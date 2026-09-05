@@ -126,16 +126,18 @@ export function validateProductionRuntimeEnvironment(env = process.env) {
   } catch {
     fail("DATABASE_URL_FORMAT_INVALID");
   }
-  if (
-    target.protocol !== "mysql:" ||
-    target.hostname !== "mysql" ||
-    (target.port && target.port !== "3306") ||
-    decodeURIComponent(target.username) !== "frontmind_dashboard" ||
-    target.pathname !== "/frontmind_dashboard" ||
-    target.search ||
-    target.hash ||
-    !target.password
-  ) {
+  const validDatabaseTarget =
+    target.protocol === "mysql:" &&
+    target.hostname === "mysql" &&
+    (!target.port || target.port === "3306") &&
+    !target.search &&
+    !target.hash &&
+    Boolean(target.password) &&
+    ((decodeURIComponent(target.username) === "frontmind_dashboard" &&
+      target.pathname === "/frontmind_dashboard") ||
+      (decodeURIComponent(target.username) === "frontmind" &&
+        target.pathname === "/frontmind_system"));
+  if (!validDatabaseTarget) {
     fail("DATABASE_URL_TARGET_INVALID");
   }
 

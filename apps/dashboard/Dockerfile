@@ -21,6 +21,7 @@ COPY --from=build --chown=10001:10001 /app/apps/dashboard/package.json /app/apps
 # Flatten the dashboard's workspace symlinks so Node can resolve production
 # dependencies from /app/dist without requiring the source workspace layout.
 COPY --from=build --chown=10001:10001 /tmp/dashboard-node_modules ./node_modules
+COPY --from=build --chown=10001:10001 /app/node_modules/.pnpm ./node_modules/.pnpm
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/dist ./dist
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/drizzle ./drizzle
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/scripts/validate-production-runtime.mjs ./scripts/validate-production-runtime.mjs

@@ -89,11 +89,18 @@ export async function syncDashboardMonitoringAccounts(db: Database): Promise<voi
 }
 
 export async function syncDashboardMonitoringAccountStates(db: Database): Promise<void> {
-  await db.execute(sql`
-    UPDATE monitoring_users m
-    LEFT JOIN monitoring_account_links l ON l.monitoringUserId = m.id
-    LEFT JOIN users d ON d.id = l.dashboardUserId
-    SET m.status = IF(d.id IS NOT NULL AND d.isActive = true, 'active', 'disabled'),
-        m.role = IF(d.role = 'admin' AND d.adminAccessLevel = 'system_admin', 'admin', 'user')
-  `);
+  await db.transaction(async (tx) => {
+    // Match ensureDashboardAccountLink: canonical Dashboard accounts must be
+    // locked before their monitoring projections. A joined UPDATE alone locks
+    // monitoring_users first, then waits for users and deadlocks with login or
+    // administrator wallet requests that are creating/updating the projection.
+    await tx.execute(sql`SELECT id FROM users ORDER BY id FOR UPDATE`);
+    await tx.execute(sql`
+      UPDATE monitoring_users m
+      LEFT JOIN monitoring_account_links l ON l.monitoringUserId = m.id
+      LEFT JOIN users d ON d.id = l.dashboardUserId
+      SET m.status = IF(d.id IS NOT NULL AND d.isActive = true, 'active', 'disabled'),
+          m.role = IF(d.role = 'admin' AND d.adminAccessLevel = 'system_admin', 'admin', 'user')
+    `);
+  });
 }

@@ -41,6 +41,22 @@ afterEach(async () => {
 });
 
 describe("production build source identity", () => {
+  it("builds the nested Dashboard from the workspace SHA and checks shared package changes", async () => {
+    const workspace = await createRepository();
+    const repositoryRoot = path.join(workspace, "apps", "dashboard");
+    await mkdir(repositoryRoot, { recursive: true });
+    await mkdir(path.join(workspace, "packages", "contracts"), { recursive: true });
+    await writeFile(path.join(workspace, "pnpm-workspace.yaml"), "packages: ['apps/*', 'packages/*']\n");
+    await writeFile(path.join(repositoryRoot, "index.ts"), "export {}\n");
+    const contract = path.join(workspace, "packages", "contracts", "index.ts");
+    await writeFile(contract, "export {}\n");
+    git(workspace, ["add", "-A"]);
+    git(workspace, ["commit", "-qm", "workspace"]);
+    expect(assertCleanProductionBuildSource({ repositoryRoot, env: {} })).toBe(git(workspace, ["rev-parse", "HEAD"]));
+    await writeFile(contract, "export const revised = true\n");
+    expect(() => assertCleanProductionBuildSource({ repositoryRoot, env: {} })).toThrow(/BUILD_SOURCE_NOT_COMMITTED:packages\/contracts\/index.ts/u);
+  });
+
   it("accepts an explicit immutable SHA only for a Git-free CI build context", async () => {
     const repositoryRoot = await mkdtemp(
       path.join(tmpdir(), "frontmind-build-archive-"),

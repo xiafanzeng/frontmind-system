@@ -19,8 +19,22 @@ function normalizedFullSha(value, errorCode) {
   return sha;
 }
 
+function sourceGitRoot(repositoryRoot) {
+  if (existsSync(path.join(repositoryRoot, ".git"))) return repositoryRoot;
+  // Dashboard is also built inside the fused pnpm repository. Resolve only
+  // this known layout, so an unrelated parent checkout cannot label an archive.
+  const workspaceRoot = path.resolve(repositoryRoot, "../..");
+  if (
+    path.basename(repositoryRoot) === "dashboard" &&
+    path.basename(path.dirname(repositoryRoot)) === "apps" &&
+    existsSync(path.join(workspaceRoot, "pnpm-workspace.yaml")) &&
+    existsSync(path.join(workspaceRoot, ".git"))
+  ) return workspaceRoot;
+  return null;
+}
+
 function repositoryHasGitMetadata(repositoryRoot) {
-  return existsSync(path.join(repositoryRoot, ".git"));
+  return sourceGitRoot(repositoryRoot) !== null;
 }
 
 function archiveBuildSourceSha(options, repositoryRoot) {
@@ -64,7 +78,10 @@ function archiveBuildSourceSha(options, repositoryRoot) {
 }
 
 export function changedSourcePaths(repositoryRoot) {
-  if (!repositoryHasGitMetadata(repositoryRoot)) return [];
+  const gitRoot = sourceGitRoot(repositoryRoot);
+  if (!gitRoot) return [];
+  // Shared packages and worker code are part of the same source snapshot.
+  repositoryRoot = gitRoot;
   const sourcePathspec = ["--", ".", ":(exclude)dist", ":(exclude)dist/**"];
   const groups = [
     git(repositoryRoot, ["diff", "--name-only", ...sourcePathspec]),

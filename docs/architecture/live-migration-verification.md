@@ -1,10 +1,16 @@
-# CN migration verification — 2026-09-05
+# CN migration verification — 2026-09-06
 
 ## Production baseline restored
 
 Dashboard baseline: original production `74ad2397bb8d701a9cdd58c51b5070359295cf8a`.
 Initial fused runtime: `543b0db016398a49f6724003cab9d958ae87463b`.
 Initial CN Website runtime: `cb5aad9705dd74eed6ecdac1081bd01c55d2e81b`.
+
+Current live Dashboard/Worker: `35b15876adc829b16df8433d951526a8c618bb7b`.
+Current live CN Website: `60974b45d0db34d3774e43b5f029aab6fa0aad6c`.
+Dashboard digest: `sha256:3ad8572b0cae60531d32d4009fca042d05bde0094227a5ef0c44c3733b4e9717`.
+Worker digest: `sha256:e7dc382f38456fb7821e349c353e9a425e4f931f2d24ec070473b2daf90c4071`.
+Website digest: `sha256:d61db3aea5ca01021251cac9586117f230aeba7522e4fd7578fbd92fc34098a5`.
 
 Migration 0058 completed on the new server. The journal has 59 entries and
 schema verification reported 86 expected/actual Dashboard tables with no
@@ -94,3 +100,63 @@ SQL policy helpers no longer runs the standalone historical CLI audit. That
 legacy audit still rejects historical 0055/0057 classifications; no applied
 SQL or historical policy was rewritten to hide it. The actual release CLI
 validates the applied journal and the one pending additive migration.
+
+## Compatible provider release completed
+
+After a verified backup at
+`/srv/frontmind-system/backups/frontmind_system-before-zhipu-20260905T172422Z.sql.gz`,
+migration 0059 completed once. The applied count is 60 and its journal hash is
+`454ae1b8b76e33d0c46dde291bb91372de68d285e2252bbc7f81b2ca76289d25`.
+All 86 Dashboard tables match the new schema exactly; monitoring tables remain.
+Both applications returned HTTP 200 from health/readiness endpoints after start.
+The running image revisions were independently inspected.
+
+The full node suite passed 4,259 tests (64 skipped); the full client suite
+passed 1,228 (7 skipped). The later delivery-wording fix passed its 14 provider
+tests and the complete build. The final image itself resolved all 70 native
+dependencies correctly and matched the wouter patch byte for byte.
+The temporary registry relay, tunnel, loopback CA and TLS private key were removed.
+
+The saved administrator session passed all six pages, reload and a second tab
+with the same user ID and no uncaught JavaScript errors. Three rounds of
+concurrent monitoring/publishing administrator and balance reads passed. A
+pre-existing mojibake `displayName` on administrator ID 1 was corrected from
+the same row's already-correct `name`; the conditional transaction changed
+exactly one row and browser verification passed.
+
+## Zhipu original-workflow validation
+
+The five original skill ZIPs and their manifests matched their original hashes
+in the real Zhipu environment. Real adapter executions passed the original
+classification, knowledge-base archive/finalizer, question selection, overseas
+translation, assessment and forecast contracts. The knowledge archive had 18
+leaf files and a non-empty image asset. Recommendation initially used the
+original partial-result path: 15 valid selectable questions from 20 outputs.
+
+Assessment's first result failed the original cross-field validation. The
+adapter's transport-schema wording was clarified to preserve the original
+skill's stricter constraints. Original prompt, schema and ZIP bytes were not
+changed. The original allowed second attempt passed all 13 metrics, authority
+checks and deterministic scoring. Forecast passed its original six-action,
+four-week scenario checks and deterministic calculations. These assessment
+and forecast prechecks used explicitly synthetic monitor inputs; they are not
+claimed as production monitoring executions.
+
+The original administrator settings API activated Zhipu credential version 9.
+All eight previous Manus versions were retained, including the retired former
+active version. A real public-information Website project was admitted through
+the original invitation/business-owner flow. Its knowledge-base operation uses
+Zhipu and frozen high effort. Actual execution text appears beneath the timer;
+refresh/reopen retained the same operation, task and provider session. Full
+Website monitor/assessment/forecast acceptance is still in progress.
+
+## Monitoring production activation follow-up
+
+Catalog synchronization discovered 17 models, but all remained unverified and
+disabled. The existing capability-probe API was restricted to localhost
+development, while production upsert correctly refused fabricated verification
+flags. The administrator's monitoring wallet also started at zero. A normal
+production administrator verification entry is being added with an explicit
+server budget, existing ownership/quote/idempotency checks and authoritative
+worker results. No provider probe or wallet adjustment has yet been submitted
+for this follow-up; customer execution and final settlement remain to verify.

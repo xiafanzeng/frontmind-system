@@ -12,7 +12,7 @@ RUN test "${#SOURCE_SHA}" -eq 40 && pnpm install --frozen-lockfile \
 FROM 1panel/node:22.22.2@sha256:4cb7297e1c72cac9ee17659f28807f4756cefd4a13cf7bc2c0ba7254c616bb28
 ARG SOURCE_SHA
 ENV NODE_ENV=production PORT=3001 FRONTMIND_BUILD_SHA=${SOURCE_SHA} \
-    FRONTMIND_MIGRATIONS_DIR=/app/apps/dashboard/drizzle FRONTMIND_MIGRATION_MANIFEST_PATH=/app/apps/dashboard/migration-manifest.json
+    FRONTMIND_MIGRATIONS_DIR=/app/apps/dashboard/drizzle FRONTMIND_MIGRATION_MANIFEST_PATH=/app/apps/dashboard/dist/migration-manifest.json
 WORKDIR /app/apps/dashboard
 RUN groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/frontmind/prepared-files /var/lib/frontmind/dashboard-assets

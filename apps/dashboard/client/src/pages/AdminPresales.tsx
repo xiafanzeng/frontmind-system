@@ -60,7 +60,57 @@ export function websiteCredentialProviderLabel(status: {
   provider?: "manus" | "zhipu";
 }) {
   if (!status.configured) return "等待配置";
-  return status.provider === "zhipu" ? "智谱 AutoGLM" : "Manus（历史凭据）";
+  return status.provider === "zhipu"
+    ? "智谱 Managed Agents"
+    : "Manus（历史凭据）";
+}
+
+type WebsiteNativeTokenUsage = {
+  provider: "zhipu";
+  unit: "tokens";
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  observedTasks: number;
+};
+
+export function WebsiteNativeUsage({
+  usage,
+}: {
+  usage?: WebsiteNativeTokenUsage;
+}) {
+  return (
+    <section
+      aria-label="智谱原生 Token 用量"
+      className="rounded-2xl border border-primary/10 bg-primary/[0.055] p-5"
+    >
+      <p className="text-sm font-medium">智谱原生 Token 用量</p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        按近 30 天官网任务的实际用量上报累计，输入、输出与缓存读取分别记录。
+      </p>
+      {!usage || usage.observedTasks === 0 ? (
+        <p className="mt-4 text-sm text-muted-foreground">
+          暂无任务上报 Token 用量。
+        </p>
+      ) : (
+        <dl className="mt-4 grid grid-cols-2 gap-4">
+          {[
+            ["输入 Token", usage.inputTokens],
+            ["输出 Token", usage.outputTokens],
+            ["缓存读取 Token", usage.cacheReadInputTokens],
+            ["已记录任务", usage.observedTasks],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="mt-1 font-mono text-lg font-semibold">
+                {Number(value).toLocaleString()}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
 }
 
 type TwentyFirstCredentialStatus = CredentialStatus & {
@@ -619,6 +669,9 @@ export default function AdminPresales() {
   const keyPoolTotalUsed = usageQuery.data?.keyPoolTotalUsed ?? null;
   const rollingWebsiteUsed = usageQuery.data?.rollingWebsiteUsed ?? 0;
   const keyHealth = usageQuery.data?.keyHealth ?? "unconfigured";
+  const nativeUsage = usageQuery.data?.nativeUsage;
+  const isZhipu =
+    status.provider === "zhipu" || nativeUsage?.provider === "zhipu";
   const usageLimit = Math.max(
     1,
     Number(websitePolicy?.limit) || DEFAULT_API_KEY_USAGE_LIMIT,
@@ -669,7 +722,7 @@ export default function AdminPresales() {
     >
       <div className="mx-auto w-full max-w-6xl">
         <p className="mb-6 max-w-3xl text-sm leading-7 text-[#716a80]">
-          统一管理官网任务积分和 AI 建站所需的 21st MCP 凭据。所有密钥
+          统一管理官网任务用量和 AI 建站所需的 21st MCP 凭据。所有密钥
           只在服务端验证并加密保存，21st Key 不会传给浏览器缓存、上游建站服务
           或客户网站。
         </p>
@@ -716,8 +769,8 @@ export default function AdminPresales() {
                       官网前台 API Key
                     </CardTitle>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      仅供官网任务使用，新凭据接入智谱 AutoGLM。 个人账号及其他
-                      Manus 功能继续使用各自凭据。
+                      仅供官网任务使用，新凭据接入智谱 Managed Agents。
+                      个人账号及其他 Manus 功能继续使用各自凭据。
                     </p>
                   </div>
                   <Badge
@@ -755,7 +808,7 @@ export default function AdminPresales() {
                     <Label htmlFor="presales-api-key">
                       {status.configured
                         ? "输入新的智谱 API Key"
-                        : "智谱 AutoGLM API Key"}
+                        : "智谱 Managed Agents API Key"}
                     </Label>
                     <div className="relative">
                       <Input
@@ -879,11 +932,12 @@ export default function AdminPresales() {
               <CardHeader className="border-b border-border/60 pb-5">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Coins className="h-5 w-5 text-primary" />近 {usageWindowDays}{" "}
-                  天积分使用
+                  天任务用量
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  官网任务按本地账本滚动累计；当前 Key
-                  的上游积分池总额与连接状态单独展示。
+                  {isZhipu
+                    ? "智谱 Token 与历史 Manus 积分分别统计，保留原积分账本。"
+                    : "官网任务按本地账本滚动累计；当前 Key 的上游积分池总额与连接状态单独展示。"}
                 </p>
               </CardHeader>
               <CardContent className="p-5 sm:p-6">
@@ -897,7 +951,7 @@ export default function AdminPresales() {
                 ) : usageQuery.error ? (
                   <div className="py-12 text-center">
                     <ShieldAlert className="mx-auto mb-3 h-6 w-6 text-destructive" />
-                    <p className="text-sm font-medium">积分记录读取失败</p>
+                    <p className="text-sm font-medium">用量记录读取失败</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {usageQuery.error.message}
                     </p>
@@ -923,72 +977,78 @@ export default function AdminPresales() {
                               : "当前 Key 同步失败；下方官网近 30 天自用仍按本地记录展示。"}
                       </div>
                     )}
-                    <div
-                      className={`rounded-2xl border p-5 ${
-                        usageTone === "critical"
-                          ? "border-red-200 bg-red-50/70"
-                          : usageTone === "warning"
-                            ? "border-amber-200 bg-amber-50/70"
-                            : usageTone === "unavailable"
-                              ? "border-slate-200 bg-slate-50/80"
-                              : "border-primary/10 bg-primary/[0.055]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="fm-eyebrow text-muted-foreground">
-                          上游积分池近 30 天总使用 / 上限
-                        </p>
-                        <Badge
-                          variant="outline"
-                          className={
-                            usageTone === "critical"
-                              ? "border-red-200 bg-white text-red-700"
-                              : usageTone === "warning"
-                                ? "border-amber-200 bg-white text-amber-700"
-                                : usageTone === "unavailable"
-                                  ? "border-slate-300 bg-white text-slate-700"
-                                  : "border-emerald-200 bg-white text-emerald-700"
-                          }
-                        >
-                          {usageTone === "critical"
-                            ? "严重预警"
+                    {isZhipu ? (
+                      <WebsiteNativeUsage usage={nativeUsage} />
+                    ) : (
+                      <div
+                        className={`rounded-2xl border p-5 ${
+                          usageTone === "critical"
+                            ? "border-red-200 bg-red-50/70"
                             : usageTone === "warning"
-                              ? "用量预警"
+                              ? "border-amber-200 bg-amber-50/70"
                               : usageTone === "unavailable"
-                                ? "统计不完整"
-                                : "用量正常"}
-                        </Badge>
-                      </div>
-                      <div className="mt-2 flex items-end justify-between gap-3">
-                        <p className="text-3xl font-semibold tracking-tight text-primary">
-                          {usageDisplay.keyTotalLabel}
-                          <span className="ml-1 text-sm font-normal text-muted-foreground">
-                            / {usageLimit.toLocaleString()}
-                          </span>
-                        </p>
-                        <span className="pb-1 text-sm text-muted-foreground">
-                          {usageDisplay.percentageLabel}
-                        </span>
-                      </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-                        <div
-                          className={`h-full rounded-full ${
-                            usageTone === "critical"
-                              ? "bg-red-600"
+                                ? "border-slate-200 bg-slate-50/80"
+                                : "border-primary/10 bg-primary/[0.055]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="fm-eyebrow text-muted-foreground">
+                            上游积分池近 30 天总使用 / 上限
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className={
+                              usageTone === "critical"
+                                ? "border-red-200 bg-white text-red-700"
+                                : usageTone === "warning"
+                                  ? "border-amber-200 bg-white text-amber-700"
+                                  : usageTone === "unavailable"
+                                    ? "border-slate-300 bg-white text-slate-700"
+                                    : "border-emerald-200 bg-white text-emerald-700"
+                            }
+                          >
+                            {usageTone === "critical"
+                              ? "严重预警"
                               : usageTone === "warning"
-                                ? "bg-amber-500"
-                                : "bg-primary"
-                          }`}
-                          style={{
-                            width: `${usageDisplay.progressPercentage}%`,
-                          }}
-                        />
+                                ? "用量预警"
+                                : usageTone === "unavailable"
+                                  ? "统计不完整"
+                                  : "用量正常"}
+                          </Badge>
+                        </div>
+                        <div className="mt-2 flex items-end justify-between gap-3">
+                          <p className="text-3xl font-semibold tracking-tight text-primary">
+                            {usageDisplay.keyTotalLabel}
+                            <span className="ml-1 text-sm font-normal text-muted-foreground">
+                              / {usageLimit.toLocaleString()}
+                            </span>
+                          </p>
+                          <span className="pb-1 text-sm text-muted-foreground">
+                            {usageDisplay.percentageLabel}
+                          </span>
+                        </div>
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+                          <div
+                            className={`h-full rounded-full ${
+                              usageTone === "critical"
+                                ? "bg-red-600"
+                                : usageTone === "warning"
+                                  ? "bg-amber-500"
+                                  : "bg-primary"
+                            }`}
+                            style={{
+                              width: `${usageDisplay.progressPercentage}%`,
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     <div className="rounded-xl border border-border/60 bg-background/55 px-4 py-3">
                       <p className="text-xs text-muted-foreground">
-                        官网前台近 30 天本地已记录
+                        {isZhipu
+                          ? "历史 Manus 官网任务近 30 天积分"
+                          : "官网前台近 30 天本地已记录积分"}
                       </p>
                       <p className="mt-1 text-2xl font-semibold text-foreground">
                         {usageDisplay.websiteUsedLabel}
@@ -998,7 +1058,7 @@ export default function AdminPresales() {
                     <div>
                       <div className="mb-2 flex items-center justify-between gap-3">
                         <p className="text-xs font-medium text-muted-foreground">
-                          最近官网任务
+                          {isZhipu ? "最近 Manus 历史任务积分" : "最近官网任务"}
                         </p>
                         <Badge variant="outline" className="font-mono text-xs">
                           {recentWebsiteTasks.length} 条
@@ -1039,7 +1099,7 @@ export default function AdminPresales() {
                   </div>
                 )}
 
-                {websitePolicy && (
+                {websitePolicy && !isZhipu && (
                   <form
                     className="mt-6 space-y-4 border-t border-border/60 pt-5"
                     onSubmit={handleSavePolicy}

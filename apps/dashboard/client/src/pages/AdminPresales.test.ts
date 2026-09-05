@@ -1,15 +1,58 @@
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import {
   websiteCredentialProviderLabel,
+  WebsiteNativeUsage,
   aliyunOAuthConfigurationDisplayState,
   presalesUsageDisplayState,
 } from "./AdminPresales";
 
 describe("presalesUsageDisplayState", () => {
+  it("renders native token units separately and never invents a credit balance", () => {
+    const html = renderToStaticMarkup(
+      createElement(WebsiteNativeUsage, {
+        usage: {
+          provider: "zhipu",
+          unit: "tokens",
+          inputTokens: 1234,
+          outputTokens: 56,
+          cacheReadInputTokens: 78,
+          observedTasks: 2,
+        },
+      }),
+    );
+    expect(html).toContain("输入 Token");
+    expect(html).toContain("1,234");
+    expect(html).toContain("输出 Token");
+    expect(html).toContain("缓存读取 Token");
+    expect(html).not.toContain("积分");
+    expect(html).not.toContain("余额");
+  });
+  it("shows absent native usage as unreported instead of a zero balance", () => {
+    for (const usage of [
+      undefined,
+      {
+        provider: "zhipu" as const,
+        unit: "tokens" as const,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        observedTasks: 0,
+      },
+    ]) {
+      const html = renderToStaticMarkup(
+        createElement(WebsiteNativeUsage, { usage }),
+      );
+      expect(html).toContain("暂无任务上报 Token 用量。");
+      expect(html).not.toContain("<dd");
+      expect(html).not.toContain("余额");
+    }
+  });
   it("identifies Website provider without reclassifying historical Manus credentials", () => {
     expect(websiteCredentialProviderLabel({ configured: false })).toBe(
       "等待配置",
@@ -22,7 +65,7 @@ describe("presalesUsageDisplayState", () => {
     ).toBe("Manus（历史凭据）");
     expect(
       websiteCredentialProviderLabel({ configured: true, provider: "zhipu" }),
-    ).toBe("智谱 AutoGLM");
+    ).toBe("智谱 Managed Agents");
   });
   it("does not contain the retired attribution or emergency-replacement gates", () => {
     const source = readFileSync(

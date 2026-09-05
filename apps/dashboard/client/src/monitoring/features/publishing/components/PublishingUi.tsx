@@ -1,3 +1,4 @@
+import { safePublisherLogoUrl } from "../../../mediaUrls";
 import {
   AlertCircle,
   Check,
@@ -189,13 +190,7 @@ export function MediaMark({
   const index =
     [...id].reduce((sum, value) => sum + value.charCodeAt(0), 0) %
     colors.length;
-  const safeLogoUrl =
-    logoUrl &&
-    /^\/api\/publisher\/media-logos\/[0-9a-f-]{36}\/[a-f0-9]{64}$/iu.test(
-      logoUrl,
-    )
-      ? logoUrl
-      : undefined;
+  const safeLogoUrl = safePublisherLogoUrl(logoUrl);
   const showImage = Boolean(
     safeLogoUrl &&
     failedUrl !== safeLogoUrl &&

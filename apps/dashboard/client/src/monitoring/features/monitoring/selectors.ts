@@ -1,3 +1,5 @@
+import { safeArchivedMediaUrl } from "../../mediaUrls";
+export { safeArchivedMediaUrl } from "../../mediaUrls";
 import type { CompetitorInput, MonitorRun, RunAttempt } from "../../domain";
 import type {
   AttemptMetricRow,
@@ -402,13 +404,6 @@ export function safeExternalUrl(value?: string) {
   } catch {
     return;
   }
-}
-
-const archivedMediaPathPattern =
-  /^\/api\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\?variant=(?:display|thumbnail))?$/iu;
-
-export function safeArchivedMediaUrl(value?: string) {
-  return value && archivedMediaPathPattern.test(value) ? value : undefined;
 }
 
 export function archivedMediaAttachmentUrl(value?: string) {

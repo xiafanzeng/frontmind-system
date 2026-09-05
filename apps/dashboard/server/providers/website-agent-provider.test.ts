@@ -341,7 +341,7 @@ describe("public execution text", () => {
   });
 });
 
-it("delivers the exact frozen structured schema while preserving the original task", () => {
+it("preserves the original task and stricter skill constraints with the frozen transport schema", () => {
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -356,6 +356,11 @@ it("delivers the exact frozen structured schema while preserving the original ta
     true,
   );
   expect(JSON.parse(prompt.split("\n").at(-1)!)).toEqual(schema);
+  expect(prompt).toContain("defines the transport shape only");
+  expect(prompt).toContain(
+    "wherever the original skill is stricter, its stricter constraint still applies",
+  );
+  expect(prompt).toContain("Do not invent evidence to satisfy either schema.");
 });
 
 it("retries a definite 429 rejection once while never replaying an unknown outcome", async () => {

@@ -38,7 +38,7 @@ export function zhipuTaskPrompt(
   input: Parameters<ManusV2Client["createTask"]>[0],
 ) {
   if (!input.structuredOutputSchema) return input.prompt;
-  return `${input.prompt}\n\nRuntime delivery contract (the original skill and business input above remain unchanged): return exactly one JSON object in the final public assistant message. Validate it against this exact frozen JSON Schema before ending the turn. Do not wrap JSON in Markdown or return the schema itself.\n${JSON.stringify(input.structuredOutputSchema)}`;
+  return `${input.prompt}\n\nRuntime delivery contract (the original skill and business input above remain unchanged): return exactly one JSON object in the final public assistant message. The frozen JSON Schema below defines the transport shape only; it does not replace or relax the original skill's business constraints or attached output schema. Satisfy both schemas: wherever the original skill is stricter, its stricter constraint still applies, even if the transport schema permits a value. Validate against the original skill's output schema and business rules as well as this transport schema before ending the turn. Do not invent evidence to satisfy either schema. Do not wrap JSON in Markdown or return the schema itself.\n${JSON.stringify(input.structuredOutputSchema)}`;
 }
 
 function asRecord(value: unknown): ZhipuRecord {

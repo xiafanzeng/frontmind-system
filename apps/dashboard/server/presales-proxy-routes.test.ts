@@ -834,6 +834,8 @@ describe("presales create-time upload capability", () => {
   });
 
   it("isolates a partial local ledger without falling back to Provider bytes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-05T00:00:00.000Z"));
     const fileId = "partial-retention-ledger";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
@@ -950,6 +952,8 @@ describe("presales create-time upload capability", () => {
   });
 
   it("retains a user upload and its local content when cleanup is requested", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-05T00:00:00.000Z"));
     const fileId = "deleted-user-upload";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");

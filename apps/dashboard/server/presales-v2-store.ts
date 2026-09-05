@@ -19,6 +19,8 @@ export type WebsiteAgentProvider = "manus" | "zhipu";
 export type ZhipuTaskRuntime = {
   revision: 1;
   model: "glm-5.3";
+  /** Missing on historical tasks: retain the provider's original max shorthand. */
+  effort?: "low" | "high" | "max";
   mutations: Record<
     string,
     {
@@ -517,6 +519,9 @@ export async function acquirePresalesV2Task(input: {
       profile: input.profile,
       upstreamModel: input.upstreamModel,
       provider: input.provider ?? "manus",
+      ...(input.provider === "zhipu"
+        ? { providerRuntime: newWebsiteZhipuRuntime() }
+        : {}),
       operationToken: operationId,
       operationMarker: `FRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: operationId, operationId, contractName: input.contract.name, contractRevision: input.contract.revision, schemaHash: input.contract.schemaHash })}`,
       providerTitle: `FrontMind Website ${input.contract.name} ${operationId}`,
@@ -574,6 +579,14 @@ export async function listOutstandingZhipuTasks() {
         ["queued", "running", "result_pending"].includes(task.status),
     )
     .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+}
+
+function newWebsiteZhipuRuntime(): ZhipuTaskRuntime {
+  const effort = process.env.WEBSITE_ZHIPU_EFFORT?.trim() || "high";
+  if (effort !== "low" && effort !== "high" && effort !== "max") {
+    throw new Error("INVALID_WEBSITE_ZHIPU_EFFORT");
+  }
+  return { revision: 1, model: "glm-5.3", effort, mutations: {} };
 }
 
 export async function readPresalesV2Task(localTaskId: string) {
@@ -653,6 +666,10 @@ export async function updatePresalesV2Task(
       next.profile !== current.profile ||
       next.upstreamModel !== current.upstreamModel ||
       (next.provider ?? "manus") !== (current.provider ?? "manus") ||
+      ((current.provider ?? "manus") === "zhipu" &&
+        ((next.providerRuntime?.model ?? "glm-5.3") !==
+          (current.providerRuntime?.model ?? "glm-5.3") ||
+          next.providerRuntime?.effort !== current.providerRuntime?.effort)) ||
       ["agentId", "environmentId", "sessionId"].some((key) => {
         const before =
           current.providerRuntime?.[

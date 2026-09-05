@@ -413,9 +413,16 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
     input: Parameters<ManusV2Client["createTask"]>[0],
   ): ReturnType<ManusV2Client["createTask"]> {
     const providerPrompt = zhipuTaskPrompt(input);
+    const frozenRuntime = runtime(await this.current());
     const agentBody = {
       name: `FrontMind Website ${this.record.operationId}`,
-      model: "glm-5.3",
+      model: frozenRuntime.effort
+        ? {
+            id: frozenRuntime.model,
+            effort: frozenRuntime.effort,
+            speed: "standard",
+          }
+        : frozenRuntime.model,
       system: RUNTIME_SYSTEM,
       tools: [{ type: "agent_toolset_20260601" }],
     };

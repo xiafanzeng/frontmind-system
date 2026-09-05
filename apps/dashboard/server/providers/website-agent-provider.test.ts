@@ -128,51 +128,71 @@ describe("Website provider compatibility", () => {
       Object.values(state.record.providerRuntime!.mutations)[0]!.state,
     ).toBe("outcome_unknown");
   });
-  it("opens the event channel before the single initial send and reuses saved resources", async () => {
-    const order: string[] = [];
-    const api = {
-      create: vi.fn(async (path: string) => ({
-        id:
-          path === "/v1/agents"
-            ? "agent_1"
-            : path === "/v1/environments"
-              ? "env_1"
-              : "sess_1",
-      })),
-      subscribeEvents: vi.fn(async () => {
-        order.push("connect");
-        return { events: (async function* () {})(), close() {} };
-      }),
-      sendMessage: vi.fn(async () => {
-        order.push("send");
-        return { data: [{ id: "event_1" }] };
-      }),
-    } as unknown as ZhipuManagedClient;
-    const provider = new ZhipuWebsiteAgentProvider(
-      state.record,
-      update,
-      "test",
-      api,
-    );
-    const result = await provider.createTask({
-      prompt: "original task",
-      title: "frozen title",
-    });
-    expect(order).toEqual(["connect", "send"]);
-    expect(result.taskId).toBe("sess_1");
-    expect(state.record.providerRuntime).toMatchObject({
-      agentId: "agent_1",
-      environmentId: "env_1",
-      sessionId: "sess_1",
-      commandEventIds: ["event_1"],
-    });
-    await provider.createTask({
-      prompt: "original task",
-      title: "frozen title",
-    });
-    expect(api.create).toHaveBeenCalledTimes(3);
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-  });
+  it.each([undefined, "low", "high", "max"] as const)(
+    "opens the event channel before the single initial send and reuses the frozen model (%s)",
+    async (effort) => {
+      if (effort) {
+        state.record.providerRuntime = {
+          revision: 1,
+          model: "glm-5.3",
+          effort,
+          mutations: {},
+        };
+      }
+      const order: string[] = [];
+      const api = {
+        create: vi.fn(async (path: string) => ({
+          id:
+            path === "/v1/agents"
+              ? "agent_1"
+              : path === "/v1/environments"
+                ? "env_1"
+                : "sess_1",
+        })),
+        subscribeEvents: vi.fn(async () => {
+          order.push("connect");
+          return { events: (async function* () {})(), close() {} };
+        }),
+        sendMessage: vi.fn(async () => {
+          order.push("send");
+          return { data: [{ id: "event_1" }] };
+        }),
+      } as unknown as ZhipuManagedClient;
+      const provider = new ZhipuWebsiteAgentProvider(
+        state.record,
+        update,
+        "test",
+        api,
+      );
+      const result = await provider.createTask({
+        prompt: "original task",
+        title: "frozen title",
+      });
+      expect(order).toEqual(["connect", "send"]);
+      expect(result.taskId).toBe("sess_1");
+      expect(api.create).toHaveBeenNthCalledWith(
+        1,
+        "/v1/agents",
+        expect.objectContaining({
+          model: effort
+            ? { id: "glm-5.3", effort, speed: "standard" }
+            : "glm-5.3",
+        }),
+      );
+      expect(state.record.providerRuntime).toMatchObject({
+        agentId: "agent_1",
+        environmentId: "env_1",
+        sessionId: "sess_1",
+        commandEventIds: ["event_1"],
+      });
+      await provider.createTask({
+        prompt: "original task",
+        title: "frozen title",
+      });
+      expect(api.create).toHaveBeenCalledTimes(3);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    },
+  );
   it("never resends an uncertain initial message", async () => {
     const api = {
       create: vi.fn(async (path: string) => ({

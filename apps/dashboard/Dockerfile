@@ -14,7 +14,10 @@ ARG SOURCE_SHA
 ENV NODE_ENV=production PORT=3001 FRONTMIND_BUILD_SHA=${SOURCE_SHA} \
     FRONTMIND_MIGRATIONS_DIR=/app/apps/dashboard/drizzle FRONTMIND_MIGRATION_MANIFEST_PATH=/app/apps/dashboard/dist/migration-manifest.json
 WORKDIR /app/apps/dashboard
-RUN groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils ghostscript \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/frontmind/prepared-files /var/lib/frontmind/dashboard-assets
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/package.json /app/apps/dashboard/pnpm-lock.yaml ./
 # Preserve the pnpm workspace layout: app symlinks resolve to /app/node_modules/.pnpm.

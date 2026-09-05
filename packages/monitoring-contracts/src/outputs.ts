@@ -14,7 +14,7 @@ import {
   userStatusSchema,
 } from "./statuses.js";
 import { competitorInputSchema, idSchema } from "./monitoring.js";
-import { usernameSchema } from "./admin.js";
+import { accountDisplayNameSchema } from "./admin.js";
 import {
   citationProvenanceSchema,
   keywordEvaluationSchema,
@@ -27,7 +27,7 @@ const nonnegativeIntegerSchema = z.number().int().nonnegative();
 
 export const publicUserSchema = z.object({
   id: idSchema,
-  username: usernameSchema,
+  username: accountDisplayNameSchema,
   role: roleSchema,
   status: userStatusSchema,
 });
@@ -402,8 +402,8 @@ const runMediaOutputSchema = z.object({
   mimeType: z.string().nullable(),
   sizeBytes: nonnegativeIntegerSchema.nullable(),
   archiveStatus: z.enum(["pending", "archived", "failed", "not_applicable"]),
-  accessPath: z.string().startsWith("/api/media/").nullable(),
-  thumbnailAccessPath: z.string().startsWith("/api/media/").nullable(),
+  accessPath: z.string().startsWith("/api/monitoring/media/").nullable(),
+  thumbnailAccessPath: z.string().startsWith("/api/monitoring/media/").nullable(),
 });
 
 const runConfigurationPlatformOutputSchema = monitorPlatformOutputSchema.extend(
@@ -443,7 +443,7 @@ export const runDetailOutputSchema = z.object({
 
 export const adminUserListOutputSchema = z.object({
   id: idSchema,
-  username: usernameSchema,
+  username: accountDisplayNameSchema,
   role: roleSchema,
   status: userStatusSchema,
   lastLoginAt: nullableDateSchema,
@@ -522,7 +522,7 @@ export const adminOverviewOutputSchema = z.object({
 
 export const adminRunListOutputSchema = z.object({
   run: runRecordOutputSchema,
-  username: usernameSchema,
+  username: accountDisplayNameSchema,
   monitorName: z.string(),
 });
 
@@ -569,7 +569,7 @@ const adminOperationAttemptOutputSchema = z.object({
 export const adminOperationDetailOutputSchema = z.object({
   run: runRecordOutputSchema,
   userId: idSchema,
-  username: usernameSchema,
+  username: accountDisplayNameSchema,
   monitorName: z.string(),
   attempts: z.array(adminOperationAttemptOutputSchema),
 });

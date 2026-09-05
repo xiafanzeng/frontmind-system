@@ -59,8 +59,8 @@ export const mediaSchema = z.object({
   type: z.enum(["screenshot", "image", "video", "goods", "raw_response"]),
   ordinal: z.number().int().nonnegative(),
   archiveStatus: z.enum(["pending", "archived", "failed", "not_applicable"]),
-  accessPath: z.string().startsWith("/api/media/").nullable(),
-  thumbnailAccessPath: z.string().startsWith("/api/media/").nullable(),
+  accessPath: z.string().startsWith("/api/monitoring/media/").nullable(),
+  thumbnailAccessPath: z.string().startsWith("/api/monitoring/media/").nullable(),
   mimeType: z.string().nullable(),
   sizeBytes: z.number().int().nonnegative().nullable(),
 });

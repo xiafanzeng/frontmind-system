@@ -313,7 +313,7 @@ export const publisherMediaListInputSchema = z
 
 const publisherMediaLogoPathSchema = z
   .string()
-  .regex(/^\/api\/publisher\/media-logos\/[0-9a-f-]{36}\/[a-f0-9]{64}$/u);
+  .regex(/^\/api\/monitoring\/publisher\/media-logos\/[0-9a-f-]{36}\/[a-f0-9]{64}$/u);
 
 export const publisherMediaOutputSchema = z.object({
   id: idSchema,

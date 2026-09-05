@@ -16,6 +16,8 @@ export const usernameSchema = z
     /^[A-Za-z0-9._-]+$/,
     "Username may only contain letters, numbers, dot, underscore and dash",
   );
+/** Display names are projected from Dashboard, not parsed as standalone logins. */
+export const accountDisplayNameSchema = z.string().min(1).max(128);
 export const passwordSchema = z.string().min(12).max(256);
 const loginPasswordSchema = z.string().min(1).max(256);
 
@@ -34,7 +36,7 @@ export type AdminCreateUserInput = z.infer<typeof adminCreateUserInputSchema>;
 
 export const adminUserViewSchema = z.object({
   id: idSchema,
-  username: usernameSchema,
+  username: accountDisplayNameSchema,
   role: roleSchema,
   status: userStatusSchema,
   createdAt: z.coerce.date(),

@@ -1,0 +1,121 @@
+name: frontmind-system
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-app-security: &app-security
+  init: true
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  logging: *logging
+
+services:
+  mysql:
+    image: public.ecr.aws/docker/library/mysql:8.4.10@sha256:8dbcf531a03aade657e181b9cf2f1d1803ce621a1d55610cb44cb531ab7d7db6
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --max-connections=150
+      - --innodb-buffer-pool-size=2G
+      - --binlog-expire-logs-seconds=2592000
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/mysql.env
+    volumes:
+      - ${FRONTMIND_MYSQL_DIR:-/srv/frontmind-system/mysql}:/var/lib/mysql
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysqladmin ping --protocol=tcp --host=127.0.0.1 --user=root --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 3584m
+    cpus: 2.0
+    networks: [database]
+
+  dashboard:
+    <<: *app-security
+    image: ${FRONTMIND_DASHBOARD_IMAGE:?set FRONTMIND_DASHBOARD_IMAGE to an immutable image@sha256 digest}
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/dashboard.env
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_DASHBOARD_IMAGE}
+    ports:
+      - 127.0.0.1:${FRONTMIND_DASHBOARD_HOST_PORT:-3001}:3001
+    volumes:
+      - ${FRONTMIND_PREPARED_FILE_DIR_HOST:-/srv/frontmind-system/runtime/prepared-files}:/var/lib/frontmind/prepared-files
+      - ${FRONTMIND_DASHBOARD_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/dashboard-assets}:/var/lib/frontmind/dashboard-assets
+    depends_on:
+      mysql: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    networks: [applications, database]
+
+  monitoring-worker:
+    <<: *app-security
+    image: ${FRONTMIND_MONITORING_WORKER_IMAGE:?set FRONTMIND_MONITORING_WORKER_IMAGE to an immutable image@sha256 digest}
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/worker.env
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_MONITORING_WORKER_IMAGE}
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [database, egress]
+    mem_limit: 1536m
+    cpus: 2.0
+    stop_grace_period: 60s
+
+  release-db-migrate:
+    <<: *app-security
+    image: ${FRONTMIND_DASHBOARD_IMAGE:?set FRONTMIND_DASHBOARD_IMAGE to an immutable image@sha256 digest}
+    profiles: [migration]
+    restart: "no"
+    entrypoint: [node, /app/dist/release-db.js]
+    command: [migrate, --json]
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/dashboard.env
+    depends_on:
+      mysql: {condition: service_healthy}
+    networks: [database]
+
+  backup:
+    image: public.ecr.aws/docker/library/mysql:8.4.10@sha256:8dbcf531a03aade657e181b9cf2f1d1803ce621a1d55610cb44cb531ab7d7db6
+    init: true
+    restart: unless-stopped
+    entrypoint: [/bin/sh, /opt/frontmind-system/backup.sh]
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/backup.env
+    volumes:
+      - ./backup/backup.sh:/opt/frontmind-system/backup.sh:ro
+      - ${FRONTMIND_BACKUP_DIR:-/srv/frontmind-system/backups}:/backups
+    depends_on:
+      mysql: {condition: service_healthy}
+    read_only: true
+    tmpfs: [/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 0.5
+    logging: *logging
+    networks: [database]
+
+networks:
+  applications:
+    name: ${FRONTMIND_APPLICATION_NETWORK:-frontmind-system-applications}
+  database:
+    name: ${FRONTMIND_DATABASE_NETWORK:-frontmind-system-database}
+    internal: true
+  egress: {}

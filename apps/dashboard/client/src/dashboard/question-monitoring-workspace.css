@@ -6,9 +6,14 @@
   --qm-line: #e9e2ed;
   --qm-purple: #6f2f90;
   --qm-purple-soft: #f7f1fa;
-  --qm-teal: #278d88;
-  --qm-amber: #b77d1b;
-  --qm-blue: #3c6fa8;
+  --qm-plum: var(--fm-question-reputation-accent, #8b4d83);
+  --qm-plum-soft: var(--fm-question-reputation-tint, #f8eef6);
+  --qm-teal: var(--fm-question-product-accent, #2f7e7a);
+  --qm-teal-soft: var(--fm-question-product-tint, #eaf6f4);
+  --qm-amber: var(--fm-question-industry-accent, #9a7028);
+  --qm-amber-soft: var(--fm-question-industry-tint, #fbf4e5);
+  --qm-blue: var(--fm-question-competitor-accent, #496f9d);
+  --qm-blue-soft: var(--fm-question-competitor-tint, #edf3fa);
 }
 
 .question-monitor-header {
@@ -114,8 +119,8 @@
 }
 
 .question-monitor-categories > button {
-  --qm-accent: var(--qm-purple);
-  --qm-soft: #faf3fa;
+  --qm-accent: var(--qm-plum);
+  --qm-soft: var(--qm-plum-soft);
   position: relative;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
@@ -137,17 +142,17 @@
 
 .question-monitor-categories > button.teal {
   --qm-accent: var(--qm-teal);
-  --qm-soft: #eff9f8;
+  --qm-soft: var(--qm-teal-soft);
 }
 
 .question-monitor-categories > button.amber {
   --qm-accent: var(--qm-amber);
-  --qm-soft: #fff8e9;
+  --qm-soft: var(--qm-amber-soft);
 }
 
 .question-monitor-categories > button.blue {
   --qm-accent: var(--qm-blue);
-  --qm-soft: #f0f5fb;
+  --qm-soft: var(--qm-blue-soft);
 }
 
 .question-monitor-categories > button:hover {

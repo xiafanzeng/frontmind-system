@@ -331,6 +331,29 @@ export const previewKnowledgeProgress: KnowledgeBaseProgressDto = {
     id: "preview-build",
     conversationId: "preview-conversation",
     companyName: "验收企业",
+    depthPolicy: {
+      version: 2,
+      minLeaves: 30,
+      maxLeaves: 115,
+      targetMinLeaves: 40,
+      targetMaxLeaves: 55,
+    },
+    researchSummary: {
+      officialPages: {
+        discovered: 18,
+        attempted: 16,
+        succeeded: 14,
+        failed: 2,
+      },
+      publicQueries: 6,
+      officialDocuments: 4,
+      uploadsRead: 0,
+      sourceCount: 24,
+      productFamilyCount: 2,
+      coveredDimensionCount: 7,
+      gapDimensionCount: 0,
+      stopReason: "coverage_complete",
+    },
     status: "confirming",
     revision: 18,
     currentLeafId: previewProgressLeaves[17]!.id,
@@ -466,6 +489,18 @@ function locked(reason: string, label = "查看升级方案"): ServiceCapability
   };
 }
 
+function workflowPrerequisite(
+  reason: string,
+  nextAction: ServiceAction,
+): ServiceCapability {
+  return {
+    allowed: false,
+    effectiveStatus: "pending",
+    reason,
+    nextAction,
+  };
+}
+
 function capabilitySet(
   values: Partial<Record<ServiceCapabilityKey, ServiceCapability>>,
 ): Record<ServiceCapabilityKey, ServiceCapability> {
@@ -485,6 +520,7 @@ function capabilitySet(
     channelDistribution: values.channelDistribution || unavailable,
     progressReport: values.progressReport || unavailable,
     contentAssets: values.contentAssets || unavailable,
+    brandTracking: values.brandTracking || unavailable,
   };
 }
 
@@ -533,17 +569,17 @@ const previewLuxuryQuestions: PurchasedServiceQuestion[] = [
     id: "acceptance-product-scenario",
     question: "验收企业的方案适合哪些业务场景？",
     kind: "scenario",
-    statusLabel: "已纳入本月服务",
+    statusLabel: "已纳入第一服务季度",
   }),
   previewQuestion({
     id: "acceptance-reputation-review",
     question: "如何核验验收企业的公开口碑？",
     kind: "reputation",
-    statusLabel: "已纳入本月服务",
+    statusLabel: "已纳入第一服务季度",
   }),
 ];
 
-const purchaseUrl = "https://www.frontmind.cn";
+const purchaseUrl = "https://www.frontmind.net";
 
 type PreviewWorkflowStepId = Exclude<
   ServiceWorkflowStep["id"],
@@ -653,12 +689,12 @@ export const previewServicePortals = {
       status: "ready",
       statusLabel: "可查看",
       version: "V1",
-      sourceLabel: "官网初步知识库",
+      sourceLabel: "Website 流程同步知识库",
       updatedAt: "2026-07-18",
     },
     capabilities: capabilitySet({
       knowledgeBuild: locked(
-        "普通版已包含官网生成的初步知识库展示，不包含对话式知识库构建。升级进阶版或豪华版后可解锁。",
+        "普通版不包含知识库智能体；知识库由 Website 流程自动同步至本账号，服务团队可补录。升级进阶版或豪华版后可解锁知识库智能体。",
       ),
       knowledgeDisplay: available(),
       globalKeywords: locked(
@@ -715,7 +751,13 @@ export const previewServicePortals = {
       validUntil: "2026-10-17",
     },
     quotas: [
-      { key: "industry", label: "行业词", limit: 1, used: 0, unit: "个词" },
+      {
+        key: "industry",
+        label: "行业排名词",
+        limit: 1,
+        used: 0,
+        unit: "个词",
+      },
       {
         key: "competitor",
         label: "竞品对比词",
@@ -769,7 +811,14 @@ export const previewServicePortals = {
       monitoring: available(),
       channelDistribution: available(),
       progressReport: available(),
-      contentAssets: available(),
+      contentAssets: workflowPrerequisite(
+        "请先在知识库智能体中完成全部节点并发布当前服务的认证知识库；知识库展示完成后解锁 AI 友好内容资产。",
+        {
+          kind: "resume_knowledge_build",
+          label: "继续知识库智能体",
+          href: "/knowledge-base",
+        },
+      ),
     }),
     primaryNextAction: {
       kind: "resume_knowledge_build",
@@ -799,35 +848,51 @@ export const previewServicePortals = {
     plan: {
       code: "luxury",
       name: "豪华版",
-      billingLabel: "",
+      billingLabel: "年度服务 · 按季度解锁",
       statusLabel: "已生效",
       validFrom: "2026-07-18",
-      validUntil: "2026-10-17",
+      validUntil: "2027-07-17",
     },
     quotas: [
-      { key: "industry", label: "行业词", limit: 4, used: 4, unit: "个词" },
+      {
+        key: "industry",
+        label: "行业排名词",
+        limit: 1,
+        entitlementLimit: 4,
+        used: 0,
+        unit: "个词",
+      },
       {
         key: "competitor",
         label: "竞品对比词",
-        limit: 4,
-        used: 4,
+        limit: 1,
+        entitlementLimit: 4,
+        used: 0,
         unit: "个词",
       },
       {
         key: "reputation",
         label: "美誉舆情词",
-        limit: 4,
-        used: 4,
+        limit: 1,
+        entitlementLimit: 4,
+        used: 1,
         unit: "个词",
       },
       {
         key: "scenario",
         label: "产品场景词",
-        limit: 20,
-        used: 20,
+        limit: 5,
+        entitlementLimit: 20,
+        used: 1,
         unit: "个词",
       },
     ],
+    quotaUnlock: {
+      current: 1,
+      total: 4,
+      nextUnlockAt: "2026-10-18",
+      capacityState: "available",
+    },
     purchasedQuestions: previewLuxuryQuestions,
     historicalQuestions: [
       previewQuestion({

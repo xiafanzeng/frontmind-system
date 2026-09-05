@@ -5,7 +5,6 @@ import {
   FileUp,
   MessageSquare,
   Paperclip,
-  Settings,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -44,8 +43,8 @@ const previewConversations = [
  * Administrator-owned FrontMind Agent.
  *
  * The live variant mounts the same Home workspace used by the real Agent so
- * cloud conversations, tasks, files, model selection and settings continue to
- * use the signed-in administrator's identity. The preview variant is an
+ * cloud conversations, tasks, files and model selection continue to use the
+ * signed-in administrator's identity. The preview variant is an
  * isolated, read-only adapter and never calls the live conversation APIs.
  */
 export default function AdminAgent({
@@ -85,6 +84,7 @@ export default function AdminAgent({
             hidePortalNavigation
             showKnowledgeBaseStarter={false}
             showAccountMenu={false}
+            showSettings={false}
             standardWelcomeVariant="workflow"
           />
         )}
@@ -165,17 +165,13 @@ function PreviewAgentWorkspace() {
           ))}
         </div>
 
-        <div className="space-y-2 border-t border-[#e8e2dc] p-3 text-xs text-[#716a80]">
+        <div className="border-t border-[#e8e2dc] p-3 text-xs text-[#716a80]">
           <div className="flex items-center justify-between rounded-lg bg-[#f6f1f8] px-3 py-2">
             <span className="flex items-center gap-2">
               <Coins className="h-3.5 w-3.5 text-[#8c6412]" />
               可用积分
             </span>
             <strong className="text-[#5b2a86]">128,400</strong>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-2">
-            <Settings className="h-3.5 w-3.5" />
-            设置与积分记录
           </div>
         </div>
       </aside>
@@ -206,8 +202,8 @@ function PreviewAgentWorkspace() {
             </div>
             <div className="flex justify-start">
               <div className="max-w-[90%] rounded-2xl rounded-bl-md border border-[#e4ded8] bg-white px-5 py-4 text-sm leading-7 text-[#4f485c] shadow-sm">
-                这是隔离的只读预览。正式页面会使用当前管理员自己的 API Key
-                与云端会话，并在这里持续显示任务状态、执行时间、引用结果和可下载文件。
+                这是隔离的只读预览。正式页面会直接使用当前账号已开放的智能服务与云端会话，
+                并在这里持续显示任务状态、执行时间、引用结果和可下载文件。
                 <div className="mt-4 flex flex-wrap gap-2 text-xs text-[#716a80]">
                   <span className="inline-flex items-center gap-1 rounded-lg bg-[#f3eef6] px-2.5 py-1.5">
                     <FileUp className="h-3.5 w-3.5" />

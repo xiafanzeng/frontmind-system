@@ -122,6 +122,26 @@
   border-left-color: oklch(55% 0.18 265 / 60%);
 }
 
+/* Brand tracking is rendered inside an intentionally light conversation card. */
+.markdown-content.brand-tracking-markdown blockquote,
+.dark .markdown-content.brand-tracking-markdown blockquote {
+  background: #fff;
+  border-left-color: #8d61ad;
+  color: #30273a;
+  font-style: normal;
+}
+
+.markdown-content.brand-tracking-markdown blockquote strong,
+.dark .markdown-content.brand-tracking-markdown blockquote strong {
+  color: #30273a;
+}
+
+.markdown-content.brand-tracking-markdown blockquote code:not(.hljs),
+.dark .markdown-content.brand-tracking-markdown blockquote code:not(.hljs) {
+  background: #f4eff8;
+  color: #4d256d;
+}
+
 /* ===== Light Mode (default) ===== */
 .markdown-content .hljs {
   color: oklch(35% 0.03 280);

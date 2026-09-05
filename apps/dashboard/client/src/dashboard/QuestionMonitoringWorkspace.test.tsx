@@ -725,7 +725,10 @@ describe("QuestionMonitoringWorkspace", () => {
       />,
     );
 
-    expect(screen.getByText("当前问题尚无答案样本")).toBeInTheDocument();
+    expect(screen.getByText("等待同步答案记录")).toBeInTheDocument();
+    expect(
+      screen.getByText("查看各AI平台的答案与引用信源记录"),
+    ).toBeInTheDocument();
     expect(screen.getByText("暂无可匹配的答案")).toBeInTheDocument();
     expect(mocks.citationsQuery).not.toHaveBeenCalled();
   });

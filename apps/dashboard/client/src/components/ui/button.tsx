@@ -10,14 +10,17 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        operator:
+          "bg-[#2563eb] text-white shadow-xs hover:bg-[#1d4ed8] focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/30 dark:bg-[#2563eb] dark:hover:bg-[#1d4ed8]",
+        operatorOutline:
+          "border border-[#2563eb]/60 bg-white text-[#1d4ed8] shadow-xs hover:border-[#2563eb] hover:bg-[#eff6ff] hover:text-[#1d4ed8] focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/25 dark:border-[#60a5fa]/70 dark:bg-transparent dark:text-[#93c5fd] dark:hover:bg-[#1e3a8a]/35 dark:hover:text-[#bfdbfe]",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
           "border bg-transparent shadow-xs hover:bg-accent dark:bg-transparent dark:border-input dark:hover:bg-input/50",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost:
-          "hover:bg-accent dark:hover:bg-accent/50",
+        ghost: "hover:bg-accent dark:hover:bg-accent/50",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
@@ -33,7 +36,7 @@ const buttonVariants = cva(
       variant: "default",
       size: "default",
     },
-  }
+  },
 );
 
 function Button({

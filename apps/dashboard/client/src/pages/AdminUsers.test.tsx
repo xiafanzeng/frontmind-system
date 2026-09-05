@@ -116,7 +116,7 @@ describe("CreateUserDialog", () => {
 
     fireEvent.click(screen.getByRole("option", { name: "普通版" }));
     fireEvent.click(screen.getByRole("combobox", { name: "客户版本" }));
-    expect(screen.getByRole("option", { name: "海内版" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "国内版" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "海外版" })).toBeInTheDocument();
   });
 
@@ -213,7 +213,7 @@ describe("CreateUserDialog", () => {
       screen.getByRole("option", { name: "AI 监控与优化工程师" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("option", { name: "AI 内容分发工程师" }),
+      screen.getByRole("option", { name: "AI 内容制作工程师" }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "AI 运维工程师" }));
 

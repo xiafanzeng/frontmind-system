@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { KnowledgeBaseObservationDto } from "@/lib/knowledge-progress";
-import { KnowledgeBasePollingCoordinator } from "./knowledge-base-coordinator";
-import { observationNeedsPolling } from "./knowledge-base-coordinator";
+import {
+  KnowledgeBasePollingCoordinator,
+  knowledgeBaseObservationAcknowledgesClientRequest,
+  observationNeedsPolling,
+} from "./knowledge-base-coordinator";
 
 function executingObservation(): KnowledgeBaseObservationDto {
   return {
@@ -76,11 +79,75 @@ function awaitingInputObservation(
 }
 
 describe("KnowledgeBasePollingCoordinator", () => {
+  it.each(["activeTurn", "approvedPresentation", "completedTurn"] as const)(
+    "accepts an ordinary reply acknowledged by %s",
+    (field) => {
+      const observation = {
+        ...executingObservation(),
+        [field]: { clientRequestId: "request-direct" },
+      } as unknown as KnowledgeBaseObservationDto;
+
+      expect(
+        knowledgeBaseObservationAcknowledgesClientRequest(
+          observation,
+          "request-direct",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not treat a legacy takeover's pre-existing active turn as acknowledgement", () => {
+    const oldActive = {
+      ...executingObservation(),
+      activeTurn: { clientRequestId: "request-legacy" },
+    } as unknown as KnowledgeBaseObservationDto;
+    const completed = {
+      ...oldActive,
+      completedTurn: { clientRequestId: "request-legacy" },
+    } as unknown as KnowledgeBaseObservationDto;
+
+    expect(
+      knowledgeBaseObservationAcknowledgesClientRequest(
+        oldActive,
+        "request-legacy",
+        { allowActiveTurn: false },
+      ),
+    ).toBe(false);
+    expect(
+      knowledgeBaseObservationAcknowledgesClientRequest(
+        completed,
+        "request-legacy",
+        { allowActiveTurn: false },
+      ),
+    ).toBe(true);
+  });
+
   it("stops polling once a released turn has a server-approved current presentation", () => {
     expect(observationNeedsPolling(awaitingInputObservation())).toBe(false);
   });
 
-  it("keeps polling the same task when its final ZIP can still arrive late", () => {
+  it("does not poll an executing task earlier than three seconds", async () => {
+    const setTimer = vi.fn(
+      (_callback: () => void, _delayMs?: number) =>
+        1 as unknown as ReturnType<typeof setTimeout>,
+    );
+    const coordinator = new KnowledgeBasePollingCoordinator({
+      observe: vi.fn().mockResolvedValue(executingObservation()),
+      apply: vi.fn(),
+      now: () => 1_000,
+      setTimer: setTimer as unknown as typeof setTimeout,
+    });
+
+    coordinator.wake("conversation");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setTimer).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledWith(expect.any(Function), 3_000);
+    coordinator.dispose();
+  });
+
+  it("does not schedule polling for a failed task even when its final ZIP is late", () => {
     const now = Date.now();
     const observation = {
       ...executingObservation(),
@@ -99,7 +166,7 @@ describe("KnowledgeBasePollingCoordinator", () => {
       },
     };
 
-    expect(observationNeedsPolling(observation, now)).toBe(true);
+    expect(observationNeedsPolling(observation, now)).toBe(false);
     expect(observationNeedsPolling(observation, now + 5 * 60 * 1000)).toBe(
       false,
     );
@@ -145,6 +212,93 @@ describe("KnowledgeBasePollingCoordinator", () => {
     coordinator.dispose();
   });
 
+  it("stops pending-request polling when a fast final turn is acknowledged without a presentation", async () => {
+    const acknowledged = {
+      ...executingObservation(),
+      interaction: {
+        ...executingObservation().interaction,
+        interactionState: "ready_to_publish" as const,
+      },
+      completedTurn: {
+        turnId: "final-turn",
+        clientRequestId: "request-final",
+        messageSequence: 9,
+      },
+    };
+    const setTimer = vi.fn();
+    const observe = vi.fn().mockResolvedValue(acknowledged);
+    const coordinator = new KnowledgeBasePollingCoordinator({
+      observe,
+      apply: vi.fn(),
+      setTimer: setTimer as unknown as typeof setTimeout,
+    });
+
+    coordinator.wake("conversation", "request-final");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(setTimer).not.toHaveBeenCalled();
+    coordinator.dispose();
+  });
+
+  it("polls a completed build until the same-epoch local package becomes ready", async () => {
+    let scheduled: (() => void) | undefined;
+    const preparing = {
+      ...executingObservation(),
+      stateEpoch: 9,
+      contentState: "completed" as const,
+      packageState: "preparing" as const,
+      interaction: {
+        ...executingObservation().interaction,
+        interactionState: "ready_to_publish" as const,
+      },
+    };
+    const ready = {
+      ...preparing,
+      packageState: "ready" as const,
+      package: {
+        revision: 3,
+        outputItemId: null,
+        fileId: null,
+        filename: "knowledge-base.zip",
+        mimeType: "application/zip" as const,
+        sha256: "a".repeat(64),
+        sizeBytes: 128,
+        downloadPath: "/api/knowledge-base/artifacts/build/package",
+      },
+    };
+    const observe = vi
+      .fn()
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValueOnce(ready);
+    const apply = vi.fn();
+    const coordinator = new KnowledgeBasePollingCoordinator({
+      observe,
+      apply,
+      now: () => 1_000,
+      setTimer: ((callback: () => void) => {
+        scheduled = callback;
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      }) as unknown as typeof setTimeout,
+    });
+
+    coordinator.wake("conversation");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(observationNeedsPolling(preparing)).toBe(true);
+    expect(scheduled).toBeTypeOf("function");
+
+    scheduled?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(apply).toHaveBeenNthCalledWith(2, "conversation", ready);
+    expect(observationNeedsPolling(ready)).toBe(false);
+    expect(observe).toHaveBeenCalledTimes(2);
+    coordinator.dispose();
+  });
+
   it("does not extend the pending-request grace when the same request wakes again", async () => {
     let now = 1_000;
     let scheduled: (() => void) | undefined;
@@ -155,9 +309,10 @@ describe("KnowledgeBasePollingCoordinator", () => {
       scheduled = callback;
       return 1 as unknown as ReturnType<typeof setTimeout>;
     });
+    const apply = vi.fn();
     const coordinator = new KnowledgeBasePollingCoordinator({
       observe,
-      apply: vi.fn(),
+      apply,
       now: () => now,
       pendingRequestGraceMs: 6_000,
       setTimer: setTimer as unknown as typeof setTimeout,
@@ -167,6 +322,14 @@ describe("KnowledgeBasePollingCoordinator", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(setTimer).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenLastCalledWith(
+      "conversation",
+      expect.objectContaining({
+        interaction: expect.objectContaining({
+          interactionState: "awaiting_input",
+        }),
+      }),
+    );
 
     now += 6_001;
     scheduled?.();
@@ -179,6 +342,10 @@ describe("KnowledgeBasePollingCoordinator", () => {
     await Promise.resolve();
     expect(observe).toHaveBeenCalledTimes(3);
     expect(setTimer).toHaveBeenCalledTimes(1);
+    // Polling may stop after the six-minute request grace only after the last
+    // authoritative observation was applied, so optimistic `running` cannot
+    // remain as the visible terminal state.
+    expect(apply).toHaveBeenCalledTimes(3);
     coordinator.dispose();
   });
 
@@ -216,8 +383,9 @@ describe("KnowledgeBasePollingCoordinator", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // All duplicate triggers collapse into at most one follow-up request.
-    expect(observe).toHaveBeenCalledTimes(2);
+    // Duplicate triggers during an in-flight request do not force a follow-up
+    // unless they carry a genuinely new pending request identity.
+    expect(observe).toHaveBeenCalledTimes(1);
     expect(maxConcurrent).toBe(1);
     coordinator.dispose();
   });

@@ -330,7 +330,7 @@ export default function AdminUsers() {
           }}
           onCreated={(userId, createdRole) => {
             if (createdRole === "user") {
-              setLocation(`/admin/customers/${userId}/service`);
+              setLocation(`/admin/customers/${userId}/workspace`);
             }
           }}
         />
@@ -1144,15 +1144,15 @@ export function CreateUserDialog({
                       disabled={createMutation.isPending}
                     >
                       <SelectTrigger className="w-full" aria-label="客户版本">
-                        <SelectValue placeholder="请选择海内版或海外版" />
+                        <SelectValue placeholder="请选择国内版或海外版" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="domestic">海内版</SelectItem>
+                        <SelectItem value="domestic">国内版</SelectItem>
                         <SelectItem value="overseas">海外版</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-xs leading-5 text-muted-foreground">
-                      海外版使用独立的内容资产媒体渠道；其他功能暂与海内版保持一致。
+                      海外版使用独立的内容资产媒体渠道；其他功能暂与国内版保持一致。
                     </p>
                   </div>
                   {fixedDeliveryAdmin ? (

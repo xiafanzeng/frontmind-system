@@ -85,8 +85,15 @@ function isAbortRequestError(error: unknown) {
 /**
  * Check if a URL needs auth headers (our proxy URLs)
  */
+const KNOWLEDGE_BASE_RESOURCE_PREFIX =
+  "/api/knowledge-base/artifacts/resources/";
+
+function isKnowledgeBaseResource(url: string): boolean {
+  return url.startsWith(KNOWLEDGE_BASE_RESOURCE_PREFIX);
+}
+
 function needsAuthHeaders(url: string): boolean {
-  return url.startsWith("/api/frontmind/");
+  return url.startsWith("/api/frontmind/") || isKnowledgeBaseResource(url);
 }
 
 async function readImageContentError(response: Response) {
@@ -161,9 +168,10 @@ export async function fetchImageWithAuth(
   url: string,
   signal?: AbortSignal,
 ): Promise<string> {
+  const knowledgeBaseResource = isKnowledgeBaseResource(url);
   const response = await fetch(url, {
     credentials: "include",
-    headers: deliveryProjectHeaders(),
+    headers: knowledgeBaseResource ? undefined : deliveryProjectHeaders(),
     signal,
   });
 
@@ -175,7 +183,10 @@ export async function fetchImageWithAuth(
 
   // upload_url is a PUT-only capability. Metadata is never a valid image
   // download fallback; the authenticated content route must return bytes.
-  if (contentType.includes("application/json")) {
+  if (
+    contentType.includes("application/json") ||
+    (knowledgeBaseResource && !contentType.toLowerCase().startsWith("image/"))
+  ) {
     await response.body?.cancel().catch(() => undefined);
     throw new ImageContentRequestError("服务返回的不是有效图片", {
       retryable: false,
@@ -235,7 +246,9 @@ export default function ImagePreview({
   expired = false,
 }: ImagePreviewProps) {
   const sourceUrl = fileId
-    ? `/api/frontmind/v1/files/${encodeURIComponent(fileId)}`
+    ? fileId.startsWith("asset_")
+      ? `/api/frontmind/v2/assets/${encodeURIComponent(fileId)}/content`
+      : `/api/frontmind/v1/files/${encodeURIComponent(fileId)}`
     : src || "";
   const [isOpen, setIsOpen] = useState(false);
   const [scale, setScale] = useState(1);
@@ -361,6 +374,9 @@ export default function ImagePreview({
       });
       return;
     }
+    if (isKnowledgeBaseResource(sourceUrl) && (!blobUrl || loadError)) {
+      return;
+    }
     try {
       let downloadUrl: string;
 
@@ -405,7 +421,7 @@ export default function ImagePreview({
       const failure = normalizeImageContentError(err);
       if (failure) setLoadError(failure);
     }
-  }, [alt, blobUrl, contentExpired, expiresAt, sourceUrl]);
+  }, [alt, blobUrl, contentExpired, expiresAt, loadError, sourceUrl]);
 
   const handleNativeImageError = useCallback(() => {
     setLoadError({
@@ -417,6 +433,9 @@ export default function ImagePreview({
 
   // Image source for the img tag: blob URL if available, otherwise original src
   const imgSrc = blobUrl || sourceUrl;
+  const canDownload =
+    showDownload &&
+    (!isKnowledgeBaseResource(sourceUrl) || Boolean(blobUrl && !loadError));
 
   return (
     <>
@@ -455,7 +474,7 @@ export default function ImagePreview({
               >
                 重试
               </button>
-            ) : showDownload && loadError.recoveryAction !== "reupload" ? (
+            ) : canDownload && loadError.recoveryAction !== "reupload" ? (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -530,7 +549,7 @@ export default function ImagePreview({
             </div>
 
             <div className="flex items-center gap-2">
-              {showDownload && (
+              {canDownload && (
                 <Button
                   variant="ghost"
                   size="icon"
@@ -561,12 +580,14 @@ export default function ImagePreview({
             ) : loadError ? (
               <div className="text-white/60 text-center">
                 <p>图片加载失败</p>
-                <button
-                  onClick={handleDownload}
-                  className="mt-2 text-sm text-blue-400 hover:underline"
-                >
-                  点击下载
-                </button>
+                {canDownload ? (
+                  <button
+                    onClick={handleDownload}
+                    className="mt-2 text-sm text-blue-400 hover:underline"
+                  >
+                    点击下载
+                  </button>
+                ) : null}
               </div>
             ) : (
               <img

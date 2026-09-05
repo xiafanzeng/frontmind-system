@@ -1,5 +1,6 @@
 import {
   CheckCircle2,
+  FileClock,
   FileImage,
   Loader2,
   LockKeyhole,
@@ -71,6 +72,7 @@ export type ContentAssetRequestDialogProps = {
   preferredMediaOptions?: readonly PreferredContentMedia[];
   onSubmit?: (payload: ContentAssetRequestPayload) => void | Promise<void>;
   onSubmitSuccess?: (payload: ContentAssetRequestPayload) => void;
+  onOpenHistory?: () => void;
 };
 
 function optionalText(value: string) {
@@ -109,6 +111,7 @@ export default function ContentAssetRequestDialog({
   preferredMediaOptions = CONTENT_ASSET_PREFERRED_MEDIA,
   onSubmit,
   onSubmitSuccess,
+  onOpenHistory,
 }: ContentAssetRequestDialogProps) {
   const [topicDirection, setTopicDirection] = useState("");
   const [preferredMedia, setPreferredMedia] = useState<
@@ -210,7 +213,7 @@ export default function ContentAssetRequestDialog({
               )}
             </div>
             <DialogTitle className="text-xl font-semibold text-[#21162f]">
-              {isPlanLocked ? "内容需求服务尚未解锁" : "提交内容需求工单"}
+              {isPlanLocked ? "内容需求服务尚未解锁" : "提交内容需求"}
             </DialogTitle>
             <DialogDescription className="pt-1 text-sm leading-6 text-[#6d6478]">
               {assetType.name} · {assetType.description}
@@ -235,9 +238,23 @@ export default function ContentAssetRequestDialog({
               </div>
             </div>
             <p className="rounded-xl bg-[#f8f5fa] px-4 py-3 text-sm leading-6 text-[#645a70]">
-              服务团队会核验话题、资料与图片，并由内容分发工程师完成内容制作和渠道登记；实际渠道和发布时间以工单结果为准。
+              服务团队会核验话题、资料与图片，并由 AI
+              内容制作工程师完成内容制作和媒体分发；实际媒体和发布时间以需求结果为准。
             </p>
             <DialogFooter>
+              {onOpenHistory && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onOpenHistory();
+                  }}
+                >
+                  <FileClock className="h-4 w-4" />
+                  需求记录
+                </Button>
+              )}
               <Button
                 type="button"
                 className="bg-[#5b2a86] text-white hover:bg-[#48216c]"
@@ -264,6 +281,19 @@ export default function ContentAssetRequestDialog({
               </div>
             </div>
             <DialogFooter>
+              {onOpenHistory && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onOpenHistory();
+                  }}
+                >
+                  <FileClock className="h-4 w-4" />
+                  需求记录
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="outline"
@@ -286,7 +316,8 @@ export default function ContentAssetRequestDialog({
                     服务团队如何交付
                   </h3>
                   <p className="mt-1 text-sm leading-6 text-[#706778]">
-                    交付管理员负责核验范围和协调异常，AI 内容分发工程师负责制作内容、完成渠道分发并登记公开结果。
+                    交付管理员负责核验范围和协调异常，AI AI
+                    内容制作工程师负责制作内容、完成媒体分发并登记公开结果。
                   </p>
                 </div>
               </div>
@@ -460,6 +491,20 @@ export default function ContentAssetRequestDialog({
             )}
 
             <DialogFooter className="gap-2 sm:gap-2">
+              {onOpenHistory && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onOpenHistory();
+                  }}
+                  disabled={submitting}
+                >
+                  <FileClock className="h-4 w-4" />
+                  需求记录
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="outline"

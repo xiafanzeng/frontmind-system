@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { Link } from "wouter";
 import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import {
   Activity,
@@ -18,20 +19,23 @@ import {
   Check,
   Eye,
   BarChart3,
-  ArrowUpRight,
   ArrowDownRight,
   Minus,
   MessageSquareQuote,
   Layers3,
   ChartNoAxesColumnIncreasing,
+  FileClock,
+  Radar,
 } from "lucide-react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { toast } from "sonner";
 import ContentAssetRequestDialog, {
   type ContentAssetRequestPayload,
 } from "@/components/ContentAssetRequestDialog";
-import ContentAssetTicketHistory from "@/components/ContentAssetTicketHistory";
+import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
 import DeliveryTicketDetailDialog from "@/components/DeliveryTicketDetailDialog";
+import { Button } from "@/components/ui/button";
 import ResponseLogicWorkspace, {
   ResponseLogicConfirmationBoard,
   useResponseLogicWorkspaceState,
@@ -40,16 +44,30 @@ import ManagedCitationWorkbench, {
   PreviewCitationWorkbench,
 } from "./ManagedCitationWorkbench";
 import ManagedKeywordTables from "./ManagedKeywordTables";
-import BrandQuestionPortfolioWorkspace from "./BrandQuestionPortfolioWorkspace";
+import QuestionIntakePanel, {
+  previewQuestionCategoryMeta,
+  type PreviewConfirmedQuestion,
+  type PreviewQuestionCategory,
+} from "./QuestionIntakePanel";
 import ProgressReportWorkspace from "./ProgressReportWorkspace";
 import HistoricalResultsReadOnly from "./HistoricalResultsReadOnly";
 import AiWebsiteManagementWorkspace from "./AiWebsiteManagementWorkspace";
+import ConnectedSiteOpsConversationPanel from "./siteops/ConnectedSiteOpsConversationPanel";
 import { trpc } from "@/lib/trpc";
 import { uploadFile } from "@/lib/frontmind-api";
+import {
+  KEYWORD_CATEGORY_OPTIONS,
+  keywordCategoryKey,
+  keywordCategoryLabel,
+  keywordCategoryTone,
+} from "@shared/keyword-categories";
+import { WEBSITE_MANAGEMENT_HISTORY_CATEGORIES } from "@shared/delivery-ticket";
+import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "@shared/siteops-branding";
 import {
   getCapability,
   getPreviewPlanCode,
   getRouteCapability,
+  isCapabilityIncludedInPlan,
   normalizeServicePortal,
 } from "./service-portal";
 import {
@@ -68,8 +86,68 @@ import "./dashboard-styles.css";
 
 export { ManagedKeywordTables };
 
+const QUESTION_QUOTA_KEY_BY_CATEGORY = {
+  industry: "industry",
+  competitor_comparison: "competitor",
+  reputation: "reputation",
+  product_scenario: "scenario",
+};
+
+export function buildKeywordQuotaAvailability(portal) {
+  const unlock =
+    portal.plan.code === "luxury" &&
+    portal.quotaUnlock?.total !== null &&
+    portal.quotaUnlock?.total !== undefined &&
+    portal.quotaUnlock.total > 1
+      ? portal.quotaUnlock
+      : undefined;
+  const futureUnlock = Boolean(
+    unlock &&
+      unlock.capacityState === "available" &&
+      unlock.current !== null &&
+      unlock.total !== null &&
+      unlock.current < unlock.total,
+  );
+  return Object.fromEntries(
+    Object.entries(QUESTION_QUOTA_KEY_BY_CATEGORY).flatMap(
+      ([category, quotaKey]) => {
+        const quota = portal.quotas.find((item) => item.key === quotaKey);
+        if (!quota || quota.limit === null || quota.used === null) return [];
+        const blockedBySchedule =
+          unlock?.capacityState === "awaiting_unlock" ||
+          unlock?.capacityState === "exhausted";
+        const available = !blockedBySchedule && quota.used < quota.limit;
+        const annualExhausted =
+          unlock?.capacityState === "exhausted" ||
+          (unlock?.capacityState !== null &&
+            unlock?.capacityState !== undefined &&
+            quota.entitlementLimit !== undefined &&
+            quota.entitlementLimit !== null &&
+            quota.used >= quota.entitlementLimit);
+        return [
+          [
+            category,
+            {
+              available,
+              unavailableLabel: annualExhausted
+                ? "全年额度已用完"
+                : unlock?.capacityState === "awaiting_unlock" || futureUnlock
+                  ? "下一季度开放"
+                  : "该类额度已满",
+            },
+          ],
+        ];
+      },
+    ),
+  );
+}
+
 const EmbeddedKnowledgeBasePanel = lazy(
   () => import("@/components/EmbeddedKnowledgeBasePanel"),
+);
+
+const BrandTrackingAgentPanel = lazy(
+  () => import("@/components/BrandTrackingAgentPanel"),
 );
 
 const QuestionMonitoringWorkspace = lazy(
@@ -77,6 +155,53 @@ const QuestionMonitoringWorkspace = lazy(
 );
 
 const FORMAL_QUERY_REFRESH_INTERVAL_MS = 30_000;
+
+export function getRouteRequestHistoryConfig(section, sub) {
+  if (section === "intent" && sub === "question-optimization") {
+    return {
+      title: "问题需求记录",
+      description: "自主填写问题审核、问题修改与问题删除记录统一显示在这里。",
+      type: "knowledge_base",
+      surface: "question_management",
+      emptyText: "暂无问题审核、修改或删除记录。",
+    };
+  }
+  if (section === "response-logic") {
+    return {
+      title: "应答逻辑需求记录",
+      description: "仅显示已确认应答逻辑的重置与重新编辑申请。",
+      type: "knowledge_base",
+      surface: "response_logic_management",
+      emptyText: "暂无应答逻辑修改需求。",
+    };
+  }
+  if (section === "knowledge-agent") {
+    return {
+      title: "知识库需求记录",
+      description: "知识库重置申请与已发布知识库维护需求统一显示在这里。",
+      surface: "knowledge_management",
+      emptyText: "暂无知识库重置或维护需求。",
+    };
+  }
+  if (section === "semantic" && sub === "website-management") {
+    return {
+      title: "官网需求记录",
+      description: "域名、备案、图片风格与官网内容需求统一显示在这里。",
+      type: "website_operation",
+      surface: "website_management",
+      emptyText: "暂无官网需求记录。",
+    };
+  }
+  if (section === "semantic" && sub === "content-assets") {
+    return {
+      title: "内容需求记录",
+      description: "当前页面提交的全部内容需求及公开交付结果统一显示在这里。",
+      type: "content_asset",
+      emptyText: "暂无内容需求记录。",
+    };
+  }
+  return null;
+}
 
 const geoIntentMeta = {
   basic: {
@@ -100,7 +225,7 @@ const geoIntentMeta = {
   ranking: {
     label: "行业排名",
     short: "行业排名",
-    desc: "围绕行业词与品牌优胜，监测出现率、答案位次、权威引用与品类入口覆盖。",
+    desc: "围绕行业排名词与品牌优胜，监测出现率、答案位次、权威引用与品类入口覆盖。",
     tone: "gold",
   },
 };
@@ -121,7 +246,7 @@ const brandSubpages = [
   {
     id: "global-keywords",
     label: "品牌全域词库",
-    desc: "基于百度营销、小红书蒲公英、抖音巨量指数等平台反馈的真实热度问题库。",
+    desc: "基于百度营销、小红书蒲公英、抖音巨量指数等平台数据综合整理 GEO 优化问题，支持按主分类与问题细分筛选。",
   },
 ];
 
@@ -157,6 +282,15 @@ const progressSubpages = [
   },
 ];
 
+const publicOpinionSubpages = [
+  {
+    id: "brand-tracking",
+    section: "public-opinion",
+    label: "品牌追踪智能体",
+    desc: "通过 FrontMind 品牌追踪智能体追踪品牌评价、舆情趋势与潜在风险。",
+  },
+];
+
 const semanticSubpages = [
   {
     id: "content-assets",
@@ -167,7 +301,7 @@ const semanticSubpages = [
   {
     id: "website-management",
     section: "semantic",
-    label: "AI 友好官网管理",
+    label: SITEOPS_CUSTOMER_DISPLAY_NAME,
     desc: "先购买并提交域名，领取 AI 运维返回的备案服务码后完成 ICP 备案。",
   },
 ];
@@ -191,7 +325,7 @@ function previewDeliveryQuota(planCode, type, used = 0) {
     periodId: `preview-${planCode}`,
     validFrom: null,
     validUntil: null,
-    reason: limit > 0 ? null : "当前版本不包含此项工单服务，历史记录仍可查看。",
+    reason: limit > 0 ? null : "当前版本不包含此项需求服务，历史记录仍可查看。",
   };
 }
 
@@ -423,11 +557,14 @@ function buildManagedQuestionGroups(questions) {
   const groups = new Map();
   for (const item of questions || []) {
     if (!groups.has(item.groupId)) {
+      const semanticTone =
+        keywordCategoryTone(item.groupId) ||
+        keywordCategoryTone(item.groupTitle);
       groups.set(item.groupId, {
         id: item.groupId,
         title: item.groupTitle,
         subtitle: item.groupSubtitle || "",
-        tone: item.tone || "plum",
+        tone: semanticTone || item.tone || "plum",
         questions: [],
       });
     }
@@ -441,7 +578,7 @@ function buildManagedQuestionGroups(questions) {
   return [...groups.values()];
 }
 
-function buildServiceQuestionGroups(purchasedQuestions, managedGroups) {
+export function buildServiceQuestionGroups(purchasedQuestions, managedGroups) {
   if (!purchasedQuestions?.length) return managedGroups;
 
   const knownQuestions = new Map();
@@ -460,7 +597,7 @@ function buildServiceQuestionGroups(purchasedQuestions, managedGroups) {
     },
     industry: {
       id: "ranking",
-      title: "行业词",
+      title: "行业排名词",
       subtitle: "行业入口与品牌优胜问题",
       tone: "amber",
     },
@@ -635,7 +772,7 @@ export function PreviewUserBrandDashboard({
             actorLabel: "服务团队",
             message:
               selectedTicket.publicSummary ||
-              "服务团队会在工单详情中更新沟通与交付结果。",
+              "服务团队会在需求详情中更新沟通与交付结果。",
             fromStatus: "submitted",
             toStatus: selectedTicket.status,
             operationResult: null,
@@ -658,6 +795,7 @@ export function PreviewUserBrandDashboard({
         questions: [],
         contentAssets: fixtures.publishedContentAssets || [],
       }}
+      managedRevision={0}
       dashboardLoading={false}
       dashboardError={false}
       onSubmitContentRequest={onSubmitContentRequest}
@@ -669,10 +807,15 @@ export function PreviewUserBrandDashboard({
       onCloseDeliveryTicket={() => setSelectedDeliveryTicketId(null)}
       deliveryTicketDetailPayload={ticketDetail}
       previewBrandName={fixtures.overview.brand}
-      renderPreviewBrandSection={({ sub, onUseQuestion }) => (
+      renderPreviewBrandSection={({
+        sub,
+        onUseQuestion,
+        quotaAvailability,
+      }) => (
         <BrandSection
           sub={sub}
           onUseQuestion={onUseQuestion}
+          quotaAvailability={quotaAvailability}
           brandBuildingData={fixtures.brandBuilding}
           globalKeywordData={fixtures.globalKeywordBank}
         />
@@ -707,6 +850,7 @@ function PersistentUserBrandDashboard({
   initialSection,
   onSubmitContentRequest,
 }) {
+  const { user } = useAuth();
   const [selectedDeliveryTicketId, setSelectedDeliveryTicketId] =
     useState(null);
   // Keep this adapter isolated until the generated AppRouter type includes
@@ -724,6 +868,7 @@ function PersistentUserBrandDashboard({
   const servicePortalView = normalizeServicePortal(servicePortalQuery.data);
   const deliveryOperationsEnabled =
     servicePortalView.capabilities.contentAssets.allowed;
+  const deliveryHistoryEnabled = servicePortalView.known;
   const dashboardQuery = trpc.workspace.dashboard.useQuery(undefined, {
     enabled: deliveryOperationsEnabled,
     retry: false,
@@ -736,7 +881,7 @@ function PersistentUserBrandDashboard({
   const deliveryWorkspaceQuery = deliveryTicketApi.workspace.useQuery(
     undefined,
     {
-      enabled: deliveryOperationsEnabled,
+      enabled: deliveryHistoryEnabled,
       retry: false,
       refetchOnMount: "always",
       refetchOnWindowFocus: true,
@@ -747,7 +892,7 @@ function PersistentUserBrandDashboard({
   const contentDeliveryTicketsQuery = deliveryTicketApi.list.useInfiniteQuery(
     { type: "content_asset", limit: 20 },
     {
-      enabled: deliveryOperationsEnabled,
+      enabled: deliveryHistoryEnabled,
       retry: false,
       refetchOnMount: "always",
       refetchOnWindowFocus: true,
@@ -757,9 +902,13 @@ function PersistentUserBrandDashboard({
     },
   );
   const websiteDeliveryTicketsQuery = deliveryTicketApi.list.useInfiniteQuery(
-    { type: "website_operation", limit: 20 },
     {
-      enabled: deliveryOperationsEnabled,
+      type: "website_operation",
+      surface: "website_management",
+      limit: 20,
+    },
+    {
+      enabled: deliveryHistoryEnabled,
       retry: false,
       refetchOnMount: "always",
       refetchOnWindowFocus: true,
@@ -779,9 +928,13 @@ function PersistentUserBrandDashboard({
         selectedDeliveryTicketId || "00000000-0000-4000-8000-000000000000",
     },
     {
-      enabled: deliveryOperationsEnabled && Boolean(selectedDeliveryTicketId),
+      enabled: deliveryHistoryEnabled && Boolean(selectedDeliveryTicketId),
       retry: false,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: true,
+      refetchInterval: selectedDeliveryTicketId
+        ? FORMAL_QUERY_REFRESH_INTERVAL_MS
+        : false,
+      refetchIntervalInBackground: false,
     },
   );
   const addDeliveryTicketMessageMutation =
@@ -814,12 +967,14 @@ function PersistentUserBrandDashboard({
   return (
     <UserBrandDashboardContent
       preview={false}
+      marketEdition={user?.marketEdition || "domestic"}
       initialSection={initialSection}
       servicePortalPayload={servicePortalQuery.data}
       servicePortalLoading={servicePortalQuery.isLoading}
       servicePortalError={servicePortalQuery.isError}
       onRefreshServicePortal={() => servicePortalQuery.refetch()}
       managedPayload={dashboardQuery.data?.payload}
+      managedRevision={dashboardQuery.data?.revision ?? null}
       dashboardLoading={dashboardQuery.isLoading}
       dashboardError={dashboardQuery.isError}
       onSubmitContentRequest={onSubmitContentRequest}
@@ -840,7 +995,7 @@ function PersistentUserBrandDashboard({
           error:
             contentDeliveryTicketsQuery.error?.message ||
             (contentDeliveryTicketsQuery.isError
-              ? "内容工单暂时无法载入，请稍后刷新。"
+              ? "内容需求暂时无法载入，请稍后刷新。"
               : null),
           onLoadMore: () => contentDeliveryTicketsQuery.fetchNextPage(),
         },
@@ -852,7 +1007,7 @@ function PersistentUserBrandDashboard({
           error:
             websiteDeliveryTicketsQuery.error?.message ||
             (websiteDeliveryTicketsQuery.isError
-              ? "官网工单暂时无法载入，请稍后刷新。"
+              ? "官网需求暂时无法载入，请稍后刷新。"
               : null),
           onLoadMore: () => websiteDeliveryTicketsQuery.fetchNextPage(),
         },
@@ -877,7 +1032,7 @@ function PersistentUserBrandDashboard({
       deliveryTicketDetailError={
         deliveryTicketDetailQuery.error?.message ||
         (deliveryTicketDetailQuery.isError
-          ? "工单详情暂时无法载入，请稍后重试。"
+          ? "需求详情暂时无法载入，请稍后重试。"
           : null)
       }
       onRefreshDeliveryTicket={() => deliveryTicketDetailQuery.refetch()}
@@ -885,7 +1040,7 @@ function PersistentUserBrandDashboard({
       onAddDeliveryTicketMessage={async ({ message, attachmentFiles }) => {
         if (!selectedDeliveryTicketId) return;
         const attachments = await uploadDeliveryFiles(attachmentFiles, {
-          purpose: "工单补充资料",
+          purpose: "需求补充资料",
         });
         await addDeliveryTicketMessageMutation.mutateAsync({
           ticketId: selectedDeliveryTicketId,
@@ -901,12 +1056,14 @@ function PersistentUserBrandDashboard({
 
 function UserBrandDashboardContent({
   preview,
+  marketEdition = "domestic",
   initialSection,
   servicePortalPayload,
   servicePortalLoading,
   servicePortalError,
   onRefreshServicePortal,
   managedPayload,
+  managedRevision = null,
   dashboardLoading,
   dashboardError,
   onSubmitContentRequest,
@@ -938,18 +1095,21 @@ function UserBrandDashboardContent({
   const [route, setRoute] = useState(
     initialSection === "knowledge-agent"
       ? { section: "knowledge-agent", sub: "build" }
-      : initialSection === "monitoring"
-        ? { section: "progress", sub: "monitor" }
       : { section: "service", sub: null },
   );
   const [accountOpen, setAccountOpen] = useState(false);
   const [salesAdvisorOpen, setSalesAdvisorOpen] = useState(false);
+  const [routeHistoryOpen, setRouteHistoryOpen] = useState(false);
   const [selectedType, setSelectedType] = useState(null);
   const [responseQuestionId, setResponseQuestionId] = useState(null);
   const [questionIntakeDraft, setQuestionIntakeDraft] = useState(null);
   const servicePortal = useMemo(
     () => normalizeServicePortal(servicePortalPayload),
     [servicePortalPayload],
+  );
+  const keywordQuotaAvailability = useMemo(
+    () => buildKeywordQuotaAvailability(servicePortal),
+    [servicePortal],
   );
   const deliveryWorkspace = deliveryWorkspacePayload || {};
   const contentAssetCatalog = useMemo(
@@ -982,14 +1142,18 @@ function UserBrandDashboardContent({
   const contentAssetTickets = contentTicketList
     ? contentTicketList.tickets
     : allDeliveryTickets.filter((ticket) => ticket?.type === "content_asset");
-  const websiteOperationTickets = websiteTicketList
-    ? websiteTicketList.tickets
-    : allDeliveryTickets.filter(
-        (ticket) => ticket?.type === "website_operation",
-      );
-  const questionCatalogTicket = websiteOperationTickets.find(
-    (ticket) => ticket?.category === "question_catalog",
+  const websiteOperationTickets = (
+    websiteTicketList
+      ? websiteTicketList.tickets
+      : allDeliveryTickets.filter(
+          (ticket) => ticket?.type === "website_operation",
+        )
+  ).filter((ticket) =>
+    WEBSITE_MANAGEMENT_HISTORY_CATEGORIES.includes(ticket?.category),
   );
+  // Production always uses the OAuth-only SiteOps workspace. Preview fixtures
+  // stay local and never create a real SiteOps project.
+  const useSiteOpsWebsiteFlow = !previewMode;
   const selectedDeliveryTicketQuota =
     deliveryTicketDetailPayload?.ticket?.type === "website_operation"
       ? websiteOperationQuota
@@ -1001,7 +1165,7 @@ function UserBrandDashboardContent({
     Boolean(
       deliveryTicketDetailPayload?.ticket?.canReply ??
         selectedDeliveryTicketQuota?.allowed ??
-        (contentAssetQuota?.allowed || websiteOperationQuota?.allowed),
+        false,
     );
   const managedQuestionGroups = useMemo(
     () => buildManagedQuestionGroups(managedPayload?.questions || []),
@@ -1015,6 +1179,23 @@ function UserBrandDashboardContent({
       ),
     [managedQuestionGroups, servicePortal.purchasedQuestions],
   );
+  const progressQuestionGroups = useMemo(() => {
+    if (previewMode) return activeQuestionGroups;
+    const confirmedQuestions = servicePortal.purchasedQuestions.filter(
+      (question) => question.responseLogicConfirmed,
+    );
+    const hasConfirmationProjection = servicePortal.purchasedQuestions.some(
+      (question) => question.responseLogicConfirmed !== undefined,
+    );
+    return buildServiceQuestionGroups(
+      confirmedQuestions.length > 0
+        ? confirmedQuestions
+        : hasConfirmationProjection
+          ? []
+          : servicePortal.purchasedQuestions,
+      [],
+    );
+  }, [activeQuestionGroups, previewMode, servicePortal.purchasedQuestions]);
   const responseLogicWorkspaceState =
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -1028,6 +1209,7 @@ function UserBrandDashboardContent({
         ? { section: "progress", sub: "monitor" }
         : { section, sub },
     );
+    setRouteHistoryOpen(false);
     setMobileNavOpen(false);
   };
   const openResponseLogic = (questionId) => {
@@ -1036,6 +1218,7 @@ function UserBrandDashboardContent({
   };
   const handleResponseLogicPublished = (questionId) => {
     setResponseQuestionId(questionId);
+    void onRefreshServicePortal?.();
     navigate("intent", "question-optimization");
   };
   const useBrandQuestion = (question) => {
@@ -1044,10 +1227,19 @@ function UserBrandDashboardContent({
       setQuestionIntakeDraft(null);
     } else {
       setQuestionIntakeDraft({
-        sourceQuestionId: question.id,
-        sourceRevision: question.revision,
+        origin: "brand_keyword_library",
         question: question.question,
         category: question.category,
+        libraryRef:
+          managedRevision !== null &&
+          question.tableId &&
+          Number.isInteger(question.rowIndex)
+            ? {
+                dashboardRevision: managedRevision,
+                tableId: question.tableId,
+                rowIndex: question.rowIndex,
+              }
+            : null,
       });
     }
     navigate("intent", "question-optimization");
@@ -1057,7 +1249,7 @@ function UserBrandDashboardContent({
       await onSubmitContentRequest(payload);
     } else if (!previewMode) {
       if (!onCreateDeliveryTicket) {
-        throw new Error("内容需求工单接口尚未连接，请稍后重试。");
+        throw new Error("内容需求接口尚未连接，请稍后重试。");
       }
       const attachments = await uploadDeliveryFiles(payload.attachmentFiles, {
         purpose: payload.imagePurpose || payload.attachmentNotes || undefined,
@@ -1084,19 +1276,19 @@ function UserBrandDashboardContent({
       });
       await onRefreshDeliveryWorkspace?.();
     }
-    toast.success(previewMode ? "预览工单已提交" : "内容需求已提交", {
-      description: "服务团队核对后会交由 AI 内容分发工程师执行。",
+    toast.success(previewMode ? "预览需求已提交" : "内容需求已提交", {
+      description: "服务团队核对后会交由 AI 内容制作工程师执行。",
     });
   };
   const submitWebsiteOperationRequest = async (payload) => {
     if (previewMode) {
-      toast.success("预览工单已提交", {
-        description: "正式账号会先上传附件，再创建真实官网运营工单。",
+      toast.success("预览需求已提交", {
+        description: "正式账号会先上传附件，再创建真实官网运营需求。",
       });
       return;
     }
     if (!onCreateDeliveryTicket) {
-      throw new Error("官网运营工单接口尚未连接，请稍后重试。");
+      throw new Error("官网运营需求接口尚未连接，请稍后重试。");
     }
     const regularAttachments = await uploadDeliveryFiles(
       payload.attachmentFiles,
@@ -1116,7 +1308,7 @@ function UserBrandDashboardContent({
       attachments: regularAttachments,
     });
     await onRefreshDeliveryWorkspace?.();
-    toast.success("官网运营工单已提交", {
+    toast.success("官网运营需求已提交", {
       description: "服务团队核对权限与资料后会交由 AI 运维工程师执行。",
     });
   };
@@ -1125,39 +1317,52 @@ function UserBrandDashboardContent({
     ? getCapability(servicePortal, capabilityKey)
     : null;
   const routeLocked = Boolean(routeAccess && !routeAccess.allowed);
+  useEffect(() => {
+    if (routeLocked) setRouteHistoryOpen(false);
+  }, [routeLocked]);
+  const routeRequestHistory = getRouteRequestHistoryConfig(
+    route.section,
+    route.sub,
+  );
   const knowledgeBuildWorkspace =
     route.section === "knowledge-agent" && route.sub !== "display";
+  const brandTrackingWorkspace =
+    marketEdition === "overseas" && route.section === "public-opinion";
+  const immersiveAgentWorkspace =
+    knowledgeBuildWorkspace || brandTrackingWorkspace;
   const routeTitle =
-    route.section === "knowledge-agent"
-      ? route.sub === "display"
-        ? "知识库展示"
-        : "知识库智能体"
-      : route.section === "brand"
-        ? route.sub === "global-keywords"
-          ? "品牌全域词库"
-          : "品牌建设"
-        : route.section === "intent"
-          ? "问题优化"
-          : route.section === "response-logic"
-            ? "应答逻辑智能体"
-            : route.section === "progress"
-              ? route.sub === "monitor"
-                ? "问题监控"
-                : "进度报告"
-              : route.section === "semantic"
-                ? route.sub === "website-management"
-                  ? "AI 友好官网管理"
-                  : "内容资产运营"
-                : "服务页面";
+    route.section === "public-opinion"
+      ? "品牌追踪智能体"
+      : route.section === "knowledge-agent"
+        ? route.sub === "display"
+          ? "知识库展示"
+          : "知识库智能体"
+        : route.section === "brand"
+          ? route.sub === "global-keywords"
+            ? "品牌全域词库"
+            : "品牌建设"
+          : route.section === "intent"
+            ? "问题优化"
+            : route.section === "response-logic"
+              ? "应答逻辑智能体"
+              : route.section === "progress"
+                ? route.sub === "monitor"
+                  ? "问题监控"
+                  : "进度报告"
+                : route.section === "semantic"
+                  ? route.sub === "website-management"
+                    ? SITEOPS_CUSTOMER_DISPLAY_NAME
+                    : "内容资产运营"
+                  : "服务页面";
   return (
     <div
       className={`user-brand-dashboard ${
-        knowledgeBuildWorkspace ? "knowledge-build-workspace" : ""
+        immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
       }`}
     >
       <div
         className={`app-shell ${mobileNavOpen ? "nav-open" : ""} ${
-          knowledgeBuildWorkspace ? "knowledge-build-app-shell" : ""
+          immersiveAgentWorkspace ? "knowledge-build-app-shell" : ""
         }`}
       >
         {/* 移动端汉堡按钮 */}
@@ -1185,15 +1390,16 @@ function UserBrandDashboardContent({
           }
           portal={servicePortal}
           preview={previewMode}
+          marketEdition={marketEdition}
           accountOpen={accountOpen}
           onAccountOpenChange={setAccountOpen}
         />
         <main
           className={`dashboard-main ${
-            knowledgeBuildWorkspace ? "knowledge-build-main" : ""
+            immersiveAgentWorkspace ? "knowledge-build-main" : ""
           }`}
         >
-          {!knowledgeBuildWorkspace && (
+          {!immersiveAgentWorkspace && (
             <ProjectRibbon
               brandName={
                 managedPayload?.brandName ||
@@ -1203,31 +1409,20 @@ function UserBrandDashboardContent({
             />
           )}
           {route.section === "service" ? (
-            <>
-              <ServiceHome
-                portal={servicePortal}
-                companyName={
-                  managedPayload?.brandName ||
-                  servicePortal.account.displayName ||
-                  (previewMode ? previewBrandName : "企业看板")
-                }
-                loading={servicePortalLoading}
-                error={servicePortalError}
-                onNavigate={navigate}
-                onRefresh={onRefreshServicePortal}
-                onOpenAccount={() => setAccountOpen(true)}
-              />
-              {!previewMode &&
-                managedPayload &&
-                getCapability(servicePortal, "contentAssets").allowed && (
-                  <ManagedDashboardSection
-                    payload={managedPayload}
-                    loading={dashboardLoading}
-                    error={dashboardError}
-                    embedded
-                  />
-                )}
-            </>
+            <ServiceHome
+              portal={servicePortal}
+              companyName={
+                managedPayload?.brandName ||
+                servicePortal.account.displayName ||
+                (previewMode ? previewBrandName : "企业看板")
+              }
+              marketEdition={marketEdition}
+              loading={servicePortalLoading}
+              error={servicePortalError}
+              onNavigate={navigate}
+              onRefresh={onRefreshServicePortal}
+              onOpenAccount={() => setAccountOpen(true)}
+            />
           ) : routeLocked ? (
             <ServiceLockedPage
               title={routeTitle}
@@ -1267,6 +1462,7 @@ function UserBrandDashboardContent({
                   renderPreviewBrandSection?.({
                     sub: route.sub,
                     onUseQuestion: useBrandQuestion,
+                    quotaAvailability: keywordQuotaAvailability,
                   }) || (
                     <ManagedModuleEmpty
                       title="品牌建设"
@@ -1274,30 +1470,14 @@ function UserBrandDashboardContent({
                     />
                   )
                 ) : (
-                  <>
-                    <BrandQuestionPortfolioWorkspace
-                      portal={servicePortal}
-                      onPortalRefresh={onRefreshServicePortal}
-                      onUseQuestion={useBrandQuestion}
-                      questionCatalogTicket={questionCatalogTicket}
-                      hasPublishedKeywordTables={
-                        (managedPayload?.keywordTables || []).length > 0
-                      }
-                      ticketLoading={
-                        deliveryWorkspaceLoading ||
-                        Boolean(websiteTicketList?.loading)
-                      }
-                      onTicketRefresh={onRefreshDeliveryWorkspace}
-                    />
-                    {(managedPayload?.keywordTables || []).length > 0 && (
-                      <ManagedKeywordTables
-                        tables={managedPayload.keywordTables}
-                        loading={dashboardLoading}
-                        error={dashboardError}
-                        embedded
-                      />
-                    )}
-                  </>
+                  <ManagedKeywordTables
+                    tables={managedPayload?.keywordTables || []}
+                    loading={dashboardLoading}
+                    error={dashboardError}
+                    onUseQuestion={useBrandQuestion}
+                    quotaAvailability={keywordQuotaAvailability}
+                    generationEnabled
+                  />
                 ))}
               {route.section === "intent" && (
                 <ProblemOptimizationResults
@@ -1308,6 +1488,7 @@ function UserBrandDashboardContent({
                   intakeDraft={questionIntakeDraft}
                   onIntakeDraftChange={setQuestionIntakeDraft}
                   onPortalRefresh={onRefreshServicePortal}
+                  onOpenDeliveryTicket={onOpenDeliveryTicket}
                   questionGroups={activeQuestionGroups}
                   onOpenResponseLogic={openResponseLogic}
                   onOpenBrandQuestions={() =>
@@ -1329,13 +1510,24 @@ function UserBrandDashboardContent({
                   <ManagedModuleEmpty
                     title="应答逻辑智能体"
                     description="当前账号没有已购问题。服务问题同步后，可在这里逐题对话、核验并确认应答逻辑。"
+                    action={
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRouteHistoryOpen(true)}
+                      >
+                        <FileClock className="h-4 w-4" />
+                        需求记录
+                      </Button>
+                    }
                   />
                 ))}
               {route.section === "progress" &&
                 (route.sub === "monitor" ? (
                   <IntentSection
                     preview={previewMode}
-                    questionGroups={activeQuestionGroups}
+                    questionGroups={progressQuestionGroups}
                     renderPreview={renderPreviewMonitoringWorkspace}
                     channelDistributionAccess={getCapability(
                       servicePortal,
@@ -1347,7 +1539,7 @@ function UserBrandDashboardContent({
                     sub={route.sub}
                     preview={previewMode}
                     renderPreview={renderPreviewProgressSection}
-                    questionGroups={activeQuestionGroups}
+                    questionGroups={progressQuestionGroups}
                     optimizationReport={
                       managedPayload?.optimizationReport || null
                     }
@@ -1358,7 +1550,9 @@ function UserBrandDashboardContent({
                 (route.sub === "website-management" ? (
                   <AiWebsiteManagementWorkspace
                     planCode={servicePortal.plan.code}
-                    marketEdition={deliveryWorkspace.marketEdition}
+                    marketEdition={
+                      deliveryWorkspace.marketEdition || marketEdition
+                    }
                     websiteWorkflow={
                       deliveryWorkspace.websiteWorkflow ||
                       deliveryWorkspace.workflowState ||
@@ -1383,6 +1577,24 @@ function UserBrandDashboardContent({
                     onLoadMore={websiteTicketList?.onLoadMore}
                     onUpgrade={() => setAccountOpen(true)}
                     onContactAdvisor={() => setSalesAdvisorOpen(true)}
+                    siteOpsMode={useSiteOpsWebsiteFlow}
+                    siteOpsPanel={
+                      useSiteOpsWebsiteFlow ? (
+                        <ConnectedSiteOpsConversationPanel
+                          onSubmitIcpFiling={async ({ domain, icpNumber }) => {
+                            await submitWebsiteOperationRequest({
+                              category: "icp_filing",
+                              topic: domain,
+                              description: "",
+                              targetPage: "",
+                              materialUrls: [],
+                              attachmentFiles: [],
+                              icpDeclarations: { icpNumber },
+                            });
+                          }}
+                        />
+                      ) : null
+                    }
                   />
                 ) : (
                   <SemanticAssetSystem
@@ -1430,10 +1642,41 @@ function UserBrandDashboardContent({
                   />
                 </Suspense>
               )}
+              {brandTrackingWorkspace && (
+                <Suspense
+                  fallback={
+                    <div className="citation-workbench-loading" role="status">
+                      <span aria-hidden="true" />
+                      正在载入品牌追踪智能体…
+                    </div>
+                  }
+                >
+                  <BrandTrackingAgentPanel
+                    brandName={
+                      managedPayload?.brandName ||
+                      servicePortal.account.displayName ||
+                      "该品牌"
+                    }
+                  />
+                </Suspense>
+              )}
             </>
           )}
         </main>
       </div>
+      {!routeLocked && routeRequestHistory && (
+        <CustomerRequestHistoryDialog
+          open={routeHistoryOpen}
+          onOpenChange={setRouteHistoryOpen}
+          title={routeRequestHistory.title}
+          description={routeRequestHistory.description}
+          type={routeRequestHistory.type}
+          surface={routeRequestHistory.surface}
+          preview={previewMode}
+          {...(previewMode ? { tickets: [] } : {})}
+          emptyText={routeRequestHistory.emptyText}
+        />
+      )}
       <DeliveryTicketDetailDialog
         open={Boolean(selectedDeliveryTicketId)}
         onOpenChange={(nextOpen) => {
@@ -1445,11 +1688,10 @@ function UserBrandDashboardContent({
         canMutate={canMutateDeliveryTicket}
         readOnlyReason={
           previewMode
-            ? "当前为预览环境，工单交流仅在正式账号中生效。"
+            ? "当前为预览环境，需求交流仅在正式账号中生效。"
             : !canMutateDeliveryTicket
-              ? contentAssetQuota?.reason ||
-                websiteOperationQuota?.reason ||
-                "当前服务不可继续补充此工单，历史记录仅供查看。"
+              ? selectedDeliveryTicketQuota?.reason ||
+                "当前服务不可继续补充此需求，历史记录仅供查看。"
               : null
         }
         mutationPending={deliveryTicketMutationPending}
@@ -1471,6 +1713,7 @@ function Sidebar({
   brandName,
   portal,
   preview,
+  marketEdition,
   accountOpen,
   onAccountOpenChange,
 }) {
@@ -1526,6 +1769,17 @@ function Sidebar({
           onNavigate={onNavigate}
           portal={portal}
         />
+        {marketEdition === "overseas" && (
+          <SidebarGroup
+            id="public-opinion"
+            label="舆情监控"
+            icon={Radar}
+            items={publicOpinionSubpages}
+            route={route}
+            onNavigate={onNavigate}
+            portal={portal}
+          />
+        )}
         <SidebarGroup
           id="semantic"
           label="AI 友好内容资产"
@@ -1536,6 +1790,11 @@ function Sidebar({
           portal={portal}
         />
       </div>
+      {!preview && <div className="nav-group-card promise-card">
+        <div className="nav-group-head"><span>监控与发布</span></div>
+        <Link href="/monitoring-system" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"><Activity size={17} />问题监控</Link>
+        <Link href="/publishing" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"><Database size={17} />媒体发布</Link>
+      </div>}
       <div className="mt-auto grid gap-2">
         <ServiceAccountDrawer
           portal={portal}
@@ -1591,11 +1850,9 @@ function SubNav({ items, section, route, onNavigate, portal }) {
         const access = capabilityKey
           ? getCapability(portal, capabilityKey)
           : null;
-        const includedInPlan = capabilityKey
-          ? portal.capabilities[capabilityKey]?.allowed
-          : true;
         const showPlanLock = Boolean(
-          access && !access.allowed && !includedInPlan,
+          capabilityKey &&
+            !isCapabilityIncludedInPlan(portal.plan.code, capabilityKey),
         );
         const active =
           route.section === targetSection &&
@@ -1604,7 +1861,13 @@ function SubNav({ items, section, route, onNavigate, portal }) {
           <button
             className={active ? "active" : ""}
             key={`${targetSection}-${item.id}`}
-            onClick={() => onNavigate(targetSection, item.id)}
+            onClick={
+              showPlanLock
+                ? undefined
+                : () => onNavigate(targetSection, item.id)
+            }
+            disabled={showPlanLock}
+            aria-disabled={showPlanLock}
             title={showPlanLock ? access?.reason : undefined}
             style={
               showPlanLock
@@ -1646,10 +1909,11 @@ function PageHeader({ eyebrow, title, desc }) {
   );
 }
 
-function ManagedModuleEmpty({ title, description }) {
+function ManagedModuleEmpty({ title, description, action = null }) {
   return (
     <section className="page-shell">
       <PageHeader eyebrow="MindPromise智诺" title={title} desc={description} />
+      {action && <div className="mb-4 flex justify-end">{action}</div>}
       <section className="panel">
         <div className="panel-head">
           <h3>暂无已发布内容</h3>
@@ -1915,6 +2179,7 @@ function TokenCloud({ items }) {
 function BrandSection({
   sub,
   onUseQuestion,
+  quotaAvailability,
   brandBuildingData,
   globalKeywordData,
 }) {
@@ -1922,6 +2187,7 @@ function BrandSection({
     return (
       <BrandGlobalKeywords
         onUseQuestion={onUseQuestion}
+        quotaAvailability={quotaAvailability}
         bank={globalKeywordData}
       />
     );
@@ -2181,7 +2447,8 @@ function BrandKnowledgeSystem({ data }) {
 function previewQuestionCategory(item) {
   const category = String(item["核心词分类"] || "");
   const scene = String(item["GEO场景"] || "");
-  if (category.includes("品类") || category.includes("行业")) return "industry";
+  const mapped = keywordCategoryKey(category);
+  if (mapped) return mapped;
   if (category.includes("竞品") || scene.includes("竞品"))
     return "competitor_comparison";
   if (category.includes("场景") || scene.includes("场景"))
@@ -2189,41 +2456,51 @@ function previewQuestionCategory(item) {
   return "reputation";
 }
 
-function BrandGlobalKeywords({ onUseQuestion, bank }) {
-  const [category, setCategory] = useState("全部");
+function BrandGlobalKeywords({ onUseQuestion, quotaAvailability, bank }) {
+  const [category, setCategory] = useState("all");
+  const [subdivision, setSubdivision] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("热度");
-  const [priorityFilter, setPriorityFilter] = useState("全部");
+  const subdivisionOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          bank.questions.map((item) => item["问题细分"]).filter(Boolean),
+        ),
+      ]
+        .map(String)
+        .sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [bank.questions],
+  );
   const filteredQuestions = useMemo(() => {
     let items = bank.questions;
-    if (category !== "全部")
-      items = items.filter((item) => item["核心词分类"] === category);
-    if (priorityFilter !== "全部")
-      items = items.filter((item) => item["优先级"] === priorityFilter);
+    if (category !== "all")
+      items = items.filter(
+        (item) => keywordCategoryKey(item["核心词分类"]) === category,
+      );
+    if (subdivision !== "all")
+      items = items.filter(
+        (item) => String(item["问题细分"] || "") === subdivision,
+      );
     if (searchTerm)
       items = items.filter(
         (item) =>
           item["问题"].includes(searchTerm) ||
-          item["核心词"].includes(searchTerm),
+          String(item["问题细分"] || "").includes(searchTerm) ||
+          String(keywordCategoryLabel(item["核心词分类"]) || "").includes(
+            searchTerm,
+          ),
       );
-    if (sortBy === "热度")
-      items = [...items].sort((a, b) => b["热度"] - a["热度"]);
     return items;
-  }, [bank.questions, category, searchTerm, sortBy, priorityFilter]);
+  }, [bank.questions, category, searchTerm, subdivision]);
 
   const topRows = filteredQuestions.slice(0, 160);
-  const categoryOptions = [
-    "全部",
-    ...bank.categories.map((item) => item["核心词分类"]),
-  ];
-  const priorityOptions = ["全部", "高热必答", "重点覆盖", "口径治理"];
 
   return (
     <section className="page-shell brand-deep-page">
       <PageHeader
         eyebrow="MindPromise智诺 / 品牌建设"
         title="品牌全域词库"
-        desc="基于百度营销、小红书蒲公英、抖音巨量指数等平台数据综合反馈的真实热度呈现 GEO 优化问题。"
+        desc="基于百度营销、小红书蒲公英、抖音巨量指数等平台数据综合整理 GEO 优化问题，支持按主分类与问题细分筛选。"
       />
 
       {/* SaaS化：多维筛选工具栏 */}
@@ -2232,7 +2509,7 @@ function BrandGlobalKeywords({ onUseQuestion, bank }) {
           <Search size={16} />
           <input
             type="text"
-            placeholder="搜索问题或核心词..."
+            placeholder="搜索问题、主分类或问题细分..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -2244,36 +2521,31 @@ function BrandGlobalKeywords({ onUseQuestion, bank }) {
         </div>
         <div className="filter-group">
           <div className="filter-item">
-            <label>分类</label>
+            <label>主分类</label>
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
             >
-              {categoryOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
+              <option value="all">全部主分类</option>
+              {KEYWORD_CATEGORY_OPTIONS.map((option) => (
+                <option key={option.key} value={option.key}>
+                  {option.label}
                 </option>
               ))}
             </select>
           </div>
           <div className="filter-item">
-            <label>优先级</label>
+            <label>问题细分</label>
             <select
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
+              value={subdivision}
+              onChange={(e) => setSubdivision(e.target.value)}
             >
-              {priorityOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
+              <option value="all">全部问题细分</option>
+              {subdivisionOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
                 </option>
               ))}
-            </select>
-          </div>
-          <div className="filter-item">
-            <label>排序</label>
-            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-              <option value="热度">按热度排序</option>
-              <option value="优先级">按优先级排序</option>
             </select>
           </div>
         </div>
@@ -2294,56 +2566,60 @@ function BrandGlobalKeywords({ onUseQuestion, bank }) {
             <thead>
               <tr>
                 <th>问题</th>
-                <th>核心词</th>
-                <th>分类</th>
-                <th>GEO 场景</th>
-                <th>优先级</th>
-                <th>热度</th>
+                <th>主分类</th>
+                <th>问题细分</th>
                 <th>问题优化</th>
               </tr>
             </thead>
             <tbody>
-              {topRows.map((item) => (
-                <tr key={`${item["核心词"]}-${item["问题"]}`}>
-                  <td className="keyword-question-cell">
-                    {safeText(item["问题"])}
-                  </td>
-                  <td>{safeText(item["核心词"])}</td>
-                  <td>
-                    <span className="keyword-pill">
-                      {safeText(item["核心词分类"])}
-                    </span>
-                  </td>
-                  <td>{safeText(item["GEO场景"])}</td>
-                  <td>
-                    <span
-                      className={`priority-pill priority-${item["优先级"] === "高热必答" ? "high" : item["优先级"] === "重点覆盖" ? "mid" : "low"}`}
-                    >
-                      {safeText(item["优先级"])}
-                    </span>
-                  </td>
-                  <td>
-                    <strong>{formatNumber(item["热度"])}</strong>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="keyword-optimize-button"
-                      onClick={() =>
-                        onUseQuestion({
-                          id: `preview-keyword-${item["序号"]}`,
-                          question: safeText(item["问题"]),
-                          category: previewQuestionCategory(item),
-                          revision: 1,
-                          status: "candidate",
-                        })
-                      }
-                    >
-                      选择并进入问题优化
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {topRows.map((item) => {
+                const category = previewQuestionCategory(item);
+                const quotaAccess = quotaAvailability?.[category];
+                return (
+                  <tr key={`${item["序号"]}-${item["问题"]}`}>
+                    <td className="keyword-question-cell">
+                      {safeText(item["问题"])}
+                    </td>
+                    <td>
+                      <span
+                        className="keyword-pill fm-question-category-pill"
+                        data-category={
+                          keywordCategoryKey(item["核心词分类"]) || undefined
+                        }
+                      >
+                        {keywordCategoryLabel(item["核心词分类"]) ||
+                          safeText(item["核心词分类"])}
+                      </span>
+                    </td>
+                    <td>{safeText(item["问题细分"])}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="keyword-optimize-button"
+                        disabled={quotaAccess?.available === false}
+                        onClick={() =>
+                          onUseQuestion({
+                            id: `preview-keyword-${item["序号"]}`,
+                            question: safeText(item["问题"]),
+                            category,
+                            tableId: "preview-brand-keywords",
+                            rowIndex: Math.max(
+                              0,
+                              Number(item["序号"] || 1) - 1,
+                            ),
+                            revision: 1,
+                            status: "candidate",
+                          })
+                        }
+                      >
+                        {quotaAccess?.available === false
+                          ? quotaAccess.unavailableLabel || "该类额度已满"
+                          : "选择并进入问题优化"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -2353,303 +2629,6 @@ function BrandGlobalKeywords({ onUseQuestion, bank }) {
 }
 
 // ==================== INTENT SECTION ====================
-const questionCategoryOptions = [
-  { value: "industry", label: "行业词", quotaKey: "industry" },
-  {
-    value: "competitor_comparison",
-    label: "竞品对比词",
-    quotaKey: "competitor",
-  },
-  { value: "reputation", label: "美誉舆情词", quotaKey: "reputation" },
-  { value: "product_scenario", label: "产品场景词", quotaKey: "scenario" },
-];
-
-function QuestionIntakePanelView({
-  portal,
-  draft,
-  onDraftChange,
-  onOpenBrandQuestions,
-  pendingQuestions,
-  submitting,
-  onSubmit,
-}) {
-  const firstAvailable =
-    questionCategoryOptions.find((option) => {
-      const quota = portal.quotas.find((item) => item.key === option.quotaKey);
-      return (
-        quota &&
-        quota.limit !== null &&
-        quota.used !== null &&
-        quota.used < quota.limit
-      );
-    })?.value || "product_scenario";
-  const [question, setQuestion] = useState(draft?.question || "");
-  const [category, setCategory] = useState(draft?.category || firstAvailable);
-  const [sourceQuestionId, setSourceQuestionId] = useState(
-    draft?.sourceQuestionId || null,
-  );
-  const [sourceRevision, setSourceRevision] = useState(
-    draft?.sourceRevision || null,
-  );
-
-  useEffect(() => {
-    if (!draft) return;
-    setQuestion(draft.question || "");
-    setCategory(draft.category || firstAvailable);
-    setSourceQuestionId(draft.sourceQuestionId || null);
-    setSourceRevision(draft.sourceRevision || null);
-  }, [
-    draft?.category,
-    draft?.question,
-    draft?.sourceQuestionId,
-    draft?.sourceRevision,
-    firstAvailable,
-  ]);
-
-  const selectedOption =
-    questionCategoryOptions.find((option) => option.value === category) ||
-    questionCategoryOptions.at(-1);
-  const selectedQuota = portal.quotas.find(
-    (item) => item.key === selectedOption?.quotaKey,
-  );
-  const selectionAccess = portal.capabilities.questionSelection;
-  const quotaAvailable = Boolean(
-    selectedQuota &&
-      selectedQuota.limit !== null &&
-      selectedQuota.used !== null &&
-      selectedQuota.used < selectedQuota.limit,
-  );
-  const updateAsDirectEntry = (nextQuestion, nextCategory) => {
-    setSourceQuestionId(null);
-    setSourceRevision(null);
-    onDraftChange?.({
-      question: nextQuestion,
-      category: nextCategory,
-      sourceQuestionId: null,
-      sourceRevision: null,
-    });
-  };
-
-  return (
-    <section className="question-intake-panel" aria-label="新增目标问题">
-      <div className="question-intake-heading">
-        <div>
-          <span>目标问题</span>
-          <h3>从品牌全域词库选择或直接输入需要优化的问题</h3>
-          <p>
-            提交后由 AI
-            监控与优化工程师确认；确认启动时，问题才会锁定并占用本周期对应类别额度。
-          </p>
-        </div>
-        <div className="question-intake-heading-actions">
-          {sourceQuestionId && (
-            <span className="question-intake-source">已从品牌全域词库带入</span>
-          )}
-          <button
-            type="button"
-            className="question-intake-library-link"
-            onClick={onOpenBrandQuestions}
-          >
-            前往品牌全域词库
-            <ArrowUpRight aria-hidden="true" size={15} />
-          </button>
-        </div>
-      </div>
-
-      <div className="question-intake-form">
-        <label>
-          <span>问题类别</span>
-          <select
-            value={category}
-            onChange={(event) => {
-              const nextCategory = event.target.value;
-              setCategory(nextCategory);
-              updateAsDirectEntry(question, nextCategory);
-            }}
-          >
-            {questionCategoryOptions.map((option) => {
-              const quota = portal.quotas.find(
-                (item) => item.key === option.quotaKey,
-              );
-              return (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                  {quota?.used !== null && quota?.limit !== null
-                    ? `（${quota.used} / ${quota.limit}）`
-                    : ""}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-        <label className="question-intake-question">
-          <span>目标问题</span>
-          <input
-            type="text"
-            value={question}
-            maxLength={4000}
-            placeholder="请输入一个完整、明确、可被用户真实提问的问题"
-            onChange={(event) => {
-              const nextQuestion = event.target.value;
-              setQuestion(nextQuestion);
-              updateAsDirectEntry(nextQuestion, category);
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          className="question-intake-submit"
-          disabled={
-            question.trim().length < 2 ||
-            !quotaAvailable ||
-            !selectionAccess.allowed ||
-            submitting
-          }
-          onClick={() =>
-            void onSubmit({
-              question: question.trim(),
-              category,
-              sourceQuestionId,
-              sourceRevision,
-            }).then((submitted) => {
-              if (!submitted) return;
-              setQuestion("");
-              setSourceQuestionId(null);
-              setSourceRevision(null);
-            })
-          }
-        >
-          {submitting ? "正在提交…" : "提交专业审核"}
-        </button>
-      </div>
-
-      {question.trim().length === 1 && (
-        <p className="question-intake-quota-note" role="status">
-          目标问题至少需要 2 个字符。
-        </p>
-      )}
-      {!quotaAvailable && (
-        <p className="question-intake-quota-note" role="status">
-          当前类别额度已用满，请选择仍有额度的类别，或联系服务管理员调整当前服务问题。
-        </p>
-      )}
-      {!selectionAccess.allowed && (
-        <p className="question-intake-quota-note" role="status">
-          {selectionAccess.reason ||
-            "完成当前服务前置流程后，即可提交目标问题。"}
-        </p>
-      )}
-
-      {pendingQuestions.length > 0 && (
-        <div className="question-intake-pending">
-          <span>待监控工程师确认</span>
-          {pendingQuestions.map((item) => (
-            <article key={item.id}>
-              <strong>{item.question}</strong>
-              <small>
-                {
-                  questionCategoryOptions.find(
-                    (option) => option.value === item.category,
-                  )?.label
-                }
-                · 监控工程师确认启动后计入额度
-              </small>
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function PreviewQuestionIntakePanel(props) {
-  const [pendingQuestions, setPendingQuestions] = useState([]);
-  return (
-    <QuestionIntakePanelView
-      {...props}
-      pendingQuestions={pendingQuestions}
-      submitting={false}
-      onSubmit={async (input) => {
-        setPendingQuestions((current) => [
-          {
-            id: input.sourceQuestionId || `preview-pending-${Date.now()}`,
-            question: input.question,
-            category: input.category,
-          },
-          ...current.filter((item) => item.question !== input.question),
-        ]);
-        props.onDraftChange?.(null);
-        toast.success("已提交专业审核", {
-          description: "监控工程师确认启动后，问题才会锁定并占用额度。",
-        });
-        return true;
-      }}
-    />
-  );
-}
-
-function PersistentQuestionIntakePanel(props) {
-  const portfolioQuery = (trpc.workspace as any).questionPortfolio.useQuery(
-    undefined,
-    { retry: false, refetchOnWindowFocus: true },
-  );
-  const requestMutation = (
-    trpc.workspace as any
-  ).requestQuestionSelection.useMutation();
-  const pendingQuestions = (portfolioQuery.data?.questions || []).filter(
-    (question) =>
-      question.status === "candidate" &&
-      question.selectionApprovalStatus === "pending",
-  );
-
-  return (
-    <QuestionIntakePanelView
-      {...props}
-      pendingQuestions={pendingQuestions}
-      submitting={requestMutation.isPending}
-      onSubmit={async (input) => {
-        try {
-          await requestMutation.mutateAsync(
-            input.sourceQuestionId && input.sourceRevision
-              ? {
-                  mode: "candidate",
-                  questionId: input.sourceQuestionId,
-                  expectedRevision: input.sourceRevision,
-                }
-              : {
-                  mode: "direct",
-                  question: input.question,
-                  category: input.category,
-                },
-          );
-          props.onDraftChange?.(null);
-          await portfolioQuery.refetch();
-          props.onPortalRefresh?.();
-          toast.success("已提交专业审核", {
-            description: "监控工程师确认启动后，问题才会锁定并占用额度。",
-          });
-          return true;
-        } catch (error) {
-          toast.error("目标问题提交失败", {
-            description:
-              error instanceof Error ? error.message : "请刷新后重试",
-          });
-          return false;
-        }
-      }}
-    />
-  );
-}
-
-function QuestionIntakePanel({ preview, ...props }) {
-  if (!props.portal.capabilities.questionSelection?.allowed) return null;
-  return preview ? (
-    <PreviewQuestionIntakePanel {...props} />
-  ) : (
-    <PersistentQuestionIntakePanel {...props} />
-  );
-}
-
 function ProblemOptimizationResults({
   portal,
   preview,
@@ -2658,6 +2637,7 @@ function ProblemOptimizationResults({
   intakeDraft,
   onIntakeDraftChange,
   onPortalRefresh,
+  onOpenDeliveryTicket,
   questionGroups,
   onOpenResponseLogic,
   onOpenBrandQuestions,
@@ -2665,10 +2645,61 @@ function ProblemOptimizationResults({
   const responseLogicStep = portal.workflowSteps.find(
     (step) => step.id === "response_logic",
   );
-
+  const [previewConfirmedQuestions, setPreviewConfirmedQuestions] = useState<
+    PreviewConfirmedQuestion[]
+  >([]);
+  const displayedPortal = useMemo(() => {
+    if (!preview || previewConfirmedQuestions.length === 0) return portal;
+    return {
+      ...portal,
+      quotas: portal.quotas.map((quota) => {
+        const added = previewConfirmedQuestions.filter(
+          (question) =>
+            previewQuestionCategoryMeta[question.category]?.quotaKey ===
+            quota.key,
+        ).length;
+        return added > 0 && quota.used !== null
+          ? { ...quota, used: quota.used + added }
+          : quota;
+      }),
+    };
+  }, [portal, preview, previewConfirmedQuestions]);
+  const displayedQuestionGroups = useMemo(() => {
+    if (!preview || previewConfirmedQuestions.length === 0) {
+      return questionGroups;
+    }
+    const groups = (questionGroups || []).map((group) => ({
+      ...group,
+      questions: [...(group.questions || [])],
+    }));
+    for (const question of previewConfirmedQuestions) {
+      const meta = previewQuestionCategoryMeta[question.category];
+      if (!meta) continue;
+      let group = groups.find((item) => item.id === meta.groupId);
+      if (!group) {
+        group = {
+          id: meta.groupId,
+          title: meta.title,
+          subtitle: meta.subtitle,
+          tone: meta.tone,
+          questions: [],
+        };
+        groups.push(group);
+      }
+      if (!group.questions.some((item) => item.id === question.id)) {
+        group.questions.push({
+          id: question.id,
+          question: question.question,
+          intent: "",
+          summary: "",
+        });
+      }
+    }
+    return groups;
+  }, [preview, previewConfirmedQuestions, questionGroups]);
   return (
     <section className="response-logic-workspace page-shell">
-      <header className="rl-page-header">
+      <header className="rl-page-header rl-page-header-with-action">
         <div>
           <span className="rl-eyebrow">MindPromise 智诺 / 意图优化</span>
           <h2>问题优化</h2>
@@ -2678,15 +2709,40 @@ function ProblemOptimizationResults({
         </div>
       </header>
 
-      <ServiceQuotaOverview portal={portal} className="mb-5" />
+      <ServiceQuotaOverview portal={displayedPortal} className="mb-5" />
 
       <QuestionIntakePanel
         preview={preview}
-        portal={portal}
+        portal={displayedPortal}
         draft={intakeDraft}
         onDraftChange={onIntakeDraftChange}
         onOpenBrandQuestions={onOpenBrandQuestions}
         onPortalRefresh={onPortalRefresh}
+        onOpenTicket={onOpenDeliveryTicket}
+        onPreviewBrandConfirmed={(input) => {
+          const category = input.category as PreviewQuestionCategory;
+          if (!previewQuestionCategoryMeta[category]) return;
+          const id = `preview-brand-${input.libraryRef?.tableId || "keyword"}-${
+            input.libraryRef?.rowIndex ?? "row"
+          }`;
+          setPreviewConfirmedQuestions((current) =>
+            current.some((question) => question.id === id) ||
+            (questionGroups || []).some((group) =>
+              (group.questions || []).some(
+                (question) => question.question === input.question,
+              ),
+            )
+              ? current
+              : [
+                  ...current,
+                  {
+                    id,
+                    question: input.question,
+                    category,
+                  },
+                ],
+          );
+        }}
       />
 
       <ResponseLogicConfirmationBoard
@@ -2694,7 +2750,7 @@ function ProblemOptimizationResults({
         previewPublished={responseLogicStep?.status === "complete"}
         workspaceState={workspaceState}
         initialQuestionId={initialQuestionId}
-        questionGroups={questionGroups}
+        questionGroups={displayedQuestionGroups}
         onOpenAgent={onOpenResponseLogic}
       />
     </section>
@@ -3594,10 +3650,12 @@ function ManagedProgressReports({ currentReport, versions, questionGroups }) {
 
   if (reportVersions.length === 0) {
     return (
-      <ManagedModuleEmpty
-        title="进度报告"
-        description="当前账号尚无已发布进度报告。管理员发布后，此页面会按章节展示完整内容。"
-      />
+      <section className="page-shell optimization-report-page">
+        <ProgressReportWorkspace
+          report={null}
+          questionGroups={questionGroups}
+        />
+      </section>
     );
   }
   const selected =
@@ -3706,6 +3764,7 @@ function SemanticAssetSystem({
   onSubmitRequest,
 }) {
   const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const visibleAssetTypes = useMemo(() => assetTypes, [assetTypes]);
   const selected =
     visibleAssetTypes.find((item) => item.id === selectedType) ||
@@ -3729,7 +3788,7 @@ function SemanticAssetSystem({
       <PageHeader
         eyebrow="MindPromise智诺 / AI 友好内容资产"
         title="内容资产运营"
-        desc="按业务目标选择内容类型并提交需求；交付管理员协调服务范围，内容分发工程师负责制作、发布并登记公开结果。"
+        desc="按业务目标选择内容类型并提交需求；交付管理员协调服务范围，AI 内容制作工程师负责内容制作与媒体分发并登记公开结果。"
       />
 
       {requestsLocked ? (
@@ -3783,17 +3842,25 @@ function SemanticAssetSystem({
         quota={quota}
         preferredMediaOptions={preferredMediaOptions}
         onSubmit={onSubmitRequest}
+        onOpenHistory={() => setHistoryDialogOpen(true)}
       />
       <PublishedContentAssets assets={publishedAssets} />
-      <ContentAssetTicketHistory
+      <CustomerRequestHistoryDialog
+        open={historyDialogOpen}
+        onOpenChange={setHistoryDialogOpen}
+        title="内容需求记录"
+        description="当前页面提交的全部内容需求及公开交付结果统一显示在这里。"
         tickets={tickets}
         loading={loading}
+        refreshing={loading}
         loadingMore={loadingMore}
         hasMore={hasMore}
         error={error}
         onOpenTicket={onOpenTicket}
         onRefresh={onRefresh}
         onLoadMore={onLoadMore}
+        preview={!onOpenTicket}
+        emptyText="暂无内容需求记录。"
       />
     </section>
   );

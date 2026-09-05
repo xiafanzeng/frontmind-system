@@ -5,7 +5,9 @@ import {
   ChevronUp,
   RefreshCw,
   Search,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useLocation } from "wouter";
 
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -14,7 +16,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { ticketTypeLabel } from "@/components/AdminDeliveryTicketWorkspace";
+import {
+  buildSystemAdminTicketWorkbenchHref,
+  permanentDeliveryTicketDeletionConfirmation,
+  ticketTypeLabel,
+} from "@/components/AdminDeliveryTicketWorkspace";
 import { isSystemAdminAccount } from "@/lib/admin-access";
 import { trpc } from "@/lib/trpc";
 import { getAdminNav } from "@/pages/AdminDashboard";
@@ -23,6 +29,13 @@ import {
   type DeliveryRoleType,
 } from "@shared/delivery-roles";
 import { type DeliveryTicketStatus } from "@shared/delivery-ticket";
+import {
+  deliveryActorRoleLabel,
+  deliveryEventDisplayMessage,
+  deliveryStatusTransitionLabel,
+  deliveryTicketPresentationTitle,
+  deliveryTicketStatusLabel,
+} from "@shared/delivery-ticket-presentation";
 
 export type AdminTicketStatus = "pending" | "completed";
 
@@ -40,11 +53,15 @@ type DispatchTicket = {
   topic?: string | null;
   operation?: string | null;
   category?: string | null;
+  parentTicketId?: string | null;
+  rootTicketId?: string | null;
+  isWorkflowContainer?: boolean | null;
   status: DeliveryTicketStatus;
   managementStatus?: AdminTicketStatus;
   workflowDomain: DeliveryRoleType | null;
   assignedProjectAssignmentId?: string | null;
   assignedMemberId: number | null;
+  revision: number;
   createdAt?: Date | string | null;
   resolvedAt?: Date | string | null;
 };
@@ -123,6 +140,18 @@ export function hasAuthoritativeProjectOwner(
   );
 }
 
+export function dispatchWorkflowScopeLabel(
+  ticket: Pick<
+    DispatchTicket,
+    "isWorkflowContainer" | "rootTicketId" | "workflowDomain"
+  >,
+) {
+  if (ticket.isWorkflowContainer) return "客户原始需求（流程汇总）";
+  if (ticket.rootTicketId) return "内部执行步骤";
+  if (ticket.workflowDomain) return DELIVERY_ROLE_LABELS[ticket.workflowDomain];
+  return "历史技术需求（只读）";
+}
+
 export function filterDispatchTickets(
   tickets: DispatchTicket[],
   projects: DispatchProject[],
@@ -191,23 +220,24 @@ export function groupDispatchTicketEvents(
 }
 
 export function adminTicketEventPublicMessage(event: DispatchTicketEvent) {
-  const message = event.message?.trim();
-  if (message) return message;
+  return deliveryEventDisplayMessage(event, "internal");
+}
 
-  const publicStatus = event.toStatus
-    ? TERMINAL_DELIVERY_TICKET_STATUSES.has(
-        event.toStatus as DeliveryTicketStatus,
+export function adminTicketEventTransitionLabel(event: DispatchTicketEvent) {
+  return event.fromStatus != null || event.toStatus != null
+    ? deliveryStatusTransitionLabel(
+        event.fromStatus,
+        event.toStatus,
+        "internal",
       )
-      ? "已完成"
-      : "待处理"
     : null;
-  return publicStatus ? `工单状态更新为${publicStatus}。` : "工单记录已更新。";
 }
 
 export default function AdminDeliveryDispatch() {
   const { user } = useAuth();
   const systemAdmin = isSystemAdminAccount(user);
   const overview = trpc.delivery.management.overview.useQuery();
+  const deleteTicketMutation = trpc.admin.deliveryTickets.delete.useMutation();
   const [, setLocation] = useLocation();
   const data = overview.data as unknown as DispatchOverview | undefined;
   const [query, setQuery] = useState("");
@@ -273,13 +303,42 @@ export default function AdminDeliveryDispatch() {
   );
   const openTicketDetail = (ticket: DispatchTicket) =>
     setLocation(
-      `/admin/customers/${ticket.userId}/tickets?ticketId=${encodeURIComponent(ticket.id)}`,
+      `/admin/customers/${ticket.userId}/workspace?ticketId=${encodeURIComponent(ticket.id)}`,
     );
+  const openPendingTicket = (ticket: DispatchTicket) => {
+    const workbenchHref = systemAdmin
+      ? buildSystemAdminTicketWorkbenchHref(ticket)
+      : null;
+    setLocation(
+      workbenchHref ??
+        `/admin/customers/${ticket.userId}/workspace?ticketId=${encodeURIComponent(ticket.id)}`,
+    );
+  };
+  const deleteTicket = async (ticket: DispatchTicket) => {
+    if (!systemAdmin) return;
+    if (!window.confirm(permanentDeliveryTicketDeletionConfirmation(ticket))) {
+      return;
+    }
+    try {
+      await deleteTicketMutation.mutateAsync({
+        userId: ticket.userId,
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        confirmation: "DELETE_TICKET",
+      });
+      await overview.refetch();
+      toast.success("需求已永久删除");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "需求删除失败，请刷新后重试",
+      );
+    }
+  };
 
   return (
     <PortalShell
-      eyebrow="交付管理 · 工单"
-      title="工单"
+      eyebrow="交付管理 · 需求"
+      title="需求"
       navItems={getAdminNav(systemAdmin)}
       toolbar={
         <Button
@@ -296,23 +355,44 @@ export default function AdminDeliveryDispatch() {
         <div className="mb-5 grid gap-3 sm:grid-cols-2">
           {[
             ["待处理", data?.tickets?.length ?? 0],
-            ["已完成", terminalTickets.length],
+            ["已结束", terminalTickets.length],
           ].map(([label, value]) => (
             <div
               key={String(label)}
-              className="rounded-xl border bg-card px-4 py-3"
+              data-testid={
+                label === "待处理" ? "pending-ticket-summary" : undefined
+              }
+              className={
+                label === "待处理"
+                  ? "rounded-xl border border-red-500 bg-red-50/80 px-4 py-3 ring-2 ring-red-500/25"
+                  : "rounded-xl border bg-card px-4 py-3"
+              }
             >
-              <p className="text-xs font-medium text-muted-foreground">
+              <p
+                className={
+                  label === "待处理"
+                    ? "text-xs font-semibold text-red-700"
+                    : "text-xs font-medium text-muted-foreground"
+                }
+              >
                 {label}
               </p>
-              <p className="mt-1 text-2xl font-semibold">{value}</p>
+              <p
+                className={
+                  label === "待处理"
+                    ? "mt-1 text-2xl font-semibold text-red-700"
+                    : "mt-1 text-2xl font-semibold"
+                }
+              >
+                {value}
+              </p>
             </div>
           ))}
         </div>
 
         <Card className="mb-5">
           <CardHeader>
-            <CardTitle>工单筛选</CardTitle>
+            <CardTitle>需求筛选</CardTitle>
           </CardHeader>
           <CardContent
             className={`grid gap-3 md:grid-cols-2 ${
@@ -325,14 +405,14 @@ export default function AdminDeliveryDispatch() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 className="pl-9"
-                placeholder="搜索企业或工单"
-                aria-label="搜索工单"
+                placeholder="搜索企业或需求"
+                aria-label="搜索需求"
               />
             </label>
             <select
               value={ticketType}
               onChange={(event) => setTicketType(event.target.value)}
-              aria-label="筛选工单类型"
+              aria-label="筛选需求类型"
               className="h-10 rounded-md border bg-background px-3 text-sm"
             >
               <option value="all">全部类型</option>
@@ -345,12 +425,12 @@ export default function AdminDeliveryDispatch() {
               onChange={(event) =>
                 setTicketStatus(event.target.value as "all" | AdminTicketStatus)
               }
-              aria-label="筛选工单状态"
+              aria-label="筛选需求状态"
               className="h-10 rounded-md border bg-background px-3 text-sm"
             >
               <option value="all">全部状态</option>
               <option value="pending">待处理</option>
-              <option value="completed">已完成</option>
+              <option value="completed">已结束</option>
             </select>
             <select
               value={customerId}
@@ -401,8 +481,8 @@ export default function AdminDeliveryDispatch() {
         <div className="mb-4 rounded-xl border border-primary/20 bg-primary/[0.035] px-4 py-3 text-sm leading-6 text-muted-foreground">
           <strong className="text-foreground">分配规则：</strong>
           {systemAdmin
-            ? "工单根据客户项目团队与岗位自动分配给对应工程师；系统管理员可从工单详情进入完整处理工作台进行异常接管。"
-            : "工单根据客户项目团队与岗位自动分配给对应工程师；交付管理员可查看详情、沟通和协调，但不能代替工程师完成工单。"}
+            ? "需求根据客户项目团队与岗位自动分配给对应工程师；系统管理员可从需求详情进入完整处理工作台进行异常接管。"
+            : "需求根据客户项目团队与岗位自动分配给对应工程师；交付管理员可查看详情、沟通和协调，但不能代替工程师完成需求。"}
         </div>
         <Card>
           <CardHeader>
@@ -418,11 +498,11 @@ export default function AdminDeliveryDispatch() {
           <CardContent className="space-y-3">
             {overview.isLoading ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
-                正在读取未结束工单…
+                正在读取未结束需求…
               </p>
             ) : overview.error ? (
               <p className="py-10 text-center text-sm text-destructive">
-                工单暂时无法读取，请刷新后重试。
+                需求暂时无法读取，请刷新后重试。
               </p>
             ) : (
               filteredActiveTickets.map((ticket) => (
@@ -431,7 +511,13 @@ export default function AdminDeliveryDispatch() {
                   ticket={ticket}
                   overview={data!}
                   events={eventsByTicket.get(ticket.id) ?? []}
-                  onOpenDetail={() => openTicketDetail(ticket)}
+                  systemAdmin={systemAdmin}
+                  deleting={
+                    deleteTicketMutation.isPending &&
+                    deleteTicketMutation.variables?.ticketId === ticket.id
+                  }
+                  onDelete={() => void deleteTicket(ticket)}
+                  onOpenDetail={() => openPendingTicket(ticket)}
                 />
               ))
             )}
@@ -439,7 +525,7 @@ export default function AdminDeliveryDispatch() {
               !overview.error &&
               !filteredActiveTickets.length && (
                 <p className="py-10 text-center text-sm text-muted-foreground">
-                  当前没有符合条件的待处理工单
+                  当前没有符合条件的待处理需求
                 </p>
               )}
           </CardContent>
@@ -447,7 +533,7 @@ export default function AdminDeliveryDispatch() {
         <Card className="mt-5">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <CardTitle>已完成</CardTitle>
+              <CardTitle>已结束</CardTitle>
               <div className="flex flex-wrap gap-2">
                 <Badge variant="outline">
                   筛选结果 {filteredTerminalTickets.length} 个
@@ -456,7 +542,7 @@ export default function AdminDeliveryDispatch() {
                   variant="outline"
                   className="border-emerald-300 text-emerald-700"
                 >
-                  已完成 {terminalTickets.length} 个
+                  已结束 {terminalTickets.length} 个
                 </Badge>
               </div>
             </div>
@@ -464,11 +550,11 @@ export default function AdminDeliveryDispatch() {
           <CardContent className="space-y-3">
             {overview.isLoading ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
-                正在读取已完成工单…
+                正在读取已结束需求…
               </p>
             ) : overview.error ? (
               <p className="py-10 text-center text-sm text-destructive">
-                已完成工单暂时无法读取，请刷新后重试。
+                已结束需求暂时无法读取，请刷新后重试。
               </p>
             ) : (
               filteredTerminalTickets.map((ticket) => (
@@ -476,6 +562,12 @@ export default function AdminDeliveryDispatch() {
                   key={ticket.id}
                   ticket={ticket}
                   overview={data!}
+                  systemAdmin={systemAdmin}
+                  deleting={
+                    deleteTicketMutation.isPending &&
+                    deleteTicketMutation.variables?.ticketId === ticket.id
+                  }
+                  onDelete={() => void deleteTicket(ticket)}
                   onOpenDetail={() => openTicketDetail(ticket)}
                 />
               ))
@@ -484,7 +576,7 @@ export default function AdminDeliveryDispatch() {
               !overview.error &&
               !filteredTerminalTickets.length && (
                 <p className="py-10 text-center text-sm text-muted-foreground">
-                  当前没有符合条件的已完成工单
+                  当前没有符合条件的已结束需求
                 </p>
               )}
           </CardContent>
@@ -498,11 +590,17 @@ function PendingTicketRow({
   ticket,
   overview,
   events,
+  systemAdmin,
+  deleting,
+  onDelete,
   onOpenDetail,
 }: {
   ticket: DispatchTicket;
   overview: DispatchOverview;
   events: DispatchTicketEvent[];
+  systemAdmin: boolean;
+  deleting: boolean;
+  onDelete: () => void;
   onOpenDetail: () => void;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -527,25 +625,20 @@ function PendingTicketRow({
         }
       : undefined);
   const assignmentSynchronized = hasAuthoritativeProjectOwner(ticket);
-
   return (
     <div
-      className={
-        !assignmentSynchronized
-          ? "rounded-xl border border-amber-300 bg-amber-50/30 p-4"
-          : "rounded-xl border p-4"
-      }
+      data-pending-ticket="true"
+      className="rounded-xl border border-red-500 bg-red-50/80 p-4 ring-2 ring-red-500/25"
     >
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium">
-              {ticket.title ||
-                ticket.operation ||
-                ticket.category ||
-                "交付工单"}
+              {deliveryTicketPresentationTitle(ticket)}
             </p>
-            <Badge variant="outline">待处理</Badge>
+            <Badge variant="destructive">
+              {deliveryTicketStatusLabel(ticket.status, "internal")}
+            </Badge>
             {!assignmentSynchronized && (
               <Badge
                 variant="outline"
@@ -560,10 +653,14 @@ function PendingTicketRow({
             {project?.displayName ||
               project?.username ||
               `客户 #${ticket.userId}`}{" "}
-            · {ticketTypeLabel(ticket.type)} ·{" "}
-            {ticket.workflowDomain
-              ? DELIVERY_ROLE_LABELS[ticket.workflowDomain]
-              : "旧版技术工单（只读）"}
+            ·{" "}
+            {ticketTypeLabel(
+              ticket.type,
+              ticket.isWorkflowContainer
+                ? ticket.category
+                : (ticket.operation ?? ticket.category),
+            )}{" "}
+            · {dispatchWorkflowScopeLabel(ticket)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             交付管理员：
@@ -584,7 +681,7 @@ function PendingTicketRow({
         </div>
 
         <Button size="sm" variant="outline" onClick={onOpenDetail}>
-          查看工单详情
+          查看需求详情
         </Button>
       </div>
 
@@ -601,6 +698,17 @@ function PendingTicketRow({
           )}
           处理记录（{events.length}）
         </Button>
+        {systemAdmin && !ticket.rootTicketId && (
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={deleting}
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {deleting ? "正在删除…" : "永久删除需求"}
+          </Button>
+        )}
       </div>
 
       {historyOpen && <TicketEventHistory events={events} />}
@@ -611,10 +719,16 @@ function PendingTicketRow({
 function CompletedDispatchRow({
   ticket,
   overview,
+  systemAdmin,
+  deleting,
+  onDelete,
   onOpenDetail,
 }: {
   ticket: DispatchTicket;
   overview: DispatchOverview;
+  systemAdmin: boolean;
+  deleting: boolean;
+  onDelete: () => void;
   onOpenDetail: () => void;
 }) {
   const project = overview.projects.find(
@@ -644,26 +758,31 @@ function CompletedDispatchRow({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-medium">
-              {ticket.title ||
-                ticket.operation ||
-                ticket.category ||
-                "交付工单"}
+              {deliveryTicketPresentationTitle(ticket)}
             </p>
             <Badge
               variant="outline"
-              className="border-emerald-300 text-emerald-700"
+              className={
+                ticket.status === "completed"
+                  ? "border-emerald-300 text-emerald-700"
+                  : "border-slate-300 text-slate-700"
+              }
             >
-              已完成
+              {deliveryTicketStatusLabel(ticket.status, "internal")}
             </Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             {project?.displayName ||
               project?.username ||
               `客户 #${ticket.userId}`}{" "}
-            · {ticketTypeLabel(ticket.type)} ·{" "}
-            {ticket.workflowDomain
-              ? DELIVERY_ROLE_LABELS[ticket.workflowDomain]
-              : "旧版技术工单"}
+            ·{" "}
+            {ticketTypeLabel(
+              ticket.type,
+              ticket.isWorkflowContainer
+                ? ticket.category
+                : (ticket.operation ?? ticket.category),
+            )}{" "}
+            · {dispatchWorkflowScopeLabel(ticket)}
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             交付管理员：
@@ -684,14 +803,22 @@ function CompletedDispatchRow({
               : ""}
           </p>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          className="w-fit shrink-0"
-          onClick={onOpenDetail}
-        >
-          查看工单详情
-        </Button>
+        <div className="flex w-fit shrink-0 flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={onOpenDetail}>
+            查看需求详情
+          </Button>
+          {systemAdmin && !ticket.rootTicketId && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleting}
+              onClick={onDelete}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {deleting ? "正在删除…" : "永久删除需求"}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -700,15 +827,22 @@ function CompletedDispatchRow({
 function TicketEventHistory({ events }: { events: DispatchTicketEvent[] }) {
   return (
     <div className="mt-3 space-y-2 rounded-lg bg-muted/35 p-3">
-      {events.slice(0, 20).map((event) => (
-        <div key={event.id} className="text-xs leading-5">
-          <span className="text-muted-foreground">
-            {new Date(event.createdAt).toLocaleString("zh-CN")} ·{" "}
-            {event.actorRole}
-          </span>
-          <p>{adminTicketEventPublicMessage(event)}</p>
-        </div>
-      ))}
+      {events.slice(0, 20).map((event) => {
+        const transitionLabel = adminTicketEventTransitionLabel(event);
+        const displayMessage = adminTicketEventPublicMessage(event);
+        return (
+          <div key={event.id} className="text-xs leading-5">
+            <span className="text-muted-foreground">
+              {new Date(event.createdAt).toLocaleString("zh-CN")} ·{" "}
+              {deliveryActorRoleLabel(event.actorRole, "internal")}
+            </span>
+            {transitionLabel && (
+              <p className="font-medium">{transitionLabel}</p>
+            )}
+            {displayMessage !== transitionLabel && <p>{displayMessage}</p>}
+          </div>
+        );
+      })}
       {!events.length && (
         <p className="text-xs text-muted-foreground">暂无处理记录</p>
       )}

@@ -21,7 +21,21 @@ import {
   AuthBoundary,
   canAccessAdminRoutes,
   canAccessSystemAdminRoutes,
+  WorkspaceLoadingState,
 } from "./App";
+
+describe("WorkspaceLoadingState", () => {
+  it("renders the shared gray-and-green workspace loader", () => {
+    render(<WorkspaceLoadingState />);
+
+    const status = screen.getByRole("status");
+    const loader = status.querySelector("svg");
+
+    expect(screen.getByText("正在打开工作空间")).toBeInTheDocument();
+    expect(loader).toHaveClass("animate-spin", "text-primary");
+    expect(loader?.parentElement).toHaveClass("rounded-2xl", "bg-muted");
+  });
+});
 
 describe("administrator route access", () => {
   it("allows both system and delivery administrators into shared admin routes", () => {

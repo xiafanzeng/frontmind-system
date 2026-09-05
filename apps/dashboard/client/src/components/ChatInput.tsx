@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import {
-  currentKnowledgeBasePresentationReady,
+  currentKnowledgeBaseReplySnapshot,
   useConversation,
 } from "@/contexts/ConversationContext";
 import {
@@ -46,6 +46,8 @@ import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
 import { consumePendingFrontMindBuildDraft } from "@/lib/build-version";
 import { useComposition } from "@/hooks/useComposition";
 import { chatAttachmentSizeError } from "@/lib/attachment-files";
+import { KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE } from "@/lib/knowledge-progress";
+import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
 
 interface FilePreview {
   file: File;
@@ -56,6 +58,32 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function LogoFileThumbnail({ file }: { file: File }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+    ) {
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    setSrc(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+
+  return src ? (
+    <img
+      src={src}
+      alt="待提交 Logo 预览"
+      className="h-12 w-12 flex-shrink-0 rounded-lg bg-white object-contain"
+    />
+  ) : (
+    <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+  );
 }
 
 const AMBIGUOUS_ADVANCE_PATTERN =
@@ -120,23 +148,34 @@ export default function ChatInput({
   composerPrefill,
   responseLogicContext,
   knowledgeBaseProgress,
+  knowledgeBaseResetRevision,
 }: {
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
   composerPrefill?: string;
   responseLogicContext?: ResponseLogicTaskContext;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
+  knowledgeBaseResetRevision?: number;
 }) {
-  const [text, setText] = useState(() => consumePendingFrontMindBuildDraft());
+  const responseLogicInitialPromptLocked = Boolean(
+    responseLogicContext && composerPrefill,
+  );
+  const [text, setText] = useState(
+    () => composerPrefill || consumePendingFrontMindBuildDraft(),
+  );
   const [files, setFiles] = useState<FilePreview[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [replacingOfficialLogo, setReplacingOfficialLogo] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   // Synchronous lock ref to prevent duplicate sends (React state updates are async)
   const sendLockRef = useRef(false);
+  const appliedComposerPrefillRef = useRef<string | null>(
+    composerPrefill || null,
+  );
 
   // Per-message model selection - default from config
   const [selectedModel, setSelectedModel] = useState(() => {
@@ -150,8 +189,18 @@ export default function ChatInput({
   }, [fixedAgentProfile]);
 
   useEffect(() => {
-    if (composerPrefill) setText(composerPrefill);
-  }, [composerPrefill]);
+    if (
+      !composerPrefill ||
+      appliedComposerPrefillRef.current === composerPrefill
+    ) {
+      return;
+    }
+    if (responseLogicContext || !text.trim()) {
+      appliedComposerPrefillRef.current = composerPrefill;
+      setText(composerPrefill);
+      if (responseLogicContext) setFiles([]);
+    }
+  }, [composerPrefill, responseLogicContext, text]);
 
   const resizeComposer = useCallback(() => {
     if (textareaRef.current) resizeAgentComposer(textareaRef.current);
@@ -186,8 +235,44 @@ export default function ChatInput({
     };
   }, [resizeComposer]);
 
-  const { sendMessage, uploadProgress: rawUploadProgress } = useSendMessage();
-  const { activeConversation } = useConversation();
+  const {
+    sendMessage,
+    uploadProgress: rawUploadProgress,
+    knowledgeBaseAttachmentAttempt,
+    continueKnowledgeBaseAttachmentAttempt,
+    discardKnowledgeBaseAttachmentAttempt,
+  } = useSendMessage();
+  const {
+    activeConversation,
+    commitKnowledgeBaseObservation,
+    wakeKnowledgeBaseConversation,
+    rollbackPendingKnowledgeBaseTurn,
+  } = useConversation();
+  const frozenConversationModel = [...(activeConversation?.messages ?? [])]
+    .reverse()
+    .find(
+      (message) =>
+        message.modelName &&
+        MODEL_OPTIONS.some((option) => option.value === message.modelName),
+    )?.modelName;
+  const modelSelectionLocked =
+    !fixedAgentProfile && Boolean(activeConversation?.previousResponseId);
+
+  useEffect(() => {
+    if (fixedAgentProfile) return;
+    if (frozenConversationModel) {
+      setSelectedModel(frozenConversationModel);
+      return;
+    }
+    if (!activeConversation?.previousResponseId) {
+      setSelectedModel(getConfig().agentProfile || "frontmind-pro");
+    }
+  }, [
+    activeConversation?.id,
+    activeConversation?.previousResponseId,
+    fixedAgentProfile,
+    frozenConversationModel,
+  ]);
 
   // Only show upload progress if it belongs to the current active conversation
   const uploadProgress =
@@ -199,34 +284,110 @@ export default function ChatInput({
   const isRunning =
     activeConversation?.status === "running" ||
     activeConversation?.status === "pending";
+  const candidateKnowledgeBaseAttachmentAttempt =
+    knowledgeBaseAttachmentAttempt;
+  const matchingKnowledgeBaseAttachmentAttempt = (() => {
+    const candidate = candidateKnowledgeBaseAttachmentAttempt;
+    if (!syncKnowledgeBaseSnapshot || !candidate) return null;
+    if (candidate.conversationId !== activeConversation?.id) return null;
+    if (
+      candidate.generation !== activeConversation?.knowledgeBase?.generation
+    ) {
+      return null;
+    }
+    const activeClientRequestId =
+      activeConversation?.knowledgeBase?.activeClientRequestId;
+    if (
+      activeClientRequestId &&
+      candidate.clientRequestId !== activeClientRequestId
+    ) {
+      return null;
+    }
+    const activeTurnId = activeConversation?.knowledgeBase?.activeTurnId;
+    if (activeTurnId && candidate.turnId && candidate.turnId !== activeTurnId) {
+      return null;
+    }
+    const activeResetRevision =
+      activeConversation?.knowledgeBase?.activeTurnResetRevision;
+    if (
+      activeResetRevision !== undefined &&
+      candidate.resetRevision !== activeResetRevision
+    ) {
+      return null;
+    }
+    return candidate;
+  })();
   const knowledgeBaseAttachmentResumeRequired =
+    matchingKnowledgeBaseAttachmentAttempt?.phase === "failed_retryable";
+  const knowledgeBaseAttachmentReconciliationPending =
+    matchingKnowledgeBaseAttachmentAttempt?.phase === "reconciling_dispatch";
+  const knowledgeBaseAttachmentAttemptActive = Boolean(
+    matchingKnowledgeBaseAttachmentAttempt &&
+      matchingKnowledgeBaseAttachmentAttempt.phase !== "accepted",
+  );
+  const knowledgeBaseDeferredUploadRecoveryRequired = Boolean(
+    syncKnowledgeBaseSnapshot &&
+      activeConversation?.knowledgeBase?.activeTurnOperationType === "revise" &&
+      activeConversation?.knowledgeBase?.activeTurnAwaitingClientAttachments ===
+        true &&
+      activeConversation?.knowledgeBase?.activeTurnId &&
+      activeConversation?.knowledgeBase?.activeClientRequestId &&
+      Number.isSafeInteger(
+        activeConversation?.knowledgeBase?.activeTurnResetRevision,
+      ) &&
+      !matchingKnowledgeBaseAttachmentAttempt,
+  );
+  const knowledgeBaseLogoProvenanceRepairRequired =
     syncKnowledgeBaseSnapshot &&
     activeConversation?.knowledgeBase?.notice?.code ===
-      "KNOWLEDGE_BASE_ATTACHMENTS_REQUIRED";
+      KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE;
+  // A Provider task id is an upstream transport pointer, not the Dashboard
+  // knowledge-base lifecycle. Local settlement deliberately clears that
+  // pointer before the next explicit customer reply, while the approved
+  // Dashboard presentation remains fully replyable.
+  const knowledgeBaseInitialized =
+    syncKnowledgeBaseSnapshot &&
+    Boolean(
+      activeConversation?.knowledgeBase?.initialized || knowledgeBaseProgress,
+    );
   const knowledgeBaseNotStarted =
-    syncKnowledgeBaseSnapshot && !activeConversation?.taskId;
+    syncKnowledgeBaseSnapshot && !knowledgeBaseInitialized;
   const knowledgeInteractionLocked =
     syncKnowledgeBaseSnapshot &&
-    Boolean(activeConversation?.taskId) &&
-    activeConversation?.status !== "awaiting_input";
+    knowledgeBaseInitialized &&
+    activeConversation?.knowledgeBase?.canReply !== true;
   const inputLocked =
-    (isRunning || knowledgeInteractionLocked) &&
-    !knowledgeBaseAttachmentResumeRequired;
+    knowledgeBaseLogoProvenanceRepairRequired ||
+    knowledgeBaseAttachmentAttemptActive ||
+    knowledgeBaseDeferredUploadRecoveryRequired ||
+    isRunning ||
+    knowledgeInteractionLocked;
   const currentKnowledgeLeaf = knowledgeBaseProgress?.branches
     .flatMap((branch) => branch.leaves)
     .find((leaf) => leaf.id === knowledgeBaseProgress.build.currentLeafId);
-  const currentNodePresentationReady = currentKnowledgeBasePresentationReady(
-    activeConversation,
-    knowledgeBaseProgress?.build.revision,
-    knowledgeBaseProgress?.build.currentLeafId,
-  );
+  const knowledgeBaseReplySnapshot =
+    currentKnowledgeBaseReplySnapshot(activeConversation);
+  const currentNodePresentationReady = Boolean(knowledgeBaseReplySnapshot);
   const knowledgeBaseComplete =
     syncKnowledgeBaseSnapshot &&
     Boolean(knowledgeBaseProgress?.packageAllowed) &&
     !currentKnowledgeLeaf;
-  const officialLogoRequired =
+  const officialLogoRequiredByBuild =
     syncKnowledgeBaseSnapshot &&
     knowledgeBaseProgress?.build.logoRequired === true;
+  const officialLogoAvailable =
+    syncKnowledgeBaseSnapshot &&
+    knowledgeBaseProgress?.build.logoAvailable === true;
+  const optionalOfficialLogoChoice = Boolean(
+    syncKnowledgeBaseSnapshot &&
+      knowledgeBaseProgress?.build.executionMode === "materialized_bundle_v1" &&
+      currentKnowledgeLeaf &&
+      knowledgeBaseProgress.summary.handled === 0 &&
+      !officialLogoAvailable &&
+      !officialLogoRequiredByBuild,
+  );
+  const officialLogoRequired =
+    officialLogoRequiredByBuild || replacingOfficialLogo;
 
   useEffect(() => {
     if (!officialLogoRequired) return;
@@ -235,6 +396,13 @@ export default function ChatInput({
     setText("");
     setFiles([]);
   }, [officialLogoRequired]);
+
+  useEffect(() => {
+    if (!matchingKnowledgeBaseAttachmentAttempt || files.length === 0) return;
+    // Ownership of the browser File has moved to the page-memory attempt. The
+    // composer selection can clear without losing retryable bytes.
+    setFiles([]);
+  }, [files.length, matchingKnowledgeBaseAttachmentAttempt]);
 
   const clearSelectedFiles = useCallback(() => {
     setFiles([]);
@@ -259,6 +427,7 @@ export default function ChatInput({
 
   const addFiles = useCallback(
     async (newFiles: File[]) => {
+      if (responseLogicInitialPromptLocked) return;
       if (officialLogoRequired && newFiles.length !== 1) {
         toast.error("请只选择一张企业主 Logo");
         return;
@@ -289,7 +458,7 @@ export default function ChatInput({
         );
       }
     },
-    [officialLogoRequired],
+    [officialLogoRequired, responseLogicInitialPromptLocked],
   );
 
   const removeFile = useCallback((id: string) => {
@@ -306,10 +475,28 @@ export default function ChatInput({
       ) {
         return;
       }
+      if (
+        syncKnowledgeBaseSnapshot &&
+        !knowledgeBaseAttachmentResumeRequired &&
+        !knowledgeBaseReplySnapshot
+      ) {
+        toast.info("当前节点仍在同步", {
+          description: "请等待已展示内容完成确认后再提交。",
+        });
+        return;
+      }
+      if (
+        responseLogicInitialPromptLocked &&
+        (selectedFiles.length > 0 || message !== composerPrefill)
+      ) {
+        return;
+      }
       if (officialLogoRequired) {
         if (selectedFiles.length !== 1) {
           toast.error("请先上传一张企业官方主 Logo", {
-            description: "上传并校验成功后，才可以确认第一个知识节点。",
+            description: officialLogoRequiredByBuild
+              ? "上传并校验成功后，才可以确认第一个知识节点。"
+              : "Logo 为可选项；如暂不上传，可返回并直接确认当前内容。",
           });
           return;
         }
@@ -344,24 +531,35 @@ export default function ChatInput({
           {
             agentProfile: fixedAgentProfile || selectedModel,
             syncKnowledgeBaseSnapshot,
-            knowledgeBaseExpectedGeneration:
-              syncKnowledgeBaseSnapshot && activeConversation?.knowledgeBase
-                ? activeConversation.knowledgeBase.generation
-                : undefined,
-            knowledgeBaseExpectedRevision:
-              syncKnowledgeBaseSnapshot && knowledgeBaseProgress
-                ? knowledgeBaseProgress.build.revision
-                : undefined,
-            knowledgeBaseExpectedLeafId:
-              syncKnowledgeBaseSnapshot && currentKnowledgeLeaf
-                ? currentKnowledgeLeaf.id
-                : undefined,
+            knowledgeBaseExpectedGeneration: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.generation
+              : undefined,
+            knowledgeBaseExpectedResetRevision: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseResetRevision
+              : undefined,
+            knowledgeBaseExpectedStateEpoch: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.stateEpoch
+              : undefined,
+            knowledgeBaseExpectedContentVersion: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.contentVersion
+              : undefined,
+            knowledgeBaseExpectedRevision: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.revision
+              : undefined,
+            knowledgeBaseExpectedLeafId: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.leafId
+              : undefined,
+            knowledgeBaseExpectedPresentationKey: syncKnowledgeBaseSnapshot
+              ? knowledgeBaseReplySnapshot?.presentationKey
+              : undefined,
+            submissionKind: officialLogoRequired ? "logo" : undefined,
             responseLogicContext,
           },
         );
         if (sent) {
           setText("");
           clearSelectedFiles();
+          setReplacingOfficialLogo(false);
           textareaRef.current?.focus();
         }
       } finally {
@@ -375,10 +573,16 @@ export default function ChatInput({
       inputLocked,
       isSending,
       knowledgeBaseNotStarted,
+      knowledgeBaseAttachmentResumeRequired,
+      knowledgeBaseReplySnapshot,
+      knowledgeBaseResetRevision,
       officialLogoRequired,
+      officialLogoRequiredByBuild,
       knowledgeBaseProgress,
       currentKnowledgeLeaf,
       responseLogicContext,
+      responseLogicInitialPromptLocked,
+      composerPrefill,
       selectedModel,
       sendMessage,
       syncKnowledgeBaseSnapshot,
@@ -412,10 +616,14 @@ export default function ChatInput({
   const isUploading = uploadProgress !== null;
 
   // Drag and drop handlers
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      if (responseLogicInitialPromptLocked) return;
+      setIsDragging(true);
+    },
+    [responseLogicInitialPromptLocked],
+  );
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -426,7 +634,13 @@ export default function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      if (inputLocked || isSending || isUploading || knowledgeBaseNotStarted) {
+      if (
+        responseLogicInitialPromptLocked ||
+        inputLocked ||
+        isSending ||
+        isUploading ||
+        knowledgeBaseNotStarted
+      ) {
         return;
       }
       const droppedFiles = Array.from(e.dataTransfer.files);
@@ -434,7 +648,14 @@ export default function ChatInput({
         addFiles(droppedFiles);
       }
     },
-    [addFiles, inputLocked, isSending, isUploading, knowledgeBaseNotStarted],
+    [
+      addFiles,
+      inputLocked,
+      isSending,
+      isUploading,
+      knowledgeBaseNotStarted,
+      responseLogicInitialPromptLocked,
+    ],
   );
 
   const handleTextChange = useCallback(
@@ -488,6 +709,7 @@ export default function ChatInput({
 
       <div className="max-w-4xl mx-auto">
         {syncKnowledgeBaseSnapshot &&
+          !knowledgeBaseLogoProvenanceRepairRequired &&
           (currentKnowledgeLeaf || knowledgeBaseComplete) && (
             <div
               className={cn(
@@ -522,7 +744,11 @@ export default function ChatInput({
                         )}
                       >
                         {officialLogoRequired
-                          ? "需要上传企业主 Logo"
+                          ? replacingOfficialLogo && !officialLogoAvailable
+                            ? "上传企业主 Logo（可选）"
+                            : replacingOfficialLogo
+                              ? "更换企业主 Logo"
+                              : "需要上传企业主 Logo"
                           : "当前待确认"}
                       </p>
                       <p
@@ -545,13 +771,59 @@ export default function ChatInput({
                         )}
                       >
                         {officialLogoRequired
-                          ? "官网、公开来源和初始资料中未找到可验证的官方主 Logo。请上传一张原图后继续；透明背景 PNG 最佳，宽高均需至少 256 像素。"
+                          ? replacingOfficialLogo
+                            ? officialLogoAvailable
+                              ? "请选择一张新图片；提交后将替换当前 Logo，当前知识节点不会推进。"
+                              : "请选择一张图片作为企业主 Logo；也可暂不上传并直接确认当前内容。"
+                            : "当前节点尚未绑定 Logo。请选择一张图片；用户选择后将直接作为当前 Logo，并可在首节点确认前再次更换。"
                           : currentNodePresentationReady
-                          ? "可直接确认，也可以输入修改意见或上传补充资料。"
-                          : "正在处理当前节点内容，显示完整后才可确认。"}
+                            ? "可直接确认，也可以输入修改意见或上传补充资料。"
+                            : "正在处理当前节点内容，显示完整后才可确认。"}
                       </p>
                     </div>
-                    <div className="shrink-0">
+                    <div className="flex shrink-0 items-center gap-2">
+                      {!officialLogoRequired && optionalOfficialLogoChoice && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setReplacingOfficialLogo(true)}
+                          disabled={quickActionsDisabled}
+                          className="rounded-xl bg-white"
+                        >
+                          <Upload className="h-4 w-4" />
+                          上传 Logo（可选）
+                        </Button>
+                      )}
+                      {!officialLogoRequired && officialLogoAvailable && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setReplacingOfficialLogo(true)}
+                          disabled={quickActionsDisabled}
+                          className="rounded-xl bg-white"
+                        >
+                          <Upload className="h-4 w-4" />
+                          更换 Logo
+                        </Button>
+                      )}
+                      {replacingOfficialLogo &&
+                        !officialLogoRequiredByBuild && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              clearSelectedFiles();
+                              setReplacingOfficialLogo(false);
+                            }}
+                            disabled={isSending || isUploading}
+                            className="rounded-xl bg-white"
+                          >
+                            暂不上传
+                          </Button>
+                        )}
                       <Button
                         type="button"
                         size="sm"
@@ -570,16 +842,22 @@ export default function ChatInput({
                         }
                         className="rounded-xl"
                       >
-                        {officialLogoRequired ? (
+                        {officialLogoRequired && (isSending || isUploading) ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : officialLogoRequired ? (
                           <Upload className="h-4 w-4" />
                         ) : (
                           <Check className="h-4 w-4" />
                         )}
                         {officialLogoRequired
-                          ? files.length === 1
-                            ? "提交 Logo 并继续"
-                            : "选择 Logo 原图"
-                          : "确认当前内容"}
+                          ? isSending || isUploading
+                            ? "正在发送至 FrontMind"
+                            : files.length === 1
+                              ? "使用此图并继续"
+                              : "选择 Logo 原图"
+                          : optionalOfficialLogoChoice
+                            ? "跳过 Logo，确认当前内容"
+                            : "确认当前内容"}
                       </Button>
                     </div>
                   </div>
@@ -592,12 +870,96 @@ export default function ChatInput({
                     )}
                   >
                     {officialLogoRequired
-                      ? "Logo 上传轮不会推进节点。系统校验并重新呈现当前节点后，才会恢复“确认当前内容”。"
+                      ? "Logo 提交轮不会推进节点；FrontMind 接收后会重新呈现当前节点。"
                       : "如需修改，请在下方输入意见或上传资料；建议尽量上传与当前部分相关的补充图片，以丰富知识库内容。系统返回修订稿后，再确认当前内容。"}
                   </p>
                 </>
               )}
             </div>
+          )}
+
+        {knowledgeBaseAttachmentResumeRequired &&
+          matchingKnowledgeBaseAttachmentAttempt && (
+            <div className="mb-3 rounded-xl border border-amber-300/70 bg-amber-50/80 p-3 text-sm text-amber-950">
+              <p className="font-medium">本轮资料仍保留在当前页面</p>
+              <p className="mt-1 text-xs leading-5 text-amber-900/80">
+                {matchingKnowledgeBaseAttachmentAttempt.lastError ||
+                  "上传或暂存暂时中断。继续时会复用同一请求、同一附件清单和已完成的暂存结果。"}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void continueKnowledgeBaseAttachmentAttempt()}
+                  disabled={isSending || isUploading}
+                >
+                  {isSending || isUploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  继续上传当前资料
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={discardKnowledgeBaseAttachmentAttempt}
+                  disabled={isSending || isUploading}
+                >
+                  放弃本轮上传
+                </Button>
+              </div>
+            </div>
+          )}
+
+        {knowledgeBaseAttachmentReconciliationPending &&
+          matchingKnowledgeBaseAttachmentAttempt && (
+            <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50/80 p-3 text-sm text-violet-950">
+              <div className="flex items-center gap-2 font-medium">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在核对本轮是否已受理
+              </div>
+              <p className="mt-1 text-xs leading-5 text-violet-900/75">
+                当前页面仍保留全部资料；系统只核对同一请求，不会创建新的 turn
+                或第二个任务。
+              </p>
+            </div>
+          )}
+
+        {knowledgeBaseDeferredUploadRecoveryRequired &&
+          activeConversation?.knowledgeBase?.activeTurnId &&
+          activeConversation.knowledgeBase.activeClientRequestId &&
+          Number.isSafeInteger(
+            activeConversation.knowledgeBase.activeTurnResetRevision,
+          ) && (
+            <KnowledgeBaseManagedUploadRecovery
+              conversationId={activeConversation.id}
+              turnId={activeConversation.knowledgeBase.activeTurnId}
+              clientRequestId={
+                activeConversation.knowledgeBase.activeClientRequestId
+              }
+              expectedResetRevision={
+                activeConversation.knowledgeBase.activeTurnResetRevision!
+              }
+              onObservation={(observation) => {
+                commitKnowledgeBaseObservation(
+                  activeConversation.id,
+                  observation,
+                );
+                wakeKnowledgeBaseConversation(activeConversation.id);
+              }}
+              onRecovered={() =>
+                wakeKnowledgeBaseConversation(activeConversation.id)
+              }
+              onCancelled={() => {
+                rollbackPendingKnowledgeBaseTurn(
+                  activeConversation.id,
+                  activeConversation.knowledgeBase!.activeClientRequestId!,
+                );
+                wakeKnowledgeBaseConversation(activeConversation.id);
+              }}
+            />
           )}
 
         {/* Upload progress indicator */}
@@ -612,9 +974,13 @@ export default function ChatInput({
               <div className="flex items-center gap-2 mb-1.5">
                 <Upload className="w-3.5 h-3.5 text-primary animate-pulse" />
                 <span className="text-xs text-muted-foreground">
-                  {uploadProgress.phase === "verifying"
-                    ? "正在校验并提交"
-                    : "上传文件"}{" "}
+                  {officialLogoRequired
+                    ? uploadProgress.phase === "verifying"
+                      ? "文件已上传，正在发送至 FrontMind"
+                      : "正在上传 Logo"
+                    : uploadProgress.phase === "verifying"
+                      ? "正在校验并提交"
+                      : "上传文件"}{" "}
                   ({uploadProgress.currentFileIndex + 1}/
                   {uploadProgress.totalFiles})：
                   <span className="text-foreground font-medium ml-1">
@@ -650,8 +1016,12 @@ export default function ChatInput({
                   exit={{ opacity: 0, scale: 0.8 }}
                   className="relative group"
                 >
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border/40 bg-muted/30 shadow-sm max-w-[180px]">
-                    <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  <div className="flex max-w-[240px] items-center gap-2 rounded-xl border border-border/40 bg-muted/30 px-3 py-2 shadow-sm">
+                    {officialLogoRequired ? (
+                      <LogoFileThumbnail file={fp.file} />
+                    ) : (
+                      <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                    )}
                     <span className="min-w-0 text-xs text-muted-foreground">
                       <span className="block truncate">{fp.file.name}</span>
                       <span className="block text-[10px] opacity-70">
@@ -660,6 +1030,8 @@ export default function ChatInput({
                     </span>
                   </div>
                   <button
+                    type="button"
+                    aria-label={`移除 ${fp.file.name}`}
                     onClick={() => removeFile(fp.id)}
                     className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
                   >
@@ -671,193 +1043,208 @@ export default function ChatInput({
           )}
         </AnimatePresence>
 
-        {/* Input card */}
-        <div
-          className={cn(
-            "bg-card/90 border border-border/70 rounded-[1.5rem] transition-all duration-300 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl",
-            isDragging && "ring-2 ring-primary/30",
-            "focus-within:shadow-[0_24px_70px_rgba(15,23,42,0.11)] focus-within:border-primary/35",
-          )}
-        >
-          <div className="flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
-            {/* File buttons */}
-            <div className="flex items-center gap-1 pb-0.5">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="w-9 h-9 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={
-                      inputLocked ||
-                      isSending ||
-                      isUploading ||
-                      knowledgeBaseNotStarted
-                    }
-                  >
-                    <Paperclip className="w-4 h-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {officialLogoRequired ? "上传企业主 Logo" : "上传文件"}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-
-            {/* Textarea */}
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={handleTextChange}
-              onCompositionStart={composerComposition.onCompositionStart}
-              onCompositionEnd={composerComposition.onCompositionEnd}
-              onKeyDown={composerComposition.onKeyDown}
-              placeholder={
-                isUploading
-                  ? uploadProgress!.phase === "verifying"
-                    ? "附件已上传，正在校验并提交本轮…"
-                    : `正在上传文件 ${uploadProgress!.overallPercent}%...`
-                  : inputLocked
-                    ? syncKnowledgeBaseSnapshot
-                      ? "正在根据你的补充资料更新当前节点…"
-                      : "FrontMind 正在编排内容制作流程..."
-                    : knowledgeBaseNotStarted
-                      ? "请先点击上方“构建企业知识库”完成资料采集设置"
-                      : officialLogoRequired
-                        ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
-                      : syncKnowledgeBaseSnapshot
-                        ? "输入修改意见，或上传资料；提交后仍停留当前节点"
-                        : "输入你的内容需求，按 Enter 开始编排..."
-              }
-              disabled={
-                inputLocked ||
-                isSending ||
-                isUploading ||
-                knowledgeBaseNotStarted ||
-                officialLogoRequired
-              }
-              rows={1}
-              data-max-rows={AGENT_COMPOSER_MAX_ROWS}
-              className="min-h-11 flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground/55 focus:outline-none"
-            />
-
-            {/* Model selector + Send button */}
-            <div className="flex items-center gap-1 pb-0.5">
-              {/* Model selector dropdown */}
-              <div className="relative" ref={modelMenuRef}>
-                {fixedAgentProfile ? null : (
-                  <>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          onClick={() => setModelMenuOpen(!modelMenuOpen)}
-                          className={cn(
-                            "flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-medium transition-all",
-                            "bg-secondary/80 text-muted-foreground hover:bg-primary/10 hover:text-primary",
-                            modelMenuOpen && "bg-primary/10 text-primary",
-                          )}
-                        >
-                          <span className="truncate max-w-[76px] sm:max-w-[148px]">
-                            {currentModelInfo.label}
-                          </span>
-                          <ChevronDown
-                            className={cn(
-                              "w-3 h-3 transition-transform",
-                              modelMenuOpen && "rotate-180",
-                            )}
-                          />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>选择模型</TooltipContent>
-                    </Tooltip>
-
-                    {/* Dropdown menu */}
-                    <AnimatePresence>
-                      {modelMenuOpen && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 4, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 4, scale: 0.95 }}
-                          transition={{ duration: 0.15 }}
-                          className="absolute bottom-full mb-1 right-0 w-52 rounded-xl border border-border/40 bg-popover shadow-lg z-50 overflow-hidden"
-                        >
-                          {MODEL_OPTIONS.map((model) => (
-                            <button
-                              key={model.value}
-                              onClick={() => {
-                                setSelectedModel(model.value);
-                                saveConfig({ agentProfile: model.value });
-                                setModelMenuOpen(false);
-                              }}
-                              className={cn(
-                                "w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors",
-                                selectedModel === model.value
-                                  ? "bg-primary/10 text-primary"
-                                  : "hover:bg-muted/60 text-foreground",
-                              )}
-                            >
-                              <div>
-                                <p className="text-sm font-medium">
-                                  {model.label}
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {model.description}
-                                </p>
-                              </div>
-                              {selectedModel === model.value && (
-                                <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-                              )}
-                            </button>
-                          ))}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </>
-                )}
+        {/* The Logo gate has one deliberate action above. Hiding the ordinary
+            composer prevents the generic Send button from becoming a second,
+            ambiguous submit path for the exact same file. */}
+        {!officialLogoRequired && (
+          <div
+            className={cn(
+              "bg-card/90 border border-border/70 rounded-[1.5rem] transition-all duration-300 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl",
+              isDragging && "ring-2 ring-primary/30",
+              "focus-within:shadow-[0_24px_70px_rgba(15,23,42,0.11)] focus-within:border-primary/35",
+            )}
+          >
+            <div className="flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
+              {/* File buttons */}
+              <div className="flex items-center gap-1 pb-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="w-9 h-9 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={
+                        responseLogicInitialPromptLocked ||
+                        inputLocked ||
+                        isSending ||
+                        isUploading ||
+                        knowledgeBaseNotStarted
+                      }
+                    >
+                      <Paperclip className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {officialLogoRequired ? "上传企业主 Logo" : "上传文件"}
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
-              {/* Send button */}
-              <Button
-                onClick={handleSubmit}
-                disabled={
-                  (!text.trim() && files.length === 0) ||
-                  isSending ||
-                  inputLocked ||
-                  isUploading ||
-                  knowledgeBaseNotStarted
+              {/* Textarea */}
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={handleTextChange}
+                onCompositionStart={composerComposition.onCompositionStart}
+                onCompositionEnd={composerComposition.onCompositionEnd}
+                onKeyDown={composerComposition.onKeyDown}
+                readOnly={responseLogicInitialPromptLocked}
+                aria-readonly={responseLogicInitialPromptLocked}
+                placeholder={
+                  isUploading
+                    ? uploadProgress!.phase === "verifying"
+                      ? "附件已上传，正在校验并提交本轮…"
+                      : `正在上传文件 ${uploadProgress!.overallPercent}%...`
+                    : inputLocked
+                      ? syncKnowledgeBaseSnapshot
+                        ? "正在根据你的补充资料更新当前节点…"
+                        : "FrontMind 正在编排内容制作流程..."
+                      : knowledgeBaseNotStarted
+                        ? "请先点击上方“构建企业知识库”完成资料采集设置"
+                        : officialLogoRequired
+                          ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
+                          : syncKnowledgeBaseSnapshot
+                            ? "输入修改意见，或上传资料；提交后仍停留当前节点"
+                            : "输入你的内容需求，按 Enter 开始编排..."
                 }
-                size="icon"
-                className={cn(
-                  "w-10 h-10 rounded-2xl transition-all flex-shrink-0",
-                  text.trim() || files.length > 0
-                    ? "bg-primary text-primary-foreground shadow-md glow-indigo"
-                    : "bg-muted text-muted-foreground",
-                )}
-              >
-                {isSending ||
-                isUploading ||
-                (isRunning && !knowledgeBaseAttachmentResumeRequired) ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
-              </Button>
+                disabled={
+                  inputLocked ||
+                  isSending ||
+                  isUploading ||
+                  knowledgeBaseNotStarted ||
+                  officialLogoRequired
+                }
+                rows={1}
+                data-max-rows={AGENT_COMPOSER_MAX_ROWS}
+                className="min-h-11 flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground/55 focus:outline-none"
+              />
+
+              {/* Model selector + Send button */}
+              <div className="flex items-center gap-1 pb-0.5">
+                {/* Model selector dropdown */}
+                <div className="relative" ref={modelMenuRef}>
+                  {fixedAgentProfile ? null : (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            disabled={modelSelectionLocked}
+                            onClick={() =>
+                              !modelSelectionLocked &&
+                              setModelMenuOpen(!modelMenuOpen)
+                            }
+                            className={cn(
+                              "flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-medium transition-all",
+                              "bg-secondary/80 text-muted-foreground hover:bg-primary/10 hover:text-primary",
+                              modelSelectionLocked &&
+                                "cursor-not-allowed opacity-70 hover:bg-secondary/80 hover:text-muted-foreground",
+                              modelMenuOpen && "bg-primary/10 text-primary",
+                            )}
+                          >
+                            <span className="truncate max-w-[76px] sm:max-w-[148px]">
+                              {currentModelInfo.label}
+                            </span>
+                            <ChevronDown
+                              className={cn(
+                                "w-3 h-3 transition-transform",
+                                modelMenuOpen && "rotate-180",
+                              )}
+                            />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {modelSelectionLocked
+                            ? "当前任务模型已锁定；新建任务后可重新选择"
+                            : "选择模型"}
+                        </TooltipContent>
+                      </Tooltip>
+
+                      {/* Dropdown menu */}
+                      <AnimatePresence>
+                        {modelMenuOpen && !modelSelectionLocked && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 4, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 4, scale: 0.95 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute bottom-full mb-1 right-0 w-52 rounded-xl border border-border/40 bg-popover shadow-lg z-50 overflow-hidden"
+                          >
+                            {MODEL_OPTIONS.map((model) => (
+                              <button
+                                key={model.value}
+                                onClick={() => {
+                                  setSelectedModel(model.value);
+                                  saveConfig({ agentProfile: model.value });
+                                  setModelMenuOpen(false);
+                                }}
+                                className={cn(
+                                  "w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors",
+                                  selectedModel === model.value
+                                    ? "bg-primary/10 text-primary"
+                                    : "hover:bg-muted/60 text-foreground",
+                                )}
+                              >
+                                <div>
+                                  <p className="text-sm font-medium">
+                                    {model.label}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {model.description}
+                                  </p>
+                                </div>
+                                {selectedModel === model.value && (
+                                  <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </>
+                  )}
+                </div>
+
+                {/* Send button */}
+                <Button
+                  onClick={handleSubmit}
+                  disabled={
+                    (!text.trim() && files.length === 0) ||
+                    isSending ||
+                    inputLocked ||
+                    isUploading ||
+                    knowledgeBaseNotStarted
+                  }
+                  size="icon"
+                  className={cn(
+                    "w-10 h-10 rounded-2xl transition-all flex-shrink-0",
+                    text.trim() || files.length > 0
+                      ? "bg-primary text-primary-foreground shadow-md glow-indigo"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {isSending || isUploading || isRunning ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Hint text */}
+            <div className="px-4 pb-2">
+              <p className="text-xs text-muted-foreground/40">
+                {responseLogicInitialPromptLocked
+                  ? "首轮使用固定提问发送 · 发送后可自由输入文字并上传图片或文件"
+                  : syncKnowledgeBaseSnapshot
+                    ? "Enter 提交修订 · Shift+Enter 换行 · 支持多文件选择与拖拽上传"
+                    : "Enter 发送 · Shift+Enter 换行 · 支持资料、图片与交付文件上传"}
+              </p>
             </div>
           </div>
-
-          {/* Hint text */}
-          <div className="px-4 pb-2">
-            <p className="text-xs text-muted-foreground/40">
-              {officialLogoRequired
-                ? "仅接受一张 PNG、JPEG、WebP、AVIF 或 GIF 原图 · 宽高均至少 256 像素"
-                : syncKnowledgeBaseSnapshot
-                ? "Enter 提交修订 · Shift+Enter 换行 · 支持多文件选择与拖拽上传"
-                : "Enter 发送 · Shift+Enter 换行 · 支持资料、图片与交付文件上传"}
-            </p>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Hidden file inputs */}
@@ -871,7 +1258,11 @@ export default function ChatInput({
             : undefined
         }
         disabled={
-          inputLocked || isSending || isUploading || knowledgeBaseNotStarted
+          responseLogicInitialPromptLocked ||
+          inputLocked ||
+          isSending ||
+          isUploading ||
+          knowledgeBaseNotStarted
         }
         className="hidden"
         onChange={(e) => {

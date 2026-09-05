@@ -39,12 +39,12 @@ function createPreviewConversation(
       {
         id: `${question.id}-intro`,
         role: "assistant",
-        text: "我已载入当前问题的知识库预填内容。请补充企业希望强调的结论、可公开事实或需要规避的表达；我会逐项追问，不会自动更新已确认内容。",
+        text: "我已载入当前问题的知识库预填内容。你可以直接说明希望修改的结论、事实或表达，我会按要求更新当前版本。",
       },
       {
         id: `${question.id}-focus`,
         role: "assistant",
-        text: `当前只讨论“${question.question}”。建议先确认：用户真实关心什么，以及首句应该给出怎样的核心结论？`,
+        text: `当前只讨论“${question.question}”。请直接输入修改要求，或上传需要加入的图片与资料。`,
       },
     ],
     input: "",
@@ -67,14 +67,13 @@ function createDraft(
 
   return {
     concern: question.intent,
-    conclusion: `核心结论：${conclusions[group.tone]}\n\n执行口径：\n1. 首句直接回应“${question.question}”的决策重点；\n2. 用 3—5 项事实或方法展开，不堆叠宣传形容词；\n3. 明确适用条件、限制和仍需企业确认的口径；\n4. 用官方入口、授权材料或可复测数据收束。`,
+    conclusion: `核心结论：${conclusions[group.tone]}\n\n执行口径：\n1. 首句直接回应“${question.question}”的决策重点；\n2. 用 3—5 项事实或方法展开，不堆叠宣传形容词；\n3. 明确适用条件与限制；\n4. 用知识库文档、用户上传材料或可复测数据收束。`,
     facts:
       "企业知识库中已确认的品牌事实与方法依据\n意图问题、应答逻辑、内容资产与监测复测的闭环记录\n结论与官网、授权文件、项目记录及可追溯来源逐项绑定",
-    pending:
-      "可公开披露的客户案例、客户 Logo 与效果数据授权范围\n本问题对应的最新产品参数、服务周期与交付边界\n对外可使用的团队头衔、合作关系及第三方评价原文\n本轮企业交流确认人、确认日期与后续复核周期",
+    pending: "",
     boundaries:
       "不使用“第一、唯一、保证收录、绝对领先”等无法核验的绝对化表达\n不虚构客户名称、合作关系、排名、奖项、数据或第三方评价\n不把自有测评结果包装为权威行业排名，不选择性隐去比较条件\n涉及价格、效果和交付周期时必须注明适用前提，并以最终确认文件为准",
-    references: `应答逻辑确认记录：${group.title} / ${question.question}\n企业官网、产品说明与企业知识库最新确认内容\n售前确认表、交付范围、授权案例与阶段验收材料\n大模型品牌监测报告、问题样本及对应引用来源`,
+    references: "",
     images: [],
     attachments: [],
   };
@@ -148,6 +147,11 @@ function PreviewDialogue({
       ? `\n已附资料：${conversation.attachments.join("、")}`
       : "";
     const enterpriseReply = `${text || "请结合上传资料核对当前口径。"}${attachmentText}`;
+    const structuredEvidence = `${text || "已结合本轮上传资料更新当前口径。"}${
+      conversation.attachments.length
+        ? "\n\n用户上传资料已直接纳入图文依据。"
+        : ""
+    }`;
     const structuredPreviewReply = [
       "## 用户真实关心",
       question.intent,
@@ -156,19 +160,10 @@ function PreviewDialogue({
       `直接回应“${question.question}”，再按可核验事实说明判断依据与适用边界。`,
       "",
       "## 企业材料/官方依据",
-      enterpriseReply,
-      "",
-      "## 待补充/待确认",
-      "确认本轮补充信息的公开范围与对应权威来源。",
+      `${structuredEvidence}\n\n引自知识库文档。`,
       "",
       "## 回答边界/禁止表达",
       "不得把未经授权或无法核验的信息写成企业事实。",
-      "",
-      "## 引用与核验规则",
-      "逐条绑定企业知识库、上传材料或可访问的官方来源。",
-      "",
-      "## 本轮确认",
-      "请确认上述补充信息是否可以公开引用。",
     ].join("\n");
     const messageId = Date.now();
     patchConversation((current) => ({
@@ -182,7 +177,7 @@ function PreviewDialogue({
         {
           id: `${question.id}-assistant-${messageId + 1}`,
           role: "assistant",
-          text: "收到。我会把这部分作为企业交流口径处理。下一步请确认：其中哪些事实可以公开引用，分别能由官网、授权文件、项目记录或图片材料中的哪一项支撑？",
+          text: "收到。我会按你的要求直接更新当前应答逻辑，并把上传资料纳入对应内容。",
         },
       ],
       latestReply: structuredPreviewReply,

@@ -13,6 +13,7 @@ import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import type { HistoricalQuestionResults } from "@shared/historical-results";
+import { normalizeResponseLogicPublicProvenance } from "@shared/response-logic";
 
 import type { ServicePortalView } from "./service-portal";
 
@@ -28,9 +29,7 @@ const responseFields = [
   ["用户真正关心", "concern"],
   ["核心结论 / 执行口径", "conclusion"],
   ["企业材料 / 官方依据", "facts"],
-  ["企业待确认", "pending"],
   ["表达边界", "boundaries"],
-  ["参考资料", "references"],
 ] as const;
 
 function displayDate(value: number) {
@@ -174,57 +173,64 @@ function HistoricalResultsContent({
 
           {result.responseLogic.length > 0 ? (
             <div className="mt-5 grid gap-4">
-              {result.responseLogic.map((logic) => (
-                <article
-                  key={logic.recordId}
-                  className="rounded-2xl border border-[#ece6f1] bg-[#fbf9fd] p-4 md:p-5"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#ece6f1] pb-3">
-                    <strong className="text-sm text-[#332a48]">
-                      {logic.status === "confirmed"
-                        ? `已确认 V${logic.version}`
-                        : "未发布草稿"}
-                    </strong>
-                    <span className="text-xs text-[#8d8498]">
-                      {displayDate(logic.updatedAt)}
-                    </span>
-                  </div>
-                  <div className="mt-4 grid gap-4">
-                    {responseFields.map(([label, key]) => {
-                      const value = logic.content[key];
-                      if (!value.trim()) return null;
-                      return (
-                        <div key={key}>
+              {result.responseLogic.map((logic) => {
+                const publicContent = normalizeResponseLogicPublicProvenance(
+                  logic.content,
+                );
+                return (
+                  <article
+                    key={logic.recordId}
+                    className="rounded-2xl border border-[#ece6f1] bg-[#fbf9fd] p-4 md:p-5"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#ece6f1] pb-3">
+                      <strong className="text-sm text-[#332a48]">
+                        {logic.status === "confirmed"
+                          ? `已确认 V${logic.version}`
+                          : "未发布草稿"}
+                      </strong>
+                      <span className="text-xs text-[#8d8498]">
+                        {displayDate(logic.updatedAt)}
+                      </span>
+                    </div>
+                    <div className="mt-4 grid gap-4">
+                      {responseFields.map(([label, key]) => {
+                        const value = publicContent[key];
+                        if (!value.trim()) return null;
+                        return (
+                          <div key={key}>
+                            <h3 className="m-0 text-sm font-semibold text-[#51445f]">
+                              {label}
+                            </h3>
+                            <div className="mt-2 text-sm leading-7 text-[#625a70]">
+                              <MarkdownRenderer content={value} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {logic.content.attachments.length > 0 && (
+                        <div>
                           <h3 className="m-0 text-sm font-semibold text-[#51445f]">
-                            {label}
+                            已核验资料
                           </h3>
-                          <div className="mt-2 text-sm leading-7 text-[#625a70]">
-                            <MarkdownRenderer content={value} />
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {logic.content.attachments.map((attachment) => (
+                              <span
+                                key={attachment.fileId}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3dce9] bg-white px-2.5 py-1.5 text-xs text-[#625a70]"
+                              >
+                                <FileText className="h-3.5 w-3.5" />
+                                {attachment.kind === "image"
+                                  ? "用户上传图片"
+                                  : "用户上传资料"}
+                              </span>
+                            ))}
                           </div>
                         </div>
-                      );
-                    })}
-                    {logic.content.attachments.length > 0 && (
-                      <div>
-                        <h3 className="m-0 text-sm font-semibold text-[#51445f]">
-                          已核验资料
-                        </h3>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {logic.content.attachments.map((attachment) => (
-                            <span
-                              key={attachment.fileId}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3dce9] bg-white px-2.5 py-1.5 text-xs text-[#625a70]"
-                            >
-                              <FileText className="h-3.5 w-3.5" />
-                              {attachment.filename}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              ))}
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           ) : (
             <p className="mt-4 rounded-xl border border-dashed border-[#ddd5e5] p-4 text-sm text-[#716a80]">

@@ -73,11 +73,8 @@ const AdminDeliveryDispatch = lazy(() =>
     default: component,
   })),
 );
-const AdminMonitoring = lazy(() =>
-  import("./pages/AdminMonitoring").then(({ default: component }) => ({
-    default: component,
-  })),
-);
+
+const MonitoringModule = lazy(() => import("./monitoring/Workspace"));
 
 const DevelopmentPreviewRouter = import.meta.env.DEV
   ? lazy(() => import("./pages/DevelopmentPreviewRouter"))
@@ -148,6 +145,15 @@ function UserOnly({ children }: { children: React.ReactNode }) {
   return user?.role === "user" ? children : <Redirect to="/" />;
 }
 
+function MonitoringCustomerOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  return user?.role === "user" || isSystemAdminAccount(user) ? (
+    children
+  ) : (
+    <Redirect to="/" />
+  );
+}
+
 function DeliveryMemberOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   return user?.role === "delivery_member" ? children : <Redirect to="/" />;
@@ -158,6 +164,36 @@ function Router() {
     <Switch>
       <Route path={"/"} component={RoleLanding} />
       <Route path={"/login"} component={RoleLanding} />
+      <Route path="/monitoring-system">
+        <MonitoringCustomerOnly>
+          <MonitoringModule />
+        </MonitoringCustomerOnly>
+      </Route>
+      <Route path="/monitoring-system/*">
+        <MonitoringCustomerOnly>
+          <MonitoringModule />
+        </MonitoringCustomerOnly>
+      </Route>
+      <Route path="/publishing">
+        <MonitoringCustomerOnly>
+          <MonitoringModule />
+        </MonitoringCustomerOnly>
+      </Route>
+      <Route path="/publishing/*">
+        <MonitoringCustomerOnly>
+          <MonitoringModule />
+        </MonitoringCustomerOnly>
+      </Route>
+      <Route path="/admin/monitoring">
+        <SystemAdminOnly>
+          <MonitoringModule />
+        </SystemAdminOnly>
+      </Route>
+      <Route path="/admin/monitoring/*">
+        <SystemAdminOnly>
+          <MonitoringModule />
+        </SystemAdminOnly>
+      </Route>
       <Route path={"/agent"}>
         <DeliveryAdminOnly>
           <Redirect to="/admin/agent" />
@@ -173,16 +209,6 @@ function Router() {
           <UserDashboard initialSection="knowledge-agent" />
         </UserOnly>
       </Route>
-      <Route path={"/monitoring"}>
-        <UserOnly>
-          <UserDashboard initialSection="monitoring" />
-        </UserOnly>
-      </Route>
-      <Route path={"/monitoring/:monitorId"}>
-        <UserOnly>
-          <UserDashboard initialSection="monitoring" />
-        </UserOnly>
-      </Route>
       <Route path={"/admin/workspace"}>
         <AdminOnly>
           <AdminWorkspace />
@@ -194,7 +220,11 @@ function Router() {
           if (!Number.isInteger(userId) || userId <= 0) return <NotFound />;
           const allowedTabs: readonly WorkspaceTab[] = ADMIN_WORKSPACE_TAB_IDS;
           if (!allowedTabs.includes(params.tab as WorkspaceTab)) {
-            return <Redirect to={`/admin/customers/${userId}/service`} />;
+            const query =
+              typeof window === "undefined" ? "" : window.location.search;
+            return (
+              <Redirect to={`/admin/customers/${userId}/workspace${query}`} />
+            );
           }
           const initialTab = params.tab as WorkspaceTab;
           return (
@@ -212,16 +242,6 @@ function Router() {
       <Route path={"/admin/presales"}>
         <SystemAdminOnly>
           <AdminPresales />
-        </SystemAdminOnly>
-      </Route>
-      <Route path={"/admin/monitoring"}>
-        <SystemAdminOnly>
-          <AdminMonitoring />
-        </SystemAdminOnly>
-      </Route>
-      <Route path={"/admin/monitoring/:section"}>
-        <SystemAdminOnly>
-          <AdminMonitoring />
         </SystemAdminOnly>
       </Route>
       <Route path={"/admin/delivery-roles"}>
@@ -263,6 +283,26 @@ function Router() {
   );
 }
 
+export function WorkspaceLoadingState() {
+  return (
+    <div
+      className="flex min-h-[100dvh] items-center justify-center bg-background"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted">
+          <Loader2
+            className="h-5 w-5 animate-spin text-primary"
+            aria-hidden="true"
+          />
+        </div>
+        正在打开工作空间
+      </div>
+    </div>
+  );
+}
+
 /**
  * Inner app shell that has access to ConversationProvider context.
  * Activates the resume-polling hook so that conversations stuck in
@@ -274,18 +314,7 @@ function AppShell({ resumePolling = true }: { resumePolling?: boolean }) {
   return (
     <>
       {resumePolling && <ConversationResumePolling />}
-      <Suspense
-        fallback={
-          <div className="flex min-h-[100dvh] items-center justify-center bg-background">
-            <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <Loader2 className="h-5 w-5 animate-spin" />
-              </div>
-              正在载入工作空间
-            </div>
-          </div>
-        }
-      >
+      <Suspense fallback={<WorkspaceLoadingState />}>
         <Router />
       </Suspense>
     </>
@@ -301,16 +330,7 @@ export function AuthBoundary() {
   const { user, loading, error, refresh } = useAuth();
 
   if (loading) {
-    return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3 text-sm text-muted-foreground">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
-          正在打开工作空间
-        </div>
-      </div>
-    );
+    return <WorkspaceLoadingState />;
   }
 
   if (!user && error) {

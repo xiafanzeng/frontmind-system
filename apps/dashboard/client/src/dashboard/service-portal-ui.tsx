@@ -4,7 +4,6 @@ import {
   CalendarRange,
   CheckCircle2,
   ChevronRight,
-  CircleDashed,
   CircleUserRound,
   Clock3,
   Database,
@@ -47,10 +46,14 @@ import {
   MAX_PASSWORD_LENGTH,
   MIN_PASSWORD_LENGTH,
 } from "@shared/auth-constraints";
+import type { AccountMarketEdition } from "@shared/account-edition";
+import { keywordCategoryKey } from "@shared/keyword-categories";
 
 import {
   getCapability,
+  getRouteCapability,
   getWorkflowStepAccess,
+  isCapabilityIncludedInPlan,
   type ServiceAction,
   type ServiceCapability,
   type ServiceCapabilityKey,
@@ -64,6 +67,7 @@ function displayDate(value: string) {
   const date = new Date(epochValue);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -77,6 +81,59 @@ function validityLabel(portal: ServicePortalView) {
   if (until) return `有效至 ${until}`;
   if (portal.plan.code === "basic") return "单次交付，账号内长期可查看";
   return "有效期待服务配置同步";
+}
+
+function progressiveQuotaDetails(portal: ServicePortalView) {
+  const unlock = portal.quotaUnlock;
+  if (
+    portal.plan.code !== "luxury" ||
+    !unlock ||
+    unlock.current === null ||
+    unlock.total === null ||
+    unlock.total <= 1
+  ) {
+    return null;
+  }
+  const unlocked = portal.quotas.reduce(
+    (sum, quota) => sum + (quota.limit ?? 0),
+    0,
+  );
+  const entitlement = portal.quotas.reduce(
+    (sum, quota) => sum + (quota.entitlementLimit ?? quota.limit ?? 0),
+    0,
+  );
+  return {
+    ...unlock,
+    unlocked,
+    entitlement,
+    nextUnlockLabel: unlock.nextUnlockAt
+      ? displayDate(unlock.nextUnlockAt)
+      : "",
+  };
+}
+
+function ProgressiveQuotaSummary({ portal }: { portal: ServicePortalView }) {
+  const details = progressiveQuotaDetails(portal);
+  if (!details) return null;
+  return (
+    <div
+      className="mt-4 flex flex-col gap-1 rounded-xl border border-[#dfd2e8] bg-[#faf7fc] px-4 py-3 text-xs leading-5 text-[#716a80] sm:flex-row sm:items-center sm:justify-between"
+      data-testid="quota-unlock-summary"
+    >
+      <span>
+        <strong className="font-semibold text-[#5b2a86]">
+          第 {details.current}/{details.total} 服务季度
+        </strong>
+        <span className="mx-2 text-[#c0b5c8]">·</span>
+        当前已解锁 {details.unlocked} / 全年 {details.entitlement} 个问题
+      </span>
+      {details.capacityState === "exhausted" ? (
+        <span>全年问题额度已用完</span>
+      ) : details.nextUnlockLabel ? (
+        <span>下一季度额度将于 {details.nextUnlockLabel} 开放</span>
+      ) : null}
+    </div>
+  );
 }
 
 function actionHref(action: ServiceAction | undefined) {
@@ -207,27 +264,19 @@ function AccessPill({ access }: { access: ServiceCapability }) {
   );
 }
 
-function WorkflowStatusPill({ step }: { step: ServiceWorkflowStep }) {
-  if (step.status === "complete") {
+function ServicePathStatusPill({ unlocked }: { unlocked: boolean }) {
+  if (unlocked) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        已完成
-      </span>
-    );
-  }
-  if (step.status === "ready") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-[#f3edf8] px-2.5 py-1 text-xs font-semibold text-[#5b2a86]">
-        <CircleDashed className="h-3.5 w-3.5" />
-        可进行
+        已解锁
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-      <Clock3 className="h-3.5 w-3.5" />
-      待解锁
+    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+      <LockKeyhole className="h-3.5 w-3.5" />
+      未解锁
     </span>
   );
 }
@@ -280,7 +329,7 @@ const WORKFLOW_JOURNEY_META: Record<
   question: {
     title: "品牌全域词库与选题",
     description:
-      "知识库发布后，由 AI 监控与优化工程师通过工单配置并发布品牌词库与问题目录，再按当期额度完成选题。",
+      "知识库发布后，由 AI 监控与优化工程师通过需求配置并发布品牌词库，客户再按当期额度选择或自主填写优化问题。",
     route: { section: "brand", sub: "global-keywords" },
   },
   intent_optimization: {
@@ -310,6 +359,60 @@ const WORKFLOW_JOURNEY_META: Record<
   },
 };
 
+type KnownServicePlanCode = Exclude<
+  ServicePortalView["plan"]["code"],
+  "unknown"
+>;
+
+type ServiceScopeModule = {
+  key: string;
+  label: string;
+};
+
+const SHARED_SERVICE_SCOPE_MODULES: readonly ServiceScopeModule[] = [
+  { key: "intent-optimization", label: "问题优化" },
+  { key: "response-logic", label: "应答逻辑智能体" },
+  { key: "monitoring", label: "问题监控" },
+  { key: "progress-report", label: "进度报告" },
+  { key: "content-assets", label: "AI 友好内容资产" },
+];
+
+const SERVICE_SCOPE_MODULES_BY_PLAN: Record<
+  KnownServicePlanCode,
+  readonly ServiceScopeModule[]
+> = {
+  basic: [
+    { key: "knowledge-display", label: "知识库展示" },
+    ...SHARED_SERVICE_SCOPE_MODULES,
+  ],
+  advanced: [
+    { key: "knowledge-build", label: "知识库智能体" },
+    { key: "global-keywords", label: "品牌全域词库与选题" },
+    ...SHARED_SERVICE_SCOPE_MODULES,
+  ],
+  luxury: [
+    { key: "knowledge-build", label: "知识库智能体" },
+    { key: "global-keywords", label: "品牌全域词库与选题" },
+    ...SHARED_SERVICE_SCOPE_MODULES,
+  ],
+};
+
+const OVERSEAS_SERVICE_SCOPE_MODULE: ServiceScopeModule = {
+  key: "overseas-brand-tracking",
+  label: "舆情监控·品牌追踪",
+};
+
+function serviceScopeModules(
+  planCode: ServicePortalView["plan"]["code"],
+  marketEdition: AccountMarketEdition,
+) {
+  if (planCode === "unknown") return [];
+  const planModules = SERVICE_SCOPE_MODULES_BY_PLAN[planCode];
+  return marketEdition === "overseas"
+    ? [...planModules, OVERSEAS_SERVICE_SCOPE_MODULE]
+    : planModules;
+}
+
 export function ServiceQuotaOverview({
   portal,
   className = "",
@@ -317,6 +420,7 @@ export function ServiceQuotaOverview({
   portal: ServicePortalView;
   className?: string;
 }) {
+  const progressiveQuota = progressiveQuotaDetails(portal) !== null;
   return (
     <section
       className={`rounded-[22px] border border-[#e8e1ee] bg-white p-5 shadow-[0_14px_36px_rgba(33,19,58,.05)] md:p-6 ${className}`}
@@ -331,27 +435,42 @@ export function ServiceQuotaOverview({
         </div>
       </div>
 
+      <ProgressiveQuotaSummary portal={portal} />
+
       {portal.quotas.length > 0 ? (
         <div className="mt-5 grid grid-cols-2 gap-3">
           {portal.quotas.map((quota) => {
             const synchronized =
               quota.used !== null && quota.limit !== null && quota.limit >= 0;
+            const categoryKey = keywordCategoryKey(quota.key);
             return (
               <article
                 key={quota.key}
-                className="rounded-2xl border border-[#ece6f1] bg-[#fbf9fd] p-4"
+                data-category={categoryKey || undefined}
+                className="fm-question-category-surface rounded-2xl border border-[#ece6f1] p-4"
               >
-                <span className="text-xs font-semibold text-[#716a80]">
+                <span className="fm-question-category-ink text-xs font-semibold">
                   {quota.label}
                 </span>
-                <strong className="mt-2 block text-xl text-[#332a48]">
-                  {synchronized ? `${quota.used} / ${quota.limit}` : "待同步"}
+                <strong className="fm-question-category-ink mt-2 block text-xl">
+                  {synchronized
+                    ? progressiveQuota && quota.entitlementLimit !== undefined
+                      ? `已用 ${quota.used} / 已解锁 ${quota.limit}`
+                      : `${quota.used} / ${quota.limit}`
+                    : "待同步"}
                   {synchronized && (
                     <small className="ml-1 text-xs font-medium text-[#8d8496]">
                       {quota.unit}
                     </small>
                   )}
                 </strong>
+                {synchronized &&
+                  progressiveQuota &&
+                  quota.entitlementLimit !== undefined && (
+                    <p className="m-0 mt-1 text-xs text-[#8d8496]">
+                      全年 {quota.entitlementLimit} {quota.unit}
+                    </p>
+                  )}
                 {!synchronized && (
                   <p className="m-0 mt-2 text-xs text-[#8d8496]">
                     等待服务配置同步
@@ -377,6 +496,7 @@ function ServiceCycleOverview({
   portal: ServicePortalView;
   onNavigate: (section: string, sub?: string | null) => void;
 }) {
+  const progressiveQuota = progressiveQuotaDetails(portal) !== null;
   const purchasedQuestionLabel =
     portal.purchasedQuestions.length > 0
       ? `${portal.purchasedQuestions.length} 个已购问题`
@@ -418,22 +538,37 @@ function ServiceCycleOverview({
         </div>
       </div>
 
+      <ProgressiveQuotaSummary portal={portal} />
+
       {portal.quotas.length > 0 ? (
         <div className="mt-4 grid min-w-0 grid-cols-2 gap-2">
           {portal.quotas.map((quota) => {
             const synchronized =
               quota.used !== null && quota.limit !== null && quota.limit >= 0;
+            const categoryKey = keywordCategoryKey(quota.key);
             return (
               <article
                 key={quota.key}
-                className="min-w-0 rounded-xl border border-[#ece6f1] bg-[#fbf9fd] px-3 py-2.5"
+                data-category={categoryKey || undefined}
+                className="fm-question-category-surface min-w-0 rounded-xl border border-[#ece6f1] px-3 py-2.5"
               >
-                <span className="block truncate text-xs font-semibold text-[#716a80]">
+                <span className="fm-question-category-ink block truncate text-xs font-semibold">
                   {quota.label}
                 </span>
-                <strong className="mt-1 block text-base text-[#332a48]">
-                  {synchronized ? `${quota.used} / ${quota.limit}` : "待同步"}
+                <strong className="fm-question-category-ink mt-1 block text-base">
+                  {synchronized
+                    ? progressiveQuota && quota.entitlementLimit !== undefined
+                      ? `已用 ${quota.used} / 已解锁 ${quota.limit}`
+                      : `${quota.used} / ${quota.limit}`
+                    : "待同步"}
                 </strong>
+                {synchronized &&
+                  progressiveQuota &&
+                  quota.entitlementLimit !== undefined && (
+                    <small className="mt-0.5 block text-xs text-[#8d8496]">
+                      全年 {quota.entitlementLimit} {quota.unit}
+                    </small>
+                  )}
               </article>
             );
           })}
@@ -450,6 +585,9 @@ function ServiceCycleOverview({
 export function ServiceHome({
   portal,
   companyName,
+  marketEdition = "domestic",
+  allowBrandTrackingManagement = false,
+  showPublicOpinionJourneyItem = true,
   loading = false,
   error = false,
   onNavigate,
@@ -458,6 +596,9 @@ export function ServiceHome({
 }: {
   portal: ServicePortalView;
   companyName?: string;
+  marketEdition?: AccountMarketEdition;
+  allowBrandTrackingManagement?: boolean;
+  showPublicOpinionJourneyItem?: boolean;
   loading?: boolean;
   error?: boolean;
   onNavigate: (section: string, sub?: string | null) => void;
@@ -477,7 +618,7 @@ export function ServiceHome({
   const channelDistributionStep = portal.workflowSteps.find(
     (step) => step.id === "channel_distribution",
   );
-  const journeyItems =
+  const workflowJourneyItems =
     portal.workflowSteps.length > 0
       ? portal.workflowSteps
           .filter((step) => step.id !== "channel_distribution")
@@ -506,9 +647,9 @@ export function ServiceHome({
               description: isKnowledge
                 ? usesInteractiveKnowledgeFlow
                   ? "在系统内通过对话逐节点补齐并确认企业资料，全部完成后发布知识库。"
-                  : "查看官网购买流程已同步到当前账号的图文知识库。"
+                  : "知识库由 Website 流程自动同步至本账号，服务团队可补录；完成后可直接查看。"
                 : isQuestion && usesInteractiveKnowledgeFlow
-                  ? "知识库发布后，由 AI 监控与优化工程师通过工单配置并发布品牌词库与问题目录，再按本期额度完成选题。"
+                  ? "知识库发布后，由 AI 监控与优化工程师通过需求配置并发布品牌词库，客户再按本期额度选择或自主填写优化问题。"
                   : isMonitoring
                     ? "查看跨平台真实回答，并在同一页面核验媒体信源与渠道分发记录。"
                     : meta.description,
@@ -530,7 +671,25 @@ export function ServiceHome({
           step: null,
           access: getCapability(portal, item.key),
         }));
+  const journeyItems =
+    marketEdition === "overseas" && showPublicOpinionJourneyItem
+      ? [
+          ...workflowJourneyItems,
+          {
+            id: allowBrandTrackingManagement
+              ? "public_opinion_management"
+              : "public_opinion_monitoring",
+            title: "舆情监控",
+            description:
+              "通过 FrontMind 品牌追踪智能体监测品牌评价、舆情趋势与潜在风险。",
+            route: { section: "public-opinion", sub: "brand-tracking" },
+            step: null,
+            access: getCapability(portal, "brandTracking"),
+          },
+        ]
+      : workflowJourneyItems;
   const contentOperationsAccess = getCapability(portal, "contentAssets");
+  const planScopeModules = serviceScopeModules(portal.plan.code, marketEdition);
 
   if (loading) {
     return (
@@ -581,7 +740,7 @@ export function ServiceHome({
         data-testid="service-home-overview"
       >
         <article
-          className="min-w-0 self-start overflow-hidden rounded-[22px] border border-[#5b2a86]/15 bg-[linear-gradient(135deg,#25124f,#5b2a86)] p-6 text-white shadow-[0_18px_48px_rgba(33,19,58,.13)] md:p-8"
+          className="min-w-0 overflow-hidden rounded-[22px] border border-[#5b2a86]/15 bg-[linear-gradient(135deg,#25124f,#5b2a86)] p-6 text-white shadow-[0_18px_48px_rgba(33,19,58,.13)] md:p-8"
           aria-label={`当前服务版本：${portal.plan.name}`}
         >
           <div>
@@ -623,34 +782,32 @@ export function ServiceHome({
                 <Sparkles className="h-4 w-4" />
                 套餐范围
               </span>
-              <div className="mt-3 min-w-0 text-sm leading-6 text-white">
-                {portal.quotas.length > 0 ? (
-                  <span
-                    className={`grid min-w-0 gap-2 ${
-                      portal.quotas.length === 1 ? "grid-cols-1" : "grid-cols-2"
-                    }`}
-                    data-testid="service-plan-scope"
-                  >
-                    {portal.quotas.slice(0, 4).map((quota) => (
-                      <span
-                        key={quota.key}
-                        className="grid min-h-14 min-w-0 content-start gap-1 rounded-xl border border-white/[0.06] bg-white/[0.045] px-3 py-2.5"
-                      >
-                        <small className="block min-w-0 break-words text-[10px] font-medium leading-4 text-white/65">
-                          {quota.label}
-                        </small>
-                        <span className="block text-xs font-semibold leading-4 text-white">
-                          {quota.limit === null
-                            ? "待同步"
-                            : `${quota.limit} ${quota.unit}`}
-                        </span>
+              {planScopeModules.length > 0 ? (
+                <ul
+                  className="m-0 mt-3 flex min-w-0 list-none flex-wrap gap-2 p-0"
+                  data-testid="service-plan-scope"
+                  aria-label="套餐包含的智能服务板块"
+                >
+                  {planScopeModules.map((module) => (
+                    <li
+                      key={module.key}
+                      className="flex min-h-11 max-w-full shrink-0 items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.05] px-3 py-2.5 text-xs font-semibold leading-5 text-white"
+                    >
+                      <CheckCircle2
+                        className="h-3.5 w-3.5 shrink-0 text-white/70"
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 whitespace-nowrap">
+                        {module.label}
                       </span>
-                    ))}
-                  </span>
-                ) : (
-                  "待服务配置同步"
-                )}
-              </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="m-0 mt-3 text-sm leading-6 text-white/70">
+                  待服务配置同步
+                </p>
+              )}
             </div>
           </div>
         </article>
@@ -688,10 +845,10 @@ export function ServiceHome({
                     portal.knowledgeBase.status === "ready"
                   ? "当前知识库由知识库智能体逐节点确认后发布，可直接查看并继续维护。"
                   : portal.knowledgeBase.status === "ready"
-                    ? `${portal.knowledgeBase.sourceLabel || "已发布知识库"}已同步到当前账号，可直接查看。`
+                    ? "知识库由 Website 流程自动同步至本账号，服务团队可补录，可直接查看。"
                     : portal.knowledgeBase.status === "importing"
-                      ? "官网初步知识库正在迁移，完成后会在此显示。"
-                      : "知识库尚未就绪，请按页面提示等待服务团队处理。"}
+                      ? "Website 流程正在自动同步知识库至本账号，服务团队也可补录；完成后会在此显示。"
+                      : "Website 流程尚未完成知识库自动同步；服务团队可补录，完成后会在此显示。"}
             </p>
             {portal.knowledgeBase.updatedAt && (
               <p className="mt-2 text-xs text-[#9a94a8]">
@@ -738,6 +895,13 @@ export function ServiceHome({
           </div>
           {journeyItems.map((item, index) => {
             const { access } = item;
+            const capabilityKey = item.route
+              ? getRouteCapability(item.route.section, item.route.sub)
+              : null;
+            const planLocked = Boolean(
+              capabilityKey &&
+                !isCapabilityIncludedInPlan(portal.plan.code, capabilityKey),
+            );
             return (
               <article
                 key={item.id}
@@ -751,11 +915,13 @@ export function ServiceHome({
                     <h4 className="m-0 text-sm font-semibold text-[#171321]">
                       {item.title}
                     </h4>
-                    {item.step ? (
-                      <WorkflowStatusPill step={item.step} />
-                    ) : (
-                      <AccessPill access={access} />
-                    )}
+                    <ServicePathStatusPill
+                      unlocked={
+                        item.step
+                          ? item.step.status !== "locked"
+                          : access.allowed
+                      }
+                    />
                   </div>
                   <p className="mt-1.5 text-xs leading-5 text-[#716a80]">
                     {access.allowed
@@ -777,8 +943,13 @@ export function ServiceHome({
                     size="sm"
                     variant="ghost"
                     className="justify-self-start text-[#5b2a86] sm:justify-self-end"
-                    onClick={() =>
-                      onNavigate(item.route!.section, item.route!.sub)
+                    disabled={planLocked}
+                    aria-disabled={planLocked}
+                    title={planLocked ? access.reason : undefined}
+                    onClick={
+                      planLocked
+                        ? undefined
+                        : () => onNavigate(item.route!.section, item.route!.sub)
                     }
                   >
                     {item.step?.status === "complete"
@@ -812,7 +983,9 @@ export function ServiceHome({
                 <h4 className="m-0 text-sm font-semibold text-[#171321]">
                   AI 友好内容资产
                 </h4>
-                <AccessPill access={contentOperationsAccess} />
+                <ServicePathStatusPill
+                  unlocked={contentOperationsAccess.allowed}
+                />
               </div>
               <p className="mt-1.5 text-xs leading-5 text-[#716a80]">
                 {contentOperationsAccess.allowed
@@ -825,7 +998,22 @@ export function ServiceHome({
               size="sm"
               variant="ghost"
               className="justify-self-start text-[#5b2a86] sm:justify-self-end"
-              onClick={() => onNavigate("semantic", "content-assets")}
+              disabled={
+                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
+              }
+              aria-disabled={
+                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
+              }
+              title={
+                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
+                  ? contentOperationsAccess.reason
+                  : undefined
+              }
+              onClick={
+                isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
+                  ? () => onNavigate("semantic", "content-assets")
+                  : undefined
+              }
             >
               {contentOperationsAccess.allowed ? "管理" : "查看原因"}
               <ChevronRight className="h-4 w-4" />
@@ -1065,6 +1253,13 @@ export function SalesAdvisorDialog({
             {planLabel}
             需要由专员确认企业需求、服务周期与交付范围，请使用企业微信扫码联系。
           </DialogDescription>
+          {targetPlan === "luxury" && (
+            <p className="mb-0 mt-3 rounded-xl border border-[#dfd2e8] bg-white px-3 py-2 text-xs leading-5 text-[#5f5668]">
+              豪华版全年包含 4 个行业排名词、4 个竞品对比词、4 个美誉舆情词和 20
+              个产品场景词；额度按四个服务季度逐步开放，每季度新增 1、1、1、5
+              个。
+            </p>
+          )}
         </DialogHeader>
         <div className="px-6 pb-6 pt-5">
           <div className="overflow-hidden rounded-2xl border border-border/70 bg-white p-3">

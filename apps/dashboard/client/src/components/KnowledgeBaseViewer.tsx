@@ -11,6 +11,7 @@ import {
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { Input } from "@/components/ui/input";
 import type { KnowledgeAsset, KnowledgeDocument } from "@shared/dashboard";
+import { customerSafeKnowledgeAssetLabel } from "@shared/knowledge-base-public-artifacts";
 
 type KnowledgeDisplayAsset = KnowledgeAsset & {
   sectionHint?: string;
@@ -52,6 +53,43 @@ function splitMarkdownSections(content: string) {
   if (current.some((item) => item.trim()))
     sections.push(current.join("\n").trim());
   return sections.filter(Boolean);
+}
+
+function normalizeDocumentTitle(value: string) {
+  return value
+    .normalize("NFKC")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function withoutDuplicateDocumentHeading(
+  content: string,
+  documentTitle: string,
+) {
+  const lines = content.split("\n");
+  const headingIndex = lines.findIndex((line) => line.trim());
+  if (headingIndex < 0) return content;
+
+  const heading = lines[headingIndex].match(
+    /^ {0,3}#{1,6}[\t ]+(.+?)[\t ]*#*[\t ]*$/,
+  );
+  if (
+    !heading ||
+    normalizeDocumentTitle(heading[1]) !== normalizeDocumentTitle(documentTitle)
+  ) {
+    return content;
+  }
+
+  lines.splice(headingIndex, 1);
+  while (lines[0]?.trim() === "") lines.shift();
+  return lines.join("\n");
+}
+
+function knowledgeDocumentSections(document: KnowledgeDocument) {
+  return splitMarkdownSections(
+    withoutDuplicateDocumentHeading(document.content, document.title),
+  );
 }
 
 function sectionHeading(content: string) {
@@ -215,7 +253,7 @@ function placeKnowledgeAssets(snapshot: KnowledgeSnapshotView): AssetPlacement {
   const relatedByDocument = new Map<string, KnowledgeDisplayAsset[]>();
   const documentSections = snapshot.documents.map((document) => ({
     document,
-    sections: splitMarkdownSections(document.content),
+    sections: knowledgeDocumentSections(document),
   }));
   const fallbackDocument = snapshot.documents[0];
 
@@ -287,12 +325,25 @@ function placeKnowledgeAssets(snapshot: KnowledgeSnapshotView): AssetPlacement {
 
 function assetDisplayName(asset: KnowledgeDisplayAsset) {
   return (
-    asset.caption?.trim() ||
-    asset.alt?.trim() ||
-    asset.title?.trim() ||
-    archiveFileName(asset.path)
-      .replace(/\.[^.]+$/, "")
-      .replaceAll(/[_-]+/g, " ")
+    customerSafeKnowledgeAssetLabel(asset.caption) ||
+    customerSafeKnowledgeAssetLabel(asset.alt) ||
+    knowledgeAssetSemanticFallback(asset)
+  );
+}
+
+function knowledgeAssetSemanticFallback(asset: KnowledgeDisplayAsset) {
+  return asset.sourceKind === "official_logo_upload" ||
+    asset.assetType === "brand_identity"
+    ? "企业官方主 Logo"
+    : undefined;
+}
+
+function assetAlternativeText(asset: KnowledgeDisplayAsset) {
+  return (
+    customerSafeKnowledgeAssetLabel(asset.alt) ||
+    customerSafeKnowledgeAssetLabel(asset.caption) ||
+    knowledgeAssetSemanticFallback(asset) ||
+    "知识库配图"
   );
 }
 
@@ -391,29 +442,35 @@ function KnowledgeImageGrid({
   );
   const renderAsset = (asset: KnowledgeDisplayAsset) => {
     const displayName = assetDisplayName(asset);
+    const source = assetSource(asset);
+    const showSource = isExternalHttpUrl(source);
     return (
       <figure key={asset.key} className="min-w-0">
         <img
           src={asset.url}
-          alt={asset.alt?.trim() || displayName}
+          alt={assetAlternativeText(asset)}
           loading="lazy"
           className={knowledgeAssetImageClass(asset)}
         />
-        <figcaption className="px-1 pt-2 text-xs leading-5 text-[#716a80]">
-          <span className="block break-words font-medium text-[#51495d]">
-            {displayName}
-          </span>
-          {isExternalHttpUrl(assetSource(asset)) && (
-            <a
-              href={assetSource(asset)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-0.5 inline-flex text-[#6d3497] hover:underline"
-            >
-              查看图片来源
-            </a>
-          )}
-        </figcaption>
+        {(displayName || showSource) && (
+          <figcaption className="px-1 pt-2 text-xs leading-5 text-[#716a80]">
+            {displayName && (
+              <span className="block break-words font-medium text-[#51495d]">
+                {displayName}
+              </span>
+            )}
+            {showSource && (
+              <a
+                href={source}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-0.5 inline-flex text-[#6d3497] hover:underline"
+              >
+                查看图片来源
+              </a>
+            )}
+          </figcaption>
+        )}
       </figure>
     );
   };
@@ -490,8 +547,7 @@ export default function KnowledgeBaseViewer({
     filteredDocuments[0] ||
     formalDocuments[0];
   const documentSections = useMemo(
-    () =>
-      selectedDocument ? splitMarkdownSections(selectedDocument.content) : [],
+    () => (selectedDocument ? knowledgeDocumentSections(selectedDocument) : []),
     [selectedDocument],
   );
   const assetPlacement = useMemo(
@@ -640,15 +696,17 @@ export default function KnowledgeBaseViewer({
                   <figure key={asset.id || asset.key} className="min-w-0">
                     <img
                       src={asset.url}
-                      alt={asset.alt?.trim() || displayName}
+                      alt={assetAlternativeText(asset)}
                       loading="lazy"
                       className={knowledgeAssetImageClass(asset)}
                     />
-                    <figcaption className="px-1 pt-2 text-xs leading-5 text-[#716a80]">
-                      <span className="block break-words font-medium text-[#51495d]">
-                        {displayName}
-                      </span>
-                    </figcaption>
+                    {displayName && (
+                      <figcaption className="px-1 pt-2 text-xs leading-5 text-[#716a80]">
+                        <span className="block break-words font-medium text-[#51495d]">
+                          {displayName}
+                        </span>
+                      </figcaption>
+                    )}
                   </figure>
                 );
               })}
@@ -761,7 +819,7 @@ export default function KnowledgeBaseViewer({
                         {sectionAssets.length > 0 && (
                           <KnowledgeImageGrid
                             assets={sectionAssets.slice(0, 3)}
-                            ariaLabel={`${sectionHeading(section) || "知识正文"}配图`}
+                            ariaLabel={`${sectionHeading(section) || selectedDocument.title || "知识正文"}配图`}
                             alternating={index % 2 === 1}
                           />
                         )}

@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -7,6 +13,12 @@ import ChatInput from "./ChatInput";
 
 const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(async () => true),
+  continueKnowledgeBaseAttachmentAttempt: vi.fn(async () => true),
+  discardKnowledgeBaseAttachmentAttempt: vi.fn(),
+  commitKnowledgeBaseObservation: vi.fn(),
+  wakeKnowledgeBaseConversation: vi.fn(),
+  rollbackPendingKnowledgeBaseTurn: vi.fn(),
+  knowledgeBaseAttachmentAttempt: null as any,
   activeConversation: {
     id: "kb-conversation",
     taskId: "kb-task",
@@ -46,32 +58,56 @@ vi.mock("@/hooks/useSendMessage", () => ({
   useSendMessage: () => ({
     sendMessage: mocks.sendMessage,
     uploadProgress: null,
+    knowledgeBaseAttachmentAttempt: mocks.knowledgeBaseAttachmentAttempt,
+    continueKnowledgeBaseAttachmentAttempt:
+      mocks.continueKnowledgeBaseAttachmentAttempt,
+    discardKnowledgeBaseAttachmentAttempt:
+      mocks.discardKnowledgeBaseAttachmentAttempt,
   }),
 }));
 
 vi.mock("@/contexts/ConversationContext", () => ({
   useConversation: () => ({
     activeConversation: mocks.activeConversation,
+    commitKnowledgeBaseObservation: mocks.commitKnowledgeBaseObservation,
+    wakeKnowledgeBaseConversation: mocks.wakeKnowledgeBaseConversation,
+    rollbackPendingKnowledgeBaseTurn: mocks.rollbackPendingKnowledgeBaseTurn,
   }),
-  currentKnowledgeBasePresentationReady: (
-    conversation: any,
-    revision: number,
-    leafId: string,
-  ) =>
-    Boolean(
+  currentKnowledgeBaseReplySnapshot: (conversation: any) => {
+    const state = conversation?.knowledgeBase;
+    const presentationTurnId = state?.presentationTurnId ?? state?.activeTurnId;
+    const matches =
       conversation?.status === "awaiting_input" &&
-        conversation?.knowledgeBase?.canReply &&
-        conversation?.knowledgeBase?.revision === revision &&
-        conversation?.knowledgeBase?.leafId === leafId &&
-        conversation.messages.some(
-          (message: any) =>
-            message.knowledgeBase?.kind === "presentation" &&
-            message.knowledgeBase?.turnId ===
-              conversation.knowledgeBase.activeTurnId &&
-            message.knowledgeBase?.presentationKey ===
-              conversation.knowledgeBase.presentationKey,
-        ),
-    ),
+      state?.canReply &&
+      state?.presentationKey &&
+      presentationTurnId &&
+      conversation.messages.some(
+        (message: any) =>
+          message.knowledgeBase?.kind === "presentation" &&
+          message.knowledgeBase?.turnId === presentationTurnId &&
+          message.knowledgeBase?.presentationKey === state.presentationKey &&
+          message.knowledgeBase?.revision === state.revision &&
+          message.knowledgeBase?.leafId === state.leafId,
+      );
+    return matches
+      ? {
+          generation: state.generation,
+          stateEpoch: state.stateEpoch,
+          revision: state.revision,
+          leafId: state.leafId,
+          presentationKey: state.presentationKey,
+          presentationTurnId,
+        }
+      : null;
+  },
+}));
+
+vi.mock("./KnowledgeBaseManagedUploadRecovery", () => ({
+  default: () => (
+    <div data-testid="knowledge-base-managed-upload-recovery">
+      Dashboard 同轮附件恢复
+    </div>
+  ),
 }));
 
 vi.mock("@/lib/frontmind-api", () => ({
@@ -91,6 +127,14 @@ const progress: KnowledgeBaseProgressDto = {
     id: "build-1",
     conversationId: "kb-conversation",
     companyName: "硅基流动",
+    depthPolicy: {
+      version: 1,
+      minLeaves: 8,
+      maxLeaves: 115,
+      targetMinLeaves: 8,
+      targetMaxLeaves: 115,
+    },
+    researchSummary: null,
     status: "confirming",
     revision: 2,
     currentLeafId: "identity.legal",
@@ -179,6 +223,45 @@ const logoRequiredProgress: KnowledgeBaseProgressDto = {
   ],
 };
 
+const logoAvailableProgress: KnowledgeBaseProgressDto = {
+  ...logoRequiredProgress,
+  build: {
+    ...logoRequiredProgress.build,
+    revision: 1,
+    logoRequired: false,
+    logoAvailable: true,
+  },
+};
+
+const optionalLogoProgress: KnowledgeBaseProgressDto = {
+  ...logoRequiredProgress,
+  build: {
+    ...logoRequiredProgress.build,
+    executionMode: "materialized_bundle_v1",
+    logoRequired: false,
+    logoAvailable: false,
+  },
+};
+
+const responseLogicContext = {
+  questionId: "question-1",
+  groupId: "group-1",
+  groupTitle: "产品场景",
+  question: "硅基流动有什么核心产品？",
+  intent: "了解产品线",
+  summary: "基于企业事实回答",
+  draft: {
+    concern: "了解产品线",
+    conclusion: "",
+    facts: "",
+    pending: "",
+    boundaries: "",
+    references: "",
+    images: [],
+    attachments: [],
+  },
+};
+
 function showLogoRequiredPresentation() {
   mocks.activeConversation.messages = [
     { id: "user", role: "user", content: "开始构建", timestamp: 1 },
@@ -207,6 +290,17 @@ describe("knowledge-base ChatInput actions", () => {
   beforeEach(() => {
     mocks.sendMessage.mockClear();
     mocks.sendMessage.mockResolvedValue(true);
+    mocks.continueKnowledgeBaseAttachmentAttempt.mockClear();
+    mocks.discardKnowledgeBaseAttachmentAttempt.mockClear();
+    mocks.knowledgeBaseAttachmentAttempt = null;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:logo-preview"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
     mocks.activeConversation.messages = [
       { id: "user", role: "user", content: "确认", timestamp: 1 },
       {
@@ -224,12 +318,19 @@ describe("knowledge-base ChatInput actions", () => {
       },
     ];
     mocks.activeConversation.status = "awaiting_input";
+    mocks.activeConversation.taskId = "kb-task";
+    mocks.activeConversation.previousResponseId = undefined;
+    mocks.activeConversation.knowledgeBase.initialized = true;
     mocks.activeConversation.knowledgeBase.activeTurnId = "turn-2";
+    mocks.activeConversation.knowledgeBase.activeClientRequestId = "request-2";
+    mocks.activeConversation.knowledgeBase.activeTurnOperationType = undefined;
     mocks.activeConversation.knowledgeBase.presentationKey = "presentation-2";
     mocks.activeConversation.knowledgeBase.revision = 2;
     mocks.activeConversation.knowledgeBase.leafId = "identity.legal";
     mocks.activeConversation.knowledgeBase.canReply = true;
     mocks.activeConversation.knowledgeBase.notice = null;
+    mocks.activeConversation.knowledgeBase.activeTurnResetRevision = undefined;
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
   });
 
   it("replaces confirmation with an official Logo picker while Logo input is required", () => {
@@ -259,10 +360,50 @@ describe("knowledge-base ChatInput actions", () => {
     );
   });
 
-  it("does not send text while the official Logo upload gate is active", () => {
+  it("offers an optional Logo upload and an explicit skip for materialized v5", async () => {
     showLogoRequiredPresentation();
 
-    render(
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={optionalLogoProgress}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "上传 Logo（可选）" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "跳过 Logo，确认当前内容" }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "上传 Logo（可选）" }));
+    expect(screen.getByText("上传企业主 Logo（可选）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂不上传" })).toBeEnabled();
+    expect(container.querySelector('input[type="file"]')).not.toHaveAttribute(
+      "multiple",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "暂不上传" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "跳过 Logo，确认当前内容" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "确认",
+        [],
+        expect.objectContaining({
+          syncKnowledgeBaseSnapshot: true,
+          submissionKind: undefined,
+        }),
+      ),
+    );
+  });
+
+  it("hides the ordinary composer while the official Logo upload gate is active", () => {
+    showLogoRequiredPresentation();
+
+    const { container } = render(
       <ChatInput
         fixedAgentProfile="frontmind-pro"
         syncKnowledgeBaseSnapshot
@@ -270,10 +411,8 @@ describe("knowledge-base ChatInput actions", () => {
       />,
     );
 
-    const textarea = screen.getByRole("textbox");
-    expect(textarea).toBeDisabled();
-    fireEvent.change(textarea, { target: { value: "先确认正文" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(container.querySelector("button svg.lucide-send")).toBeNull();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -295,9 +434,7 @@ describe("knowledge-base ChatInput actions", () => {
       target: { files: [logo] },
     });
     expect(screen.getByText("official-logo.png")).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "提交 Logo 并继续" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "使用此图并继续" }));
 
     await waitFor(() =>
       expect(mocks.sendMessage).toHaveBeenCalledWith(
@@ -308,6 +445,8 @@ describe("knowledge-base ChatInput actions", () => {
           knowledgeBaseExpectedGeneration: 1,
           knowledgeBaseExpectedRevision: 0,
           knowledgeBaseExpectedLeafId: "identity.role",
+          knowledgeBaseExpectedPresentationKey: "presentation-logo-required",
+          submissionKind: "logo",
         }),
       ),
     );
@@ -316,6 +455,114 @@ describe("knowledge-base ChatInput actions", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it("replaces an existing first-leaf Logo through the same single-action gate and keeps the preview after failure", async () => {
+    showLogoRequiredPresentation();
+    const presentation = mocks.activeConversation.messages[1]!.knowledgeBase;
+    presentation.revision = 1;
+    mocks.activeConversation.knowledgeBase.revision = 1;
+    mocks.sendMessage.mockResolvedValueOnce(false);
+
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={logoAvailableProgress}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "更换 Logo" })).toBeEnabled();
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "更换 Logo" }));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(container.querySelector("button svg.lucide-send")).toBeNull();
+
+    const replacement = new File(["replacement"], "replacement.png", {
+      type: "image/png",
+    });
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [replacement] },
+    });
+    expect(
+      screen.getByRole("img", { name: "待提交 Logo 预览" }),
+    ).toHaveAttribute("src", "blob:logo-preview");
+    fireEvent.click(screen.getByRole("button", { name: "使用此图并继续" }));
+
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "",
+        [replacement],
+        expect.objectContaining({
+          submissionKind: "logo",
+          knowledgeBaseExpectedRevision: 1,
+          knowledgeBaseExpectedLeafId: "identity.role",
+          knowledgeBaseExpectedPresentationKey: "presentation-logo-required",
+        }),
+      ),
+    );
+    expect(screen.getByText("replacement.png")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "使用此图并继续" }),
+    ).toBeEnabled();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("uses only FrontMind copy while an accepted Logo is being sent", async () => {
+    showLogoRequiredPresentation();
+    const presentation = mocks.activeConversation.messages[1]!.knowledgeBase;
+    presentation.revision = 1;
+    mocks.activeConversation.knowledgeBase.revision = 1;
+    let resolveSend!: (sent: boolean) => void;
+    mocks.sendMessage.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveSend = resolve;
+      }),
+    );
+
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={logoAvailableProgress}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "更换 Logo" }));
+    expect(
+      screen.getByText(
+        "Logo 提交轮不会推进节点；FrontMind 接收后会重新呈现当前节点。",
+      ),
+    ).toBeInTheDocument();
+
+    const replacement = new File(["replacement"], "replacement.png", {
+      type: "image/png",
+    });
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [replacement] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "使用此图并继续" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: "正在发送至 FrontMind",
+      }),
+    ).toBeDisabled();
+    expect(screen.queryByText(/Manus/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveSend(true);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "更换 Logo" })).toBeEnabled(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("img", { name: "待提交 Logo 预览" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText("replacement.png")).not.toBeInTheDocument();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not allow another confirmation until the current presentation renders", () => {
@@ -342,6 +589,7 @@ describe("knowledge-base ChatInput actions", () => {
       <ChatInput
         fixedAgentProfile="frontmind-pro"
         syncKnowledgeBaseSnapshot
+        knowledgeBaseResetRevision={9}
         knowledgeBaseProgress={progress}
       />,
     );
@@ -362,12 +610,73 @@ describe("knowledge-base ChatInput actions", () => {
         [],
         expect.objectContaining({
           syncKnowledgeBaseSnapshot: true,
+          knowledgeBaseExpectedResetRevision: 9,
           knowledgeBaseExpectedGeneration: 1,
           knowledgeBaseExpectedRevision: 2,
           knowledgeBaseExpectedLeafId: "identity.legal",
+          knowledgeBaseExpectedPresentationKey: "presentation-2",
         }),
       ),
     );
+  });
+
+  it("keeps an initialized taskless v2 build replyable from its approved Dashboard presentation", async () => {
+    mocks.activeConversation.taskId = undefined;
+    mocks.activeConversation.knowledgeBase.initialized = true;
+    mocks.activeConversation.knowledgeBase.activeTurnId = null;
+    mocks.activeConversation.knowledgeBase.presentationTurnId = "turn-2";
+
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(
+      screen.getByText("可直接确认，也可以输入修改意见或上传补充资料。"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认当前内容" })).toBeEnabled();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+    expect(container.querySelector('input[type="file"]')).toBeEnabled();
+    expect(
+      screen.queryByPlaceholderText(
+        "请先点击上方“构建企业知识库”完成资料采集设置",
+      ),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认当前内容" }));
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "确认",
+        [],
+        expect.objectContaining({
+          knowledgeBaseExpectedGeneration: 1,
+          knowledgeBaseExpectedRevision: 2,
+          knowledgeBaseExpectedLeafId: "identity.legal",
+          knowledgeBaseExpectedPresentationKey: "presentation-2",
+        }),
+      ),
+    );
+  });
+
+  it("keeps the composer locked when the server denies reply even if a stale client status says awaiting input", () => {
+    mocks.activeConversation.status = "awaiting_input";
+    mocks.activeConversation.knowledgeBase.initialized = true;
+    mocks.activeConversation.knowledgeBase.canReply = false;
+
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(container.querySelector('input[type="file"]')).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认当前内容" })).toBeDisabled();
   });
 
   it("locks the confirmation synchronously until the request settles", async () => {
@@ -505,6 +814,25 @@ describe("knowledge-base ChatInput actions", () => {
     );
   });
 
+  it("locks the model selector after a general Agent task is created", () => {
+    mocks.activeConversation.previousResponseId = "local-task-1";
+    mocks.activeConversation.messages = [
+      {
+        id: "general-user",
+        role: "user",
+        content: "分析资料",
+        timestamp: 1,
+        modelName: "frontmind-pro",
+      },
+    ];
+
+    render(<ChatInput />);
+
+    expect(
+      screen.getByRole("button", { name: "FrontMind Pro" }),
+    ).toBeDisabled();
+  });
+
   it("does not submit Enter while a Chinese IME composition is active", () => {
     render(<ChatInput fixedAgentProfile="frontmind-pro" />);
 
@@ -532,17 +860,10 @@ describe("knowledge-base ChatInput actions", () => {
     await waitFor(() => expect(mocks.sendMessage).not.toHaveBeenCalled());
   });
 
-  it("unlocks file selection only for an attachment-resume reservation", () => {
+  it("locks the generic composer while the server awaits browser Files", () => {
     mocks.activeConversation.status = "running";
     mocks.activeConversation.knowledgeBase.canReply = false;
-    mocks.activeConversation.knowledgeBase.notice = {
-      errorKey: "attachments-required",
-      code: "KNOWLEDGE_BASE_ATTACHMENTS_REQUIRED",
-      message: "请重新选择原文件",
-      severity: "warning" as const,
-      retryable: false,
-      turnId: "turn-2",
-    };
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = true;
     const { container } = render(
       <ChatInput
         fixedAgentProfile="frontmind-pro"
@@ -551,22 +872,273 @@ describe("knowledge-base ChatInput actions", () => {
       />,
     );
 
-    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.getByRole("textbox")).toBeDisabled();
     const fileInput = container.querySelector('input[type="file"]')!;
-    expect(fileInput).not.toBeDisabled();
+    expect(fileInput).toBeDisabled();
     expect(screen.getByRole("button", { name: "确认当前内容" })).toBeDisabled();
-    expect(container.querySelector("svg.animate-spin")).not.toBeInTheDocument();
-    expect(container.querySelector("svg.lucide-send")).toBeInTheDocument();
+    expect(container.querySelector("svg.animate-spin")).toBeInTheDocument();
+    expect(container.querySelector("svg.lucide-send")).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(fileInput, {
-      target: {
-        files: [new File(["image"], "补充图片.jpg", { type: "image/jpeg" })],
-      },
+  it("offers continue and discard only for a matching page-memory attachment attempt", async () => {
+    mocks.activeConversation.status = "running";
+    mocks.activeConversation.knowledgeBase.canReply = false;
+    mocks.activeConversation.knowledgeBase.activeTurnId = "turn-upload";
+    mocks.activeConversation.knowledgeBase.activeClientRequestId =
+      "request-upload";
+    mocks.activeConversation.knowledgeBase.activeTurnResetRevision = 4;
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = true;
+    const file = new File(["facts"], "facts.pdf", {
+      type: "application/pdf",
     });
+    mocks.knowledgeBaseAttachmentAttempt = {
+      conversationId: "kb-conversation",
+      clientRequestId: "request-upload",
+      turnId: "turn-upload",
+      submissionKind: "revise",
+      originalMessageEnvelope: {},
+      files: [
+        {
+          file,
+          itemId: "request-upload:1",
+          ordinal: 1,
+          manifestItem: {
+            itemId: "request-upload:1",
+            ordinal: 1,
+            total: 1,
+            filename: "facts.pdf",
+            sizeBytes: file.size,
+            mimeType: "application/pdf",
+            lastModified: 0,
+            sha256: "a".repeat(64),
+          },
+        },
+      ],
+      generation: 1,
+      stateEpoch: 2,
+      resetRevision: 4,
+      phase: "failed_retryable",
+      lastError: "暂存响应中断",
+    };
 
-    expect(screen.getByText("补充图片.jpg")).toBeInTheDocument();
-    const sendIcon = container.querySelector("svg.lucide-send")!;
-    expect(sendIcon).toBeInTheDocument();
-    expect(sendIcon.closest("button")).not.toBeDisabled();
+    render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(screen.getByText("本轮资料仍保留在当前页面")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "继续上传当前资料" }));
+    await waitFor(() =>
+      expect(
+        mocks.continueKnowledgeBaseAttachmentAttempt,
+      ).toHaveBeenCalledTimes(1),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "放弃本轮上传" }));
+    expect(mocks.discardKnowledgeBaseAttachmentAttempt).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(screen.queryByText("请重置")).not.toBeInTheDocument();
+  });
+
+  it("mounts same-turn recovery for an awaiting revise turn without a page-memory attempt", () => {
+    mocks.activeConversation.status = "running";
+    mocks.activeConversation.knowledgeBase.canReply = false;
+    mocks.activeConversation.knowledgeBase.activeTurnId = "turn-upload";
+    mocks.activeConversation.knowledgeBase.activeClientRequestId =
+      "request-upload";
+    mocks.activeConversation.knowledgeBase.activeTurnResetRevision = 4;
+    mocks.activeConversation.knowledgeBase.activeTurnOperationType = "revise";
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = true;
+
+    render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(
+      screen.getByTestId("knowledge-base-managed-upload-recovery"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/申请重置知识库/u)).not.toBeInTheDocument();
+  });
+
+  it("does not mount revise recovery for an initial start reservation", () => {
+    mocks.activeConversation.status = "running";
+    mocks.activeConversation.knowledgeBase.canReply = false;
+    mocks.activeConversation.knowledgeBase.activeTurnId = "turn-start";
+    mocks.activeConversation.knowledgeBase.activeClientRequestId =
+      "request-start";
+    mocks.activeConversation.knowledgeBase.activeTurnResetRevision = 4;
+    mocks.activeConversation.knowledgeBase.activeTurnOperationType = "start";
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = true;
+
+    render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("knowledge-base-managed-upload-recovery"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows dispatch reconciliation without a second-send action", () => {
+    mocks.activeConversation.status = "running";
+    mocks.activeConversation.knowledgeBase.canReply = false;
+    mocks.activeConversation.knowledgeBase.activeTurnId = "turn-upload";
+    mocks.activeConversation.knowledgeBase.activeClientRequestId =
+      "request-upload";
+    mocks.activeConversation.knowledgeBase.activeTurnResetRevision = 4;
+    mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
+    mocks.knowledgeBaseAttachmentAttempt = {
+      conversationId: "kb-conversation",
+      clientRequestId: "request-upload",
+      turnId: "turn-upload",
+      submissionKind: "revise",
+      originalMessageEnvelope: {},
+      files: [],
+      generation: 1,
+      stateEpoch: 2,
+      resetRevision: 4,
+      phase: "reconciling_dispatch",
+    };
+
+    render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(screen.getByText("正在核对本轮是否已受理")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "继续上传当前资料" }),
+    ).not.toBeInTheDocument();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("locks the ordinary composer while dedicated Logo provenance repair is required", () => {
+    mocks.activeConversation.knowledgeBase.notice = {
+      errorKey: "logo-provenance-required",
+      code: "KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED",
+      message: "请重新上传同一张 Logo",
+      severity: "warning" as const,
+      retryable: false,
+      turnId: "turn-50",
+    };
+
+    const { container } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(container.querySelector('input[type="file"]')).toBeDisabled();
+    expect(
+      screen.queryByTestId("knowledge-node-action-card"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("locks only the fixed first response-logic prompt, then allows free text and files", async () => {
+    const prompt =
+      "请基于最新企业知识库，为“硅基流动有什么核心产品？”生成可核验的应答逻辑。";
+    const { container, rerender } = render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        composerPrefill={prompt}
+        responseLogicContext={responseLogicContext}
+      />,
+    );
+
+    const firstComposer = screen.getByRole("textbox");
+    const fileInput = container.querySelector('input[type="file"]')!;
+    expect(firstComposer).toHaveValue(prompt);
+    expect(firstComposer).toHaveAttribute("readonly");
+    expect(fileInput).toBeDisabled();
+
+    fireEvent.keyDown(firstComposer, { key: "Enter" });
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        prompt,
+        [],
+        expect.objectContaining({ responseLogicContext }),
+      ),
+    );
+    await waitFor(() => expect(firstComposer).toHaveValue(""));
+
+    rerender(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        responseLogicContext={responseLogicContext}
+      />,
+    );
+    const followUpComposer = screen.getByRole("textbox");
+    expect(followUpComposer).not.toHaveAttribute("readonly");
+    expect(fileInput).not.toBeDisabled();
+
+    fireEvent.change(followUpComposer, {
+      target: { value: "请把产品线改成用户最关心的三类。" },
+    });
+    rerender(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        responseLogicContext={responseLogicContext}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toHaveValue(
+      "请把产品线改成用户最关心的三类。",
+    );
+    const image = new File(["image"], "产品图.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [image] } });
+    fireEvent.click(
+      container.querySelector("svg.lucide-send")!.closest("button")!,
+    );
+
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenLastCalledWith(
+        "请把产品线改成用户最关心的三类。",
+        [image],
+        expect.objectContaining({ responseLogicContext }),
+      ),
+    );
+  });
+
+  it("keeps the exact response-logic input in the composer when no task was created", async () => {
+    const prompt =
+      "请基于最新企业知识库，为“国内第三方软件测评机构推荐”生成可核验的应答逻辑。";
+    mocks.sendMessage.mockResolvedValue(false);
+    render(
+      <ChatInput
+        fixedAgentProfile="frontmind-pro"
+        composerPrefill={prompt}
+        responseLogicContext={responseLogicContext}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox");
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledTimes(1));
+    expect(composer).toHaveValue(prompt);
+
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledTimes(2));
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith(
+      prompt,
+      [],
+      expect.objectContaining({ responseLogicContext }),
+    );
+    expect(composer).toHaveValue(prompt);
   });
 });

@@ -270,7 +270,7 @@ export default function AdminDeliveryRoles() {
       toast.success(
         input.engineerUserId == null
           ? "项目岗位已解除分配"
-          : "项目工程师已更新，未结束工单已按岗位同步转交",
+          : "项目工程师已更新，未结束需求已按岗位同步转交",
       );
     } catch (error) {
       await refresh();
@@ -314,7 +314,7 @@ export default function AdminDeliveryRoles() {
             icon={<UsersRound className="h-5 w-5" />}
           />
           <SummaryCard
-            label="待分配工单"
+            label="待分配需求"
             value={summary.pendingTicketCount}
             tone={summary.pendingTicketCount ? "warning" : "success"}
             icon={<AlertTriangle className="h-5 w-5" />}
@@ -503,7 +503,7 @@ export default function AdminDeliveryRoles() {
                       {pendingTickets > 0 && (
                         <p className="mt-3 flex items-center gap-1.5 border-t pt-3 text-xs font-medium text-amber-700">
                           <AlertTriangle className="h-3.5 w-3.5" />
-                          {pendingTickets} 个待分配工单，点击配置缺失岗位
+                          {pendingTickets} 个待分配需求，点击配置缺失岗位
                         </p>
                       )}
                     </button>
@@ -612,7 +612,7 @@ function ProjectDetails({
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
           {project.managerId
-            ? `账号：${project.managerUsername || `#${project.managerId}`}。工程师加入后由该管理员负责项目协调；只有跨多个交付管理员共享的工程师 Key 才由系统管理员维护。`
+            ? `账号：${project.managerUsername || `#${project.managerId}`}。工程师加入后由该管理员负责项目协调；所有账号 API Key 均由系统管理员在“API 与人员管理”统一维护。`
             : "请在客户交付工作台设置该项目的交付管理员。"}
         </p>
       </div>
@@ -693,7 +693,7 @@ function ProjectRoleCard({
     if (engineerUserId === (assignment?.engineerUserId ?? null)) return;
     if (engineerUserId == null && activeTicketCount > 0) {
       toast.error(
-        `该岗位还有 ${activeTicketCount} 个未结束工单，只能更换负责人，不能解除分配。`,
+        `该岗位还有 ${activeTicketCount} 个未结束需求，只能更换负责人，不能解除分配。`,
       );
       return;
     }
@@ -703,7 +703,7 @@ function ProjectRoleCard({
           ? disabledRoleWithAssignment
             ? `确认解除已停用岗位 ${DELIVERY_ROLE_LABELS[roleType]} 的遗留负责人？`
             : `确认解除 ${DELIVERY_ROLE_LABELS[roleType]}？`
-          : `确认更换 ${DELIVERY_ROLE_LABELS[roleType]}？系统将同步转交 ${activeTicketCount} 个未结束工单及待处理知识库重置请求。`,
+          : `确认更换 ${DELIVERY_ROLE_LABELS[roleType]}？系统将同步转交 ${activeTicketCount} 个未结束需求及待处理知识库重置请求。`,
       );
       if (!confirmed) return;
     }
@@ -756,13 +756,13 @@ function ProjectRoleCard({
             <p className="mt-1 text-xs text-muted-foreground">
               {!enabled
                 ? activeTicketCount
-                  ? `该岗位有 ${activeTicketCount} 个未结束工单，需先完成后才能解除遗留负责人。`
+                  ? `该岗位有 ${activeTicketCount} 个未结束需求，需先完成后才能解除遗留负责人。`
                   : `当前负责人：${currentEngineerLabel}。该岗位已随套餐停用，可以解除遗留负责人。`
                 : activeTicketCount
-                  ? `${activeTicketCount} 个未结束工单将随负责人同步转交`
+                  ? `${activeTicketCount} 个未结束需求将随负责人同步转交`
                   : assigned
                     ? `由${project.managerDisplayName || project.managerUsername || "项目交付管理员"}统一管理`
-                    : "当前没有未结束工单"}
+                    : "当前没有未结束需求"}
             </p>
           )}
         </div>

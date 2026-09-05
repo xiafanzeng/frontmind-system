@@ -124,7 +124,7 @@ describe("DashboardSkeletonEditor", () => {
       screen.getByRole("tab", { name: "知识库智能体" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "AI 友好官网管理" }),
+      screen.getByRole("tab", { name: "AI友好官网管理" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("更新首页标题与简介")).toBeNull();
     expect(screen.queryByText("修改如何同步给客户")).toBeNull();
@@ -139,6 +139,48 @@ describe("DashboardSkeletonEditor", () => {
       screen.getByRole("button", { name: "上传修改" }),
     ).toBeInTheDocument();
   });
+
+  it("uses the full right workspace and keeps an in-dashboard return action", () => {
+    const onExitDashboard = vi.fn();
+    const { container } = render(
+      <DashboardSkeletonEditor
+        userId={42}
+        dashboardLayout="workspace"
+        onExitDashboard={onExitDashboard}
+        workspace={{
+          payload,
+          revision: 3,
+          enterpriseIdentityBoundAt: Date.parse("2026-07-01T00:00:00Z"),
+        }}
+      />,
+    );
+
+    expect(
+      container.querySelector(".customer-dashboard-mirror"),
+    ).toHaveAttribute("data-layout", "workspace");
+    fireEvent.click(screen.getByRole("button", { name: "返回工作台" }));
+    expect(onExitDashboard).toHaveBeenCalledTimes(1);
+  });
+
+  it("can host overseas Jenova management inside the customer dashboard", () => {
+    render(
+      <DashboardSkeletonEditor
+        userId={42}
+        dashboardLayout="workspace"
+        marketEdition="overseas"
+        brandTrackingManagement={<div>Jenova 客户管理组件</div>}
+        workspace={{
+          payload,
+          revision: 3,
+          enterpriseIdentityBoundAt: Date.parse("2026-07-01T00:00:00Z"),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "舆情监控" }));
+    expect(screen.getByText("Jenova 客户管理组件")).toBeInTheDocument();
+  });
+
   const payloadWithReport = {
     ...payload,
     questions: [reportQuestion],
@@ -657,6 +699,10 @@ describe("DashboardSkeletonEditor", () => {
     const fileInput =
       card!.querySelector<HTMLInputElement>('input[type="file"]');
     expect(fileInput).not.toBeNull();
+    expect(fileInput).toHaveAttribute(
+      "accept",
+      expect.stringContaining(".xlsx"),
+    );
     const file = new File(["workbook"], "关键词.xlsx", {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });

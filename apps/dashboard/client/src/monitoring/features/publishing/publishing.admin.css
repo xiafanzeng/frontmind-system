@@ -1,0 +1,460 @@
+/*  Publishing administration and reconciliation views.  */
+.monitoring-module :where(.publishing-page) .publishing-admin-table {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+}
+.monitoring-module :where(.publishing-page) .publishing-admin-health-grid {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article {
+  display: grid;
+  min-height: 128px;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 13px;
+  padding: 20px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  > button,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-capabilities
+  article
+  > button,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--publishing-line);
+  border-radius: 7px;
+  background: white;
+  color: #483e56;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  > button {
+  grid-column: 1 / -1;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-mode-control {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-mode-control
+  select,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-mode-control
+  button {
+  min-height: 44px;
+  border: 1px solid var(--publishing-line);
+  border-radius: 7px;
+  background: white;
+  color: #483e56;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-mode-control
+  select {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-mode-control
+  button {
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  p,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  strong,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  small {
+  display: block;
+  margin: 0;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  p {
+  color: var(--publishing-muted);
+  font-size: 11px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  strong {
+  margin: 5px 0;
+  font-size: 15px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-grid
+  article
+  small {
+  color: #8a8294;
+  font-size: 9px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-health-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 9px;
+  background: #f2eef8;
+  color: var(--publishing-purple);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-health-icon.is-success {
+  background: #ecf9f3;
+  color: var(--publishing-green);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-row {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns:
+    minmax(180px, 1fr) minmax(120px, 0.6fr) minmax(120px, 0.5fr)
+    minmax(100px, 0.45fr);
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--publishing-line);
+  color: #51485e;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-row:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-row small {
+  color: var(--publishing-muted);
+  text-align: right;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-run {
+  grid-template-columns:
+    minmax(240px, 1.05fr) minmax(120px, 0.45fr) minmax(260px, 1fr)
+    minmax(190px, 0.75fr) minmax(92px, 0.35fr);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-catalog-run
+  > span:not(.publishing-status) {
+  display: grid;
+  gap: 4px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-run small {
+  text-align: left;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-catalog-run
+  .is-warning-text,
+.monitoring-module :where(.publishing-page) .publishing-catalog-stop-reason {
+  color: #b76600;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-stop-reason {
+  grid-column: 1 / -1;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-capabilities {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-capabilities
+  article {
+  display: grid;
+  min-height: 82px;
+  grid-template-columns:
+    minmax(235px, 1fr) minmax(120px, 0.4fr) minmax(190px, 0.7fr)
+    minmax(260px, 1.05fr);
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--publishing-line);
+  color: #5d5469;
+  font-size: 11px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-capabilities
+  article:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-capability-evidence {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-capability-evidence
+  a {
+  color: var(--publishing-purple);
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-inline-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-inline-actions
+  button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--publishing-line);
+  border-radius: 7px;
+  background: white;
+  color: #483e56;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-inline-actions
+  button:disabled,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-mode-control
+  button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-admin-reconciliation {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  > article {
+  padding: 20px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  > article
+  > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  > article
+  > div
+  span {
+  color: var(--publishing-muted);
+  font-size: 11px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  dl
+  div {
+  padding: 12px;
+  border-radius: 8px;
+  background: #faf8fc;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  dt {
+  color: var(--publishing-muted);
+  font-size: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  dd {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-admin-reconciliation
+  footer
+  button {
+  padding: 0 14px;
+}
+
+@media (max-width: 1099px) {
+  .monitoring-module :where(.publishing-page) .publishing-admin-health-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .monitoring-module :where(.publishing-page) .publishing-admin-health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-admin-row,
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-admin-capabilities
+    article {
+    grid-template-columns: 1fr auto;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-catalog-run {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-admin-row
+    > :nth-child(3),
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-admin-capabilities
+    article
+    > :nth-child(3) {
+    display: none;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-catalog-run
+    > :nth-child(3) {
+    display: grid;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-admin-inline-actions {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-admin-mode-control {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-admin-reconciliation
+    dl {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-admin-reconciliation
+    footer {
+    flex-direction: column;
+  }
+}

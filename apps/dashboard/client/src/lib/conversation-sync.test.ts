@@ -91,7 +91,7 @@ describe("ConversationSyncQueue", () => {
     expect(syncSnapshot).toHaveBeenLastCalledWith({ id: "one", value: 2 });
   });
 
-  it("drops a permanent failure instead of retrying forever", async () => {
+  it("keeps a permanent failure blocked and dirty until an explicit retry", async () => {
     const error = Object.assign(new Error("deleted elsewhere"), {
       data: { code: "NOT_FOUND" },
     });
@@ -110,6 +110,54 @@ describe("ConversationSyncQueue", () => {
 
     expect(syncSnapshot).toHaveBeenCalledTimes(1);
     expect(onPermanentError).toHaveBeenCalledTimes(1);
+
+    syncSnapshot.mockResolvedValueOnce(undefined);
+    await expect(queue.flushConversation("one")).resolves.toBe(true);
+    expect(syncSnapshot).toHaveBeenCalledTimes(2);
+    expect(syncSnapshot).toHaveBeenLastCalledWith({ id: "one", value: 1 });
+  });
+
+  it("flushes only the requested conversation before dependent work", async () => {
+    const syncSnapshot = vi.fn().mockResolvedValue(undefined);
+    const queue = new ConversationSyncQueue<Snapshot>({
+      syncSnapshot,
+      deleteConversation: vi.fn().mockResolvedValue(undefined),
+      debounceMs: 50,
+    });
+
+    queue.enqueueSnapshot({ id: "one", value: 1 });
+    queue.enqueueSnapshot({ id: "two", value: 2 });
+
+    await expect(queue.flushConversation("one")).resolves.toBe(true);
+    expect(syncSnapshot).toHaveBeenCalledTimes(1);
+    expect(syncSnapshot).toHaveBeenCalledWith({ id: "one", value: 1 });
+  });
+
+  it("cancels a reset-owned lane and ignores its late in-flight completion", async () => {
+    let finishSnapshot: (() => void) | undefined;
+    const syncSnapshot = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSnapshot = resolve;
+        }),
+    );
+    const queue = new ConversationSyncQueue<Snapshot>({
+      syncSnapshot,
+      deleteConversation: vi.fn().mockResolvedValue(undefined),
+    });
+
+    queue.enqueueSnapshot({ id: "reset-owned", value: 1 }, true);
+    await vi.advanceTimersByTimeAsync(0);
+    queue.cancel("reset-owned");
+    queue.enqueueSnapshot({ id: "fresh", value: 2 });
+    finishSnapshot?.();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(syncSnapshot).toHaveBeenCalledTimes(2);
+    expect(syncSnapshot).toHaveBeenLastCalledWith({ id: "fresh", value: 2 });
   });
 });
 

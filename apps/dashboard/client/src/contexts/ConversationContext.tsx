@@ -19,6 +19,25 @@ import {
   type OutputMessage,
 } from "@/lib/frontmind-api";
 import { normalizeKnowledgeCollectionCopy } from "@shared/knowledge-base-copy";
+import type {
+  KnowledgeBaseApprovedResourceDto,
+  KnowledgeBaseContentAvailability,
+  KnowledgeBaseContentState,
+  KnowledgeBaseFailureClass,
+  KnowledgeBaseFailureStage,
+  KnowledgeBaseOperationType,
+  KnowledgeBaseOperationState,
+  KnowledgeBasePackageState,
+  KnowledgeBaseProcessingPhase,
+  KnowledgeBasePublicationState,
+  KnowledgeBaseRecoveryAction,
+  KnowledgeBaseSyncState,
+  KnowledgeBaseTaskCreationState,
+} from "@shared/knowledge-base-progress";
+import {
+  customerSafeKnowledgeAssetLabel,
+  customerSafeKnowledgeFilename,
+} from "@shared/knowledge-base-public-artifacts";
 import {
   knowledgeBasePresentationMessagePublicId,
   knowledgeBaseUserMessagePublicId,
@@ -28,7 +47,10 @@ import {
   stripKnowledgeBaseReferenceAppendix,
 } from "@shared/knowledge-base-output";
 import { uniquifyOrderedIds } from "@shared/ordered-id";
+import type { GeneralChatDispatchMetadata } from "@shared/frontmind-general-chat-dispatch";
+import { GENERAL_CHAT_TERMINAL_MESSAGE_ID_PREFIX } from "@shared/frontmind-general-chat-terminal";
 import {
+  dispatchKnowledgeBaseProgressUpdated,
   reconcileKnowledgeBaseObservation,
   type KnowledgeBaseObservationDto,
 } from "@/lib/knowledge-progress";
@@ -37,6 +59,21 @@ import {
   isAttachmentExpired,
   localAttachmentPayloadExpiresAt,
 } from "@/lib/attachment-expiry";
+
+export function conversationSyncErrorMessage(error: unknown): string {
+  const message = getErrorMessage(error);
+  return error instanceof TypeError ||
+    /failed to fetch|networkerror|network request failed|load failed/iu.test(
+      message,
+    )
+    ? "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。"
+    : message === CONVERSATION_HYDRATION_SUPERSEDED_MESSAGE
+      ? message
+      : "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。";
+}
+
+const CONVERSATION_HYDRATION_SUPERSEDED_MESSAGE =
+  "会话列表在读取期间发生变化，请重新读取。";
 
 // Types for local conversation management
 export interface Attachment {
@@ -102,17 +139,29 @@ export interface LocalMessage {
   /** Server-approved knowledge-base projection metadata. Never inferred from raw output. */
   knowledgeBase?: {
     schemaVersion?: 1;
-    kind: "pending_user" | "presentation";
+    kind: "pending_user" | "presentation" | "completion";
     buildId?: string;
     operationKey?: string;
     clientRequestId?: string;
     turnId?: string;
     presentationKey?: string;
+    contentSha256?: string;
     generation?: number;
     revision?: number;
     leafId?: string | null;
     serverOwned?: boolean;
   };
+  /** Server-authored durable projection of an ordinary Agent event. */
+  generalChat?: {
+    schemaVersion: 1;
+    kind: "assistant_projection";
+    turnId: string;
+    agentTaskId: string;
+    providerEventId: string;
+    serverOwned: true;
+  };
+  /** Browser-owned retry identity until Dashboard returns a task DTO. */
+  generalChatDispatch?: GeneralChatDispatchMetadata;
 }
 
 export interface KnowledgeBaseClientNotice {
@@ -121,6 +170,11 @@ export interface KnowledgeBaseClientNotice {
   message: string;
   severity: "info" | "warning" | "error";
   retryable: boolean;
+  failureClass?: KnowledgeBaseFailureClass | null;
+  recoveryAction?: KnowledgeBaseRecoveryAction | null;
+  recoveryToken?: string;
+  canRegenerate?: boolean;
+  attachmentCount?: number;
   turnId?: string | null;
 }
 
@@ -128,8 +182,32 @@ export interface KnowledgeBaseClientState {
   initialized: boolean;
   generation: number;
   stateEpoch: number;
+  contentVersion?: number;
+  /** Latest immutable receipt sequence accepted for display in this conversation. */
+  displaySequence?: number;
+  syncState?: KnowledgeBaseSyncState;
+  processingPhase?: KnowledgeBaseProcessingPhase | null;
+  contentState?: KnowledgeBaseContentState;
+  packageState?: KnowledgeBasePackageState;
+  publicationState?: KnowledgeBasePublicationState;
+  contentAvailability?: KnowledgeBaseContentAvailability;
+  operationState?: KnowledgeBaseOperationState;
+  resetAllowed?: boolean;
+  taskCreationState?: KnowledgeBaseTaskCreationState;
+  failureStage?: KnowledgeBaseFailureStage | null;
+  retainedCustomerAttachmentCount?: number;
+  generatedSystemAttachmentCount?: number;
+  settledAt?: number | null;
   activeTurnId: string | null;
   activeClientRequestId: string | null;
+  /** Same-turn freshness fence; never compares unrelated turn clocks. */
+  activeTurnUpdatedAt?: number;
+  activeTurnMessageSequence?: number;
+  activeTurnResetRevision?: number;
+  activeTurnOperationType?: KnowledgeBaseOperationType;
+  activeTurnAwaitingClientAttachments?: boolean;
+  activeTurnStagedAttachmentCount?: number;
+  activeTurnExpectedAttachmentCount?: number;
   /** Provenance of the currently approved presentation; remains after the reservation is released. */
   presentationTurnId: string | null;
   interactionState: KnowledgeBaseObservationDto["interaction"]["interactionState"];
@@ -144,6 +222,8 @@ export interface Conversation {
   id: string;
   title: string;
   messages: LocalMessage[];
+  /** Server-derived boundary for provider tasks owned outside ordinary chat. */
+  executionKind?: "general_chat_v2" | "response_logic";
   taskId?: string; // Upstream task ID
   previousResponseId?: string;
   status:
@@ -198,8 +278,39 @@ export function repairConversationMessageIds(
   });
 }
 
+/**
+ * Terminal notices are the sole browser-authored message class with an
+ * idempotency key shared by send, recovery polling, hydration, and incident
+ * repair. Upsert this narrow namespace atomically; all other local messages
+ * retain the historical append-and-repair behavior.
+ */
+export function appendOrUpsertConversationMessage(
+  messages: readonly LocalMessage[],
+  message: LocalMessage,
+) {
+  if (!message.id.startsWith(GENERAL_CHAT_TERMINAL_MESSAGE_ID_PREFIX)) {
+    return repairConversationMessageIds([...messages, message]);
+  }
+  const existingIndex = messages.findIndex(
+    (candidate) => candidate.id === message.id,
+  );
+  if (existingIndex < 0) {
+    return repairConversationMessageIds([...messages, message]);
+  }
+  const nextMessages = messages.filter(
+    (candidate, index) =>
+      candidate.id !== message.id || index === existingIndex,
+  );
+  nextMessages[existingIndex] = message;
+  return repairConversationMessageIds(nextMessages);
+}
+
 export function isServerOwnedKnowledgeBaseMessage(message: LocalMessage) {
   return message.knowledgeBase?.serverOwned === true;
+}
+
+export function isServerOwnedGeneralChatMessage(message: LocalMessage) {
+  return message.generalChat?.serverOwned === true;
 }
 
 function hasServerOwnedKnowledgeBaseMessages(conversation: Conversation) {
@@ -327,6 +438,8 @@ type Action =
         taskId?: string;
         taskUrl?: string;
         previousResponseId?: string;
+        executionKind?: "general_chat_v2" | "response_logic";
+        clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;
         lastKnownOutputLength?: number;
@@ -335,6 +448,10 @@ type Action =
   | {
       type: "UPDATE_ASSISTANT_MESSAGES";
       payload: { conversationId: string; messages: LocalMessage[] };
+    }
+  | {
+      type: "SETTLE_GENERAL_CHAT_DISPATCH";
+      payload: { conversationId: string; clientRequestId: string };
     }
   | {
       type: "MARK_KNOWLEDGE_BASE";
@@ -364,6 +481,48 @@ type Action =
     }
   | { type: "LOAD_STATE"; payload: ConversationState };
 
+function generalChatProjectionIdentity(message: LocalMessage) {
+  if (message.generalChat?.serverOwned) {
+    return `${message.generalChat.turnId}\0${message.generalChat.providerEventId}`;
+  }
+  return message.upstreamOutputId || message.id || "";
+}
+
+function generalChatProjectionSemanticallyEqual(
+  left: LocalMessage,
+  right: LocalMessage,
+) {
+  const semanticProjection = (message: LocalMessage) => ({
+    role: message.role,
+    content: message.content,
+    outputFiles: message.outputFiles,
+    inlineImages: message.inlineImages,
+    intermediateSteps: message.intermediateSteps,
+    stepGroups: message.stepGroups,
+    isStepsPlaceholder: message.isStepsPlaceholder,
+    elapsedTime: message.elapsedTime,
+    responseStartedAt: message.responseStartedAt,
+    modelName: message.modelName,
+    upstreamOutputId: message.upstreamOutputId,
+    serverSequence: message.serverSequence,
+    generalChat: message.generalChat,
+  });
+  return (
+    JSON.stringify(semanticProjection(left)) ===
+    JSON.stringify(semanticProjection(right))
+  );
+}
+
+function sameMessageReferences(
+  left: readonly LocalMessage[],
+  right: readonly LocalMessage[],
+) {
+  return (
+    left.length === right.length &&
+    left.every((message, index) => message === right[index])
+  );
+}
+
 function conversationReducer(
   state: ConversationState,
   action: Action,
@@ -382,95 +541,194 @@ function conversationReducer(
     case "ADD_MESSAGE": {
       return {
         ...state,
-        conversations: state.conversations.map((c) =>
-          c.id === action.payload.conversationId
-            ? {
-                ...c,
-                messages: repairConversationMessageIds([
-                  ...c.messages,
-                  action.payload.message,
-                ]),
-                updatedAt: Date.now(),
-              }
-            : c,
-        ),
+        conversations: state.conversations.map((c) => {
+          if (c.id !== action.payload.conversationId) return c;
+          const isTerminalNotice = action.payload.message.id.startsWith(
+            GENERAL_CHAT_TERMINAL_MESSAGE_ID_PREFIX,
+          );
+          return {
+            ...c,
+            messages: appendOrUpsertConversationMessage(
+              c.messages,
+              action.payload.message,
+            ),
+            // Old clients could tombstone a transient terminal notice while a
+            // partial result recovered. Reviving that deterministic ID must
+            // also remove the stale tombstone or cloud sync would hide it.
+            deletedMessageIds: isTerminalNotice
+              ? c.deletedMessageIds?.filter(
+                  (messageId) => messageId !== action.payload.message.id,
+                )
+              : c.deletedMessageIds,
+            updatedAt: Date.now(),
+          };
+        }),
       };
     }
     case "UPDATE_STATUS": {
-      return {
-        ...state,
-        conversations: state.conversations.map((c) =>
-          c.id === action.payload.conversationId
-            ? {
-                ...c,
-                status: action.payload.status,
-                taskId: action.payload.taskId ?? c.taskId,
-                taskUrl: action.payload.taskUrl ?? c.taskUrl,
-                previousResponseId:
-                  action.payload.previousResponseId ?? c.previousResponseId,
-                startedAt: action.payload.startedAt ?? c.startedAt,
-                completedAt:
-                  action.payload.completedAt !== undefined
-                    ? action.payload.completedAt
-                    : (action.payload.status === "running" ||
-                          action.payload.status === "pending") &&
-                        action.payload.startedAt !== undefined
-                      ? undefined
-                      : c.completedAt,
-                lastKnownOutputLength:
-                  action.payload.lastKnownOutputLength ??
-                  c.lastKnownOutputLength,
-                updatedAt: Date.now(),
-              }
-            : c,
-        ),
-      };
+      let changed = false;
+      const conversations = state.conversations.map((c) => {
+        if (c.id !== action.payload.conversationId) return c;
+        const next = {
+          ...c,
+          status: action.payload.status,
+          taskId: action.payload.clearTaskPointer
+            ? undefined
+            : (action.payload.taskId ?? c.taskId),
+          // Provider task/share navigation URLs are never conversation
+          // state. Older hydrated values are removed on the next write.
+          taskUrl: undefined,
+          previousResponseId: action.payload.clearTaskPointer
+            ? undefined
+            : (action.payload.previousResponseId ?? c.previousResponseId),
+          executionKind: action.payload.executionKind ?? c.executionKind,
+          startedAt: action.payload.startedAt ?? c.startedAt,
+          completedAt:
+            action.payload.completedAt !== undefined
+              ? action.payload.completedAt
+              : (action.payload.status === "running" ||
+                    action.payload.status === "pending") &&
+                  action.payload.startedAt !== undefined
+                ? undefined
+                : c.completedAt,
+          lastKnownOutputLength:
+            action.payload.lastKnownOutputLength ?? c.lastKnownOutputLength,
+        };
+        if (
+          next.status === c.status &&
+          next.taskId === c.taskId &&
+          next.previousResponseId === c.previousResponseId &&
+          next.executionKind === c.executionKind &&
+          next.startedAt === c.startedAt &&
+          next.completedAt === c.completedAt &&
+          next.lastKnownOutputLength === c.lastKnownOutputLength &&
+          c.taskUrl === undefined
+        ) {
+          return c;
+        }
+        changed = true;
+        return { ...next, updatedAt: Date.now() };
+      });
+      return changed ? { ...state, conversations } : state;
     }
     case "UPDATE_ASSISTANT_MESSAGES": {
+      let changed = false;
+      const conversations = state.conversations.map((c) => {
+        if (c.id !== action.payload.conversationId) return c;
+        if (
+          c.knowledgeBase?.initialized ||
+          hasServerOwnedKnowledgeBaseMessages(c)
+        ) {
+          return c;
+        }
+
+        // Find the index of the last user message.
+        // All assistant messages after it belong to the current turn and will be
+        // REPLACED by the incoming (authoritative) set from parseOutputMessages.
+        const messages = [...c.messages];
+        let lastUserIdx = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === "user") {
+            lastUserIdx = i;
+            break;
+          }
+        }
+
+        // Keep everything up to and including the last user message.
+        const kept = messages.slice(0, lastUserIdx + 1);
+        // Terminal notices are local state about settlement, not Provider
+        // projection rows. Empty/ambiguous output must clear the latter
+        // without deleting the former.
+        const terminalNotices = messages
+          .slice(lastUserIdx + 1)
+          .filter((message) =>
+            message.id.startsWith(GENERAL_CHAT_TERMINAL_MESSAGE_ID_PREFIX),
+          );
+
+        // Only filter out messages that were manually deleted by the user
+        const deletedIds = new Set(c.deletedMessageIds || []);
+
+        let newMessages = action.payload.messages.filter((m) => {
+          // Skip messages that were manually deleted
+          if (m.id && deletedIds.has(m.id)) return false;
+          // Steps placeholders always pass through (they get replaced each poll)
+          if (m.isStepsPlaceholder) return true;
+          return true;
+        });
+
+        if (c.executionKind === "general_chat_v2") {
+          const currentTurnMessages = messages.slice(lastUserIdx + 1);
+          const currentByIdentity = new Map(
+            currentTurnMessages
+              .map(
+                (message) =>
+                  [generalChatProjectionIdentity(message), message] as const,
+              )
+              .filter((entry): entry is readonly [string, LocalMessage] =>
+                Boolean(entry[0]),
+              ),
+          );
+          newMessages = newMessages.map((incoming) => {
+            const identity = generalChatProjectionIdentity(incoming);
+            const existing = identity
+              ? currentByIdentity.get(identity)
+              : undefined;
+            if (!existing) return incoming;
+            const stabilized = {
+              ...incoming,
+              id: existing.id,
+              timestamp: existing.timestamp,
+            };
+            return generalChatProjectionSemanticallyEqual(existing, stabilized)
+              ? existing
+              : stabilized;
+          });
+        }
+        const incomingIds = new Set(newMessages.map((message) => message.id));
+        const preservedTerminalNotices = terminalNotices.filter(
+          (message) => !incomingIds.has(message.id),
+        );
+
+        // Provider output IDs can be reused across two user turns. Preserve
+        // both turns and deterministically disambiguate the local/database ID.
+        const nextMessages = repairConversationMessageIds([
+          ...kept,
+          ...newMessages,
+          ...preservedTerminalNotices,
+        ]);
+        if (sameMessageReferences(messages, nextMessages)) return c;
+        changed = true;
+        return {
+          ...c,
+          messages: nextMessages,
+          updatedAt: Date.now(),
+        };
+      });
+      return changed ? { ...state, conversations } : state;
+    }
+    case "SETTLE_GENERAL_CHAT_DISPATCH": {
       return {
         ...state,
-        conversations: state.conversations.map((c) => {
-          if (c.id !== action.payload.conversationId) return c;
-          if (
-            c.knowledgeBase?.initialized ||
-            hasServerOwnedKnowledgeBaseMessages(c)
-          ) {
-            return c;
+        conversations: state.conversations.map((conversation) => {
+          if (conversation.id !== action.payload.conversationId) {
+            return conversation;
           }
-
-          // Find the index of the last user message.
-          // All assistant messages after it belong to the current turn and will be
-          // REPLACED by the incoming (authoritative) set from parseOutputMessages.
-          const messages = [...c.messages];
-          let lastUserIdx = -1;
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === "user") {
-              lastUserIdx = i;
-              break;
+          let changed = false;
+          const messages = conversation.messages.map((message) => {
+            if (
+              message.generalChatDispatch?.clientRequestId !==
+              action.payload.clientRequestId
+            ) {
+              return message;
             }
-          }
-
-          // Keep everything up to and including the last user message
-          const kept = messages.slice(0, lastUserIdx + 1);
-
-          // Only filter out messages that were manually deleted by the user
-          const deletedIds = new Set(c.deletedMessageIds || []);
-
-          const newMessages = action.payload.messages.filter((m) => {
-            // Skip messages that were manually deleted
-            if (m.id && deletedIds.has(m.id)) return false;
-            // Steps placeholders always pass through (they get replaced each poll)
-            if (m.isStepsPlaceholder) return true;
-            return true;
+            changed = true;
+            const { generalChatDispatch: _pendingDispatch, ...settled } =
+              message;
+            return settled;
           });
-
-          // Provider output IDs can be reused across two user turns. Preserve
-          // both turns and deterministically disambiguate the local/database ID.
-          return {
-            ...c,
-            messages: repairConversationMessageIds([...kept, ...newMessages]),
-            updatedAt: Date.now(),
-          };
+          return changed
+            ? { ...conversation, messages, updatedAt: Date.now() }
+            : conversation;
         }),
       };
     }
@@ -589,15 +847,27 @@ function conversationReducer(
             (message) => message.id === action.payload.messageId,
           );
           if (target && isServerOwnedKnowledgeBaseMessage(target)) return c;
+          if (
+            target?.role === "user" &&
+            target.generalChatDispatch?.kind === "pending_user"
+          ) {
+            return c;
+          }
           return {
             ...c,
             messages: c.messages.filter(
               (m) => m.id !== action.payload.messageId,
             ),
-            deletedMessageIds: [
-              ...(c.deletedMessageIds || []),
-              action.payload.messageId,
-            ],
+            // Deterministic terminal notices are transient system state. A
+            // successful re-probe removes them without recording a permanent
+            // user deletion that would suppress the same ID on recovery.
+            deletedMessageIds: action.payload.messageId.startsWith(
+              GENERAL_CHAT_TERMINAL_MESSAGE_ID_PREFIX,
+            )
+              ? c.deletedMessageIds?.filter(
+                  (messageId) => messageId !== action.payload.messageId,
+                )
+              : [...(c.deletedMessageIds || []), action.payload.messageId],
             updatedAt: Date.now(),
           };
         }),
@@ -652,8 +922,22 @@ function emptyKnowledgeBaseClientState(): KnowledgeBaseClientState {
     initialized: false,
     generation: 0,
     stateEpoch: 0,
+    displaySequence: 0,
+    syncState: "synced",
+    processingPhase: null,
+    contentState: "building",
+    packageState: "not_started",
+    publicationState: "draft",
+    contentAvailability: "none",
+    resetAllowed: false,
     activeTurnId: null,
     activeClientRequestId: null,
+    activeTurnUpdatedAt: undefined,
+    activeTurnMessageSequence: undefined,
+    activeTurnResetRevision: undefined,
+    activeTurnAwaitingClientAttachments: false,
+    activeTurnStagedAttachmentCount: 0,
+    activeTurnExpectedAttachmentCount: 0,
     presentationTurnId: null,
     interactionState: "queued",
     canReply: false,
@@ -676,16 +960,12 @@ export function approvedKnowledgeBasePresentationMatches(
   observation: KnowledgeBaseObservationDto,
 ) {
   const presentation = observation.approvedPresentation;
-  const progress = observation.progress ?? observation.interaction.progress;
-  const activeTurnId = observationActiveTurnId(observation);
   return Boolean(
     presentation &&
       presentation.visibleMarkdown.trim() &&
       presentation.turnId &&
-      (!activeTurnId || presentation.turnId === activeTurnId) &&
-      progress &&
-      presentation.revision === progress.build.revision &&
-      presentation.leafId === progress.build.currentLeafId,
+      (presentation.messageSequence === undefined ||
+        Number.isSafeInteger(presentation.messageSequence)),
   );
 }
 
@@ -699,21 +979,121 @@ function knowledgeObservationIsStale(
   if (observation.generation > current.generation) return false;
   if (observation.stateEpoch < current.stateEpoch) return true;
   if (observation.stateEpoch > current.stateEpoch) return false;
-
-  const incomingTurnId = observationActiveTurnId(observation);
+  const observedActiveTurn = observation.activeTurn;
   if (
-    current.activeTurnId &&
-    incomingTurnId &&
-    current.activeTurnId !== incomingTurnId
+    observedActiveTurn &&
+    current.activeTurnId === observedActiveTurn.id &&
+    Number.isFinite(current.activeTurnUpdatedAt) &&
+    observedActiveTurn.updatedAt < current.activeTurnUpdatedAt!
   ) {
     return true;
   }
+  if (
+    observedActiveTurn &&
+    current.activeTurnId &&
+    current.activeTurnId !== observedActiveTurn.id &&
+    Number.isSafeInteger(current.activeTurnMessageSequence) &&
+    Number.isSafeInteger(observedActiveTurn.messageSequence) &&
+    observedActiveTurn.messageSequence! < current.activeTurnMessageSequence!
+  ) {
+    return true;
+  }
+  // A same-coordinate observation is still authoritative. It must be allowed
+  // to repair optimistic browser-only state (for example running ->
+  // awaiting_input after a 422) even when the durable build itself did not
+  // advance stateEpoch. Only a strictly older monotonic coordinate is stale.
+  return false;
+}
+
+function acceptedDisplaySequence(messages: readonly LocalMessage[]) {
+  return messages.reduce(
+    (latest, message) =>
+      isServerOwnedKnowledgeBaseMessage(message) &&
+      (message.knowledgeBase?.kind === "presentation" ||
+        message.knowledgeBase?.kind === "completion") &&
+      Number.isSafeInteger(message.serverSequence)
+        ? Math.max(latest, message.serverSequence!)
+        : latest,
+    0,
+  );
+}
+
+function persistedDisplaySequence(conversation: Conversation) {
+  const stateSequence = conversation.knowledgeBase?.displaySequence;
+  return Math.max(
+    Number.isSafeInteger(stateSequence) && stateSequence! >= 0
+      ? stateSequence!
+      : 0,
+    acceptedDisplaySequence(conversation.messages),
+  );
+}
+
+function observationDisplaySequence(observation: KnowledgeBaseObservationDto) {
+  if (observation.displaySequence !== undefined) {
+    return observation.displaySequence;
+  }
+  const presentationSequence =
+    observation.approvedPresentation?.messageSequence;
+  return Number.isSafeInteger(presentationSequence) &&
+    presentationSequence! >= 0
+    ? presentationSequence!
+    : 0;
+}
+
+function observationRevision(observation: KnowledgeBaseObservationDto) {
   return (
-    current.activeTurnId === incomingTurnId &&
-    current.interactionState === observation.interaction.interactionState &&
-    current.presentationKey ===
-      (observation.approvedPresentation?.presentationKey ?? null) &&
-    current.notice?.errorKey === (observation.notice?.key ?? undefined)
+    observation.approvedPresentation?.revision ??
+    observation.interaction.progress?.build.revision ??
+    observation.progress?.build.revision ??
+    -1
+  );
+}
+
+function observationAdvancesDurableClientCoordinate(
+  current: KnowledgeBaseClientState | undefined,
+  messages: readonly LocalMessage[],
+  observation: KnowledgeBaseObservationDto,
+) {
+  const observedRevision = observationRevision(observation);
+  if (current?.initialized) {
+    if (observation.generation !== current.generation) {
+      return observation.generation > current.generation;
+    }
+    if (observation.stateEpoch !== current.stateEpoch) {
+      return observation.stateEpoch > current.stateEpoch;
+    }
+    const currentRevision = current.revision ?? -1;
+    // stateEpoch refinements at the same presentation may update processing
+    // metadata, but they cannot authorize lower receipt history to replace
+    // the immutable body already rendered by the browser.
+    if (observedRevision > currentRevision) return true;
+    if (observedRevision <= currentRevision) return false;
+  }
+
+  const persisted = messages
+    .filter(
+      (message) =>
+        isServerOwnedKnowledgeBaseMessage(message) &&
+        message.knowledgeBase?.kind === "presentation",
+    )
+    .reduce(
+      (latest, message) => {
+        const candidate = {
+          generation: message.knowledgeBase?.generation ?? -1,
+          revision: message.knowledgeBase?.revision ?? -1,
+        };
+        return candidate.generation > latest.generation ||
+          (candidate.generation === latest.generation &&
+            candidate.revision > latest.revision)
+          ? candidate
+          : latest;
+      },
+      { generation: -1, revision: -1 },
+    );
+  return (
+    observation.generation > persisted.generation ||
+    (observation.generation === persisted.generation &&
+      observedRevision > persisted.revision)
   );
 }
 
@@ -759,10 +1139,29 @@ function knowledgeBasePresentationMessage(
   if (!presentation || !approvedKnowledgeBasePresentationMatches(observation)) {
     return null;
   }
-  const inlineImages = (presentation.resources ?? [])
+  // A cached observation from the previous response contract may still carry
+  // `filename` and the coordinate-bearing legacy URL for one rollout cycle.
+  // New server projections always carry `caption` and an opaque URL; in that
+  // shape filename is never consulted or copied into alt text.
+  type CompatibleApprovedResource = Omit<
+    KnowledgeBaseApprovedResourceDto,
+    "kind" | "caption"
+  > & {
+    kind: KnowledgeBaseApprovedResourceDto["kind"] | "working_set_evidence";
+    caption?: string;
+    filename?: string;
+  };
+  const resources = (presentation.resources ??
+    []) as CompatibleApprovedResource[];
+  const resourceCaption = (resource: CompatibleApprovedResource) => {
+    const caption = customerSafeKnowledgeAssetLabel(resource.caption);
+    if (caption) return caption;
+    return resource.kind === "logo" ? "企业官方主 Logo" : "知识库配图";
+  };
+  const inlineImages = resources
     .map((resource) => ({
       src: resource.sameOriginUrl,
-      alt: resource.filename,
+      alt: resourceCaption(resource),
       mimeType: resource.mimeType,
       kind: resource.kind,
     }))
@@ -773,6 +1172,20 @@ function knowledgeBasePresentationMessage(
           /image|logo/i.test(resource.kind)),
     )
     .map(({ src, alt }) => ({ src, alt }));
+  const evidenceFiles = resources
+    .filter(
+      (resource) =>
+        resource.kind === "working_set_evidence" &&
+        resource.sameOriginUrl.startsWith("/"),
+    )
+    .map((resource) => ({
+      fileUrl: resource.sameOriginUrl,
+      fileName: customerSafeKnowledgeFilename(
+        resource.filename,
+        "知识库参考资料.txt",
+      ),
+      mimeType: resource.mimeType,
+    }));
 
   return {
     id: stableKnowledgeBaseMessageId(presentation.presentationKey),
@@ -781,8 +1194,9 @@ function knowledgeBasePresentationMessage(
     content: sanitizeKnowledgeBaseCustomerMarkdown(
       presentation.visibleMarkdown,
     ),
-    timestamp: Date.now(),
+    timestamp: presentation.acceptedAt ?? Date.now(),
     inlineImages: inlineImages.length > 0 ? inlineImages : undefined,
+    outputFiles: evidenceFiles.length > 0 ? evidenceFiles : undefined,
     knowledgeBase: {
       schemaVersion: 1,
       kind: "presentation",
@@ -791,7 +1205,7 @@ function knowledgeBasePresentationMessage(
       operationKey: observation.activeTurn?.operationKey,
       turnId: presentation.turnId,
       presentationKey: presentation.presentationKey,
-      generation: observation.generation,
+      generation: presentation.generation ?? observation.generation,
       revision: presentation.revision,
       leafId: presentation.leafId,
       serverOwned: true,
@@ -803,7 +1217,16 @@ export function applyKnowledgeBaseObservation(
   conversation: Conversation,
   observation: KnowledgeBaseObservationDto,
 ): Conversation {
+  const currentDisplaySequence = persistedDisplaySequence(conversation);
+  const advancesDurableCoordinate = observationAdvancesDurableClientCoordinate(
+    conversation.knowledgeBase,
+    conversation.messages,
+    observation,
+  );
   if (
+    (!advancesDurableCoordinate &&
+      currentDisplaySequence > 0 &&
+      observationDisplaySequence(observation) < currentDisplaySequence) ||
     knowledgeObservationIsStale(conversation.knowledgeBase, observation) ||
     observationPrecedesPersistedKnowledgeBaseHistory(
       conversation.messages,
@@ -817,6 +1240,7 @@ export function applyKnowledgeBaseObservation(
   const activeClientRequestId = observation.activeTurn?.clientRequestId ?? null;
   const presentationClientRequestId =
     observation.approvedPresentation?.clientRequestId ?? null;
+  const completedTurn = observation.completedTurn ?? null;
   const presentation = knowledgeBasePresentationMessage(observation);
   const presentationMatches = Boolean(presentation);
   const interactionState = observation.interaction.interactionState;
@@ -873,6 +1297,31 @@ export function applyKnowledgeBaseObservation(
       );
     }
   }
+  if (completedTurn) {
+    messages = messages.map((message) => {
+      if (
+        message.role !== "user" ||
+        message.knowledgeBase?.kind !== "pending_user" ||
+        message.knowledgeBase.clientRequestId !== completedTurn.clientRequestId
+      ) {
+        return message;
+      }
+      return {
+        ...message,
+        id: knowledgeBaseUserMessagePublicId(completedTurn.turnId),
+        serverSequence: completedTurn.messageSequence,
+        knowledgeBase: {
+          ...message.knowledgeBase,
+          schemaVersion: 1,
+          buildId: (observation.progress ?? observation.interaction.progress)
+            ?.build.id,
+          turnId: completedTurn.turnId,
+          generation: observation.generation,
+          serverOwned: true,
+        },
+      };
+    });
+  }
   if (presentation && !activeClientRequestId && presentationClientRequestId) {
     const pendingIndex = messages.findIndex(
       (message) =>
@@ -927,7 +1376,19 @@ export function applyKnowledgeBaseObservation(
     );
     if (existingPresentationIndex >= 0) {
       messages = messages.map((message, index) =>
-        index === existingPresentationIndex ? presentation : message,
+        index === existingPresentationIndex
+          ? {
+              ...presentation,
+              // Re-observing the same immutable presentation must not assign
+              // it a fresh Date.now() and move it below a newer optimistic
+              // request while the provider outcome is still unknown. A later
+              // durable sequence may refine ordering; otherwise retain the
+              // first-render position.
+              timestamp: message.timestamp,
+              serverSequence:
+                presentation.serverSequence ?? message.serverSequence,
+            }
+          : message,
       );
     } else if (presentationUserIndex >= 0) {
       messages = [
@@ -949,6 +1410,11 @@ export function applyKnowledgeBaseObservation(
   // approved current node after a newer optimistic request and wait for a
   // subsequent history fetch to repair it.
   messages = mergeServerOwnedKnowledgeBaseMessages([], messages);
+  const displaySequence = Math.max(
+    currentDisplaySequence,
+    acceptedDisplaySequence(messages),
+    observationDisplaySequence(observation),
+  );
 
   const protectedMessageIds = new Set(
     messages
@@ -956,16 +1422,57 @@ export function applyKnowledgeBaseObservation(
       .map((message) => message.id),
   );
 
-  const rawNotice = observation.notice;
+  const serverAwaitsBrowserAttachments =
+    observation.activeTurn?.awaitingClientAttachments ??
+    observation.activeTurn?.requiresAttachmentReselection ??
+    false;
+  const legacyDeferredUploadNoticeCodes = new Set([
+    "KNOWLEDGE_BASE_START_INCOMPLETE",
+    "KNOWLEDGE_BASE_REVISION_UPLOAD_INCOMPLETE",
+    "KNOWLEDGE_BASE_ATTACHMENTS_REQUIRED",
+  ]);
+  // Old servers synthesized reset-required notices from a normal reserve ->
+  // stage window. The current-page File attempt owns that distinction; an
+  // active awaiting turn is neutral upload progress, never a server terminal.
+  const rawNotice =
+    serverAwaitsBrowserAttachments &&
+    observation.notice?.code &&
+    legacyDeferredUploadNoticeCodes.has(observation.notice.code)
+      ? null
+      : observation.notice;
   const noticeKey = rawNotice?.key;
+  const noticeCode =
+    typeof rawNotice?.code === "string" &&
+    /^[A-Z0-9_:-]{1,128}$/u.test(rawNotice.code)
+      ? rawNotice.code
+      : undefined;
+  const noticeAttachmentCount = Number(rawNotice?.attachmentCount);
+  const noticeRecoveryToken =
+    typeof rawNotice?.recoveryToken === "string" &&
+    /^[a-f0-9]{64}$/u.test(rawNotice.recoveryToken)
+      ? rawNotice.recoveryToken
+      : undefined;
   const notice =
     rawNotice?.message && noticeKey
       ? {
           errorKey: noticeKey,
-          code: rawNotice.code,
+          ...(noticeCode ? { code: noticeCode } : {}),
           message: sanitizeBrandText(rawNotice.message),
           severity: rawNotice.severity ?? ("error" as const),
           retryable: rawNotice.retryable === true,
+          failureClass: rawNotice.failureClass ?? null,
+          recoveryAction: rawNotice.recoveryAction ?? null,
+          ...(noticeRecoveryToken
+            ? { recoveryToken: noticeRecoveryToken }
+            : {}),
+          // Missing means an old server, never implicit permission to create
+          // another paid model task.
+          canRegenerate: rawNotice.canRegenerate === true,
+          ...(Number.isSafeInteger(noticeAttachmentCount) &&
+          noticeAttachmentCount >= 0 &&
+          noticeAttachmentCount <= 1_000
+            ? { attachmentCount: noticeAttachmentCount }
+            : {}),
           turnId: rawNotice.turnId,
         }
       : null;
@@ -974,9 +1481,14 @@ export function applyKnowledgeBaseObservation(
     ...conversation,
     messages,
     status: nextStatus,
-    taskId: observation.authoritativeTaskId ?? conversation.taskId,
+    taskId:
+      observation.authoritativeTaskId === null
+        ? undefined
+        : (observation.authoritativeTaskId ?? conversation.taskId),
     previousResponseId:
-      observation.authoritativeTaskId ?? conversation.previousResponseId,
+      observation.authoritativeTaskId === null
+        ? undefined
+        : (observation.authoritativeTaskId ?? conversation.previousResponseId),
     deletedMessageIds: conversation.deletedMessageIds?.filter(
       (messageId) => !protectedMessageIds.has(messageId),
     ),
@@ -988,8 +1500,53 @@ export function applyKnowledgeBaseObservation(
       initialized: true,
       generation: observation.generation,
       stateEpoch: observation.stateEpoch,
+      contentVersion:
+        observation.interaction.progress?.build.contentVersion ??
+        conversation.knowledgeBase?.contentVersion ??
+        0,
+      displaySequence,
+      syncState: observation.syncState,
+      processingPhase: observation.processingPhase,
+      contentState: observation.contentState,
+      packageState: observation.packageState,
+      publicationState: observation.publicationState,
+      contentAvailability:
+        observation.contentAvailability ??
+        observation.interaction.progress?.contentAvailability,
+      operationState:
+        observation.operationState ??
+        observation.interaction.progress?.operationState,
+      resetAllowed:
+        observation.resetAllowed ??
+        observation.interaction.progress?.resetAllowed,
+      taskCreationState:
+        observation.taskCreationState ??
+        observation.interaction.progress?.taskCreationState,
+      failureStage:
+        observation.failureStage ??
+        observation.interaction.progress?.failureStage,
+      retainedCustomerAttachmentCount:
+        observation.retainedCustomerAttachmentCount ??
+        observation.interaction.progress?.retainedCustomerAttachmentCount,
+      generatedSystemAttachmentCount:
+        observation.generatedSystemAttachmentCount ??
+        observation.interaction.progress?.generatedSystemAttachmentCount,
+      settledAt:
+        observation.settledAt ?? observation.interaction.progress?.settledAt,
       activeTurnId,
       activeClientRequestId,
+      activeTurnUpdatedAt: observation.activeTurn?.updatedAt,
+      activeTurnMessageSequence: observation.activeTurn?.messageSequence,
+      activeTurnResetRevision: observation.activeTurn?.resetRevision,
+      activeTurnOperationType: observation.activeTurn?.operationType,
+      activeTurnAwaitingClientAttachments:
+        observation.activeTurn?.awaitingClientAttachments ??
+        observation.activeTurn?.requiresAttachmentReselection ??
+        false,
+      activeTurnStagedAttachmentCount:
+        observation.activeTurn?.stagedAttachmentCount ?? 0,
+      activeTurnExpectedAttachmentCount:
+        observation.activeTurn?.expectedAttachmentCount ?? 0,
       presentationTurnId:
         observation.approvedPresentation?.turnId ??
         conversation.knowledgeBase?.presentationTurnId ??
@@ -1015,32 +1572,68 @@ export function applyKnowledgeBaseObservation(
   };
 }
 
-export function currentKnowledgeBasePresentationReady(
+export interface KnowledgeBaseReplySnapshot {
+  generation: number;
+  stateEpoch: number;
+  contentVersion: number;
+  revision: number;
+  leafId: string;
+  presentationKey: string;
+  presentationTurnId: string;
+}
+
+/**
+ * Return one internally consistent reply coordinate from the approved message
+ * the browser is actually rendering. Callers must not mix these fields with a
+ * separately refreshed progress object.
+ */
+export function currentKnowledgeBaseReplySnapshot(
   conversation: Conversation | null | undefined,
-  revision: number | undefined,
-  leafId: string | null | undefined,
-) {
+): KnowledgeBaseReplySnapshot | null {
   const knowledgeBase = conversation?.knowledgeBase;
   if (
     !conversation ||
     conversation.status !== "awaiting_input" ||
     !knowledgeBase?.canReply ||
-    knowledgeBase.revision !== revision ||
-    knowledgeBase.leafId !== leafId ||
+    knowledgeBase.revision === null ||
+    !knowledgeBase.leafId ||
     !knowledgeBase.presentationKey ||
     !knowledgeBase.presentationTurnId
   ) {
-    return false;
+    return null;
   }
-  return conversation.messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      message.content.trim() &&
-      message.knowledgeBase?.kind === "presentation" &&
-      message.knowledgeBase.turnId === knowledgeBase.presentationTurnId &&
-      message.knowledgeBase.presentationKey === knowledgeBase.presentationKey &&
-      message.knowledgeBase.revision === revision &&
-      message.knowledgeBase.leafId === leafId,
+  const message = conversation.messages.find(
+    (candidate) =>
+      candidate.role === "assistant" &&
+      candidate.content.trim() &&
+      candidate.knowledgeBase?.kind === "presentation" &&
+      candidate.knowledgeBase.turnId === knowledgeBase.presentationTurnId &&
+      candidate.knowledgeBase.presentationKey ===
+        knowledgeBase.presentationKey &&
+      candidate.knowledgeBase.generation === knowledgeBase.generation &&
+      candidate.knowledgeBase.revision === knowledgeBase.revision &&
+      candidate.knowledgeBase.leafId === knowledgeBase.leafId,
+  );
+  if (!message) return null;
+  return {
+    generation: knowledgeBase.generation,
+    stateEpoch: knowledgeBase.stateEpoch,
+    contentVersion: knowledgeBase.contentVersion ?? 0,
+    revision: knowledgeBase.revision,
+    leafId: knowledgeBase.leafId,
+    presentationKey: knowledgeBase.presentationKey,
+    presentationTurnId: knowledgeBase.presentationTurnId,
+  };
+}
+
+export function currentKnowledgeBasePresentationReady(
+  conversation: Conversation | null | undefined,
+  revision: number | undefined,
+  leafId: string | null | undefined,
+) {
+  const snapshot = currentKnowledgeBaseReplySnapshot(conversation);
+  return Boolean(
+    snapshot && snapshot.revision === revision && snapshot.leafId === leafId,
   );
 }
 
@@ -1063,13 +1656,25 @@ function getTrpcErrorCode(error: unknown): string | undefined {
 export function prepareConversationForCloud(
   conversation: Conversation,
 ): Conversation {
-  const { apiKeyFingerprint: _legacyFingerprint, ...cloudConversation } =
-    conversation;
+  const {
+    apiKeyFingerprint: _legacyFingerprint,
+    taskUrl: _legacyProviderTaskUrl,
+    ...cloudConversation
+  } = conversation;
   const repairedMessages = repairConversationMessageIds(conversation.messages);
   const protectedMessageIds = new Set(
     repairedMessages
       .filter(isServerOwnedKnowledgeBaseMessage)
       .map((message) => message.id),
+  );
+  const browserOwnedMessages = repairedMessages.filter(
+    (message) =>
+      !isServerOwnedKnowledgeBaseMessage(message) &&
+      !isServerOwnedGeneralChatMessage(message) &&
+      !(
+        message.knowledgeBase?.kind === "pending_user" &&
+        message.knowledgeBase.serverOwned !== true
+      ),
   );
 
   return {
@@ -1077,7 +1682,12 @@ export function prepareConversationForCloud(
     deletedMessageIds: conversation.deletedMessageIds?.filter(
       (messageId) => !protectedMessageIds.has(messageId),
     ),
-    messages: repairedMessages.map((message) => ({
+    // Knowledge-base request/presentation messages are server-owned. An
+    // optimistic confirmation without a reserved turn is browser-only and
+    // must not survive refresh as a ghost; accepted KB messages already live
+    // in the authoritative messages table and are never rewritten by a client
+    // snapshot.
+    messages: browserOwnedMessages.map((message) => ({
       ...message,
       attachments: message.attachments?.map((attachment) => {
         const {
@@ -1094,6 +1704,76 @@ export function prepareConversationForCloud(
       ),
     })),
   };
+}
+
+/**
+ * A cloud read must never erase a local snapshot that has not received an
+ * ACK. Merge by stable message/output identity while allowing a server-owned
+ * ordinary projection to replace its optimistic polling copy.
+ */
+export function mergeDirtyConversationHydration(
+  local: Conversation,
+  remote: Conversation,
+): Conversation {
+  const messages = [...local.messages];
+  const idToIndex = new Map(
+    messages.map((message, index) => [message.id, index]),
+  );
+  const outputToIndex = new Map(
+    messages.flatMap((message, index) =>
+      message.upstreamOutputId
+        ? ([[message.upstreamOutputId, index]] as const)
+        : [],
+    ),
+  );
+
+  for (const remoteMessage of remote.messages) {
+    const existingIndex =
+      idToIndex.get(remoteMessage.id) ??
+      (remoteMessage.upstreamOutputId
+        ? outputToIndex.get(remoteMessage.upstreamOutputId)
+        : undefined);
+    if (existingIndex === undefined) {
+      idToIndex.set(remoteMessage.id, messages.length);
+      if (remoteMessage.upstreamOutputId) {
+        outputToIndex.set(remoteMessage.upstreamOutputId, messages.length);
+      }
+      messages.push(remoteMessage);
+    } else if (isServerOwnedGeneralChatMessage(remoteMessage)) {
+      messages[existingIndex] = remoteMessage;
+      idToIndex.set(remoteMessage.id, existingIndex);
+      if (remoteMessage.upstreamOutputId) {
+        outputToIndex.set(remoteMessage.upstreamOutputId, existingIndex);
+      }
+    }
+  }
+
+  return {
+    ...remote,
+    messages: repairConversationMessageIds(messages),
+    title: local.title,
+    status: local.status,
+    executionKind: local.executionKind ?? remote.executionKind,
+    taskId: local.taskId ?? remote.taskId,
+    previousResponseId: local.previousResponseId ?? remote.previousResponseId,
+    startedAt: local.startedAt ?? remote.startedAt,
+    completedAt: local.completedAt ?? remote.completedAt,
+    lastKnownOutputLength:
+      local.lastKnownOutputLength ?? remote.lastKnownOutputLength,
+    updatedAt: Math.max(local.updatedAt, remote.updatedAt),
+  };
+}
+
+export function remoteMissingLocalConversations(
+  local: readonly Conversation[],
+  remoteIds: ReadonlySet<string>,
+  initial: boolean,
+  isDirty: (id: string) => boolean,
+) {
+  return local.filter(
+    (conversation) =>
+      !remoteIds.has(conversation.id) && (initial || isDirty(conversation.id)),
+  );
 }
 
 function normalizeConversation(conversation: Conversation): Conversation {
@@ -1113,6 +1793,7 @@ function normalizeConversation(conversation: Conversation): Conversation {
 
   return {
     ...conversation,
+    taskUrl: undefined,
     // A crash can leave both the optimistic request and the canonical
     // server-owned turn in the first cloud snapshot. Collapse that pair before
     // it ever reaches the reducer; otherwise it survives until another save.
@@ -1244,26 +1925,15 @@ function compareHydratedMessageOrder(left: LocalMessage, right: LocalMessage) {
     return left.serverSequence - right.serverSequence;
   }
 
-  // A server projection is read after its immutable database message has been
-  // assigned a sequence. If a newer browser-only request is already visible,
-  // Date.now() would otherwise make the older approved presentation appear
-  // below that request until the next cloud hydration reorders the history.
-  // An accepted request is promoted to server-owned before this comparison;
-  // therefore a remaining optimistic KB message is necessarily after the
-  // durable history represented by the projection.
-  if (
-    leftIsServerOwned &&
-    left.serverSequence !== undefined &&
-    rightIsOptimisticKnowledgeBase
-  ) {
-    return -1;
+  // A durable sequence proves the server row predates the unbound browser
+  // request. Legacy/equivalent observations may omit that sequence; in that
+  // case preserve the already-rendered array order instead of comparing a
+  // projection-time Date.now() with the optimistic message timestamp.
+  if (leftIsServerOwned && rightIsOptimisticKnowledgeBase) {
+    return left.serverSequence !== undefined ? -1 : 0;
   }
-  if (
-    rightIsServerOwned &&
-    right.serverSequence !== undefined &&
-    leftIsOptimisticKnowledgeBase
-  ) {
-    return 1;
+  if (rightIsServerOwned && leftIsOptimisticKnowledgeBase) {
+    return right.serverSequence !== undefined ? 1 : 0;
   }
   if (leftIsServerOwned && rightIsServerOwned) {
     const leftGeneration = left.knowledgeBase?.generation ?? -1;
@@ -1286,10 +1956,22 @@ function compareHydratedMessageOrder(left: LocalMessage, right: LocalMessage) {
       // that advances it. Sorting every pending message first temporarily put
       // 1.2 below the confirmation for 1.2, allowing 1.3 to render above 1.2
       // until a later hydration happened to rebuild the history.
+      type KnowledgeBaseMessageKind = NonNullable<
+        LocalMessage["knowledgeBase"]
+      >["kind"];
+      const leftKind = left.knowledgeBase?.kind;
+      const rightKind = right.knowledgeBase?.kind;
+      if (!leftKind || !rightKind) return 0;
+      const kindRank = (kind: KnowledgeBaseMessageKind) =>
+        kind === "pending_user" ? 0 : kind === "presentation" ? 1 : 2;
       if (sameTurn) {
-        return left.knowledgeBase?.kind === "pending_user" ? -1 : 1;
+        return kindRank(leftKind) - kindRank(rightKind);
       }
-      return left.knowledgeBase?.kind === "presentation" ? -1 : 1;
+      // A presentation belongs before the next turn's pending request; the
+      // completion receipt is terminal and remains last at its revision.
+      const crossTurnRank = (kind: KnowledgeBaseMessageKind) =>
+        kind === "presentation" ? 0 : kind === "pending_user" ? 1 : 2;
+      return crossTurnRank(leftKind) - crossTurnRank(rightKind);
     }
   }
   return left.timestamp - right.timestamp;
@@ -1412,11 +2094,31 @@ export function mergeKnowledgeBaseHydration(
   if (!local.knowledgeBase?.initialized) return remoteWithProtectedHistory;
   const localState = local.knowledgeBase;
   const remoteState = remote.knowledgeBase;
+  const localDisplaySequence = persistedDisplaySequence(local);
+  const remoteDisplaySequence = persistedDisplaySequence(
+    remoteWithProtectedHistory,
+  );
+  const remoteDisplaySequenceIsOlder =
+    localDisplaySequence > 0 && remoteDisplaySequence < localDisplaySequence;
+  const localRevision = localState.revision ?? -1;
+  const remoteRevision = remoteState?.revision ?? -1;
+  const coordinatesMatch = Boolean(
+    remoteState?.initialized &&
+      remoteState.generation === localState.generation &&
+      remoteState.stateEpoch === localState.stateEpoch &&
+      remoteRevision === localRevision,
+  );
   const remoteIsNewer = Boolean(
     remoteState?.initialized &&
       (remoteState.generation > localState.generation ||
         (remoteState.generation === localState.generation &&
-          remoteState.stateEpoch > localState.stateEpoch)),
+          remoteState.stateEpoch > localState.stateEpoch) ||
+        (remoteState.generation === localState.generation &&
+          remoteState.stateEpoch === localState.stateEpoch &&
+          remoteRevision > localRevision) ||
+        (coordinatesMatch &&
+          !remoteDisplaySequenceIsOlder &&
+          remoteDisplaySequence > localDisplaySequence)),
   );
   if (remoteIsNewer) return remoteWithProtectedHistory;
 
@@ -1438,7 +2140,7 @@ export function mergeKnowledgeBaseHydration(
     status: local.status,
     taskId: local.taskId,
     previousResponseId: local.previousResponseId,
-    taskUrl: local.taskUrl,
+    taskUrl: undefined,
     startedAt: local.startedAt,
     completedAt: local.completedAt,
     knowledgeBase: localState,
@@ -1495,6 +2197,10 @@ interface ConversationContextType {
   }) => string;
   setActive: (id: string) => void;
   addMessage: (conversationId: string, message: LocalMessage) => void;
+  settleGeneralChatDispatch: (
+    conversationId: string,
+    clientRequestId: string,
+  ) => void;
   updateStatus: (
     conversationId: string,
     status: Conversation["status"],
@@ -1502,6 +2208,8 @@ interface ConversationContextType {
       taskId?: string;
       taskUrl?: string;
       previousResponseId?: string;
+      executionKind?: "general_chat_v2" | "response_logic";
+      clearTaskPointer?: boolean;
       startedAt?: number;
       completedAt?: number;
       lastKnownOutputLength?: number;
@@ -1529,8 +2237,15 @@ interface ConversationContextType {
   updateTitle: (conversationId: string, title: string) => void;
   deleteConversation: (id: string) => void;
   discardConversationLocally: (id: string) => void;
+  discardKnowledgeBaseConversationsLocally: (
+    primaryConversationId?: string,
+  ) => string[];
   deleteMessage: (conversationId: string, messageId: string) => void;
+  /** Persist the latest local snapshot before dispatching dependent work. */
+  flushConversation: (conversationId: string) => Promise<boolean>;
   refreshConversations: () => Promise<void>;
+  /** Re-read cloud history after an authoritative reset/local discard. */
+  refreshConversationsAfterDiscard: () => Promise<void>;
   clearSyncError: () => void;
 }
 
@@ -1567,12 +2282,14 @@ export function ConversationProvider({
   const [syncError, setSyncError] = useState<string | null>(null);
   const accountIdRef = useRef<number | null>(null);
   const hydrationGenerationRef = useRef(0);
+  const activeHydrationGenerationRef = useRef<number | null>(null);
   const canSyncRef = useRef(false);
   const listRefetchRef = useRef(listQuery.refetch);
   const syncSnapshotRef = useRef(syncSnapshotMutation.mutateAsync);
   const deleteRemoteRef = useRef(deleteMutation.mutateAsync);
   const projectAssignmentIdRef = useRef(projectAssignmentId);
   const knowledgeBaseConversationIdsRef = useRef(new Set<string>());
+  const locallyDiscardedConversationIdsRef = useRef(new Set<string>());
   const knowledgeBaseCoordinatorRef =
     useRef<KnowledgeBasePollingCoordinator | null>(null);
   const applyKnowledgeBaseObservationRef = useRef<
@@ -1601,7 +2318,7 @@ export function ConversationProvider({
             ? { projectAssignmentId: projectAssignmentIdRef.current }
             : {}),
         }),
-      onError: (error) => setSyncError(getErrorMessage(error)),
+      onError: (error) => setSyncError(conversationSyncErrorMessage(error)),
       onSuccess: () => setSyncError(null),
       shouldRetry: (error) => {
         const code = getTrpcErrorCode(error);
@@ -1614,20 +2331,9 @@ export function ConversationProvider({
           "UNAUTHORIZED",
         ].includes(code ?? "");
       },
-      onPermanentError: (error, operation) => {
-        if (
-          getTrpcErrorCode(error) === "NOT_FOUND" &&
-          operation.kind === "snapshot"
-        ) {
-          const nextState = conversationReducer(stateRef.current, {
-            type: "DELETE_CONVERSATION",
-            payload: operation.conversation.id,
-          });
-          stateRef.current = nextState;
-          dispatch({ type: "LOAD_STATE", payload: nextState });
-          setSyncError(null);
-        }
-      },
+      // A write rejection is not authoritative deletion evidence. The queue
+      // retains the operation as blocked/dirty for an explicit retry.
+      onPermanentError: () => undefined,
       debounceMs: 50,
     });
   }
@@ -1642,7 +2348,9 @@ export function ConversationProvider({
 
   const commit = useCallback(
     (action: Action, conversationIdsToSync: string[] = []) => {
-      const nextState = conversationReducer(stateRef.current, action);
+      const currentState = stateRef.current;
+      const nextState = conversationReducer(currentState, action);
+      if (nextState === currentState) return;
       replaceState(nextState);
 
       if (!canSyncRef.current) return;
@@ -1679,14 +2387,7 @@ export function ConversationProvider({
           prepareConversationForCloud(after),
         );
       }
-      const progress = observation.progress ?? observation.interaction.progress;
-      if (progress) {
-        window.dispatchEvent(
-          new CustomEvent("frontmind:knowledge-progress-updated", {
-            detail: progress,
-          }),
-        );
-      }
+      dispatchKnowledgeBaseProgressUpdated(observation);
     },
     [replaceState],
   );
@@ -1858,6 +2559,7 @@ export function ConversationProvider({
   const hydrateForUser = useCallback(
     async (expectedUserId: number, initial: boolean) => {
       const generation = ++hydrationGenerationRef.current;
+      activeHydrationGenerationRef.current = generation;
       if (initial) {
         setHydrated(false);
         setHydrationLoading(true);
@@ -1866,34 +2568,50 @@ export function ConversationProvider({
       try {
         const result = await listRefetchRef.current();
         if (result.error) throw result.error;
-        if (
-          accountIdRef.current !== expectedUserId ||
-          hydrationGenerationRef.current !== generation
-        ) {
+        if (accountIdRef.current !== expectedUserId) {
+          return;
+        }
+        if (hydrationGenerationRef.current !== generation) {
+          // A local reset/discard can invalidate the only initial list request
+          // without starting a replacement request. Settle that abandoned
+          // generation into an explicit retryable state instead of leaving the
+          // whole provider permanently unhydrated. A genuinely newer hydrate
+          // owns the loading state and will perform its own finite settlement.
+          if (initial && activeHydrationGenerationRef.current === generation) {
+            setSyncError(CONVERSATION_HYDRATION_SUPERSEDED_MESSAGE);
+            setHydrated(false);
+          }
           return;
         }
 
         const remoteConversations = (result.data ?? [])
+          .filter(
+            (remote) =>
+              !locallyDiscardedConversationIdsRef.current.has(remote.id),
+          )
           .map(normalizeConversation)
-          .map((remote) =>
-            mergeKnowledgeBaseHydration(
-              stateRef.current.conversations.find(
-                (local) => local.id === remote.id,
-              ),
-              remote,
-            ),
-          );
-        // The workspace is already visible while its first conversation query
-        // is in flight. Preserve brand-new local conversations created during
-        // that short window, then persist them once hydration succeeds.
+          .map((remote) => {
+            const local = stateRef.current.conversations.find(
+              (candidate) => candidate.id === remote.id,
+            );
+            const merged = mergeKnowledgeBaseHydration(local, remote);
+            return local && syncQueueRef.current!.isDirty(remote.id)
+              ? mergeDirtyConversationHydration(local, merged)
+              : merged;
+          });
+        // A list response may have started before the latest local write. Keep
+        // every remote-missing dirty conversation on both initial and later
+        // hydrations; a stale list is never authority to erase unacknowledged
+        // messages or attachments.
         const remoteIds = new Set(
           remoteConversations.map((conversation) => conversation.id),
         );
-        const optimisticConversations = initial
-          ? stateRef.current.conversations.filter(
-              (conversation) => !remoteIds.has(conversation.id),
-            )
-          : [];
+        const optimisticConversations = remoteMissingLocalConversations(
+          stateRef.current.conversations,
+          remoteIds,
+          initial,
+          (conversationId) => syncQueueRef.current!.isDirty(conversationId),
+        );
         const conversations = [
           ...optimisticConversations,
           ...remoteConversations,
@@ -1908,26 +2626,32 @@ export function ConversationProvider({
         setSyncError(null);
         setHydrated(true);
         canSyncRef.current = true;
-        for (const conversation of optimisticConversations) {
-          syncQueueRef.current!.enqueueSnapshot(
-            prepareConversationForCloud(conversation),
-            true,
-          );
+        if (initial) {
+          for (const conversation of optimisticConversations) {
+            syncQueueRef.current!.enqueueSnapshot(
+              prepareConversationForCloud(conversation),
+              true,
+            );
+          }
         }
       } catch (error: unknown) {
         if (
           accountIdRef.current === expectedUserId &&
-          hydrationGenerationRef.current === generation
+          activeHydrationGenerationRef.current === generation
         ) {
-          setSyncError(getErrorMessage(error));
+          setSyncError(conversationSyncErrorMessage(error));
+          // `hydrated` remains the remote-data-loaded signal consumed by Home,
+          // response logic and resume polling. Finite failure is represented by
+          // loading=false plus syncError, never by pretending the list loaded.
           if (initial) setHydrated(false);
         }
       } finally {
         if (
           accountIdRef.current === expectedUserId &&
-          hydrationGenerationRef.current === generation
+          activeHydrationGenerationRef.current === generation
         ) {
           setHydrationLoading(false);
+          activeHydrationGenerationRef.current = null;
         }
       }
     },
@@ -1938,11 +2662,13 @@ export function ConversationProvider({
     if (auth.loading) return;
 
     hydrationGenerationRef.current += 1;
+    activeHydrationGenerationRef.current = null;
     syncQueueRef.current!.reset();
     canSyncRef.current = false;
     accountIdRef.current = userId;
     knowledgeBaseCoordinatorRef.current?.reset();
     knowledgeBaseConversationIdsRef.current.clear();
+    locallyDiscardedConversationIdsRef.current.clear();
     replaceState(EMPTY_STATE);
     setSyncError(null);
 
@@ -1957,6 +2683,8 @@ export function ConversationProvider({
   }, [auth.loading, hydrateForUser, projectAssignmentId, replaceState, userId]);
 
   useEffect(() => {
+    // A previous rejection must not turn off the outbox. Newer local snapshots
+    // still enqueue and can replace/retry the blocked operation.
     canSyncRef.current = hydrated && userId !== null;
   }, [hydrated, userId]);
 
@@ -2064,6 +2792,19 @@ export function ConversationProvider({
     [commit],
   );
 
+  const settleGeneralChatDispatch = useCallback(
+    (conversationId: string, clientRequestId: string) => {
+      commit(
+        {
+          type: "SETTLE_GENERAL_CHAT_DISPATCH",
+          payload: { conversationId, clientRequestId },
+        },
+        [conversationId],
+      );
+    },
+    [commit],
+  );
+
   const updateStatus = useCallback(
     (
       conversationId: string,
@@ -2072,6 +2813,8 @@ export function ConversationProvider({
         taskId?: string;
         taskUrl?: string;
         previousResponseId?: string;
+        executionKind?: "general_chat_v2" | "response_logic";
+        clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;
         lastKnownOutputLength?: number;
@@ -2090,12 +2833,18 @@ export function ConversationProvider({
 
   const updateAssistantMessages = useCallback(
     (conversationId: string, messages: LocalMessage[]) => {
+      const conversation = stateRef.current.conversations.find(
+        (candidate) => candidate.id === conversationId,
+      );
+      const serverOwnedGeneralChatProjection =
+        conversation?.executionKind === "general_chat_v2" &&
+        messages.every(isServerOwnedGeneralChatMessage);
       commit(
         {
           type: "UPDATE_ASSISTANT_MESSAGES",
           payload: { conversationId, messages },
         },
-        [conversationId],
+        serverOwnedGeneralChatProjection ? [] : [conversationId],
       );
     },
     [commit],
@@ -2132,6 +2881,11 @@ export function ConversationProvider({
 
   const discardConversationLocally = useCallback(
     (id: string) => {
+      // Invalidate a cloud-list response that began before the reset and keep
+      // future hydration from resurrecting this reset-owned conversation.
+      hydrationGenerationRef.current += 1;
+      locallyDiscardedConversationIdsRef.current.add(id);
+      syncQueueRef.current?.cancel(id);
       knowledgeBaseConversationIdsRef.current.delete(id);
       knowledgeBaseCoordinatorRef.current?.unregister(id);
       const nextState = conversationReducer(stateRef.current, {
@@ -2139,6 +2893,37 @@ export function ConversationProvider({
         payload: id,
       });
       replaceState(nextState);
+    },
+    [replaceState],
+  );
+
+  const discardKnowledgeBaseConversationsLocally = useCallback(
+    (primaryConversationId?: string) => {
+      hydrationGenerationRef.current += 1;
+      const conversationIds = new Set(knowledgeBaseConversationIdsRef.current);
+      if (primaryConversationId) conversationIds.add(primaryConversationId);
+      for (const conversation of stateRef.current.conversations) {
+        if (
+          conversation.title === "企业知识库构建" ||
+          conversation.knowledgeBase?.initialized ||
+          hasServerOwnedKnowledgeBaseMessages(conversation)
+        ) {
+          conversationIds.add(conversation.id);
+        }
+      }
+      knowledgeBaseCoordinatorRef.current?.reset();
+      knowledgeBaseConversationIdsRef.current.clear();
+      let nextState = stateRef.current;
+      for (const conversationId of conversationIds) {
+        locallyDiscardedConversationIdsRef.current.add(conversationId);
+        syncQueueRef.current?.cancel(conversationId);
+        nextState = conversationReducer(nextState, {
+          type: "DISCARD_CONVERSATION_LOCALLY",
+          payload: conversationId,
+        });
+      }
+      replaceState(nextState);
+      return [...conversationIds];
     },
     [replaceState],
   );
@@ -2157,13 +2942,23 @@ export function ConversationProvider({
     const expectedUserId = accountIdRef.current;
     if (expectedUserId === null) return;
     if (!hydrated) {
-      await hydrateForUser(expectedUserId, true);
+      await hydrateForUser(expectedUserId, !hydrated);
       return;
     }
-    if (!canSyncRef.current) return;
     const flushed = await syncQueueRef.current!.flushAll();
     if (!flushed) return;
     await hydrateForUser(expectedUserId, false);
+  }, [hydrateForUser, hydrated]);
+
+  const flushConversation = useCallback(async (conversationId: string) => {
+    if (!canSyncRef.current) return false;
+    return syncQueueRef.current!.flushConversation(conversationId);
+  }, []);
+
+  const refreshConversationsAfterDiscard = useCallback(async () => {
+    const expectedUserId = accountIdRef.current;
+    if (expectedUserId === null) return;
+    await hydrateForUser(expectedUserId, !hydrated);
   }, [hydrateForUser, hydrated]);
 
   const clearSyncError = useCallback(() => setSyncError(null), []);
@@ -2218,6 +3013,7 @@ export function ConversationProvider({
         createConversation,
         setActive,
         addMessage,
+        settleGeneralChatDispatch,
         updateStatus,
         updateAssistantMessages,
         registerKnowledgeBaseConversation,
@@ -2229,8 +3025,11 @@ export function ConversationProvider({
         updateTitle,
         deleteConversation,
         discardConversationLocally,
+        discardKnowledgeBaseConversationsLocally,
         deleteMessage,
+        flushConversation,
         refreshConversations,
+        refreshConversationsAfterDiscard,
         clearSyncError,
       }}
     >
@@ -2599,6 +3398,27 @@ function isImageOutputResource(input: {
   );
 }
 
+function outputMessageIdentity(message: OutputMessage) {
+  const canonical =
+    typeof message.message_id === "string" ? message.message_id.trim() : "";
+  return canonical || message.id || undefined;
+}
+
+function outputMessageTimestamp(message: OutputMessage) {
+  const sentAt = Number(message.sent_at_ms);
+  return Number.isFinite(sentAt) && sentAt > 0 ? sentAt : Date.now();
+}
+
+function outputMessageProjectionMetadata(message: OutputMessage) {
+  const generalChat = message.general_chat;
+  return {
+    ...(generalChat?.serverOwned === true ? { generalChat } : {}),
+    ...(Number.isSafeInteger(message.server_sequence)
+      ? { serverSequence: message.server_sequence }
+      : {}),
+  };
+}
+
 /**
  * Parse FrontMind API output messages into local messages
  * Handles both OpenAI Responses API format and native FrontMind API format.
@@ -2734,12 +3554,13 @@ function _parseOutputMessagesInner(
         });
         messages.push({
           id:
-            msg.id ||
+            outputMessageIdentity(msg) ||
             `msg-file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           ...(msg.id ? { upstreamOutputId: msg.id } : {}),
           role: "assistant",
           content: "",
-          timestamp: Date.now(),
+          timestamp: outputMessageTimestamp(msg),
+          ...outputMessageProjectionMetadata(msg),
           ...(image
             ? {
                 inlineImages: [
@@ -2920,7 +3741,7 @@ function _parseOutputMessagesInner(
       ) {
         messages.push({
           id:
-            msg.id ||
+            outputMessageIdentity(msg) ||
             `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           ...(msg.id ? { upstreamOutputId: msg.id } : {}),
           role: "assistant",
@@ -2928,7 +3749,8 @@ function _parseOutputMessagesInner(
             textParts.length > 0
               ? sanitizeBrandText(textParts.join("\n\n"))
               : "",
-          timestamp: Date.now(),
+          timestamp: outputMessageTimestamp(msg),
+          ...outputMessageProjectionMetadata(msg),
           outputFiles:
             files.length > 0
               ? files.map((f) => ({

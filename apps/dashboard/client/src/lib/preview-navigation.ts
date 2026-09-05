@@ -17,7 +17,7 @@ import type { PortalNavItem } from "@/components/PortalShell";
 export type PreviewAdminAccessLevel = "delivery_admin" | "system_admin";
 
 export const previewIssueMonitorUrl =
-  "/admin/monitoring";
+  "https://business.molizhishu.com/business/dashboard?view=projects";
 export const previewChannelDistributionUrl = "https://i.kol.cn/";
 
 export const previewUserNav: PortalNavItem[] = [
@@ -33,7 +33,7 @@ export const previewAdminNav: PortalNavItem[] = [
     group: "运营",
   },
   {
-    label: "官网任务与积分",
+    label: "官网任务与AI建站",
     href: "/preview/admin/presales",
     icon: BriefcaseBusiness,
     group: "运营",
@@ -51,7 +51,7 @@ export const previewAdminNav: PortalNavItem[] = [
     group: "客户与服务",
   },
   {
-    label: "工单管理",
+    label: "需求管理",
     href: "/preview/admin/dispatch",
     icon: ClipboardList,
     group: "客户与服务",
@@ -66,7 +66,9 @@ export const previewAdminNav: PortalNavItem[] = [
     label: "问题监控",
     href: previewIssueMonitorUrl,
     icon: Activity,
-    group: "系统管理",
+    group: "外部系统",
+    external: true,
+    newWindow: true,
   },
   {
     label: "渠道分发",
@@ -92,7 +94,7 @@ const previewDeliveryAdminNav: PortalNavItem[] = [
     group: "交付管理",
   },
   {
-    label: "工单",
+    label: "需求",
     href: "/preview/admin/dispatch",
     icon: ClipboardList,
     group: "交付管理",

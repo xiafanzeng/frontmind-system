@@ -13,6 +13,12 @@ const LOGIN_BACKGROUND = "/assets/frontmind-login-background.webp";
 const WORDMARK = "/assets/frontmind-wordmark.svg";
 const CUHKSZ_EMBLEM = "/assets/cuhksz-emblem.png";
 
+export function frontMindWebsiteUrl(
+  configuredUrl = import.meta.env.VITE_FRONTMIND_WEBSITE_URL,
+) {
+  return configuredUrl?.trim() || "/";
+}
+
 export default function Login() {
   const [, setLocation] = useLocation();
   const { login, loginPending } = useAuth();
@@ -163,7 +169,7 @@ export default function Login() {
             >
               请
               <a
-                href="https://www.frontmind.cn"
+                href={frontMindWebsiteUrl()}
                 className="mx-1 inline-flex rounded-[4px] bg-[#641b96] px-2 py-0.5 font-medium text-white transition-colors hover:bg-[#511278] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#641b96]/30"
               >
                 返回官网

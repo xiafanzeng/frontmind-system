@@ -1,7 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import type { LucideIcon } from "lucide-react";
-import { LogOut, Menu, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  CircleUserRound,
+  LogOut,
+  Menu,
+  X,
+} from "lucide-react";
 
 import { useAuth } from "@/_core/hooks/useAuth";
 
@@ -26,6 +33,17 @@ type PortalShellProps = {
   mode?: "standard" | "fullscreen";
 };
 
+const PORTAL_SIDEBAR_STORAGE_KEY = "frontmind:portal-sidebar-state";
+
+function initialPortalSidebarCollapsed() {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(PORTAL_SIDEBAR_STORAGE_KEY) === "collapsed";
+  } catch {
+    return false;
+  }
+}
+
 export default function PortalShell({
   eyebrow,
   title,
@@ -37,8 +55,25 @@ export default function PortalShell({
   mode = "standard",
 }: PortalShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    initialPortalSidebarCollapsed,
+  );
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const toggleSidebar = () => {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      try {
+        localStorage.setItem(
+          PORTAL_SIDEBAR_STORAGE_KEY,
+          next ? "collapsed" : "expanded",
+        );
+      } catch {
+        // The visual state still works when browser storage is unavailable.
+      }
+      return next;
+    });
+  };
   const activeHref = navItems
     .filter(
       (item) =>
@@ -64,7 +99,11 @@ export default function PortalShell({
 
   return (
     <div
-      className={`bg-[radial-gradient(circle_at_34%_0%,rgba(91,42,134,.09),transparent_34%),radial-gradient(circle_at_92%_18%,rgba(200,144,19,.09),transparent_30%),#f6f3f8] text-[#443a50] lg:grid lg:grid-cols-[286px_minmax(0,1fr)] ${
+      className={`bg-[radial-gradient(circle_at_34%_0%,rgba(91,42,134,.09),transparent_34%),radial-gradient(circle_at_92%_18%,rgba(200,144,19,.09),transparent_30%),#f6f3f8] text-[#443a50] transition-[grid-template-columns] duration-200 lg:grid ${
+        sidebarCollapsed
+          ? "lg:grid-cols-[76px_minmax(0,1fr)]"
+          : "lg:grid-cols-[220px_minmax(0,1fr)]"
+      } ${
         mode === "fullscreen" ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]"
       }`}
     >
@@ -73,6 +112,8 @@ export default function PortalShell({
         className="fixed left-4 top-4 z-[90] flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-[#11131b] text-white shadow-xl lg:hidden"
         onClick={() => setMobileOpen((open) => !open)}
         aria-label="切换导航"
+        aria-controls="portal-workspace-sidebar"
+        aria-expanded={mobileOpen}
       >
         {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
       </button>
@@ -87,25 +128,59 @@ export default function PortalShell({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-[80] flex w-[286px] flex-col overflow-y-auto bg-[radial-gradient(circle_at_20%_2%,rgba(120,74,176,.36),transparent_28%),linear-gradient(180deg,#11131b_0%,#090a10_48%,#06070b_100%)] px-4 py-5 text-white transition-transform lg:sticky lg:top-0 lg:h-[100dvh] lg:translate-x-0 ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        id="portal-workspace-sidebar"
+        aria-label="工作台侧栏"
+        className={`fixed inset-y-0 left-0 z-[80] flex w-[220px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto bg-[radial-gradient(circle_at_20%_2%,rgba(120,74,176,.36),transparent_28%),linear-gradient(180deg,#11131b_0%,#090a10_48%,#06070b_100%)] px-4 pb-[18px] pt-[22px] text-white transition-[transform,width,padding] duration-200 lg:sticky lg:top-0 lg:h-[100dvh] lg:max-w-none lg:translate-x-0 ${
+          sidebarCollapsed ? "lg:w-[76px] lg:px-3" : "lg:w-[220px]"
+        } ${
+          mobileOpen
+            ? "visible translate-x-0"
+            : "invisible -translate-x-full lg:visible"
         }`}
       >
-        <div className="border-b border-white/10 px-2 pb-5">
+        <div
+          className={`border-b border-white/[0.08] px-2 pb-4 pt-1.5 ${
+            sidebarCollapsed ? "lg:flex lg:justify-center lg:px-0" : ""
+          }`}
+        >
           <img
             src="/assets/frontmind-wordmark.svg"
             alt="FrontMind"
-            className="h-9 w-auto max-w-[190px] brightness-0 invert"
+            className={`mt-0.5 h-auto w-[152px] max-w-full brightness-0 invert md:w-[164px] ${
+              sidebarCollapsed ? "lg:hidden" : ""
+            }`}
           />
-          <p className="fm-eyebrow mt-3 text-white/50">企业级 GEO 工作台</p>
+          {sidebarCollapsed && (
+            <span className="hidden h-9 w-9 overflow-hidden lg:block">
+              <img
+                src="/assets/frontmind-wordmark.svg"
+                alt=""
+                aria-hidden="true"
+                className="h-9 w-[125px] max-w-none brightness-0 invert"
+              />
+            </span>
+          )}
+          <p
+            className={`fm-eyebrow mt-2 text-[13px] font-bold tracking-[0.04em] text-white/[0.72] ${
+              sidebarCollapsed ? "lg:hidden" : ""
+            }`}
+          >
+            企业级 GEO 工作台
+          </p>
         </div>
 
-        <div className="mt-5 rounded-[22px] border border-white/10 bg-white/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.06)]">
-          <nav className="space-y-1.5" aria-label="管理中心导航">
+        <div
+          className={`mt-4 rounded-[22px] border border-white/[0.08] bg-white/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.06)] ${
+            sidebarCollapsed ? "lg:rounded-2xl lg:p-2" : ""
+          }`}
+        >
+          <nav className="space-y-1" aria-label="管理中心导航">
             {navItems.map((item, itemIndex) => {
               const Icon = item.icon;
               const active = !item.external && item.href === activeHref;
-              const className = `flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${
+              const className = `flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] leading-5 transition lg:min-h-[34px] lg:py-1.5 ${
+                sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
+              } ${
                 active
                   ? "bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]"
                   : "text-white/62 hover:bg-white/[0.075] hover:text-white"
@@ -113,9 +188,11 @@ export default function PortalShell({
               const content = (
                 <>
                   <Icon
-                    className={`h-4 w-4 ${active ? "text-[#d7aa44]" : ""}`}
+                    className={`h-4 w-4 shrink-0 ${active ? "text-[#d7aa44]" : ""}`}
                   />
-                  <span>{item.label}</span>
+                  <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                    {item.label}
+                  </span>
                 </>
               );
               const previousItem = navItems[itemIndex - 1];
@@ -124,7 +201,11 @@ export default function PortalShell({
               return (
                 <div key={`${item.group || "workspace"}-${item.href}`}>
                   {showGroup && (
-                    <p className="px-3 pb-2 pt-4 text-xs font-medium text-white/38 first:pt-0">
+                    <p
+                      className={`px-2.5 pb-1 text-[11px] font-medium leading-4 text-white/38 ${
+                        itemIndex === 0 ? "pt-0" : "pt-2.5"
+                      } ${sidebarCollapsed ? "lg:hidden" : ""}`}
+                    >
                       {item.group || "工作空间"}
                     </p>
                   )}
@@ -134,6 +215,8 @@ export default function PortalShell({
                       target={item.newWindow ? "_blank" : undefined}
                       rel={item.newWindow ? "noopener noreferrer" : undefined}
                       className={className}
+                      title={sidebarCollapsed ? item.label : undefined}
+                      aria-label={sidebarCollapsed ? item.label : undefined}
                       onClick={() => setMobileOpen(false)}
                     >
                       {content}
@@ -142,6 +225,8 @@ export default function PortalShell({
                     <Link
                       href={item.href}
                       className={className}
+                      title={sidebarCollapsed ? item.label : undefined}
+                      aria-label={sidebarCollapsed ? item.label : undefined}
                       onClick={() => setMobileOpen(false)}
                     >
                       {content}
@@ -153,26 +238,73 @@ export default function PortalShell({
           </nav>
         </div>
 
-        <div className="mt-auto rounded-[18px] border border-white/10 bg-white/[0.055] p-4">
-          <p className="text-xs text-white/48">当前账号</p>
-          <p className="mt-1 truncate text-sm font-semibold text-white">
-            {accountLabel || user?.displayName || user?.username || "预览账号"}
-          </p>
-          <p className="mt-1 text-xs text-white/45">
-            {roleLabel || (user?.role === "admin" ? "管理员" : "用户")}
-          </p>
+        <div
+          className={`mt-auto rounded-[18px] border border-white/10 bg-white/[0.055] p-4 ${
+            sidebarCollapsed ? "lg:p-2" : ""
+          }`}
+        >
+          <div className={sidebarCollapsed ? "lg:hidden" : ""}>
+            <p className="text-xs text-white/48">当前账号</p>
+            <p className="mt-1 truncate text-sm font-semibold text-white">
+              {accountLabel ||
+                user?.displayName ||
+                user?.username ||
+                "预览账号"}
+            </p>
+            <p className="mt-1 text-xs text-white/45">
+              {roleLabel || (user?.role === "admin" ? "管理员" : "用户")}
+            </p>
+          </div>
+          {sidebarCollapsed && (
+            <CircleUserRound
+              aria-hidden="true"
+              className="mx-auto hidden h-5 w-5 text-white/65 lg:block"
+            />
+          )}
           <button
             type="button"
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 py-2 text-xs text-white/65 transition hover:bg-white/10 hover:text-white"
+            className={`mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 py-2 text-xs text-white/65 transition hover:bg-white/10 hover:text-white lg:min-h-[34px] lg:py-1.5 ${
+              sidebarCollapsed ? "lg:mt-2 lg:h-9 lg:px-0 lg:py-0" : ""
+            }`}
             onClick={() => {
               if (!accountLabel) void logout();
             }}
             disabled={Boolean(accountLabel)}
+            title={sidebarCollapsed ? "退出登录" : undefined}
+            aria-label={sidebarCollapsed ? "退出登录" : undefined}
           >
             <LogOut className="h-3.5 w-3.5" />
-            退出登录
+            <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+              退出登录
+            </span>
           </button>
         </div>
+
+        <button
+          type="button"
+          className="mt-2 hidden min-h-[34px] w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-2 py-1.5 text-xs text-white/62 transition hover:bg-white/10 hover:text-white lg:flex"
+          onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+          aria-expanded={!sidebarCollapsed}
+          title={sidebarCollapsed ? "展开侧栏" : undefined}
+        >
+          {sidebarCollapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <>
+              <ChevronLeft className="h-4 w-4" />
+              收起侧栏
+            </>
+          )}
+        </button>
+        <button
+          type="button"
+          className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-2 py-2 text-xs text-white/62 transition hover:bg-white/10 hover:text-white lg:hidden"
+          onClick={() => setMobileOpen(false)}
+        >
+          <ChevronLeft className="h-4 w-4" />
+          关闭侧栏
+        </button>
       </aside>
 
       <main

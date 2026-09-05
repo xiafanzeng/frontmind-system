@@ -109,7 +109,7 @@ describe("KnowledgeBaseLivePreview", () => {
     expect(JSON.parse(String(startCall[1]?.body))).toMatchObject({
       mode: "full",
       companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
+      companyWebsite: "https://www.frontmind.net/",
     });
   });
 

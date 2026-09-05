@@ -41,7 +41,7 @@ export default function DeliveryWorkflowGuide({
           <div>
             <h2 className="font-semibold">我的岗位职责</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-              这里只展示当前岗位需要完成的工作；请按工单执行，并登记可核验的交付结果。
+              这里只展示当前岗位需要完成的工作；请按需求执行，并登记可核验的交付结果。
             </p>
           </div>
           <Badge className="w-fit shrink-0">当前岗位</Badge>
@@ -75,7 +75,7 @@ export default function DeliveryWorkflowGuide({
         <div>
           <h2 className="font-semibold">项目交付协作链</h2>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-            交付管理员负责配齐岗位、确认负责人和协调异常；工程师负责岗位工单执行，系统管理员可在异常场景接管处理。
+            交付管理员负责配齐岗位、确认负责人和协调异常；工程师负责岗位需求执行，系统管理员可在异常场景接管处理。
           </p>
         </div>
         <Badge variant="outline" className="w-fit shrink-0">
@@ -89,12 +89,12 @@ export default function DeliveryWorkflowGuide({
           ：描述客户从资料、监控、内容到复测的完整结果路径。
         </p>
         <p className="rounded-xl border bg-muted/20 px-3 py-2">
-          <strong className="text-foreground">工单</strong>
+          <strong className="text-foreground">需求</strong>
           ：流程中只交给一个岗位、可独立验收的一次执行任务。
         </p>
         <p className="rounded-xl border bg-muted/20 px-3 py-2">
           <strong className="text-foreground">交接</strong>
-          ：完成工单时登记结构化结果，由系统幂等创建下一张工单。
+          ：完成需求时登记结构化结果，由系统幂等创建下一张需求。
         </p>
       </div>
 
@@ -102,14 +102,14 @@ export default function DeliveryWorkflowGuide({
         <WorkflowActorCard
           icon={<UserRound className="h-4 w-4" />}
           title="客户"
-          responsibility="发起需求、补充资料、选择方案并确认自己看到的结果；不负责判断内部岗位和工单流转。"
+          responsibility="发起需求、补充资料、选择方案并确认自己看到的结果；不负责判断内部岗位和需求流转。"
           boundary="客户只看到对外状态、交付摘要和公开结果。"
         />
         <WorkflowActorCard
           icon={<UserCog className="h-4 w-4" />}
           title="交付管理员"
           responsibility="配置客户项目团队、协调优先级与异常、回复客户并催办对应岗位。"
-          boundary="不代替工程师上传、发布或完成岗位工单。"
+          boundary="不代替工程师上传、发布或完成岗位需求。"
         />
         <WorkflowActorCard
           icon={<ShieldCheck className="h-4 w-4" />}
@@ -165,7 +165,7 @@ export default function DeliveryWorkflowGuide({
                       {state.ownerLabel || "负责人待分配"}
                     </p>
                     <p className="mt-1 text-muted-foreground">
-                      未结束工单 {state.openTicketCount ?? 0} 个
+                      未结束需求 {state.openTicketCount ?? 0} 个
                     </p>
                   </div>
                 )}
@@ -199,7 +199,7 @@ export default function DeliveryWorkflowGuide({
 
       <p className="mt-4 flex items-start gap-2 rounded-xl bg-muted/35 px-3 py-2 text-xs leading-5 text-muted-foreground">
         <RotateCcw className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        内容发布不是流程终点：分发结果必须回到监控岗位复测；未达到目标时沿原问题继续生成下一轮优化工单。
+        内容发布不是流程终点：分发结果必须回到监控岗位复测；未达到目标时沿原问题继续生成下一轮优化需求。
       </p>
     </section>
   );

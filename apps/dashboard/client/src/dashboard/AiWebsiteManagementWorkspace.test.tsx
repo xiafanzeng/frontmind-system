@@ -31,6 +31,34 @@ function websiteQuota(
 }
 
 describe("AiWebsiteManagementWorkspace", () => {
+  it("opens the new SiteOps build flow before domain or ICP while legacy gates stay isolated", () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainStatus: "not_started",
+          icpStatus: "locked",
+          canSubmitDomain: true,
+          canSubmitIcp: false,
+          canSubmitContent: false,
+        }}
+        siteOpsMode
+        siteOpsPanel={<div>对话式建站面板已连接</div>}
+      />,
+    );
+
+    expect(screen.getByText("对话式建站面板已连接")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "AI友好官网管理" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/完成官网制作、预览、域名配置与发布/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("阿里云企业域名注册图文教程")).toBeNull();
+    expect(screen.queryByText("官网开通进度")).toBeNull();
+  });
+
   it("shows only customer-facing results in the engineer preview", () => {
     render(
       <AiWebsiteManagementWorkspace
@@ -59,7 +87,33 @@ describe("AiWebsiteManagementWorkspace", () => {
       screen.queryByText("阿里云企业域名注册图文教程"),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/图文教程逐步完成/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "提交工单" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "提交需求" })).toBeNull();
+  });
+
+  it("keeps the engineer preview aligned with the overseas two-stage flow", () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        marketEdition="overseas"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainStatus: "completed",
+          icpStatus: "not_required",
+          styleState: "waiting_samples",
+          websiteBuildStatus: "locked",
+          canSubmitContent: false,
+        }}
+        contentCatalog={websiteContentCatalog}
+        readOnlyPreview
+      />,
+    );
+
+    expect(screen.getByText("企业域名注册与确认")).toBeInTheDocument();
+    expect(
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("待风格确认");
+    expect(screen.queryByText(/ICP 备案 ·/)).not.toBeInTheDocument();
+    expect(screen.getByText(/域名教程、客户提交表单/)).toBeInTheDocument();
   });
 
   it("removes the old technical console and exposes the fixed two-step workflow", () => {
@@ -83,7 +137,10 @@ describe("AiWebsiteManagementWorkspace", () => {
     expect(screen.getByText("阿里云域名注册与 ICP 备案")).toBeInTheDocument();
     expect(screen.getByText("AI专用官网构建与内容运营")).toBeInTheDocument();
     expect(
-      screen.queryByText("购买域名并提交 AI 运维工单"),
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("已开放");
+    expect(
+      screen.queryByText("购买域名并提交 AI 运维需求"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("领取服务码并完成 ICP 备案"),
@@ -122,8 +179,9 @@ describe("AiWebsiteManagementWorkspace", () => {
 
     expect(screen.queryByLabelText("需求类型")).not.toBeInTheDocument();
     expect(
-      screen.queryByText("域名购买完成后，在这里提交"),
-    ).not.toBeInTheDocument();
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("待域名与备案确认");
+    expect(screen.getByText("域名购买完成后，在这里提交")).toBeInTheDocument();
     expect(
       screen.getByText("企业首次备案：照着下面 7 个阶段一步一步做"),
     ).toBeInTheDocument();
@@ -149,9 +207,48 @@ describe("AiWebsiteManagementWorkspace", () => {
     const stageFour = screen.getByRole("button", {
       name: /进入 ICP 备案系统并完成基础信息校验/,
     });
-    expect(stageOne).toHaveAttribute("aria-expanded", "true");
+    const filingStage = screen.getByRole("button", {
+      name: /完成审核、短信核验并取得 ICP 主体备案号/,
+    });
+    expect(stageOne).toHaveAttribute("aria-expanded", "false");
     expect(stageTwo).toHaveAttribute("aria-expanded", "false");
-    expect(stageThree).toHaveAttribute("aria-expanded", "false");
+    expect(stageThree).toHaveAttribute("aria-expanded", "true");
+    expect(stageFour).toHaveAttribute("aria-expanded", "false");
+    expect(filingStage).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((button) => button.id.includes("-stage-"))
+        .filter((button) => button.getAttribute("aria-expanded") === "true"),
+    ).toEqual([stageThree, filingStage]);
+    expect(screen.getByText("备案信息回填处")).toBeInTheDocument();
+    expect(
+      screen.getByText("等待 AI 运维工程师在域名需求内提供备案服务码。"),
+    ).toBeInTheDocument();
+    const serviceCodeReceipt = screen
+      .getByText("备案服务码接收处")
+      .closest("section");
+    expect(serviceCodeReceipt).toHaveTextContent(
+      "等待 AI 运维工程师在域名需求内提供备案服务码。",
+    );
+    expect(serviceCodeReceipt).not.toHaveTextContent(/未提交|处理中|异常缺失/);
+    expect(
+      screen.getByText(/回填项已开放；域名需求完成后/),
+    ).toBeInTheDocument();
+
+    const purchasedDomain = screen.getByLabelText("已购买域名");
+    const filedDomain = screen.getByLabelText("已备案域名");
+    const icpNumber = screen.getByLabelText("ICP 主体备案号");
+    expect(stageThree.closest("li")).toContainElement(purchasedDomain);
+    expect(filingStage.closest("li")).toContainElement(filedDomain);
+    expect(filingStage.closest("li")).toContainElement(icpNumber);
+    expect(purchasedDomain.closest("form")).not.toBeNull();
+    expect(filedDomain.closest("form")).not.toBeNull();
+    expect(purchasedDomain.closest("form")).not.toBe(
+      filedDomain.closest("form"),
+    );
+    expect(document.querySelector("form form")).toBeNull();
+    expect(screen.getByRole("button", { name: "提交备案结果" })).toBeDisabled();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -161,24 +258,33 @@ describe("AiWebsiteManagementWorkspace", () => {
     expect(onContactAdvisor).toHaveBeenCalledTimes(1);
 
     fireEvent.click(stageTwo);
-    fireEvent.click(stageThree);
     fireEvent.click(stageFour);
     expect(
       screen.getByRole("link", { name: /去阿里云查询并注册域名/ }),
     ).toHaveAttribute("href", "https://wanwang.aliyun.com/");
     expect(
+      screen.getByRole("link", { name: /去阿里云查询并注册域名/ }),
+    ).not.toHaveAttribute("target");
+    expect(
       screen.getByRole("link", { name: /去阿里云开始 ICP 备案/ }),
     ).toHaveAttribute("href", "https://beian.aliyun.com/");
-    const purchasedDomain = screen.getByLabelText("已购买域名");
-    expect(stageThree.closest("li")).toContainElement(purchasedDomain);
+    const smsVerificationLink = screen.getByRole("link", {
+      name: /查看工信部短信核验说明/,
+    });
+    const filingProgressLink = screen.getByRole("link", {
+      name: /查看备案进度与结果/,
+    });
+    for (const link of [smsVerificationLink, filingProgressLink]) {
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
     expect(screen.getByText("域名购买完成后，在这里提交")).toBeInTheDocument();
-    expect(screen.queryByLabelText("ICP 主体备案号")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "提交工单" }),
+      screen.queryByRole("button", { name: "提交需求" }),
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "提交域名，创建 AI 运维工单",
+        name: "提交域名，创建 AI 运维需求",
       }),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText(/上传营业执照/)).not.toBeInTheDocument();
@@ -202,6 +308,7 @@ describe("AiWebsiteManagementWorkspace", () => {
     const stageOne = screen.getByRole("button", {
       name: /准备资料，创建企业域名信息模板并完成实名认证/,
     });
+    fireEvent.click(stageOne);
 
     const screenshot = screen.getByRole("img", {
       name: /阿里云企业备案主办者基础信息表单示例/,
@@ -229,7 +336,7 @@ describe("AiWebsiteManagementWorkspace", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("keeps the next stage locked while a domain ticket is pending", () => {
+  it("keeps the guide and filing fields visible while a domain ticket is pending", () => {
     render(
       <AiWebsiteManagementWorkspace
         planCode="advanced"
@@ -258,14 +365,30 @@ describe("AiWebsiteManagementWorkspace", () => {
 
     expect(
       screen.getByText(
-        "域名已提交，AI 运维工单正在处理。备案服务码会在工单完成后返回，请勿重复提交。",
+        "备案服务码会在域名需求完成后显示在下方接收处，请勿重复提交。",
       ),
     ).toBeInTheDocument();
+    const serviceCodeReceipt = screen
+      .getByText("备案服务码接收处")
+      .closest("section");
+    expect(serviceCodeReceipt).toHaveTextContent(
+      "等待 AI 运维工程师在域名需求内提供备案服务码。",
+    );
     expect(
-      screen.queryByRole("button", { name: "提交工单" }),
+      screen.getByText("等待 AI 运维工程师在域名需求内提供备案服务码。"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("已备案域名")).toBeInTheDocument();
+    expect(screen.getByLabelText("ICP 主体备案号")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交备案结果" })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "提交需求" }),
     ).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "需求记录" })[0]!);
+    expect(
+      screen.getByRole("dialog", { name: "官网需求记录" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("申请企业域名")).toBeInTheDocument();
-    expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
+    expect(screen.getByText("域名确认中")).toBeInTheDocument();
   });
 
   it("opens a nonterminal website ticket when the customer must supplement it", () => {
@@ -288,8 +411,6 @@ describe("AiWebsiteManagementWorkspace", () => {
             topic: "example.cn",
             status: "needs_information",
             publicStatus: "pending",
-            publicStage: "action_required",
-            publicStageLabel: "待您补充",
             publicSummary: "请确认域名实名认证状态。",
             revision: 2,
           },
@@ -299,12 +420,48 @@ describe("AiWebsiteManagementWorkspace", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /example\.cn.*待您补充/,
-      }),
-    );
+    fireEvent.click(screen.getAllByRole("button", { name: "需求记录" })[0]!);
+    fireEvent.click(screen.getByText("example.cn").closest("button")!);
     expect(onOpenTicket).toHaveBeenCalledWith("domain-needs-information");
+  });
+
+  it("shows the service code from the current delivered domain ticket", async () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainStatus: "completed",
+          icpStatus: "not_started",
+          canSubmitIcp: true,
+          canSubmitContent: false,
+        }}
+        tickets={[
+          {
+            id: "domain-completed",
+            type: "website_operation",
+            category: "domain_application",
+            topic: "example.cn",
+            status: "completed",
+            publicStatus: "completed",
+            publicSummary: "备案服务码：ABC-123",
+            revision: 2,
+          },
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("备案服务码接收处")).toBeInTheDocument();
+    expect(
+      screen.getByText("ABC-123", { selector: "code" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("等待 AI 运维工程师在域名需求内提供备案服务码。"),
+    ).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByLabelText("已备案域名")).toHaveValue("example.cn"),
+    );
   });
 
   it("submits the purchased domain as an AI operations work order", async () => {
@@ -324,17 +481,12 @@ describe("AiWebsiteManagementWorkspace", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /回到 FrontMind 提交已购买域名，等待备案服务码/,
-      }),
-    );
     fireEvent.change(screen.getByLabelText("已购买域名"), {
       target: { value: "example.cn" },
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "提交域名，创建 AI 运维工单",
+        name: "提交域名，创建 AI 运维需求",
       }),
     );
 
@@ -350,9 +502,15 @@ describe("AiWebsiteManagementWorkspace", () => {
     );
     expect(
       screen.getByText(
-        "域名已提交，AI 运维工单已创建。请等待工单返回备案服务码。",
+        "域名已提交，AI 运维需求已创建。请等待需求返回备案服务码。",
       ),
     ).toBeInTheDocument();
+    const submitButton = screen.getByRole("button", {
+      name: "提交域名，创建 AI 运维需求",
+    });
+    expect(submitButton).toBeDisabled();
+    fireEvent.click(submitButton);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("shows only the two domestic tutorials for domestic accounts", () => {
@@ -391,9 +549,27 @@ describe("AiWebsiteManagementWorkspace", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: /确认企业主体已有备案，本次域名尚未备案/,
+        name: /回到 FrontMind 提交本次域名，等待 AI 运维返回服务码/,
       }),
     ).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByRole("button", {
+        name: /完成审核并回填备案结果/,
+      }),
+    ).toHaveAttribute("aria-expanded", "true");
+    const existingFilingProgressLink = screen.getByRole("link", {
+      name: /查看备案进度与结果/,
+    });
+    expect(existingFilingProgressLink).toHaveAttribute("target", "_blank");
+    expect(existingFilingProgressLink).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /确认企业主体已有备案，本次域名尚未备案/,
+      }),
+    );
     expect(
       screen.getByRole("img", {
         name: /阿里云官方 ICP 备案完整流程图/,
@@ -465,21 +641,23 @@ describe("AiWebsiteManagementWorkspace", () => {
         name: "国内版 · 已有 ICP 备案",
       }),
     ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /回到 FrontMind 按海外版提交域名/,
-      }),
-    );
     expect(
       screen.getByText("海外版域名购买完成后，在这里提交"),
     ).toBeInTheDocument();
+    expect(screen.getByText("企业域名注册与确认")).toBeInTheDocument();
+    expect(
+      screen.queryByText("阿里云域名注册与 ICP 备案"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("待域名确认");
 
     fireEvent.change(screen.getByLabelText("已购买域名"), {
       target: { value: "example.com" },
     });
     fireEvent.click(
       screen.getByRole("button", {
-        name: "提交域名，创建 AI 运维工单",
+        name: "提交域名，创建 AI 运维需求",
       }),
     );
 
@@ -496,7 +674,7 @@ describe("AiWebsiteManagementWorkspace", () => {
     );
     expect(
       screen.getByText(
-        "海外版域名已提交，AI 运维工单已创建。无需办理 ICP 备案。",
+        "海外版域名已提交，AI 运维需求已创建。无需办理 ICP 备案。",
       ),
     ).toBeInTheDocument();
   });
@@ -523,7 +701,9 @@ describe("AiWebsiteManagementWorkspace", () => {
     const lastTutorialStage = screen.getByRole("button", {
       name: /完成审核并回填备案结果/,
     });
-    const filingTicket = screen.getByText("提交备案信息工单");
+    const filingTicket = screen.getByText("备案信息回填处");
+    expect(lastTutorialStage).toHaveAttribute("aria-expanded", "true");
+    expect(lastTutorialStage.closest("li")).toContainElement(filingTicket);
     const securityNotice = screen.getByText(/不会索要阿里云密码/);
     expect(
       lastTutorialStage.compareDocumentPosition(filingTicket) &
@@ -533,6 +713,12 @@ describe("AiWebsiteManagementWorkspace", () => {
       filingTicket.compareDocumentPosition(securityNotice) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    fireEvent.click(lastTutorialStage);
+    expect(screen.queryByText("备案信息回填处")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "我已取得备案号，去填写结果" }),
+    );
+    expect(screen.getByText("备案信息回填处")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("已备案域名"), {
       target: { value: "example.cn" },
@@ -562,6 +748,65 @@ describe("AiWebsiteManagementWorkspace", () => {
     );
   });
 
+  it("never exposes the domestic filing form to an overseas account", () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        marketEdition="overseas"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainStatus: "completed",
+          icpStatus: "not_started",
+          canSubmitIcp: true,
+          canSubmitContent: false,
+        }}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByLabelText("已备案域名")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("ICP 主体备案号")).not.toBeInTheDocument();
+    expect(screen.queryByText("备案服务码接收处")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "提交备案结果" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the overseas build stage after domain confirmation while waiting for style approval", () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        marketEdition="overseas"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainCompleted: true,
+          icpCompleted: true,
+          canSubmitDomain: false,
+          canSubmitIcp: false,
+          canSubmitContent: false,
+          styleState: "waiting_samples",
+          styleConfirmed: false,
+        }}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    const prerequisiteStep = screen
+      .getByText("企业域名注册与确认")
+      .closest("li");
+    const contentStep = screen
+      .getByText("AI专用官网构建与内容运营")
+      .closest("li");
+    expect(prerequisiteStep).toHaveTextContent("域名已确认");
+    expect(contentStep).toHaveAttribute("data-state", "pending");
+    expect(contentStep).toHaveTextContent("待风格确认");
+    expect(
+      screen.getByRole("heading", { name: "选择 AI 专用官网图片风格" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("ICP 主体备案号")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("需求类型")).not.toBeInTheDocument();
+  });
+
   it("offers exactly five content categories after ICP is complete", () => {
     render(
       <AiWebsiteManagementWorkspace
@@ -579,6 +824,9 @@ describe("AiWebsiteManagementWorkspace", () => {
     );
 
     const select = screen.getByLabelText("需求类型");
+    expect(
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("已开放");
     expect(select).toContainHTML("企业资料与品牌事实");
     for (const label of [
       "企业资料与品牌事实",
@@ -594,6 +842,37 @@ describe("AiWebsiteManagementWorkspace", () => {
       screen.queryByRole("option", { name: "官网技术诊断" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("目标页面（选填）")).not.toBeInTheDocument();
+  });
+
+  it("keeps content submission locked while the confirmed website is being built", () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainCompleted: true,
+          icpCompleted: true,
+          styleState: "confirmed",
+          styleConfirmed: true,
+          websiteBuildStatus: "pending",
+          canSubmitContent: false,
+          contentLockReason:
+            "官网风格已确认，正在等待 AI 运维工程师或系统管理员完成官网构建并登记公开链接。",
+        }}
+        contentCatalog={websiteContentCatalog}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("AI专用官网构建与内容运营").closest("li"),
+    ).toHaveTextContent("官网构建中");
+    expect(
+      screen.getByText(
+        "官网风格已确认，正在等待 AI 运维工程师或系统管理员完成官网构建并登记公开链接。",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("需求类型")).not.toBeInTheDocument();
   });
 
   it("requires the customer to select or reject one batch of exactly three style samples", async () => {
@@ -684,10 +963,10 @@ describe("AiWebsiteManagementWorkspace", () => {
     fireEvent.change(screen.getByLabelText("参考资料（选填）"), {
       target: { value: "https://example.com/source" },
     });
-    fireEvent.change(screen.getByLabelText("上传官网工单附件"), {
+    fireEvent.change(screen.getByLabelText("上传官网需求附件"), {
       target: { files: [sourceFile] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交工单" }));
+    fireEvent.click(screen.getByRole("button", { name: "提交需求" }));
 
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith({
@@ -742,13 +1021,74 @@ describe("AiWebsiteManagementWorkspace", () => {
               },
             ],
           },
+          {
+            id: "question-catalog",
+            type: "website_operation",
+            category: "question_catalog",
+            topic: "配置品牌词库与问题目录",
+            status: "submitted",
+            publicStatus: "pending",
+          },
+          {
+            id: "initial-monitoring",
+            type: "website_operation",
+            category: "initial_monitoring",
+            topic: "执行首次问题监控",
+            status: "submitted",
+            publicStatus: "pending",
+          },
+          {
+            id: "website-style",
+            type: "website_operation",
+            category: "website_style_samples",
+            categoryLabel: "website_style_samples",
+            topic: "确认官网图片风格",
+            status: "completed",
+            publicStatus: "completed",
+          },
+          {
+            id: "website-build",
+            type: "website_operation",
+            category: "website_build",
+            categoryLabel: "website_build",
+            topic: "website_build",
+            status: "completed",
+            publicStatus: "completed",
+          },
+          {
+            id: "site-check",
+            type: "website_operation",
+            category: "site_check",
+            categoryLabel: "site_check",
+            topic: "检查已发布官网页面",
+            status: "completed",
+            publicStatus: "completed",
+          },
         ]}
         onSubmit={vi.fn()}
       />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "需求记录" }));
+    expect(
+      screen.getByRole("dialog", { name: "官网需求记录" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("更新企业资料")).toBeInTheDocument();
     expect(screen.getByText("发布企业动态")).toBeInTheDocument();
+    expect(
+      screen.queryByText("配置品牌词库与问题目录"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("执行首次问题监控")).not.toBeInTheDocument();
+    expect(screen.getByText("确认官网图片风格")).toBeInTheDocument();
+    expect(screen.getByText("检查已发布官网页面")).toBeInTheDocument();
+    expect(screen.getByText("官网图片风格")).toBeInTheDocument();
+    expect(screen.getByText("AI 专用官网构建")).toBeInTheDocument();
+    expect(screen.getByText("站点检查")).toBeInTheDocument();
+    expect(screen.getByText("企业资料与品牌事实")).toBeInTheDocument();
+    expect(screen.getByText("企业新闻与动态")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/website_style_samples|website_build|site_check/),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText("这段过程回复不能在列表显示。"),
     ).not.toBeInTheDocument();
@@ -756,9 +1096,52 @@ describe("AiWebsiteManagementWorkspace", () => {
     expect(screen.queryByText(/2026/)).not.toBeInTheDocument();
     expect(screen.queryByText(/交付文件/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("发布企业动态"));
-    expect(screen.getByText("处理结果")).toBeInTheDocument();
-    expect(screen.getByText("已完成企业动态内容更新。")).toBeInTheDocument();
+    expect(screen.getByText(/已完成企业动态内容更新。/)).toBeInTheDocument();
+  });
+
+  it("opens a focused demand history from the current website step", async () => {
+    render(
+      <AiWebsiteManagementWorkspace
+        planCode="advanced"
+        quota={websiteQuota()}
+        websiteWorkflow={{
+          domainStatus: "completed",
+          icpStatus: "completed",
+          canSubmitContent: true,
+        }}
+        contentCatalog={websiteContentCatalog}
+        tickets={[
+          {
+            id: "facts",
+            type: "website_operation",
+            category: "company_facts",
+            topic: "企业事实历史",
+            publicStatus: "pending",
+          },
+          {
+            id: "news",
+            type: "website_operation",
+            category: "company_news",
+            topic: "企业新闻历史",
+            publicStatus: "completed",
+          },
+        ]}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("需求类型"), {
+      target: { value: "company_news" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "需求记录" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: "官网需求记录" }),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByText("企业新闻历史")).toBeInTheDocument();
+    expect(screen.getByText("企业事实历史")).toBeInTheDocument();
   });
 
   it("does not invent a preview domain or technical check result", () => {
@@ -795,6 +1178,7 @@ describe("AiWebsiteManagementWorkspace", () => {
       />,
     );
 
+    fireEvent.click(screen.getAllByRole("button", { name: "需求记录" })[0]!);
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });

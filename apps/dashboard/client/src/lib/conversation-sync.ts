@@ -10,6 +10,8 @@ type QueueEntry<T extends { id: string }> = {
   timerIsImmediate: boolean;
   retryDelayMs: number;
   lastAttemptFailed: boolean;
+  /** A non-retryable transport result still owns unsaved local state. */
+  blocked: boolean;
 };
 
 export interface ConversationSyncQueueOptions<T extends { id: string }> {
@@ -71,6 +73,19 @@ export class ConversationSyncQueue<T extends { id: string }> {
     return results.every(Boolean);
   }
 
+  /** Flush one conversation before dispatching work that depends on its ACK. */
+  async flushConversation(id: string) {
+    const entry = this.entries.get(id);
+    if (!entry) return true;
+    return this.flushEntry(id, entry);
+  }
+
+  /** Whether local state for this conversation has not received an ACK. */
+  isDirty(id: string) {
+    const entry = this.entries.get(id);
+    return Boolean(entry && (entry.pending || entry.running));
+  }
+
   /** Drop queued writes when the authenticated account changes. */
   reset() {
     this.generation += 1;
@@ -78,6 +93,19 @@ export class ConversationSyncQueue<T extends { id: string }> {
       if (entry.timer) clearTimeout(entry.timer);
     }
     this.entries.clear();
+  }
+
+  /**
+   * Fence one conversation after an authoritative server-side deletion/reset.
+   * An already-running transport cannot always be aborted, but removing its
+   * lane guarantees that its completion cannot enqueue, retry, or acknowledge
+   * any stale snapshot locally.
+   */
+  cancel(id: string) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    if (entry.timer) clearTimeout(entry.timer);
+    this.entries.delete(id);
   }
 
   private getEntry(id: string): QueueEntry<T> {
@@ -92,6 +120,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
       timerIsImmediate: false,
       retryDelayMs: 1_000,
       lastAttemptFailed: false,
+      blocked: false,
     };
     this.entries.set(id, entry);
     return entry;
@@ -130,6 +159,8 @@ export class ConversationSyncQueue<T extends { id: string }> {
       }
       if (!entry.running && !entry.pending) return true;
 
+      // Explicit flush/retry is allowed to re-attempt a blocked dirty snapshot.
+      entry.blocked = false;
       await this.drain(id, entry);
       if (entry.lastAttemptFailed) return false;
     }
@@ -142,6 +173,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
     entry.pending = null;
     entry.running = true;
     entry.lastAttemptFailed = false;
+    entry.blocked = false;
 
     try {
       if (operation.kind === "snapshot") {
@@ -160,8 +192,12 @@ export class ConversationSyncQueue<T extends { id: string }> {
 
       this.options.onError?.(error);
       if (this.options.shouldRetry?.(error, operation) === false) {
-        entry.pending = null;
-        entry.lastAttemptFailed = false;
+        // FORBIDDEN/CONFLICT/etc. are not proof that the local snapshot may be
+        // discarded. Keep the latest state blocked and dirty until an explicit
+        // retry or a newer local snapshot replaces it.
+        if (!entry.pending) entry.pending = operation;
+        entry.lastAttemptFailed = true;
+        entry.blocked = true;
         this.options.onPermanentError?.(error, operation);
         return;
       }
@@ -181,7 +217,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
       if (generation !== this.generation || this.entries.get(id) !== entry)
         return;
 
-      if (entry.pending && !entry.timer) {
+      if (entry.pending && !entry.timer && !entry.blocked) {
         this.schedule(id, entry, 0);
       } else if (!entry.pending && !entry.timer) {
         this.entries.delete(id);

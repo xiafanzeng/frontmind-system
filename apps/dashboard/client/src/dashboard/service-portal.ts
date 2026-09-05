@@ -1,3 +1,5 @@
+import { SERVICE_PLAN_CATALOG } from "@shared/service-portal";
+
 export type ServicePlanCode = "basic" | "advanced" | "luxury" | "unknown";
 
 export type ServiceCapabilityKey =
@@ -10,6 +12,7 @@ export type ServiceCapabilityKey =
   | "monitoring"
   | "channelDistribution"
   | "progressReport"
+  | "brandTracking"
   | "contentAssets";
 
 export type ServiceAction = {
@@ -30,8 +33,31 @@ export type ServiceQuota = {
   key: "basicQuestion" | "industry" | "competitor" | "reputation" | "scenario";
   label: string;
   limit: number | null;
+  /** Full-contract entitlement. `limit` remains the currently unlocked cap. */
+  entitlementLimit?: number | null;
   used: number | null;
   unit: string;
+};
+
+export type ServiceQuotaCapacityState =
+  | "available"
+  | "awaiting_unlock"
+  | "exhausted";
+
+export type ServiceQuotaUnlock = {
+  current: number | null;
+  total: number | null;
+  nextUnlockAt: string | null;
+  capacityState: ServiceQuotaCapacityState | null;
+};
+
+const CANONICAL_KEYWORD_QUOTA_LABELS: Partial<
+  Record<ServiceQuota["key"], string>
+> = {
+  industry: "行业排名词",
+  competitor: "竞品对比词",
+  reputation: "美誉舆情词",
+  scenario: "产品场景词",
 };
 
 export type PurchasedServiceQuestion = {
@@ -48,6 +74,7 @@ export type PurchasedServiceQuestion = {
   intentConfirmedRevision: number | null;
   intentConfirmedAt: number | null;
   intentConfirmed: boolean;
+  responseLogicConfirmed?: boolean;
 };
 
 export type ServiceWorkflowStep = {
@@ -82,6 +109,8 @@ export type ServicePortalView = {
     validUntil: string;
   };
   quotas: ServiceQuota[];
+  /** Present only when the server publishes an authoritative unlock schedule. */
+  quotaUnlock?: ServiceQuotaUnlock;
   purchasedQuestions: PurchasedServiceQuestion[];
   historicalQuestions: PurchasedServiceQuestion[];
   workflowSteps: ServiceWorkflowStep[];
@@ -122,6 +151,7 @@ const CAPABILITY_KEYS: ServiceCapabilityKey[] = [
   "monitoring",
   "channelDistribution",
   "progressReport",
+  "brandTracking",
   "contentAssets",
 ];
 
@@ -173,6 +203,12 @@ const CAPABILITY_ALIASES: Record<ServiceCapabilityKey, string[]> = {
     "progress_report",
     "optimizationReport",
     "optimization_report",
+  ],
+  brandTracking: [
+    "brandTracking",
+    "brand_tracking",
+    "publicOpinion",
+    "public_opinion",
   ],
   contentAssets: [
     "contentAssets",
@@ -342,6 +378,7 @@ function normalizeCapability(value: unknown): ServiceCapability {
           "preparing",
           "importing",
           "processing",
+          "workflow_prerequisite",
           "service_pending_confirmation",
           "service_scheduled",
         ].includes(rawStatus)
@@ -400,6 +437,25 @@ function quotaFromRecord(
       firstValue(record, ["limit", "total", "quota", "included"]),
     ),
     used: numberValue(firstValue(record, ["used", "selected", "consumed"])),
+    ...(numberValue(
+      firstValue(record, [
+        "entitlementLimit",
+        "entitlement_limit",
+        "contractLimit",
+        "contract_limit",
+      ]),
+    ) !== null
+      ? {
+          entitlementLimit: numberValue(
+            firstValue(record, [
+              "entitlementLimit",
+              "entitlement_limit",
+              "contractLimit",
+              "contract_limit",
+            ]),
+          ),
+        }
+      : {}),
     unit: textValue(
       firstValue(record, ["unit"]),
       key === "basicQuestion" ? "个问题" : "个词",
@@ -421,16 +477,26 @@ function normalizeQuotas(
   const quotaArray = arrayValue(quotaValue);
   const limitRecord = firstRecord(quotaRecord, ["limits", "limit"]);
   const usageRecord = firstRecord(quotaRecord, ["usage", "used"]);
+  const entitlementRecord = firstRecord(quotaRecord, [
+    "entitlementLimits",
+    "entitlement_limits",
+    "contractLimits",
+    "contract_limits",
+  ]);
 
   if (Object.keys(limitRecord).length > 0) {
     const limit = (key: string) => numberValue(limitRecord[key]) || 0;
     const used = (key: string) => numberValue(usageRecord[key]) || 0;
+    const entitlement = (key: string) => numberValue(entitlementRecord[key]);
     if (planCode === "basic") {
       return [
         {
           key: "basicQuestion",
           label: "已购问题",
           limit: limit("totalQuestionLimit"),
+          ...(entitlement("totalQuestionLimit") !== null
+            ? { entitlementLimit: entitlement("totalQuestionLimit") }
+            : {}),
           used: used("total"),
           unit: "个问题",
         },
@@ -439,8 +505,11 @@ function normalizeQuotas(
     return [
       {
         key: "industry",
-        label: "行业词",
+        label: "行业排名词",
         limit: limit("industryLimit"),
+        ...(entitlement("industryLimit") !== null
+          ? { entitlementLimit: entitlement("industryLimit") }
+          : {}),
         used: used("industry"),
         unit: "个词",
       },
@@ -448,6 +517,11 @@ function normalizeQuotas(
         key: "competitor",
         label: "竞品对比词",
         limit: limit("competitorComparisonLimit"),
+        ...(entitlement("competitorComparisonLimit") !== null
+          ? {
+              entitlementLimit: entitlement("competitorComparisonLimit"),
+            }
+          : {}),
         used: used("competitorComparison"),
         unit: "个词",
       },
@@ -455,6 +529,9 @@ function normalizeQuotas(
         key: "reputation",
         label: "美誉舆情词",
         limit: limit("reputationLimit"),
+        ...(entitlement("reputationLimit") !== null
+          ? { entitlementLimit: entitlement("reputationLimit") }
+          : {}),
         used: used("reputation"),
         unit: "个词",
       },
@@ -462,6 +539,9 @@ function normalizeQuotas(
         key: "scenario",
         label: "产品场景词",
         limit: limit("productScenarioLimit"),
+        ...(entitlement("productScenarioLimit") !== null
+          ? { entitlementLimit: entitlement("productScenarioLimit") }
+          : {}),
         used: used("productScenario"),
         unit: "个词",
       },
@@ -486,10 +566,11 @@ function normalizeQuotas(
       return {
         ...quotaFromRecord(
           key,
-          textValue(
-            firstValue(record, ["label", "name"]),
-            `服务配额 ${index + 1}`,
-          ),
+          CANONICAL_KEYWORD_QUOTA_LABELS[key] ??
+            textValue(
+              firstValue(record, ["label", "name"]),
+              `服务配额 ${index + 1}`,
+            ),
           record,
         ),
       };
@@ -508,7 +589,7 @@ function normalizeQuotas(
     },
     {
       key: "industry",
-      label: "行业词",
+      label: "行业排名词",
       aliases: ["industry", "industryKeywords", "industry_keywords"],
     },
     {
@@ -549,6 +630,88 @@ function normalizeQuotas(
   });
 
   return normalized;
+}
+
+function normalizeQuotaUnlock(
+  rawPortal: Record<string, unknown>,
+): ServiceQuotaUnlock | undefined {
+  const directUnlockRecord = firstRecord(rawPortal, [
+    "quotaUnlock",
+    "quota_unlock",
+  ]);
+  const quotaRecord = asRecord(
+    firstValue(rawPortal, [
+      "quotas",
+      "quota",
+      "serviceQuotas",
+      "service_quotas",
+    ]),
+  );
+  if (
+    Object.keys(quotaRecord).length === 0 &&
+    Object.keys(directUnlockRecord).length === 0
+  ) {
+    return undefined;
+  }
+
+  const stageRecord =
+    Object.keys(directUnlockRecord).length > 0
+      ? directUnlockRecord
+      : firstRecord(quotaRecord, ["unlockStage", "unlock_stage"]);
+  const current = numberValue(
+    firstValue(stageRecord, ["current", "ordinal", "stage"]),
+  );
+  const total = numberValue(
+    firstValue(stageRecord, ["total", "count", "stages"]),
+  );
+  const unlockSource =
+    Object.keys(directUnlockRecord).length > 0
+      ? directUnlockRecord
+      : quotaRecord;
+  const rawNextUnlockAt = firstValue(unlockSource, [
+    "nextUnlockAt",
+    "next_unlock_at",
+  ]);
+  const nextUnlockAt =
+    typeof rawNextUnlockAt === "string" ||
+    (typeof rawNextUnlockAt === "number" && Number.isFinite(rawNextUnlockAt))
+      ? String(rawNextUnlockAt).trim() || null
+      : null;
+  const rawCapacityState = textValue(
+    firstValue(unlockSource, ["capacityState", "capacity_state"]),
+  ).toLowerCase();
+  const capacityState: ServiceQuotaCapacityState | null = [
+    "available",
+    "awaiting_unlock",
+    "exhausted",
+  ].includes(rawCapacityState)
+    ? (rawCapacityState as ServiceQuotaCapacityState)
+    : null;
+  const entitlementRecord = firstRecord(quotaRecord, [
+    "entitlementLimits",
+    "entitlement_limits",
+  ]);
+
+  if (
+    current === null &&
+    total === null &&
+    nextUnlockAt === null &&
+    capacityState === null &&
+    Object.keys(entitlementRecord).length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    current:
+      current !== null && Number.isInteger(current) && current > 0
+        ? current
+        : null,
+    total:
+      total !== null && Number.isInteger(total) && total > 0 ? total : null,
+    nextUnlockAt,
+    capacityState,
+  };
 }
 
 function normalizeQuestionKind(
@@ -653,6 +816,12 @@ function normalizeQuestions(
           boolValue(
             firstValue(record, ["intentConfirmed", "intent_confirmed"]),
           ) ?? false,
+        responseLogicConfirmed: boolValue(
+          firstValue(record, [
+            "responseLogicConfirmed",
+            "response_logic_confirmed",
+          ]),
+        ),
       } satisfies PurchasedServiceQuestion,
     ];
   });
@@ -770,6 +939,7 @@ export function createUnavailableServicePortal(): ServicePortalView {
       validUntil: "",
     },
     quotas: [],
+    quotaUnlock: undefined,
     purchasedQuestions: [],
     historicalQuestions: [],
     workflowSteps: [],
@@ -860,7 +1030,7 @@ export function normalizeServicePortal(raw: unknown): ServicePortalView {
       allowed: false,
       effectiveStatus: "locked",
       reason:
-        "普通版已包含官网生成的初步知识库展示，不包含对话式知识库构建。升级进阶版或豪华版后可解锁。",
+        "普通版不包含知识库智能体；知识库由 Website 流程自动同步至本账号，服务团队可补录。升级进阶版或豪华版后可解锁知识库智能体。",
       nextAction: {
         kind: "upgrade",
         label: "查看升级方案",
@@ -954,6 +1124,7 @@ export function normalizeServicePortal(raw: unknown): ServicePortalView {
       ),
     },
     quotas: normalizeQuotas(portal, planCode),
+    quotaUnlock: normalizeQuotaUnlock(portal),
     purchasedQuestions: normalizeQuestions(portal),
     historicalQuestions: normalizeQuestions(
       portal,
@@ -990,7 +1161,7 @@ export function normalizeServicePortal(raw: unknown): ServicePortalView {
           "source_kind",
         ]),
         firstValue(planRecord, ["source"]) === "website"
-          ? "官网初步知识库"
+          ? "Website 流程同步知识库"
           : "",
       ),
       updatedAt: textValue(
@@ -1037,8 +1208,21 @@ export function getRouteCapability(
   if (section === "progress" && sub === "optimization") {
     return "progressReport";
   }
+  if (section === "public-opinion" && sub === "brand-tracking") {
+    return "brandTracking";
+  }
   if (section === "semantic") return "contentAssets";
   return null;
+}
+
+export function isCapabilityIncludedInPlan(
+  planCode: ServicePlanCode,
+  key: ServiceCapabilityKey,
+): boolean {
+  // A sidebar lock describes the purchased plan, not a temporary workflow or
+  // service lifecycle gate. Avoid claiming exclusion until the plan is known.
+  if (planCode === "unknown") return true;
+  return SERVICE_PLAN_CATALOG[planCode].includedCapabilities[key];
 }
 
 export function getCapability(
@@ -1064,6 +1248,23 @@ export function getCapability(
   const step = stepId
     ? portal.workflowSteps.find((candidate) => candidate.id === stepId)
     : undefined;
+  const knowledgeStep = portal.workflowSteps.find(
+    (candidate) => candidate.id === "knowledge",
+  );
+  const knowledgeReady = knowledgeStep
+    ? knowledgeStep.status === "complete"
+    : portal.knowledgeBase.status === "ready";
+  if (key === "contentAssets" && explicit.allowed && !knowledgeReady) {
+    return {
+      allowed: false,
+      effectiveStatus: "pending",
+      reason:
+        portal.plan.code === "basic"
+          ? "请先等待 Website 流程自动同步或服务团队补录知识库；知识库展示完成后解锁 AI 友好内容资产。"
+          : "请先在知识库智能体中完成全部节点并发布当前服务的认证知识库；知识库展示完成后解锁 AI 友好内容资产。",
+      nextAction: knowledgeStep?.nextAction ?? portal.primaryNextAction,
+    } satisfies ServiceCapability;
+  }
   if (
     key === "knowledgeDisplay" &&
     explicit.allowed &&

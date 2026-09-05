@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { filePreviewSource } from "./file-preview-source";
+import {
+  filePreviewSource,
+  managedLocalAssetContentUrl,
+} from "./file-preview-source";
 
 describe("filePreviewSource", () => {
+  it("routes only Dashboard local asset identities to local content", () => {
+    expect(managedLocalAssetContentUrl(`asset_${"a".repeat(30)}`)).toBe(
+      `/api/frontmind/v2/assets/asset_${"a".repeat(30)}/content`,
+    );
+    expect(managedLocalAssetContentUrl("provider-file-1")).toBeNull();
+  });
   it("prefers in-session bytes and keeps their immutable deadline", () => {
     const file = new File(["pdf"], "report.pdf", { type: "application/pdf" });
     expect(

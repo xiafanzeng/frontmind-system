@@ -14,6 +14,10 @@ import MarkdownRenderer from "@/components/MarkdownRenderer";
 import type { IntentQuestionGroup } from "@/components/ResponseLogicWorkspace";
 import { trpc } from "@/lib/trpc";
 import type { DashboardPayload } from "@shared/dashboard";
+import {
+  keywordCategoryKey,
+  keywordCategoryTone,
+} from "@shared/keyword-categories";
 import "./question-monitoring-workspace.css";
 
 const categoryOrder = ["reputation", "basic", "ranking", "comparison"] as const;
@@ -306,11 +310,13 @@ function buildManagedMonitoringData(
       })),
     };
 
+    const semanticTone =
+      keywordCategoryTone(group.id) || keywordCategoryTone(group.title);
     meta[group.id] = {
       label: group.title,
       eyebrow: group.title,
       description: group.subtitle || "企业问题监测",
-      tone: group.tone || "plum",
+      tone: semanticTone || group.tone || "plum",
       icon: managedCategoryIcons[groupIndex % managedCategoryIcons.length],
     };
 
@@ -1079,10 +1085,13 @@ export default function QuestionMonitoringWorkspace({
             const meta = activeCategoryMeta[intent.id];
             const Icon = meta.icon;
             const active = intent.id === selectedIntent.id;
+            const categoryKey =
+              keywordCategoryKey(intent.id) || keywordCategoryKey(meta.label);
             return (
               <button
                 type="button"
                 key={intent.id}
+                data-category={categoryKey || undefined}
                 className={`${meta.tone} ${active ? "active" : ""}`}
                 aria-pressed={active}
                 onClick={() => selectCategory(intent)}
@@ -1259,10 +1268,8 @@ export default function QuestionMonitoringWorkspace({
                   </div>
                 ) : (
                   <div className="question-monitor-answer-empty">
-                    <strong>当前问题尚无答案样本</strong>
-                    <p>
-                      管理员完成采集或导入后，可在这里按箭头连续查看全部平台答案。
-                    </p>
+                    <strong>等待同步答案记录</strong>
+                    <p>查看各AI平台的答案与引用信源记录</p>
                   </div>
                 )}
               </section>

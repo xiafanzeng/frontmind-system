@@ -4,11 +4,18 @@
  * Features: Message display, file/image attachments, status indicators,
  *           local PDF.js reader, inline Markdown reader, HTML file preview.
  */
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   useConversation,
   type Attachment,
   type KnowledgeBaseClientNotice,
+  type KnowledgeBaseClientState,
   type LocalMessage,
 } from "@/contexts/ConversationContext";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -36,12 +43,22 @@ import {
 import { cn, copyToClipboard } from "@/lib/utils";
 import {
   creditEventBus,
+  cancelKnowledgeBaseStartReservation,
   deliveryProjectHeaders,
+  discardManagedUploadIntent,
+  discardUnboundUpload,
   getModelDisplayName,
+  reserveKnowledgeBaseStart,
   sanitizeBrandText,
-  uploadFile,
+  stageKnowledgeBaseTurnAttachment,
+  uploadKnowledgeBaseLocalAsset,
+  type FileUploadRecordEvent,
+  type KnowledgeBaseAttachmentManifestItem,
+  type ManagedUploadHandle,
   type OutputMessage,
   type ResponseLogicTaskContext,
+  type UploadRecoveryAction,
+  type UploadFileOptions,
 } from "@/lib/frontmind-api";
 import ChatInput from "./ChatInput";
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
@@ -62,19 +79,27 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import type { KnowledgeBaseInteractionDto } from "@shared/knowledge-base-progress";
 import { trpc } from "@/lib/trpc";
 import {
+  KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE,
+  requestKnowledgeBaseReset,
+  executeKnowledgeBaseRecovery,
   knowledgeBaseObservationFromPayload,
   reconcileKnowledgeBaseObservation,
+  recoverKnowledgeBaseCanonicalFromSnapshot,
   retryKnowledgeBaseTurn,
   type KnowledgeBaseObservationDto,
 } from "@/lib/knowledge-progress";
+import KnowledgeBaseLogoProvenanceRepair from "./KnowledgeBaseLogoProvenanceRepair";
+import KnowledgeBaseAttachmentRepair from "./KnowledgeBaseAttachmentRepair";
 import {
   assertChatAttachmentSizes,
   chatAttachmentSizeError,
   normalizedKnowledgeBaseUploadFilename,
+  normalizedKnowledgeBaseUploadMimeType,
 } from "@/lib/attachment-files";
 import { isAttachmentExpired } from "@/lib/attachment-expiry";
 
@@ -87,31 +112,211 @@ export function runningAssistantStatusText(syncKnowledgeBaseSnapshot: boolean) {
     : "FrontMind AI 正在处理...";
 }
 
+export function isKnowledgeBaseTaskVisiblyRunning(input: {
+  status: string | undefined;
+  syncKnowledgeBaseSnapshot: boolean;
+  interactionState?: string | null;
+  noticeSeverity?: string | null;
+}) {
+  const taskIsRunning =
+    input.status === "running" || input.status === "pending";
+  if (!taskIsRunning) return false;
+  if (!input.syncKnowledgeBaseSnapshot) return true;
+  return (
+    input.interactionState !== "failed" && input.noticeSeverity !== "error"
+  );
+}
+
+export function scrollChatViewportToBottom(
+  viewport: Pick<HTMLElement, "scrollHeight" | "scrollTo">,
+) {
+  viewport.scrollTo({
+    top: viewport.scrollHeight,
+    behavior: "auto",
+  });
+}
+
 export const KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE =
   "PACKAGE_REBIND_REQUIRED";
 export const KNOWLEDGE_BASE_INTERNAL_ATTACHMENT_NOTICE_CODE =
   "KNOWLEDGE_BASE_ATTACHMENTS_REQUIRED";
+export const KNOWLEDGE_BASE_REBUILD_REQUIRED_NOTICE_CODE = "UPSTREAM_CREATE_3";
+export const KNOWLEDGE_BASE_NEW_BUILD_EVENT =
+  "frontmind:new-knowledge-base-build";
+const KNOWLEDGE_BASE_TRACE_ID_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/iu;
+const KNOWLEDGE_BASE_PRECREATE_ATTACHMENT_REPAIR_CODES = new Set([
+  "KNOWLEDGE_BASE_CLIENT_ATTACHMENT_INVALID",
+  "KNOWLEDGE_BASE_USER_ATTACHMENT_INVALID",
+]);
+
+function safeKnowledgeBaseTraceId(value: unknown) {
+  const normalized = String(value || "").trim();
+  return KNOWLEDGE_BASE_TRACE_ID_PATTERN.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+export function knowledgeBaseExplicitRecoveryRequest(
+  current: { recoveryToken: string; clientRequestId: string } | null,
+  recoveryToken: string,
+  createClientRequestId: () => string,
+) {
+  return current?.recoveryToken === recoveryToken
+    ? current
+    : { recoveryToken, clientRequestId: createClientRequestId() };
+}
 
 export function shouldRenderKnowledgeBaseNotice(
-  notice: Pick<KnowledgeBaseClientNotice, "code">,
+  _notice: Pick<KnowledgeBaseClientNotice, "code">,
 ) {
-  return notice.code !== KNOWLEDGE_BASE_INTERNAL_ATTACHMENT_NOTICE_CODE;
+  return true;
+}
+
+export function knowledgeBaseTaskWasNotCreated(
+  knowledgeBase:
+    | Pick<KnowledgeBaseClientState, "taskCreationState" | "failureStage">
+    | null
+    | undefined,
+) {
+  return Boolean(
+    knowledgeBase?.taskCreationState === "not_attempted" &&
+      (knowledgeBase.failureStage === "local_upload" ||
+        knowledgeBase.failureStage === "provider_file_registration"),
+  );
 }
 
 export function knowledgeBaseNoticeRecoveryMode(
-  notice: Pick<KnowledgeBaseClientNotice, "code">,
+  notice: Pick<
+    KnowledgeBaseClientNotice,
+    "code" | "recoveryAction" | "recoveryToken" | "canRegenerate"
+  >,
 ) {
-  return notice.code === KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE
-    ? ("reconcile" as const)
-    : ("new_turn" as const);
+  if (notice.code === KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE) {
+    return "reconcile" as const;
+  }
+  if (notice.code === KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE) {
+    return "logo_repair" as const;
+  }
+  if (
+    notice.code === KNOWLEDGE_BASE_INTERNAL_ATTACHMENT_NOTICE_CODE ||
+    notice.recoveryAction === "approve_reset" ||
+    notice.recoveryAction === "resume_start_from_retained_sources" ||
+    notice.recoveryAction === "reselect_start_sources"
+  ) {
+    return "reset" as const;
+  }
+  if (
+    (notice.recoveryAction === "retry_request" ||
+      notice.recoveryAction === "start_new_generation") &&
+    typeof notice.recoveryToken === "string" &&
+    /^[a-f0-9]{64}$/u.test(notice.recoveryToken)
+  ) {
+    return "explicit_recovery" as const;
+  }
+  if (
+    notice.recoveryAction === "reconcile" ||
+    notice.recoveryAction === "update_credential" ||
+    notice.recoveryAction === "top_up"
+  ) {
+    return "reconcile" as const;
+  }
+  if (notice.recoveryAction === "create_new_canonical_from_snapshot") {
+    return "canonical_recovery" as const;
+  }
+  if (
+    notice.canRegenerate === true &&
+    notice.recoveryAction === "regenerate_turn"
+  ) {
+    return "regenerate" as const;
+  }
+  return "none" as const;
 }
 
 export function knowledgeBaseNoticeRetryLabel(
+  notice: Pick<
+    KnowledgeBaseClientNotice,
+    "code" | "recoveryAction" | "recoveryToken" | "canRegenerate"
+  >,
+) {
+  return knowledgeBaseNoticeRecoveryMode(notice) === "explicit_recovery"
+    ? notice.recoveryAction === "start_new_generation"
+      ? "创建新任务继续"
+      : "确认后继续本轮"
+    : knowledgeBaseNoticeRecoveryMode(notice) === "reconcile"
+      ? notice.code === KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE
+        ? "重新绑定成品"
+        : notice.recoveryAction === "update_credential"
+          ? "更新凭证后继续本轮"
+          : notice.recoveryAction === "top_up"
+            ? "补充额度后继续本轮"
+            : "继续恢复本轮"
+      : knowledgeBaseNoticeRecoveryMode(notice) === "logo_repair"
+        ? "重新上传 Logo 原图"
+        : knowledgeBaseNoticeRecoveryMode(notice) === "reset"
+          ? "申请重置知识库"
+          : knowledgeBaseNoticeRecoveryMode(notice) === "canonical_recovery"
+            ? "创建新任务继续"
+            : knowledgeBaseNoticeRecoveryMode(notice) === "regenerate"
+              ? "重新生成本轮（将创建一次新的 API 任务）"
+              : "";
+}
+
+export function knowledgeBaseNoticeHasRecoveryAction(
+  notice: Pick<
+    KnowledgeBaseClientNotice,
+    "code" | "recoveryAction" | "recoveryToken" | "canRegenerate"
+  >,
+) {
+  return knowledgeBaseNoticeRecoveryMode(notice) !== "none";
+}
+
+export function knowledgeBaseReconcileResultRequiresConfirmation(
+  observation: Pick<KnowledgeBaseObservationDto, "notice">,
+) {
+  return Boolean(
+    observation.notice &&
+      knowledgeBaseNoticeRecoveryMode({
+        ...observation.notice,
+        recoveryToken: observation.notice.recoveryToken ?? undefined,
+      }) === "explicit_recovery",
+  );
+}
+
+export function knowledgeBaseReconcileResultIsStopped(
+  observation: Pick<KnowledgeBaseObservationDto, "notice" | "operationState">,
+) {
+  return Boolean(
+    observation.operationState === undefined &&
+      observation.notice &&
+      (observation.notice.code === "FRONTMIND_KB_STOPPED" ||
+        observation.notice.recoveryAction === "stopped"),
+  );
+}
+
+export function knowledgeBaseReconcileResultChangedCoordinate(
+  observation: Pick<KnowledgeBaseObservationDto, "generation" | "stateEpoch">,
+  expected: { generation: number; stateEpoch: number },
+) {
+  return (
+    observation.generation !== expected.generation ||
+    observation.stateEpoch !== expected.stateEpoch
+  );
+}
+
+export function knowledgeBaseNoticeRequiresLogoProvenanceRepair(
   notice: Pick<KnowledgeBaseClientNotice, "code">,
 ) {
-  return knowledgeBaseNoticeRecoveryMode(notice) === "reconcile"
-    ? "重新绑定成品"
-    : "重试本轮";
+  return notice.code === KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE;
+}
+
+export function knowledgeBaseNoticeRequiresAttachmentRepair(
+  notice: Pick<KnowledgeBaseClientNotice, "code" | "recoveryAction">,
+) {
+  return (
+    notice.recoveryAction === "fix_attachments" &&
+    KNOWLEDGE_BASE_PRECREATE_ATTACHMENT_REPAIR_CODES.has(notice.code || "")
+  );
 }
 
 export function knowledgeBasePackageRebindResolved(
@@ -124,6 +329,12 @@ export function knowledgeBasePackageRebindResolved(
   );
 }
 
+export function knowledgeBaseSameTurnRecoveryAccepted(
+  observation: KnowledgeBaseObservationDto,
+) {
+  return observation.accepted === true && observation.resumed === true;
+}
+
 /**
  * PACKAGE_REBIND_REQUIRED is repaired by rereading the existing authoritative
  * task. It must never reserve a new turn or submit another billable request.
@@ -131,21 +342,54 @@ export function knowledgeBasePackageRebindResolved(
 export async function recoverKnowledgeBaseNotice(
   input: {
     conversationId: string;
-    notice: Pick<KnowledgeBaseClientNotice, "code">;
+    notice: Pick<
+      KnowledgeBaseClientNotice,
+      "code" | "recoveryAction" | "recoveryToken" | "canRegenerate"
+    >;
     clientRequestId: string;
     expectedGeneration: number;
+    expectedStateEpoch: number;
     expectedRevision: number;
     expectedLeafId: string | null;
+    expectedPresentationKey?: string | null;
   },
   dependencies: {
     reconcile?: typeof reconcileKnowledgeBaseObservation;
     retry?: typeof retryKnowledgeBaseTurn;
+    execute?: typeof executeKnowledgeBaseRecovery;
   } = {},
 ): Promise<KnowledgeBaseObservationDto> {
+  if (knowledgeBaseNoticeRecoveryMode(input.notice) === "explicit_recovery") {
+    return (dependencies.execute ?? executeKnowledgeBaseRecovery)({
+      conversationId: input.conversationId,
+      recoveryToken: input.notice.recoveryToken!,
+      clientRequestId: input.clientRequestId,
+    });
+  }
   if (knowledgeBaseNoticeRecoveryMode(input.notice) === "reconcile") {
     return (dependencies.reconcile ?? reconcileKnowledgeBaseObservation)({
       conversationId: input.conversationId,
     });
+  }
+  if (knowledgeBaseNoticeRecoveryMode(input.notice) === "logo_repair") {
+    throw new Error("请通过专用入口重新上传当前知识库使用的同一张 Logo 原图");
+  }
+  if (knowledgeBaseNoticeRecoveryMode(input.notice) === "canonical_recovery") {
+    if (!input.expectedLeafId || !input.expectedPresentationKey) {
+      throw new Error("当前展示坐标不完整，请刷新后重试");
+    }
+    return recoverKnowledgeBaseCanonicalFromSnapshot({
+      conversationId: input.conversationId,
+      clientRequestId: input.clientRequestId,
+      expectedGeneration: input.expectedGeneration,
+      expectedStateEpoch: input.expectedStateEpoch,
+      expectedRevision: input.expectedRevision,
+      expectedLeafId: input.expectedLeafId,
+      expectedPresentationKey: input.expectedPresentationKey,
+    });
+  }
+  if (knowledgeBaseNoticeRecoveryMode(input.notice) !== "regenerate") {
+    throw new Error("当前失败不允许创建新的 API 任务，系统会保留并恢复本轮");
   }
   return (dependencies.retry ?? retryKnowledgeBaseTurn)({
     conversationId: input.conversationId,
@@ -172,6 +416,9 @@ type ReportTaskStatus =
 interface OneClickTaskStartResponse {
   visibleMessage?: string;
   startedAt?: number;
+  reservationCreated?: boolean;
+  traceId?: string;
+  attachmentCount?: number;
   progress?: KnowledgeBaseProgressDto;
   interaction?: KnowledgeBaseInteractionDto;
   observation?: KnowledgeBaseObservationDto;
@@ -192,12 +439,597 @@ interface DeepReportStartInput {
   files: File[];
 }
 
+type KnowledgeBaseStarterUploadStage =
+  | "queued"
+  | "creating_intent"
+  | "uploading_to_dashboard"
+  | "sealed"
+  | "creating_cloud_record"
+  | "uploading_to_cloud"
+  | "waiting_cloud_ready"
+  | "creating_record"
+  | "recovering"
+  | "uploading"
+  | "server_processing"
+  | "uploaded"
+  | "failed"
+  | "cancelled";
+
+type KnowledgeBaseStarterBatchPhase =
+  | "ready"
+  | "uploading"
+  | "starting"
+  | "recovering"
+  | "completed"
+  | "failed";
+
+type KnowledgeBaseStarterUploadReceipt = {
+  fileId: string;
+  filename: string;
+  sizeBytes?: number;
+  contentSha256?: string;
+  uploadedAt?: number;
+  dashboardReadyAt?: number;
+  providerReadyAt?: number;
+  expiresAt?: number;
+  traceId?: string;
+};
+
+type KnowledgeBaseStarterFileUpdate = {
+  stage: KnowledgeBaseStarterUploadStage;
+  itemId?: string;
+  intentId?: string;
+  fileId?: string;
+  loadedBytes?: number;
+  dashboardReceivedBytes?: number;
+  totalBytes?: number;
+  receipt?: KnowledgeBaseStarterUploadReceipt;
+  uploadHandle?: ManagedUploadHandle;
+  clearFileRecord?: boolean;
+  error?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  recoveryAction?: UploadRecoveryAction;
+  recreateRequired?: boolean;
+  traceId?: string;
+  attempt?: number;
+};
+
+export type KnowledgeBaseStarterStartOutcome =
+  | { status: "accepted" }
+  | { status: "recovering" };
+
+export type KnowledgeBaseStarterLifecycle = {
+  signal: AbortSignal;
+  clientRequestId: string;
+  /** Reset epoch frozen when this starter batch begins. */
+  expectedResetRevision: number;
+  startedAt: number;
+  uploadedReceipts: ReadonlyMap<string, KnowledgeBaseStarterUploadReceipt>;
+  fileRecordIds: ReadonlyMap<string, string>;
+  uploadHandles: ReadonlyMap<string, ManagedUploadHandle>;
+  fileAttempts: ReadonlyMap<string, number>;
+  transferredBytes: ReadonlyMap<string, number>;
+  dashboardReceivedBytes?: ReadonlyMap<string, number>;
+  /** Stable row identities aligned with the `files` payload array. */
+  fileItemIds?: readonly string[];
+  /** Durable start coordinate created before the first browser upload. */
+  reservation?: {
+    conversationId: string;
+    turnId: string;
+    clientRequestId: string;
+    expectedResetRevision: number;
+  };
+  attachmentManifest?: import("@/lib/frontmind-api").KnowledgeBaseAttachmentManifestItem[];
+  startPrepared: boolean;
+  onStartPrepared: (prepared: boolean) => void;
+  onReservation?: (
+    reservation: NonNullable<KnowledgeBaseStarterLifecycle["reservation"]>,
+  ) => void;
+  onBatchPhase: (phase: KnowledgeBaseStarterBatchPhase) => void;
+  onFileUpdate: (
+    itemId: string,
+    file: File,
+    update: KnowledgeBaseStarterFileUpdate,
+  ) => void;
+};
+
+function uploadErrorMessage(error: unknown) {
+  return error instanceof Error && error.message
+    ? error.message
+    : "文件上传失败，请稍后重试";
+}
+
+function uploadWasCancelled(error: unknown, signal: AbortSignal) {
+  return (
+    signal.aborted ||
+    (error as { cancelled?: unknown } | null)?.cancelled === true ||
+    (error as { name?: unknown } | null)?.name === "AbortError"
+  );
+}
+
+function uploadFileRecordId(event: FileUploadRecordEvent) {
+  return event.fileId;
+}
+
+export async function buildKnowledgeBaseStarterAttachmentManifest(
+  files: readonly File[],
+  itemIds: readonly string[],
+  signal: AbortSignal,
+): Promise<KnowledgeBaseAttachmentManifestItem[]> {
+  if (files.length !== itemIds.length) {
+    throw new Error("知识库附件坐标不完整，请重新选择资料");
+  }
+  const manifest: KnowledgeBaseAttachmentManifestItem[] = [];
+  // Reserve from immutable browser metadata only. Dashboard computes the
+  // authoritative digest while streaming each upload into managed storage.
+  for (const [index, file] of files.entries()) {
+    if (signal.aborted) {
+      throw new DOMException("上传已停止", "AbortError");
+    }
+    manifest.push({
+      itemId: itemIds[index],
+      ordinal: index + 1,
+      total: files.length,
+      filename: normalizedKnowledgeBaseUploadFilename(file.name),
+      sizeBytes: file.size,
+      mimeType: normalizedKnowledgeBaseUploadMimeType(file),
+      lastModified: Math.max(0, Number(file.lastModified || 0)),
+    });
+  }
+  return manifest;
+}
+
+type KnowledgeBaseStarterUploadImplementation = (
+  file: File,
+  onProgress?: (percent: number) => void,
+  retryConfig?: {
+    maxRetries: number;
+    initialDelay: number;
+    maxDelay: number;
+  },
+  options?: UploadFileOptions,
+) => Promise<{
+  fileId: string;
+  filename: string;
+  sizeBytes?: number;
+  contentSha256?: string;
+  uploadedAt?: number;
+  dashboardReadyAt?: number;
+  providerReadyAt?: number;
+  expiresAt?: number;
+  replayed?: boolean;
+  recovered?: boolean;
+  traceId?: string;
+}>;
+
+export async function uploadKnowledgeBaseStarterFiles(
+  files: File[],
+  lifecycle: KnowledgeBaseStarterLifecycle,
+  responseStartedAt: number,
+  uploadImplementation: KnowledgeBaseStarterUploadImplementation = uploadKnowledgeBaseLocalAsset,
+) {
+  const receipts = new Map(lifecycle.uploadedReceipts);
+  const uploadedAttachments: Array<{
+    file_id: string;
+    filename: string;
+  }> = [];
+  const messageAttachments: Attachment[] = [];
+
+  for (const [fileIndex, file] of files.entries()) {
+    if (lifecycle.signal.aborted) {
+      throw new DOMException("上传已停止", "AbortError");
+    }
+    const itemId =
+      lifecycle.fileItemIds?.[fileIndex] ||
+      `${lifecycle.clientRequestId}:${fileIndex + 1}`;
+    let receipt = receipts.get(itemId);
+    if (!receipt) {
+      if (lifecycle.signal.aborted) {
+        throw new DOMException("上传已停止", "AbortError");
+      }
+
+      const existingFileId = lifecycle.fileRecordIds.get(itemId);
+      const existingUploadHandle = lifecycle.uploadHandles.get(itemId);
+      const recoveryFileId = existingUploadHandle?.fileId || existingFileId;
+      let currentFileId = recoveryFileId;
+      let currentUploadHandle = existingUploadHandle;
+      const attempt = (lifecycle.fileAttempts.get(itemId) ?? 0) + 1;
+      let transferredBytes = lifecycle.transferredBytes.get(itemId) ?? 0;
+      lifecycle.onFileUpdate(itemId, file, {
+        stage:
+          existingUploadHandle || recoveryFileId
+            ? "recovering"
+            : "creating_intent",
+        ...(existingUploadHandle?.itemId
+          ? { itemId: existingUploadHandle.itemId }
+          : {}),
+        ...(existingUploadHandle?.intentId
+          ? { intentId: existingUploadHandle.intentId }
+          : {}),
+        ...(recoveryFileId ? { fileId: recoveryFileId } : {}),
+        ...(existingUploadHandle ? { uploadHandle: existingUploadHandle } : {}),
+        loadedBytes: transferredBytes,
+        totalBytes: file.size,
+        attempt,
+      });
+
+      try {
+        const uploadOptions: UploadFileOptions = {
+          captureLocalCopy: true,
+          captureFilename: normalizedKnowledgeBaseUploadFilename(file.name),
+          batchId: lifecycle.clientRequestId,
+          batchOrdinal: fileIndex + 1,
+          batchTotal: files.length,
+          itemId,
+          ...(lifecycle.attachmentManifest?.[fileIndex]?.sha256
+            ? {
+                contentSha256: lifecycle.attachmentManifest[fileIndex]!.sha256,
+              }
+            : {}),
+          ...(lifecycle.reservation
+            ? {
+                resumeScope: {
+                  kind: "knowledge_base" as const,
+                  conversationId: lifecycle.reservation.conversationId,
+                  turnId: lifecycle.reservation.turnId,
+                  clientRequestId: lifecycle.reservation.clientRequestId,
+                  expectedResetRevision:
+                    lifecycle.reservation.expectedResetRevision,
+                },
+              }
+            : {}),
+          signal: lifecycle.signal,
+          ...(existingUploadHandle
+            ? { existingUploadHandle }
+            : existingFileId
+              ? { existingFileId }
+              : {}),
+          onFileRecord: (event) => {
+            if (lifecycle.signal.aborted) return;
+            const fileId = uploadFileRecordId(event);
+            if (fileId) currentFileId = fileId;
+            if (event.uploadHandle) currentUploadHandle = event.uploadHandle;
+            lifecycle.onFileUpdate(itemId, file, {
+              stage: event.intentId ? "creating_intent" : "creating_record",
+              ...(event.itemId ? { itemId: event.itemId } : {}),
+              ...(event.intentId ? { intentId: event.intentId } : {}),
+              ...(fileId ? { fileId } : {}),
+              ...(event.uploadHandle
+                ? { uploadHandle: event.uploadHandle }
+                : {}),
+              loadedBytes: transferredBytes,
+              totalBytes: file.size,
+              attempt,
+            });
+          },
+          onFileRecordDiscarded: () => {
+            if (lifecycle.signal.aborted) return;
+            currentFileId = undefined;
+            lifecycle.onFileUpdate(itemId, file, {
+              stage: "creating_record",
+              clearFileRecord: true,
+              loadedBytes: transferredBytes,
+              totalBytes: file.size,
+              attempt,
+            });
+          },
+          onStage: (event) => {
+            if (lifecycle.signal.aborted) return;
+            if (typeof event.loadedBytes === "number") {
+              transferredBytes = Math.max(
+                transferredBytes,
+                Math.min(file.size, Math.max(0, event.loadedBytes)),
+              );
+            }
+            const traceId = safeKnowledgeBaseTraceId(event.traceId);
+            lifecycle.onFileUpdate(itemId, file, {
+              stage: event.stage,
+              ...(event.itemId ? { itemId: event.itemId } : {}),
+              ...(event.intentId ? { intentId: event.intentId } : {}),
+              ...(event.fileId ? { fileId: event.fileId } : {}),
+              loadedBytes: transferredBytes,
+              ...(typeof event.dashboardReceivedBytes === "number"
+                ? {
+                    dashboardReceivedBytes: Math.min(
+                      file.size,
+                      Math.max(0, event.dashboardReceivedBytes),
+                    ),
+                  }
+                : {}),
+              totalBytes:
+                typeof event.totalBytes === "number"
+                  ? event.totalBytes
+                  : file.size,
+              ...(traceId ? { traceId } : {}),
+              attempt,
+            });
+          },
+        };
+        let uploaded: Awaited<
+          ReturnType<KnowledgeBaseStarterUploadImplementation>
+        >;
+        try {
+          uploaded = await uploadImplementation(
+            file,
+            undefined,
+            undefined,
+            uploadOptions,
+          );
+        } catch (firstError) {
+          const code = String(
+            (firstError as { code?: unknown } | null)?.code || "",
+          );
+          const frozen = lifecycle.attachmentManifest?.[fileIndex];
+          const retryHandle = currentUploadHandle;
+          const sameFile = Boolean(
+            frozen &&
+              frozen.filename ===
+                normalizedKnowledgeBaseUploadFilename(file.name) &&
+              frozen.sizeBytes === file.size &&
+              frozen.mimeType === normalizedKnowledgeBaseUploadMimeType(file) &&
+              frozen.lastModified ===
+                Math.max(0, Number(file.lastModified || 0)),
+          );
+          const canRetrySameIntent = Boolean(
+            [
+              "UPLOAD_BROWSER_BODY_INCOMPLETE",
+              "UPLOAD_BROWSER_BODY_REQUIRED",
+            ].includes(code) &&
+              sameFile &&
+              retryHandle?.intentId &&
+              retryHandle.ticket &&
+              retryHandle.expiresAt > Date.now() &&
+              lifecycle.reservation &&
+              lifecycle.expectedResetRevision ===
+                lifecycle.reservation.expectedResetRevision &&
+              !lifecycle.signal.aborted,
+          );
+          if (!canRetrySameIntent) throw firstError;
+          lifecycle.onFileUpdate(itemId, file, {
+            stage: "recovering",
+            itemId: retryHandle!.itemId,
+            intentId: retryHandle!.intentId,
+            uploadHandle: retryHandle,
+            loadedBytes: transferredBytes,
+            totalBytes: file.size,
+            attempt,
+          });
+          uploaded = await uploadImplementation(file, undefined, undefined, {
+            ...uploadOptions,
+            existingFileId: undefined,
+            existingUploadHandle: retryHandle,
+          });
+        }
+        if (lifecycle.signal.aborted) {
+          throw new DOMException("上传已停止", "AbortError");
+        }
+        receipt = {
+          fileId: uploaded.fileId,
+          filename: uploaded.filename,
+          sizeBytes: uploaded.sizeBytes,
+          contentSha256: uploaded.contentSha256,
+          uploadedAt: uploaded.uploadedAt,
+          dashboardReadyAt: uploaded.dashboardReadyAt,
+          providerReadyAt: uploaded.providerReadyAt,
+          expiresAt: uploaded.expiresAt,
+          traceId: safeKnowledgeBaseTraceId(uploaded.traceId),
+        };
+        receipts.set(itemId, receipt);
+        if (!lifecycle.signal.aborted) {
+          lifecycle.onFileUpdate(itemId, file, {
+            stage: "uploaded",
+            fileId: receipt.fileId,
+            loadedBytes: file.size,
+            dashboardReceivedBytes: file.size,
+            totalBytes: file.size,
+            receipt,
+            traceId: receipt.traceId,
+            attempt,
+          });
+        }
+      } catch (error) {
+        const rawStructuredFileId = (error as { fileId?: unknown } | null)
+          ?.fileId;
+        const structuredFileId = currentUploadHandle?.intentId
+          ? undefined
+          : typeof rawStructuredFileId === "string" &&
+              rawStructuredFileId.trim()
+            ? rawStructuredFileId
+            : undefined;
+        const structuredRetryable = (error as { retryable?: unknown } | null)
+          ?.retryable;
+        const structuredRecoveryAction = (
+          error as { recoveryAction?: UploadRecoveryAction } | null
+        )?.recoveryAction;
+        const structuredRecreateRequired =
+          (error as { recreateRequired?: unknown } | null)?.recreateRequired ===
+          true;
+        const recoveryAction =
+          structuredRecreateRequired &&
+          structuredRecoveryAction !== "discard_and_recreate"
+            ? "check_status"
+            : structuredRecoveryAction;
+        if (!lifecycle.signal.aborted) {
+          lifecycle.onFileUpdate(itemId, file, {
+            stage: uploadWasCancelled(error, lifecycle.signal)
+              ? "cancelled"
+              : "failed",
+            ...(structuredFileId !== undefined
+              ? { fileId: structuredFileId }
+              : currentFileId
+                ? { fileId: currentFileId }
+                : {}),
+            loadedBytes: transferredBytes,
+            totalBytes: file.size,
+            error: uploadErrorMessage(error),
+            errorCode:
+              String((error as { code?: unknown } | null)?.code || "").trim() ||
+              undefined,
+            retryable:
+              typeof structuredRetryable === "boolean"
+                ? structuredRetryable
+                : undefined,
+            recoveryAction,
+            recreateRequired:
+              structuredRecreateRequired &&
+              structuredRecoveryAction === "discard_and_recreate",
+            traceId: safeKnowledgeBaseTraceId(
+              (error as { traceId?: unknown } | null)?.traceId,
+            ),
+            attempt,
+          });
+        }
+        throw error;
+      }
+    }
+
+    if (lifecycle.reservation && lifecycle.attachmentManifest) {
+      if (lifecycle.signal.aborted) {
+        throw new DOMException("上传已停止", "AbortError");
+      }
+      await stageKnowledgeBaseTurnAttachment({
+        ...lifecycle.reservation,
+        attachmentManifest: lifecycle.attachmentManifest,
+        index: fileIndex,
+        signal: lifecycle.signal,
+        attachment: {
+          file_id: receipt.fileId,
+          filename: receipt.filename,
+        },
+      });
+      if (lifecycle.signal.aborted) {
+        throw new DOMException("上传已停止", "AbortError");
+      }
+    }
+
+    uploadedAttachments.push({
+      file_id: receipt.fileId,
+      filename: receipt.filename,
+    });
+    messageAttachments.push({
+      id: `att-${responseStartedAt}-${messageAttachments.length + 1}`,
+      type: "file",
+      name: file.name,
+      fileId: receipt.fileId,
+      file,
+      expiresAt: receipt.expiresAt,
+      expired: false,
+    });
+  }
+
+  return { uploadedAttachments, messageAttachments };
+}
+
+export function projectKnowledgeBaseStarterRequest(input: {
+  lifecycle: KnowledgeBaseStarterLifecycle;
+  conversationId: string;
+  responseStartedAt: number;
+  messageAttachments: Attachment[];
+  registerConversation: (conversationId: string) => void;
+  addConversationMessage: (
+    conversationId: string,
+    message: LocalMessage,
+  ) => void;
+  updateConversationTitle: (conversationId: string, title: string) => void;
+}) {
+  if (input.lifecycle.startPrepared) return false;
+
+  input.registerConversation(input.conversationId);
+  input.addConversationMessage(input.conversationId, {
+    id: `msg-kb-start-${input.responseStartedAt}`,
+    role: "user",
+    content: "开始构建企业知识库",
+    ...(input.messageAttachments.length > 0
+      ? { attachments: input.messageAttachments }
+      : {}),
+    timestamp: input.responseStartedAt,
+    knowledgeBase: {
+      kind: "pending_user",
+      clientRequestId: input.lifecycle.clientRequestId,
+    },
+  });
+  input.updateConversationTitle(input.conversationId, "企业知识库构建");
+  input.lifecycle.onStartPrepared(true);
+  return true;
+}
+
 type KnowledgeBaseStartRequestError = Error & {
   status?: number;
   code?: string;
+  traceId?: string;
+  attachmentCount?: number;
   reservationCreated?: boolean;
   observation?: KnowledgeBaseObservationDto;
 };
+
+export const KNOWLEDGE_BASE_START_TIMEOUT_MS = 120_000;
+
+function knowledgeBaseStartTimeoutError(): KnowledgeBaseStartRequestError {
+  const error = new Error(
+    "启动请求等待超时，系统将继续确认服务端是否已受理",
+  ) as KnowledgeBaseStartRequestError;
+  error.status = 408;
+  error.code = "KNOWLEDGE_BASE_START_TIMEOUT";
+  return error;
+}
+
+export async function fetchKnowledgeBaseStartRequest(
+  init: RequestInit,
+  options: {
+    signal: AbortSignal;
+    timeoutMs?: number;
+    fetchImplementation?: typeof fetch;
+    endpoint?: string;
+    onRequestStarted?: () => void;
+  },
+) {
+  if (options.signal.aborted) {
+    throw new DOMException("上传已停止", "AbortError");
+  }
+
+  const controller = new AbortController();
+  const abortFromLifecycle = () => controller.abort();
+  options.signal.addEventListener("abort", abortFromLifecycle, { once: true });
+  if (options.signal.aborted) controller.abort();
+  if (controller.signal.aborted) {
+    options.signal.removeEventListener("abort", abortFromLifecycle);
+    throw new DOMException("上传已停止", "AbortError");
+  }
+  const timeoutMs = options.timeoutMs ?? KNOWLEDGE_BASE_START_TIMEOUT_MS;
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Response>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(knowledgeBaseStartTimeoutError());
+    }, timeoutMs);
+  });
+
+  try {
+    if (controller.signal.aborted) {
+      throw new DOMException("上传已停止", "AbortError");
+    }
+    options.onRequestStarted?.();
+    return await Promise.race([
+      (options.fetchImplementation ?? fetch)(
+        options.endpoint ?? "/api/knowledge-base/start/reserve",
+        {
+          ...init,
+          signal: controller.signal,
+        },
+      ),
+      timeout,
+    ]);
+  } catch (error) {
+    if (timedOut) throw knowledgeBaseStartTimeoutError();
+    throw error;
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    options.signal.removeEventListener("abort", abortFromLifecycle);
+  }
+}
 
 export async function readKnowledgeBaseStartRequestError(
   response: Response,
@@ -212,8 +1044,20 @@ export async function readKnowledgeBaseStartRequestError(
       `请求失败 (${response.status})`;
     const error = new Error(message) as KnowledgeBaseStartRequestError;
     error.status = response.status;
-    error.code =
-      String(errorNode?.code || data?.code || "").trim() || undefined;
+    const code = String(errorNode?.code || data?.code || "").trim();
+    const traceId = String(errorNode?.traceId || data?.traceId || "").trim();
+    error.code = /^[A-Z0-9_:-]{1,128}$/u.test(code) ? code : undefined;
+    error.traceId = safeKnowledgeBaseTraceId(traceId);
+    const attachmentCount = Number(
+      errorNode?.attachmentCount ?? data?.attachmentCount,
+    );
+    if (
+      Number.isSafeInteger(attachmentCount) &&
+      attachmentCount >= 0 &&
+      attachmentCount <= 1_000
+    ) {
+      error.attachmentCount = attachmentCount;
+    }
     if (typeof data?.reservationCreated === "boolean") {
       error.reservationCreated = data.reservationCreated;
     }
@@ -235,17 +1079,23 @@ export async function readKnowledgeBaseStartRequestError(
 }
 
 export function shouldRecoverKnowledgeBaseStartFailure(
-  requestDispatched: boolean,
+  dispatchAttempted: boolean,
   error: Pick<
     KnowledgeBaseStartRequestError,
     "status" | "code" | "reservationCreated"
   >,
 ) {
-  if (!requestDispatched) return false;
-  if (error.reservationCreated === true) return true;
+  if (!dispatchAttempted) return false;
+  // A reset epoch mismatch is a definitive rejection of these browser bytes.
+  // It must never enter the network-unknown recovery branch or project an old
+  // pending start into the freshly reset conversation.
+  if (error.code === "KNOWLEDGE_BASE_RESET_REVISION_CHANGED") return false;
   if (error.reservationCreated === false) return false;
   if (error.code === "KNOWLEDGE_BASE_ROLLOUT_PENDING") return false;
   const status = Number(error.status || 0);
+  // A reserve receipt embedded in an explicit 4xx does not acknowledge the
+  // final dispatch. Only a sent request with a transport/timeout/transient
+  // response can have an unknown dispatch outcome.
   return !status || status === 408 || status === 429 || status >= 500;
 }
 
@@ -267,12 +1117,8 @@ function filterWaitingText(content: string): string {
 
 /**
  * Fetch a file URL with auth headers and return a blob URL.
- * Works for both /api/frontmind/v1/files/ URLs, proxy-download URLs, and external URLs.
- *
- * The server proxy now handles:
- * - /v1/files/:id → fetches metadata, then downloads binary from S3
- * - /proxy-download?url=... → proxies binary from external URLs
- * So this function should receive proper binary content.
+ * Dashboard-owned artifact URLs are served locally; explicit external URLs
+ * are routed through the authenticated proxy-download boundary.
  */
 function buildProxyDownloadUrl(
   fileUrl: string,
@@ -351,22 +1197,35 @@ export default function ChatArea({
   syncKnowledgeBaseSnapshot = false,
   composerPrefill,
   responseLogicContext,
+  messageProjection,
   showKnowledgeBaseStarter = true,
   standardWelcomeVariant = "simple",
   reserveOuterMobileNav = false,
   knowledgeBaseProgress,
+  knowledgeBaseResetRevision,
+  knowledgeBaseAccountId,
+  onKnowledgeBaseBatchCancelled,
 }: {
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
   composerPrefill?: string;
   responseLogicContext?: ResponseLogicTaskContext;
+  messageProjection?: (message: LocalMessage) => LocalMessage;
   showKnowledgeBaseStarter?: boolean;
   standardWelcomeVariant?: "simple" | "workflow";
   reserveOuterMobileNav?: boolean;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
+  knowledgeBaseResetRevision?: number;
+  knowledgeBaseAccountId?: number;
+  onKnowledgeBaseBatchCancelled?: (
+    conversationId: string,
+    resetRevision: number,
+  ) => void | Promise<void>;
 }) {
   const {
     activeConversation,
+    createConversation,
+    setActive,
     deleteConversation,
     deleteMessage,
     addMessage,
@@ -377,6 +1236,7 @@ export default function ChatArea({
     commitKnowledgeBaseObservation,
     settleKnowledgeBaseStartFailure,
     discardConversationLocally,
+    refreshConversationsAfterDiscard,
   } = useConversation();
   const dashboardQuery = trpc.workspace.dashboard.useQuery(undefined, {
     enabled: !responseLogicContext && showKnowledgeBaseStarter,
@@ -384,25 +1244,83 @@ export default function ChatArea({
     refetchOnWindowFocus: true,
     staleTime: 30_000,
   });
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesViewportRef = useRef<HTMLDivElement>(null);
+  const explicitRecoveryRequestRef = useRef<{
+    recoveryToken: string;
+    clientRequestId: string;
+  } | null>(null);
 
-  const [, setTick] = useState(0);
   const [retryingKnowledgeBase, setRetryingKnowledgeBase] = useState(false);
+
+  const startFreshKnowledgeBaseBuild = useCallback(() => {
+    const conversationId = createConversation({
+      title: "企业知识库构建",
+      reuseEmpty: false,
+    });
+    setActive(conversationId);
+    window.dispatchEvent(
+      new CustomEvent(KNOWLEDGE_BASE_NEW_BUILD_EVENT, {
+        detail: { conversationId },
+      }),
+    );
+    toast.info("已新建知识库构建", {
+      description: "上一轮及其附件保持只读；请为新一轮重新选择资料。",
+    });
+  }, [createConversation, setActive]);
+
+  const discardCancelledKnowledgeBaseStart = useCallback(
+    async (conversationId: string, resetRevision: number) => {
+      if (onKnowledgeBaseBatchCancelled) {
+        await onKnowledgeBaseBatchCancelled(conversationId, resetRevision);
+        return;
+      }
+      discardConversationLocally(conversationId);
+      const nextConversationId = createConversation({
+        title: "企业知识库构建",
+        reuseEmpty: false,
+      });
+      setActive(nextConversationId);
+      window.dispatchEvent(
+        new CustomEvent(KNOWLEDGE_BASE_NEW_BUILD_EVENT, {
+          detail: { conversationId: nextConversationId },
+        }),
+      );
+      void refreshConversationsAfterDiscard();
+    },
+    [
+      createConversation,
+      discardConversationLocally,
+      onKnowledgeBaseBatchCancelled,
+      refreshConversationsAfterDiscard,
+      setActive,
+    ],
+  );
 
   const status = activeConversation?.status;
   const startedAt = activeConversation?.startedAt;
   const completedAt = activeConversation?.completedAt;
+  const hasKnowledgeBaseProgress = Boolean(knowledgeBaseProgress);
+  const displayActiveTask = isKnowledgeBaseTaskVisiblyRunning({
+    status,
+    syncKnowledgeBaseSnapshot,
+    interactionState: activeConversation?.knowledgeBase?.interactionState,
+    noticeSeverity: activeConversation?.knowledgeBase?.notice?.severity,
+  });
+  const knowledgeBaseDisplayFailed =
+    syncKnowledgeBaseSnapshot &&
+    (activeConversation?.knowledgeBase?.interactionState === "failed" ||
+      activeConversation?.knowledgeBase?.notice?.severity === "error");
 
   useEffect(() => {
     if (!syncKnowledgeBaseSnapshot || !activeConversation?.id) return;
     registerKnowledgeBaseConversation(activeConversation.id);
-    if (activeConversation.taskId || knowledgeBaseProgress) {
+    if (activeConversation.taskId || hasKnowledgeBaseProgress) {
       wakeKnowledgeBaseConversation(activeConversation.id);
     }
   }, [
     activeConversation?.id,
     activeConversation?.taskId,
-    knowledgeBaseProgress,
+    hasKnowledgeBaseProgress,
     registerKnowledgeBaseConversation,
     syncKnowledgeBaseSnapshot,
     wakeKnowledgeBaseConversation,
@@ -411,124 +1329,147 @@ export default function ChatArea({
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     const timer = setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      const viewport = messagesViewportRef.current;
+      if (viewport) scrollChatViewportToBottom(viewport);
     }, 100);
     return () => clearTimeout(timer);
   }, [activeConversation?.messages?.length, status]);
 
-  // Force re-render every second when running to update elapsed time
-  useEffect(() => {
-    if ((status === "running" || status === "pending") && startedAt) {
-      const timer = setInterval(() => setTick((t) => t + 1), 1000);
-      return () => clearInterval(timer);
-    }
-  }, [status, startedAt]);
-
   const startKnowledgeBase = useCallback(
-    async ({
-      companyName,
-      companyWebsite,
-      operatorNotes,
-      files,
-    }: DeepReportStartInput) => {
-      if (!activeConversation) return;
-
-      const selectedAgentProfile = "frontmind-pro";
+    async (
+      {
+        companyName,
+        companyWebsite,
+        operatorNotes,
+        files,
+      }: DeepReportStartInput,
+      lifecycle: KnowledgeBaseStarterLifecycle,
+    ): Promise<KnowledgeBaseStarterStartOutcome> => {
+      if (!activeConversation) {
+        throw new Error("当前知识库会话不可用，请刷新后重试");
+      }
 
       const conversationId = activeConversation.id;
-      const responseStartedAt = Date.now();
-      const clientRequestId =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `kb-start-${responseStartedAt}-${Math.random().toString(36).slice(2, 10)}`;
-      let requestDispatched = false;
+      const responseStartedAt = lifecycle.startedAt;
+      const clientRequestId = lifecycle.clientRequestId;
+      const expectedResetRevision = lifecycle.expectedResetRevision;
+      let dispatchAttempted = false;
+      let preparedMessageAttachments: Attachment[] = [];
 
       try {
         assertChatAttachmentSizes(files);
-        const uploadedAttachments: Array<{
-          file_id: string;
-          filename: string;
-        }> = [];
-        const messageAttachments: Attachment[] = [];
-        for (const file of files) {
-          const uploaded = await uploadFile(file, undefined, undefined, {
-            captureLocalCopy: true,
-            captureFilename: normalizedKnowledgeBaseUploadFilename(file.name),
-          });
-          uploadedAttachments.push({
-            file_id: uploaded.fileId,
-            filename: uploaded.filename,
-          });
-          messageAttachments.push({
-            id: `att-${responseStartedAt}-${messageAttachments.length + 1}`,
-            type: "file",
-            name: file.name,
-            fileId: uploaded.fileId,
-            file,
-            expiresAt: uploaded.expiresAt,
-            expired: false,
-          });
-        }
-
-        registerKnowledgeBaseConversation(conversationId);
-
-        addMessage(conversationId, {
-          id: `msg-kb-start-${responseStartedAt}`,
-          role: "user",
-          content: "开始构建企业知识库",
-          ...(messageAttachments.length > 0
-            ? { attachments: messageAttachments }
-            : {}),
-          timestamp: responseStartedAt,
-          knowledgeBase: {
-            kind: "pending_user",
-            clientRequestId,
-          },
-        });
-        updateTitle(conversationId, "企业知识库构建");
-
-        requestDispatched = true;
-        const response = await fetch("/api/knowledge-base/start", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify({
+        const itemIds = files.map(
+          (_file, index) =>
+            lifecycle.fileItemIds?.[index] || `${clientRequestId}:${index + 1}`,
+        );
+        const attachmentManifest =
+          await buildKnowledgeBaseStarterAttachmentManifest(
+            files,
+            itemIds,
+            lifecycle.signal,
+          );
+        const reserved = await reserveKnowledgeBaseStart(
+          {
             conversationId,
             clientRequestId,
+            expectedResetRevision,
             companyName,
             companyWebsite,
             operatorNotes,
-            agentProfile: selectedAgentProfile,
-            attachments: uploadedAttachments,
-          }),
-        });
+            attachmentManifest,
+          },
+          lifecycle.signal,
+        );
+        const reservation = {
+          conversationId,
+          turnId: reserved.reservation.turnId,
+          clientRequestId,
+          expectedResetRevision,
+        };
+        lifecycle.onReservation?.(reservation);
+        const { messageAttachments } = await uploadKnowledgeBaseStarterFiles(
+          files,
+          {
+            ...lifecycle,
+            reservation,
+            attachmentManifest,
+          },
+          responseStartedAt,
+        );
+        preparedMessageAttachments = messageAttachments;
+        lifecycle.onBatchPhase("starting");
+
+        // Only the final dispatch can have an unknown Provider-task outcome.
+        // Reserve, local upload and stage failures must keep the browser-owned
+        // batch open and must never project the conversation as running.
+        const response = await fetchKnowledgeBaseStartRequest(
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "include",
+            body: JSON.stringify({
+              conversationId,
+              clientRequestId,
+              turnId: reservation.turnId,
+              expectedResetRevision,
+              attachmentManifest,
+            }),
+          },
+          {
+            signal: lifecycle.signal,
+            endpoint: "/api/knowledge-base/turn/dispatch",
+            onRequestStarted: () => {
+              dispatchAttempted = true;
+            },
+          },
+        );
 
         if (!response.ok) {
           throw await readKnowledgeBaseStartRequestError(response);
         }
 
         const data = (await response.json()) as OneClickTaskStartResponse;
-        if (!data.observation && !data.task?.id) {
-          throw new Error("任务创建失败：未返回任务 ID");
-        }
+        const observation = data.observation
+          ? knowledgeBaseObservationFromPayload(data)
+          : undefined;
+        // `/start/reserve` already supplied the durable acknowledgement. The
+        // dispatch endpoint need not echo the legacy reservationCreated flag
+        // or a provider task id; its 2xx only releases the existing turn.
+        const acceptedObservation =
+          observation ?? reserved.knowledgeObservation;
+
+        projectKnowledgeBaseStarterRequest({
+          lifecycle,
+          conversationId,
+          responseStartedAt,
+          messageAttachments,
+          registerConversation: registerKnowledgeBaseConversation,
+          addConversationMessage: addMessage,
+          updateConversationTitle: updateTitle,
+        });
 
         const taskStartedAt = data.startedAt || responseStartedAt;
-        if (data.observation) {
-          commitKnowledgeBaseObservation(
-            conversationId,
-            knowledgeBaseObservationFromPayload(data),
-          );
+        if (acceptedObservation) {
+          commitKnowledgeBaseObservation(conversationId, acceptedObservation);
         } else {
           // Compatibility while the server fleet rolls forward. Never project
-          // data.task.output for KB; the coordinator will obtain the approved DTO.
-          updateStatus(conversationId, "running", {
-            taskId: data.task!.id,
-            taskUrl: data.task!.taskUrl,
-            previousResponseId: data.task!.id,
-            startedAt: taskStartedAt,
-          });
+          // data.task.output for KB; the coordinator will obtain the approved
+          // DTO. A durable reservation may be acknowledged before a provider
+          // task id exists, so the task fields are optional in this window.
+          updateStatus(
+            conversationId,
+            "running",
+            data.task?.id
+              ? {
+                  taskId: data.task.id,
+                  taskUrl: data.task.taskUrl,
+                  previousResponseId: data.task.id,
+                  startedAt: taskStartedAt,
+                }
+              : { startedAt: taskStartedAt },
+          );
         }
         wakeKnowledgeBaseConversation(conversationId);
 
@@ -539,24 +1480,50 @@ export default function ChatArea({
         });
 
         creditEventBus.emit();
+        lifecycle.onBatchPhase("completed");
+        return { status: "accepted" };
       } catch (error: any) {
         const errorMessage = error?.message || "启动失败";
-        if (errorMessage.includes("不能超过 100 MB")) {
+        const resetRevisionChanged =
+          error?.code === "KNOWLEDGE_BASE_RESET_REVISION_CHANGED";
+        if (uploadWasCancelled(error, lifecycle.signal)) {
+          lifecycle.onBatchPhase("failed");
+          toast.info("上传已停止", {
+            description: "已完成的文件会保留，继续时只上传未完成资料。",
+          });
+          throw error;
+        } else if (errorMessage.includes("不能超过 100 MB")) {
+          lifecycle.onBatchPhase("failed");
           toast.error("文件过大", { description: errorMessage });
-        } else if (error?.observation) {
-          settleKnowledgeBaseStartFailure(conversationId, clientRequestId);
-          commitKnowledgeBaseObservation(conversationId, error.observation);
-          wakeKnowledgeBaseConversation(conversationId);
-          toast.error("启动结果已确认", { description: errorMessage });
+          throw error;
+        } else if (resetRevisionChanged) {
+          lifecycle.onBatchPhase("failed");
+          toast.info("知识库已完成重置", {
+            description:
+              "本次旧资料提交已停止，请在新的空白构建中重新选择资料。",
+          });
+          throw error;
         } else if (
-          !shouldRecoverKnowledgeBaseStartFailure(requestDispatched, error)
+          !shouldRecoverKnowledgeBaseStartFailure(dispatchAttempted, error)
         ) {
-          settleKnowledgeBaseStartFailure(conversationId, clientRequestId);
-          if (error?.code === "CONVERSATION_RESET") {
-            discardConversationLocally(conversationId);
+          if (dispatchAttempted) {
+            settleKnowledgeBaseStartFailure(conversationId, clientRequestId);
           }
-          toast.error("启动失败", { description: errorMessage });
+          toast.error(dispatchAttempted ? "启动失败" : "上传失败", {
+            description: errorMessage,
+          });
+          lifecycle.onBatchPhase("failed");
+          throw error;
         } else {
+          projectKnowledgeBaseStarterRequest({
+            lifecycle,
+            conversationId,
+            responseStartedAt,
+            messageAttachments: preparedMessageAttachments,
+            registerConversation: registerKnowledgeBaseConversation,
+            addConversationMessage: addMessage,
+            updateConversationTitle: updateTitle,
+          });
           updateStatus(conversationId, "running", {
             startedAt: responseStartedAt,
           });
@@ -565,6 +1532,8 @@ export default function ChatArea({
             description:
               "请求结果暂时未知，系统正在核对服务端是否已受理，不会重复创建知识库任务。",
           });
+          lifecycle.onBatchPhase("recovering");
+          return { status: "recovering" };
         }
       }
     },
@@ -572,7 +1541,6 @@ export default function ChatArea({
       activeConversation,
       addMessage,
       commitKnowledgeBaseObservation,
-      discardConversationLocally,
       registerKnowledgeBaseConversation,
       settleKnowledgeBaseStartFailure,
       updateStatus,
@@ -584,33 +1552,72 @@ export default function ChatArea({
   const retryCurrentKnowledgeBaseTurn = useCallback(async () => {
     const conversation = activeConversation;
     const knowledgeBase = conversation?.knowledgeBase;
+    const recoveryMode = knowledgeBase?.notice
+      ? knowledgeBaseNoticeRecoveryMode(knowledgeBase.notice)
+      : "none";
     if (
       !conversation ||
-      !knowledgeBase?.notice?.retryable ||
+      !knowledgeBase?.notice ||
+      recoveryMode === "none" ||
       knowledgeBase.revision === null ||
       retryingKnowledgeBase
     ) {
       return;
     }
     setRetryingKnowledgeBase(true);
-    const clientRequestId =
+    const nextClientRequestId = () =>
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `kb-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const recoveryMode = knowledgeBaseNoticeRecoveryMode(knowledgeBase.notice);
+    const explicitRecoveryToken = knowledgeBase.notice.recoveryToken;
+    if (recoveryMode === "explicit_recovery" && explicitRecoveryToken) {
+      explicitRecoveryRequestRef.current = knowledgeBaseExplicitRecoveryRequest(
+        explicitRecoveryRequestRef.current,
+        explicitRecoveryToken,
+        nextClientRequestId,
+      );
+    }
+    const clientRequestId =
+      recoveryMode === "explicit_recovery"
+        ? explicitRecoveryRequestRef.current!.clientRequestId
+        : nextClientRequestId();
     try {
       const observation = await recoverKnowledgeBaseNotice({
         conversationId: conversation.id,
         notice: knowledgeBase.notice,
         clientRequestId,
         expectedGeneration: knowledgeBase.generation,
+        expectedStateEpoch: knowledgeBase.stateEpoch,
         expectedRevision: knowledgeBase.revision,
         expectedLeafId: knowledgeBase.leafId,
+        expectedPresentationKey: knowledgeBase.presentationKey,
       });
       commitKnowledgeBaseObservation(conversation.id, observation);
       wakeKnowledgeBaseConversation(conversation.id);
+      if (
+        recoveryMode === "explicit_recovery" &&
+        observation.notice?.recoveryToken !== explicitRecoveryToken
+      ) {
+        explicitRecoveryRequestRef.current = null;
+      }
       if (recoveryMode === "reconcile") {
-        if (!knowledgeBasePackageRebindResolved(observation)) {
+        if (knowledgeBaseReconcileResultRequiresConfirmation(observation)) {
+          toast.info("状态已更新，需要你确认后继续", {
+            description:
+              observation.notice?.message || "已安全停在确认点，不会自动重发。",
+          });
+          return;
+        }
+        if (knowledgeBaseReconcileResultIsStopped(observation)) {
+          toast.warning("本轮已停止，不会自动重发", {
+            description: observation.notice?.message || "已完成内容不受影响。",
+          });
+          return;
+        }
+        const packageRebind =
+          knowledgeBase.notice.code ===
+          KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE;
+        if (packageRebind && !knowledgeBasePackageRebindResolved(observation)) {
           toast.warning("知识库成品仍在等待重新绑定", {
             description:
               observation.notice?.message ||
@@ -618,9 +1625,29 @@ export default function ChatArea({
           });
           return;
         }
-        toast.success("知识库成品已重新绑定", {
-          description: "已复用原权威任务完成校验，没有创建新的模型任务。",
-        });
+        if (packageRebind) {
+          toast.success("知识库成品已重新绑定", {
+            description: "已复用原权威任务完成校验，没有创建新的模型任务。",
+          });
+        } else if (knowledgeBaseSameTurnRecoveryAccepted(observation)) {
+          toast.success("已继续当前操作", {
+            description: "系统已接受同一轮次，并继续等待模型返回结果。",
+          });
+        } else if (
+          knowledgeBaseReconcileResultChangedCoordinate(observation, {
+            generation: knowledgeBase.generation,
+            stateEpoch: knowledgeBase.stateEpoch,
+          })
+        ) {
+          toast.info("状态已更新", {
+            description: observation.notice?.message || "已同步当前权威状态。",
+          });
+        } else {
+          toast.warning("当前操作尚未恢复", {
+            description:
+              observation.notice?.message || "请刷新当前状态后再次尝试。",
+          });
+        }
       } else {
         toast.success("已重新发起当前节点", {
           description: "本次使用新的幂等操作，不会复用上一条失败任务。",
@@ -628,6 +1655,12 @@ export default function ChatArea({
       }
     } catch (error) {
       const status = Number((error as { status?: unknown })?.status || 0);
+      const changedObservation = (
+        error as { knowledgeObservation?: KnowledgeBaseObservationDto }
+      )?.knowledgeObservation;
+      if (changedObservation) {
+        commitKnowledgeBaseObservation(conversation.id, changedObservation);
+      }
       if (!status || status === 408 || status === 429 || status >= 500) {
         wakeKnowledgeBaseConversation(conversation.id);
         toast.warning("正在恢复重试结果", {
@@ -635,6 +1668,9 @@ export default function ChatArea({
             "网络结果暂时未知，系统会恢复同一操作，不会重复创建任务。",
         });
       } else {
+        if (recoveryMode === "explicit_recovery") {
+          explicitRecoveryRequestRef.current = null;
+        }
         toast.error(
           recoveryMode === "reconcile"
             ? "重新绑定知识库成品失败"
@@ -655,32 +1691,55 @@ export default function ChatArea({
     wakeKnowledgeBaseConversation,
   ]);
 
+  const messages = useMemo(
+    () =>
+      activeConversation
+        ? messageProjection
+          ? activeConversation.messages.map(messageProjection)
+          : activeConversation.messages
+        : [],
+    [activeConversation, messageProjection],
+  );
+  const finalAssistantMessageId = useMemo(
+    () =>
+      [...messages].reverse().find((message) => message.role === "assistant")
+        ?.id,
+    [messages],
+  );
+
   if (!activeConversation) {
     return <EmptyState />;
   }
 
-  const { messages } = activeConversation;
-
   const sanitizedTitle = activeConversation.title
     ? sanitizeBrandText(activeConversation.title)
     : activeConversation.title;
-  const activeTask = status === "running" || status === "pending";
-  const executionDuration =
-    startedAt && (activeTask || completedAt)
-      ? Math.max(
-          0,
-          ((activeTask ? Date.now() : completedAt!) - startedAt) / 1000,
-        )
-      : null;
+  const activeTask = displayActiveTask;
+  const displayStatus = knowledgeBaseDisplayFailed ? "error" : status;
   const executionModel =
     fixedAgentProfile ||
     [...messages]
       .reverse()
       .find((message) => message.role === "assistant" && message.modelName)
       ?.modelName;
+  const knowledgeBaseTaskNotCreated = knowledgeBaseTaskWasNotCreated(
+    activeConversation.knowledgeBase,
+  );
+  const retainedCustomerAttachmentCount =
+    activeConversation.knowledgeBase?.retainedCustomerAttachmentCount;
+  const knowledgeBaseHasDisplayableContent =
+    activeConversation.knowledgeBase?.contentAvailability === "partial" ||
+    activeConversation.knowledgeBase?.contentAvailability === "complete";
+  const knowledgeBaseNoticeDisplayMessage = knowledgeBaseTaskNotCreated
+    ? "附件未能完成任务创建前的登记，请申请重置后重新上传资料。"
+    : activeConversation.knowledgeBase?.operationState === "reset_required"
+      ? knowledgeBaseHasDisplayableContent
+        ? "本轮需要重置，已完成内容不受影响。"
+        : "本轮需要重置，请申请重置后重新上传资料。"
+      : activeConversation.knowledgeBase?.notice?.message;
 
   return (
-    <div className="flex-1 flex flex-col h-full relative">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {/* Header bar */}
       <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
         <div
@@ -693,7 +1752,7 @@ export default function ChatArea({
               {sanitizedTitle}
             </h2>
             <StatusBadge
-              status={status || "idle"}
+              status={displayStatus || "idle"}
               knowledgeBase={syncKnowledgeBaseSnapshot}
             />
           </div>
@@ -728,11 +1787,12 @@ export default function ChatArea({
                   })}
                 </span>
               )}
-              {executionDuration !== null && (
-                <span className="inline-flex items-center gap-1 font-mono">
-                  <Clock className="h-3 w-3" />
-                  {formatExecutionDuration(executionDuration)}
-                </span>
+              {startedAt && (activeTask || completedAt) && (
+                <HeaderExecutionDuration
+                  startedAt={startedAt}
+                  completedAt={completedAt}
+                  active={Boolean(activeTask)}
+                />
               )}
             </div>
           )}
@@ -740,41 +1800,65 @@ export default function ChatArea({
       </div>
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div
+        ref={messagesViewportRef}
+        className="min-h-0 flex-1 overflow-y-auto custom-scrollbar"
+        data-testid="chat-messages-viewport"
+      >
         <div className="max-w-4xl mx-auto px-3 py-6 space-y-6 sm:px-5 sm:py-8 sm:space-y-7">
           {messages.length === 0 &&
-            status === "idle" &&
-            (responseLogicContext ? (
-              <ResponseLogicConversationHint
-                question={responseLogicContext.question}
-              />
-            ) : showKnowledgeBaseStarter ? (
-              <EmptyConversationHint
-                onStartKnowledgeBase={startKnowledgeBase}
-                companyName={
+          status === "idle" &&
+          responseLogicContext ? (
+            <ResponseLogicConversationHint
+              question={responseLogicContext.question}
+            />
+          ) : showKnowledgeBaseStarter ? (
+            <EmptyConversationHint
+              key={`${knowledgeBaseAccountId ?? 0}:${knowledgeBaseResetRevision ?? 0}:${activeConversation.id}`}
+              onStartKnowledgeBase={startKnowledgeBase}
+              onBatchCancelled={(resetRevision) =>
+                discardCancelledKnowledgeBaseStart(
+                  activeConversation.id,
+                  resetRevision,
+                )
+              }
+              eligible={messages.length === 0 && status === "idle"}
+              companyName={
+                dashboardQuery.data?.enterpriseName ||
+                dashboardQuery.data?.payload?.brandName ||
+                ""
+              }
+              companyConfigured={Boolean(
+                (
                   dashboardQuery.data?.enterpriseName ||
                   dashboardQuery.data?.payload?.brandName ||
                   ""
-                }
-                companyConfigured={Boolean(
-                  (
-                    dashboardQuery.data?.enterpriseName ||
-                    dashboardQuery.data?.payload?.brandName ||
-                    ""
-                  ).trim(),
-                )}
-                companyLoading={dashboardQuery.isLoading}
-              />
-            ) : (
-              <StandardConversationHint variant={standardWelcomeVariant} />
-            ))}
+                ).trim(),
+              )}
+              companyLoading={dashboardQuery.isLoading}
+              resetRevision={knowledgeBaseResetRevision ?? 0}
+            />
+          ) : messages.length === 0 && status === "idle" ? (
+            <StandardConversationHint variant={standardWelcomeVariant} />
+          ) : null}
 
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
               <MessageBubble
                 key={msg.id}
                 message={msg}
-                isRunning={status === "running" || status === "pending"}
+                isRunning={displayActiveTask}
+                generalChatLinks={
+                  activeConversation.executionKind === "general_chat_v2"
+                }
+                fixedElapsedTime={
+                  status === "completed" &&
+                  msg.id === finalAssistantMessageId &&
+                  startedAt !== undefined &&
+                  completedAt !== undefined
+                    ? Math.max(0, (completedAt - startedAt) / 1_000)
+                    : undefined
+                }
                 suppressKnowledgeArtifacts={syncKnowledgeBaseSnapshot}
                 onDelete={
                   syncKnowledgeBaseSnapshot
@@ -809,15 +1893,95 @@ export default function ChatArea({
                   activeConversation.knowledgeBase.notice.errorKey
                 }
               >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span>{activeConversation.knowledgeBase.notice.message}</span>
-                  {activeConversation.knowledgeBase.notice.retryable && (
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <span>{knowledgeBaseNoticeDisplayMessage}</span>
+                    {knowledgeBaseTaskNotCreated &&
+                      typeof retainedCustomerAttachmentCount === "number" &&
+                      retainedCustomerAttachmentCount > 0 && (
+                        <p
+                          className="mt-1 text-xs"
+                          data-testid="knowledge-base-attachment-retention"
+                        >
+                          {retainedCustomerAttachmentCount}/
+                          {retainedCustomerAttachmentCount}{" "}
+                          个附件已保留，知识库任务未创建。
+                        </p>
+                      )}
+                  </div>
+                  {activeConversation.knowledgeBase.notice.code ===
+                  KNOWLEDGE_BASE_REBUILD_REQUIRED_NOTICE_CODE ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={startFreshKnowledgeBaseBuild}
+                    >
+                      新建知识库构建
+                    </Button>
+                  ) : knowledgeBaseNoticeRequiresLogoProvenanceRepair(
+                      activeConversation.knowledgeBase.notice,
+                    ) ? (
+                    activeConversation.knowledgeBase.revision !== null ? (
+                      <KnowledgeBaseLogoProvenanceRepair
+                        conversationId={activeConversation.id}
+                        expectedGeneration={
+                          activeConversation.knowledgeBase.generation
+                        }
+                        expectedRevision={
+                          activeConversation.knowledgeBase.revision
+                        }
+                        expectedLeafId={activeConversation.knowledgeBase.leafId}
+                        onObservation={(observation) => {
+                          commitKnowledgeBaseObservation(
+                            activeConversation.id,
+                            observation,
+                          );
+                          wakeKnowledgeBaseConversation(activeConversation.id);
+                        }}
+                      />
+                    ) : null
+                  ) : knowledgeBaseNoticeRequiresAttachmentRepair(
+                      activeConversation.knowledgeBase.notice,
+                    ) ? (
+                    activeConversation.knowledgeBase.revision !== null ? (
+                      <KnowledgeBaseAttachmentRepair
+                        conversationId={activeConversation.id}
+                        expectedGeneration={
+                          activeConversation.knowledgeBase.generation
+                        }
+                        expectedRevision={
+                          activeConversation.knowledgeBase.revision
+                        }
+                        expectedLeafId={activeConversation.knowledgeBase.leafId}
+                        onObservation={(observation) => {
+                          commitKnowledgeBaseObservation(
+                            activeConversation.id,
+                            observation,
+                          );
+                          wakeKnowledgeBaseConversation(activeConversation.id);
+                        }}
+                      />
+                    ) : null
+                  ) : knowledgeBaseNoticeHasRecoveryAction(
+                      activeConversation.knowledgeBase.notice,
+                    ) ? (
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
                       disabled={retryingKnowledgeBase}
-                      onClick={() => void retryCurrentKnowledgeBaseTurn()}
+                      onClick={() => {
+                        if (
+                          knowledgeBaseNoticeRecoveryMode(
+                            activeConversation.knowledgeBase!.notice!,
+                          ) === "reset"
+                        ) {
+                          requestKnowledgeBaseReset();
+                          return;
+                        }
+                        void retryCurrentKnowledgeBaseTurn();
+                      }}
                     >
                       {retryingKnowledgeBase && (
                         <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -826,13 +1990,13 @@ export default function ChatArea({
                         activeConversation.knowledgeBase.notice,
                       )}
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               </div>
             )}
 
           {/* Typing indicator when running */}
-          {(status === "running" || status === "pending") &&
+          {displayActiveTask &&
             (() => {
               let lastUserIdx = -1;
               for (let i = messages.length - 1; i >= 0; i--) {
@@ -856,7 +2020,7 @@ export default function ChatArea({
               />
             )}
 
-          <div ref={bottomRef} />
+          <div aria-hidden="true" />
         </div>
       </div>
 
@@ -867,6 +2031,7 @@ export default function ChatArea({
         composerPrefill={composerPrefill}
         responseLogicContext={responseLogicContext}
         knowledgeBaseProgress={knowledgeBaseProgress}
+        knowledgeBaseResetRevision={knowledgeBaseResetRevision}
       />
     </div>
   );
@@ -989,24 +2154,215 @@ function StandardConversationHint({
   );
 }
 
+type KnowledgeBaseStarterFileState = {
+  stage: KnowledgeBaseStarterUploadStage;
+  itemId?: string;
+  intentId?: string;
+  fileId?: string;
+  loadedBytes: number;
+  dashboardReceivedBytes?: number;
+  totalBytes: number;
+  error?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  recoveryAction?: UploadRecoveryAction;
+  recreateRequired?: boolean;
+  traceId?: string;
+  attempt?: number;
+  startedAt?: number;
+  elapsedMs?: number;
+};
+
+function createKnowledgeBaseStarterClientRequestId(startedAt: number) {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `kb-start-${startedAt}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createKnowledgeBaseStarterItemId(file: File) {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `kb-file-${suffix}-${file.size}`.slice(0, 255);
+}
+
+function formatKnowledgeBaseStarterBytes(bytes: number) {
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  const megabytes = bytes / 1024 / 1024;
+  if (megabytes >= 1) return `${megabytes.toFixed(megabytes >= 10 ? 1 : 2)} MB`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+function formatKnowledgeBaseStarterElapsed(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0
+    ? `${minutes}分${String(seconds).padStart(2, "0")}秒`
+    : `${seconds}秒`;
+}
+
+function knowledgeBaseStarterStageCopy(state: KnowledgeBaseStarterFileState) {
+  switch (state.stage) {
+    case "creating_intent":
+      return "正在创建 Dashboard 本地上传记录";
+    case "uploading_to_dashboard": {
+      const percent = state.totalBytes
+        ? Math.min(
+            100,
+            Math.round((state.loadedBytes / state.totalBytes) * 100),
+          )
+        : 0;
+      return `正在上传到 Dashboard ${percent}%`;
+    }
+    case "sealed":
+      return "Dashboard 已完整接收，正在准备云端上传";
+    case "creating_cloud_record":
+      return "正在创建云端文件记录";
+    case "uploading_to_cloud":
+      return "Dashboard 正在从本地副本上传云端";
+    case "waiting_cloud_ready":
+      return "文件已接收，正在等待云端就绪";
+    case "creating_record":
+      return "正在准备 Dashboard 接收";
+    case "recovering":
+      return "正在确认云端上传状态";
+    case "uploading": {
+      const percent = state.totalBytes
+        ? Math.min(
+            100,
+            Math.round((state.loadedBytes / state.totalBytes) * 100),
+          )
+        : 0;
+      return `正在上传 ${percent}%`;
+    }
+    case "server_processing":
+      return "文件已接收，正在等待云端就绪";
+    case "uploaded":
+      return "Dashboard 已确认，等待其余文件";
+    case "failed":
+      return state.error || "上传失败";
+    case "cancelled":
+      return "已停止，可继续上传";
+    default:
+      return "等待上传";
+  }
+}
+
+function knowledgeBaseStarterBatchCopy(phase: KnowledgeBaseStarterBatchPhase) {
+  switch (phase) {
+    case "uploading":
+      return "资料上传中，尚未启动知识库构建";
+    case "starting":
+      return "全部资料已确认，正在创建知识库任务";
+    case "recovering":
+      return "请求结果暂时未知，正在确认是否已启动";
+    case "completed":
+      return "资料与派发请求已由 Dashboard 接收，等待上游任务创建";
+    case "failed":
+      return "本批次尚未完成，可安全重试";
+    default:
+      return "准备上传企业资料";
+  }
+}
+
+function knowledgeBaseStarterRecoveryCopy(
+  state: KnowledgeBaseStarterFileState,
+) {
+  if (state.recoveryAction === "discard_and_recreate") {
+    return "重试时会先确认云端状态，再清理旧记录并创建新上传。";
+  }
+  if (state.recreateRequired) {
+    return "重试时会先确认云端状态，再清理旧记录并创建新上传。";
+  }
+  if (
+    state.recoveryAction === "retry_same_file" ||
+    state.recoveryAction === "check_status"
+  ) {
+    return "可安全确认并继续同一文件记录。";
+  }
+  if (state.recoveryAction === "refresh_page") {
+    return "当前上传凭证无效，请刷新页面后重新选择。";
+  }
+  if (state.recoveryAction === "contact_admin") {
+    return "该文件需要管理员协助处理。";
+  }
+  if (state.retryable === false) {
+    return "无法直接重试；请移除该文件后继续，或取消本批次重新选择。";
+  }
+  return null;
+}
+
 export function EmptyConversationHint({
   onStartKnowledgeBase,
+  onBatchCancelled,
+  eligible = true,
   companyName,
   companyConfigured,
   companyLoading,
+  resetRevision = 0,
 }: {
-  onStartKnowledgeBase: (input: DeepReportStartInput) => Promise<void>;
+  onStartKnowledgeBase: (
+    input: DeepReportStartInput,
+    lifecycle: KnowledgeBaseStarterLifecycle,
+  ) => Promise<KnowledgeBaseStarterStartOutcome>;
+  onBatchCancelled?: (resetRevision: number) => void | Promise<void>;
+  eligible?: boolean;
   companyName: string;
   companyConfigured: boolean;
   companyLoading: boolean;
+  resetRevision?: number;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [companyWebsite, setCompanyWebsite] = useState("");
   const [operatorNotes, setOperatorNotes] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [fileItems, setFileItems] = useState<
+    Array<{ itemId: string; file: File }>
+  >([]);
+  const files = useMemo(() => fileItems.map((item) => item.file), [fileItems]);
   const [isDragging, setIsDragging] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
+  const [isDiscarding, setIsDiscarding] = useState(false);
+  const [fileStates, setFileStates] = useState<
+    Map<string, KnowledgeBaseStarterFileState>
+  >(() => new Map());
+  const [uploadedReceipts, setUploadedReceipts] = useState<
+    Map<string, KnowledgeBaseStarterUploadReceipt>
+  >(() => new Map());
+  const [fileRecordIds, setFileRecordIds] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const [uploadHandles, setUploadHandles] = useState<
+    Map<string, ManagedUploadHandle>
+  >(() => new Map());
+  const [batchStartedAt, setBatchStartedAt] = useState<number | null>(null);
+  const [elapsedAt, setElapsedAt] = useState(() => Date.now());
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchPhase, setBatchPhase] =
+    useState<KnowledgeBaseStarterBatchPhase>("ready");
+  const [startPrepared, setStartPrepared] = useState(false);
+  const [startReservation, setStartReservation] = useState<NonNullable<
+    KnowledgeBaseStarterLifecycle["reservation"]
+  > | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const clientRequestIdRef = useRef<string | null>(null);
+  const batchLocked = batchStartedAt !== null;
+
+  useEffect(
+    () => () => {
+      // Reset-revision remounts and page exits revoke the entire starter
+      // lifecycle. No upload/stage/dispatch from the previous epoch may keep
+      // running after its UI and conversation have been discarded.
+      abortControllerRef.current?.abort(
+        Object.assign(new DOMException("页面生命周期已结束", "AbortError"), {
+          frontmindAbortSource: "PAGE_OR_RESET_LIFECYCLE",
+        }),
+      );
+    },
+    [],
+  );
 
   const addFiles = useCallback((fileList: FileList | File[]) => {
     const incoming = Array.from(fileList).filter((file) => {
@@ -1015,16 +2371,36 @@ export function EmptyConversationHint({
       toast.error("文件过大", { description: sizeError });
       return false;
     });
-    setFiles((current) => {
+    const candidates = incoming.map((file) => ({
+      itemId: createKnowledgeBaseStarterItemId(file),
+      file,
+    }));
+    setFileItems((current) => {
       const seen = new Set(
-        current.map((file) => `${file.name}:${file.size}:${file.lastModified}`),
+        current.map(
+          ({ file }) => `${file.name}:${file.size}:${file.lastModified}`,
+        ),
       );
       const next = [...current];
-      for (const file of incoming) {
+      for (const candidate of candidates) {
+        const { file } = candidate;
         const key = `${file.name}:${file.size}:${file.lastModified}`;
         if (!seen.has(key)) {
           seen.add(key);
-          next.push(file);
+          next.push(candidate);
+        }
+      }
+      return next;
+    });
+    setFileStates((current) => {
+      const next = new Map(current);
+      for (const { itemId, file } of candidates) {
+        if (!next.has(itemId)) {
+          next.set(itemId, {
+            stage: "queued",
+            loadedBytes: 0,
+            totalBytes: file.size,
+          });
         }
       }
       return next;
@@ -1034,19 +2410,410 @@ export function EmptyConversationHint({
   const resetDialog = useCallback(() => {
     setCompanyWebsite("");
     setOperatorNotes("");
-    setFiles([]);
+    setFileItems([]);
     setIsDragging(false);
     setIsStarting(false);
+    setIsDiscarding(false);
+    setFileStates(new Map());
+    setUploadedReceipts(new Map());
+    setFileRecordIds(new Map());
+    setUploadHandles(new Map());
+    setBatchStartedAt(null);
+    setElapsedAt(Date.now());
+    setBatchError(null);
+    setBatchPhase("ready");
+    setStartPrepared(false);
+    setStartReservation(null);
+    abortControllerRef.current = null;
+    clientRequestIdRef.current = null;
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   }, []);
 
-  const removeFile = useCallback((index: number) => {
-    setFiles((current) =>
-      current.filter((_, fileIndex) => fileIndex !== index),
+  const removeFile = useCallback(
+    async (index: number) => {
+      const removed = files[index];
+      const removedItem = fileItems[index];
+      // Once the server freezes a start manifest, removing one local row would
+      // leave the operation waiting forever for that exact ordinal. Release
+      // the whole reservation before choosing a different file set instead.
+      if (
+        !removed ||
+        !removedItem ||
+        isStarting ||
+        isDiscarding ||
+        startPrepared ||
+        startReservation
+      )
+        return;
+      const { itemId } = removedItem;
+      const fileId = fileRecordIds.get(itemId);
+      const uploadHandle = uploadHandles.get(itemId);
+      if (fileId || uploadHandle) {
+        setIsDiscarding(true);
+        try {
+          if (uploadHandle) await discardManagedUploadIntent(uploadHandle);
+          else await discardUnboundUpload(fileId!);
+        } catch (error) {
+          const code = String((error as { code?: unknown } | null)?.code || "");
+          toast.warning(
+            code === "UPLOAD_IN_PROGRESS"
+              ? "文件仍在处理中"
+              : "文件暂时无法移除",
+            {
+              description:
+                code === "UPLOAD_IN_PROGRESS"
+                  ? "云端仍在登记该文件，请稍后再试。"
+                  : uploadErrorMessage(error),
+            },
+          );
+          return;
+        } finally {
+          setIsDiscarding(false);
+        }
+      }
+
+      setFileItems((current) =>
+        current.filter((item) => item.itemId !== itemId),
+      );
+      setFileStates((states) => {
+        const next = new Map(states);
+        next.delete(itemId);
+        return next;
+      });
+      setUploadedReceipts((receipts) => {
+        const next = new Map(receipts);
+        next.delete(itemId);
+        return next;
+      });
+      setFileRecordIds((records) => {
+        const next = new Map(records);
+        next.delete(itemId);
+        return next;
+      });
+      setUploadHandles((handles) => {
+        const next = new Map(handles);
+        next.delete(itemId);
+        return next;
+      });
+    },
+    [
+      fileItems,
+      fileRecordIds,
+      files,
+      isDiscarding,
+      isStarting,
+      startPrepared,
+      startReservation,
+      uploadHandles,
+    ],
+  );
+
+  const discardBatchAndClose = useCallback(async () => {
+    if (isStarting || isDiscarding) return;
+    const targets = new Map<
+      string,
+      { fileId?: string; handle?: ManagedUploadHandle }
+    >();
+    for (const [itemId, fileId] of fileRecordIds) {
+      targets.set(itemId, { fileId });
+    }
+    // A sealed/processing intent intentionally has no provider fileId yet.
+    // Include it independently so closing the dialog cannot orphan local
+    // bytes or bypass the intent DELETE contract.
+    for (const [itemId, handle] of uploadHandles) {
+      targets.set(itemId, { ...targets.get(itemId), handle });
+    }
+    const records = Array.from(targets.entries());
+    setIsDiscarding(true);
+    if (startReservation) {
+      try {
+        const cancelled =
+          await cancelKnowledgeBaseStartReservation(startReservation);
+        setStartReservation(null);
+        await onBatchCancelled?.(cancelled.resetRevision);
+        void Promise.allSettled(
+          records.map(([, target]) => {
+            if (target.handle) {
+              return discardManagedUploadIntent(target.handle, {
+                deferProviderCleanup: true,
+              });
+            }
+            return discardUnboundUpload(target.fileId!);
+          }),
+        );
+        if (!onBatchCancelled) {
+          setIsDiscarding(false);
+          setDialogOpen(false);
+          resetDialog();
+        }
+        return;
+      } catch (error) {
+        const code = String((error as { code?: unknown } | null)?.code || "");
+        // A reset or retention tombstone already revoked the old reservation;
+        // treating it as released is safe and prevents an old tab from
+        // keeping the freshly reset starter UI blocked.
+        if (
+          ![
+            "KNOWLEDGE_BASE_RESET_REVISION_CHANGED",
+            "CONVERSATION_RESET",
+            "TURN_NOT_FOUND",
+            "BUILD_NOT_FOUND",
+            "RESERVATION_NOT_FOUND",
+          ].includes(code)
+        ) {
+          toast.warning("本批次暂时无法取消", {
+            description: uploadErrorMessage(error),
+          });
+          setIsDiscarding(false);
+          return;
+        }
+      }
+    }
+
+    const results = await Promise.allSettled(
+      records.map(([, target]) => {
+        if (target.handle) return discardManagedUploadIntent(target.handle);
+        return discardUnboundUpload(target.fileId!);
+      }),
     );
-  }, []);
+    const failed: Array<{ itemId: string; error: unknown }> = [];
+    const discardedItemIds: string[] = [];
+    results.forEach((result, index) => {
+      const itemId = records[index][0];
+      if (result.status === "fulfilled") discardedItemIds.push(itemId);
+      else failed.push({ itemId, error: result.reason });
+    });
+
+    if (failed.length > 0) {
+      const discarded = new Set(discardedItemIds);
+      setFileRecordIds((current) => {
+        const next = new Map(current);
+        for (const itemId of discarded) next.delete(itemId);
+        return next;
+      });
+      setUploadHandles((current) => {
+        const next = new Map(current);
+        for (const itemId of discarded) next.delete(itemId);
+        return next;
+      });
+      setUploadedReceipts((current) => {
+        const next = new Map(current);
+        for (const itemId of discarded) next.delete(itemId);
+        return next;
+      });
+      setFileStates((current) => {
+        const next = new Map(current);
+        for (const itemId of discarded) {
+          const file = fileItems.find((item) => item.itemId === itemId)?.file;
+          if (!file) continue;
+          next.set(itemId, {
+            stage: "queued",
+            loadedBytes: 0,
+            totalBytes: file.size,
+          });
+        }
+        return next;
+      });
+      const firstError = failed[0].error;
+      const code = String(
+        (firstError as { code?: unknown } | null)?.code || "",
+      );
+      toast.warning(
+        code === "UPLOAD_IN_PROGRESS"
+          ? "仍有文件正在云端处理"
+          : "部分文件暂时无法取消",
+        {
+          description:
+            code === "UPLOAD_IN_PROGRESS"
+              ? "请稍后再次点击取消；未清理的上传记录已保留。"
+              : uploadErrorMessage(firstError),
+        },
+      );
+      setIsDiscarding(false);
+      return;
+    }
+
+    setIsDiscarding(false);
+    setDialogOpen(false);
+    resetDialog();
+  }, [
+    fileItems,
+    fileRecordIds,
+    isDiscarding,
+    isStarting,
+    resetDialog,
+    onBatchCancelled,
+    startReservation,
+    uploadHandles,
+  ]);
+
+  useEffect(() => {
+    if (!isStarting || batchStartedAt === null) return;
+    setElapsedAt(Date.now());
+    const timer = setInterval(() => setElapsedAt(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [batchStartedAt, isStarting]);
+
+  const updateFileState = useCallback(
+    (itemId: string, file: File, update: KnowledgeBaseStarterFileUpdate) => {
+      if (update.clearFileRecord) {
+        setFileRecordIds((current) => {
+          const next = new Map(current);
+          next.delete(itemId);
+          return next;
+        });
+        setUploadHandles((current) => {
+          const next = new Map(current);
+          next.delete(itemId);
+          return next;
+        });
+      }
+      if (update.fileId) {
+        setFileRecordIds((current) => {
+          const next = new Map(current);
+          next.set(itemId, update.fileId!);
+          return next;
+        });
+      }
+      if (update.uploadHandle) {
+        setUploadHandles((current) => {
+          const next = new Map(current);
+          next.set(itemId, update.uploadHandle!);
+          return next;
+        });
+      }
+      if (update.receipt) {
+        setUploadedReceipts((current) => {
+          const next = new Map(current);
+          next.set(itemId, update.receipt!);
+          return next;
+        });
+      }
+      setFileStates((current) => {
+        const previous = current.get(itemId) || {
+          stage: "queued" as const,
+          loadedBytes: 0,
+          totalBytes: file.size,
+        };
+        const now = Date.now();
+        const isActive = [
+          "creating_intent",
+          "uploading_to_dashboard",
+          "sealed",
+          "creating_cloud_record",
+          "uploading_to_cloud",
+          "waiting_cloud_ready",
+          "creating_record",
+          "recovering",
+          "uploading",
+          "server_processing",
+        ].includes(update.stage);
+        const isTerminal = ["uploaded", "failed", "cancelled"].includes(
+          update.stage,
+        );
+        const startedAt =
+          previous.startedAt ?? (isActive || isTerminal ? now : undefined);
+        const next = new Map(current);
+        next.set(itemId, {
+          ...previous,
+          ...update,
+          ...(update.clearFileRecord ? { fileId: undefined } : {}),
+          loadedBytes:
+            typeof update.loadedBytes === "number"
+              ? Math.max(previous.loadedBytes, 0, update.loadedBytes)
+              : previous.loadedBytes,
+          dashboardReceivedBytes:
+            typeof update.dashboardReceivedBytes === "number"
+              ? Math.max(
+                  previous.dashboardReceivedBytes ?? 0,
+                  update.dashboardReceivedBytes,
+                )
+              : previous.dashboardReceivedBytes,
+          totalBytes:
+            typeof update.totalBytes === "number" && update.totalBytes > 0
+              ? update.totalBytes
+              : previous.totalBytes || file.size,
+          startedAt,
+          elapsedMs:
+            isTerminal && startedAt !== undefined
+              ? Math.max(0, now - startedAt)
+              : previous.elapsedMs,
+        });
+        return next;
+      });
+    },
+    [],
+  );
+
+  const uploadSummary = useMemo(() => {
+    const totalBytes = fileItems.reduce(
+      (total, { file }) => total + file.size,
+      0,
+    );
+    let transferredBytes = 0;
+    let dashboardReceivedBytes = 0;
+    let confirmedBytes = 0;
+    let confirmedCount = 0;
+    for (const { itemId, file } of fileItems) {
+      const state = fileStates.get(itemId);
+      // Browser transfer and even a provider PUT success are not a confirmed
+      // attachment until the managed upload returns its final receipt.
+      if (uploadedReceipts.has(itemId)) {
+        confirmedCount += 1;
+        confirmedBytes += file.size;
+      }
+      transferredBytes += Math.min(
+        file.size,
+        Math.max(0, state?.loadedBytes ?? 0),
+      );
+      dashboardReceivedBytes += Math.min(
+        file.size,
+        Math.max(0, state?.dashboardReceivedBytes ?? 0),
+      );
+    }
+    const rawPercent = totalBytes
+      ? Math.round((transferredBytes / totalBytes) * 100)
+      : 0;
+    return {
+      totalBytes,
+      transferredBytes,
+      dashboardReceivedBytes,
+      confirmedBytes,
+      uploadedCount: confirmedCount,
+      percent:
+        confirmedCount === files.length && files.length > 0
+          ? 100
+          : Math.min(99, rawPercent),
+    };
+  }, [fileItems, fileStates, files.length, uploadedReceipts]);
+
+  const nonRetryableFailedFile = useMemo(
+    () =>
+      fileItems.find(({ itemId }) => {
+        const state = fileStates.get(itemId);
+        return (
+          state?.stage === "failed" &&
+          state.retryable === false &&
+          !state.recreateRequired &&
+          !["retry_same_file", "check_status", "discard_and_recreate"].includes(
+            String(state.recoveryAction),
+          )
+        );
+      })?.file,
+    [fileItems, fileStates],
+  );
+  const hasCloudStatusCheckFailure = useMemo(
+    () =>
+      fileItems.some(({ itemId }) => {
+        const state = fileStates.get(itemId);
+        return (
+          state?.stage === "failed" && state.recoveryAction === "check_status"
+        );
+      }),
+    [fileItems, fileStates],
+  );
 
   const handleStart = useCallback(async () => {
     const normalizedCompanyName = companyName.trim();
@@ -1055,6 +2822,47 @@ export function EmptyConversationHint({
       return;
     }
 
+    const startedAt = batchStartedAt ?? Date.now();
+    const clientRequestId =
+      clientRequestIdRef.current ||
+      createKnowledgeBaseStarterClientRequestId(startedAt);
+    clientRequestIdRef.current = clientRequestId;
+    setBatchStartedAt(startedAt);
+    setElapsedAt(Date.now());
+    setBatchError(null);
+    setBatchPhase(
+      uploadedReceipts.size === files.length ? "starting" : "uploading",
+    );
+    setFileStates((current) => {
+      const next = new Map(current);
+      for (const { itemId, file } of fileItems) {
+        const state = next.get(itemId);
+        if (!state) {
+          next.set(itemId, {
+            stage: "queued",
+            loadedBytes: 0,
+            totalBytes: file.size,
+          });
+        } else if (state.stage === "failed" || state.stage === "cancelled") {
+          next.set(itemId, {
+            ...state,
+            stage: "queued",
+            error: undefined,
+            errorCode: undefined,
+            retryable: undefined,
+            recoveryAction: undefined,
+            recreateRequired: undefined,
+            traceId: undefined,
+            startedAt: undefined,
+            elapsedMs: undefined,
+          });
+        }
+      }
+      return next;
+    });
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setIsStarting(true);
     try {
       const payload = {
@@ -1064,21 +2872,88 @@ export function EmptyConversationHint({
         operatorNotes: operatorNotes.trim(),
         files,
       };
-      await onStartKnowledgeBase(payload);
-      setDialogOpen(false);
-      resetDialog();
+      const outcome = await onStartKnowledgeBase(payload, {
+        signal: controller.signal,
+        clientRequestId,
+        expectedResetRevision: resetRevision,
+        startedAt,
+        uploadedReceipts: new Map(uploadedReceipts),
+        fileRecordIds: new Map(fileRecordIds),
+        uploadHandles: new Map(uploadHandles),
+        fileAttempts: new Map(
+          fileItems.map(({ itemId }) => [
+            itemId,
+            fileStates.get(itemId)?.attempt ?? 0,
+          ]),
+        ),
+        transferredBytes: new Map(
+          fileItems.map(({ itemId }) => [
+            itemId,
+            fileStates.get(itemId)?.loadedBytes ?? 0,
+          ]),
+        ),
+        dashboardReceivedBytes: new Map(
+          fileItems.map(({ itemId }) => [
+            itemId,
+            fileStates.get(itemId)?.dashboardReceivedBytes ?? 0,
+          ]),
+        ),
+        fileItemIds: fileItems.map(({ itemId }) => itemId),
+        startPrepared,
+        onStartPrepared: setStartPrepared,
+        onReservation: setStartReservation,
+        onBatchPhase: setBatchPhase,
+        onFileUpdate: updateFileState,
+      });
+      if (outcome.status === "accepted" || outcome.status === "recovering") {
+        setBatchPhase(
+          outcome.status === "accepted" ? "completed" : "recovering",
+        );
+        setDialogOpen(false);
+        resetDialog();
+      }
+    } catch (error) {
+      setElapsedAt(Date.now());
+      setBatchPhase("failed");
+      setBatchError(
+        uploadWasCancelled(error, controller.signal)
+          ? "上传已停止。已完成的文件会保留，继续时只处理未完成资料。"
+          : uploadErrorMessage(error),
+      );
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsStarting(false);
     }
   }, [
+    batchStartedAt,
     companyName,
     companyConfigured,
     companyWebsite,
+    fileRecordIds,
+    fileItems,
+    fileStates,
     files,
     onStartKnowledgeBase,
     operatorNotes,
+    resetRevision,
     resetDialog,
+    startPrepared,
+    updateFileState,
+    uploadedReceipts,
+    uploadHandles,
   ]);
+
+  const stopUpload = useCallback(() => {
+    abortControllerRef.current?.abort(
+      Object.assign(new DOMException("用户已停止上传", "AbortError"), {
+        frontmindAbortSource: "USER_STOP",
+      }),
+    );
+  }, []);
+
+  if (!eligible && batchStartedAt === null && !dialogOpen) return null;
 
   return (
     <>
@@ -1124,9 +2999,12 @@ export function EmptyConversationHint({
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
-          if (isStarting) return;
-          setDialogOpen(open);
-          if (!open) resetDialog();
+          if (open) {
+            setDialogOpen(true);
+            return;
+          }
+          if (isStarting || isDiscarding) return;
+          void discardBatchAndClose();
         }}
       >
         <DialogContent className="w-[calc(100vw-1rem)] sm:max-w-[560px] max-h-[calc(100dvh-1rem)] overflow-y-auto p-4 sm:p-6">
@@ -1144,7 +3022,9 @@ export function EmptyConversationHint({
                 value={companyName}
                 readOnly
                 placeholder={companyLoading ? "正在读取企业信息…" : "尚未配置"}
-                disabled={isStarting || companyLoading}
+                disabled={
+                  isStarting || isDiscarding || companyLoading || batchLocked
+                }
               />
               {!companyLoading && !companyConfigured && (
                 <p className="text-xs leading-5 text-amber-700">
@@ -1161,7 +3041,7 @@ export function EmptyConversationHint({
                 value={companyWebsite}
                 onChange={(event) => setCompanyWebsite(event.target.value)}
                 placeholder="填写一个或多个企业官网，每行一个，例如 https://www.example.com"
-                disabled={isStarting}
+                disabled={isStarting || isDiscarding || batchLocked}
                 className="min-h-20 resize-none"
               />
               <p className="text-xs leading-5 text-muted-foreground">
@@ -1177,7 +3057,7 @@ export function EmptyConversationHint({
                 value={operatorNotes}
                 onChange={(event) => setOperatorNotes(event.target.value)}
                 placeholder="填写知识库范围、重点产品、目标用途或需要避开的内容"
-                disabled={isStarting}
+                disabled={isStarting || isDiscarding || batchLocked}
                 className="min-h-24 resize-none"
               />
             </div>
@@ -1189,22 +3069,38 @@ export function EmptyConversationHint({
               <div
                 role="button"
                 tabIndex={0}
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => {
+                  if (!isStarting && !isDiscarding && !batchLocked) {
+                    fileInputRef.current?.click();
+                  }
+                }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
+                  if (
+                    !isStarting &&
+                    !isDiscarding &&
+                    !batchLocked &&
+                    (event.key === "Enter" || event.key === " ")
+                  ) {
                     event.preventDefault();
                     fileInputRef.current?.click();
                   }
                 }}
                 onDragOver={(event) => {
                   event.preventDefault();
-                  if (!isStarting) setIsDragging(true);
+                  if (!isStarting && !isDiscarding && !batchLocked) {
+                    setIsDragging(true);
+                  }
                 }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={(event) => {
                   event.preventDefault();
                   setIsDragging(false);
-                  if (!isStarting && event.dataTransfer.files.length > 0) {
+                  if (
+                    !isStarting &&
+                    !isDiscarding &&
+                    !batchLocked &&
+                    event.dataTransfer.files.length > 0
+                  ) {
                     addFiles(event.dataTransfer.files);
                   }
                 }}
@@ -1213,7 +3109,8 @@ export function EmptyConversationHint({
                   isDragging
                     ? "border-primary/70 bg-primary/5"
                     : "border-border hover:border-primary/40 hover:bg-muted/40",
-                  isStarting && "cursor-not-allowed opacity-60",
+                  (isStarting || isDiscarding || batchLocked) &&
+                    "cursor-not-allowed opacity-60",
                 )}
               >
                 <UploadCloud className="mb-3 h-6 w-6 text-primary" />
@@ -1228,7 +3125,7 @@ export function EmptyConversationHint({
                   type="file"
                   multiple
                   className="sr-only"
-                  disabled={isStarting}
+                  disabled={isStarting || isDiscarding || batchLocked}
                   onChange={(event) => {
                     if (event.target.files) addFiles(event.target.files);
                   }}
@@ -1237,34 +3134,153 @@ export function EmptyConversationHint({
 
               {files.length > 0 && (
                 <div className="space-y-2 rounded-xl border border-border/70 bg-muted/20 p-3">
-                  {files.map((file, index) => (
+                  {fileItems.map(({ itemId, file }, index) => (
                     <div
-                      key={`${file.name}-${file.size}-${file.lastModified}`}
+                      key={itemId}
                       className="flex items-center justify-between gap-3 rounded-lg bg-background/80 px-3 py-2 text-sm"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="truncate text-foreground/80">
                           {file.name}
                         </div>
                         <div className="text-xs text-muted-foreground">
                           {(file.size / 1024 / 1024).toFixed(2)} MB
                         </div>
+                        {batchStartedAt !== null &&
+                          (() => {
+                            const state = fileStates.get(itemId) || {
+                              stage: "queued" as const,
+                              loadedBytes: 0,
+                              totalBytes: file.size,
+                            };
+                            const fileElapsedMs = state.startedAt
+                              ? (state.elapsedMs ?? elapsedAt - state.startedAt)
+                              : null;
+                            return (
+                              <>
+                                <div
+                                  className={cn(
+                                    "mt-1 text-xs",
+                                    state.stage === "failed"
+                                      ? "text-destructive"
+                                      : state.stage === "uploaded"
+                                        ? "text-emerald-700"
+                                        : "text-muted-foreground",
+                                  )}
+                                >
+                                  {knowledgeBaseStarterStageCopy(state)}
+                                </div>
+                                {state.attempt !== undefined && (
+                                  <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                                    第 {state.attempt} 次尝试
+                                  </div>
+                                )}
+                                {state.stage === "failed" &&
+                                  knowledgeBaseStarterRecoveryCopy(state) && (
+                                    <div className="mt-0.5 text-[11px] leading-4 text-destructive">
+                                      {knowledgeBaseStarterRecoveryCopy(state)}
+                                    </div>
+                                  )}
+                                {fileElapsedMs !== null && (
+                                  <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+                                    本次耗时{" "}
+                                    {formatKnowledgeBaseStarterElapsed(
+                                      fileElapsedMs,
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                       </div>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
+                        aria-label={`移除 ${file.name}`}
                         className="h-7 w-7 shrink-0"
-                        disabled={isStarting}
+                        disabled={
+                          isStarting ||
+                          isDiscarding ||
+                          startPrepared ||
+                          Boolean(startReservation)
+                        }
                         onClick={(event) => {
                           event.stopPropagation();
-                          removeFile(index);
+                          void removeFile(index);
                         }}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {batchStartedAt !== null && files.length > 0 && (
+                <div
+                  aria-label="资料上传进度"
+                  className="space-y-3 rounded-xl border border-border/70 bg-background/90 p-4"
+                >
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium text-foreground/80">
+                      资料上传进度
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {uploadSummary.percent}%
+                    </span>
+                  </div>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {knowledgeBaseStarterBatchCopy(batchPhase)}
+                  </p>
+                  <Progress
+                    aria-label="总体上传进度"
+                    value={uploadSummary.percent}
+                  />
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>
+                      已完成 {uploadSummary.uploadedCount}/{files.length} 个文件
+                    </span>
+                    <span>
+                      已从浏览器传出
+                      {formatKnowledgeBaseStarterBytes(
+                        uploadSummary.transferredBytes,
+                      )}
+                      /
+                      {formatKnowledgeBaseStarterBytes(
+                        uploadSummary.totalBytes,
+                      )}
+                    </span>
+                    <span>
+                      Dashboard 已完整确认
+                      {formatKnowledgeBaseStarterBytes(
+                        uploadSummary.confirmedBytes,
+                      )}
+                      /
+                      {formatKnowledgeBaseStarterBytes(
+                        uploadSummary.totalBytes,
+                      )}
+                    </span>
+                    <span>
+                      {batchPhase === "completed"
+                        ? "Dashboard 派发已接收，等待上游任务创建"
+                        : "上游任务尚未创建"}
+                    </span>
+                    <span>
+                      已用时{" "}
+                      {formatKnowledgeBaseStarterElapsed(
+                        elapsedAt - batchStartedAt,
+                      )}
+                    </span>
+                  </div>
+                  {batchError && (
+                    <div
+                      role="alert"
+                      className="rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive"
+                    >
+                      {batchError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1275,21 +3291,37 @@ export function EmptyConversationHint({
               type="button"
               variant="outline"
               onClick={() => {
-                setDialogOpen(false);
-                resetDialog();
+                if (isStarting) {
+                  stopUpload();
+                } else {
+                  void discardBatchAndClose();
+                }
               }}
-              disabled={isStarting}
+              disabled={
+                isDiscarding ||
+                (isStarting && uploadSummary.uploadedCount === files.length)
+              }
             >
-              取消
+              {isDiscarding
+                ? "正在取消"
+                : isStarting
+                  ? uploadSummary.uploadedCount === files.length
+                    ? "正在启动"
+                    : "停止上传"
+                  : startReservation
+                    ? "取消本批次并重新选择"
+                    : "取消"}
             </Button>
             <Button
               type="button"
               onClick={() => void handleStart()}
               disabled={
                 isStarting ||
+                isDiscarding ||
                 companyLoading ||
                 !companyConfigured ||
-                !companyName.trim()
+                !companyName.trim() ||
+                Boolean(nonRetryableFailedFile)
               }
               className="gap-2"
             >
@@ -1298,7 +3330,19 @@ export function EmptyConversationHint({
               ) : (
                 <BookOpen className="h-4 w-4" />
               )}
-              开始构建
+              {isStarting
+                ? uploadSummary.uploadedCount === files.length
+                  ? "正在启动构建"
+                  : "正在上传资料"
+                : batchStartedAt !== null
+                  ? nonRetryableFailedFile
+                    ? "请先移除失败文件"
+                    : hasCloudStatusCheckFailure
+                      ? "重新检查云端状态"
+                      : uploadSummary.uploadedCount === files.length
+                        ? "重试启动"
+                        : "重试并继续"
+                  : "开始构建"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1875,14 +3919,18 @@ function UserAttachmentImage({ attachment }: { attachment: Attachment }) {
   );
 }
 
-function MessageBubble({
+export function MessageBubble({
   message,
   isRunning,
+  generalChatLinks,
+  fixedElapsedTime,
   suppressKnowledgeArtifacts,
   onDelete,
 }: {
   message: LocalMessage;
   isRunning?: boolean;
+  generalChatLinks?: boolean;
+  fixedElapsedTime?: number;
   suppressKnowledgeArtifacts?: boolean;
   onDelete?: () => void;
 }) {
@@ -1926,28 +3974,11 @@ function MessageBubble({
     [],
   );
 
-  // Calculate running elapsed time for this specific response
-  const getRunningElapsed = () => {
-    if (
-      !isUser &&
-      isRunning &&
-      message.responseStartedAt &&
-      !message.elapsedTime
-    ) {
-      const elapsed = (Date.now() - message.responseStartedAt) / 1000;
-      if (elapsed >= 0) {
-        if (elapsed < 60) return `${elapsed.toFixed(1)}s`;
-        const mins = Math.floor(elapsed / 60);
-        const secs = (elapsed % 60).toFixed(0);
-        return `${mins}m ${secs}s`;
-      }
-    }
-    return null;
-  };
-
   const getCompletedElapsed = () => {
-    if (message.elapsedTime != null && message.elapsedTime >= 0) {
-      const elapsed = message.elapsedTime;
+    // Conversation settlement timestamps survive hydrate; prefer that fixed
+    // duration so refresh never changes the completed footer.
+    const elapsed = fixedElapsedTime ?? message.elapsedTime;
+    if (elapsed != null && elapsed >= 0) {
       if (elapsed < 60) return `${elapsed.toFixed(1)}s`;
       const mins = Math.floor(elapsed / 60);
       const secs = (elapsed % 60).toFixed(0);
@@ -1956,9 +3987,8 @@ function MessageBubble({
     return null;
   };
 
-  const runningElapsed = getRunningElapsed();
   const completedElapsed = getCompletedElapsed();
-  const elapsedDisplay = completedElapsed || runningElapsed;
+  const elapsedDisplay = completedElapsed;
 
   // Check file types
   const isMdFile = (fileName: string) => {
@@ -2021,6 +4051,34 @@ function MessageBubble({
       }
     });
   };
+
+  const handleArtifactDownload = useCallback(
+    async (href: string) => {
+      const matchingImage = message.inlineImages?.find(
+        (image) => image.src === href,
+      );
+      const matchingFile = visibleOutputFiles?.find(
+        (file) => file.fileUrl === href,
+      );
+      const downloadName = sanitizeBrandText(
+        matchingFile?.fileName ||
+          matchingImage?.alt ||
+          href.split("/").filter(Boolean).at(-2) ||
+          "frontmind-artifact",
+      );
+      try {
+        const blobUrl = await fetchWithAuth(href, downloadName);
+        nativeDownload(blobUrl, downloadName);
+        URL.revokeObjectURL(blobUrl);
+      } catch (error) {
+        console.error("Artifact download failed:", error);
+        toast.error("文件下载失败", {
+          description: error instanceof Error ? error.message : "请稍后重试",
+        });
+      }
+    },
+    [message.inlineImages, visibleOutputFiles],
+  );
 
   return (
     <>
@@ -2112,6 +4170,8 @@ function MessageBubble({
                 ) : (
                   <MarkdownRenderer
                     content={sanitizedContent}
+                    generalChatLinks={generalChatLinks}
+                    onArtifactDownload={handleArtifactDownload}
                     className="prose prose-sm max-w-none prose-p:my-1.5 prose-headings:my-2 prose-pre:my-2 prose-ul:my-1 prose-ol:my-1"
                   />
                 )}
@@ -2386,7 +4446,39 @@ function StatusBadge({
   );
 }
 
-function formatExecutionDuration(seconds: number) {
+export function HeaderExecutionDuration({
+  startedAt,
+  completedAt,
+  active,
+}: {
+  startedAt: number;
+  completedAt?: number;
+  active: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [active, startedAt]);
+
+  const endedAt = active ? now : completedAt;
+  if (endedAt === undefined) return null;
+  const seconds = Math.max(0, (endedAt - startedAt) / 1_000);
+  return (
+    <span
+      className="inline-flex items-center gap-1 font-mono"
+      data-testid="header-execution-duration"
+    >
+      <Clock className="h-3 w-3" />
+      {formatExecutionDuration(seconds)}
+    </span>
+  );
+}
+
+export function formatExecutionDuration(seconds: number) {
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);

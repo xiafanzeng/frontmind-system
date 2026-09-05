@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const authMock = vi.hoisted(() => ({
   login: vi.fn(),
@@ -22,6 +22,7 @@ import Login from "./Login";
 
 describe("Login", () => {
   beforeEach(() => {
+    vi.stubEnv("VITE_FRONTMIND_WEBSITE_URL", "https://website.example.invalid");
     authMock.login.mockReset();
     authMock.login.mockResolvedValue({
       user: {
@@ -34,6 +35,10 @@ describe("Login", () => {
     });
     toastMock.error.mockReset();
     window.history.replaceState({}, "", "/login");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("shows the FrontMind positioning and the approved school laboratory brand", () => {
@@ -56,9 +61,25 @@ describe("Login", () => {
     expect(screen.getByTestId("presales-login-hint")).toHaveTextContent(
       "请返回官网完成售前流程，使用售前分配的账号登录。",
     );
+  });
+
+  it("links back to the website URL supplied by the release profile", () => {
+    render(<Login />);
+
     expect(screen.getByRole("link", { name: "返回官网" })).toHaveAttribute(
       "href",
-      "https://www.frontmind.cn",
+      "https://website.example.invalid",
+    );
+  });
+
+  it("falls back to a same-origin link outside a configured release build", () => {
+    vi.stubEnv("VITE_FRONTMIND_WEBSITE_URL", "  ");
+
+    render(<Login />);
+
+    expect(screen.getByRole("link", { name: "返回官网" })).toHaveAttribute(
+      "href",
+      "/",
     );
   });
 

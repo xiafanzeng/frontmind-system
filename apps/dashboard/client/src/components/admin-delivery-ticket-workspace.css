@@ -696,49 +696,70 @@
   overflow-y: auto;
 }
 
-.admin-ticket-list > button {
-  display: grid;
+.admin-ticket-list > article {
+  position: relative;
   width: 100%;
-  gap: 9px;
-  padding: 16px 17px;
   border-bottom: 1px solid #eee8f2;
-  text-align: left;
   transition:
     background 0.18s ease,
     box-shadow 0.18s ease;
 }
 
-.admin-ticket-list > button:hover,
-.admin-ticket-list > button.is-selected {
+.admin-ticket-list > article:hover,
+.admin-ticket-list > article.is-selected {
   background: #fff;
 }
 
-.admin-ticket-list > button.is-selected {
+.admin-ticket-list > article.is-pending-alert {
+  outline: 1px solid #ef4444;
+  outline-offset: -1px;
+  background: #fff5f5;
+}
+
+.admin-ticket-list > article.is-pending-alert:hover {
+  background: #fff1f2;
+}
+
+.admin-ticket-list > article.is-selected {
   box-shadow: inset 3px 0 #5b2a86;
 }
 
-.admin-ticket-list > button > div,
-.admin-ticket-list > button > footer {
+.admin-ticket-list > article.is-pending-alert.is-selected {
+  outline-color: #ef4444;
+  background: #fff1f2;
+  box-shadow: inset 3px 0 #5b2a86;
+}
+
+.admin-ticket-list-main {
+  display: grid;
+  width: 100%;
+  gap: 9px;
+  padding: 16px 52px 16px 17px;
+  text-align: left;
+}
+
+.admin-ticket-list-main > div,
+.admin-ticket-list-main > footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.admin-ticket-list > button > div > span:first-child {
+.admin-ticket-list-main > div > span:first-child {
   color: #5b2a86;
   font-size: 12px;
   font-weight: 600;
 }
 
-.admin-ticket-list > button > strong {
+.admin-ticket-list-main > strong {
   color: #332842;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.55;
 }
 
-.admin-ticket-list > button > p {
+.admin-ticket-list-main > p {
   display: -webkit-box;
   overflow: hidden;
   color: #716a80;
@@ -748,9 +769,34 @@
   -webkit-line-clamp: 2;
 }
 
-.admin-ticket-list > button > footer {
+.admin-ticket-list-main > footer {
   color: #9a94a8;
   font-size: 12px;
+}
+
+.admin-ticket-list-delete {
+  position: absolute;
+  right: 13px;
+  bottom: 13px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  color: #dc2626;
+  background: #fff;
+}
+
+.admin-ticket-list-delete:hover {
+  border-color: #ef4444;
+  background: #fff1f2;
+}
+
+.admin-ticket-list-delete:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .admin-ticket-list > .admin-ticket-load-more {
@@ -781,6 +827,11 @@
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.admin-ticket-status.is-pending-alert {
+  color: #b91c1c;
+  background: #fee2e2;
 }
 
 .admin-ticket-status.is-needs_information,

@@ -2,16 +2,104 @@ import React from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { knowledgeBaseUserMessagePublicId } from "@shared/knowledge-base-message";
+import { generalChatTerminalMessagePublicId } from "@shared/frontmind-general-chat-terminal";
 import {
   ConversationProvider,
+  appendOrUpsertConversationMessage,
+  applyKnowledgeBaseObservation,
+  conversationSyncErrorMessage,
+  currentKnowledgeBaseReplySnapshot,
+  mergeKnowledgeBaseHydration,
+  mergeDirtyConversationHydration,
   mergeServerOwnedKnowledgeBaseMessages,
   parseOutputMessages,
   prepareConversationForCloud,
+  remoteMissingLocalConversations,
   sanitizeKnowledgeBaseCustomerMarkdown,
   sanitizeKnowledgeBaseOutputMessages,
   useConversation,
   type Conversation,
 } from "./ConversationContext";
+
+describe("general-chat terminal message upsert", () => {
+  it("atomically replaces the same deterministic notice and leaves ordinary duplicate repair unchanged", () => {
+    const terminalId = generalChatTerminalMessagePublicId({
+      conversationId: "conversation-1",
+      taskId: "task-1",
+      errorCode: "PARTIAL_RESULT_PRESERVED",
+    });
+    const first = {
+      id: terminalId,
+      role: "assistant" as const,
+      content: "旧提示",
+      timestamp: 1,
+    };
+    const next = appendOrUpsertConversationMessage([first], {
+      ...first,
+      content: "部分结果已保留",
+      timestamp: 2,
+    });
+    expect(next).toEqual([
+      expect.objectContaining({
+        id: terminalId,
+        content: "部分结果已保留",
+        timestamp: 2,
+      }),
+    ]);
+
+    const ordinary = appendOrUpsertConversationMessage(
+      [{ ...first, id: "ordinary" }],
+      { ...first, id: "ordinary", content: "第二条" },
+    );
+    expect(ordinary.map(({ id }) => id)).toEqual(["ordinary", "ordinary~2"]);
+  });
+});
+
+describe("conversation sync errors", () => {
+  it("promises preservation for both transport and business write failures", () => {
+    expect(conversationSyncErrorMessage(new TypeError("Failed to fetch"))).toBe(
+      "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。",
+    );
+    expect(conversationSyncErrorMessage(new Error("保存被拒绝"))).toBe(
+      "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。",
+    );
+  });
+});
+
+describe("dirty hydration fencing", () => {
+  const conversation = (id: string): Conversation => ({
+    id,
+    title: id,
+    messages: [],
+    status: "idle",
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  it("preserves remote-missing dirty conversations on a later refresh", () => {
+    const local = [conversation("clean"), conversation("dirty")];
+    expect(
+      remoteMissingLocalConversations(
+        local,
+        new Set<string>(),
+        false,
+        (id) => id === "dirty",
+      ).map(({ id }) => id),
+    ).toEqual(["dirty"]);
+  });
+
+  it("preserves every optimistic conversation during initial hydration", () => {
+    const local = [conversation("already-remote"), conversation("new-local")];
+    expect(
+      remoteMissingLocalConversations(
+        local,
+        new Set(["already-remote"]),
+        true,
+        () => false,
+      ).map(({ id }) => id),
+    ).toEqual(["new-local"]);
+  });
+});
 
 describe("knowledge-base attachment payload reconciliation", () => {
   function pendingUserMessage(input: {
@@ -189,6 +277,234 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <ConversationProvider>{children}</ConversationProvider>;
 }
 
+describe("knowledge-base reply snapshots", () => {
+  it("returns all reply coordinates from one rendered presentation", () => {
+    const value: Conversation = {
+      ...conversation("reply-snapshot"),
+      status: "awaiting_input",
+      messages: [
+        {
+          id: "presentation",
+          role: "assistant",
+          content: "## 当前节点\n正文",
+          timestamp: 1,
+          knowledgeBase: {
+            kind: "presentation",
+            turnId: "turn-7",
+            presentationKey: "presentation-7",
+            generation: 3,
+            revision: 7,
+            leafId: "1.8",
+            serverOwned: true,
+          },
+        },
+      ],
+      knowledgeBase: {
+        initialized: true,
+        generation: 3,
+        stateEpoch: 9,
+        activeTurnId: null,
+        activeClientRequestId: null,
+        presentationTurnId: "turn-7",
+        interactionState: "awaiting_input",
+        canReply: true,
+        presentationKey: "presentation-7",
+        revision: 7,
+        leafId: "1.8",
+        notice: null,
+      },
+    };
+    expect(currentKnowledgeBaseReplySnapshot(value)).toEqual({
+      generation: 3,
+      stateEpoch: 9,
+      revision: 7,
+      contentVersion: 0,
+      leafId: "1.8",
+      presentationKey: "presentation-7",
+      presentationTurnId: "turn-7",
+    });
+  });
+
+  it("clears stale task pointers when the authoritative id is explicitly null", () => {
+    const next = applyKnowledgeBaseObservation(
+      {
+        ...conversation("released-kb-task"),
+        taskId: "stale-task",
+        previousResponseId: "stale-task",
+      },
+      {
+        generation: 1,
+        stateEpoch: 1,
+        authoritativeTaskId: null,
+        activeTurn: null,
+        completedTurn: null,
+        approvedPresentation: null,
+        progress: null,
+        notice: null,
+        interaction: {
+          interactionState: "executing",
+          canReply: false,
+          canPublish: false,
+          lockReason: "任务仍在执行",
+          progress: null,
+        },
+      } as any,
+    );
+    expect(next.taskId).toBeUndefined();
+    expect(next.previousResponseId).toBeUndefined();
+  });
+
+  it("commits the server-owned pre-create business projection without inferring from the notice", () => {
+    const progress = {
+      build: { id: "build-precreate", revision: 0, currentLeafId: null },
+      contentAvailability: "none",
+      operationState: "reset_required",
+      resetAllowed: true,
+      taskCreationState: "not_attempted",
+      failureStage: "provider_file_registration",
+      retainedCustomerAttachmentCount: 9,
+      generatedSystemAttachmentCount: 2,
+      settledAt: 1_787_000_000_000,
+    } as any;
+    const next = applyKnowledgeBaseObservation(
+      conversation("precreate-failure"),
+      {
+        generation: 1,
+        stateEpoch: 2,
+        authoritativeTaskId: null,
+        activeTurn: null,
+        completedTurn: null,
+        approvedPresentation: null,
+        progress,
+        notice: {
+          key: "safe-notice",
+          code: "RESET_REQUIRED",
+          severity: "warning",
+          message: "请申请重置",
+          retryable: false,
+          recoveryAction: "approve_reset",
+          attachmentCount: 11,
+          turnId: "turn-precreate",
+          createdAt: 1,
+        },
+        interaction: {
+          interactionState: "failed",
+          canReply: false,
+          canPublish: false,
+          lockReason: "RESET_REQUIRED",
+          progress,
+        },
+      } as any,
+    );
+
+    expect(next.knowledgeBase).toMatchObject({
+      contentAvailability: "none",
+      operationState: "reset_required",
+      resetAllowed: true,
+      taskCreationState: "not_attempted",
+      failureStage: "provider_file_registration",
+      retainedCustomerAttachmentCount: 9,
+      generatedSystemAttachmentCount: 2,
+      settledAt: 1_787_000_000_000,
+    });
+    expect(next.knowledgeBase?.notice?.severity).toBe("warning");
+    expect(next.knowledgeBase?.notice?.attachmentCount).toBe(11);
+  });
+
+  it("applies an equivalent observation to repair optimistic running state", () => {
+    const progress = {
+      build: {
+        id: "build-1",
+        revision: 1,
+        currentLeafId: "1.2",
+      },
+    } as any;
+    const next = applyKnowledgeBaseObservation(
+      {
+        ...conversation("equivalent-observation"),
+        status: "running",
+        messages: [
+          {
+            id: "optimistic-confirmation",
+            role: "user",
+            content: "确认",
+            timestamp: 1,
+            knowledgeBase: {
+              kind: "pending_user",
+              clientRequestId: "request-confirm",
+              serverOwned: false,
+            },
+          },
+        ],
+        knowledgeBase: {
+          initialized: true,
+          generation: 2,
+          stateEpoch: 9,
+          activeTurnId: null,
+          activeClientRequestId: null,
+          interactionState: "executing",
+          canReply: false,
+          presentationKey: "a".repeat(64),
+          presentationTurnId: null,
+          revision: 1,
+          leafId: "1.2",
+          notice: null,
+        },
+      },
+      {
+        generation: 2,
+        stateEpoch: 9,
+        authoritativeTaskId: "task-completed",
+        activeTurn: null,
+        completedTurn: null,
+        progress,
+        approvedPresentation: {
+          turnId: "turn-confirm",
+          clientRequestId: "request-confirm",
+          presentationKey: "a".repeat(64),
+          revision: 1,
+          leafId: "1.2",
+          visibleMarkdown: "## 当前节点\n已批准正文",
+          contentSha256: "a".repeat(64),
+          imageState: "attached",
+          resources: [],
+        },
+        notice: null,
+        interaction: {
+          interactionState: "awaiting_input",
+          canReply: true,
+          canPublish: false,
+          lockReason: null,
+          progress,
+        },
+      } as any,
+    );
+
+    expect(next.status).toBe("awaiting_input");
+    expect(next.knowledgeBase).toMatchObject({
+      generation: 2,
+      stateEpoch: 9,
+      interactionState: "awaiting_input",
+      canReply: true,
+    });
+    expect(next.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringContaining("turn-confirm"),
+          knowledgeBase: expect.objectContaining({
+            turnId: "turn-confirm",
+            serverOwned: true,
+          }),
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: "## 当前节点\n已批准正文",
+        }),
+      ]),
+    );
+  });
+});
+
 describe("ConversationProvider cloud hydration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -203,6 +519,39 @@ describe("ConversationProvider cloud hydration", () => {
     vi.useRealTimers();
   });
 
+  it("accepts a higher durable KB revision even when its display sequence is lower", () => {
+    const state = (revision: number, stateEpoch: number) => ({
+      initialized: true,
+      generation: 1,
+      stateEpoch,
+      revision,
+      leafId: `leaf-${revision}`,
+      presentationKey: `presentation-${revision}`,
+      presentationTurnId: `turn-${revision}`,
+      activeTurnId: null,
+      activeClientRequestId: null,
+      interactionState: "awaiting_input" as const,
+      canReply: true,
+      displaySequence: revision === 7 ? 70 : 1,
+      notice: null,
+    });
+    const local: Conversation = {
+      ...conversation("higher-revision-hydration"),
+      status: "running",
+      knowledgeBase: state(7, 7),
+    };
+    const remote: Conversation = {
+      ...conversation("higher-revision-hydration"),
+      status: "awaiting_input",
+      knowledgeBase: state(8, 8),
+    };
+
+    expect(mergeKnowledgeBaseHydration(local, remote)).toMatchObject({
+      status: "awaiting_input",
+      knowledgeBase: { revision: 8, stateEpoch: 8, displaySequence: 1 },
+    });
+  });
+
   it("hydrates conversations from the database", async () => {
     const { result } = renderHook(() => useConversation(), { wrapper });
 
@@ -211,6 +560,80 @@ describe("ConversationProvider cloud hydration", () => {
     expect(result.current.state.conversations.map((item) => item.id)).toEqual([
       "account-1",
     ]);
+  });
+
+  it("settles a failed initial list read and can explicitly retry it", async () => {
+    mocks.listRefetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const { result } = renderHook(() => useConversation(), { wrapper });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.hydrated).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.syncError).toBe(
+      "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。",
+    );
+    expect(result.current.state.conversations).toEqual([]);
+
+    await act(async () => {
+      await result.current.refreshConversations();
+    });
+    await waitFor(() => expect(result.current.syncError).toBeNull());
+    expect(result.current.state.conversations.map((item) => item.id)).toEqual([
+      "account-1",
+    ]);
+  });
+
+  it("gives an invalidated initial hydration a finite retryable outcome", async () => {
+    let resolveInitial: ((value: { data: Conversation[] }) => void) | undefined;
+    mocks.listRefetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveInitial = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useConversation(), { wrapper });
+
+    expect(result.current.hydrated).toBe(false);
+    act(() => result.current.discardConversationLocally("stale-local"));
+    await act(async () => {
+      resolveInitial?.({ data: [conversation("stale-remote")] });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.hydrated).toBe(false);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.syncError).toContain("请重新读取");
+    expect(result.current.state.conversations).toEqual([]);
+  });
+
+  it("clears a released response-logic task pointer so the next turn can start fresh", async () => {
+    mocks.listRefetch.mockResolvedValue({
+      data: [
+        {
+          ...conversation("response-logic-released"),
+          status: "completed",
+          taskId: "task-gone",
+          taskUrl: "https://tasks.example/task-gone",
+          previousResponseId: "task-gone",
+        },
+      ],
+    });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => {
+      result.current.updateStatus("response-logic-released", "error", {
+        clearTaskPointer: true,
+        completedAt: Date.now(),
+      });
+    });
+
+    const released = result.current.state.conversations.find(
+      (item) => item.id === "response-logic-released",
+    );
+    expect(released?.taskId).toBeUndefined();
+    expect(released?.taskUrl).toBeUndefined();
+    expect(released?.previousResponseId).toBeUndefined();
   });
 
   it("revokes and removes an attachment blob only after it expires", async () => {
@@ -600,6 +1023,328 @@ describe("ConversationProvider cloud hydration", () => {
     expect(mocks.deleteConversation).not.toHaveBeenCalled();
   });
 
+  it("does not delete or tombstone a pending ordinary-chat user message", async () => {
+    const pendingConversation: Conversation = {
+      ...conversation("pending-general-chat-delete"),
+      executionKind: "general_chat_v2",
+      messages: [
+        {
+          id: "pending-user",
+          role: "user",
+          content: "尚未确认的请求",
+          timestamp: 100,
+          generalChatDispatch: {
+            schemaVersion: 1,
+            kind: "pending_user",
+            clientRequestId: "pending-user",
+            providerPrompt: "尚未确认的 Provider 请求",
+            localAssetIds: [],
+            localTaskId: null,
+            modelProfile: "frontmind-base",
+          },
+        },
+        {
+          id: "settled-user",
+          role: "user",
+          content: "已确认的普通消息",
+          timestamp: 90,
+        },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [pendingConversation] });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => {
+      result.current.deleteMessage(
+        "pending-general-chat-delete",
+        "pending-user",
+      );
+    });
+
+    let current = result.current.state.conversations.find(
+      (item) => item.id === "pending-general-chat-delete",
+    );
+    expect(current?.messages.map((message) => message.id)).toEqual([
+      "settled-user",
+      "pending-user",
+    ]);
+    expect(current?.deletedMessageIds ?? []).not.toContain("pending-user");
+
+    act(() => {
+      result.current.deleteMessage(
+        "pending-general-chat-delete",
+        "settled-user",
+      );
+    });
+
+    current = result.current.state.conversations.find(
+      (item) => item.id === "pending-general-chat-delete",
+    );
+    expect(current?.messages.map((message) => message.id)).toEqual([
+      "pending-user",
+    ]);
+    expect(current?.deletedMessageIds).toContain("settled-user");
+  });
+
+  it("hides an empty current-turn projection, preserves its terminal notice, and restores the same ID once", async () => {
+    const terminalId = generalChatTerminalMessagePublicId({
+      conversationId: "projection-recovery",
+      taskId: "task-1",
+      errorCode: "PARTIAL_RESULT_PRESERVED",
+    });
+    const projection = {
+      id: "projection-1",
+      upstreamOutputId: "event-row-1",
+      role: "assistant" as const,
+      content: "可恢复结果",
+      timestamp: 2,
+      generalChat: {
+        schemaVersion: 1 as const,
+        kind: "assistant_projection" as const,
+        turnId: "turn-1",
+        agentTaskId: "task-1",
+        providerEventId: "provider-event-1",
+        serverOwned: true as const,
+      },
+    };
+    mocks.listRefetch.mockResolvedValueOnce({
+      data: [
+        {
+          ...conversation("projection-recovery"),
+          executionKind: "general_chat_v2",
+          taskId: "task-1",
+          messages: [
+            {
+              id: "user-1",
+              role: "user",
+              content: "当前轮",
+              timestamp: 1,
+            },
+            projection,
+            {
+              id: terminalId,
+              role: "assistant",
+              content: "部分结果已保留",
+              timestamp: 3,
+            },
+          ],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    mocks.syncSnapshot.mockClear();
+
+    act(() => {
+      result.current.updateAssistantMessages("projection-recovery", []);
+    });
+    expect(
+      result.current.state.conversations
+        .find((item) => item.id === "projection-recovery")
+        ?.messages.map((message) => message.id),
+    ).toEqual(["user-1", terminalId]);
+
+    act(() => {
+      result.current.updateAssistantMessages("projection-recovery", [
+        projection,
+      ]);
+      result.current.updateAssistantMessages("projection-recovery", [
+        projection,
+      ]);
+    });
+    expect(
+      result.current.state.conversations
+        .find((item) => item.id === "projection-recovery")
+        ?.messages.map((message) => message.id),
+    ).toEqual(["user-1", "projection-1", terminalId]);
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps twenty identical general-chat projections referentially stable and never re-syncs them", async () => {
+    const projection = {
+      id: "canonical-message-1",
+      upstreamOutputId: "event-row-1",
+      role: "assistant" as const,
+      content: "稳定的处理中消息",
+      timestamp: 2,
+      serverSequence: 7,
+      generalChat: {
+        schemaVersion: 1 as const,
+        kind: "assistant_projection" as const,
+        turnId: "turn-1",
+        agentTaskId: "task-1",
+        providerEventId: "provider-event-1",
+        serverOwned: true as const,
+      },
+    };
+    mocks.listRefetch.mockResolvedValueOnce({
+      data: [
+        {
+          ...conversation("stable-general-chat"),
+          executionKind: "general_chat_v2",
+          status: "running",
+          taskId: "task-1",
+          startedAt: 1,
+          messages: [
+            { id: "user-1", role: "user", content: "开始", timestamp: 1 },
+            projection,
+          ],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const initialConversation = result.current.state.conversations[0];
+    const initialProjection = initialConversation.messages[1];
+    mocks.syncSnapshot.mockClear();
+
+    act(() => {
+      for (let index = 0; index < 20; index += 1) {
+        result.current.updateAssistantMessages("stable-general-chat", [
+          {
+            ...projection,
+            id: `transient-${index}`,
+            timestamp: 10_000 + index,
+          },
+        ]);
+        result.current.updateStatus("stable-general-chat", "running", {
+          taskId: "task-1",
+          startedAt: 1,
+        });
+      }
+    });
+
+    const current = result.current.state.conversations[0];
+    expect(current).toBe(initialConversation);
+    expect(current.messages[1]).toBe(initialProjection);
+    expect(current.messages[1]).toMatchObject({
+      id: "canonical-message-1",
+      timestamp: 2,
+    });
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("removes and revives a deterministic terminal notice without a tombstone", async () => {
+    const terminalId = generalChatTerminalMessagePublicId({
+      conversationId: "terminal-recovery",
+      taskId: "task-1",
+      errorCode: "PARTIAL_RESULT_PRESERVED",
+    });
+    mocks.listRefetch.mockResolvedValueOnce({
+      data: [
+        {
+          ...conversation("terminal-recovery"),
+          deletedMessageIds: [terminalId],
+          messages: [],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    const notice = {
+      id: terminalId,
+      role: "assistant" as const,
+      content: "部分结果已保留",
+      timestamp: 1,
+    };
+    act(() => result.current.addMessage("terminal-recovery", notice));
+    let current = result.current.state.conversations.find(
+      (item) => item.id === "terminal-recovery",
+    );
+    expect(current?.messages.map((message) => message.id)).toEqual([
+      terminalId,
+    ]);
+    expect(current?.deletedMessageIds ?? []).not.toContain(terminalId);
+
+    act(() => result.current.deleteMessage("terminal-recovery", terminalId));
+    current = result.current.state.conversations.find(
+      (item) => item.id === "terminal-recovery",
+    );
+    expect(current?.messages).toEqual([]);
+    expect(current?.deletedMessageIds ?? []).not.toContain(terminalId);
+
+    act(() => result.current.addMessage("terminal-recovery", notice));
+    current = result.current.state.conversations.find(
+      (item) => item.id === "terminal-recovery",
+    );
+    expect(current?.messages.map((message) => message.id)).toEqual([
+      terminalId,
+    ]);
+  });
+
+  it("keeps a reset-discarded conversation out of a late and subsequent cloud hydration", async () => {
+    const stale = {
+      ...conversation("reset-discarded"),
+      title: "企业知识库构建",
+      status: "awaiting_input" as const,
+      knowledgeBase: {
+        initialized: true,
+        generation: 1,
+        stateEpoch: 2,
+        activeTurnId: null,
+        activeClientRequestId: null,
+        presentationTurnId: "turn-old",
+        interactionState: "awaiting_input" as const,
+        canReply: true,
+        presentationKey: "presentation-old",
+        revision: 1,
+        leafId: "1.1",
+        notice: null,
+      },
+    };
+    mocks.listRefetch.mockResolvedValue({ data: [stale] });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => result.current.discardConversationLocally("reset-discarded"));
+    expect(result.current.state.conversations).toEqual([]);
+
+    await act(async () => {
+      await result.current.refreshConversationsAfterDiscard();
+    });
+
+    expect(result.current.state.conversations).toEqual([]);
+  });
+
+  it("retires two inactive blank KB conversations, preserves ordinary chat, and creates one fresh KB", async () => {
+    const blankKbOne = {
+      ...conversation("kb-old-1"),
+      title: "企业知识库构建",
+    };
+    const blankKbTwo = {
+      ...conversation("kb-old-2"),
+      title: "企业知识库构建",
+    };
+    const ordinary = conversation("ordinary-chat");
+    mocks.listRefetch.mockResolvedValueOnce({
+      data: [blankKbOne, ordinary, blankKbTwo],
+    });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    let freshConversationId = "";
+    act(() => {
+      result.current.discardKnowledgeBaseConversationsLocally();
+      freshConversationId = result.current.createConversation({
+        title: "企业知识库构建",
+        reuseEmpty: false,
+      });
+    });
+
+    expect(
+      result.current.state.conversations.map((candidate) => candidate.id),
+    ).toEqual([freshConversationId, "ordinary-chat"]);
+    expect(
+      result.current.state.conversations.filter(
+        (candidate) => candidate.title === "企业知识库构建",
+      ),
+    ).toHaveLength(1);
+    expect(result.current.isKnowledgeBaseConversation("kb-old-1")).toBe(false);
+    expect(result.current.isKnowledgeBaseConversation("kb-old-2")).toBe(false);
+  });
+
   it("atomically settles an unaccepted KB start without leaving task identity", async () => {
     mocks.listRefetch.mockResolvedValueOnce({
       data: [conversation("knowledge-base-start")],
@@ -696,6 +1441,127 @@ describe("ConversationProvider cloud hydration", () => {
 });
 
 describe("prepareConversationForCloud", () => {
+  it("keeps the browser-owned ordinary dispatch envelope in the cloud snapshot", () => {
+    const clean = prepareConversationForCloud({
+      ...conversation("pending-general-chat"),
+      executionKind: "general_chat_v2",
+      messages: [
+        {
+          id: "msg-pending-general-chat",
+          role: "user",
+          content: "界面展示正文",
+          timestamp: 1,
+          attachments: [
+            {
+              id: "attachment-pending-general-chat",
+              type: "image",
+              name: "proof.png",
+              fileId: "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            },
+          ],
+          generalChatDispatch: {
+            schemaVersion: 1,
+            kind: "pending_user",
+            clientRequestId: "msg-pending-general-chat",
+            providerPrompt: "精确 Provider 正文",
+            localAssetIds: ["asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            localTaskId: null,
+            modelProfile: "frontmind-base",
+          },
+        },
+      ],
+    });
+
+    expect(clean.messages[0]?.generalChatDispatch).toEqual({
+      schemaVersion: 1,
+      kind: "pending_user",
+      clientRequestId: "msg-pending-general-chat",
+      providerPrompt: "精确 Provider 正文",
+      localAssetIds: ["asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      localTaskId: null,
+      modelProfile: "frontmind-base",
+    });
+  });
+
+  it("excludes server-owned ordinary assistant projections from browser snapshots", () => {
+    const clean = prepareConversationForCloud({
+      ...conversation("server-owned-general-chat"),
+      executionKind: "general_chat_v2",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "你好",
+          timestamp: 1,
+        },
+        {
+          id: "assistant-event-1",
+          upstreamOutputId: "event-1",
+          role: "assistant",
+          content: "服务端结果",
+          timestamp: 2,
+          generalChat: {
+            schemaVersion: 1,
+            kind: "assistant_projection",
+            turnId: "turn-1",
+            agentTaskId: "task-1",
+            providerEventId: "event-1",
+            serverOwned: true,
+          },
+        },
+      ],
+    });
+
+    expect(clean.messages.map((message) => message.id)).toEqual(["user-1"]);
+    expect(clean.executionKind).toBe("general_chat_v2");
+  });
+
+  it("keeps dirty ordinary messages and deduplicates a server projection by output id", () => {
+    const local: Conversation = {
+      ...conversation("dirty-general-chat"),
+      executionKind: "general_chat_v2",
+      messages: [
+        { id: "user-local", role: "user", content: "未确认", timestamp: 2 },
+        {
+          id: "optimistic-output",
+          upstreamOutputId: "provider-event-1",
+          role: "assistant",
+          content: "轮询结果",
+          timestamp: 3,
+        },
+      ],
+    };
+    const remote: Conversation = {
+      ...conversation("dirty-general-chat"),
+      messages: [
+        { id: "user-remote", role: "user", content: "旧消息", timestamp: 1 },
+        {
+          id: "durable-output",
+          upstreamOutputId: "provider-event-1",
+          role: "assistant",
+          content: "持久结果",
+          timestamp: 3,
+          generalChat: {
+            schemaVersion: 1,
+            kind: "assistant_projection",
+            turnId: "turn-1",
+            agentTaskId: "task-1",
+            providerEventId: "provider-event-1",
+            serverOwned: true,
+          },
+        },
+      ],
+    };
+
+    const merged = mergeDirtyConversationHydration(local, remote);
+    expect(merged.messages.map((message) => message.id)).toEqual([
+      "user-local",
+      "durable-output",
+      "user-remote",
+    ]);
+    expect(merged.messages[1]?.content).toBe("持久结果");
+  });
+
   it("self-heals reused assistant and attachment IDs before cloud sync", () => {
     const clean = prepareConversationForCloud({
       ...conversation("duplicate-output"),
@@ -752,6 +1618,7 @@ describe("prepareConversationForCloud", () => {
     const clean = prepareConversationForCloud({
       ...conversation("one"),
       apiKeyFingerprint: "fingerprint",
+      taskUrl: "https://provider.example/task/private",
       messages: [
         {
           id: "message",
@@ -780,6 +1647,7 @@ describe("prepareConversationForCloud", () => {
     });
 
     expect(clean.apiKeyFingerprint).toBeUndefined();
+    expect(clean.taskUrl).toBeUndefined();
     expect(clean.messages[0].attachments).toEqual([
       {
         id: "file",
@@ -795,7 +1663,7 @@ describe("prepareConversationForCloud", () => {
     ]);
   });
 
-  it("keeps KB provenance and removes tombstones targeting server-owned messages", () => {
+  it("omits server-owned KB messages and pending ghosts from browser snapshots", () => {
     const clean = prepareConversationForCloud({
       ...conversation("knowledge-base-metadata"),
       deletedMessageIds: ["presentation-1", "ordinary-deleted"],
@@ -815,18 +1683,67 @@ describe("prepareConversationForCloud", () => {
             serverOwned: true,
           },
         },
+        {
+          id: "pending-without-turn",
+          role: "user",
+          content: "确认",
+          timestamp: 11,
+          knowledgeBase: {
+            kind: "pending_user",
+            clientRequestId: "request-without-turn",
+            serverOwned: false,
+          },
+        },
+        {
+          id: "ordinary-browser-message",
+          role: "user",
+          content: "普通消息",
+          timestamp: 12,
+        },
       ],
     });
 
-    expect(clean.messages[0]?.knowledgeBase).toMatchObject({
-      presentationKey: "presentation-1",
-      serverOwned: true,
-    });
+    expect(clean.messages.map((message) => message.id)).toEqual([
+      "ordinary-browser-message",
+    ]);
     expect(clean.deletedMessageIds).toEqual(["ordinary-deleted"]);
   });
 });
 
 describe("parseOutputMessages file IDs", () => {
+  it("uses the canonical durable message identity, time, sequence, and projection metadata", () => {
+    const generalChat = {
+      schemaVersion: 1 as const,
+      kind: "assistant_projection" as const,
+      turnId: "turn-1",
+      agentTaskId: "task-1",
+      providerEventId: "provider-event-1",
+      serverOwned: true as const,
+    };
+    const messages = parseOutputMessages([
+      {
+        id: "event-row-1",
+        message_id: "canonical-message-1",
+        sent_at_ms: 1_725_000_000_123,
+        server_sequence: 9,
+        general_chat: generalChat,
+        role: "assistant",
+        type: "message",
+        content: [{ type: "output_text", text: "稳定正文" }],
+      },
+    ]);
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        id: "canonical-message-1",
+        upstreamOutputId: "event-row-1",
+        timestamp: 1_725_000_000_123,
+        serverSequence: 9,
+        generalChat,
+      }),
+    ]);
+  });
+
   it.each([
     {
       type: "output_message",

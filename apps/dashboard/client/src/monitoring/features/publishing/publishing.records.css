@@ -1,0 +1,683 @@
+/*  Publication list, batch detail, result links, and QR presentation.  */
+.monitoring-module :where(.publishing-page) .publishing-batch-row {
+  display: grid;
+  min-height: 82px;
+  grid-template-columns:
+    minmax(260px, 1.25fr) minmax(180px, 0.85fr) minmax(130px, 0.58fr)
+    minmax(120px, 0.55fr) minmax(110px, 0.5fr) 24px;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--publishing-line);
+  color: #51495e;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-row:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) a.publishing-batch-row:hover {
+  background: #fbf9fd;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-head {
+  min-height: 56px;
+  background: #fdfcfe;
+  color: #5f566d;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-result b {
+  font-size: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-result
+  .is-success,
+.monitoring-module :where(.publishing-page) .publishing-batch-row small,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-money
+  .is-success {
+  color: var(--publishing-green);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-result
+  .is-danger {
+  color: var(--publishing-red);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-result
+  .is-warning,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-money
+  .is-warning {
+  color: var(--publishing-orange);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-row
+  > span:nth-child(3) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-row
+  > span:nth-child(3)
+  small {
+  color: var(--publishing-muted);
+  font-size: 9px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-title {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  position: relative;
+  margin-bottom: 20px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-title > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-title h2 {
+  margin: 0;
+  font-size: 25px;
+  letter-spacing: -0.025em;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-title p {
+  margin: 8px 0 0;
+  color: var(--publishing-muted);
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-title > span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  color: var(--publishing-muted);
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-metrics {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 20px;
+  padding: 22px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-metrics article {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border-right: 1px solid var(--publishing-line);
+  color: var(--publishing-purple);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article:last-child {
+  border-right: 0;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article.is-success {
+  color: var(--publishing-green);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article.is-danger {
+  color: var(--publishing-red);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article.is-warning {
+  color: var(--publishing-orange);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article
+  span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #463d52;
+  font-size: 12px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-metrics
+  article
+  strong {
+  color: var(--publishing-ink);
+  font-size: 22px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-results-table {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-results-row {
+  display: grid;
+  min-height: 90px;
+  grid-template-columns:
+    minmax(210px, 1fr) minmax(190px, 0.85fr) minmax(110px, 0.52fr)
+    minmax(210px, 1fr) minmax(120px, 0.58fr) minmax(120px, 0.58fr);
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--publishing-line);
+  color: #51485e;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-results-row:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-results-head {
+  min-height: 55px;
+  background: #fdfcfe;
+  color: #5c5369;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-copy,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-results-row
+  > span:nth-child(5) {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-copy a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--publishing-purple);
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-copy small,
+.monitoring-module :where(.publishing-page) .publishing-results-row time,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-results-row
+  > span:nth-child(5)
+  small {
+  color: var(--publishing-muted);
+  font-size: 10px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-detail-bottom {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: 1fr minmax(500px, 0.72fr);
+  align-items: end;
+  gap: 20px;
+  margin-top: 18px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-detail-bottom > a {
+  justify-self: start;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money {
+  padding: 20px 24px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money h2 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money dl {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money dl div {
+  padding: 0 16px;
+  border-right: 1px solid var(--publishing-line);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-money
+  dl
+  div:first-child {
+  padding-left: 0;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-money
+  dl
+  div:last-child {
+  border-right: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money dt {
+  color: var(--publishing-muted);
+  font-size: 10px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money dd {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money > p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--publishing-line);
+  color: var(--publishing-muted);
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-money > p strong {
+  color: var(--publishing-green);
+  font-size: 16px;
+}
+
+@media (max-width: 1280px) {
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-results-head
+    > span:nth-child(2),
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-results-row
+    > span:nth-child(2) {
+    display: none;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-results-row {
+    grid-template-columns:
+      minmax(210px, 1fr) minmax(110px, 0.5fr) minmax(210px, 1fr)
+      minmax(120px, 0.58fr) minmax(115px, 0.55fr);
+  }
+}
+
+@media (max-width: 1099px) {
+  .monitoring-module :where(.publishing-page) .publishing-batch-row {
+    grid-template-columns:
+      minmax(240px, 1fr) minmax(160px, 0.7fr) minmax(120px, 0.5fr)
+      minmax(100px, 0.45fr) 24px;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-batch-row
+    > span:nth-child(4),
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-batch-head
+    > span:nth-child(4) {
+    display: none;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-detail-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-batch-money {
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .monitoring-module :where(.publishing-page) .publishing-batch-list {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-batch-head {
+    display: none;
+  }
+
+  .monitoring-module :where(.publishing-page) a.publishing-batch-row {
+    display: grid;
+    min-height: auto;
+    margin-bottom: 10px;
+    padding: 15px;
+    border: 1px solid var(--publishing-line);
+    border-radius: 11px;
+    background: white;
+    box-shadow: var(--publishing-shadow);
+  }
+
+  .monitoring-module :where(.publishing-page) a.publishing-batch-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    a.publishing-batch-row
+    > span:nth-child(2),
+  .monitoring-module
+    :where(.publishing-page)
+    a.publishing-batch-row
+    > span:nth-child(3),
+  .monitoring-module
+    :where(.publishing-page)
+    a.publishing-batch-row
+    > span:nth-child(4) {
+    display: none;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-results-head {
+    display: none;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-results-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 13px;
+    padding: 16px;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-results-row
+    > .publishing-media-name {
+    grid-column: 1 / -1;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-results-row
+    > span[data-label]::before {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--publishing-muted);
+    content: attr(data-label);
+    font-size: 9px;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-results-row
+    > span:nth-child(2) {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-batch-title > span {
+    position: static;
+    display: block;
+    margin-top: 8px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-result-metrics {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0;
+    padding: 12px;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-result-metrics
+    article {
+    padding: 14px 6px;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-result-metrics
+    article:nth-child(2) {
+    border-right: 0;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-result-metrics
+    article:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--publishing-line);
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-batch-money dl {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px 0;
+  }
+
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-batch-money
+    dl
+    div:nth-child(2) {
+    border-right: 0;
+  }
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  .publishing-search-field
+  svg {
+  top: 8px;
+  left: 11px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  input,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  select {
+  height: 34px;
+  border: 1px solid #dedfe8;
+  border-radius: 7px;
+  background: #fff;
+  color: #3d3f50;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-publication-filters {
+  max-width: 1660px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) repeat(4, minmax(135px, 0.5fr));
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 14px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  label {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  color: #7e8091;
+  font-size: 10px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  input,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  select {
+  width: 100%;
+  padding: 0 9px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  .publishing-search-field {
+  display: block;
+  align-self: end;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-publication-filters
+  .publishing-search-field
+  input {
+  padding-left: 35px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-list {
+  margin-right: auto;
+  margin-left: auto;
+  max-width: 1660px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-list
+  .publishing-batch-row {
+  grid-template-columns:
+    minmax(280px, 1.3fr) minmax(110px, 0.5fr) minmax(160px, 0.7fr)
+    minmax(130px, 0.55fr) minmax(135px, 0.55fr) minmax(110px, 0.45fr) 18px;
+}
+@media (max-width: 1280px) {
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-batch-list
+    .publishing-batch-row {
+    grid-template-columns:
+      minmax(260px, 1.2fr) minmax(100px, 0.45fr) minmax(150px, 0.65fr)
+      minmax(120px, 0.5fr) minmax(105px, 0.45fr) 18px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-batch-list
+    .publishing-batch-row
+    > :nth-child(5) {
+    display: none;
+  }
+}
+@media (max-width: 800px) {
+  .monitoring-module :where(.publishing-page) .publishing-publication-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-publication-filters
+    .publishing-search-field {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 460px) {
+  .monitoring-module :where(.publishing-page) .publishing-publication-filters {
+    grid-template-columns: 1fr;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-publication-filters
+    .publishing-search-field {
+    grid-column: auto;
+  }
+}
+.monitoring-module :where(.publishing-page) .publishing-result-copy > button {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3636e2;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-copy
+  .publishing-result-id {
+  color: #9294a3;
+  font-size: 10px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-qr {
+  position: relative;
+  width: fit-content;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-qr > summary {
+  color: #3636e2;
+  cursor: pointer;
+  font-size: 11px;
+  list-style: none;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-result-qr
+  > summary::-webkit-details-marker {
+  display: none;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-qr > span {
+  display: block;
+  width: fit-content;
+  margin-top: 7px;
+  padding: 7px;
+  border: 1px solid #e7e8f0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(28 30 54 / 12%);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-result-qr svg {
+  display: block;
+}

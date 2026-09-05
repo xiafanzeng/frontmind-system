@@ -5,6 +5,12 @@ export type FilePreviewSource =
   | { kind: "owned_file"; fileId: string; expiresAt?: number }
   | { kind: "external"; url: string };
 
+export function managedLocalAssetContentUrl(fileId: string) {
+  return fileId.startsWith("asset_")
+    ? `/api/frontmind/v2/assets/${encodeURIComponent(fileId)}/content`
+    : null;
+}
+
 /** Resolve one attachment to exactly one preview source. */
 export function filePreviewSource(
   attachment: Attachment,

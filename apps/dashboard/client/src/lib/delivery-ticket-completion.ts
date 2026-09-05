@@ -1,11 +1,8 @@
-import type { DeliveryWorkflowOperation } from "@shared/delivery-roles";
-
-export type WebsiteContentOperation =
-  | "company_facts"
-  | "product_case_docs"
-  | "industry_news"
-  | "company_news"
-  | "faq_content";
+import {
+  getDeliveryOperationSpec,
+  type DeliveryOperationCompletionField,
+  type DeliveryOperationCompletionMode,
+} from "@shared/delivery-operation-spec";
 
 export type DeliveryCompletionDraft = {
   summary: string;
@@ -17,39 +14,85 @@ export type DeliveryCompletionDraft = {
   icpProvince: string;
   icpNumber: string;
   monitoringBatchKey: string;
-  optimizationQuestionIds: string;
+  optimizationQuestionIds: string[];
   responseLogicRevision: string;
   contentAssetIds: string;
-  publishMedia: boolean;
-  publishWebsite: boolean;
-  websiteOperation: WebsiteContentOperation;
+  channelTargetMedia: string;
   needsFurtherOptimization: boolean;
   siteCheckKey: string;
   siteCheckLabel: string;
   siteCheckStatus: "passed" | "warning" | "failed" | "not_applicable";
   siteCheckSummary: string;
   siteCheckEvidence: string;
+  siteCheckSource: string;
 };
 
 export type DeliveryCompletionTicket = {
-  operation: DeliveryWorkflowOperation;
+  operation: string;
+  credentialTargetUserId?: number | null;
+  status?: string | null;
   marketEdition?: "domestic" | "overseas" | null;
   topic?: string | null;
+  preferredMedia?: string | null;
   monitoringBatchKey?: string | null;
   responseLogicRevision?: number | null;
   contentAssetIds?: string[] | null;
 };
 
+export type DeliveryMonitoringBatchOption = {
+  batchKey: string;
+  sourceName: string;
+  collectedAt: number;
+  sampleCount: number;
+};
+
+export type DeliveryApprovedQuestionOption = {
+  id: string;
+  question: string;
+  category?: string | null;
+};
+
+export type DeliveryCompletionOptions = {
+  monitoringBatches: DeliveryMonitoringBatchOption[];
+  approvedQuestions: DeliveryApprovedQuestionOption[];
+  keywordCatalogPublished: boolean;
+};
+
+const EMPTY_DELIVERY_COMPLETION_OPTIONS: DeliveryCompletionOptions = {
+  monitoringBatches: [],
+  approvedQuestions: [],
+  keywordCatalogPublished: false,
+};
+
+const ACTIVE_DELIVERY_STATUSES = new Set([
+  "submitted",
+  "needs_information",
+  "scheduled",
+  "in_progress",
+]);
+
+export function deliveryTicketWaitsForAdminCredential(ticket: {
+  credentialTargetUserId?: number | null;
+  status?: string | null;
+}) {
+  return Boolean(
+    typeof ticket.credentialTargetUserId === "number" &&
+      ticket.credentialTargetUserId > 0 &&
+      ticket.status &&
+      ACTIVE_DELIVERY_STATUSES.has(ticket.status),
+  );
+}
+
 export type DeliveryCompletionPayload = {
   message: string;
   publicUrl?: string;
+  previewVerified?: true;
   handoff?: {
     monitoringBatchKey?: string;
     optimizationQuestionIds?: string[];
     responseLogicRevision?: number;
     contentAssetIds?: string[];
-    publishTargets?: Array<"media" | "website">;
-    websiteOperation?: WebsiteContentOperation;
+    targetMedia?: string;
     needsFurtherOptimization?: boolean;
     domain?: string;
     icpServiceCode?: string;
@@ -62,29 +105,22 @@ export type DeliveryCompletionPayload = {
       status: "passed" | "warning" | "failed" | "not_applicable";
       summary?: string;
       evidence?: string;
+      source?: string;
     };
   };
 };
 
-const WEBSITE_CONTENT_OPERATIONS = new Set<DeliveryWorkflowOperation>([
-  "company_facts",
-  "product_case_docs",
-  "industry_news",
-  "company_news",
-  "faq_content",
-]);
-
-const PUBLIC_URL_REQUIRED_OPERATIONS = new Set<DeliveryWorkflowOperation>([
-  "content_asset_publish",
-  "channel_distribution",
-  ...WEBSITE_CONTENT_OPERATIONS,
-]);
-
 export function createDeliveryCompletionDraft(
   ticket: DeliveryCompletionTicket,
+  options: DeliveryCompletionOptions = EMPTY_DELIVERY_COMPLETION_OPTIONS,
 ): DeliveryCompletionDraft {
+  const eligibleMonitoringBatches = deliveryCompletionMonitoringBatchOptions(
+    ticket,
+    options,
+  );
+  const existingMonitoringBatchKey = ticket.monitoringBatchKey?.trim() || "";
   return {
-    summary: "",
+    summary: ticket.operation === "question_catalog" ? "品牌词库已发布" : "",
     publicUrl: "",
     previewVerified: false,
     domain: ticket.topic?.trim() || "",
@@ -93,114 +129,159 @@ export function createDeliveryCompletionDraft(
     icpProvince: "",
     icpNumber: "",
     monitoringBatchKey:
-      ticket.operation === "monitoring_retest"
-        ? ""
-        : ticket.monitoringBatchKey?.trim() || "",
-    optimizationQuestionIds: "",
+      ticket.operation !== "monitoring_retest" &&
+      eligibleMonitoringBatches.some(
+        (batch) => batch.batchKey === existingMonitoringBatchKey,
+      )
+        ? existingMonitoringBatchKey
+        : "",
+    optimizationQuestionIds: [],
     responseLogicRevision: String(ticket.responseLogicRevision || 1),
     contentAssetIds: (ticket.contentAssetIds || []).join(", "),
-    publishMedia: true,
-    publishWebsite: false,
-    websiteOperation: "company_facts",
+    channelTargetMedia: ticket.preferredMedia?.trim() || "",
     needsFurtherOptimization: false,
     siteCheckKey: "published-page-check",
     siteCheckLabel: "已发布页面检查",
     siteCheckStatus: "passed",
     siteCheckSummary: "",
     siteCheckEvidence: "",
+    siteCheckSource: "",
   };
 }
 
-export function deliveryCompletionRequiresPublicUrl(
-  operation: DeliveryWorkflowOperation,
+export function deliveryCompletionMode(
+  operation: string | null | undefined,
+): DeliveryOperationCompletionMode | "legacy_summary" {
+  return (
+    getDeliveryOperationSpec(operation)?.completion.mode ?? "legacy_summary"
+  );
+}
+
+export function deliveryCompletionHasField(
+  operation: string | null | undefined,
+  field: DeliveryOperationCompletionField,
 ) {
-  return PUBLIC_URL_REQUIRED_OPERATIONS.has(operation);
+  return Boolean(
+    getDeliveryOperationSpec(operation)?.completion.fields.includes(field),
+  );
+}
+
+export function deliveryCompletionRequiresPublicUrl(
+  operation: string | null | undefined,
+) {
+  return (
+    getDeliveryOperationSpec(operation)?.completion.publicUrl === "required"
+  );
+}
+
+export function deliveryCompletionRequiresPreviewVerification(
+  operation: string | null | undefined,
+) {
+  return (
+    getDeliveryOperationSpec(operation)?.completion.previewVerification ===
+    "required"
+  );
 }
 
 export function deliveryCompletionCreatesNextStep(
-  operation: DeliveryWorkflowOperation,
+  operation: string | null | undefined,
 ) {
-  switch (operation) {
-    case "initial_monitoring":
-    case "monitoring_import":
-      return "填写的待优化问题会分别生成“应答逻辑”下游工单。";
-    case "response_logic":
-      return "完成后自动生成“内容资产发布”工单。";
-    case "content_asset_publish":
-      return "系统会按所选发布目标生成媒体分发或官网内容工单。";
-    case "monitoring_retest":
-      return "完成后自动生成“阶段效果报告”工单。";
-    case "stage_report":
-      return "若仍需优化，系统会沿原问题生成下一轮应答逻辑工单。";
-    case "domain_application":
-      return "域名结果会写入用户官网流程；海外版将直接进入风格样例阶段。";
-    case "icp_filing":
-      return "备案结果会写入用户官网流程，并自动生成风格样例工单。";
-    case "company_facts":
-    case "product_case_docs":
-    case "industry_news":
-    case "company_news":
-    case "faq_content":
-      return "完成后自动生成站点检查工单；站点检查通过后才进入效果复测。";
-    case "channel_distribution":
-      return "公开链接登记后，系统会按来源问题生成效果复测工单。";
-    case "site_check":
-      return "站点检查通过后，系统会按来源问题生成效果复测工单；检查失败时不能完成交付。";
-    default:
-      return "完成后结果会进入客户任务记录和管理员交付记录。";
-  }
+  return (
+    getDeliveryOperationSpec(operation)?.nextStep ??
+    "该历史需求完成时只保存交付摘要，不生成其他字段或下游动作。"
+  );
+}
+
+export function deliveryCompletionSummaryPlaceholder(
+  operation: string | null | undefined,
+) {
+  const label = getDeliveryOperationSpec(operation)?.label;
+  return label
+    ? `请说明“${label}”已完成的内容、可核验结果及后续注意事项。`
+    : "请说明该历史需求已完成的内容和可核验结果。";
 }
 
 export function validateDeliveryCompletionDraft(
   ticket: DeliveryCompletionTicket,
   draft: DeliveryCompletionDraft,
+  options: DeliveryCompletionOptions = EMPTY_DELIVERY_COMPLETION_OPTIONS,
 ): string[] {
   const errors: string[] = [];
   const operation = ticket.operation;
+  const spec = getDeliveryOperationSpec(operation);
+
+  if (spec && spec.completion.mode !== "form") {
+    return ["该需求仅供查看，不能通过通用表单完成"];
+  }
 
   if (!draft.summary.trim()) {
     errors.push("请填写客户能理解的交付结果摘要");
   }
-  if (!draft.previewVerified) {
-    errors.push("请先核对用户实际页面或可核验交付记录");
-  }
+
+  if (!spec) return errors;
+
+  errors.push(...deliveryCompletionOptionBlockReasons(ticket, options));
 
   if (deliveryCompletionRequiresPublicUrl(operation)) {
     if (!draft.publicUrl.trim()) {
-      errors.push("本工单必须登记公开链接");
+      errors.push("本需求必须登记公开链接");
     } else if (!isHttpUrl(draft.publicUrl)) {
       errors.push("公开链接必须是有效的 http(s) 地址");
     }
-  } else if (draft.publicUrl.trim() && !isHttpUrl(draft.publicUrl)) {
-    errors.push("公开链接必须是有效的 http(s) 地址");
   }
 
-  if (operation === "domain_application") {
+  if (
+    deliveryCompletionRequiresPreviewVerification(operation) &&
+    !draft.previewVerified
+  ) {
+    errors.push("请先核对用户实际页面");
+  }
+
+  if (deliveryCompletionHasField(operation, "domain")) {
     if (!draft.domain.trim()) {
       errors.push("请填写已核验的客户域名");
     } else if (!isHostname(draft.domain)) {
       errors.push("客户域名格式不正确");
     }
-    if (ticket.marketEdition !== "overseas" && !draft.icpServiceCode.trim()) {
+    if (
+      deliveryCompletionHasField(operation, "icp_service_code") &&
+      ticket.marketEdition !== "overseas" &&
+      !draft.icpServiceCode.trim()
+    ) {
       errors.push("国内版客户必须填写备案服务码");
     }
   }
 
   if (
-    operation === "icp_filing" &&
+    deliveryCompletionHasField(operation, "icp_resolution") &&
     draft.icpResolution === "approved" &&
     !draft.icpNumber.trim()
   ) {
     errors.push("备案已通过时必须填写 ICP 备案号");
   }
-
   if (
-    (operation === "initial_monitoring" ||
-      operation === "monitoring_import" ||
-      operation === "monitoring_retest") &&
-    !draft.monitoringBatchKey.trim()
+    deliveryCompletionHasField(operation, "icp_resolution") &&
+    draft.icpResolution === "not_required" &&
+    ticket.marketEdition !== "overseas"
   ) {
-    errors.push("请填写本次正式监控批次标识");
+    errors.push("国内版官网必须填写已通过的 ICP 备案结果");
+  }
+
+  if (deliveryCompletionHasField(operation, "monitoring_batch")) {
+    const eligibleMonitoringBatches = deliveryCompletionMonitoringBatchOptions(
+      ticket,
+      options,
+    );
+    if (eligibleMonitoringBatches.length && !draft.monitoringBatchKey.trim()) {
+      errors.push("请选择本次已发布的正式监控批次");
+    } else if (
+      draft.monitoringBatchKey.trim() &&
+      !eligibleMonitoringBatches.some(
+        (batch) => batch.batchKey === draft.monitoringBatchKey.trim(),
+      )
+    ) {
+      errors.push("监控批次必须从当前客户已发布的正式批次中选择");
+    }
   }
   if (
     operation === "monitoring_retest" &&
@@ -209,34 +290,52 @@ export function validateDeliveryCompletionDraft(
     errors.push("效果复测必须填写新的监控批次，不能继续使用复测前基线");
   }
 
-  if (operation === "response_logic") {
+  if (
+    deliveryCompletionHasField(operation, "optimization_question_ids") &&
+    draft.optimizationQuestionIds.some(
+      (questionId) =>
+        !options.approvedQuestions.some(
+          (question) => question.id === questionId.trim(),
+        ),
+    )
+  ) {
+    errors.push("待优化问题只能从客户已确认且审核通过的问题中选择");
+  }
+
+  if (deliveryCompletionHasField(operation, "response_logic_revision")) {
     const revision = Number(draft.responseLogicRevision);
     if (!Number.isInteger(revision) || revision < 1) {
       errors.push("应答逻辑版本必须是大于等于 1 的整数");
     }
   }
 
-  if (operation === "content_asset_publish") {
-    if (!splitValues(draft.contentAssetIds).length) {
-      errors.push("请填写已经进入客户正式看板的内容资产 ID");
-    }
-    if (!draft.publishMedia && !draft.publishWebsite) {
-      errors.push("请至少选择一个发布目标");
-    }
+  if (
+    deliveryCompletionHasField(operation, "content_asset_ids") &&
+    !contentAssetIdsForCompletion(ticket, draft).length
+  ) {
+    errors.push(
+      operation === "content_asset_publish"
+        ? "请填写已经进入客户正式看板的内容资产 ID"
+        : "官网页面必须绑定已发布的内容资产 ID",
+    );
   }
 
   if (
-    WEBSITE_CONTENT_OPERATIONS.has(operation) &&
-    !splitValues(draft.contentAssetIds).length
+    deliveryCompletionHasField(operation, "channel_target_media") &&
+    !targetMediaForCompletion(ticket, draft)
   ) {
-    errors.push("官网页面必须绑定已发布的内容资产 ID");
+    errors.push("请填写本次实际发布的目标媒体或渠道");
   }
 
-  if (operation === "site_check") {
+  if (deliveryCompletionHasField(operation, "site_check")) {
     if (!draft.siteCheckKey.trim()) errors.push("请填写检查项标识");
     if (!draft.siteCheckLabel.trim()) errors.push("请填写检查项名称");
-    if (draft.siteCheckStatus === "failed") {
-      errors.push("站点检查未通过时不能完成工单，请先修正页面或等待补充");
+  }
+  if (deliveryCompletionHasField(operation, "site_check_source")) {
+    if (!draft.siteCheckSource.trim()) {
+      errors.push("请填写本次检查的页面地址");
+    } else if (!isHttpUrl(draft.siteCheckSource)) {
+      errors.push("检查页面地址必须是有效的 http(s) 地址");
     }
   }
 
@@ -248,7 +347,15 @@ export function buildDeliveryCompletionPayload(
   draft: DeliveryCompletionDraft,
 ): DeliveryCompletionPayload {
   const operation = ticket.operation;
-  const publicUrl = draft.publicUrl.trim() || undefined;
+  const spec = getDeliveryOperationSpec(operation);
+  if (spec && spec.completion.mode !== "form") {
+    throw new Error("该需求仅供查看，不能通过通用表单完成");
+  }
+
+  if (!spec) {
+    return { message: draft.summary.trim() };
+  }
+
   const handoff: NonNullable<DeliveryCompletionPayload["handoff"]> = {};
 
   if (operation === "domain_application") {
@@ -270,24 +377,24 @@ export function buildDeliveryCompletionPayload(
     operation === "monitoring_retest"
   ) {
     handoff.monitoringBatchKey = draft.monitoringBatchKey.trim();
-    if (operation !== "monitoring_retest") {
-      handoff.optimizationQuestionIds = splitValues(
-        draft.optimizationQuestionIds,
+    if (deliveryCompletionHasField(operation, "optimization_question_ids")) {
+      handoff.optimizationQuestionIds = Array.from(
+        new Set(
+          draft.optimizationQuestionIds
+            .map((questionId) => questionId.trim())
+            .filter(Boolean),
+        ),
       );
     }
   } else if (operation === "response_logic") {
     handoff.responseLogicRevision = Number(draft.responseLogicRevision);
-  } else if (operation === "content_asset_publish") {
-    handoff.contentAssetIds = splitValues(draft.contentAssetIds);
-    handoff.publishTargets = [
-      ...(draft.publishMedia ? (["media"] as const) : []),
-      ...(draft.publishWebsite ? (["website"] as const) : []),
-    ];
-    if (draft.publishWebsite) {
-      handoff.websiteOperation = draft.websiteOperation;
-    }
-  } else if (WEBSITE_CONTENT_OPERATIONS.has(operation)) {
-    handoff.contentAssetIds = splitValues(draft.contentAssetIds);
+  } else if (operation === "channel_distribution") {
+    handoff.targetMedia = targetMediaForCompletion(ticket, draft);
+  } else if (
+    operation === "content_asset_publish" ||
+    deliveryCompletionHasField(operation, "content_asset_ids")
+  ) {
+    handoff.contentAssetIds = contentAssetIdsForCompletion(ticket, draft);
   } else if (operation === "site_check") {
     handoff.siteCheck = {
       key: draft.siteCheckKey.trim(),
@@ -295,6 +402,7 @@ export function buildDeliveryCompletionPayload(
       status: draft.siteCheckStatus,
       summary: draft.siteCheckSummary.trim() || undefined,
       evidence: draft.siteCheckEvidence.trim() || undefined,
+      source: draft.siteCheckSource.trim(),
     };
   } else if (operation === "stage_report") {
     handoff.needsFurtherOptimization = draft.needsFurtherOptimization;
@@ -302,9 +410,79 @@ export function buildDeliveryCompletionPayload(
 
   return {
     message: draft.summary.trim(),
-    publicUrl,
+    ...(deliveryCompletionRequiresPublicUrl(operation) && draft.publicUrl.trim()
+      ? { publicUrl: draft.publicUrl.trim() }
+      : {}),
+    ...(deliveryCompletionRequiresPreviewVerification(operation) &&
+    draft.previewVerified
+      ? { previewVerified: true as const }
+      : {}),
     ...(Object.keys(handoff).length ? { handoff } : {}),
   };
+}
+
+export function deliveryCompletionMonitoringBatchOptions(
+  ticket: DeliveryCompletionTicket,
+  options: DeliveryCompletionOptions = EMPTY_DELIVERY_COMPLETION_OPTIONS,
+) {
+  const baselineBatchKey = ticket.monitoringBatchKey?.trim();
+  return options.monitoringBatches.filter(
+    (batch) =>
+      batch.sampleCount > 0 &&
+      batch.batchKey.trim().length > 0 &&
+      (ticket.operation !== "monitoring_retest" ||
+        batch.batchKey !== baselineBatchKey),
+  );
+}
+
+export function deliveryCompletionOptionBlockReasons(
+  ticket: DeliveryCompletionTicket,
+  options: DeliveryCompletionOptions = EMPTY_DELIVERY_COMPLETION_OPTIONS,
+) {
+  const reasons: string[] = [];
+  if (ticket.operation === "question_catalog") {
+    if (!options.keywordCatalogPublished) {
+      reasons.push("正式品牌词库尚未发布，请先通过业务文件发布入口完成发布");
+    }
+    return reasons;
+  }
+
+  if (deliveryCompletionHasField(ticket.operation, "monitoring_batch")) {
+    const batches = deliveryCompletionMonitoringBatchOptions(ticket, options);
+    if (!batches.length) {
+      reasons.push(
+        ticket.operation === "monitoring_retest"
+          ? "当前没有可用于复测的正式监控批次，请先发布新批次；复测基线不能重复选择"
+          : "当前没有已发布且包含正式答案的监控批次，请先完成监控数据发布",
+      );
+    }
+  }
+  if (
+    deliveryCompletionHasField(ticket.operation, "optimization_question_ids") &&
+    !options.approvedQuestions.length
+  ) {
+    reasons.push("当前没有已审核通过的客户问题，无法登记待优化问题");
+  }
+  return reasons;
+}
+
+function contentAssetIdsForCompletion(
+  ticket: DeliveryCompletionTicket,
+  draft: DeliveryCompletionDraft,
+) {
+  const inheritedIds = (ticket.contentAssetIds || [])
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return ticket.operation !== "content_asset_publish" && inheritedIds.length
+    ? Array.from(new Set(inheritedIds))
+    : splitValues(draft.contentAssetIds);
+}
+
+function targetMediaForCompletion(
+  ticket: DeliveryCompletionTicket,
+  draft: DeliveryCompletionDraft,
+) {
+  return ticket.preferredMedia?.trim() || draft.channelTargetMedia.trim();
 }
 
 function splitValues(value: string) {

@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { CloudOff, Loader2, RefreshCw, X } from "lucide-react";
 import type { ResponseLogicTaskContext } from "@/lib/frontmind-api";
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
+import type { LocalMessage } from "@/contexts/ConversationContext";
 
 export default function Home({
   embedded = false,
@@ -28,7 +29,11 @@ export default function Home({
   showSettings = true,
   standardWelcomeVariant = "simple",
   responseLogicContext,
+  messageProjection,
   knowledgeBaseProgress,
+  knowledgeBaseResetRevision,
+  knowledgeBaseAccountId,
+  onKnowledgeBaseBatchCancelled,
 }: {
   embedded?: boolean;
   fixedAgentProfile?: string;
@@ -41,7 +46,14 @@ export default function Home({
   showSettings?: boolean;
   standardWelcomeVariant?: "simple" | "workflow";
   responseLogicContext?: ResponseLogicTaskContext;
+  messageProjection?: (message: LocalMessage) => LocalMessage;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
+  knowledgeBaseResetRevision?: number;
+  knowledgeBaseAccountId?: number;
+  onKnowledgeBaseBatchCancelled?: (
+    conversationId: string,
+    resetRevision: number,
+  ) => void | Promise<void>;
 } = {}) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -164,13 +176,17 @@ export default function Home({
       )}
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col relative z-10">
+      <main className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <ChatArea
           fixedAgentProfile={fixedAgentProfile}
           syncKnowledgeBaseSnapshot={syncKnowledgeBaseSnapshot}
           composerPrefill={composerPrefill}
           responseLogicContext={responseLogicContext}
+          messageProjection={messageProjection}
           knowledgeBaseProgress={knowledgeBaseProgress}
+          knowledgeBaseResetRevision={knowledgeBaseResetRevision}
+          knowledgeBaseAccountId={knowledgeBaseAccountId}
+          onKnowledgeBaseBatchCancelled={onKnowledgeBaseBatchCancelled}
           showKnowledgeBaseStarter={showKnowledgeBaseStarter}
           standardWelcomeVariant={standardWelcomeVariant}
           reserveOuterMobileNav={!showAccountMenu}

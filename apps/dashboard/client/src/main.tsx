@@ -1,10 +1,12 @@
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
+import { AuthSessionProvider } from "@/_core/hooks/useAuth";
 import { checkFrontMindBuildVersion } from "@/lib/build-version";
+import { shouldIsolateAuthOperation } from "@/lib/trpc-link-routing";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -16,7 +18,8 @@ function loadOptionalAnalytics() {
 
   try {
     const scriptUrl = new URL("umami", `${endpoint.replace(/\/$/, "")}/`);
-    if (scriptUrl.protocol !== "https:" && scriptUrl.protocol !== "http:") return;
+    if (scriptUrl.protocol !== "https:" && scriptUrl.protocol !== "http:")
+      return;
     const script = document.createElement("script");
     script.defer = true;
     script.src = scriptUrl.toString();
@@ -29,14 +32,14 @@ function loadOptionalAnalytics() {
 
 loadOptionalAnalytics();
 
-queryClient.getQueryCache().subscribe(event => {
+queryClient.getQueryCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
     console.error("[API Query Error]", error);
   }
 });
 
-queryClient.getMutationCache().subscribe(event => {
+queryClient.getMutationCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
     console.error("[API Mutation Error]", error);
@@ -45,18 +48,30 @@ queryClient.getMutationCache().subscribe(event => {
 
 const trpcClient = trpc.createClient({
   links: [
-    httpBatchLink({
-      url: "/api/trpc",
-      transformer: superjson,
-      fetch(input, init) {
-        return globalThis.fetch(input, {
-          ...(init ?? {}),
-          credentials: "include",
-        });
+    splitLink({
+      condition(operation) {
+        return shouldIsolateAuthOperation(operation.path);
       },
+      true: httpLink({
+        url: "/api/trpc",
+        transformer: superjson,
+        fetch: credentialedFetch,
+      }),
+      false: httpBatchLink({
+        url: "/api/trpc",
+        transformer: superjson,
+        fetch: credentialedFetch,
+      }),
     }),
   ],
 });
+
+function credentialedFetch(input: RequestInfo | URL, init?: RequestInit) {
+  return globalThis.fetch(input, {
+    ...(init ?? {}),
+    credentials: "include",
+  });
+}
 
 // ============================================================
 // Version check on focus (Stale-While-Revalidate pattern)
@@ -83,17 +98,27 @@ if (import.meta.env.PROD) {
     void checkFrontMindBuildVersion();
   });
 
-  window.setInterval(() => {
-    if (document.visibilityState === "visible") {
-      void checkFrontMindBuildVersion();
-    }
-  }, 5 * 60 * 1000);
+  window.setInterval(
+    () => {
+      if (document.visibilityState === "visible") {
+        void checkFrontMindBuildVersion();
+      }
+    },
+    5 * 60 * 1000,
+  );
 }
 
-createRoot(document.getElementById("root")!).render(
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("FrontMind root element is missing");
+}
+
+createRoot(rootElement).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <AuthSessionProvider>
+        <App />
+      </AuthSessionProvider>
     </QueryClientProvider>
-  </trpc.Provider>
+  </trpc.Provider>,
 );

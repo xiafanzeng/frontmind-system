@@ -64,6 +64,14 @@
   --fm-weight-medium: 500;
   --fm-weight-semibold: 600;
   --fm-weight-bold: 700;
+  --fm-question-industry-accent: #9a7028;
+  --fm-question-industry-tint: #fbf4e5;
+  --fm-question-competitor-accent: #496f9d;
+  --fm-question-competitor-tint: #edf3fa;
+  --fm-question-reputation-accent: #8b4d83;
+  --fm-question-reputation-tint: #f8eef6;
+  --fm-question-product-accent: #2f7e7a;
+  --fm-question-product-tint: #eaf6f4;
   --radius: 1rem;
   --background: oklch(0.982 0.006 83);
   --foreground: oklch(0.205 0.012 255);
@@ -126,6 +134,52 @@
 }
 
 @layer components {
+  [data-category="industry"] {
+    --fm-question-category-accent: var(--fm-question-industry-accent);
+    --fm-question-category-tint: var(--fm-question-industry-tint);
+  }
+
+  [data-category="competitor_comparison"] {
+    --fm-question-category-accent: var(--fm-question-competitor-accent);
+    --fm-question-category-tint: var(--fm-question-competitor-tint);
+  }
+
+  [data-category="reputation"] {
+    --fm-question-category-accent: var(--fm-question-reputation-accent);
+    --fm-question-category-tint: var(--fm-question-reputation-tint);
+  }
+
+  [data-category="product_scenario"] {
+    --fm-question-category-accent: var(--fm-question-product-accent);
+    --fm-question-category-tint: var(--fm-question-product-tint);
+  }
+
+  .fm-question-category-surface {
+    background-color: var(--fm-question-category-tint, #fbf9fd);
+  }
+
+  .fm-question-category-ink {
+    color: var(--fm-question-category-accent, #716a80);
+  }
+
+  .fm-question-category-pill {
+    background-color: var(--fm-question-category-tint, #f3edf8) !important;
+    color: var(--fm-question-category-accent, #5b2a86) !important;
+  }
+
+  .fm-question-category-dark-surface {
+    border-color: color-mix(
+      in srgb,
+      var(--fm-question-category-accent, white) 44%,
+      transparent
+    );
+    background-color: color-mix(
+      in srgb,
+      var(--fm-question-category-accent, white) 24%,
+      transparent
+    );
+  }
+
   .container {
     width: 100%;
     margin-left: auto;

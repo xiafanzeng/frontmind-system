@@ -5,11 +5,14 @@ import {
   Check,
   CircleDot,
   ChevronRight,
+  FileClock,
   FileText,
   ImagePlus,
   Layers3,
   Loader2,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   Paperclip,
   RefreshCw,
   Search,
@@ -32,13 +35,36 @@ import {
 import Home from "@/pages/Home";
 import FilePreview from "@/components/FilePreview";
 import ImagePreview from "@/components/ImagePreview";
+import MarkdownRenderer from "@/components/MarkdownRenderer";
+import QuestionMaintenanceRequestDialog from "@/components/QuestionMaintenanceRequestDialog";
+import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   useConversation,
   type Attachment,
+  type Conversation,
   type LocalMessage,
 } from "@/contexts/ConversationContext";
 import { trpc } from "@/lib/trpc";
+import {
+  RESPONSE_LOGIC_RESET_REQUIRED_MESSAGE_ID_PREFIX,
+  type ResponseLogicTaskStartFailure,
+} from "@/lib/frontmind-api";
 import { toast } from "sonner";
+import {
+  keywordCategoryKey,
+  keywordCategoryTone,
+} from "@shared/keyword-categories";
 import type {
   ConfirmedResponseLogic,
   ResponseLogicAttachment,
@@ -48,9 +74,14 @@ import type {
   SaveResponseLogicInput,
 } from "@shared/response-logic";
 import {
+  normalizeResponseLogicPublicProvenance,
+  normalizeResponseLogicPublicText,
   parseResponseLogicStructuredDraft,
-  responseLogicStructuredDraftSchema,
+  projectResponseLogicAssistantMarkdown,
+  responseLogicTaskStatusEnvelopeSchema,
+  serializeResponseLogicStructuredDraft,
   type ResponseLogicStructuredDraft,
+  type ResponseLogicTaskStatusEnvelope,
 } from "@shared/response-logic";
 import "./response-logic-workspace.css";
 
@@ -76,6 +107,8 @@ export interface IntentQuestionGroup {
  * router.
  */
 const EMPTY_QUESTION_GROUPS: IntentQuestionGroup[] = [];
+const RESPONSE_LOGIC_FACTS_DISPLAY_HEADING =
+  "企业材料/官方依据（引自知识库文档）";
 
 type LogicImage = ResponseLogicImage;
 type LogicDraft = ResponseLogicDraft;
@@ -108,8 +141,18 @@ export type ResponseLogicWorkspaceProps = {
 
 export type ResponseLogicPreviewDialogueProps = {
   question: IntentQuestion;
-  onLoadLatestReply: (reply: string) => void | Promise<void>;
+  onLoadLatestReply: (reply: string) => void | Promise<unknown>;
 };
+
+type ResponseLogicLoadResult = "saved" | "displayed_unsaved" | "ignored";
+type ResponseLogicLoadReply = (
+  reply: string,
+  message?: LocalMessage,
+  taskId?: string,
+  operationRevision?: number,
+  onTaskUnavailable?: () => void,
+  suppliedStructuredDraft?: ResponseLogicStructuredDraft,
+) => Promise<ResponseLogicLoadResult>;
 
 export type ResponseLogicPreviewAdapter = {
   createDraft: (
@@ -160,70 +203,256 @@ function createEmptyDraft(question: IntentQuestion): LogicDraft {
 }
 
 /**
- * Converts only a server-compatible seven-section Pro response into editable
+ * Converts only a server-compatible four-section Pro response into editable
  * fields. Invalid or partial model text is rejected instead of being copied
  * into an arbitrary draft field.
  */
 export function parseResponseLogicReply(
   reply: string,
 ): Pick<LogicDraft, LogicTextField> {
-  const { roundConfirmation: _roundConfirmation, ...draftFields } =
-    parseResponseLogicStructuredDraft(reply);
-  return draftFields;
+  return {
+    ...parseResponseLogicStructuredDraft(reply),
+    pending: "",
+    references: "",
+  };
+}
+
+export class ResponseLogicTaskStatusError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly options: {
+      status?: number;
+      retryable?: boolean;
+      stage?: "transport" | "http" | "response";
+    } = {},
+  ) {
+    super(message);
+    this.name = "ResponseLogicTaskStatusError";
+  }
+}
+
+const RESPONSE_LOGIC_BINDING_FORBIDDEN_CODES = new Set([
+  "RESPONSE_LOGIC_WORKSPACE_FORBIDDEN",
+  "RESPONSE_LOGIC_QUESTION_FORBIDDEN",
+  "RESPONSE_LOGIC_CONVERSATION_FORBIDDEN",
+  "RESPONSE_LOGIC_TASK_FORBIDDEN",
+  "RESPONSE_LOGIC_OPERATION_FORBIDDEN",
+]);
+
+export function isResponseLogicBindingForbiddenCode(code: string) {
+  return RESPONSE_LOGIC_BINDING_FORBIDDEN_CODES.has(code);
+}
+
+export function responseLogicTaskStatusIsRetryable(
+  status: number,
+  code: string,
+) {
+  if (status === 403 && isResponseLogicBindingForbiddenCode(code)) return false;
+  return status === 401 || status === 403 || status === 429 || status >= 500;
+}
+
+export function authoritativeResponseLogicTaskMatches(input: {
+  records: ReadonlyArray<
+    Pick<ResponseLogicRecordDto, "questionId" | "lastTaskId" | "revision">
+  >;
+  questionId: string;
+  taskId: string;
+  operationRevision: number;
+}) {
+  const record = input.records.find(
+    (candidate) => candidate.questionId === input.questionId,
+  );
+  return Boolean(
+    record &&
+      record.lastTaskId === input.taskId &&
+      record.revision === input.operationRevision,
+  );
+}
+
+export function getResponseLogicPollDelay(
+  elapsedMs: number,
+  consecutiveFailures = 0,
+) {
+  const steady = elapsedMs < 5 * 60_000 ? 3_000 : 10_000;
+  return Math.min(30_000, steady * 2 ** Math.min(consecutiveFailures, 3));
+}
+
+export function responseLogicResultMessageId(resultId: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < resultId.length; index += 1) {
+    hash ^= resultId.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619) >>> 0;
+  }
+  const readable = resultId.replace(/[^A-Za-z0-9_-]/gu, "-").slice(0, 72);
+  return `response-logic-${readable || "result"}-${hash.toString(16)}`;
+}
+
+export function canReloadResponseLogicTask(input: {
+  taskId?: string;
+  readOnly: boolean;
+  loading: boolean;
+  resetRequired?: boolean;
+}) {
+  return Boolean(
+    input.taskId && !input.readOnly && !input.loading && !input.resetRequired,
+  );
+}
+
+export function scopedResponseLogicTaskStartFailure<
+  T extends ResponseLogicTaskStartFailure & {
+    questionId: string;
+    conversationId: string;
+  },
+>(input: { failure: T | null; questionId: string; conversationId?: string }) {
+  return input.failure?.questionId === input.questionId &&
+    input.failure.conversationId === input.conversationId
+    ? input.failure
+    : null;
+}
+
+export function durableResponseLogicResetBarrier(input: {
+  conversation?: Pick<Conversation, "id" | "status" | "messages">;
+  questionId: string;
+}):
+  | (ResponseLogicTaskStartFailure & {
+      questionId: string;
+      conversationId: string;
+    })
+  | null {
+  const conversation = input.conversation;
+  if (
+    !conversation ||
+    conversation.status !== "error" ||
+    !conversation.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.id.startsWith(RESPONSE_LOGIC_RESET_REQUIRED_MESSAGE_ID_PREFIX),
+    )
+  ) {
+    return null;
+  }
+  return {
+    code: "RESPONSE_LOGIC_RESET_REQUIRED",
+    message: "此前应答逻辑任务的创建结果无法确认",
+    retryable: false,
+    resetRequired: true,
+    stage: "response" as const,
+    questionId: input.questionId,
+    conversationId: conversation.id,
+  };
+}
+
+export async function fetchResponseLogicTaskStatus(input: {
+  questionId: string;
+  conversationId: string;
+  taskId: string;
+  operationRevision: number;
+  signal?: AbortSignal;
+}): Promise<ResponseLogicTaskStatusEnvelope> {
+  const query = new URLSearchParams({
+    questionId: input.questionId,
+    conversationId: input.conversationId,
+    operationRevision: String(input.operationRevision),
+  });
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/response-logic/tasks/${encodeURIComponent(input.taskId)}/status?${query.toString()}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: input.signal,
+      },
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError")
+      throw error;
+    throw new ResponseLogicTaskStatusError(
+      "RESPONSE_LOGIC_TASK_TRANSPORT_FAILED",
+      "应答逻辑结果传输中断，系统将自动重试",
+      { retryable: true, stage: "transport" },
+    );
+  }
+
+  let responseText = "";
+  try {
+    responseText = await response.text();
+  } catch {
+    throw new ResponseLogicTaskStatusError(
+      "RESPONSE_LOGIC_TASK_RESPONSE_READ_FAILED",
+      "应答逻辑结果传输校验失败，系统将自动重试",
+      { status: response.status, retryable: true, stage: "response" },
+    );
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(responseText);
+  } catch {
+    if (response.ok) {
+      throw new ResponseLogicTaskStatusError(
+        "RESPONSE_LOGIC_TASK_RESPONSE_INVALID_JSON",
+        "应答逻辑结果传输校验失败，系统将自动重试",
+        { status: response.status, retryable: true, stage: "response" },
+      );
+    }
+  }
+
+  if (!response.ok) {
+    const apiError =
+      payload &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      payload.error &&
+      typeof payload.error === "object"
+        ? payload.error
+        : null;
+    const message =
+      apiError && "message" in apiError && typeof apiError.message === "string"
+        ? apiError.message
+        : `读取应答逻辑任务失败（${response.status}）`;
+    const code =
+      apiError && "code" in apiError && typeof apiError.code === "string"
+        ? apiError.code
+        : "RESPONSE_LOGIC_TASK_READ_FAILED";
+    throw new ResponseLogicTaskStatusError(code, message, {
+      status: response.status,
+      // Generic session/project authorization can refresh while the provider
+      // task remains valid. Exact binding-forbidden codes are permanent for
+      // this tuple and must instead hand off to the authoritative record.
+      retryable: responseLogicTaskStatusIsRetryable(response.status, code),
+      stage: "http",
+    });
+  }
+
+  const parsed = responseLogicTaskStatusEnvelopeSchema.safeParse(payload);
+  if (
+    !parsed.success ||
+    parsed.data.taskId !== input.taskId ||
+    parsed.data.operationRevision !== input.operationRevision
+  ) {
+    throw new ResponseLogicTaskStatusError(
+      "RESPONSE_LOGIC_TASK_RESPONSE_INVALID",
+      "服务端返回的应答逻辑状态未通过传输协议校验",
+      { status: response.status, retryable: true, stage: "response" },
+    );
+  }
+  return parsed.data;
 }
 
 export async function fetchResponseLogicStructuredDraft(input: {
   questionId: string;
   conversationId: string;
   taskId: string;
+  operationRevision: number;
 }): Promise<ResponseLogicStructuredDraft> {
-  const query = new URLSearchParams({
-    questionId: input.questionId,
-    conversationId: input.conversationId,
-  });
-  const response = await fetch(
-    `/api/response-logic/tasks/${encodeURIComponent(input.taskId)}/status?${query.toString()}`,
-    {
-      method: "GET",
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    },
-  );
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-  if (!response.ok) {
-    const message =
-      payload &&
-      typeof payload === "object" &&
-      "error" in payload &&
-      payload.error &&
-      typeof payload.error === "object" &&
-      "message" in payload.error &&
-      typeof payload.error.message === "string"
-        ? payload.error.message
-        : `读取应答逻辑任务失败（${response.status}）`;
-    throw new Error(message);
-  }
-  if (
-    !payload ||
-    typeof payload !== "object" ||
-    !("status" in payload) ||
-    payload.status !== "completed" ||
-    !("structuredDraft" in payload)
-  ) {
+  const observation = await fetchResponseLogicTaskStatus(input);
+  if (observation.status !== "completed") {
     throw new Error("应答逻辑任务尚未完成，请稍后重试");
   }
-  const parsed = responseLogicStructuredDraftSchema.safeParse(
-    payload.structuredDraft,
-  );
-  if (!parsed.success) {
-    throw new Error("服务端返回的应答逻辑草稿未通过七栏目校验");
-  }
-  return parsed.data;
+  return observation.structuredDraft;
 }
 
 function responseLogicAttachmentUrl(fileId: string) {
@@ -253,6 +482,77 @@ export function isResponseLogicAttachmentExpired(
       Number.isFinite(attachment.expiresAt) &&
       attachment.expiresAt <= now)
   );
+}
+
+/**
+ * Only provider-owned assistant outputs may feed the response-logic draft.
+ * Local error/help bubbles have no provider id, files, or response start time.
+ */
+export function isAuthoritativeResponseLogicAssistantMessage(
+  message: LocalMessage,
+) {
+  return (
+    message.role === "assistant" &&
+    !message.isStepsPlaceholder &&
+    Boolean(
+      message.upstreamOutputId ||
+        message.outputFiles?.length ||
+        message.responseStartedAt !== undefined,
+    ) &&
+    Boolean(message.content.trim() || message.outputFiles?.length)
+  );
+}
+
+export function projectResponseLogicConversationMessage(
+  message: LocalMessage,
+): LocalMessage {
+  if (message.role !== "assistant") return message;
+  const publicOutputFileName = (fileName: string, mimeType: string) => {
+    const extension = fileName.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase();
+    const image = mimeType.startsWith("image/");
+    return `${image ? "模型输出图片" : "模型输出资料"}${extension ? `.${extension}` : ""}`;
+  };
+  const publicStepText = (value?: string) =>
+    value ? normalizeResponseLogicPublicText(value) : undefined;
+
+  return {
+    ...message,
+    content: message.content
+      ? projectResponseLogicAssistantMarkdown(message.content).replace(
+          /^##[ \t]+企业材料\/官方依据[ \t]*$/mu,
+          `## ${RESPONSE_LOGIC_FACTS_DISPLAY_HEADING}`,
+        )
+      : message.content,
+    attachments: message.attachments?.map((attachment) => ({
+      ...attachment,
+      name: attachment.type === "image" ? "模型输出图片" : "模型输出资料",
+    })),
+    outputFiles: message.outputFiles?.map((file) => ({
+      ...file,
+      fileName: publicOutputFileName(file.fileName, file.mimeType),
+    })),
+    inlineImages: message.inlineImages?.map((image) => ({
+      ...image,
+      alt: "模型输出图片",
+    })),
+    intermediateSteps: message.intermediateSteps?.map((step) => ({
+      ...step,
+      label: publicStepText(step.label) || "正在整理应答逻辑",
+      description: publicStepText(step.description),
+      details: publicStepText(step.details),
+    })),
+    stepGroups: message.stepGroups?.map((group) => ({
+      ...group,
+      title: publicStepText(group.title) || "正在整理应答逻辑",
+      description: publicStepText(group.description),
+      steps: group.steps.map((step) => ({
+        ...step,
+        label: publicStepText(step.label) || "正在整理应答逻辑",
+        description: publicStepText(step.description),
+        details: publicStepText(step.details),
+      })),
+    })),
+  };
 }
 
 export function mergeResponseLogicAttachmentsIntoDraft(
@@ -285,8 +585,8 @@ export function mergeResponseLogicAttachmentsIntoDraft(
       url: responseLogicAttachmentUrl(attachment.fileId),
       caption: attachment.filename.replace(/\.[^.]+$/, ""),
       source: `企业交流上传：${attachment.filename}`,
-      section: "事实依据",
-      authorization: "待确认",
+      section: "图文依据",
+      authorization: "本次应答可用",
     }));
 
   return {
@@ -338,13 +638,6 @@ export function useResponseLogicWorkspaceState(
   };
 }
 
-function textLines(value: string) {
-  return value
-    .split(/\n+/)
-    .map((item) => item.replace(/^\s*(?:[-•]|\d+[.、])\s*/, "").trim())
-    .filter(Boolean);
-}
-
 function formatConfirmedAt(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -365,6 +658,18 @@ function groupIcon(tone: IntentQuestionGroup["tone"]) {
   return MessageSquareText;
 }
 
+function semanticGroupCategory(group: IntentQuestionGroup) {
+  return keywordCategoryKey(group.id) || keywordCategoryKey(group.title);
+}
+
+function semanticGroupTone(group: IntentQuestionGroup) {
+  return (
+    keywordCategoryTone(group.id) ||
+    keywordCategoryTone(group.title) ||
+    group.tone
+  );
+}
+
 type ResponseLogicPersistence = {
   records?: ResponseLogicRecordDto[];
   loading: boolean;
@@ -376,6 +681,104 @@ type ResponseLogicPersistence = {
     input: SaveResponseLogicInput,
   ) => Promise<{ record: ResponseLogicRecordDto }>;
 };
+
+export function responseLogicPersistenceAvailability(input: {
+  isLoading: boolean;
+  isFetching: boolean;
+  isSuccess: boolean;
+  isError: boolean;
+  hasData: boolean;
+  errorMessage?: string;
+}) {
+  return {
+    // Background fetching must not unmount the live conversation/editor.
+    loading: input.isLoading,
+    // Keep cached content interactive when a background refresh fails. The
+    // next successful poll can reconcile it without flashing back to loading.
+    ready: input.isSuccess || input.hasData,
+    error:
+      input.isError && !input.hasData
+        ? input.errorMessage || "应答逻辑数据载入失败"
+        : undefined,
+  };
+}
+
+export function reconcileResponseLogicDrafts(
+  current: Record<string, LogicDraft>,
+  records: ResponseLogicRecordDto[],
+  previousRecordIds: ReadonlySet<string> | null,
+) {
+  if (previousRecordIds === null) {
+    return Object.fromEntries(
+      records.map((record) => [record.questionId, record.draft]),
+    );
+  }
+  const nextRecordIds = new Set(records.map((record) => record.questionId));
+  const next = { ...current };
+  previousRecordIds.forEach((questionId) => {
+    if (!nextRecordIds.has(questionId)) delete next[questionId];
+  });
+  records.forEach((record) => {
+    // A confirmation made in another tab is authoritative and immutable.
+    // Draft records keep any possibly unsaved local edit during refresh.
+    if (record.confirmed || !next[record.questionId]) {
+      next[record.questionId] = record.draft;
+    }
+  });
+  return next;
+}
+
+export function shouldUseResponseLogicInitialPrompt(
+  conversation: {
+    taskId?: string;
+    previousResponseId?: string;
+    messages: Array<Pick<LocalMessage, "role">>;
+  },
+  readOnly: boolean,
+) {
+  return (
+    !readOnly &&
+    !conversation.taskId &&
+    !conversation.previousResponseId &&
+    !conversation.messages.some((message) => message.role === "user")
+  );
+}
+
+export function shouldHydrateResponseLogicTask(input: {
+  authoritativeTaskId?: string;
+  localTaskId?: string;
+  localPreviousResponseId?: string;
+  unavailableTaskIds: ReadonlySet<string>;
+  resetRequired?: boolean;
+}) {
+  return Boolean(
+    input.authoritativeTaskId &&
+      !input.resetRequired &&
+      !input.unavailableTaskIds.has(input.authoritativeTaskId) &&
+      (input.localTaskId !== input.authoritativeTaskId ||
+        input.localPreviousResponseId !== input.authoritativeTaskId),
+  );
+}
+
+export function responseLogicContinuationRevision(input: {
+  persistedRevision?: number;
+  activeTaskRevision?: number;
+}) {
+  // A completed task save advances the record revision. Reusing the task's
+  // older operation revision on /turn would incorrectly continue a stale
+  // operation, so only the latest persisted record may authorize a turn.
+  return Number.isSafeInteger(input.persistedRevision) &&
+    Number(input.persistedRevision) > 0
+    ? Number(input.persistedRevision)
+    : undefined;
+}
+
+export function canRequestResponseLogicReset(input: {
+  preview: boolean;
+  record?: Pick<ResponseLogicRecordDto, "questionId">;
+}) {
+  return !input.preview && Boolean(input.record?.questionId);
+}
 
 export default function ResponseLogicWorkspace(
   props: ResponseLogicWorkspaceProps,
@@ -427,7 +830,7 @@ export type ResponseLogicConfirmationBoardProps = {
   initialQuestionId?: string | null;
   questionGroups?: IntentQuestionGroup[];
   previewPublished?: boolean;
-  onOpenAgent: (questionId: string) => void;
+  onOpenAgent?: (questionId: string) => void;
 };
 
 export function ResponseLogicConfirmationBoard(
@@ -444,6 +847,25 @@ export function ResponseLogicConfirmationBoard(
     );
   }
   return <PersistentResponseLogicConfirmationBoard {...props} />;
+}
+
+export function ResponseLogicReadOnlyConfirmationBoard({
+  questionGroups,
+  records,
+}: {
+  questionGroups: IntentQuestionGroup[];
+  records: ResponseLogicRecordDto[];
+}) {
+  return (
+    <ResponseLogicConfirmationBoardContent
+      preview={false}
+      questionGroups={questionGroups}
+      records={records}
+      loading={false}
+      error=""
+      onRetry={() => undefined}
+    />
+  );
 }
 
 function DevelopmentResponseLogicConfirmationBoard(
@@ -487,7 +909,7 @@ function PersistentResponseLogicConfirmationBoard(
       records={recordsQuery.data?.records ?? []}
       loading={recordsQuery.isLoading}
       error={
-        recordsQuery.isError
+        recordsQuery.isError && !recordsQuery.data
           ? recordsQuery.error.message || "应答逻辑成果载入失败"
           : ""
       }
@@ -656,15 +1078,19 @@ function ResponseLogicConfirmationBoardContent({
           question={selectedEntry.question}
           logic={confirmed}
           showPublicationMeta={false}
-          actionLabel="进入应答逻辑智能体更新"
-          onAction={() => onOpenAgent(activeQuestionId)}
+          actionLabel={onOpenAgent ? "查看已确认应答逻辑" : undefined}
+          onAction={
+            onOpenAgent ? () => onOpenAgent(activeQuestionId) : undefined
+          }
         />
       ) : (
         <ResponseLogicConfirmationState
           title="尚未形成已确认的应答逻辑"
           description={`“${selectedEntry.question.question}”还没有从应答逻辑智能体发布的正式内容；草稿和预填内容不会在这里展示。`}
-          actionLabel="进入应答逻辑智能体"
-          onAction={() => onOpenAgent(activeQuestionId)}
+          actionLabel={onOpenAgent ? "进入应答逻辑智能体" : undefined}
+          onAction={
+            onOpenAgent ? () => onOpenAgent(activeQuestionId) : undefined
+          }
         />
       )}
     </div>
@@ -729,16 +1155,20 @@ function PersistentResponseLogicWorkspace(props: ResponseLogicWorkspaceProps) {
       });
     },
   });
+  const availability = responseLogicPersistenceAvailability({
+    isLoading: recordsQuery.isLoading,
+    isFetching: recordsQuery.isFetching,
+    isSuccess: recordsQuery.isSuccess,
+    isError: recordsQuery.isError,
+    hasData: Boolean(recordsQuery.data),
+    errorMessage: recordsQuery.error?.message,
+  });
   return (
     <ResponseLogicWorkspaceContent
       {...props}
       persistence={{
         records: recordsQuery.data?.records,
-        loading: recordsQuery.isLoading || recordsQuery.isFetching,
-        ready: recordsQuery.isSuccess && !recordsQuery.isFetching,
-        error: recordsQuery.isError
-          ? recordsQuery.error.message || "应答逻辑数据载入失败"
-          : undefined,
+        ...availability,
         retry: () => {
           void recordsQuery.refetch();
         },
@@ -794,8 +1224,31 @@ function ResponseLogicWorkspaceContent({
     setUpdateNotice,
   } = workspaceState ?? internalState;
   const objectUrls = useRef(new Set<string>());
-  const hydratedRecordsRef = useRef(false);
+  const syncedRecordIdsRef = useRef<Set<string> | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [requestHistoryOpen, setRequestHistoryOpen] = useState(false);
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!workspaceExpanded) return;
+
+    const bodyOverflow = document.body.style.overflow;
+    const documentOverflow = document.documentElement.style.overflow;
+    const exitOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWorkspaceExpanded(false);
+    };
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    document.addEventListener("keydown", exitOnEscape);
+
+    return () => {
+      document.removeEventListener("keydown", exitOnEscape);
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = documentOverflow;
+    };
+  }, [workspaceExpanded]);
 
   useEffect(
     () => () => {
@@ -805,35 +1258,62 @@ function ResponseLogicWorkspaceContent({
   );
 
   useEffect(() => {
-    if (
-      preview ||
-      hydratedRecordsRef.current ||
-      !persistence?.ready ||
-      !persistence.records
-    ) {
+    if (preview || !persistence?.ready || !persistence.records) {
       return;
     }
-    hydratedRecordsRef.current = true;
     const records = persistence.records;
-    setDrafts(
-      Object.fromEntries(
-        records.map((record) => [record.questionId, record.draft]),
-      ),
+    const previousRecordIds = syncedRecordIdsRef.current;
+    const nextRecordIds = new Set(records.map((record) => record.questionId));
+
+    if (previousRecordIds === null) {
+      setDrafts((current) =>
+        reconcileResponseLogicDrafts(current, records, previousRecordIds),
+      );
+      setConfirmations(
+        Object.fromEntries(
+          records
+            .filter((record) => Boolean(record.confirmed))
+            .map((record) => [record.questionId, record.confirmed!]),
+        ),
+      );
+      setConversationIds(
+        Object.fromEntries(
+          records
+            .filter((record) => Boolean(record.conversationId))
+            .map((record) => [record.questionId, record.conversationId!]),
+        ),
+      );
+      syncedRecordIdsRef.current = nextRecordIds;
+      return;
+    }
+
+    const removedRecordIds = [...previousRecordIds].filter(
+      (questionId) => !nextRecordIds.has(questionId),
     );
-    setConfirmations(
-      Object.fromEntries(
-        records
-          .filter((record) => Boolean(record.confirmed))
-          .map((record) => [record.questionId, record.confirmed!]),
-      ),
+    if (removedRecordIds.length > 0) setUpdateNotice("");
+    setDrafts((current) =>
+      reconcileResponseLogicDrafts(current, records, previousRecordIds),
     );
-    setConversationIds(
-      Object.fromEntries(
-        records
-          .filter((record) => Boolean(record.conversationId))
-          .map((record) => [record.questionId, record.conversationId!]),
-      ),
-    );
+    setConfirmations((current) => {
+      const next = { ...current };
+      removedRecordIds.forEach((questionId) => delete next[questionId]);
+      records.forEach((record) => {
+        if (record.confirmed) next[record.questionId] = record.confirmed;
+        else delete next[record.questionId];
+      });
+      return next;
+    });
+    setConversationIds((current) => {
+      const next = { ...current };
+      removedRecordIds.forEach((questionId) => delete next[questionId]);
+      records.forEach((record) => {
+        if (record.conversationId && !next[record.questionId]) {
+          next[record.questionId] = record.conversationId;
+        }
+      });
+      return next;
+    });
+    syncedRecordIdsRef.current = nextRecordIds;
   }, [
     preview,
     persistence?.records,
@@ -841,6 +1321,7 @@ function ResponseLogicWorkspaceContent({
     setConfirmations,
     setConversationIds,
     setDrafts,
+    setUpdateNotice,
   ]);
 
   useEffect(() => {
@@ -896,6 +1377,10 @@ function ResponseLogicWorkspaceContent({
   const persistedRecord = persistence?.records?.find(
     (record) => record.questionId === activeQuestionId,
   );
+  const resetAvailable = canRequestResponseLogicReset({
+    preview,
+    record: persistedRecord,
+  });
 
   const selectGroup = (group: IntentQuestionGroup) => {
     const questionId = group.questions[0].id;
@@ -915,6 +1400,7 @@ function ResponseLogicWorkspaceContent({
   };
 
   const patchDraft = (patch: Partial<LogicDraft>) => {
+    if (confirmed) return;
     setDrafts((current) => ({
       ...current,
       [activeQuestionId]: {
@@ -929,6 +1415,9 @@ function ResponseLogicWorkspaceContent({
     options?: {
       conversationId?: string;
       publish?: boolean;
+      expectedRevision?: number;
+      expectedTaskId?: string;
+      expectedOperationRevision?: number;
     },
   ) => {
     if (preview) return null;
@@ -940,6 +1429,14 @@ function ResponseLogicWorkspaceContent({
       question: selectedEntry.question.question,
       intent: selectedEntry.question.intent,
       summary: selectedEntry.question.summary,
+      expectedRevision:
+        options?.expectedRevision ?? persistedRecord?.revision ?? 0,
+      ...(options?.expectedTaskId
+        ? { expectedTaskId: options.expectedTaskId }
+        : {}),
+      ...(options?.expectedOperationRevision
+        ? { expectedOperationRevision: options.expectedOperationRevision }
+        : {}),
       conversationId: options?.conversationId ?? conversationId,
       draft: nextDraft,
       publish: options?.publish ?? false,
@@ -948,6 +1445,7 @@ function ResponseLogicWorkspaceContent({
   };
 
   const bindConversation = async (nextConversationId: string) => {
+    if (confirmed) return;
     setConversationIds((current) => ({
       ...current,
       [activeQuestionId]: nextConversationId,
@@ -966,62 +1464,46 @@ function ResponseLogicWorkspaceContent({
     reply: string,
     message?: LocalMessage,
     taskId?: string,
+    operationRevision?: number,
+    onTaskUnavailable?: () => void,
+    suppliedStructuredDraft?: ResponseLogicStructuredDraft,
   ) => {
-    let draftWithVerifiedAttachments = draft;
-    if (!preview && persistence) {
-      try {
-        const records = await persistence.refresh();
-        const authoritativeRecord = records.find(
-          (record) => record.questionId === activeQuestionId,
-        );
-        if (
-          taskId &&
-          authoritativeRecord?.lastTaskId &&
-          authoritativeRecord.lastTaskId !== taskId
-        ) {
-          throw new Error(
-            "当前模型输出与服务端记录的最新任务不一致，请重新打开问题",
-          );
-        }
-        draftWithVerifiedAttachments = mergeResponseLogicAttachmentsIntoDraft(
-          draft,
-          authoritativeRecord?.draft.attachments ?? [],
-        );
-      } catch (error) {
-        toast.error("上传资料同步失败", {
-          description:
-            error instanceof Error
-              ? error.message
-              : "无法核对本轮上传资料，请稍后重试",
-        });
-        return;
-      }
-    }
-
+    if (confirmed) return "ignored" as const;
     let parsed: Pick<LogicDraft, LogicTextField>;
-    let roundConfirmation = "";
     try {
       if (preview) {
         parsed = parseResponseLogicReply(reply);
       } else {
-        if (!taskId || !conversationId) {
+        if (!taskId || !operationRevision || !conversationId) {
           throw new Error("缺少当前问题的会话或任务标识，请重新打开该问题");
         }
-        const structuredDraft = await fetchResponseLogicStructuredDraft({
-          questionId: activeQuestionId,
-          conversationId,
-          taskId,
-        });
-        ({ roundConfirmation, ...parsed } = structuredDraft);
+        const structuredDraft =
+          suppliedStructuredDraft ??
+          (await fetchResponseLogicStructuredDraft({
+            questionId: activeQuestionId,
+            conversationId,
+            taskId,
+            operationRevision,
+          }));
+        parsed = { ...structuredDraft, pending: "", references: "" };
       }
     } catch (error) {
+      if (
+        error instanceof ResponseLogicTaskStatusError &&
+        [
+          "RESPONSE_LOGIC_TASK_UNAVAILABLE",
+          "RESPONSE_LOGIC_TASK_FAILED",
+        ].includes(error.code)
+      ) {
+        onTaskUnavailable?.();
+      }
       toast.error("模型输出未载入", {
         description:
           error instanceof Error
             ? error.message
-            : "模型输出未通过七栏目校验，请重新生成",
+            : "模型输出未通过四栏目校验，请重新生成",
       });
-      return;
+      return "ignored" as const;
     }
     const imageCandidates: LogicImage[] = [
       ...(message?.inlineImages || []).map((image, index) => ({
@@ -1030,8 +1512,8 @@ function ResponseLogicWorkspaceContent({
         url: image.src,
         caption: image.alt || `应答配图 ${index + 1}`,
         source: "智能体任务输出",
-        section: "事实依据",
-        authorization: "待确认" as const,
+        section: "图文依据",
+        authorization: "本次应答可用" as const,
       })),
       ...(message?.outputFiles || [])
         .filter((file) => file.mimeType.startsWith("image/"))
@@ -1041,45 +1523,127 @@ function ResponseLogicWorkspaceContent({
           url: file.fileUrl,
           caption: file.fileName,
           source: "智能体任务输出",
-          section: "事实依据",
-          authorization: "待确认" as const,
+          section: "图文依据",
+          authorization: "本次应答可用" as const,
         })),
     ];
-    const nextDraft: LogicDraft = {
-      ...draftWithVerifiedAttachments,
+    const draftWithResult: LogicDraft = {
+      ...draft,
       ...parsed,
       images:
         imageCandidates.length > 0
           ? [
-              ...draftWithVerifiedAttachments.images,
+              ...draft.images,
               ...imageCandidates.filter(
                 (candidate) =>
-                  !draftWithVerifiedAttachments.images.some(
-                    (image) => image.url === candidate.url,
-                  ),
+                  !draft.images.some((image) => image.url === candidate.url),
               ),
             ]
-          : draftWithVerifiedAttachments.images,
+          : draft.images,
     };
-    setDrafts((current) => ({
-      ...current,
-      [activeQuestionId]: nextDraft,
-    }));
-    if (!preview) {
+    if (preview) {
+      setDrafts((current) => ({
+        ...current,
+        [activeQuestionId]: draftWithResult,
+      }));
+      return "saved" as const;
+    }
+
+    let nextDraft = draftWithResult;
+    let authoritativeRevision = persistedRecord?.revision ?? 0;
+    if (persistence) {
       try {
-        await persistDraft(nextDraft);
-        toast.success("模型输出已载入应答草稿", {
-          description: roundConfirmation || undefined,
-        });
+        const records = await persistence.refresh();
+        const authoritativeRecord = records.find(
+          (record) => record.questionId === activeQuestionId,
+        );
+        if (
+          !taskId ||
+          !operationRevision ||
+          !authoritativeRecord ||
+          authoritativeRecord.lastTaskId !== taskId ||
+          authoritativeRecord.revision !== operationRevision
+        ) {
+          throw new Error(
+            "当前模型输出与服务端记录的最新任务不一致，请重新打开问题",
+          );
+        }
+        authoritativeRevision = operationRevision;
+        nextDraft = mergeResponseLogicAttachmentsIntoDraft(
+          draftWithResult,
+          authoritativeRecord?.draft.attachments ?? [],
+        );
       } catch (error) {
-        toast.error("草稿保存失败", {
-          description: error instanceof Error ? error.message : "请稍后重试",
+        if (
+          error instanceof Error &&
+          error.message.includes("最新任务不一致")
+        ) {
+          toast.error("模型输出未载入", { description: error.message });
+          return "ignored" as const;
+        }
+        // The dedicated status endpoint already authenticated this exact
+        // question/conversation/task tuple. Keep its validated four fields
+        // visible even if the follow-up CAS refresh is temporarily offline.
+        setDrafts((current) => ({
+          ...current,
+          [activeQuestionId]: draftWithResult,
+        }));
+        toast.error("结果已显示但尚未保存", {
+          description:
+            error instanceof Error ? error.message : "连接恢复后请重试保存",
         });
+        return "displayed_unsaved" as const;
       }
+    }
+
+    try {
+      await persistDraft(nextDraft, {
+        expectedRevision: authoritativeRevision,
+        expectedTaskId: taskId,
+        expectedOperationRevision: operationRevision,
+      });
+      setDrafts((current) => ({
+        ...current,
+        [activeQuestionId]: nextDraft,
+      }));
+      toast.success("模型输出已载入应答草稿");
+      return "saved" as const;
+    } catch (error) {
+      if (persistence && taskId && operationRevision) {
+        try {
+          const records = await persistence.refresh();
+          if (
+            !authoritativeResponseLogicTaskMatches({
+              records,
+              questionId: activeQuestionId,
+              taskId,
+              operationRevision,
+            })
+          ) {
+            toast.error("模型输出未载入", {
+              description: "当前任务已被重置或替换，请载入最新任务。",
+            });
+            persistence.retry();
+            return "ignored" as const;
+          }
+        } catch {
+          // The validated result remains useful while persistence is offline.
+          // The atomic expectedTaskId guard still prevents server resurrection.
+        }
+      }
+      setDrafts((current) => ({
+        ...current,
+        [activeQuestionId]: nextDraft,
+      }));
+      toast.error("结果已显示但尚未保存", {
+        description: error instanceof Error ? error.message : "请稍后重试保存",
+      });
+      return "displayed_unsaved" as const;
     }
   };
 
   const addImages = (event: ChangeEvent<HTMLInputElement>) => {
+    if (confirmed) return;
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
 
@@ -1092,28 +1656,21 @@ function ResponseLogicWorkspaceContent({
         url,
         caption: file.name.replace(/\.[^.]+$/, ""),
         source: "本次企业交流上传",
-        section: "事实依据",
-        authorization: "待确认",
+        section: "图文依据",
+        authorization: "本次应答可用",
       };
     });
     patchDraft({ images: [...draft.images, ...images] });
     event.target.value = "";
   };
 
-  const patchImage = (id: string, patch: Partial<LogicImage>) => {
-    patchDraft({
-      images: draft.images.map((image) =>
-        image.id === id ? { ...image, ...patch } : image,
-      ),
-    });
-  };
-
   const removeImage = (id: string) => {
+    if (confirmed) return;
     patchDraft({ images: draft.images.filter((image) => image.id !== id) });
   };
 
   const updateConfirmation = async () => {
-    if (isPublishing) return;
+    if (isPublishing || confirmed) return;
     setIsPublishing(true);
     try {
       let nextConfirmed: ConfirmedLogic;
@@ -1121,7 +1678,7 @@ function ResponseLogicWorkspaceContent({
         nextConfirmed = {
           ...draft,
           images: draft.images.map((image) => ({ ...image })),
-          version: Math.max(confirmed?.version ?? 0, 0) + 1,
+          version: 1,
           updatedAt: new Date().toISOString(),
         };
       } else {
@@ -1136,8 +1693,9 @@ function ResponseLogicWorkspaceContent({
         [activeQuestionId]: nextConfirmed,
       }));
       setUpdateNotice(
-        `“${selectedEntry.question.question}”的应答逻辑已更新，可在问题优化中查看。`,
+        `“${selectedEntry.question.question}”的应答逻辑已确认，可在问题优化中查看。`,
       );
+      setConfirmDialogOpen(false);
       onPublished?.(activeQuestionId);
     } catch (error) {
       toast.error("应答逻辑更新失败", {
@@ -1149,8 +1707,10 @@ function ResponseLogicWorkspaceContent({
   };
 
   return (
-    <section className="response-logic-workspace page-shell">
-      <header className="rl-page-header">
+    <section
+      className={`response-logic-workspace page-shell ${workspaceExpanded ? "rl-workspace-expanded" : ""}`}
+    >
+      <header className="rl-page-header rl-page-header-with-action">
         <div>
           <span className="rl-eyebrow">MindPromise 智诺 · 应答逻辑智能体</span>
           <h2>应答逻辑智能体</h2>
@@ -1158,7 +1718,47 @@ function ResponseLogicWorkspaceContent({
             围绕每个核心问题沉淀可核验的回答口径、证据来源、表达边界与配图材料；完成更新后返回问题优化查看正式版本。
           </p>
         </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="rl-page-header-action"
+            onClick={() => setRequestHistoryOpen(true)}
+          >
+            <FileClock className="h-4 w-4" aria-hidden="true" />
+            需求记录
+          </Button>
+          <QuestionMaintenanceRequestDialog
+            mode="response_logic"
+            questions={
+              resetAvailable
+                ? [
+                    {
+                      id: selectedEntry.question.id,
+                      question: selectedEntry.question.question,
+                    },
+                  ]
+                : []
+            }
+            selectedQuestionId={resetAvailable ? activeQuestionId : null}
+            triggerLabel="申请重置应答逻辑"
+            disabled={!resetAvailable}
+          />
+        </div>
       </header>
+
+      <CustomerRequestHistoryDialog
+        open={requestHistoryOpen}
+        onOpenChange={setRequestHistoryOpen}
+        title="应答逻辑需求记录"
+        description="显示草稿、启动失败、处理中或已确认应答逻辑的重置申请。"
+        type="knowledge_base"
+        surface="response_logic_management"
+        preview={preview}
+        {...(preview ? { tickets: [] } : {})}
+        emptyText="暂无应答逻辑修改需求。"
+      />
 
       {updateNotice && (
         <div className="rl-update-notice" role="status">
@@ -1195,23 +1795,60 @@ function ResponseLogicWorkspaceContent({
               recordsError={persistence?.error}
               onRetryRecords={() => persistence?.retry()}
               lastTaskId={persistedRecord?.lastTaskId}
+              lastTaskRevision={persistedRecord?.revision}
               lastTaskRecordedAt={persistedRecord?.updatedAt}
+              readOnly={Boolean(confirmed)}
+              expanded={workspaceExpanded}
+              onToggleExpanded={() =>
+                setWorkspaceExpanded((expanded) => !expanded)
+              }
               onConversationIdChange={bindConversation}
               onLoadLatestReply={loadModelReply}
             />
             <LogicEditor
               draft={draft}
+              readOnly={Boolean(confirmed)}
               allowLocalImageUpload={preview}
               isPublishing={isPublishing}
               onPatch={patchDraft}
               onAddImages={addImages}
-              onPatchImage={patchImage}
               onRemoveImage={removeImage}
-              onUpdate={() => void updateConfirmation()}
+              onUpdate={() => setConfirmDialogOpen(true)}
             />
           </div>
         </div>
       </div>
+      <AlertDialog
+        open={confirmDialogOpen}
+        onOpenChange={(open) => {
+          if (!isPublishing) setConfirmDialogOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认当前应答逻辑？</AlertDialogTitle>
+            <AlertDialogDescription>
+              确认后将作为“{selectedEntry.question.question}
+              ”的正式应答逻辑，不能直接修改；如需调整，请提交应答逻辑修改需求。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPublishing}>
+              继续检查
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isPublishing}
+              onClick={(event) => {
+                event.preventDefault();
+                void updateConfirmation();
+              }}
+            >
+              {isPublishing && <Loader2 className="h-4 w-4 animate-spin" />}
+              确认并锁定
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 }
@@ -1235,9 +1872,16 @@ function QuestionNavigator({
 }) {
   const selectedGroup =
     groups.find((group) => group.id === selectedGroupId) ?? groups[0];
+  const selectedTone = semanticGroupTone(selectedGroup);
+  const selectedCategory = semanticGroupCategory(selectedGroup);
 
   return (
-    <aside className="rl-question-nav" aria-label={navTitle}>
+    <aside
+      className="rl-question-nav"
+      aria-label={navTitle}
+      data-tone={selectedTone}
+      data-category={selectedCategory || undefined}
+    >
       <div className="rl-question-nav-head">
         <div>
           <strong>{navTitle}</strong>
@@ -1247,13 +1891,16 @@ function QuestionNavigator({
 
       <div className="rl-group-tabs">
         {groups.map((group) => {
-          const Icon = groupIcon(group.tone);
+          const tone = semanticGroupTone(group);
+          const category = semanticGroupCategory(group);
+          const Icon = groupIcon(tone);
           return (
             <button
               key={group.id}
               type="button"
               aria-label={group.title}
-              data-tone={group.tone}
+              data-tone={tone}
+              data-category={category || undefined}
               className={group.id === selectedGroup.id ? "active" : ""}
               onClick={() => onSelectGroup(group)}
             >
@@ -1305,9 +1952,15 @@ function QuestionContext({
   group: IntentQuestionGroup;
   question: IntentQuestion;
 }) {
-  const Icon = groupIcon(group.tone);
+  const tone = semanticGroupTone(group);
+  const category = semanticGroupCategory(group);
+  const Icon = groupIcon(tone);
   return (
-    <section className="rl-question-context" data-tone={group.tone}>
+    <section
+      className="rl-question-context"
+      data-tone={tone}
+      data-category={category || undefined}
+    >
       <span className="rl-context-icon">
         <Icon size={20} />
       </span>
@@ -1332,7 +1985,11 @@ function DialoguePanel({
   recordsError,
   onRetryRecords,
   lastTaskId,
+  lastTaskRevision,
   lastTaskRecordedAt,
+  readOnly,
+  expanded,
+  onToggleExpanded,
   onConversationIdChange,
   onLoadLatestReply,
 }: {
@@ -1347,13 +2004,13 @@ function DialoguePanel({
   recordsError?: string;
   onRetryRecords: () => void;
   lastTaskId?: string;
+  lastTaskRevision?: number;
   lastTaskRecordedAt?: number;
+  readOnly: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onConversationIdChange: (conversationId: string) => Promise<void>;
-  onLoadLatestReply: (
-    reply: string,
-    message?: LocalMessage,
-    taskId?: string,
-  ) => Promise<void>;
+  onLoadLatestReply: ResponseLogicLoadReply;
 }) {
   return (
     <section className="rl-dialogue-card">
@@ -1367,12 +2024,29 @@ function DialoguePanel({
             <p>结合企业知识库与补充资料，生成可核验的应答口径。</p>
           </div>
         </div>
+        <button
+          type="button"
+          className="rl-dialogue-expand"
+          aria-label={expanded ? "退出全屏" : "进入全屏"}
+          aria-pressed={expanded}
+          title={expanded ? "退出全屏" : "进入全屏"}
+          onClick={onToggleExpanded}
+        >
+          {expanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+          <span>{expanded ? "退出全屏" : "进入全屏"}</span>
+        </button>
       </div>
       {preview && PreviewDialogueComponent ? (
-        <PreviewDialogueComponent
-          question={question}
-          onLoadLatestReply={onLoadLatestReply}
-        />
+        <fieldset
+          className="rl-preview-fieldset"
+          disabled={readOnly}
+          aria-label={readOnly ? "已确认应答逻辑对话（只读）" : undefined}
+        >
+          <PreviewDialogueComponent
+            question={question}
+            onLoadLatestReply={onLoadLatestReply}
+          />
+        </fieldset>
       ) : (
         <RealResponseLogicDialogue
           group={group}
@@ -1384,7 +2058,9 @@ function DialoguePanel({
           recordsError={recordsError}
           onRetryRecords={onRetryRecords}
           lastTaskId={lastTaskId}
+          lastTaskRevision={lastTaskRevision}
           lastTaskRecordedAt={lastTaskRecordedAt}
+          readOnly={readOnly}
           onConversationIdChange={onConversationIdChange}
           onLoadLatestReply={onLoadLatestReply}
         />
@@ -1403,7 +2079,9 @@ function RealResponseLogicDialogue({
   recordsError,
   onRetryRecords,
   lastTaskId,
+  lastTaskRevision,
   lastTaskRecordedAt,
+  readOnly,
   onConversationIdChange,
   onLoadLatestReply,
 }: {
@@ -1416,13 +2094,11 @@ function RealResponseLogicDialogue({
   recordsError?: string;
   onRetryRecords: () => void;
   lastTaskId?: string;
+  lastTaskRevision?: number;
   lastTaskRecordedAt?: number;
+  readOnly: boolean;
   onConversationIdChange: (conversationId: string) => Promise<void>;
-  onLoadLatestReply: (
-    reply: string,
-    message?: LocalMessage,
-    taskId?: string,
-  ) => Promise<void>;
+  onLoadLatestReply: ResponseLogicLoadReply;
 }) {
   const {
     state,
@@ -1430,34 +2106,130 @@ function RealResponseLogicDialogue({
     hydrated,
     createConversation,
     setActive,
+    updateAssistantMessages,
     updateStatus,
     updateTitle,
   } = useConversation();
   const initializationRef = useRef<string | null>(null);
   const callbackRef = useRef(onConversationIdChange);
   callbackRef.current = onConversationIdChange;
-  const [loadingOutput, setLoadingOutput] = useState(false);
-
+  const unavailableTaskIdsRef = useRef(new Set<string>());
   const scopedConversation = conversationId
     ? state.conversations.find(
         (conversation) => conversation.id === conversationId,
       )
     : undefined;
+  const scopedConversationRef = useRef(scopedConversation);
+  scopedConversationRef.current = scopedConversation;
+  const loadLatestReplyRef = useRef(onLoadLatestReply);
+  loadLatestReplyRef.current = onLoadLatestReply;
+  const retryRecordsRef = useRef(onRetryRecords);
+  retryRecordsRef.current = onRetryRecords;
+  const [activeDedicatedTask, setActiveDedicatedTask] = useState<{
+    questionId: string;
+    conversationId?: string;
+    taskId: string;
+    operationRevision: number;
+    startedAt: number;
+  } | null>(null);
+  const scopedActiveDedicatedTask =
+    activeDedicatedTask?.questionId === question.id &&
+    activeDedicatedTask.conversationId === conversationId
+      ? activeDedicatedTask
+      : null;
+  const [lastCompletedObservation, setLastCompletedObservation] =
+    useState<ResponseLogicTaskStatusEnvelope | null>(null);
+  const [unsavedResultId, setUnsavedResultId] = useState<string | null>(null);
+  const [loadingOutput, setLoadingOutput] = useState(false);
+  const [startFailure, setStartFailure] = useState<
+    | (ResponseLogicTaskStartFailure & {
+        questionId: string;
+        conversationId: string;
+        continuationTaskId?: string;
+      })
+    | null
+  >(null);
+  const startFailureRef = useRef(startFailure);
+  startFailureRef.current = startFailure;
+  const scopedStartFailure =
+    scopedResponseLogicTaskStartFailure({
+      failure: startFailure,
+      questionId: question.id,
+      conversationId: scopedConversation?.id,
+    }) ??
+    durableResponseLogicResetBarrier({
+      conversation: scopedConversation,
+      questionId: question.id,
+    });
 
   useEffect(() => {
-    if (!hydrated || recordsLoading || !recordsReady || recordsError) return;
+    if (!lastTaskId || !lastTaskRevision || scopedStartFailure?.resetRequired)
+      return;
+    setActiveDedicatedTask((current) =>
+      current?.taskId === lastTaskId &&
+      current.operationRevision === lastTaskRevision
+        ? current
+        : {
+            questionId: question.id,
+            conversationId,
+            taskId: lastTaskId,
+            operationRevision: lastTaskRevision,
+            startedAt: lastTaskRecordedAt || Date.now(),
+          },
+    );
+  }, [
+    conversationId,
+    lastTaskId,
+    lastTaskRecordedAt,
+    lastTaskRevision,
+    question.id,
+    scopedStartFailure?.resetRequired,
+  ]);
+
+  useEffect(() => {
+    setLastCompletedObservation(null);
+    setUnsavedResultId(null);
+    startFailureRef.current = null;
+    setStartFailure(null);
+  }, [conversationId, question.id]);
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      recordsLoading ||
+      !recordsReady ||
+      recordsError ||
+      scopedStartFailure?.resetRequired
+    )
+      return;
     if (scopedConversation) {
       initializationRef.current = null;
+      const authoritativeTaskId =
+        scopedActiveDedicatedTask?.taskId || lastTaskId;
+      const operationRevision =
+        scopedActiveDedicatedTask?.operationRevision || lastTaskRevision;
       if (
-        lastTaskId &&
-        (scopedConversation.taskId !== lastTaskId ||
-          scopedConversation.previousResponseId !== lastTaskId)
+        (Boolean(operationRevision) &&
+          (scopedConversation.status === "running" ||
+            scopedConversation.status === "pending") &&
+          scopedActiveDedicatedTask?.operationRevision !== operationRevision) ||
+        shouldHydrateResponseLogicTask({
+          authoritativeTaskId,
+          localTaskId: scopedConversation.taskId,
+          localPreviousResponseId: scopedConversation.previousResponseId,
+          unavailableTaskIds: unavailableTaskIdsRef.current,
+          resetRequired: scopedStartFailure?.resetRequired,
+        })
       ) {
         updateStatus(scopedConversation.id, "pending", {
-          taskId: lastTaskId,
-          previousResponseId: lastTaskId,
+          taskId: authoritativeTaskId,
+          previousResponseId: authoritativeTaskId,
+          executionKind: "response_logic",
           startedAt:
-            scopedConversation.startedAt || lastTaskRecordedAt || Date.now(),
+            scopedConversation.startedAt ||
+            scopedActiveDedicatedTask?.startedAt ||
+            lastTaskRecordedAt ||
+            Date.now(),
         });
         return;
       }
@@ -1466,6 +2238,8 @@ function RealResponseLogicDialogue({
       }
       return;
     }
+
+    if (readOnly) return;
 
     const key = `${question.id}:${conversationId || "new"}`;
     if (initializationRef.current === key) return;
@@ -1477,20 +2251,260 @@ function RealResponseLogicDialogue({
     });
   }, [
     activeConversation?.id,
+    scopedActiveDedicatedTask?.startedAt,
+    scopedActiveDedicatedTask?.taskId,
     conversationId,
     createConversation,
     hydrated,
     lastTaskId,
     lastTaskRecordedAt,
+    lastTaskRevision,
     question.id,
     question.question,
+    readOnly,
     recordsError,
     recordsLoading,
     recordsReady,
     scopedConversation,
+    scopedStartFailure?.resetRequired,
     setActive,
     updateStatus,
     updateTitle,
+  ]);
+
+  const applyCompletedObservationRef = useRef<
+    (
+      observation: Extract<
+        ResponseLogicTaskStatusEnvelope,
+        { status: "completed" }
+      >,
+    ) => Promise<ResponseLogicLoadResult>
+  >(async () => "ignored");
+  applyCompletedObservationRef.current = async (observation) => {
+    const conversation = scopedConversationRef.current;
+    const blockingFailure =
+      scopedResponseLogicTaskStartFailure({
+        failure: startFailureRef.current,
+        questionId: question.id,
+        conversationId: conversation?.id,
+      }) ??
+      durableResponseLogicResetBarrier({
+        conversation,
+        questionId: question.id,
+      });
+    const currentTaskId =
+      scopedActiveDedicatedTask?.taskId || lastTaskId || conversation?.taskId;
+    const currentOperationRevision =
+      scopedActiveDedicatedTask?.operationRevision || lastTaskRevision;
+    if (
+      !conversation ||
+      blockingFailure?.resetRequired ||
+      observation.taskId !== currentTaskId ||
+      observation.operationRevision !== currentOperationRevision
+    ) {
+      return "ignored";
+    }
+
+    const messageId = responseLogicResultMessageId(observation.resultId);
+    const existingMessage = conversation.messages.find(
+      (message) =>
+        message.id === messageId || message.upstreamOutputId === messageId,
+    );
+    const assistantMessage: LocalMessage = existingMessage ?? {
+      id: messageId,
+      upstreamOutputId: messageId,
+      role: "assistant",
+      content: serializeResponseLogicStructuredDraft(
+        observation.structuredDraft,
+      ),
+      timestamp: Date.now(),
+      responseStartedAt:
+        scopedActiveDedicatedTask?.startedAt ||
+        conversation.startedAt ||
+        lastTaskRecordedAt ||
+        Date.now(),
+      modelName: observation.model,
+    };
+    const outcome = await loadLatestReplyRef.current(
+      assistantMessage.content,
+      assistantMessage,
+      observation.taskId,
+      observation.operationRevision,
+      () => {
+        unavailableTaskIdsRef.current.add(observation.taskId);
+        updateStatus(conversation.id, "error", {
+          clearTaskPointer: true,
+          executionKind: "response_logic",
+          completedAt: Date.now(),
+        });
+        setActiveDedicatedTask(null);
+        retryRecordsRef.current();
+      },
+      observation.structuredDraft,
+    );
+    const latestFailure =
+      scopedResponseLogicTaskStartFailure({
+        failure: startFailureRef.current,
+        questionId: question.id,
+        conversationId: conversation.id,
+      }) ??
+      durableResponseLogicResetBarrier({
+        conversation: scopedConversationRef.current,
+        questionId: question.id,
+      });
+    if (outcome === "ignored" || latestFailure?.resetRequired) return "ignored";
+
+    if (!existingMessage) {
+      updateAssistantMessages(conversation.id, [assistantMessage]);
+    }
+
+    setLastCompletedObservation(observation);
+    setUnsavedResultId(
+      outcome === "displayed_unsaved" ? observation.resultId : null,
+    );
+    updateStatus(conversation.id, "completed", {
+      taskId: observation.taskId,
+      previousResponseId: observation.taskId,
+      executionKind: "response_logic",
+      completedAt: Date.now(),
+    });
+    return outcome;
+  };
+
+  useEffect(() => {
+    const conversation = scopedConversation;
+    const taskId =
+      scopedActiveDedicatedTask?.taskId || lastTaskId || conversation?.taskId;
+    const operationRevision =
+      scopedActiveDedicatedTask?.operationRevision || lastTaskRevision;
+    if (
+      !hydrated ||
+      recordsLoading ||
+      !recordsReady ||
+      recordsError ||
+      readOnly ||
+      scopedStartFailure?.resetRequired ||
+      !conversationId ||
+      !conversation ||
+      !taskId ||
+      !operationRevision ||
+      (conversation.status !== "running" && conversation.status !== "pending")
+    ) {
+      return;
+    }
+
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let activeController: AbortController | null = null;
+    let consecutiveFailures = 0;
+    const startedAt =
+      scopedActiveDedicatedTask?.startedAt ||
+      conversation.startedAt ||
+      lastTaskRecordedAt ||
+      Date.now();
+    const schedule = (delay: number) => {
+      if (disposed) return;
+      timer = setTimeout(() => void pollOnce(), delay);
+    };
+    const pollOnce = async () => {
+      if (disposed) return;
+      activeController = new AbortController();
+      try {
+        const observation = await fetchResponseLogicTaskStatus({
+          questionId: question.id,
+          conversationId,
+          taskId,
+          operationRevision,
+          signal: activeController.signal,
+        });
+        if (disposed) return;
+        const blockingFailure = scopedResponseLogicTaskStartFailure({
+          failure: startFailureRef.current,
+          questionId: question.id,
+          conversationId: conversation.id,
+        });
+        if (blockingFailure?.resetRequired) return;
+        consecutiveFailures = 0;
+        if (observation.status !== "completed") {
+          updateStatus(conversation.id, "running", {
+            taskId,
+            previousResponseId: taskId,
+            executionKind: "response_logic",
+            startedAt,
+          });
+          schedule(getResponseLogicPollDelay(Date.now() - startedAt));
+          return;
+        }
+        await applyCompletedObservationRef.current(observation);
+      } catch (error) {
+        if (
+          disposed ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        if (
+          error instanceof ResponseLogicTaskStatusError &&
+          error.options.retryable
+        ) {
+          consecutiveFailures += 1;
+          schedule(
+            getResponseLogicPollDelay(
+              Date.now() - startedAt,
+              consecutiveFailures,
+            ),
+          );
+          return;
+        }
+
+        const unavailable =
+          error instanceof ResponseLogicTaskStatusError &&
+          ([
+            "RESPONSE_LOGIC_TASK_UNAVAILABLE",
+            "RESPONSE_LOGIC_TASK_FAILED",
+          ].includes(error.code) ||
+            isResponseLogicBindingForbiddenCode(error.code));
+        if (unavailable) unavailableTaskIdsRef.current.add(taskId);
+        updateStatus(conversation.id, "error", {
+          ...(unavailable ? { clearTaskPointer: true } : { taskId }),
+          executionKind: "response_logic",
+          completedAt: Date.now(),
+        });
+        if (unavailable) {
+          setActiveDedicatedTask(null);
+          retryRecordsRef.current();
+        }
+        toast.error("应答逻辑任务未完成", {
+          description:
+            error instanceof Error ? error.message : "请稍后重试或重新生成",
+        });
+      }
+    };
+
+    void pollOnce();
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      activeController?.abort();
+    };
+  }, [
+    scopedActiveDedicatedTask?.startedAt,
+    scopedActiveDedicatedTask?.taskId,
+    scopedActiveDedicatedTask?.operationRevision,
+    conversationId,
+    hydrated,
+    lastTaskId,
+    lastTaskRecordedAt,
+    lastTaskRevision,
+    question.id,
+    readOnly,
+    recordsError,
+    recordsLoading,
+    recordsReady,
+    scopedConversation?.id,
+    scopedConversation?.status,
+    scopedStartFailure?.resetRequired,
+    updateStatus,
   ]);
 
   if (recordsError) {
@@ -1509,8 +2523,9 @@ function RealResponseLogicDialogue({
     recordsLoading ||
     !recordsReady ||
     !hydrated ||
-    !scopedConversation ||
-    activeConversation?.id !== scopedConversation.id
+    (!scopedConversation
+      ? !readOnly
+      : activeConversation?.id !== scopedConversation.id)
   ) {
     return (
       <div className="rl-home-frame rl-home-loading">
@@ -1520,27 +2535,152 @@ function RealResponseLogicDialogue({
     );
   }
 
-  const latestAssistantMessage = [...scopedConversation.messages]
-    .reverse()
-    .find(
-      (message) =>
-        message.role === "assistant" &&
-        !message.isStepsPlaceholder &&
-        Boolean(message.content.trim()),
+  if (!scopedConversation) {
+    return (
+      <div className="rl-home-frame rl-home-loading rl-home-read-only">
+        <ShieldCheck size={22} />
+        <span>应答逻辑已确认；本设备没有保留此前对话记录。</span>
+      </div>
     );
-  const taskActive =
-    scopedConversation.status === "running" ||
-    scopedConversation.status === "pending";
+  }
+
+  const reloadTaskId =
+    scopedActiveDedicatedTask?.taskId ||
+    lastTaskId ||
+    scopedConversation.taskId;
+  const reloadOperationRevision =
+    scopedActiveDedicatedTask?.operationRevision || lastTaskRevision;
+  const continuationRevision = responseLogicContinuationRevision({
+    persistedRevision: lastTaskRevision,
+    activeTaskRevision: scopedActiveDedicatedTask?.operationRevision,
+  });
 
   return (
     <>
-      <div className="rl-home-frame">
+      {scopedStartFailure && (
+        <div
+          className="mx-4 mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+          role="alert"
+        >
+          <strong className="block">
+            {scopedStartFailure.resetRequired
+              ? "任务创建结果无法确认"
+              : "任务尚未创建"}
+          </strong>
+          <span className="mt-1 block">
+            {scopedStartFailure.message}
+            {scopedStartFailure.resetRequired
+              ? " 请先申请重置；批准后将以全新会话和全新任务重新开始。"
+              : scopedStartFailure.retryable
+                ? " 当前输入和附件仍保留，可稍后直接重新发送。"
+                : " 请根据提示处理后重新发送。"}
+          </span>
+          {scopedStartFailure.incidentId && (
+            <small className="mt-1 block opacity-75">
+              故障编号：{scopedStartFailure.incidentId}
+            </small>
+          )}
+        </div>
+      )}
+      <button
+        type="button"
+        className="rl-load-reply"
+        disabled={
+          !reloadOperationRevision ||
+          !canReloadResponseLogicTask({
+            taskId: reloadTaskId,
+            readOnly,
+            loading: loadingOutput,
+            resetRequired: scopedStartFailure?.resetRequired,
+          })
+        }
+        onClick={async () => {
+          if (
+            scopedStartFailure?.resetRequired ||
+            !reloadTaskId ||
+            !reloadOperationRevision ||
+            !conversationId
+          )
+            return;
+          setLoadingOutput(true);
+          try {
+            const cached =
+              lastCompletedObservation?.status === "completed" &&
+              lastCompletedObservation.taskId === reloadTaskId &&
+              lastCompletedObservation.operationRevision ===
+                reloadOperationRevision
+                ? lastCompletedObservation
+                : null;
+            const observation =
+              cached ??
+              (await fetchResponseLogicTaskStatus({
+                questionId: question.id,
+                conversationId,
+                taskId: reloadTaskId,
+                operationRevision: reloadOperationRevision,
+              }));
+            if (observation.status !== "completed") {
+              toast.info("应答逻辑仍在生成并校验，请稍后重试");
+              return;
+            }
+            await applyCompletedObservationRef.current(observation);
+          } catch (error) {
+            if (
+              error instanceof ResponseLogicTaskStatusError &&
+              ([
+                "RESPONSE_LOGIC_TASK_UNAVAILABLE",
+                "RESPONSE_LOGIC_TASK_FAILED",
+              ].includes(error.code) ||
+                isResponseLogicBindingForbiddenCode(error.code))
+            ) {
+              unavailableTaskIdsRef.current.add(reloadTaskId);
+              updateStatus(scopedConversation.id, "error", {
+                clearTaskPointer: true,
+                executionKind: "response_logic",
+                completedAt: Date.now(),
+              });
+              setActiveDedicatedTask(null);
+              onRetryRecords();
+            }
+            toast.error("模型输出未载入", {
+              description:
+                error instanceof Error ? error.message : "请稍后重试",
+            });
+          } finally {
+            setLoadingOutput(false);
+          }
+        }}
+      >
+        {loadingOutput ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : readOnly ? (
+          <Check size={14} />
+        ) : (
+          <RefreshCw size={14} />
+        )}
+        {loadingOutput
+          ? "正在载入"
+          : readOnly
+            ? "应答逻辑已确认"
+            : unsavedResultId
+              ? "重试保存已显示的模型输出"
+              : "载入模型最新输出到应答草稿"}
+      </button>
+      <fieldset
+        className="rl-home-frame rl-home-fieldset"
+        disabled={readOnly || scopedStartFailure?.resetRequired}
+        aria-label={readOnly ? "已确认应答逻辑对话（只读）" : undefined}
+      >
         <Home
           key={scopedConversation.id}
           embedded
           hideSidebar
           fixedAgentProfile="frontmind-pro"
-          composerPrefill={`请基于最新企业知识库，为“${question.question}”生成可核验的应答逻辑。`}
+          composerPrefill={
+            shouldUseResponseLogicInitialPrompt(scopedConversation, readOnly)
+              ? `请基于最新企业知识库，为“${question.question}”生成可核验的应答逻辑。`
+              : undefined
+          }
           responseLogicContext={{
             questionId: question.id,
             groupId: group.id,
@@ -1549,54 +2689,66 @@ function RealResponseLogicDialogue({
             intent: question.intent,
             summary: question.summary,
             draft,
+            operationRevision: continuationRevision,
+            onTaskStarted: (task) => {
+              if (
+                task.questionId !== question.id ||
+                task.conversationId !== scopedConversation.id
+              ) {
+                return;
+              }
+              setActiveDedicatedTask({
+                questionId: task.questionId,
+                conversationId: task.conversationId,
+                taskId: task.taskId,
+                operationRevision: task.operationRevision,
+                startedAt: task.startedAt,
+              });
+              setLastCompletedObservation(null);
+              setUnsavedResultId(null);
+              startFailureRef.current = null;
+              setStartFailure(null);
+            },
+            onTaskStartFailed: (failure) => {
+              if (
+                failure.questionId !== question.id ||
+                failure.conversationId !== scopedConversation.id
+              ) {
+                return;
+              }
+              startFailureRef.current = failure;
+              setStartFailure(failure);
+              if (failure.resetRequired) {
+                setActiveDedicatedTask(null);
+                setLastCompletedObservation(null);
+                setUnsavedResultId(null);
+                retryRecordsRef.current();
+              }
+            },
           }}
+          messageProjection={projectResponseLogicConversationMessage}
         />
-      </div>
-      <button
-        type="button"
-        className="rl-load-reply"
-        disabled={!latestAssistantMessage || taskActive || loadingOutput}
-        onClick={async () => {
-          if (!latestAssistantMessage) return;
-          setLoadingOutput(true);
-          try {
-            await onLoadLatestReply(
-              latestAssistantMessage.content,
-              latestAssistantMessage,
-              scopedConversation.taskId,
-            );
-          } finally {
-            setLoadingOutput(false);
-          }
-        }}
-      >
-        {loadingOutput ? (
-          <Loader2 size={14} className="animate-spin" />
-        ) : (
-          <RefreshCw size={14} />
-        )}
-        {loadingOutput ? "正在载入" : "载入模型最新输出到应答草稿"}
-      </button>
+      </fieldset>
     </>
   );
 }
 
 function LogicEditor({
   draft,
+  readOnly,
   allowLocalImageUpload,
   isPublishing,
   onPatch,
   onAddImages,
-  onPatchImage,
   onRemoveImage,
   onUpdate,
 }: {
   draft: LogicDraft;
+  readOnly: boolean;
   allowLocalImageUpload: boolean;
   isPublishing: boolean;
   onPatch: (patch: Partial<LogicDraft>) => void;
   onAddImages: (event: ChangeEvent<HTMLInputElement>) => void;
-  onPatchImage: (id: string, patch: Partial<LogicImage>) => void;
   onRemoveImage: (id: string) => void;
   onUpdate: () => void;
 }) {
@@ -1613,7 +2765,6 @@ function LogicEditor({
           [`response-logic-upload-${attachment.fileId}`, attachment] as const,
       ),
   );
-
   return (
     <section className="rl-editor-card">
       <div className="rl-card-title">
@@ -1623,11 +2774,34 @@ function LogicEditor({
           </span>
           <div>
             <h3>应答参考草稿</h3>
-            <p>预填内容可修改；未手动更新前不会进入确认页。</p>
+            <p>
+              {readOnly
+                ? "当前版本已经正式确认，如需修改请提交需求。"
+                : "预填内容可修改；确认前不会进入问题优化正式展示。"}
+            </p>
           </div>
         </div>
+        <button
+          type="button"
+          className="rl-primary-button rl-card-action"
+          disabled={isPublishing || readOnly}
+          onClick={onUpdate}
+        >
+          {isPublishing ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : readOnly ? (
+            <Check size={16} />
+          ) : (
+            <RefreshCw size={16} />
+          )}
+          {isPublishing
+            ? "正在确认"
+            : readOnly
+              ? "应答逻辑已确认"
+              : "更新应答逻辑"}
+        </button>
       </div>
-      <div className="rl-editor-scroll">
+      <fieldset className="rl-editor-scroll" disabled={readOnly}>
         <EditorField
           index="01"
           label="用户真实关心"
@@ -1644,7 +2818,7 @@ function LogicEditor({
         />
         <EditorField
           index="03"
-          label="企业材料/官方依据"
+          label={RESPONSE_LOGIC_FACTS_DISPLAY_HEADING}
           hint="事实依据每行一项，后续应与可追溯来源一一对应"
           value={draft.facts}
           onChange={(facts) => onPatch({ facts })}
@@ -1652,34 +2826,22 @@ function LogicEditor({
         />
         <EditorField
           index="04"
-          label="待补充/待确认"
-          value={draft.pending}
-          onChange={(pending) => onPatch({ pending })}
-          rows={5}
-        />
-        <EditorField
-          index="05"
           label="回答边界/禁止表达"
           value={draft.boundaries}
           onChange={(boundaries) => onPatch({ boundaries })}
           rows={5}
         />
-        <EditorField
-          index="06"
-          label="引用与核验规则"
-          value={draft.references}
-          onChange={(references) => onPatch({ references })}
-          rows={5}
-        />
         <div className="rl-editor-field rl-image-field">
           <div className="rl-editor-label">
-            <span>07</span>
+            <span>05</span>
             <div>
               <strong>图文依据</strong>
-              <small>图片直接挂到当前问题，并记录图注、来源与授权状态。</small>
+              <small>
+                图片上传后直接加入当前问题，无需另行确认位置或权限。
+              </small>
             </div>
           </div>
-          {allowLocalImageUpload ? (
+          {allowLocalImageUpload && !readOnly ? (
             <label className="rl-image-upload">
               <input
                 hidden
@@ -1691,7 +2853,7 @@ function LogicEditor({
               <ImagePlus size={20} />
               <span>
                 <strong>上传参考图片</strong>
-                <small>支持多张图片；请逐张补充使用信息</small>
+                <small>支持多张图片；上传后直接加入当前应答逻辑</small>
               </span>
               <Upload size={16} />
             </label>
@@ -1738,51 +2900,8 @@ function LogicEditor({
                       <img src={image.url} alt={image.caption || image.name} />
                     )}
                     <div className="rl-image-meta-editor">
-                      <input
-                        value={image.caption}
-                        aria-label={`${image.name} 图注`}
-                        placeholder="图注"
-                        onChange={(event) =>
-                          onPatchImage(image.id, {
-                            caption: event.target.value,
-                          })
-                        }
-                      />
-                      <input
-                        value={image.source}
-                        aria-label={`${image.name} 来源`}
-                        placeholder="来源材料"
-                        onChange={(event) =>
-                          onPatchImage(image.id, { source: event.target.value })
-                        }
-                      />
-                      <div>
-                        <input
-                          value={image.section}
-                          aria-label={`${image.name} 对应逻辑段落`}
-                          placeholder="对应逻辑段落"
-                          onChange={(event) =>
-                            onPatchImage(image.id, {
-                              section: event.target.value,
-                            })
-                          }
-                        />
-                        <select
-                          value={image.authorization}
-                          aria-label={`${image.name} 授权状态`}
-                          onChange={(event) =>
-                            onPatchImage(image.id, {
-                              authorization: event.target
-                                .value as LogicImage["authorization"],
-                            })
-                          }
-                        >
-                          <option>待确认</option>
-                          <option>公开可用</option>
-                          <option>已获授权</option>
-                          <option>仅内部参考</option>
-                        </select>
-                      </div>
+                      <strong>{image.caption || image.name}</strong>
+                      <span>已加入当前应答逻辑</span>
                     </div>
                     <button
                       type="button"
@@ -1798,25 +2917,14 @@ function LogicEditor({
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
       <div className="rl-editor-footer">
         <p>
           <ShieldCheck size={15} />
-          更新只作用于当前问题，其他问题草稿保持不变。
+          {readOnly
+            ? "当前确认版本不可直接修改；需求通过后可重新生成并确认。"
+            : "确认只作用于当前问题，其他问题草稿保持不变。"}
         </p>
-        <button
-          type="button"
-          className="rl-primary-button"
-          disabled={isPublishing}
-          onClick={onUpdate}
-        >
-          {isPublishing ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <RefreshCw size={16} />
-          )}
-          {isPublishing ? "正在更新" : "更新应答逻辑"}
-        </button>
       </div>
     </section>
   );
@@ -1870,30 +2978,35 @@ export function ResponseLogicConfirmationPanel({
   actionLabel?: string;
   onAction?: () => void;
 }) {
-  const Icon = groupIcon(group.tone);
-  const conclusionLines = textLines(logic.conclusion);
-  const facts = textLines(logic.facts);
-  const pending = textLines(logic.pending);
-  const boundaries = textLines(logic.boundaries);
-  const references = textLines(logic.references);
-  const sourceFiles = (logic.attachments ?? []).filter(
+  const tone = semanticGroupTone(group);
+  const category = semanticGroupCategory(group);
+  const Icon = groupIcon(tone);
+  const publicLogic = normalizeResponseLogicPublicProvenance(logic);
+  const sourceFiles = (publicLogic.attachments ?? []).filter(
     (attachment) =>
       attachment.kind === "file" ||
       isResponseLogicAttachmentExpired(attachment),
   );
   const uploadedImageAttachments = new Map<string, ResponseLogicAttachment>(
-    (logic.attachments ?? [])
+    (publicLogic.attachments ?? [])
       .filter((attachment) => attachment.kind === "image")
       .map(
         (attachment) =>
           [`response-logic-upload-${attachment.fileId}`, attachment] as const,
       ),
   );
-  const versionLabel = logic.version > 0 ? `V${logic.version}.0` : "V0.1";
+  const hasSupportingAssets =
+    sourceFiles.length > 0 || (publicLogic.images ?? []).length > 0;
+  const versionLabel =
+    publicLogic.version > 0 ? `V${publicLogic.version}.0` : "V0.1";
 
   return (
     <article className="rl-confirmation">
-      <header className="rl-confirmation-head" data-tone={group.tone}>
+      <header
+        className="rl-confirmation-head"
+        data-tone={tone}
+        data-category={category || undefined}
+      >
         <div className="rl-confirmation-heading">
           <span className="rl-context-icon">
             <Icon size={21} />
@@ -1910,7 +3023,9 @@ export function ResponseLogicConfirmationPanel({
             {showPublicationMeta && (
               <>
                 <span>已发布应答逻辑 {versionLabel}</span>
-                <span>发布时间：{formatConfirmedAt(logic.updatedAt)}</span>
+                <span>
+                  发布时间：{formatConfirmedAt(publicLogic.updatedAt)}
+                </span>
               </>
             )}
             {actionLabel && onAction && (
@@ -1927,7 +3042,11 @@ export function ResponseLogicConfirmationPanel({
         )}
       </header>
 
-      <section className="rl-answer-hero" data-tone={group.tone}>
+      <section
+        className="rl-answer-hero"
+        data-tone={tone}
+        data-category={category || undefined}
+      >
         <div className="rl-answer-visual">
           <span>
             <Sparkles size={22} />
@@ -1938,10 +3057,10 @@ export function ResponseLogicConfirmationPanel({
         </div>
         <div className="rl-answer-summary">
           <span>用户真实关心</span>
-          <p>{logic.concern}</p>
-          <blockquote>
-            {conclusionLines[0] || "请在上方草稿中补充核心结论。"}
-          </blockquote>
+          <MarkdownRenderer
+            content={publicLogic.concern}
+            className="rl-confirmation-markdown rl-concern-markdown"
+          />
         </div>
       </section>
 
@@ -1949,93 +3068,83 @@ export function ResponseLogicConfirmationPanel({
         <LogicSection
           number="01"
           title="核心结论与执行口径"
-          items={conclusionLines.slice(1)}
+          content={publicLogic.conclusion}
           wide
         />
-        <LogicSection number="02" title="事实依据" items={facts} />
+        <LogicSection
+          number="02"
+          title={RESPONSE_LOGIC_FACTS_DISPLAY_HEADING}
+          content={publicLogic.facts}
+        />
         <LogicSection
           number="03"
-          title="待补充/待确认"
-          items={pending}
-          variant="pending"
-        />
-        <LogicSection
-          number="04"
           title="回答边界/禁止表达"
-          items={boundaries}
+          content={publicLogic.boundaries}
           variant="boundary"
         />
-        <section className="rl-logic-section rl-reference-section wide">
-          <div className="rl-logic-section-title">
-            <span>05</span>
-            <div>
-              <h4>引用与核验规则及图文依据</h4>
-              <p>材料与图片都归属于当前问题，不拆分为独立图片库。</p>
+        {hasSupportingAssets && (
+          <section className="rl-logic-section rl-reference-section wide">
+            <div className="rl-logic-section-title">
+              <span>04</span>
+              <div>
+                <h4>图文依据</h4>
+                <p>材料与图片都归属于当前问题，不拆分为独立图片库。</p>
+              </div>
             </div>
-          </div>
-          <div className="rl-reference-content">
-            <ul>
-              {references.map((item) => (
-                <li key={item}>
-                  <FileText size={15} />
-                  <span>{item}</span>
-                </li>
-              ))}
-              {sourceFiles.map((attachment) => (
-                <li key={attachment.fileId}>
-                  <Paperclip size={15} />
-                  <FilePreview
-                    file={responseLogicChatAttachment(attachment)}
-                    className="w-full"
-                  />
-                </li>
-              ))}
-            </ul>
-            <div className="rl-confirmed-images">
-              {(logic.images ?? []).length > 0 ? (
-                (logic.images ?? []).map((image) => {
-                  const uploadedAttachment = uploadedImageAttachments.get(
-                    image.id,
-                  );
-                  return (
-                    <figure key={image.id}>
-                      {uploadedAttachment ? (
-                        <ImagePreview
-                          fileId={uploadedAttachment.fileId}
-                          alt={image.caption || image.name}
-                          expiresAt={uploadedAttachment.expiresAt}
-                          expired={uploadedAttachment.expired}
-                          className="rl-owned-image-preview-confirmed"
-                        />
-                      ) : (
-                        <img
-                          src={image.url}
-                          alt={image.caption || image.name}
-                        />
-                      )}
-                      <figcaption>
-                        <strong>{image.caption || image.name}</strong>
-                        <span>来源：{image.source || "待补充"}</span>
-                        <span>对应段落：{image.section || "待补充"}</span>
-                        <span>使用权限：{image.authorization}</span>
-                      </figcaption>
-                    </figure>
-                  );
-                })
-              ) : (
-                <div className="rl-empty-image">
-                  <ImagePlus size={23} />
-                  <div>
-                    <strong>当前问题尚未添加参考图片</strong>
-                    <p>
-                      建议补充流程图、证据截图或授权场景图，并标注图注、来源、对应逻辑段落与公开权限。
-                    </p>
+            <div className="rl-reference-content">
+              <div className="rl-reference-list">
+                {sourceFiles.map((attachment) => (
+                  <div key={attachment.fileId} className="rl-reference-file">
+                    <Paperclip size={15} />
+                    <FilePreview
+                      file={{
+                        ...responseLogicChatAttachment(attachment),
+                        name: "用户上传资料",
+                      }}
+                      className="w-full"
+                    />
                   </div>
+                ))}
+              </div>
+              {(publicLogic.images ?? []).length > 0 && (
+                <div className="rl-confirmed-images">
+                  {(publicLogic.images ?? []).map((image) => {
+                    const uploadedAttachment = uploadedImageAttachments.get(
+                      image.id,
+                    );
+                    return (
+                      <figure key={image.id}>
+                        {uploadedAttachment ? (
+                          <ImagePreview
+                            fileId={uploadedAttachment.fileId}
+                            alt="用户上传图片"
+                            expiresAt={uploadedAttachment.expiresAt}
+                            expired={uploadedAttachment.expired}
+                            className="rl-owned-image-preview-confirmed"
+                          />
+                        ) : (
+                          <img
+                            src={image.url}
+                            alt={image.caption || image.name}
+                          />
+                        )}
+                        <figcaption>
+                          <strong>
+                            {uploadedAttachment
+                              ? "用户上传图片"
+                              : normalizeResponseLogicPublicText(
+                                  image.caption || image.name,
+                                ) || "应答逻辑配图"}
+                          </strong>
+                        </figcaption>
+                      </figure>
+                    );
+                  })}
                 </div>
               )}
             </div>
-          </div>
-        </section>
+          </section>
+        )}
       </div>
     </article>
   );
@@ -2044,15 +3153,15 @@ export function ResponseLogicConfirmationPanel({
 function LogicSection({
   number,
   title,
-  items,
+  content,
   wide = false,
   variant = "default",
 }: {
   number: string;
   title: string;
-  items: string[];
+  content: string;
   wide?: boolean;
-  variant?: "default" | "pending" | "boundary";
+  variant?: "default" | "boundary";
 }) {
   return (
     <section className={`rl-logic-section ${wide ? "wide" : ""} ${variant}`}>
@@ -2060,24 +3169,14 @@ function LogicSection({
         <span>{number}</span>
         <h4>{title}</h4>
       </div>
-      <ul>
-        {items.length > 0 ? (
-          items.map((item) => (
-            <li key={item}>
-              {variant === "boundary" ? (
-                <ShieldCheck size={16} />
-              ) : variant === "pending" ? (
-                <RefreshCw size={16} />
-              ) : (
-                <Check size={16} />
-              )}
-              <span>{item}</span>
-            </li>
-          ))
-        ) : (
-          <li className="rl-empty-line">待企业交流补充</li>
-        )}
-      </ul>
+      {content.trim() ? (
+        <MarkdownRenderer
+          content={content}
+          className="rl-confirmation-markdown rl-logic-markdown"
+        />
+      ) : (
+        <p className="rl-empty-line">暂无内容</p>
+      )}
     </section>
   );
 }

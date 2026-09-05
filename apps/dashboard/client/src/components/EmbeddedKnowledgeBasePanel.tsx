@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Download,
+  FileClock,
   Loader2,
   PanelRightOpen,
   RefreshCw,
@@ -13,6 +14,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/_core/hooks/useAuth";
 import KnowledgeBaseProgressPanel from "@/components/KnowledgeBaseProgressPanel";
+import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
 import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
 } from "@/components/KnowledgeBaseViewer";
@@ -36,12 +38,20 @@ import {
   type Conversation,
 } from "@/contexts/ConversationContext";
 import { syncKnowledgeBaseArchiveFromOutput } from "@/lib/knowledge-snapshot";
+import {
+  KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
+  isKnowledgeBaseProgressCoordinateOlder,
+  readKnowledgeBaseProgressEventDetail,
+} from "@/lib/knowledge-progress";
 import { trpc } from "@/lib/trpc";
 import Home from "@/pages/Home";
 import type {
   KnowledgeBaseLeafStatus,
   KnowledgeBaseProgressDto,
 } from "@shared/knowledge-base-progress";
+
+const KNOWLEDGE_BASE_NEW_BUILD_EVENT = "frontmind:new-knowledge-base-build";
+export const KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS = 15_000;
 
 function isKnowledgeBaseConversationCandidate(
   conversation: Conversation | null,
@@ -50,8 +60,47 @@ function isKnowledgeBaseConversationCandidate(
     conversation &&
       (conversation.knowledgeBase ||
         conversation.title === "企业知识库构建" ||
-        conversation.messages.some((message) => message.knowledgeBase)),
+        conversation.messages?.some((message) => message.knowledgeBase)),
   );
+}
+
+function hasLastGoodKnowledgeBasePresentation(
+  conversation: Conversation | null | undefined,
+) {
+  const knowledgeBase = conversation?.knowledgeBase;
+  if (
+    !knowledgeBase?.initialized ||
+    !knowledgeBase.presentationKey ||
+    !knowledgeBase.presentationTurnId
+  ) {
+    return false;
+  }
+  return Boolean(
+    conversation?.messages?.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.content.trim() &&
+        message.knowledgeBase?.kind === "presentation" &&
+        message.knowledgeBase.serverOwned === true &&
+        message.knowledgeBase.presentationKey ===
+          knowledgeBase.presentationKey &&
+        message.knowledgeBase.turnId === knowledgeBase.presentationTurnId,
+    ),
+  );
+}
+
+export function isKnowledgeBaseProgressProjectionOlder(
+  candidate: KnowledgeBaseProgressDto,
+  current: KnowledgeBaseProgressDto | null,
+) {
+  if (!current) return false;
+  if (candidate.build.id !== current.build.id) {
+    return candidate.build.updatedAt < current.build.updatedAt;
+  }
+  if (candidate.build.revision !== current.build.revision) {
+    return candidate.build.revision < current.build.revision;
+  }
+  return candidate.build.updatedAt < current.build.updatedAt;
 }
 
 export function shouldDiscardConversationAfterKnowledgeReset(input: {
@@ -60,19 +109,24 @@ export function shouldDiscardConversationAfterKnowledgeReset(input: {
   hasKnowledge: boolean;
   conversation: Conversation | null;
 }) {
-  const resetCompleted =
-    input.observedRevision === null
-      ? input.revision > 0 && !input.hasKnowledge
-      : input.revision > input.observedRevision;
-  if (!resetCompleted || !input.conversation) return false;
-  const conversation = input.conversation;
+  const resetCompleted = shouldInstallFreshConversationAfterKnowledgeReset({
+    observedRevision: input.observedRevision,
+    revision: input.revision,
+    hasKnowledge: input.hasKnowledge,
+  });
   return Boolean(
-    isKnowledgeBaseConversationCandidate(conversation) &&
-      (conversation.knowledgeBase?.initialized ||
-        conversation.taskId ||
-        conversation.status !== "idle" ||
-        conversation.messages.some((message) => message.knowledgeBase)),
+    resetCompleted && isKnowledgeBaseConversationCandidate(input.conversation),
   );
+}
+
+export function shouldInstallFreshConversationAfterKnowledgeReset(input: {
+  observedRevision: number | null;
+  revision: number;
+  hasKnowledge: boolean;
+}) {
+  return input.observedRevision === null
+    ? input.revision > 0 && !input.hasKnowledge
+    : input.revision > input.observedRevision;
 }
 
 export default function EmbeddedKnowledgeBasePanel({
@@ -95,9 +149,11 @@ export default function EmbeddedKnowledgeBasePanel({
 }) {
   const previewMode = import.meta.env.DEV && preview && Boolean(previewData);
   const { user } = useAuth();
+  const trpcUtils = trpc.useUtils();
   const [previewProgress, setPreviewProgress] = useState(
     previewData?.progress ?? null,
   );
+  const [requestHistoryOpen, setRequestHistoryOpen] = useState(false);
   const knowledgeQuery = trpc.workspace.knowledge.useQuery(undefined, {
     enabled: !previewMode && user?.role === "user",
     retry: false,
@@ -115,7 +171,12 @@ export default function EmbeddedKnowledgeBasePanel({
         ? 5_000
         : 30_000,
   });
-  const { activeConversation, discardConversationLocally } = useConversation();
+  const {
+    activeConversation,
+    hydrated,
+    discardKnowledgeBaseConversationsLocally,
+    refreshConversationsAfterDiscard,
+  } = useConversation();
   useEffect(() => {
     if (previewMode) return;
     const refreshResetStatus = () => {
@@ -134,40 +195,54 @@ export default function EmbeddedKnowledgeBasePanel({
   const [observedResetRevision, setObservedResetRevision] = useState<
     number | null
   >(null);
+  const resetNeedsFreshConversation = resetQuery.data
+    ? shouldInstallFreshConversationAfterKnowledgeReset({
+        observedRevision: observedResetRevision,
+        revision: resetQuery.data.revision,
+        hasKnowledge: resetQuery.data.hasKnowledge,
+      })
+    : false;
   useEffect(() => {
     const revision = resetQuery.data?.revision;
-    if (revision === undefined) return;
-    const resetNeedsAcknowledgement =
-      observedResetRevision === null
-        ? revision > 0 && resetQuery.data?.hasKnowledge === false
-        : revision > observedResetRevision;
-    if (
-      resetNeedsAcknowledgement &&
-      !isKnowledgeBaseConversationCandidate(activeConversation)
-    ) {
-      // RealBuildFlow may not have selected its scoped conversation yet. Keep
-      // the reset pending so a stale KB conversation cannot become the baseline.
-      return;
-    }
-    if (
-      shouldDiscardConversationAfterKnowledgeReset({
-        observedRevision: observedResetRevision,
-        revision,
-        hasKnowledge: resetQuery.data?.hasKnowledge === true,
-        conversation: activeConversation,
-      }) &&
-      activeConversation
-    ) {
-      discardConversationLocally(activeConversation.id);
-      void knowledgeQuery.refetch();
+    if (revision === undefined || !hydrated) return;
+    if (resetNeedsFreshConversation) {
+      const discardedConversationIds = discardKnowledgeBaseConversationsLocally(
+        isKnowledgeBaseConversationCandidate(activeConversation)
+          ? activeConversation?.id
+          : undefined,
+      );
+      // The approved revision is a hard local boundary: cancel every KB sync
+      // lane/coordinator through the context discard, then remove both query
+      // aliases before a single fresh RealBuildFlow is allowed to mount.
+      trpcUtils.workspace.knowledge.setData(undefined, (current) =>
+        current ? { ...current, snapshot: null } : current,
+      );
+      trpcUtils.workspace.knowledgeProgress.setData(undefined, () => ({
+        progress: null,
+      }));
+      for (const conversationId of discardedConversationIds) {
+        trpcUtils.workspace.knowledgeProgress.setData(
+          { conversationId },
+          () => ({ progress: null }),
+        );
+      }
+      void Promise.all([
+        knowledgeQuery.refetch(),
+        refreshConversationsAfterDiscard(),
+        trpcUtils.workspace.knowledgeProgress.invalidate(),
+      ]);
     }
     setObservedResetRevision(revision);
   }, [
     activeConversation,
-    discardConversationLocally,
+    discardKnowledgeBaseConversationsLocally,
+    hydrated,
     knowledgeQuery,
     observedResetRevision,
+    resetNeedsFreshConversation,
     resetQuery.data?.revision,
+    refreshConversationsAfterDiscard,
+    trpcUtils,
   ]);
 
   const displayedSnapshot = previewMode
@@ -258,6 +333,17 @@ export default function EmbeddedKnowledgeBasePanel({
               unavailableReason={resetQuery.data?.unavailableReason ?? null}
             />
           )}
+          {!previewMode && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-fit shrink-0"
+              onClick={() => setRequestHistoryOpen(true)}
+            >
+              <FileClock className="h-4 w-4" />
+              需求记录
+            </Button>
+          )}
           {page === "display" &&
             displayedSnapshot &&
             archiveDownloadAvailable && (
@@ -272,6 +358,17 @@ export default function EmbeddedKnowledgeBasePanel({
             )}
         </div>
       </header>
+
+      <CustomerRequestHistoryDialog
+        open={requestHistoryOpen}
+        onOpenChange={setRequestHistoryOpen}
+        title="知识库需求记录"
+        description="知识库重置申请与已发布知识库维护需求统一显示在这里。"
+        surface="knowledge_management"
+        preview={previewMode}
+        {...(previewMode ? { tickets: [] } : {})}
+        emptyText="暂无知识库重置或维护需求。"
+      />
 
       {page === "display" ? (
         <div
@@ -319,16 +416,23 @@ export default function EmbeddedKnowledgeBasePanel({
             <Loader2 className="mx-auto h-7 w-7 animate-spin text-primary" />
             <p className="mt-4 font-medium">知识库重置申请正在审批</p>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              工单 {resetQuery.data.pending?.ticketId} 已由
+              需求 {resetQuery.data.pending?.ticketId} 已由
               {resetQuery.data.pending?.engineerName}{" "}
               负责。审批期间不能继续回复、上传、发布或启动新构建。
             </p>
           </div>
         </div>
+      ) : resetNeedsFreshConversation ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          正在清理旧任务并准备全新知识库…
+        </div>
       ) : (
         <RealBuildFlow
           key={`knowledge-build-${resetQuery.data?.revision ?? 0}`}
           mode={mode}
+          resetRevision={resetQuery.data.revision}
+          accountId={user?.id ?? 0}
         />
       )}
     </section>
@@ -343,6 +447,17 @@ const RESET_REASONS = [
   ["other", "其他"],
 ] as const;
 
+export function knowledgeResetButtonLabel(status: {
+  locked: boolean;
+  engineer: { id: number; name: string } | null;
+}) {
+  return status.locked
+    ? "重置申请审批中"
+    : status.engineer === null
+      ? "请等待分配AI 运维工程师"
+      : "申请重置知识库";
+}
+
 function KnowledgeResetButton({
   status,
   onSubmitted,
@@ -351,6 +466,7 @@ function KnowledgeResetButton({
     locked: boolean;
     canRequest: boolean;
     unavailableReason: string | null;
+    engineer: { id: number; name: string } | null;
     pending: { ticketId: string } | null;
   };
   onSubmitted: () => Promise<unknown>;
@@ -359,12 +475,33 @@ function KnowledgeResetButton({
   const [reasonCode, setReasonCode] =
     useState<(typeof RESET_REASONS)[number][0]>("stuck");
   const [reasonNote, setReasonNote] = useState("");
+  const submittingRef = useRef(false);
   const submitMutation = trpc.workspace.knowledgeReset.submit.useMutation();
+  useEffect(() => {
+    const openResetRequest = () => {
+      if (status.canRequest) {
+        setOpen(true);
+        return;
+      }
+      toast.info(status.unavailableReason || "当前暂时无法提交知识库重置申请");
+    };
+    window.addEventListener(
+      KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
+      openResetRequest,
+    );
+    return () =>
+      window.removeEventListener(
+        KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
+        openResetRequest,
+      );
+  }, [status.canRequest, status.unavailableReason]);
   const submit = async () => {
+    if (submittingRef.current || submitMutation.isPending) return;
     if (reasonCode === "other" && !reasonNote.trim()) {
       toast.warning("请填写补充说明");
       return;
     }
+    submittingRef.current = true;
     try {
       await submitMutation.mutateAsync({
         reasonCode,
@@ -379,6 +516,8 @@ function KnowledgeResetButton({
       toast.error("重置申请提交失败", {
         description: error instanceof Error ? error.message : "请稍后重试",
       });
+    } finally {
+      submittingRef.current = false;
     }
   };
   return (
@@ -391,7 +530,7 @@ function KnowledgeResetButton({
         onClick={() => setOpen(true)}
       >
         <Trash2 className="h-4 w-4" />
-        {status.locked ? "重置申请审批中" : "申请重置知识库"}
+        {knowledgeResetButtonLabel(status)}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -502,7 +641,7 @@ function ManualKnowledgeUpdateButton({
     }
     if (
       !window.confirm(
-        "这是唯一一次直接更新。更新成功后当前会话和更新入口将永久锁定；后续修改需要提交维护工单。确认现在更新吗？",
+        "这是唯一一次直接更新。更新成功后当前会话和更新入口将永久锁定；后续修改需要提交维护需求。确认现在更新吗？",
       )
     ) {
       return;
@@ -546,7 +685,7 @@ function ManualKnowledgeUpdateButton({
     <div className="flex flex-col items-start gap-2">
       <p className="max-w-full whitespace-nowrap text-xs leading-5 text-amber-700">
         知识库已达到
-        100%：这是唯一一次直接更新；更新成功后当前会话和入口将锁定，后续修改需提交维护工单。
+        100%：这是唯一一次直接更新；更新成功后当前会话和入口将锁定，后续修改需提交维护需求。
       </p>
       <Button
         className="w-fit shrink-0 bg-[#5b2a86] hover:bg-[#49216c]"
@@ -591,7 +730,7 @@ function KnowledgeMaintenanceTicketButton({
         type: "website_operation",
         category: "knowledge_base_maintenance",
         topic: "已发布知识库维护",
-        title: "知识库维护工单",
+        title: "知识库维护需求",
         description: request,
         knowledgeSnapshotId: snapshotId,
         materialUrls: [],
@@ -599,11 +738,11 @@ function KnowledgeMaintenanceTicketButton({
       });
       setDescription("");
       setOpen(false);
-      toast.success("知识库维护工单已提交", {
-        description: "服务团队会在工单中处理后续知识库更新。",
+      toast.success("知识库维护需求已提交", {
+        description: "服务团队会在需求中处理后续知识库更新。",
       });
     } catch (error) {
-      toast.error("维护工单提交失败", {
+      toast.error("维护需求提交失败", {
         description: error instanceof Error ? error.message : "请稍后重试",
       });
     }
@@ -618,7 +757,7 @@ function KnowledgeMaintenanceTicketButton({
           onClick={() => enabled && setOpen(true)}
         >
           <Wrench className="h-4 w-4" />
-          提交维护工单
+          提交维护需求
         </Button>
         {!enabled && (
           <p className="text-xs leading-5 text-amber-700">
@@ -632,7 +771,7 @@ function KnowledgeMaintenanceTicketButton({
       >
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>提交知识库维护工单</DialogTitle>
+            <DialogTitle>提交知识库维护需求</DialogTitle>
             <DialogDescription>
               当前知识库已锁定。请说明需要补充、修订或替换的内容，服务团队将基于已发布版本处理。
             </DialogDescription>
@@ -657,7 +796,7 @@ function KnowledgeMaintenanceTicketButton({
               {createMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin" />
               )}
-              提交工单
+              提交需求
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -666,15 +805,33 @@ function KnowledgeMaintenanceTicketButton({
   );
 }
 
-function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
-  const { state, activeConversation, hydrated, createConversation, setActive } =
-    useConversation();
+function RealBuildFlow({
+  mode,
+  resetRevision,
+  accountId,
+}: {
+  mode: "standard" | "workspace";
+  resetRevision: number;
+  accountId: number;
+}) {
+  const {
+    state,
+    activeConversation,
+    loading: conversationLoading,
+    hydrated,
+    syncError,
+    createConversation,
+    setActive,
+    discardKnowledgeBaseConversationsLocally,
+    refreshConversationsAfterDiscard,
+    refreshConversations,
+    clearSyncError,
+  } = useConversation();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const trpcUtils = trpc.useUtils();
   const latestProgressQuery = trpc.workspace.knowledgeProgress.useQuery(
     undefined,
     {
-      enabled: hydrated,
       retry: false,
       refetchOnWindowFocus: true,
     },
@@ -684,10 +841,60 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
         (conversation) => conversation.id === conversationId,
       )
     : undefined;
+  // Home renders ConversationContext.activeConversation. Only use that same
+  // object as the last-good fallback; a stale scoped id must never make the KB
+  // shell mount while Home is actually pointing at an unrelated conversation.
+  const lastGoodConversation = hasLastGoodKnowledgeBasePresentation(
+    activeConversation,
+  )
+    ? activeConversation
+    : undefined;
+  const displayedConversation = lastGoodConversation ?? scopedConversation;
+  const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
+  const recoveryPending = Boolean(
+    !lastGoodConversation &&
+      !syncError &&
+      !latestProgressQuery.isError &&
+      (conversationLoading ||
+        !hydrated ||
+        latestProgressQuery.data === undefined),
+  );
+
+  useEffect(() => {
+    if (!recoveryPending) {
+      setRecoveryTimedOut(false);
+      return;
+    }
+    if (recoveryTimedOut) return;
+    const timeout = window.setTimeout(
+      () => setRecoveryTimedOut(true),
+      KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [recoveryPending, recoveryTimedOut]);
+
+  useEffect(() => {
+    const selectFreshBuild = (event: Event) => {
+      const nextConversationId = String(
+        (event as CustomEvent<{ conversationId?: unknown }>).detail
+          ?.conversationId || "",
+      ).trim();
+      if (!nextConversationId) return;
+      setConversationId(nextConversationId);
+      setActive(nextConversationId);
+    };
+    window.addEventListener(KNOWLEDGE_BASE_NEW_BUILD_EVENT, selectFreshBuild);
+    return () =>
+      window.removeEventListener(
+        KNOWLEDGE_BASE_NEW_BUILD_EVENT,
+        selectFreshBuild,
+      );
+  }, [setActive]);
 
   useEffect(() => {
     if (
       !hydrated ||
+      Boolean(syncError) ||
       latestProgressQuery.isLoading ||
       latestProgressQuery.isError ||
       !latestProgressQuery.data
@@ -719,7 +926,7 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
     if (!conversationId) {
       const nextConversationId = createConversation({
         title: "企业知识库构建",
-        reuseEmpty: true,
+        reuseEmpty: false,
       });
       setConversationId(nextConversationId);
     }
@@ -734,6 +941,7 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
     scopedConversation,
     setActive,
     state.conversations,
+    syncError,
   ]);
 
   const progressQuery = trpc.workspace.knowledgeProgress.useQuery(
@@ -745,32 +953,146 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
   );
   const [liveProgress, setLiveProgress] =
     useState<KnowledgeBaseProgressDto | null>(null);
+  const [progressTimedOut, setProgressTimedOut] = useState(false);
+  const liveProgressCoordinateRef = useRef({
+    generation: -1,
+    stateEpoch: -1,
+  });
+
+  const installCancelledBatchRevision = useCallback(
+    async (cancelledConversationId: string, nextRevision: number) => {
+      trpcUtils.workspace.knowledgeReset.status.setData(undefined, (current) =>
+        current
+          ? {
+              ...current,
+              revision: Math.max(current.revision, nextRevision),
+              hasKnowledge: false,
+              locked: false,
+              canRequest: false,
+              pending: null,
+              unavailableReason: "当前没有可重置的知识库记录",
+            }
+          : current,
+      );
+      trpcUtils.workspace.knowledgeProgress.setData(undefined, () => ({
+        progress: null,
+      }));
+      const discardedConversationIds = discardKnowledgeBaseConversationsLocally(
+        cancelledConversationId,
+      );
+      for (const conversationId of discardedConversationIds) {
+        trpcUtils.workspace.knowledgeProgress.setData(
+          { conversationId },
+          () => ({ progress: null }),
+        );
+      }
+      setLiveProgress(null);
+      void Promise.all([
+        refreshConversationsAfterDiscard(),
+        trpcUtils.workspace.knowledgeReset.status.invalidate(),
+        trpcUtils.workspace.knowledgeProgress.invalidate(),
+      ]);
+    },
+    [
+      discardKnowledgeBaseConversationsLocally,
+      refreshConversationsAfterDiscard,
+      trpcUtils,
+    ],
+  );
 
   useEffect(() => {
     setLiveProgress(null);
+    setProgressTimedOut(false);
+    liveProgressCoordinateRef.current = { generation: -1, stateEpoch: -1 };
   }, [conversationId]);
 
   useEffect(() => {
-    if (progressQuery.data?.progress !== undefined) {
-      setLiveProgress(progressQuery.data.progress);
+    const candidate = progressQuery.data?.progress;
+    if (candidate !== undefined) {
+      setLiveProgress((current) => {
+        if (candidate === null) return null;
+        if (isKnowledgeBaseProgressProjectionOlder(candidate, current)) {
+          return current;
+        }
+        return candidate;
+      });
     }
   }, [progressQuery.data?.progress]);
 
+  const latestScopedProgress =
+    latestProgressQuery.data?.progress?.build.conversationId === conversationId
+      ? latestProgressQuery.data.progress
+      : null;
+  const displayedProgress =
+    liveProgress ??
+    progressQuery.data?.progress ??
+    latestScopedProgress ??
+    null;
+  const progressRequestPending = Boolean(
+    conversationId && !displayedProgress && progressQuery.isLoading,
+  );
+
+  useEffect(() => {
+    if (!progressRequestPending) {
+      setProgressTimedOut(false);
+      return;
+    }
+    if (progressTimedOut) return;
+    const timeout = window.setTimeout(
+      () => setProgressTimedOut(true),
+      KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [progressRequestPending, progressTimedOut]);
+
   useEffect(() => {
     const refresh = (event: Event) => {
-      const detail = (event as CustomEvent<KnowledgeBaseProgressDto | null>)
-        .detail;
-      if (
-        detail &&
-        (!conversationId || detail.build.conversationId === conversationId)
-      ) {
-        setLiveProgress(detail);
-        if (conversationId) {
-          trpcUtils.workspace.knowledgeProgress.setData(
-            { conversationId },
-            (current) => (current ? { ...current, progress: detail } : current),
-          );
+      const detail = readKnowledgeBaseProgressEventDetail(
+        (event as CustomEvent<unknown>).detail,
+      );
+      if (detail) {
+        if (
+          conversationId &&
+          detail.progress.build.conversationId !== conversationId
+        ) {
+          return;
         }
+        const currentCoordinate = liveProgressCoordinateRef.current;
+        const hasCoordinate = detail.generation >= 0 && detail.stateEpoch >= 0;
+        const coordinateIsOlder =
+          hasCoordinate &&
+          isKnowledgeBaseProgressCoordinateOlder(detail, currentCoordinate);
+        if (!coordinateIsOlder) {
+          if (hasCoordinate) {
+            liveProgressCoordinateRef.current = {
+              generation: detail.generation,
+              stateEpoch: detail.stateEpoch,
+            };
+          }
+          setLiveProgress((current) =>
+            isKnowledgeBaseProgressProjectionOlder(detail.progress, current)
+              ? current
+              : detail.progress,
+          );
+          if (conversationId) {
+            trpcUtils.workspace.knowledgeProgress.setData(
+              { conversationId },
+              (current) =>
+                current &&
+                !isKnowledgeBaseProgressProjectionOlder(
+                  detail.progress,
+                  current.progress ?? null,
+                )
+                  ? { ...current, progress: detail.progress }
+                  : current,
+            );
+          }
+        }
+        // The event carries the complete authoritative progress projection.
+        // Updating local state and the query cache is sufficient; refetching it
+        // here feeds the same progress back into ChatArea and used to trigger a
+        // reconcile storm.
+        return;
       }
       void progressQuery.refetch();
     };
@@ -784,24 +1106,42 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
 
   const progressPanel = (
     <KnowledgeBaseProgressPanel
-      progress={liveProgress ?? progressQuery.data?.progress}
-      loading={progressQuery.isLoading}
+      progress={displayedProgress}
+      loading={progressRequestPending && !progressTimedOut}
+      emptyMessage={
+        progressTimedOut
+          ? "构建状态同步暂时没有响应。任务可继续在上游处理，请稍后重试或在需要时申请重置。"
+          : undefined
+      }
     />
   );
 
-  if (latestProgressQuery.isError) {
+  const recoveryFailed = Boolean(
+    !lastGoodConversation &&
+      (syncError || latestProgressQuery.isError || recoveryTimedOut),
+  );
+  const retryRecovery = () => {
+    setRecoveryTimedOut(false);
+    clearSyncError();
+    void Promise.allSettled([
+      refreshConversations(),
+      latestProgressQuery.refetch(),
+    ]);
+  };
+
+  if (recoveryFailed) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center p-6">
         <div className="max-w-lg rounded-2xl border bg-muted/30 p-7 text-center">
           <p className="font-medium">构建会话读取失败</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            尚未创建新的构建会话，请先恢复已有会话状态。
+            {syncError || "未能在 15 秒内恢复已有构建会话，请检查网络后重试。"}
           </p>
           <Button
             type="button"
             variant="outline"
             className="mt-4"
-            onClick={() => void latestProgressQuery.refetch()}
+            onClick={retryRecovery}
           >
             重新读取
           </Button>
@@ -810,7 +1150,10 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
     );
   }
 
-  if (latestProgressQuery.isLoading || !latestProgressQuery.data) {
+  if (
+    !lastGoodConversation &&
+    (conversationLoading || !hydrated || latestProgressQuery.data === undefined)
+  ) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -834,16 +1177,17 @@ function RealBuildFlow({ mode }: { mode: "standard" | "workspace" }) {
             : "h-[calc(100dvh-210px)] min-h-[680px] overflow-hidden rounded-[20px] border border-[#e1d8e8] bg-white shadow-[0_18px_48px_rgba(33,19,58,.08)]"
         }
       >
-        {scopedConversation ? (
+        {displayedConversation ? (
           <Home
-            key={scopedConversation.id}
+            key={displayedConversation.id}
             embedded
             hideSidebar
             fixedAgentProfile="frontmind-pro"
             syncKnowledgeBaseSnapshot
-            knowledgeBaseProgress={
-              liveProgress ?? progressQuery.data?.progress ?? null
-            }
+            knowledgeBaseProgress={displayedProgress}
+            knowledgeBaseResetRevision={resetRevision}
+            knowledgeBaseAccountId={accountId}
+            onKnowledgeBaseBatchCancelled={installCancelledBatchRevision}
           />
         ) : (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-[#716a80]">

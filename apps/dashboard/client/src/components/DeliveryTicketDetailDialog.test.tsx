@@ -82,6 +82,32 @@ const detail = {
 };
 
 describe("DeliveryTicketDetailDialog", () => {
+  it("labels knowledge and approval demands correctly and keeps them read-only", () => {
+    render(
+      <DeliveryTicketDetailDialog
+        open
+        onOpenChange={vi.fn()}
+        detail={{
+          ticket: {
+            id: "knowledge-ticket",
+            type: "knowledge_base",
+            categoryLabel: "问题审核",
+            topic: "品牌是否可靠？",
+            publicStatus: "pending",
+            revision: 1,
+            canReply: true,
+          },
+          events: [],
+        }}
+        canMutate
+        onSubmitMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("知识库需求")).toBeInTheDocument();
+    expect(screen.queryByLabelText("补充说明")).not.toBeInTheDocument();
+  });
+
   it("renders the strict customer DTO without raw status or attachment data", () => {
     render(
       <DeliveryTicketDetailDialog
@@ -95,7 +121,7 @@ describe("DeliveryTicketDetailDialog", () => {
             categoryLabel: "知乎问答",
             topic: "品牌事实问答",
             publicStatus: "pending",
-            publicStatusLabel: "待受理",
+            publicStatusLabel: "待处理",
             publicSummary: null,
             preferredMedia: "新浪",
             deliveryLinks: [],
@@ -110,6 +136,13 @@ describe("DeliveryTicketDetailDialog", () => {
               message: "这是经过公开过滤的回复。",
               createdAt: "2026-07-28T09:00:00+08:00",
             },
+            {
+              id: "public-empty-event",
+              actorRole: "system",
+              actorLabel: "服务团队",
+              message: null,
+              createdAt: "2026-07-28T10:00:00+08:00",
+            },
           ],
         }}
         canMutate
@@ -118,11 +151,53 @@ describe("DeliveryTicketDetailDialog", () => {
     );
 
     expect(screen.getByText("这是经过公开过滤的回复。")).toBeInTheDocument();
+    expect(screen.getByText("需求记录已更新。")).toBeInTheDocument();
     expect(screen.getByText("意向媒体：新浪")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "取消工单" }),
+      screen.queryByRole("button", { name: "取消需求" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("附件与交付文件")).not.toBeInTheDocument();
+  });
+
+  it("renders empty status-change messages without exposing internal states", () => {
+    render(
+      <DeliveryTicketDetailDialog
+        open
+        onOpenChange={vi.fn()}
+        detail={{
+          ticket: {
+            id: "ticket-empty-event",
+            type: "content_asset",
+            category: "future_category",
+            topic: "future_category",
+            publicStatus: "pending",
+            publicStatusLabel: "待处理",
+            revision: 1,
+          },
+          events: [
+            {
+              id: "empty-status-change",
+              actorRole: "delivery_member",
+              actorLabel: "delivery_member",
+              message: null,
+              fromStatus: "submitted",
+              toStatus: "in_progress",
+              createdAt: "2026-07-28T10:00:00+08:00",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("需求状态更新为待处理。")).toBeInTheDocument();
+    expect(screen.getByText("服务团队")).toBeInTheDocument();
+    expect(screen.queryByText(/submitted|in_progress/)).not.toBeInTheDocument();
+    expect(screen.queryByText("已提交 → 处理中")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^delivery_member$/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "需求详情" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^future_category$/)).not.toBeInTheDocument();
   });
 
   it("shows the customer-visible timeline and downloadable deliverables", () => {
@@ -136,7 +211,7 @@ describe("DeliveryTicketDetailDialog", () => {
     );
 
     expect(screen.getByText("请补充客户书面授权。")).toBeInTheDocument();
-    expect(screen.getByText("已提交")).toBeInTheDocument();
+    expect(screen.getByText("待处理")).toBeInTheDocument();
     expect(screen.queryByText("已提交 → 待补充资料")).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /客户授权书.pdf/ }),
@@ -200,7 +275,7 @@ describe("DeliveryTicketDetailDialog", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "取消工单" }),
+      screen.queryByRole("button", { name: "取消需求" }),
     ).not.toBeInTheDocument();
   });
 
@@ -273,7 +348,7 @@ describe("DeliveryTicketDetailDialog", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: "取消工单" }),
+      screen.queryByRole("button", { name: "取消需求" }),
     ).not.toBeInTheDocument();
   });
 
@@ -323,8 +398,6 @@ describe("DeliveryTicketDetailDialog", () => {
             category: "icp_filing",
             status: "needs_information",
             publicStatus: "pending",
-            publicStage: "action_required",
-            publicStageLabel: "待您补充",
             publicSummary: "请补充 ICP 主体备案号的文字说明。",
             targetPage: "https://example.com/news",
             canReply: true,
@@ -346,7 +419,7 @@ describe("DeliveryTicketDetailDialog", () => {
       screen.getByRole("button", { name: "提交补充资料" }),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("上传补充资料")).not.toBeInTheDocument();
-    expect(screen.getByText(/此工单只接收文字补充/)).toBeInTheDocument();
+    expect(screen.getByText(/此需求只接收文字补充/)).toBeInTheDocument();
   });
 });
 
@@ -358,13 +431,13 @@ describe("DeliveryTicketDetailDialog safety helpers", () => {
     expect(
       safeDeliveryAttachmentUrl(
         "https://evil.example/file",
-        "https://dashboard.frontmind.cn",
+        "https://dashboard.frontmind.net",
       ),
     ).toBeNull();
     expect(
       safeDeliveryAttachmentUrl(
         "/api/delivery-ticket-attachments/4a67e445-37bb-45ed-9268-4ca9437e4d70/content",
-        "https://dashboard.frontmind.cn",
+        "https://dashboard.frontmind.net",
       ),
     ).toBe(
       "/api/delivery-ticket-attachments/4a67e445-37bb-45ed-9268-4ca9437e4d70/content",

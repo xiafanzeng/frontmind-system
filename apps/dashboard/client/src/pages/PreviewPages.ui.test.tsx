@@ -6,13 +6,18 @@ vi.mock("@/components/PortalShell", () => ({
     children,
     toolbar,
     accountLabel,
+    title,
+    mode = "standard",
   }: {
     children: React.ReactNode;
     toolbar?: React.ReactNode;
     accountLabel?: string;
+    title?: string;
+    mode?: "standard" | "fullscreen";
   }) => (
-    <div>
+    <div data-testid="portal-shell" data-mode={mode}>
       {accountLabel && <span>{accountLabel}</span>}
+      {title && <h1>{title}</h1>}
       {toolbar}
       {children}
     </div>
@@ -24,6 +29,49 @@ vi.mock("@/components/PortalShell", () => ({
     children: React.ReactNode;
     className?: string;
   }) => <section className={className}>{children}</section>,
+}));
+
+vi.mock("@/components/AdminDeliveryTicketWorkspace", () => ({
+  default: ({
+    enterpriseName,
+    canAdjustQuota,
+    canExecuteDelivery,
+  }: {
+    enterpriseName?: string;
+    canAdjustQuota?: boolean;
+    canExecuteDelivery?: boolean;
+  }) => (
+    <section
+      data-testid="admin-delivery-ticket-workspace"
+      data-can-adjust-quota={String(Boolean(canAdjustQuota))}
+      data-can-execute-delivery={String(Boolean(canExecuteDelivery))}
+    >
+      <h2>{enterpriseName}需求记录</h2>
+    </section>
+  ),
+}));
+
+vi.mock("@/components/CustomerDashboardMirror", () => ({
+  default: ({
+    layout,
+    initialSection,
+    heading,
+    editActions,
+  }: {
+    layout?: string;
+    initialSection?: string;
+    heading?: string;
+    editActions?: React.ReactNode;
+  }) => (
+    <section
+      data-testid="customer-dashboard-mirror"
+      data-layout={layout}
+      data-initial-section={initialSection}
+    >
+      <h2>{heading}</h2>
+      {editActions}
+    </section>
+  ),
 }));
 
 import {
@@ -80,7 +128,7 @@ describe("preview account creation form", () => {
     expect(screen.getByRole("option", { name: "普通版" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "进阶版" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "豪华版" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "海内版" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "国内版" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "海外版" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "创建客户并开通套餐" }),
@@ -130,7 +178,13 @@ describe("preview account creation form", () => {
   });
 
   it("renders a download and upload action for all seven delivery modules", () => {
-    render(<PreviewDeliveryControl userName="验收客户" />);
+    const onOpenCustomerDashboard = vi.fn();
+    render(
+      <PreviewDeliveryControl
+        userName="验收客户"
+        onOpenCustomerDashboard={onOpenCustomerDashboard}
+      />,
+    );
 
     expect(
       screen.getAllByRole("button", { name: "下载当前内容模板" }),
@@ -138,6 +192,64 @@ describe("preview account creation form", () => {
     expect(screen.getAllByRole("button", { name: "上传并校验" })).toHaveLength(
       7,
     );
+    expect(screen.queryByTestId("customer-dashboard-mirror")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "预览" }));
+    expect(onOpenCustomerDashboard).toHaveBeenLastCalledWith("keywords");
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "预览用户所见" })[2]!,
+    );
+    expect(onOpenCustomerDashboard).toHaveBeenLastCalledWith("questions");
+  });
+
+  it("merges service, requirements and sample operations into one customer workspace", () => {
+    render(<PreviewAdminUsers previewAccessLevel="delivery_admin" />);
+
+    expect(
+      screen.queryByRole("button", { name: "客户工作台" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "进入客户看板" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("套餐与服务周期")).toBeInTheDocument();
+    expect(screen.getByText("验收企业需求记录")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "上传并校验" })).toHaveLength(
+      7,
+    );
+    expect(screen.queryByText("用户流程")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("customer-dashboard-mirror")).toBeNull();
+  });
+
+  it("opens the customer dashboard fullscreen beside the administrator navigation", () => {
+    render(<PreviewAdminUsers previewAccessLevel="delivery_admin" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "进入客户看板" }));
+
+    expect(screen.getByTestId("portal-shell")).toHaveAttribute(
+      "data-mode",
+      "fullscreen",
+    );
+    expect(screen.getByTestId("customer-dashboard-mirror")).toHaveAttribute(
+      "data-layout",
+      "workspace",
+    );
+    expect(screen.getByTestId("customer-dashboard-mirror")).toHaveAttribute(
+      "data-initial-section",
+      "keywords",
+    );
+    expect(screen.getByTestId("customer-dashboard-mirror")).toHaveTextContent(
+      "验收企业 · 客户看板",
+    );
+    expect(screen.queryByText("套餐与服务周期")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回工作台" }));
+    expect(screen.getByTestId("portal-shell")).toHaveAttribute(
+      "data-mode",
+      "standard",
+    );
+    expect(screen.queryByTestId("customer-dashboard-mirror")).toBeNull();
+    expect(screen.getByText("套餐与服务周期")).toBeInTheDocument();
   });
 
   it("keeps a delivery administrator read-only and inside assigned customers", () => {
@@ -154,10 +266,18 @@ describe("preview account creation form", () => {
     expect(
       screen.queryByRole("button", { name: "编辑分配" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("admin-delivery-ticket-workspace"),
+    ).toHaveAttribute("data-can-adjust-quota", "false");
+    expect(
+      screen.getByTestId("admin-delivery-ticket-workspace"),
+    ).toHaveAttribute("data-can-execute-delivery", "false");
   });
 
   it("keeps account creation out of the system customer workspace", () => {
-    render(<PreviewAdminUsers previewAccessLevel="system_admin" />);
+    const { container } = render(
+      <PreviewAdminUsers previewAccessLevel="system_admin" />,
+    );
 
     expect(screen.getByText("系统管理员验收账号")).toBeInTheDocument();
     expect(screen.getByText("验收企业 C")).toBeInTheDocument();
@@ -171,5 +291,41 @@ describe("preview account creation form", () => {
     expect(screen.queryByText("API Key 与积分")).not.toBeInTheDocument();
     expect(screen.queryByText(/API Key 已配置/)).not.toBeInTheDocument();
     expect(screen.queryByText(/API Key 待配置/)).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("admin-delivery-ticket-workspace"),
+    ).toHaveAttribute("data-can-adjust-quota", "true");
+    expect(
+      screen.getByTestId("admin-delivery-ticket-workspace"),
+    ).toHaveAttribute("data-can-execute-delivery", "true");
+    expect(
+      Array.from(
+        container.querySelectorAll(
+          '[data-testid="preview-service-plan-quota"] [data-category]',
+        ),
+      ).map((item) => item.getAttribute("data-category")),
+    ).toEqual([
+      "industry",
+      "competitor_comparison",
+      "reputation",
+      "product_scenario",
+    ]);
+  });
+
+  it("shows the luxury first-quarter cap beside its full-year entitlement", () => {
+    render(<PreviewAdminUsers previewAccessLevel="system_admin" />);
+
+    fireEvent.click(screen.getByText("验收企业 B").closest("button")!);
+
+    expect(
+      screen.getByText(/第 1\/4 服务季度 · 当前已解锁 8 \/ 全年 32 个问题/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("全年 4 个词")).toHaveLength(3);
+    expect(screen.getByText("全年 20 个词")).toBeInTheDocument();
+    const quota = screen.getByTestId("preview-service-plan-quota");
+    expect(
+      Array.from(quota.querySelectorAll("[data-category] strong")).map(
+        (item) => item.textContent,
+      ),
+    ).toEqual(["1 个词", "1 个词", "1 个词", "5 个词"]);
   });
 });

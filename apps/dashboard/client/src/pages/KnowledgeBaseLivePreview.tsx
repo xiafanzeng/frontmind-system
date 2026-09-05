@@ -231,7 +231,7 @@ export default function KnowledgeBaseLivePreview() {
   });
   const [companyName, setCompanyName] = useState("FrontMind超前智能");
   const [companyWebsite, setCompanyWebsite] = useState(
-    "https://www.frontmind.cn/",
+    "https://www.frontmind.net/",
   );
   const [apiKey, setApiKey] = useState("");
   const [serverCredentialConfigured, setServerCredentialConfigured] = useState<
@@ -531,7 +531,7 @@ export default function KnowledgeBaseLivePreview() {
               <Input
                 value={companyWebsite}
                 onChange={(event) => setCompanyWebsite(event.target.value)}
-                placeholder="https://www.frontmind.cn/"
+                placeholder="https://www.frontmind.net/"
               />
             </label>
             <div className="flex flex-col gap-2 self-end">

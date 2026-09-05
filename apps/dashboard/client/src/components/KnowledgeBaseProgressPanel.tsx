@@ -11,11 +11,14 @@ import {
   Waypoints,
 } from "lucide-react";
 
+import MarkdownRenderer from "@/components/MarkdownRenderer";
+
 import type {
   KnowledgeBaseLeafStatus,
   KnowledgeBaseProgressBranchDto,
   KnowledgeBaseProgressDto,
 } from "@shared/knowledge-base-progress";
+import { KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE } from "@shared/knowledge-base-progress";
 
 export type { KnowledgeBaseProgressDto };
 
@@ -148,6 +151,63 @@ export default function KnowledgeBaseProgressPanel({
   );
   const pending = clampCount(progress.summary.pending, total);
   const overallPercent = normalizedOverallPercent(progress);
+  const contentCompleted =
+    progress.build.status === "ready_to_publish" ||
+    progress.build.status === "published";
+  const partialResult =
+    progress.contentAvailability === "partial" ||
+    progress.resultQuality?.completeness === "partial";
+  const coverageIncomplete = progress.resultQuality?.warnings?.some(
+    (warning) => warning.code === "COVERAGE_INCOMPLETE",
+  );
+  const resultResetRequired = progress.operationState === "reset_required";
+  const taskWasNotCreated =
+    progress.taskCreationState === "not_attempted" &&
+    (progress.failureStage === "local_upload" ||
+      progress.failureStage === "provider_file_registration");
+  const hasDisplayableContent =
+    progress.contentAvailability === "partial" ||
+    progress.contentAvailability === "complete";
+  const contentAvailabilityIsLegacyUnknown =
+    progress.contentAvailability === undefined;
+  const retainedCustomerAttachmentCount = clampCount(
+    progress.retainedCustomerAttachmentCount ?? 0,
+  );
+  const materializedOperationActive =
+    progress.operationState === "creating" ||
+    progress.operationState === "waiting_output" ||
+    progress.operationState === "normalizing";
+  // Materialized-v5 presentation is driven by the durable business state. A
+  // Provider terminal status must never be projected as "stopped" after the
+  // server has retained displayable canonical content or explicitly opened
+  // the reset path. Keep the historical build-status fallback only for older
+  // DTOs that do not yet carry operationState.
+  const buildStopped =
+    progress.operationState === undefined &&
+    (progress.build.status === "failed" ||
+      progress.build.status === "protocol_error");
+  const buildExecuting =
+    !buildStopped &&
+    !resultResetRequired &&
+    (materializedOperationActive ||
+      (progress.operationState === undefined &&
+        progress.build.awaitingResponseSince != null &&
+        (progress.build.status === "researching" ||
+          progress.build.status === "confirming")));
+  const stoppedMessage =
+    progress.build.protocolError ===
+    KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE
+      ? KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE
+      : hasDisplayableContent || contentAvailabilityIsLegacyUnknown
+        ? "系统不会自动重发。已完成内容不受影响。"
+        : "系统不会自动重发；请申请重置后重新上传资料。";
+  const resetMessage = taskWasNotCreated
+    ? `${
+        retainedCustomerAttachmentCount > 0
+          ? `${retainedCustomerAttachmentCount}/${retainedCustomerAttachmentCount} 个附件已保留，`
+          : ""
+      }知识库任务未创建。请申请重置后重新上传资料。`
+    : KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE;
   const currentLeaf = progress.branches
     .flatMap((branch) => branch.leaves)
     .find((leaf) => leaf.id === progress.build.currentLeafId);
@@ -215,12 +275,63 @@ export default function KnowledgeBaseProgressPanel({
         </div>
       </header>
 
-      {progress.build.protocolError && (
-        <div className="mx-5 mt-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-xs leading-5 text-red-800 sm:mx-6">
+      {(buildStopped || buildExecuting || resultResetRequired) && (
+        <div
+          className={`mx-5 mt-4 flex items-start gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 sm:mx-6 ${
+            buildStopped || resultResetRequired
+              ? "border-slate-200 bg-slate-50 text-slate-800"
+              : "border-violet-200 bg-violet-50 text-violet-900"
+          }`}
+        >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <strong className="block">当前节点需要继续确认</strong>
-            <span>{progress.build.protocolError}</span>
+            <strong className="block">
+              {resultResetRequired
+                ? taskWasNotCreated
+                  ? "知识库任务未创建"
+                  : "本轮结果需要重置"
+                : buildStopped
+                  ? "本轮已停止"
+                  : progress.operationState === "normalizing"
+                    ? "正在处理已返回内容"
+                    : "FrontMind 正在处理当前操作"}
+            </strong>
+            <span>
+              {resultResetRequired
+                ? resetMessage
+                : buildStopped
+                  ? stoppedMessage
+                  : hasDisplayableContent || contentAvailabilityIsLegacyUnknown
+                    ? "请稍候，已完成内容不受影响。"
+                    : "请稍候，任务状态会自动更新。"}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {partialResult && (
+        <div
+          className="mx-5 mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-xs leading-5 text-amber-900 sm:mx-6"
+          data-testid="knowledge-result-quality-partial"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <strong className="block">
+              {coverageIncomplete
+                ? "研究覆盖信息不完整，节点仍可查看"
+                : "内容不完整，可安全查看"}
+            </strong>
+            <span>
+              {coverageIncomplete ? (
+                "节点内容已保留，但研究覆盖信息不完整，暂不能确认、修订、打包或发布；请申请重置后重新生成。"
+              ) : (
+                <>
+                  当前保留{" "}
+                  {progress.resultQuality?.stats?.acceptedCount ?? total}{" "}
+                  个安全节点，但未达到完整发布条件。确认、修订、打包和发布均已锁定；请批准重置后重新上传资料并创建全新任务。
+                </>
+              )}
+            </span>
           </div>
         </div>
       )}
@@ -257,7 +368,7 @@ export default function KnowledgeBaseProgressPanel({
 
       <footer
         className={`flex items-start gap-2 border-t px-5 py-4 text-xs leading-5 sm:px-6 ${
-          progress.packageAllowed
+          contentCompleted
             ? "border-emerald-100 bg-emerald-50/60 text-emerald-800"
             : "border-[#ece5f0] bg-[#fbfafc] text-[#716a80]"
         }`}
@@ -265,8 +376,14 @@ export default function KnowledgeBaseProgressPanel({
         <Archive className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
           {progress.packageAllowed
-            ? "所有知识节点均已逐项处理，已满足知识库更新条件。"
-            : "知识库必须逐项走完；“企业已确认”和“直接预填”都会计入已处理，但只有企业明确确认的节点显示对号。"}
+            ? "知识库内容与下载包均已完成，可以直接更新。"
+            : partialResult
+              ? "当前安全内容已保留并可查看，但不驱动后续操作或发布。"
+              : progress.packageState === "attention_required"
+                ? "知识库内容已完成，下载包暂时无法生成；已完成正文不受影响。"
+                : contentCompleted
+                  ? "知识库内容已完成，下载包正在后台准备；已完成正文不会回退。"
+                  : "知识库必须逐项走完；“企业已确认”和“直接预填”都会计入已处理，但只有企业明确确认的节点显示对号。"}
         </span>
       </footer>
     </section>
@@ -359,23 +476,50 @@ function BranchProgress({
         <ol className="grid gap-2">
           {[...branch.leaves]
             .sort((a, b) => a.ordinal - b.ordinal)
-            .map((leaf) => (
-              <li
-                key={leaf.id}
-                data-leaf-status={leaf.status}
-                className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${leafStatusClassNames[leaf.status]}`}
-              >
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-white/75">
-                  <LeafStatusIcon status={leaf.status} />
-                </span>
-                <span className="min-w-0 flex-1 text-xs font-semibold leading-5">
-                  {leaf.title}
-                </span>
-                <span className="shrink-0 text-xs font-bold">
-                  {leafStatusLabels[leaf.status]}
-                </span>
-              </li>
-            ))}
+            .map((leaf) => {
+              const summary = (
+                <>
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-white/75">
+                    <LeafStatusIcon status={leaf.status} />
+                  </span>
+                  <span className="min-w-0 flex-1 text-xs font-semibold leading-5">
+                    {leaf.title}
+                  </span>
+                  <span className="shrink-0 text-xs font-bold">
+                    {leaf.contentMarkdown
+                      ? "查看内容"
+                      : leafStatusLabels[leaf.status]}
+                  </span>
+                </>
+              );
+              return (
+                <li key={leaf.id} data-leaf-status={leaf.status}>
+                  {leaf.contentMarkdown ? (
+                    <details
+                      className={`group/leaf overflow-hidden rounded-xl border ${leafStatusClassNames[leaf.status]}`}
+                      data-testid="partial-knowledge-leaf"
+                    >
+                      <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 marker:hidden">
+                        {summary}
+                        <ChevronRight className="h-4 w-4 shrink-0 transition-transform group-open/leaf:rotate-90" />
+                      </summary>
+                      <div className="border-t border-current/10 bg-white px-4 py-4 text-[#261d32]">
+                        <MarkdownRenderer
+                          content={leaf.contentMarkdown}
+                          className="prose prose-sm max-w-none"
+                        />
+                      </div>
+                    </details>
+                  ) : (
+                    <div
+                      className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${leafStatusClassNames[leaf.status]}`}
+                    >
+                      {summary}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
         </ol>
       </div>
     </details>

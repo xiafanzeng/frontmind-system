@@ -150,4 +150,53 @@ describe("HistoricalResultsReadOnly", () => {
     expect(screen.getByText("已有应答逻辑")).toBeInTheDocument();
     expect(screen.getByText("历史监控成果")).toBeInTheDocument();
   });
+
+  it("projects legacy response logic into the public four-section view", () => {
+    const legacyResult: HistoricalQuestionResults = {
+      ...result,
+      responseLogic: [
+        {
+          ...result.responseLogic[0],
+          content: {
+            ...result.responseLogic[0].content,
+            concern: "查看 FINAL.zip 后判断产品能力。",
+            facts:
+              "- 来源文件：FINAL.zip；平台支持 **200 个模型**。\n- 详见 knowledge_base/products/3.2.md",
+            pending: "请确认图片公开权限。",
+            boundaries: "不要公开 sources/private.json。",
+            references: "引用文档：products/3.2.md",
+            attachments: [
+              {
+                fileId: "legacy-source",
+                filename: "企业资料.pdf",
+                mimeType: "application/pdf",
+                kind: "file",
+                uploadedAt: "2026-06-30T08:00:00.000Z",
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const { container } = render(
+      <HistoricalResultsReadOnly
+        questionId="history-server-id"
+        portal={portal}
+        onBack={vi.fn()}
+        resultOverride={legacyResult}
+      />,
+    );
+
+    expect(container.textContent).toContain("平台支持 200 个模型");
+    expect(screen.getByText(/引自知识库文档/u)).toBeInTheDocument();
+    expect(screen.queryByText("参考资料")).not.toBeInTheDocument();
+    expect(screen.getByText("用户上传资料")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("企业待确认");
+    expect(container.textContent).not.toContain("请确认图片公开权限");
+    expect(container.textContent).not.toContain("FINAL.zip");
+    expect(container.textContent).not.toContain("products/3.2.md");
+    expect(container.textContent).not.toContain("private.json");
+    expect(container.textContent).not.toContain("企业资料.pdf");
+  });
 });

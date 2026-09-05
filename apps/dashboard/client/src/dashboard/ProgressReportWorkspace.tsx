@@ -16,6 +16,7 @@ import type {
   DashboardOptimizationBaseline,
   DashboardOptimizationQuestionReport,
 } from "@shared/dashboard";
+import { keywordCategoryKey } from "@shared/keyword-categories";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import type { IntentQuestionGroup } from "@/components/ResponseLogicWorkspace";
 
@@ -32,7 +33,7 @@ type ReportQuestionCategoryKey =
   | "scenario";
 
 interface ProgressReportWorkspaceProps {
-  report: OptimizationReportData;
+  report?: OptimizationReportData | null;
   progressToolbar?: ReactNode;
   questionGroups?: readonly IntentQuestionGroup[];
 }
@@ -153,9 +154,15 @@ function QuestionReportNavigator({
   const activeEntries = entries.filter(
     (entry) => entry.categoryKey === activeCategory.key,
   );
+  const activeCanonicalCategory = keywordCategoryKey(activeCategory.key);
 
   return (
-    <aside className="progress-question-nav" aria-label={navTitle}>
+    <aside
+      className="progress-question-nav"
+      aria-label={navTitle}
+      data-tone={activeCategory.tone}
+      data-category={activeCanonicalCategory || undefined}
+    >
       <div className="progress-question-nav-head">
         <strong>{navTitle}</strong>
         <Sparkles size={18} aria-hidden="true" />
@@ -168,6 +175,7 @@ function QuestionReportNavigator({
       >
         {reportQuestionCategories.map((category) => {
           const Icon = category.icon;
+          const canonicalCategory = keywordCategoryKey(category.key);
           const categoryEntries = entries.filter(
             (entry) => entry.categoryKey === category.key,
           );
@@ -180,6 +188,7 @@ function QuestionReportNavigator({
               aria-selected={active}
               disabled={categoryEntries.length === 0}
               data-tone={category.tone}
+              data-category={canonicalCategory || undefined}
               className={active ? "active" : ""}
               onClick={() => onSelect(categoryEntries[0]!.id)}
             >
@@ -642,21 +651,41 @@ function QuestionProgressReport({
     () => authoritativeQuestionCategories(questionGroups),
     [questionGroups],
   );
-  const entries = useMemo(
-    () =>
-      questionReports.map((report) => ({
-        id: report.id,
-        question: report.question,
+  const entries = useMemo(() => {
+    const reportsById = new Map(
+      questionReports.map((report) => [report.id, report]),
+    );
+    const questions = questionGroups.flatMap((group) =>
+      group.questions.map((question) => ({
+        id: question.id,
+        question: question.question,
         categoryKey: reportEntryCategory(
-          report.id,
-          report.category,
-          report.question,
+          question.id,
+          group.title || group.id,
+          question.question,
           categoryByQuestionId,
         ),
-        report,
+        report: reportsById.get(question.id),
       })),
-    [categoryByQuestionId, questionReports],
-  );
+    );
+    const questionIds = new Set(questions.map((question) => question.id));
+    return [
+      ...questions,
+      ...questionReports
+        .filter((report) => !questionIds.has(report.id))
+        .map((report) => ({
+          id: report.id,
+          question: report.question,
+          categoryKey: reportEntryCategory(
+            report.id,
+            report.category,
+            report.question,
+            categoryByQuestionId,
+          ),
+          report,
+        })),
+    ];
+  }, [categoryByQuestionId, questionGroups, questionReports]);
   const [selectedQuestionId, setSelectedQuestionId] = useState(
     entries[0]?.id || "",
   );
@@ -671,6 +700,26 @@ function QuestionProgressReport({
   const selected =
     entries.find((entry) => entry.id === selectedQuestionId) || entries[0];
   if (!selected) return <QuestionReportEmptyState />;
+  const selectedCategory =
+    reportQuestionCategories.find(
+      (category) => category.key === selected.categoryKey,
+    ) ?? reportQuestionCategories[0];
+  const selectedCanonicalCategory = keywordCategoryKey(selectedCategory.key);
+  if (!selected.report) {
+    return (
+      <div className="progress-question-layout">
+        <QuestionReportNavigator
+          entries={entries}
+          selectedId={selected.id}
+          onSelect={setSelectedQuestionId}
+          navTitle="报告问题"
+        />
+        <div className="progress-question-document">
+          <QuestionReportEmptyState />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="progress-question-layout">
@@ -681,15 +730,13 @@ function QuestionProgressReport({
         navTitle="报告问题"
       />
 
-      <article className="question-progress-report progress-question-document">
+      <article
+        className="question-progress-report progress-question-document"
+        data-tone={selectedCategory.tone}
+        data-category={selectedCanonicalCategory || undefined}
+      >
         <header className="question-report-cover">
-          <span>
-            {
-              reportQuestionCategories.find(
-                (category) => category.key === selected.categoryKey,
-              )?.title
-            }
-          </span>
+          <span>{selectedCategory.title}</span>
           <h2>{selected.report.question}</h2>
         </header>
 
@@ -824,14 +871,24 @@ const gapClosureLabels = {
 
 function QuestionAfterEffect({
   report,
+  categoryKey,
 }: {
   report: DashboardOptimizationQuestionReport;
+  categoryKey: ReportQuestionCategoryKey;
 }) {
   const effect = report.afterEffect;
   if (!effect?.released) return null;
+  const category =
+    reportQuestionCategories.find((item) => item.key === categoryKey) ??
+    reportQuestionCategories[0];
+  const canonicalCategory = keywordCategoryKey(category.key);
 
   return (
-    <article className="question-after-effect progress-question-document">
+    <article
+      className="question-after-effect progress-question-document"
+      data-tone={category.tone}
+      data-category={canonicalCategory || undefined}
+    >
       <header className="question-report-cover">
         <span>优化后效果</span>
         <h2>{report.question}</h2>
@@ -1046,7 +1103,10 @@ function AfterEffectCollection({
         onSelect={setSelectedQuestionId}
         navTitle="优化后效果问题"
       />
-      <QuestionAfterEffect report={selected.report} />
+      <QuestionAfterEffect
+        report={selected.report}
+        categoryKey={selected.categoryKey}
+      />
     </div>
   );
 }
@@ -1055,14 +1115,14 @@ function ProgressReportContent({
   report,
   questionGroups,
 }: {
-  report: OptimizationReportData;
+  report: OptimizationReportData | null;
   questionGroups: readonly IntentQuestionGroup[];
 }) {
   const questionReports = useMemo(
-    () => report.questionReports || [],
-    [report.questionReports],
+    () => report?.questionReports || [],
+    [report?.questionReports],
   );
-  return questionReports.length > 0 ? (
+  return questionReports.length > 0 || !report ? (
     <QuestionProgressReport
       questionReports={questionReports}
       questionGroups={questionGroups}
@@ -1079,16 +1139,16 @@ export default function ProgressReportWorkspace({
 }: ProgressReportWorkspaceProps) {
   const baselines = useMemo(
     () =>
-      report.questionBaselines?.length
+      report?.questionBaselines?.length
         ? report.questionBaselines
-        : report.baseline
+        : report?.baseline
           ? [report.baseline]
           : [],
-    [report.baseline, report.questionBaselines],
+    [report?.baseline, report?.questionBaselines],
   );
   const questionReports = useMemo(
-    () => report.questionReports || [],
-    [report.questionReports],
+    () => report?.questionReports || [],
+    [report?.questionReports],
   );
   const hasReleasedAfterEffect = questionReports.some(
     (question) => question.afterEffect?.released,
@@ -1172,7 +1232,7 @@ export default function ProgressReportWorkspace({
         <>
           {progressToolbar}
           <ProgressReportContent
-            report={report}
+            report={report ?? null}
             questionGroups={questionGroups}
           />
         </>

@@ -126,8 +126,9 @@ describe("KnowledgeBaseViewer", () => {
       name: "相关图片",
     });
     expect(
-      within(relatedSection).getByRole("img", { name: "factory" }),
+      within(relatedSection).getByRole("img", { name: "知识库配图" }),
     ).toBeTruthy();
+    expect(within(relatedSection).queryByText("factory")).toBeNull();
     expect(screen.queryByText("待关联图片资产")).toBeNull();
   });
 
@@ -252,8 +253,8 @@ describe("KnowledgeBaseViewer", () => {
     );
 
     expect(
-      screen.getAllByRole("heading", { name: "企业正式综述" }).length,
-    ).toBeGreaterThan(0);
+      screen.getAllByRole("heading", { name: "企业正式综述" }),
+    ).toHaveLength(1);
     expect(screen.queryByText("仅供证据核验。")).toBeNull();
     expect(screen.queryByRole("tab", { name: "证据与来源" })).toBeNull();
     expect(
@@ -265,12 +266,103 @@ describe("KnowledgeBaseViewer", () => {
     expect(screen.queryByText(/·/)).toBeNull();
   });
 
+  it("keeps section headings while removing a repeated document heading", () => {
+    render(
+      <KnowledgeBaseViewer
+        snapshot={{
+          ...snapshot,
+          documents: [
+            {
+              path: "branches/company/culture.md",
+              title: "品牌命名与文化内涵「天印溯方」",
+              content:
+                "## 品牌命名与文化内涵「天印溯方」\n正文内容。\n\n### 文化脉络\n章节内容。",
+              kind: "leaf",
+              customerVisible: true,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getAllByRole("heading", {
+        name: "品牌命名与文化内涵「天印溯方」",
+      }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("heading", { name: "文化脉络" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("正文内容。")).toBeInTheDocument();
+    expect(screen.getByText("章节内容。")).toBeInTheDocument();
+  });
+
   it("does not show internal branch identifiers in the image gallery", () => {
     render(<KnowledgeBaseViewer snapshot={snapshot} />);
 
     fireEvent.click(screen.getByRole("tab", { name: "图片素材 2" }));
 
     expect(screen.queryByText("分支：identity")).toBeNull();
+  });
+
+  it("never renders imported image filenames as captions or alt text", () => {
+    render(
+      <KnowledgeBaseViewer
+        snapshot={{
+          ...snapshot,
+          assets: [
+            {
+              key: "private/storage/clinic-reception.jpg",
+              path: "working-set/assets/clinic-reception.jpg",
+              mimeType: "image/jpeg",
+              size: 2_048,
+              url: "/api/dashboard/knowledge/assets/snapshot-1/0",
+              caption: "clinic-reception.jpg",
+              alt: "images/clinic-signage.jpg",
+            },
+          ],
+          imageCount: 1,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "知识库配图" })).toBeTruthy();
+    expect(screen.queryByText("clinic-reception.jpg")).toBeNull();
+    expect(screen.queryByText("clinic-signage.jpg")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "图片素材 1" }));
+    expect(screen.getByRole("img", { name: "知识库配图" })).toBeTruthy();
+    expect(screen.queryByText("clinic-reception.jpg")).toBeNull();
+    expect(screen.queryByText("clinic-signage.jpg")).toBeNull();
+  });
+
+  it("uses a semantic official Logo label for filename-only historical metadata", () => {
+    render(
+      <KnowledgeBaseViewer
+        snapshot={{
+          ...snapshot,
+          assets: [
+            {
+              key: "historical-logo",
+              path: "assets/customer-logo.png",
+              mimeType: "image/png",
+              size: 1_024,
+              url: "/api/dashboard/knowledge/assets/snapshot-1/0",
+              caption: "customer-logo.png",
+              alt: "uploads/customer-logo.png",
+              sourceKind: "official_logo_upload",
+              assetType: "brand_identity",
+              displayRole: "badge",
+            },
+          ],
+          imageCount: 1,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "企业官方主 Logo" })).toBeTruthy();
+    expect(screen.getByText("企业官方主 Logo")).toBeTruthy();
+    expect(screen.queryByText("customer-logo.png")).toBeNull();
   });
 
   it("uses one manifest asset on every explicitly linked document", () => {

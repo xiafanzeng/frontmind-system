@@ -105,6 +105,53 @@ export function buildSafeMarkdownHref(href?: string): string | undefined {
   }
 }
 
+const PROVIDER_LOCAL_MARKDOWN_PATH =
+  /^(?:\/home\/|\/mnt\/data\/|sandbox:|file:|\.\.?\/)/i;
+const BARE_PROVIDER_FILENAME = /^[^/?#]+\.[a-z0-9]{1,12}(?:[?#].*)?$/i;
+
+export function isGeneralChatArtifactHref(href?: string) {
+  if (!href) return false;
+  const normalized = href.trim();
+  if (!normalized.startsWith("/api/frontmind/v2/artifacts/")) return false;
+  try {
+    const parsed = new URL(normalized, "https://frontmind.invalid");
+    return /^\/api\/frontmind\/v2\/artifacts\/[^/]+\/content$/u.test(
+      parsed.pathname,
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function buildSafeGeneralChatMarkdownHref(
+  href?: string,
+): string | undefined {
+  const normalized = href?.trim();
+  if (!normalized) return undefined;
+  if (isGeneralChatArtifactHref(normalized)) return normalized;
+  if (normalized.startsWith("//")) return undefined;
+  if (/^(?:https?:\/\/|mailto:|tel:|#)/i.test(normalized)) {
+    return buildSafeMarkdownHref(normalized);
+  }
+  let classified = normalized;
+  try {
+    classified = decodeURIComponent(normalized);
+  } catch {
+    return undefined;
+  }
+  if (
+    PROVIDER_LOCAL_MARKDOWN_PATH.test(classified) ||
+    BARE_PROVIDER_FILENAME.test(classified)
+  ) {
+    return undefined;
+  }
+  // Provider output must not navigate Dashboard-relative paths. The only
+  // same-origin download capability exposed to ordinary chat is the strict
+  // artifact route handled above; all other relative or absolute paths are
+  // rendered as text so they cannot fall through to the SPA NotFound page.
+  return undefined;
+}
+
 // Custom link component
 const Link = ({
   className,
@@ -129,6 +176,46 @@ const Link = ({
     </a>
   );
 };
+
+function GeneralChatLink({
+  className,
+  href,
+  children,
+  onArtifactDownload,
+  onClick,
+  ...props
+}: React.ComponentProps<"a"> & {
+  onArtifactDownload?: (href: string) => void | Promise<void>;
+}) {
+  const safeHref = buildSafeGeneralChatMarkdownHref(href);
+  if (!safeHref) {
+    return <span className={cn("text-foreground", className)}>{children}</span>;
+  }
+  const isArtifact = isGeneralChatArtifactHref(safeHref);
+  const isExternal = /^https?:\/\//i.test(safeHref);
+  return (
+    <a
+      href={safeHref}
+      target={isExternal ? "_blank" : undefined}
+      rel={isExternal ? "noopener noreferrer" : undefined}
+      className={cn(
+        "text-primary underline-offset-2 hover:underline",
+        className,
+      )}
+      onClick={
+        isArtifact && onArtifactDownload
+          ? (event) => {
+              event.preventDefault();
+              void onArtifactDownload(safeHref);
+            }
+          : onClick
+      }
+      {...props}
+    >
+      {children}
+    </a>
+  );
+}
 
 // Custom heading components
 const Heading = ({
@@ -296,17 +383,33 @@ const components: Components = {
 interface MarkdownRendererProps {
   content: string;
   className?: string;
+  generalChatLinks?: boolean;
+  onArtifactDownload?: (href: string) => void | Promise<void>;
 }
 
-function MarkdownRendererInner({ content, className }: MarkdownRendererProps) {
+function MarkdownRendererInner({
+  content,
+  className,
+  generalChatLinks,
+  onArtifactDownload,
+}: MarkdownRendererProps) {
   if (!content || typeof content !== "string") return null;
+
+  const rendererComponents = generalChatLinks
+    ? {
+        ...components,
+        a: (props: React.ComponentProps<"a">) => (
+          <GeneralChatLink {...props} onArtifactDownload={onArtifactDownload} />
+        ),
+      }
+    : components;
 
   return (
     <div className={cn("markdown-content", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
-        components={components}
+        components={rendererComponents}
       >
         {content}
       </ReactMarkdown>
@@ -348,12 +451,19 @@ class MarkdownErrorBoundary extends React.Component<
 export default function MarkdownRenderer({
   content,
   className,
+  generalChatLinks,
+  onArtifactDownload,
 }: MarkdownRendererProps) {
   if (!content || typeof content !== "string") return null;
 
   return (
     <MarkdownErrorBoundary fallbackContent={content}>
-      <MarkdownRendererInner content={content} className={className} />
+      <MarkdownRendererInner
+        content={content}
+        className={className}
+        generalChatLinks={generalChatLinks}
+        onArtifactDownload={onArtifactDownload}
+      />
     </MarkdownErrorBoundary>
   );
 }

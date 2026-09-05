@@ -1,0 +1,737 @@
+/*  Publishing shell, shared components, and overview. All component rules are scoped to .publishing-page.  */
+
+.monitoring-module .publishing-page * {
+  box-sizing: border-box;
+}
+
+.monitoring-module .publishing-page {
+  position: relative;
+  min-height: calc(100vh - 82px);
+  padding: 24px clamp(20px, 2vw, 32px) 104px;
+  color: var(--publishing-ink);
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  box-sizing: border-box;
+}
+
+.monitoring-module .publishing-page button,
+.monitoring-module .publishing-page input,
+.monitoring-module .publishing-page textarea,
+.monitoring-module .publishing-page select {
+  font: inherit;
+}
+
+.monitoring-module .publishing-page a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: 1660px;
+  margin: 0 auto 20px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-page-heading h1 {
+  margin: 0;
+  color: #1e2030;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-page-heading p {
+  margin: 5px 0 0;
+  color: #838598;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--publishing-ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button:focus-visible,
+.monitoring-module .publishing-page button:focus-visible,
+.monitoring-module .publishing-page input:focus-visible,
+.monitoring-module .publishing-page select:focus-visible,
+.monitoring-module .publishing-page textarea:focus-visible,
+.monitoring-module .publishing-page a:focus-visible {
+  outline: 3px solid rgba(79, 36, 201, 0.24);
+  outline-offset: 2px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button-primary {
+  background: #3636e2;
+  color: #fff !important;
+  box-shadow: 0 5px 14px rgba(54, 54, 226, 0.17);
+  border-color: #3636e2;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-button-primary:hover:not(:disabled) {
+  background: #2929ca;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button-secondary {
+  border-color: var(--publishing-line);
+  background: white;
+  color: #332c41;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-button-secondary:hover:not(:disabled) {
+  border-color: #c9bed8;
+  background: #fcfbfd;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button-accent {
+  border-color: #3636e2;
+  background: #3636e2;
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(54, 54, 226, 0.17);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button-dark {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: white;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-button-block {
+  width: 100%;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-panel {
+  border: 1px solid #e7e8f0;
+  border-radius: 12px;
+  background: var(--publishing-surface);
+  box-shadow: var(--publishing-shadow);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-panel-heading {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 17px 20px;
+  border-bottom: 1px solid var(--publishing-line);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-panel-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-panel-heading p {
+  margin: 4px 0 0;
+  color: var(--publishing-muted);
+  font-size: 13px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-panel-heading > a {
+  color: var(--publishing-purple);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-state {
+  display: flex;
+  min-height: 160px;
+  max-width: 1520px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 auto;
+  border: 1px dashed #d9cfe6;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--publishing-muted);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-state-error {
+  min-height: 100px;
+  padding: 22px;
+  border-style: solid;
+  border-color: #f0c8cb;
+  color: var(--publishing-red);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-state-error div {
+  flex: 1;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-state-error p,
+.monitoring-module :where(.publishing-page) .publishing-empty p {
+  margin: 5px 0 0;
+  color: var(--publishing-muted);
+  font-size: 13px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-empty {
+  flex-direction: column;
+  padding: 32px;
+  text-align: center;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-empty-icon {
+  display: grid;
+  width: 44px;
+  height: 52px;
+  place-items: center;
+  border: 2px solid #aa99c3;
+  border-radius: 8px;
+  color: var(--publishing-purple);
+  font-family: serif;
+  font-size: 18px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-spin {
+  animation: publishing-spin 900ms linear infinite;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: fit-content;
+  padding: 3px 9px;
+  border: 1px solid #ded8e6;
+  border-radius: 6px;
+  background: #f8f7fa;
+  color: #60586e;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status.is-success {
+  border-color: #bee7d2;
+  background: #f0faf5;
+  color: var(--publishing-green);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status.is-danger {
+  border-color: #f1c6c9;
+  background: #fff4f4;
+  color: var(--publishing-red);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status.is-warning {
+  border-color: #f2d8ab;
+  background: #fff9ef;
+  color: var(--publishing-orange);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status.is-info {
+  border-color: #d8cff7;
+  background: #f6f3ff;
+  color: var(--publishing-purple);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-status.is-neutral {
+  background: #f8f7fa;
+  color: #655d73;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-mark {
+  --publishing-mark: #4f24c9;
+  display: grid;
+  width: 43px;
+  height: 43px;
+  flex: 0 0 43px;
+  place-items: center;
+  border: 3px solid white;
+  border-radius: 50%;
+  background: linear-gradient(
+    145deg,
+    var(--publishing-mark),
+    var(--publishing-mark-secondary, var(--publishing-mark))
+  );
+  box-shadow: 0 0 0 1px #e6dfeb;
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.05;
+  position: relative;
+  text-align: center;
+  overflow: hidden;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-mark.is-placeholder {
+  grid-template-rows: 1fr 11px;
+  padding-top: 5px;
+  border-width: 2px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-mark.is-placeholder
+  b {
+  max-width: 35px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  line-height: 1;
+  overflow: hidden;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-mark.is-placeholder
+  small {
+  width: 100%;
+  padding: 1px 0 2px;
+  background: rgb(0 0 0 / 28%);
+  color: #fff;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-mark.has-image {
+  border-width: 1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px #e6dfeb;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-mark-label {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 2px 0;
+  background: rgb(0 0 0 / 56%);
+  color: #fff;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  line-height: 1;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-name,
+.monitoring-module :where(.publishing-page) .publishing-article-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-name
+  > span:last-child,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-article-name
+  > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-name strong,
+.monitoring-module :where(.publishing-page) .publishing-article-name strong {
+  overflow: hidden;
+  color: var(--publishing-ink);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-name small,
+.monitoring-module :where(.publishing-page) .publishing-article-name small {
+  color: #837b91;
+  font-size: 12px;
+  font-weight: 450;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-file-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border: 1px solid #ddd3f4;
+  border-radius: 9px;
+  background: var(--publishing-purple-soft);
+  color: var(--publishing-purple);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric-grid {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric {
+  position: relative;
+  display: grid;
+  min-height: 148px;
+  grid-template-columns: auto 1fr;
+  gap: 13px;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px solid var(--publishing-line);
+  border-radius: 14px;
+  background: white;
+  box-shadow: var(--publishing-shadow);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric-icon {
+  display: grid;
+  width: 39px;
+  height: 39px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--publishing-purple-soft);
+  color: var(--publishing-purple);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric p,
+.monitoring-module :where(.publishing-page) .publishing-metric strong,
+.monitoring-module :where(.publishing-page) .publishing-metric span {
+  display: block;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric p {
+  margin: 0 0 5px;
+  color: var(--publishing-muted);
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric > div > strong {
+  font-size: 23px;
+  letter-spacing: -0.025em;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric > div > span {
+  margin-top: 5px;
+  color: #837b91;
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric > a {
+  position: absolute;
+  right: 18px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--publishing-purple);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric-primary {
+  background: linear-gradient(145deg, #2a1655, #171127);
+  color: white;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric-primary p,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-metric-primary
+  > div
+  > span {
+  color: #cfc4e3;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-metric-primary > a {
+  color: #efbd2d;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-metric-primary
+  .publishing-metric-icon {
+  background: rgba(255, 255, 255, 0.12);
+  color: #efbd2d;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-metric-warning
+  .publishing-metric-icon {
+  background: #fff7e8;
+  color: var(--publishing-orange);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-overview-columns {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-row {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #efeaf3;
+  transition: background-color 150ms ease;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-row:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-row:hover {
+  background: #fbf9fd;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-copy strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-list-copy span,
+.monitoring-module :where(.publishing-page) .publishing-row-time {
+  color: var(--publishing-muted);
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-image-preview {
+  display: grid;
+  height: 56px;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #25124f, #6f49ae);
+  color: white;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-image-preview small {
+  font-size: 8px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-search-field svg {
+  position: absolute;
+  top: 14px;
+  left: 13px;
+  color: #6f667d;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-search-field input {
+  padding: 0 13px 0 42px;
+}
+
+@media (max-width: 1280px) {
+  .monitoring-module :where(.publishing-page) .publishing-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1099px) {
+  .monitoring-module .publishing-page {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-overview-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-search-field {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .monitoring-module .publishing-page {
+    min-height: 100vh;
+    padding: 23px 14px calc(116px + env(safe-area-inset-bottom));
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+    margin-bottom: 20px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-page-heading h1 {
+    font-size: 27px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-page-actions {
+    justify-content: flex-start;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-overview-columns {
+    gap: 14px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-list-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 12px 14px;
+  }
+
+  .monitoring-module :where(.publishing-page) .publishing-row-time,
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-list-row
+    .publishing-status {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitoring-module .publishing-page *,
+  .monitoring-module .publishing-page *::before,
+  .monitoring-module .publishing-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@keyframes publishing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes publishing-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-button-accent:hover:not(:disabled) {
+  background: #2929ca;
+}
+.monitoring-module :where(.publishing-page) .publishing-shared-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.4fr);
+  gap: 18px;
+  padding: 22px;
+}
+.monitoring-module :where(.publishing-page) .publishing-shared-title label {
+  display: grid;
+  gap: 8px;
+  color: #555768;
+  font-size: 12px;
+}
+.monitoring-module :where(.publishing-page) .publishing-shared-title textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid #dcdee8;
+  border-radius: 8px;
+  color: #292b3e;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.monitoring-module :where(.publishing-page) .publishing-shared-title small {
+  color: #8b8d9d;
+}
+@media (max-width: 800px) {
+  .monitoring-module .publishing-page {
+    padding: 18px 14px calc(116px + env(safe-area-inset-bottom));
+  }
+  .monitoring-module :where(.publishing-page) .publishing-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-shared-title {
+    grid-template-columns: 1fr;
+    padding: 15px;
+  }
+}
+@media (max-width: 460px) {
+  .monitoring-module :where(.publishing-page) .publishing-page-heading h1 {
+    font-size: 22px;
+  }
+}

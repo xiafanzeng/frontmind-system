@@ -36,6 +36,8 @@ describe("AdminAgent preview", () => {
     expect(within(workspace).queryByText("修改密码")).toBeNull();
     expect(within(workspace).queryByText("账号管理")).toBeNull();
     expect(within(workspace).queryByText("退出登录")).toBeNull();
+    expect(within(workspace).queryByText("设置与积分记录")).toBeNull();
+    expect(within(workspace).queryByText(/API Key/)).toBeNull();
   });
 
   it("mounts the live Agent as a fullscreen workspace without inner account or knowledge-base launchers", () => {
@@ -46,6 +48,7 @@ describe("AdminAgent preview", () => {
     expect(source).toContain('mode="fullscreen"');
     expect(source).toContain("showKnowledgeBaseStarter={false}");
     expect(source).toContain("showAccountMenu={false}");
+    expect(source).toContain("showSettings={false}");
     expect(source).toContain('standardWelcomeVariant="workflow"');
   });
 

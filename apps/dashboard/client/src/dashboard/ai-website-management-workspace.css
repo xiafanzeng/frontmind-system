@@ -537,7 +537,7 @@
 .ai-website-guide-stage-toggle:focus-visible,
 .ai-website-guide-image-button:focus-visible,
 .ai-website-guide-advisor-button:focus-visible,
-.ai-website-guide-finish a:focus-visible,
+.ai-website-guide-finish-action:focus-visible,
 .ai-website-guide-lightbox-card > button:focus-visible {
   outline: 3px solid rgba(91, 42, 134, 0.25);
   outline-offset: 2px;
@@ -667,6 +667,58 @@
   border-radius: 12px;
   background: #faf7fc;
   scroll-margin-top: 24px;
+}
+
+.ai-website-guide-stage-flow {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-website-content-request-form {
+  display: grid;
+  gap: 16px;
+}
+
+.ai-website-service-code-receipt {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #b8dccc;
+  border-radius: 12px;
+  background: #f3fbf7;
+}
+
+.ai-website-service-code-receipt > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.ai-website-service-code-receipt p {
+  margin: 0;
+  color: var(--website-muted);
+  line-height: 1.65;
+}
+
+.ai-website-service-code-value {
+  display: grid;
+  gap: 7px;
+}
+
+.ai-website-service-code-value span,
+.ai-website-service-code-value small {
+  color: var(--website-muted);
+}
+
+.ai-website-service-code-value code {
+  overflow-wrap: anywhere;
+  padding: 11px 13px;
+  border: 1px solid #9acbb5;
+  border-radius: 9px;
+  background: #fff;
+  color: #14553b;
+  font-size: var(--fm-text-body, 15px);
+  font-weight: var(--fm-weight-semibold, 600);
+  user-select: all;
 }
 
 .ai-website-guide-visuals {
@@ -886,12 +938,13 @@
   font-size: var(--fm-text-body-sm, 13px);
 }
 
-.ai-website-guide-finish a {
+.ai-website-guide-finish-action {
   display: inline-flex;
   min-height: 40px;
   align-items: center;
   justify-content: center;
   padding: 0 14px;
+  border: 0;
   border-radius: 10px;
   background: var(--website-green);
   color: #fff;
@@ -899,7 +952,7 @@
   text-decoration: none;
 }
 
-.ai-website-guide-finish a:hover {
+.ai-website-guide-finish-action:hover {
   background: #11633f;
 }
 
@@ -1097,6 +1150,14 @@
   gap: 14px;
 }
 
+.ai-website-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .ai-website-submit-message {
   margin: 0;
   color: var(--website-muted);
@@ -1214,6 +1275,11 @@
 .ai-website-order-status[data-status="completed"] {
   background: #eaf7f1;
   color: var(--website-green);
+}
+
+.ai-website-order-status[data-status="pending"] {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
 .ai-website-order-status[data-status="processing"] {
@@ -1434,7 +1500,7 @@
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .ai-website-guide-finish a {
+  .ai-website-guide-finish-action {
     grid-column: 1 / -1;
     width: 100%;
   }
@@ -1453,6 +1519,15 @@
   .ai-website-form-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .ai-website-action-buttons {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .ai-website-action-buttons > button {
+    flex: 1 1 auto;
   }
 
   .ai-website-upload-button,

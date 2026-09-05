@@ -1,5 +1,9 @@
 import { ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react";
 import { type DeliveryTicketStatus } from "@shared/delivery-ticket";
+import {
+  deliveryCategoryLabel,
+  deliveryTicketPresentationTopic,
+} from "@shared/delivery-ticket-presentation";
 
 export type ContentAssetTicket = {
   id: string;
@@ -11,14 +15,6 @@ export type ContentAssetTicket = {
   status?: DeliveryTicketStatus;
   statusLabel?: string | null;
   publicStatus?: "pending" | "completed" | null;
-  publicStage?:
-    | "awaiting_service"
-    | "processing"
-    | "action_required"
-    | "completed"
-    | "closed"
-    | null;
-  publicStageLabel?: string | null;
   submittedAt?: string | number | Date | null;
   updatedAt?: string | number | Date | null;
   resolvedAt?: string | number | Date | null;
@@ -88,16 +84,27 @@ function TicketList({
             ticket.status && COMPLETED_TICKET_STATUSES.has(ticket.status),
           );
         const summary = ticket.publicSummary || ticket.contentSummary || "";
+        const localizedCategory = deliveryCategoryLabel({
+          type: ticket.type,
+          category: ticket.category,
+          providedLabel: ticket.categoryLabel,
+        });
+        const categoryCopy =
+          localizedCategory === "内容资产需求" &&
+          ticket.title?.trim() &&
+          ticket.title.trim() !== ticket.category?.trim()
+            ? ticket.title.trim()
+            : localizedCategory;
         const body = (
           <>
             <div className="content-ticket-copy">
-              <span>
-                {ticket.categoryLabel ||
-                  ticket.title ||
-                  ticket.category ||
-                  "内容资产需求"}
-              </span>
-              <strong>{ticket.topic || "内容运营与发布需求"}</strong>
+              <span>{categoryCopy}</span>
+              <strong>
+                {deliveryTicketPresentationTopic({
+                  ...ticket,
+                  fallbackLabel: "内容运营与发布需求",
+                })}
+              </strong>
               {completed && summary && (
                 <p className="content-ticket-summary">{summary}</p>
               )}
@@ -124,14 +131,8 @@ function TicketList({
                 )}
             </div>
             <div className="content-ticket-status">
-              <span
-                data-status={
-                  ticket.publicStage ||
-                  (completed ? "completed" : "awaiting_service")
-                }
-              >
-                {ticket.publicStageLabel ||
-                  (completed ? "已完成" : "已提交")}
+              <span data-status={completed ? "completed" : "pending"}>
+                {completed ? "已完成" : "待处理"}
               </span>
             </div>
           </>
@@ -184,11 +185,11 @@ export default function ContentAssetTicketHistory({
       {loading ? (
         <div className="content-ticket-empty" role="status">
           <Loader2 className="animate-spin" size={21} aria-hidden="true" />
-          <strong>正在载入内容工单…</strong>
+          <strong>正在载入内容需求…</strong>
         </div>
       ) : error ? (
         <div className="content-ticket-empty error" role="alert">
-          <strong>内容工单暂时无法载入</strong>
+          <strong>内容需求暂时无法载入</strong>
           <span>{error}</span>
         </div>
       ) : (
@@ -210,7 +211,7 @@ export default function ContentAssetTicketHistory({
                 ) : (
                   <RefreshCw size={15} aria-hidden="true" />
                 )}
-                {loadingMore ? "正在载入…" : "加载更多工单"}
+                {loadingMore ? "正在载入…" : "加载更多需求"}
               </button>
             </div>
           )}

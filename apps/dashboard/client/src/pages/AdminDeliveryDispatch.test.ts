@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   adminTicketEventPublicMessage,
+  adminTicketEventTransitionLabel,
+  dispatchWorkflowScopeLabel,
   filterDispatchTickets,
   groupDispatchTicketEvents,
   hasAuthoritativeProjectOwner,
@@ -57,6 +59,30 @@ describe("delivery administration ticket view", () => {
     ).toBe(true);
   });
 
+  it("distinguishes customer roots, internal steps, and standalone history", () => {
+    expect(
+      dispatchWorkflowScopeLabel({
+        isWorkflowContainer: true,
+        rootTicketId: null,
+        workflowDomain: null,
+      }),
+    ).toBe("客户原始需求（流程汇总）");
+    expect(
+      dispatchWorkflowScopeLabel({
+        isWorkflowContainer: false,
+        rootTicketId: "root-1",
+        workflowDomain: "content_distribution_engineer",
+      }),
+    ).toBe("内部执行步骤");
+    expect(
+      dispatchWorkflowScopeLabel({
+        isWorkflowContainer: false,
+        rootTicketId: null,
+        workflowDomain: null,
+      }),
+    ).toBe("历史技术需求（只读）");
+  });
+
   it("filters by the public state, customer, type, role, and manager", () => {
     const tickets = [
       {
@@ -102,7 +128,7 @@ describe("delivery administration ticket view", () => {
     ).toEqual(["1"]);
   });
 
-  it("groups events in one pass and never exposes internal statuses for empty messages", () => {
+  it("groups events in one pass and presents exact internal transitions in Chinese", () => {
     const events = [
       {
         id: "event-1",
@@ -131,27 +157,33 @@ describe("delivery administration ticket view", () => {
     expect(grouped.get("ticket-2")?.map((event) => event.id)).toEqual([
       "event-2",
     ]);
-    expect(adminTicketEventPublicMessage(events[0])).toBe(
-      "工单状态更新为待处理。",
-    );
+    expect(adminTicketEventPublicMessage(events[0])).toBe("已提交 → 处理中");
     expect(adminTicketEventPublicMessage(events[0])).not.toContain(
       "in_progress",
     );
     expect(adminTicketEventPublicMessage(events[1])).toBe("已补充处理说明。");
+    expect(
+      adminTicketEventTransitionLabel({
+        ...events[1]!,
+        message: "已开始处理。",
+        fromStatus: "submitted",
+        toStatus: "in_progress",
+      }),
+    ).toBe("已提交 → 处理中");
   });
 
-  it("exposes only read-only detail and two-state filters", () => {
+  it("exposes only read-only detail and grouped filters", () => {
     const source = readFileSync(
       resolve(process.cwd(), "client/src/pages/AdminDeliveryDispatch.tsx"),
       "utf8",
     );
 
-    expect(source).toContain('title="工单"');
+    expect(source).toContain('title="需求"');
     expect(source).toContain('<option value="pending">待处理</option>');
-    expect(source).toContain('<option value="completed">已完成</option>');
+    expect(source).toContain('<option value="completed">已结束</option>');
     expect(source).toContain('aria-label="筛选客户"');
     expect(source).toContain('aria-label="筛选执行岗位"');
-    expect(source).toContain("查看工单详情");
+    expect(source).toContain("查看需求详情");
     expect(source).not.toContain("dispatchTicket.useMutation");
     expect(source).not.toContain("urgeTicket.useMutation");
     expect(source).not.toContain("保存优先级");

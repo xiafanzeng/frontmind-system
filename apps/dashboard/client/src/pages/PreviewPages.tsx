@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import {
+  ArrowLeft,
   BriefcaseBusiness,
   Check,
   CheckCircle2,
   ChevronRight,
-  ClipboardList,
   Coins,
   Download,
   Gauge,
@@ -316,6 +316,8 @@ export function PreviewAdminAgent({
 export function PreviewAdminPresales() {
   const [keyDraft, setKeyDraft] = useState("");
   const [configured, setConfigured] = useState(true);
+  const [twentyFirstKeyDraft, setTwentyFirstKeyDraft] = useState("");
+  const [twentyFirstConfigured, setTwentyFirstConfigured] = useState(true);
   const tasks = [
     ["官网知识库采集 · 验收企业 B", "2026/7/27 14:22", "6,820"],
     ["普通版单题构建 · 验收企业", "2026/7/26 10:08", "3,460"],
@@ -325,7 +327,7 @@ export function PreviewAdminPresales() {
   return (
     <PortalShell
       eyebrow="管理中心 · 客户与服务"
-      title="官网任务与积分"
+      title="官网任务与AI建站"
       navItems={getRoleScopedPreviewAdminNav("system_admin")}
       accountLabel="系统管理员验收账号"
       roleLabel="系统管理员 · 验收预览"
@@ -423,23 +425,129 @@ export function PreviewAdminPresales() {
             ))}
           </div>
         </PortalCard>
+
+        <PortalCard className="p-5 sm:p-6 lg:col-span-2">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-[#5b2a86]" />
+                <h2 className="font-semibold text-[#171321]">AI建站（21st）</h2>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[#716a80]">
+                21st 仅用于视觉方向检索；保存时验证 MCP 初始化、search 与
+                get_component，不与官网任务积分混算。
+              </p>
+            </div>
+            <Badge
+              className={
+                twentyFirstConfigured
+                  ? "bg-[#16794f]/10 text-[#16794f]"
+                  : "bg-[#c89013]/10 text-[#8b6500]"
+              }
+            >
+              {twentyFirstConfigured ? "AI 建站就绪" : "等待配置"}
+            </Badge>
+          </div>
+          <div className="mt-5 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+            <div>
+              <div className="rounded-2xl border border-[#e8e1ee] bg-[#fbf9fd] p-4">
+                <p className="text-xs text-[#857e91]">21st 凭据指纹</p>
+                <p className="mt-1 font-mono text-sm text-[#332842]">
+                  {twentyFirstConfigured ? "•••• •••• 21ST" : "尚未配置"}
+                </p>
+              </div>
+              <Input
+                type="password"
+                value={twentyFirstKeyDraft}
+                onChange={(event) => setTwentyFirstKeyDraft(event.target.value)}
+                className="mt-4"
+                placeholder={
+                  twentyFirstConfigured
+                    ? "输入新的 21st API Key"
+                    : "粘贴 21st_sk_…"
+                }
+              />
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    toast.success("样例 21st MCP 连接通过 · 318ms")
+                  }
+                >
+                  测试 MCP 连接
+                </Button>
+                <Button
+                  disabled={twentyFirstKeyDraft.trim().length < 8}
+                  className="bg-[#5b2a86] hover:bg-[#49216c]"
+                  onClick={() => {
+                    setTwentyFirstConfigured(true);
+                    setTwentyFirstKeyDraft("");
+                    toast.success("样例 21st Key 已验证并加密保存");
+                  }}
+                >
+                  验证并更换
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 rounded-2xl border border-[#e8e1ee] bg-[#fbf9fd] p-4">
+              {["search", "get_component"].map((capability) => (
+                <div
+                  key={capability}
+                  className="rounded-xl border border-[#e8e1ee] bg-white px-3 py-3"
+                >
+                  <p className="font-mono text-xs text-[#484057]">
+                    {capability}
+                  </p>
+                  <p className="mt-1 text-xs font-medium text-[#16794f]">
+                    可用
+                  </p>
+                </div>
+              ))}
+              {["get_usage", "get_theme"].map((capability) => (
+                <div
+                  key={capability}
+                  className="rounded-xl border border-[#e8e1ee] bg-white px-3 py-3"
+                >
+                  <p className="font-mono text-xs text-[#484057]">
+                    {capability}
+                  </p>
+                  <p className="mt-1 text-xs text-[#857e91]">未提供</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </PortalCard>
       </div>
     </PortalShell>
   );
 }
 
-type PreviewWorkspaceTab = "service" | "tickets";
-
 type PreviewManagedUser = {
   id: number;
   name: string;
   username: string;
+  marketEdition: "domestic" | "overseas";
 };
 
 const managedUsers: PreviewManagedUser[] = [
-  { id: 1, name: "验收企业", username: "acceptance" },
-  { id: 2, name: "验收企业 B", username: "acceptance_b" },
-  { id: 3, name: "验收企业 C", username: "acceptance_c" },
+  {
+    id: 1,
+    name: "验收企业",
+    username: "acceptance",
+    marketEdition: "overseas",
+  },
+  {
+    id: 2,
+    name: "验收企业 B",
+    username: "acceptance_b",
+    marketEdition: "domestic",
+  },
+  {
+    id: 3,
+    name: "验收企业 C",
+    username: "acceptance_c",
+    marketEdition: "domestic",
+  },
 ];
 
 const managerOptions = [
@@ -480,13 +588,9 @@ export function PreviewAdminUsers({
   const systemAdmin = previewAccessLevel === "system_admin";
   const users = managedUsers;
   const [selectedId, setSelectedId] = useState(1);
-  const [tab, setTab] = useState<PreviewWorkspaceTab>(() => {
-    if (typeof window === "undefined") return "service";
-    const requested = new URLSearchParams(window.location.search).get("tab");
-    return ["service", "tickets"].includes(requested || "")
-      ? (requested as PreviewWorkspaceTab)
-      : "service";
-  });
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [dashboardInitialSection, setDashboardInitialSection] =
+    useState<CustomerDashboardMirrorSection>("keywords");
   const [servicePlans, setServicePlans] = useState<
     Record<number, "basic" | "advanced" | "luxury">
   >({
@@ -503,6 +607,21 @@ export function PreviewAdminUsers({
   );
   const selectedUser =
     visibleUsers.find((user) => user.id === selectedId) ?? visibleUsers[0];
+  const previewPayload = useMemo(
+    () => ({
+      ...previewCustomerDashboardPayload,
+      brandName: selectedUser?.name || "客户",
+      headline: `${selectedUser?.name || "客户"} · GEO 用户流程`,
+    }),
+    [selectedUser?.name],
+  );
+
+  const openCustomerDashboard = (
+    section: CustomerDashboardMirrorSection = "keywords",
+  ) => {
+    setDashboardInitialSection(section);
+    setDashboardOpen(true);
+  };
 
   const saveManagers = (managerIds: number[]) => {
     if (!systemAdmin || !selectedUser) return;
@@ -514,6 +633,42 @@ export function PreviewAdminUsers({
   };
 
   if (!selectedUser) return null;
+
+  if (dashboardOpen) {
+    return (
+      <PortalShell
+        mode="fullscreen"
+        eyebrow="管理中心 · 客户与服务"
+        title={`${selectedUser.name} · 客户看板`}
+        navItems={getRoleScopedPreviewAdminNav(previewAccessLevel)}
+        accountLabel={`${systemAdmin ? "系统管理员" : "交付管理员"}验收账号`}
+        roleLabel={`${systemAdmin ? "系统管理员" : "交付管理员"} · 验收预览`}
+      >
+        <CustomerDashboardMirror
+          layout="workspace"
+          payload={previewPayload}
+          marketEdition={selectedUser.marketEdition}
+          initialSection={dashboardInitialSection}
+          knowledgePreview={{
+            progress: previewKnowledgeProgress,
+            snapshot: previewKnowledgeSnapshot,
+          }}
+          heading={`${selectedUser.name} · 客户看板`}
+          editActions={
+            <Button
+              type="button"
+              size="sm"
+              variant="operatorOutline"
+              onClick={() => setDashboardOpen(false)}
+            >
+              <ArrowLeft className="h-4 w-4" />
+              返回工作台
+            </Button>
+          }
+        />
+      </PortalShell>
+    );
+  }
 
   return (
     <PortalShell
@@ -551,7 +706,10 @@ export function PreviewAdminUsers({
               <button
                 key={account.id}
                 type="button"
-                onClick={() => setSelectedId(account.id)}
+                onClick={() => {
+                  setDashboardOpen(false);
+                  setSelectedId(account.id);
+                }}
                 className={`w-full p-4 text-left transition ${
                   selectedId === account.id
                     ? "bg-[#5b2a86]/8"
@@ -608,47 +766,32 @@ export function PreviewAdminUsers({
               />
             </div>
             <div className="mt-6 flex flex-wrap gap-2 border-t border-[#eee8f2] pt-4">
-              {(
-                [
-                  ["service", "用户流程", PackageCheck],
-                  ["tickets", "工单", ClipboardList],
-                ] as const
-              ).map(([value, label, Icon]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setTab(value)}
-                  className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-                    tab === value
-                      ? "bg-[#5b2a86] text-white"
-                      : "bg-[#f3eef6] text-[#716a80] hover:text-[#5b2a86]"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </button>
-              ))}
+              <Button
+                type="button"
+                size="sm"
+                variant="operatorOutline"
+                onClick={() => openCustomerDashboard()}
+              >
+                进入客户看板
+                <PanelsTopLeft className="h-4 w-4" />
+              </Button>
             </div>
           </PortalCard>
 
-          {tab === "service" && (
-            <div className="space-y-5">
-              <PreviewServiceManager
-                userName={selectedUser.name}
-                plan={servicePlans[selectedId] || "basic"}
-                editable={systemAdmin}
-                onPlanChange={(plan) =>
-                  setServicePlans((current) => ({
-                    ...current,
-                    [selectedId]: plan,
-                  }))
-                }
-              />
-              <PreviewDeliveryControl userName={selectedUser.name} />
-            </div>
-          )}
-          {tab === "tickets" && (
+          <div className="space-y-5">
+            <PreviewServiceManager
+              userName={selectedUser.name}
+              plan={servicePlans[selectedId] || "basic"}
+              editable={systemAdmin}
+              onPlanChange={(plan) =>
+                setServicePlans((current) => ({
+                  ...current,
+                  [selectedId]: plan,
+                }))
+              }
+            />
             <AdminDeliveryTicketWorkspace
+              key={selectedUser.id}
               userId={selectedUser.id}
               enterpriseName={selectedUser.name}
               customerUsername={selectedUser.username}
@@ -657,7 +800,11 @@ export function PreviewAdminUsers({
               preview
               previewFixtures={adminDeliveryTicketPreviewFixtures}
             />
-          )}
+            <PreviewDeliveryControl
+              userName={selectedUser.name}
+              onOpenCustomerDashboard={openCustomerDashboard}
+            />
+          </div>
         </div>
       </div>
     </PortalShell>
@@ -671,7 +818,7 @@ const previewProjectTeams = [
     roles: [
       ["AI 运维工程师", "林哲"],
       ["AI 监控与优化工程师", "周宁"],
-      ["AI 内容分发工程师", "何川"],
+      ["AI 内容制作工程师", "何川"],
     ],
   },
   {
@@ -680,7 +827,7 @@ const previewProjectTeams = [
     roles: [
       ["AI 运维工程师", "赵恺"],
       ["AI 监控与优化工程师", "许薇"],
-      ["AI 内容分发工程师", "沈航"],
+      ["AI 内容制作工程师", "沈航"],
     ],
   },
   {
@@ -689,7 +836,7 @@ const previewProjectTeams = [
     roles: [
       ["AI 运维工程师", "待配置"],
       ["AI 监控与优化工程师", "待配置"],
-      ["AI 内容分发工程师", "待配置"],
+      ["AI 内容制作工程师", "待配置"],
     ],
   },
 ] as const;
@@ -712,7 +859,7 @@ export function PreviewAdminDeliveryRoles({
       roleLabel={`${systemAdmin ? "系统管理员" : "交付管理员"} · 验收预览`}
     >
       <div className="mb-5 rounded-xl border border-primary/20 bg-primary/[0.035] px-4 py-3 text-sm leading-6 text-muted-foreground">
-        项目岗位在这里绑定工程师；绑定后，新增和未结束工单会自动归属对应岗位人员。
+        项目岗位在这里绑定工程师；绑定后，新增和未结束需求会自动归属对应岗位人员。
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         {teams.map((team) => (
@@ -760,7 +907,7 @@ const previewManagementTickets = [
   {
     id: "ticket-2",
     customer: "验收企业 B",
-    title: "品牌词库与问题目录",
+    title: "配置品牌词库",
     role: "AI 监控与优化工程师",
     engineer: "许薇",
     status: "待处理",
@@ -769,7 +916,7 @@ const previewManagementTickets = [
     id: "ticket-3",
     customer: "验收企业",
     title: "官网企业事实内容发布",
-    role: "AI 内容分发工程师",
+    role: "AI 内容制作工程师",
     engineer: "何川",
     status: "已完成",
   },
@@ -790,7 +937,7 @@ export function PreviewAdminDispatch({
   return (
     <PortalShell
       eyebrow="管理中心 · 客户与服务"
-      title="工单"
+      title="需求"
       navItems={getRoleScopedPreviewAdminNav(previewAccessLevel)}
       accountLabel={`${systemAdmin ? "系统管理员" : "交付管理员"}验收账号`}
       roleLabel={`${systemAdmin ? "系统管理员" : "交付管理员"} · 验收预览`}
@@ -1001,18 +1148,14 @@ function downloadPreviewDeliveryTemplate(
   URL.revokeObjectURL(href);
 }
 
-export function PreviewDeliveryControl({ userName }: { userName: string }) {
+export function PreviewDeliveryControl({
+  userName,
+  onOpenCustomerDashboard,
+}: {
+  userName: string;
+  onOpenCustomerDashboard: (section: CustomerDashboardMirrorSection) => void;
+}) {
   const [revision, setRevision] = useState(6);
-  const [previewSection, setPreviewSection] =
-    useState<CustomerDashboardMirrorSection>("keywords");
-  const previewPayload = useMemo(
-    () => ({
-      ...previewCustomerDashboardPayload,
-      brandName: userName,
-      headline: `${userName} · GEO 用户流程`,
-    }),
-    [userName],
-  );
 
   const publishSample = (title: string) => {
     setRevision((current) => current + 1);
@@ -1027,7 +1170,7 @@ export function PreviewDeliveryControl({ userName }: { userName: string }) {
         <div className="flex flex-col gap-4 border-b border-[#e8e1ee] bg-[linear-gradient(135deg,#fbf8fd,#f4edf8)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
             <p className="text-xs font-semibold text-[#5b2a86]">
-              用户流程内容管理
+              客户看板内容管理
             </p>
             <h3 className="mt-1 font-semibold text-[#171321]">{userName}</h3>
             <p className="mt-2 text-sm leading-6 text-[#716a80]">
@@ -1037,29 +1180,17 @@ export function PreviewDeliveryControl({ userName }: { userName: string }) {
           <div className="flex gap-2">
             <Button
               variant="outline"
-              onClick={() => setPreviewSection("keywords")}
+              onClick={() => onOpenCustomerDashboard("keywords")}
             >
               预览
             </Button>
             <Button
-              className="bg-[#5b2a86] hover:bg-[#49216c]"
+              variant="operator"
               onClick={() => publishSample("结构化内容")}
             >
               发布修改
             </Button>
           </div>
-        </div>
-        <div className="border-b border-[#e8e1ee] bg-[#f6f3f8] p-4 sm:p-6">
-          <CustomerDashboardMirror
-            payload={previewPayload}
-            initialSection={previewSection}
-            knowledgePreview={{
-              progress: previewKnowledgeProgress,
-              snapshot: previewKnowledgeSnapshot,
-            }}
-            heading="用户当前所见"
-            description="所有分区均读取与用户端相同的数据，发布前可在这里逐项核对。"
-          />
         </div>
         <div className="grid gap-3 p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3">
           {previewDeliveryModules.map((module) => (
@@ -1072,10 +1203,10 @@ export function PreviewDeliveryControl({ userName }: { userName: string }) {
               <div className="mt-4 grid gap-2">
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="operatorOutline"
                   className="w-full"
                   onClick={() =>
-                    setPreviewSection(previewSectionForModule(module.key))
+                    onOpenCustomerDashboard(previewSectionForModule(module.key))
                   }
                 >
                   预览用户所见
@@ -1091,7 +1222,7 @@ export function PreviewDeliveryControl({ userName }: { userName: string }) {
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="operator"
                   className="w-full"
                   onClick={() => publishSample(module.title)}
                 >
@@ -1185,20 +1316,60 @@ function PreviewServiceManager({
   editable: boolean;
   onPlanChange: (plan: "basic" | "advanced" | "luxury") => void;
 }) {
-  const planMeta = {
-    basic: {
-      name: "普通版",
-      quota: "每个订单 1 个非行业词问题，可在同一账号累加",
-    },
-    advanced: {
-      name: "进阶版",
-      quota: "1 行业词 · 1 竞品对比词 · 1 美誉舆情词 · 5 产品场景词",
-    },
-    luxury: {
-      name: "豪华版",
-      quota: "4 行业词 · 4 竞品对比词 · 4 美誉舆情词 · 20 产品场景词",
-    },
-  }[plan];
+  const planMeta = (
+    {
+      basic: {
+        name: "普通版",
+        quota: "每个订单 1 个非行业类问题，可在同一账号累加",
+        quotaItems: undefined,
+      },
+      advanced: {
+        name: "进阶版",
+        quota: "1 行业排名词 · 1 竞品对比词 · 1 美誉舆情词 · 5 产品场景词",
+        quotaItems: [
+          { category: "industry", label: "行业排名词", limit: 1 },
+          {
+            category: "competitor_comparison",
+            label: "竞品对比词",
+            limit: 1,
+          },
+          { category: "reputation", label: "美誉舆情词", limit: 1 },
+          { category: "product_scenario", label: "产品场景词", limit: 5 },
+        ],
+      },
+      luxury: {
+        name: "豪华版",
+        quota:
+          "第一服务季度开放 1 行业排名词 · 1 竞品对比词 · 1 美誉舆情词 · 5 产品场景词",
+        quotaItems: [
+          {
+            category: "industry",
+            label: "行业排名词",
+            limit: 1,
+            entitlementLimit: 4,
+          },
+          {
+            category: "competitor_comparison",
+            label: "竞品对比词",
+            limit: 1,
+            entitlementLimit: 4,
+          },
+          {
+            category: "reputation",
+            label: "美誉舆情词",
+            limit: 1,
+            entitlementLimit: 4,
+          },
+          {
+            category: "product_scenario",
+            label: "产品场景词",
+            limit: 5,
+            entitlementLimit: 20,
+          },
+        ],
+      },
+    } as const
+  )[plan];
   return (
     <div className="space-y-5">
       <PortalCard className="p-5 sm:p-6">
@@ -1252,11 +1423,44 @@ function PreviewServiceManager({
             <Input aria-label="签署主体" placeholder="企业名 / 签署主体" />
           </div>
         )}
-        <div className="mt-5 rounded-2xl border border-[#e8e1ee] bg-[#fbf9fd] p-4">
+        <div
+          className="mt-5 rounded-2xl border border-[#e8e1ee] bg-[#fbf9fd] p-4"
+          data-testid="preview-service-plan-quota"
+        >
           <p className="text-xs font-semibold text-[#716a80]">当前权益</p>
-          <p className="mt-2 text-sm leading-6 text-[#332842]">
-            {planMeta.quota}
-          </p>
+          {plan === "luxury" && (
+            <p className="mt-2 text-xs leading-5 text-[#716a80]">
+              第 1/4 服务季度 · 当前已解锁 8 / 全年 32
+              个问题；以后每个服务季度新增 1、1、1、5 个额度。
+            </p>
+          )}
+          {planMeta.quotaItems ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {planMeta.quotaItems.map((item) => (
+                <span
+                  key={item.category}
+                  data-category={item.category}
+                  className="fm-question-category-surface grid min-w-0 gap-1 rounded-xl border border-[#e8e1ee] px-3 py-2.5"
+                >
+                  <small className="fm-question-category-ink text-xs font-semibold">
+                    {item.label}
+                  </small>
+                  <strong className="fm-question-category-ink text-base">
+                    {item.limit} 个词
+                  </strong>
+                  {"entitlementLimit" in item && (
+                    <small className="text-xs text-[#857e91]">
+                      全年 {item.entitlementLimit} 个词
+                    </small>
+                  )}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-[#332842]">
+              {planMeta.quota}
+            </p>
+          )}
         </div>
         {editable && (
           <div className="mt-5 flex justify-end">
@@ -1459,8 +1663,8 @@ export function PreviewCreateAccountDialog({
                   }
                   className="mt-2 h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                 >
-                  <option value="">请选择海内版或海外版</option>
-                  <option value="domestic">海内版</option>
+                  <option value="">请选择国内版或海外版</option>
+                  <option value="domestic">国内版</option>
                   <option value="overseas">海外版</option>
                 </select>
               </label>

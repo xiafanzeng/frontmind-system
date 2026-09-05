@@ -1,0 +1,1480 @@
+/*  Dual-media catalog, filters, selection, and drawer.  */
+
+.monitoring-module :where(.publishing-page) .publishing-media-table {
+  max-width: 1520px;
+  margin-right: auto;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-row {
+  display: grid;
+  min-height: 73px;
+  grid-template-columns:
+    32px minmax(260px, 1.35fr) minmax(130px, 0.72fr)
+    minmax(100px, 0.55fr) minmax(110px, 0.62fr) minmax(80px, 0.42fr) minmax(
+      100px,
+      0.55fr
+    );
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--publishing-line);
+  color: #4f465c;
+  font-size: 13px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-row:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) label.publishing-media-row {
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.monitoring-module :where(.publishing-page) label.publishing-media-row:hover {
+  background: #fcfbfd;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  label.publishing-media-row.is-selected {
+  background: linear-gradient(
+    90deg,
+    rgba(83, 43, 199, 0.055),
+    rgba(83, 43, 199, 0.018)
+  );
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-head {
+  min-height: 58px;
+  background: #fdfcfe;
+  color: #5c536b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-row
+  input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--publishing-purple);
+  cursor: pointer;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-footer > span {
+  margin-right: auto;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-footer label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-footer select {
+  min-height: 38px;
+  border: 1px solid var(--publishing-line);
+  border-radius: 7px;
+  background: white;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--publishing-line);
+  border-radius: 8px;
+  background: white;
+  color: var(--publishing-purple);
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-pagination
+  .publishing-pagination-edge {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-pages,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-pagination-pages
+  > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-pages i {
+  color: #8b8d9b;
+  font-style: normal;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-pagination-pages
+  button.is-active {
+  border-color: var(--publishing-purple);
+  background: var(--publishing-purple);
+  color: white;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-summary {
+  display: inline;
+  white-space: nowrap;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-jump {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-jump input {
+  width: 52px;
+  height: 40px;
+  padding: 0 7px;
+  border: 1px solid var(--publishing-line);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-pagination-jump button {
+  width: auto;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-pagination
+  button:disabled {
+  color: #beb6c7;
+  cursor: not-allowed;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-selection-bar > div {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 16px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-bar
+  > div
+  > span {
+  color: #d7cde4;
+  font-size: 13px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-bar
+  > div
+  > span
+  b {
+  margin-left: 8px;
+  color: #f3bd21;
+  font-size: 20px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-selection-check {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: white;
+  color: var(--publishing-purple);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-count {
+  display: inline-flex;
+  align-items: center;
+  color: var(--publishing-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  min-height: 34px;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #e2e3eb;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-count strong {
+  max-width: 170px;
+  overflow: hidden;
+  color: #3636e2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-count small {
+  padding-left: 7px;
+  border-left: 1px solid #e5e6ee;
+  color: #2a9b68;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar {
+  max-width: 1660px;
+  margin-right: auto;
+  margin-left: auto;
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 9px 14px;
+  border: 1px solid #e5e6ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--publishing-shadow);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-context-bar
+  > div
+  > span {
+  color: #858798;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar strong {
+  color: #282a3c;
+  font-size: 13px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-context-bar
+  strong
+  small {
+  color: #6e70db;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar select {
+  min-width: 320px;
+  height: 34px;
+  padding: 0 32px 0 10px;
+  border: 1px solid #dadce7;
+  border-radius: 7px;
+  background: #fff;
+  color: #343647;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar p {
+  margin: 0;
+  color: #a06e16;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-context-bar > a {
+  margin-left: auto;
+  color: #3636e2;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-workbench {
+  max-width: 1660px;
+  margin-right: auto;
+  margin-left: auto;
+  margin-bottom: 16px;
+  border: 1px solid #e4e5ed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--publishing-shadow);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-kind-tabs {
+  display: flex;
+  height: 50px;
+  align-items: flex-end;
+  gap: 26px;
+  padding: 0 20px;
+  border-bottom: 1px solid #ececf2;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-kind-tabs button {
+  position: relative;
+  display: flex;
+  height: 50px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #686a7b;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-kind-tabs
+  button::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  content: "";
+}
+
+.monitoring-module :where(.publishing-page) .publishing-kind-tabs button span {
+  min-width: 25px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #f1f2f6;
+  color: #888a9a;
+  font-size: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-kind-tabs
+  button.is-active {
+  color: #3636e2;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-kind-tabs
+  button.is-active::after {
+  background: #3636e2;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-kind-tabs
+  button.is-active
+  span {
+  background: #ededff;
+  color: #3636e2;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-search-row {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) auto minmax(190px, auto);
+  gap: 10px;
+  padding: 15px 20px;
+  border-bottom: 1px solid #f0f0f4;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-search-row
+  .publishing-search-field {
+  position: relative;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-search-row
+  .publishing-search-field
+  svg {
+  top: 8px;
+  left: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-search-row input,
+.monitoring-module :where(.publishing-page) .publishing-media-search-row select,
+.monitoring-module :where(.publishing-page) .publishing-sort-field select,
+.monitoring-module :where(.publishing-page) .publishing-filter-line select,
+.monitoring-module :where(.publishing-page) .publishing-advanced-grid select {
+  height: 34px;
+  border: 1px solid #dedfe8;
+  border-radius: 7px;
+  background: #fff;
+  color: #3d3f50;
+  font-size: 12px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-search-row
+  .publishing-search-field
+  input {
+  width: 100%;
+  padding-left: 36px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-sort-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #858797;
+  font-size: 12px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-sort-field select {
+  min-width: 130px;
+  padding: 0 8px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-search {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  margin: 0 20px 14px;
+  padding: 13px 14px;
+  border: 1px solid #dcdcff;
+  border-radius: 8px;
+  background: #f8f8ff;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-search > span {
+  color: #3f4154;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-batch-search
+  > span
+  small {
+  margin-left: 8px;
+  color: #888a9a;
+  font-weight: 400;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-search textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 9px 48px 9px 10px;
+  border: 1px solid #dedfea;
+  border-radius: 7px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-batch-search > b {
+  position: absolute;
+  right: 24px;
+  bottom: 21px;
+  color: #9698a7;
+  font-size: 10px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-groups {
+  display: grid;
+  gap: 0;
+  padding: 4px 20px 8px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-line {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px dashed #eeeff4;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-line:last-child {
+  border-bottom: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-line > strong {
+  width: 68px;
+  flex: 0 0 68px;
+  color: #7d7f91;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-inline-select select {
+  min-width: 190px;
+  padding: 0 28px 0 9px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-filter-pills button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #4f5161;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-filter-pills
+  button:hover,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-filter-pills
+  button.is-active {
+  border-color: #cfcfff;
+  background: #f0f0ff;
+  color: #3636e2;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-price-range {
+  display: inline-flex;
+  height: 29px;
+  align-items: center;
+  margin-left: 4px;
+  border: 1px solid #dedfe8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-price-range i,
+.monitoring-module :where(.publishing-page) .publishing-price-range em {
+  color: #9a9cab;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-price-range i {
+  padding-left: 8px;
+}
+.monitoring-module :where(.publishing-page) .publishing-price-range input {
+  width: 72px;
+  height: 27px;
+  padding: 0 5px;
+  border: 0;
+  outline: 0;
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-advanced-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 39px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-top: 1px solid #eeeef4;
+  background: #fafafd;
+  color: #626476;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-advanced-toggle b {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 9px;
+  background: #3636e2;
+  color: #fff;
+  font-size: 10px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-advanced-toggle
+  svg:last-child {
+  transition: transform 150ms ease;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-advanced-toggle
+  svg.is-open {
+  transform: rotate(180deg);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 15px 20px 18px;
+  border-top: 1px solid #eeeef4;
+  background: #fcfcfe;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-advanced-grid > label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: #7d7f90;
+  font-size: 11px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-advanced-grid select {
+  min-width: 0;
+  flex: 1;
+  padding: 0 7px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-advanced-grid
+  .publishing-inline-select
+  select {
+  width: 100%;
+  min-width: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-check-filter {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #dedfe8;
+  border-radius: 7px;
+  background: #fff;
+  color: #4f5163 !important;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-check-filter input {
+  accent-color: #3636e2;
+}
+.monitoring-module :where(.publishing-page) .publishing-filter-reset {
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: #3636e2;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-table-detailed {
+  max-width: 1660px;
+  margin: 0 auto;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-entry {
+  display: contents;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-compact-details,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-col-compact-details {
+  display: none;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-row {
+  position: relative;
+  min-height: 82px;
+  grid-template-columns:
+    28px minmax(270px, 1.25fr) minmax(120px, 0.7fr) minmax(95px, 0.45fr)
+    minmax(145px, 0.7fr) minmax(120px, 0.58fr) minmax(110px, 0.5fr);
+  gap: 12px;
+  padding: 10px 16px;
+  color: #4a4c5d;
+  font-size: 12px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-head {
+  min-height: 42px;
+  background: #f8f9fc;
+  color: #7c7e90;
+  font-size: 11px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  label.publishing-media-row:hover {
+  background: #fafaff;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  label.publishing-media-row.is-selected {
+  background: #f2f2ff;
+  box-shadow: inset 3px 0 #3636e2;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  label.publishing-media-row.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-name
+  > span:last-child,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-row
+  > span:not(.publishing-media-name),
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-market-price {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-row
+  small {
+  color: #9294a3;
+  font-size: 10px;
+  font-weight: 400;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-head
+  > span.publishing-media-col-compact-details {
+  display: none;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-name
+  small {
+  flex-wrap: wrap;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-name
+  small
+  a {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 7px;
+  color: #3636e2;
+}
+.monitoring-module :where(.publishing-page) .publishing-market-price {
+  color: #ef5b32;
+  font-size: 14px;
+}
+.monitoring-module :where(.publishing-page) .publishing-recommended {
+  margin-left: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #fff0e8;
+  color: #ed653c;
+  font-size: 9px;
+}
+.monitoring-module :where(.publishing-page) .publishing-capability {
+  color: #655d72;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #f1f2f6;
+  font-size: 10px;
+}
+.monitoring-module :where(.publishing-page) .publishing-capability.is-image {
+  background: #eaf8f2;
+  color: #16865d;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-capability.is-image_pending {
+  background: #fff5e8;
+  color: #ad6b0a;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-remark {
+  position: absolute;
+  right: 14px;
+  bottom: 2px;
+  margin: 0;
+  color: #999baa;
+  font-size: 9px;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-remark.is-danger {
+  color: #d64b55;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-update {
+  display: grid;
+  max-width: 1660px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto 14px;
+  padding: 12px 14px;
+  border: 1px solid #cfd1ff;
+  border-radius: 10px;
+  background: #f2f2ff;
+  color: #3636e2;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-update strong,
+.monitoring-module :where(.publishing-page) .publishing-catalog-update p {
+  display: block;
+  margin: 0;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-update strong {
+  color: #292b59;
+  font-size: 13px;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-catalog-update p {
+  margin-top: 3px;
+  color: #66698b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-media-footer {
+  margin-right: auto;
+  margin-left: auto;
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 22px;
+  color: var(--publishing-muted);
+  font-size: 12px;
+  max-width: 1660px;
+  margin: 0 auto;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-selection-bar {
+  position: sticky;
+  z-index: 12;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  border: 1px solid #28174e;
+  border-radius: 12px;
+  color: white;
+  max-width: min(1060px, calc(100vw - 64px));
+  min-height: 62px;
+  margin-right: auto;
+  margin-left: auto;
+  padding: 10px 12px 10px 16px;
+  border-color: #2a2b45;
+  background: #25263d;
+  box-shadow: 0 14px 40px rgba(21, 22, 49, 0.24);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-selection-summary {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-summary
+  > span {
+  color: #cacbda;
+  font-size: 12px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-summary
+  > span
+  b {
+  color: #fff;
+  font-size: 15px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-summary
+  > svg {
+  margin-left: auto;
+  color: #aeb0c6;
+}
+
+.monitoring-module :where(.publishing-page) .publishing-drawer-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(26, 27, 46, 0.38);
+}
+
+.monitoring-module :where(.publishing-page) .publishing-selection-drawer {
+  display: flex;
+  width: min(480px, 100vw);
+  height: 100%;
+  flex-direction: column;
+  background: #fff;
+  box-shadow: -18px 0 44px rgba(20, 21, 47, 0.16);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-drawer
+  > header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #ececf2;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-drawer
+  > header
+  span {
+  color: #898b9a;
+  font-size: 11px;
+}
+.monitoring-module :where(.publishing-page) .publishing-selection-drawer h2 {
+  margin: 3px 0 0;
+  font-size: 20px;
+}
+.monitoring-module :where(.publishing-page) .publishing-selection-drawer h2 b {
+  color: #3636e2;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-drawer
+  > header
+  button,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-drawer-list
+  article
+  > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #e2e3eb;
+  border-radius: 7px;
+  background: #fff;
+  color: #737586;
+  cursor: pointer;
+}
+.monitoring-module :where(.publishing-page) .publishing-drawer-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: #e9eaf1;
+}
+.monitoring-module :where(.publishing-page) .publishing-drawer-summary span {
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  background: #f9f9fc;
+  color: #838596;
+  font-size: 10px;
+}
+.monitoring-module :where(.publishing-page) .publishing-drawer-summary b {
+  color: #303244;
+  font-size: 13px;
+}
+.monitoring-module :where(.publishing-page) .publishing-drawer-list {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 20px;
+}
+.monitoring-module :where(.publishing-page) .publishing-drawer-list article {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid #eeeff4;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-drawer-list
+  article
+  > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-drawer-list
+  article
+  strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-drawer-list
+  article
+  small {
+  color: #8c8e9e;
+  font-size: 10px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-drawer-list
+  article
+  > b {
+  color: #ef5b32;
+  font-size: 12px;
+}
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-selection-drawer
+  > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid #e9eaf1;
+}
+@media (max-width: 1280px) {
+  .monitoring-module :where(.publishing-page) .publishing-advanced-grid {
+    grid-template-columns: repeat(3, minmax(145px, 1fr));
+  }
+}
+@media (min-width: 801px) and (max-width: 1280px) {
+  .monitoring-module :where(.publishing-page) .publishing-media-entry {
+    position: relative;
+    display: block;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-row {
+    grid-template-areas: "choice resource category price capability";
+    grid-template-columns:
+      28px minmax(250px, 1.25fr) minmax(120px, 0.6fr)
+      minmax(90px, 0.4fr) minmax(110px, 0.48fr);
+    padding-right: 76px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-col-choice {
+    grid-area: choice;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-col-resource {
+    grid-area: resource;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-col-category {
+    grid-area: category;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-col-price {
+    grid-area: price;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-col-capability {
+    grid-area: capability;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-row
+    > span.publishing-media-col-indexing,
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-row
+    > span.publishing-media-col-delivery {
+    display: none;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-head {
+    position: relative;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-head
+    > span.publishing-media-col-compact-details {
+    position: absolute;
+    top: 50%;
+    right: 18px;
+    display: block;
+    transform: translateY(-50%);
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details {
+    display: block;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    summary {
+    position: absolute;
+    z-index: 1;
+    top: 25px;
+    right: 14px;
+    display: inline-flex;
+    height: 30px;
+    align-items: center;
+    gap: 3px;
+    padding: 0 8px;
+    border: 1px solid #dfe0ec;
+    border-radius: 6px;
+    background: #fff;
+    color: #555869;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    summary::-webkit-details-marker {
+    display: none;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    summary:hover,
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    summary:focus-visible {
+    border-color: #aeb0ef;
+    color: #3636e2;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details[open]
+    summary
+    svg {
+    transform: rotate(180deg);
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    dl {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 18px;
+    margin: 0;
+    padding: 12px 76px 14px 56px;
+    border-bottom: 1px solid var(--publishing-line);
+    background: #fafaff;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    dl
+    > div {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 7px;
+    color: #505365;
+    font-size: 11px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    dt {
+    color: #9294a3;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-compact-details
+    dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 800px) {
+  .monitoring-module :where(.publishing-page) .publishing-catalog-update {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-catalog-update
+    .publishing-button {
+    grid-column: 1 / -1;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-context-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-context-bar > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-context-bar select {
+    width: 100%;
+    min-width: 0;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-context-bar > a {
+    margin-left: 0;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-search-row {
+    grid-template-columns: 1fr;
+    padding: 13px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-sort-field {
+    justify-content: space-between;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-sort-field select {
+    flex: 1;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-filter-groups {
+    padding: 4px 13px 8px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-filter-line {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 0;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-filter-line > strong {
+    width: auto;
+    flex-basis: auto;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-inline-select,
+  .monitoring-module :where(.publishing-page) .publishing-inline-select select {
+    width: 100%;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-price-range {
+    margin: 3px 0;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-advanced-grid {
+    grid-template-columns: 1fr;
+    padding: 13px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-head {
+    display: none !important;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-table-detailed {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row {
+    display: grid;
+    min-height: 0;
+    grid-template-columns: 24px 1fr auto;
+    gap: 11px;
+    margin-bottom: 10px;
+    padding: 14px;
+    border: 1px solid #e5e6ee;
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: var(--publishing-shadow);
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > input {
+    align-self: start;
+    margin-top: 6px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > .publishing-media-name {
+    grid-column: 2 / -1;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > span:not(.publishing-media-name),
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > .publishing-market-price {
+    grid-column: 2 / -1;
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    align-items: center;
+    gap: 4px;
+    padding-top: 7px;
+    border-top: 1px dashed #ececf2;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > span:not(.publishing-media-name)::before,
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > .publishing-market-price::before {
+    color: #989aa9;
+    content: attr(data-label);
+    font-size: 9px;
+    font-weight: 400;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-remark {
+    position: static;
+    grid-column: 2 / -1;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-footer {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-footer > span {
+    width: 100%;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-selection-bar {
+    max-width: calc(100vw - 28px);
+    align-items: stretch;
+    flex-wrap: wrap;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .monitoring-module :where(.publishing-page) .publishing-selection-summary {
+    width: 100%;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: 7px 12px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-selection-bar
+    > .publishing-button {
+    flex: 1;
+  }
+}
+@media (max-width: 460px) {
+  .monitoring-module :where(.publishing-page) .publishing-kind-tabs {
+    gap: 18px;
+    padding: 0 14px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-batch-search {
+    margin-right: 13px;
+    margin-left: 13px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-drawer-summary {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .monitoring-module :where(.publishing-page) .publishing-catalog-count {
+    margin-left: auto;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    label.publishing-media-row
+    > input {
+    grid-row: 1 / -1;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-footer > span,
+  .monitoring-module :where(.publishing-page) .publishing-media-footer > label {
+    display: none;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-pagination {
+    width: 100%;
+    justify-content: center;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-pagination-pages,
+  .monitoring-module :where(.publishing-page) .publishing-pagination-edge,
+  .monitoring-module :where(.publishing-page) .publishing-pagination-jump {
+    display: none;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-pagination-summary {
+    display: inline;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-selection-bar {
+    position: fixed;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    left: 10px;
+    min-height: 94px;
+    margin: 0;
+    padding: 12px 13px;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-selection-bar
+    .publishing-button-dark {
+    width: 48px;
+    padding: 0;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-selection-bar
+    .publishing-button-dark
+    span {
+    display: none;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-selection-bar
+    .publishing-button-accent {
+    min-width: 132px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+}

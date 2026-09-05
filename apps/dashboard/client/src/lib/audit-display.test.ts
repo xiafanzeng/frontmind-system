@@ -5,6 +5,9 @@ import { auditActionLabel, auditEventDetail } from "./audit-display";
 describe("audit display localization", () => {
   it("localizes machine action and target codes without exposing raw ids", () => {
     expect(auditActionLabel("account.created")).toBe("创建账号");
+    expect(
+      auditActionLabel("service_quota_period.question_limits_adjusted"),
+    ).toBe("调整问题额度");
     expect(auditEventDetail({ targetType: "user" }, "示例企业")).toBe(
       "用户账号 · 示例企业",
     );

@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "@shared/siteops-branding";
 
 type GuideHotspot = {
   label: string;
@@ -41,6 +42,11 @@ type GuideLink = {
   label: string;
   href: string;
 };
+
+const GUIDE_LINKS_OPEN_IN_NEW_PAGE = new Set([
+  "https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/sms-check",
+  "https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-progress-and-result-inquires",
+]);
 
 type GuideStage = {
   id: number;
@@ -71,6 +77,27 @@ export type AliyunGuideScenario =
   | "first_filing"
   | "existing_filing"
   | "overseas";
+
+function defaultOpenStageId(
+  currentPhase: "domain" | "icp",
+  scenario: AliyunGuideScenario,
+) {
+  if (currentPhase === "domain") return 3;
+  if (scenario === "existing_filing") return 6;
+  if (scenario === "first_filing") return 7;
+  return 3;
+}
+
+function filingStageId(scenario: AliyunGuideScenario) {
+  if (scenario === "existing_filing") return 6;
+  if (scenario === "first_filing") return 7;
+  return null;
+}
+
+function defaultOpenStageIds(scenario: AliyunGuideScenario) {
+  const filingStage = filingStageId(scenario);
+  return new Set(filingStage ? [3, filingStage] : [3]);
+}
 
 const GUIDE_SCENARIO_OPTIONS = [
   {
@@ -196,31 +223,31 @@ const firstFilingStages: GuideStage[] = [
   {
     id: 3,
     title: "回到 FrontMind 提交已购买域名，等待备案服务码",
-    summary: "提交域名会自动创建 AI 运维工单；服务码由该工单返回。",
-    duration: "提交约 1 分钟，工单处理时间以页面状态为准",
-    path: "FrontMind → AI 友好官网管理 → “已购买域名” → “提交域名，创建 AI 运维工单”",
+    summary: "提交域名会自动创建 AI 运维需求；服务码由该需求返回。",
+    duration: "提交约 1 分钟，需求处理时间以页面状态为准",
+    path: `FrontMind → ${SITEOPS_CUSTOMER_DISPLAY_NAME} → “已购买域名” → “提交域名，创建 AI 运维需求”`,
     tasks: [
       "确认阿里云域名列表中的域名状态已经显示“正常”。",
       "回到本页下方的“提交已购买域名”区域，只填写主域名，例如 example.com。",
-      "点击“提交域名，创建 AI 运维工单”；系统会生成一条“域名申请”工单。",
-      "工单处于“待受理”时不要重复提交，等待 AI 运维核验域名并准备备案服务码。",
-      "工单变为“已完成”后，在页面下方“官网历史与交付记录”中展开该工单。",
-      "从工单的“备案服务码”处理结果中复制服务码；拿到服务码后再开始下一阶段的 ICP 备案。",
+      "点击“提交域名，创建 AI 运维需求”；系统会生成一条“域名核验与备案准备”需求。",
+      "需求处于“待处理”时不要重复提交，等待 AI 运维核验域名并准备备案服务码。",
+      "需求变为“已完成”后，在页面下方“官网历史与交付记录”中展开该需求。",
+      "从需求的“备案服务码”处理结果中复制服务码；拿到服务码后再开始下一阶段的 ICP 备案。",
       "若域名刚完成实名认证，建议等实名认证信息同步 2–3 天后再发起备案。",
     ],
     fill: [
       "已购买域名：只填 example.com，不填 www、http、https、斜杠或页面路径",
       "提交对象：阿里云域名列表中状态为“正常”的企业实名域名",
-      "备案服务码：无需提前填写，由已完成的 AI 运维工单返回",
+      "备案服务码：无需提前填写，由已完成的 AI 运维需求返回",
     ],
     avoid: [
       "不要在域名尚未购买、实名认证未成功或状态异常时提交。",
-      "不要通过微信索要或传递证件、验证码；域名提交工单只需要域名。",
+      "不要通过微信索要或传递证件、验证码；域名提交需求只需要域名。",
       "不要把域名订单号、阿里云账号密码或短信验证码填进域名栏。",
     ],
-    done: "“域名申请”工单显示“已完成”，展开后能看到 AI 运维返回的备案服务码。",
+    done: "“域名核验与备案准备”需求显示“已完成”，展开后能看到 AI 运维返回的备案服务码。",
     trouble:
-      "提交后请先查看工单状态；若工单已完成但没有备案服务码，再联系服务专员并提供工单编号，不要提交第二张工单。",
+      "提交后请先查看需求状态；若需求已完成但没有备案服务码，再联系服务专员并提供需求编号，不要提交第二张需求。",
     links: [
       {
         label: "进入阿里云域名列表核对状态",
@@ -239,7 +266,7 @@ const firstFilingStages: GuideStage[] = [
       "域名只填写主域名，例如 example.com，不填写 www、http、https 或路径。",
       "地区选择企业证件所在地，备案性质选择“企业”，证件类型按营业执照选择。",
       "仅在阿里云页面上传营业执照，企业名称、证件号码和证件住所必须与营业执照一致。",
-      "到云服务 / 接入信息处选择“ICP备案服务码”，粘贴 AI 运维工单返回的服务码。",
+      "到云服务 / 接入信息处选择“ICP备案服务码”，粘贴 AI 运维需求返回的服务码。",
       "点击“信息校验”；校验成功后确认系统识别出的域名、云服务和所需材料，再点“下一步”。",
     ],
     fill: [
@@ -600,28 +627,28 @@ const existingFilingStages: GuideStage[] = [
   {
     id: 3,
     title: "回到 FrontMind 提交本次域名，等待 AI 运维返回服务码",
-    summary: "提交时保留“已有 ICP 备案”标签，工单会记录为新增网站。",
-    duration: "提交约 1 分钟，处理时间以工单状态为准",
-    path: "FrontMind → AI 友好官网管理 → 已购买域名 → 提交域名",
+    summary: "提交时保留“已有 ICP 备案”标签，需求会记录为新增网站。",
+    duration: "提交约 1 分钟，处理时间以需求状态为准",
+    path: `FrontMind → ${SITEOPS_CUSTOMER_DISPLAY_NAME} → 已购买域名 → 提交域名`,
     tasks: [
       "回到本页下方，只填写本次新增网站使用的主域名。",
       "保持当前教程选择为“国内版 · 已有 ICP 备案”，再提交域名。",
-      "系统会创建 AI 运维工单并带上“已有主体下新增网站”场景，工单处理中不要重复提交。",
-      "工单显示已完成后，展开处理结果并复制备案服务码。",
+      "系统会创建 AI 运维需求并带上“已有主体下新增网站”场景，需求处理中不要重复提交。",
+      "需求显示已完成后，展开处理结果并复制备案服务码。",
       "拿到服务码后再进入阿里云备案系统；FrontMind 不接收任何证件或人脸材料。",
     ],
     fill: [
       "主域名：例如 example.com，不带 www 或协议",
       "办理场景：保持当前“已有 ICP 备案”教程标签",
-      "备案服务码：由已完成的 AI 运维工单返回",
+      "备案服务码：由已完成的 AI 运维需求返回",
     ],
     avoid: [
       "不要把主体备案号误填进域名输入框。",
       "不要在微信中发送营业执照、负责人证件或验证码。",
     ],
-    done: "域名工单已完成，能够在处理结果中看到备案服务码。",
+    done: "域名需求已完成，能够在处理结果中看到备案服务码。",
     trouble:
-      "若工单判断的办理类型与工信部查询结果不一致，先联系服务专员核对，不要创建第二张工单。",
+      "若需求判断的办理类型与工信部查询结果不一致，先联系服务专员核对，不要创建第二张需求。",
     links: [
       {
         label: "查看阿里云备案前准备",
@@ -639,7 +666,7 @@ const existingFilingStages: GuideStage[] = [
       "登录本次企业使用的阿里云账号；一个阿里云账号只应对应一个备案主体。",
       "账号下已有该主体备案信息时，进入“我的备案”，选择新增互联网信息服务。",
       "账号下还未显示主体信息时，从“开始备案”进入并填写现有主体信息，让系统完成识别。",
-      "填写不带 www 的主域名，并在接入资源处使用 AI 运维工单返回的备案服务码。",
+      "填写不带 www 的主域名，并在接入资源处使用 AI 运维需求返回的备案服务码。",
       "确认页面识别结果为“新增互联网信息服务”，并核对企业主体与本次域名后再继续。",
     ],
     fill: [
@@ -876,7 +903,7 @@ const overseasStages: GuideStage[] = [
     ],
     done: "阿里云域名列表中能看到企业实名域名，状态为“正常”。",
     trouble:
-      "模板或域名状态异常时，先按阿里云提示完成实名认证，不要先提交 FrontMind 工单。",
+      "模板或域名状态异常时，先按阿里云提示完成实名认证，不要先提交 FrontMind 需求。",
     links: [
       {
         label: "查看阿里云域名注册流程",
@@ -887,23 +914,23 @@ const overseasStages: GuideStage[] = [
   {
     id: 3,
     title: "回到 FrontMind 按海外版提交域名",
-    summary: "AI 运维工单会按海外部署处理，不会返回国内备案服务码。",
+    summary: "AI 运维需求会按海外部署处理，不会返回国内备案服务码。",
     duration: "提交约 1 分钟",
     path: "FrontMind → 海外版教程 → 已购买域名 → 提交域名",
     tasks: [
       "保持当前选择为“海外版 · 香港/海外节点”。",
-      "在下方填写已购买的主域名并提交 AI 运维工单。",
-      "系统会把海外版场景写入工单，AI 运维按香港或海外节点处理。",
+      "在下方填写已购买的主域名并提交 AI 运维需求。",
+      "系统会把海外版场景写入需求，AI 运维按香港或海外节点处理。",
       "海外版不需要备案服务码，也不需要回填 ICP 主体备案号。",
     ],
     fill: ["主域名：例如 example.com", "部署场景：海外版，中国香港或海外节点"],
     avoid: [
-      "不要切回首次备案标签后再提交，否则工单场景会不准确。",
+      "不要切回首次备案标签后再提交，否则需求场景会不准确。",
       "不要上传营业执照、身份证、人脸或验证码到 FrontMind。",
     ],
-    done: "海外版域名工单已提交，历史记录显示正在处理或已完成。",
+    done: "海外版域名需求已提交，历史记录显示正在处理或已完成。",
     trouble:
-      "提交后若工单仍要求备案服务码，请联系服务专员核对账户版本和部署地区。",
+      "提交后若需求仍要求备案服务码，请联系服务专员核对账户版本和部署地区。",
     links: [
       {
         label: "进入阿里云域名控制台",
@@ -914,9 +941,9 @@ const overseasStages: GuideStage[] = [
   {
     id: 4,
     title: "等待海外节点开通并配置域名",
-    summary: "工单完成后再按交付说明配置解析、HTTPS 和官网内容。",
-    duration: "以 AI 运维工单处理时间为准",
-    path: "官网历史与交付记录 → 已完成域名工单 → 查看处理结果",
+    summary: "需求完成后再按交付说明配置解析、HTTPS 和官网内容。",
+    duration: "以 AI 运维需求处理时间为准",
+    path: "官网历史与交付记录 → 已完成域名需求 → 查看处理结果",
     tasks: [
       "等待 AI 运维确认香港或海外节点和域名接入方式。",
       "按处理结果配置 DNS 解析，不要提前把域名指向未准备好的地址。",
@@ -924,7 +951,7 @@ const overseasStages: GuideStage[] = [
       "若网站面向中国内地用户，按业务所在地和网站实际功能另行确认公安联网备案、经营许可等要求。",
     ],
     fill: [
-      "DNS 记录和目标地址：只使用工单确认的配置",
+      "DNS 记录和目标地址：只使用需求确认的配置",
       "HTTPS 证书：覆盖正式访问域名",
     ],
     avoid: [
@@ -1015,7 +1042,6 @@ export default function AliyunIcpGuide({
 }: AliyunIcpGuideProps) {
   const [internalScenario, setInternalScenario] =
     useState<AliyunGuideScenario>("first_filing");
-  const [openStages, setOpenStages] = useState<Set<number>>(() => new Set([1]));
   const [selectedImage, setSelectedImage] = useState<GuideImage | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLButtonElement | null>(null);
@@ -1035,6 +1061,11 @@ export default function AliyunIcpGuide({
       : activeScenario === "overseas"
         ? overseasStages
         : firstFilingStages;
+  const activeInputStageId = defaultOpenStageId(currentPhase, activeScenario);
+  const activeFilingStageId = filingStageId(activeScenario);
+  const [openStages, setOpenStages] = useState<Set<number>>(() =>
+    defaultOpenStageIds(activeScenario),
+  );
 
   const scenarioCopy = {
     first_filing: {
@@ -1125,6 +1156,10 @@ export default function AliyunIcpGuide({
     };
   }, [selectedImage]);
 
+  useEffect(() => {
+    setOpenStages(defaultOpenStageIds(activeScenario));
+  }, [activeInputStageId, activeScenario]);
+
   function toggleStage(stageId: number) {
     setOpenStages((current) => {
       const next = new Set(current);
@@ -1139,12 +1174,20 @@ export default function AliyunIcpGuide({
     setSelectedImage(image);
   }
 
+  function openFilingSubmission() {
+    if (!activeFilingStageId) return;
+    setOpenStages((current) => new Set(current).add(activeFilingStageId));
+    window.setTimeout(() => {
+      document.getElementById("ai-website-result-form")?.focus();
+    }, 0);
+  }
+
   function selectScenario(nextScenario: AliyunGuideScenario) {
     if (!scenarioOptions.some((option) => option.value === nextScenario))
       return;
     if (scenario === undefined) setInternalScenario(nextScenario);
     onScenarioChange?.(nextScenario);
-    setOpenStages(new Set([1]));
+    setOpenStages(defaultOpenStageIds(nextScenario));
   }
 
   function handleScenarioKeyDown(
@@ -1319,6 +1362,10 @@ export default function AliyunIcpGuide({
 
                     {stage.id === 3 && stageThreeContent}
 
+                    {marketEdition === "domestic" &&
+                      stage.id === activeFilingStageId &&
+                      filingSubmissionContent}
+
                     {stage.images && (
                       <div className="ai-website-guide-visuals">
                         {stage.images.map((image) => (
@@ -1368,17 +1415,24 @@ export default function AliyunIcpGuide({
                     </div>
 
                     <div className="ai-website-guide-links">
-                      {stage.links.map((link) => (
-                        <a
-                          href={link.href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          key={link.href}
-                        >
-                          {link.label}
-                          <ExternalLink size={14} aria-hidden="true" />
-                        </a>
-                      ))}
+                      {stage.links.map((link) => {
+                        const opensInNewPage = GUIDE_LINKS_OPEN_IN_NEW_PAGE.has(
+                          link.href,
+                        );
+                        return (
+                          <a
+                            href={link.href}
+                            target={opensInNewPage ? "_blank" : undefined}
+                            rel={
+                              opensInNewPage ? "noopener noreferrer" : undefined
+                            }
+                            key={link.href}
+                          >
+                            {link.label}
+                            <ExternalLink size={14} aria-hidden="true" />
+                          </a>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -1398,9 +1452,14 @@ export default function AliyunIcpGuide({
                   主体备案号，然后只在下方回填域名和备案号。
                 </p>
               </div>
-              <a href="#ai-website-result-form">我已取得备案号，去填写结果</a>
+              <button
+                type="button"
+                className="ai-website-guide-finish-action"
+                onClick={openFilingSubmission}
+              >
+                我已取得备案号，去填写结果
+              </button>
             </div>
-            {filingSubmissionContent}
           </>
         )}
 

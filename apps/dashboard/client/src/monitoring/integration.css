@@ -1,0 +1,54 @@
+.monitoring-module {
+  min-width: 0;
+  border-radius: 18px;
+}
+.monitoring-module .page-content {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px 0;
+}
+.monitoring-module .boot-state {
+  min-height: 260px;
+}
+.monitoring-module .module-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.monitoring-module .module-project-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.monitoring-module .module-project-picker select {
+  max-width: 320px;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.monitoring-module .module-wallet-link {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-decoration: none;
+}
+.monitoring-module .module-wallet-link strong {
+  margin-left: 8px;
+  color: var(--purple-700);
+  font-size: 17px;
+}
+.monitoring-module .modal-backdrop {
+  z-index: 110;
+}
+.monitoring-module .modal-card {
+  z-index: 111;
+}

@@ -13,11 +13,13 @@ import {
   LockKeyhole,
   MessageSquare,
   Paperclip,
+  PanelRightOpen,
   RefreshCw,
   Save,
   Search,
   Send,
   SlidersHorizontal,
+  Trash2,
   UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,15 +29,31 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { uploadFile } from "@/lib/frontmind-api";
+import { deliveryTicketDisplayDescription } from "@/lib/delivery-workflow";
 import { trpc } from "@/lib/trpc";
+import { deliveryWorkbenchHref } from "@/pages/DeliveryMemberDashboard";
 import { type DeliveryTicketStatus } from "@shared/delivery-ticket";
+import { getDeliveryOperationSpec } from "@shared/delivery-operation-spec";
 import {
   DELIVERY_ROLE_LABELS,
   type DeliveryRoleType,
   type DeliveryWorkflowOperation,
 } from "@shared/delivery-roles";
+import {
+  deliveryActorRoleLabel,
+  deliveryCategoryLabel,
+  deliveryEventDisplayMessage,
+  deliveryOperationLabel,
+  deliveryStatusTransitionLabel,
+  deliveryTicketPresentationTitle,
+  deliveryTicketPresentationTopic,
+  deliveryTicketStatusLabel,
+} from "@shared/delivery-ticket-presentation";
 
 import "./admin-delivery-ticket-workspace.css";
+
+const CUSTOMER_DASHBOARD_BUTTON_CLASS =
+  "border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700 hover:text-white focus-visible:border-blue-600 focus-visible:ring-blue-600/30 dark:border-blue-500 dark:bg-blue-600 dark:hover:bg-blue-700";
 
 export type AdminDeliveryTicket = {
   id: string;
@@ -46,6 +64,9 @@ export type AdminDeliveryTicket = {
   type: "content_asset" | "website_operation" | "knowledge_base";
   category?: string | null;
   categoryLabel?: string | null;
+  parentTicketId?: string | null;
+  rootTicketId?: string | null;
+  isWorkflowContainer?: boolean | null;
   workflowDomain?: DeliveryRoleType | null;
   operation?: DeliveryWorkflowOperation | null;
   assignedProjectAssignmentId?: string | null;
@@ -58,7 +79,7 @@ export type AdminDeliveryTicket = {
   targetUrl?: string | null;
   targetPage?: string | null;
   knowledgeSnapshotId?: string | null;
-  status: DeliveryTicketStatus;
+  status: DeliveryTicketStatus | "unknown";
   publicStatus?: "pending" | "completed" | null;
   publicStatusLabel?: string | null;
   preferredMedia?: string | null;
@@ -79,6 +100,7 @@ export type AdminDeliveryTicket = {
 type AdminDeliveryTicketEvent = {
   id: string;
   visibility: "customer" | "internal";
+  actorRole?: string | null;
   eventType?: string | null;
   message?: string | null;
   statusFrom?: string | null;
@@ -106,6 +128,21 @@ type TicketDetailPayload = {
     platformMessage?: string | null;
     attachments?: AdminDeliveryTicketEvent["attachments"];
   }>;
+  workflowRelations?: {
+    root: AdminDeliveryWorkflowRelation | null;
+    children: AdminDeliveryWorkflowRelation[];
+  };
+};
+
+type AdminDeliveryWorkflowRelation = {
+  id: string;
+  parentTicketId: string | null;
+  rootTicketId: string | null;
+  operation: string | null;
+  status: string;
+  workflowDomain: DeliveryRoleType | null;
+  assignedMemberId: number | null;
+  assignedMemberName: string | null;
 };
 
 export type AdminDeliveryTicketPreviewFixtures = {
@@ -137,7 +174,7 @@ const STATUS_ORDER: DeliveryTicketStatus[] = [
   "cancelled",
 ];
 
-const OPEN_TICKET_STATUSES = new Set<DeliveryTicketStatus>([
+const OPEN_TICKET_STATUSES = new Set<string>([
   "submitted",
   "needs_information",
   "scheduled",
@@ -151,7 +188,7 @@ export const ADMIN_DELIVERY_TICKET_PUBLIC_STATUS_LABELS: Record<
   string
 > = Object.freeze({
   pending: "待处理",
-  completed: "已完成",
+  completed: "已结束",
 });
 
 function asRecord(value: unknown): Record<string, any> {
@@ -194,7 +231,7 @@ export function normalizeAdminTicketList(
       const ticket = asRecord(entry);
       const status = STATUS_ORDER.includes(ticket.status)
         ? ticket.status
-        : "submitted";
+        : "unknown";
       const type =
         ticket.type === "website_operation" || ticket.type === "knowledge_base"
           ? ticket.type
@@ -307,9 +344,8 @@ export function deliveryTicketPublicStatus(
   ) {
     return ticket.publicStatus;
   }
-  return OPEN_TICKET_STATUSES.has(ticket?.status || "submitted")
-    ? "pending"
-    : "completed";
+  if (!ticket || ticket.status === "unknown") return "pending";
+  return OPEN_TICKET_STATUSES.has(ticket.status) ? "pending" : "completed";
 }
 
 export function adminDeliveryTicketPublicStatusLabel(
@@ -318,18 +354,25 @@ export function adminDeliveryTicketPublicStatusLabel(
     | null
     | undefined,
 ) {
-  return ADMIN_DELIVERY_TICKET_PUBLIC_STATUS_LABELS[
-    deliveryTicketPublicStatus(ticket)
-  ];
+  if (!ticket || ticket.status === "unknown") return "未知状态";
+  return deliveryTicketStatusLabel(ticket.status, "internal");
 }
 
 export function adminDeliveryEventPublicStatusLabel(
   status: string | null | undefined,
 ) {
   if (!STATUS_ORDER.includes(status as DeliveryTicketStatus)) return null;
-  return adminDeliveryTicketPublicStatusLabel({
-    status: status as DeliveryTicketStatus,
-  });
+  return deliveryTicketStatusLabel(status, "internal");
+}
+
+export function adminDeliveryEventActorLabel(
+  event: Pick<AdminDeliveryTicketEvent, "actorRole" | "actorLabel">,
+) {
+  const actorRole = event.actorRole?.trim();
+  if (actorRole) return deliveryActorRoleLabel(actorRole, "internal");
+  const actorLabel = event.actorLabel?.trim();
+  if (!actorLabel) return "相关人员";
+  return /[\u3400-\u9fff]/u.test(actorLabel) ? actorLabel : "相关人员";
 }
 
 export function normalizeTicketDetail(
@@ -352,6 +395,53 @@ export function normalizeTicketDetail(
           statusFrom: record.statusFrom ?? record.fromStatus ?? null,
           statusTo: record.statusTo ?? record.toStatus ?? null,
         } as AdminDeliveryTicketEvent;
+      })
+    : [];
+  const normalizeWorkflowRelation = (
+    value: unknown,
+  ): AdminDeliveryWorkflowRelation | null => {
+    const relation = asRecord(value);
+    const id = typeof relation.id === "string" ? relation.id.trim() : "";
+    if (!id) return null;
+    const workflowDomain = [
+      "ai_operations_engineer",
+      "monitoring_optimization_engineer",
+      "content_distribution_engineer",
+    ].includes(String(relation.workflowDomain || ""))
+      ? (relation.workflowDomain as DeliveryRoleType)
+      : null;
+    const assignedMemberId = Number(relation.assignedMemberId);
+    return {
+      id,
+      parentTicketId:
+        typeof relation.parentTicketId === "string"
+          ? relation.parentTicketId
+          : null,
+      rootTicketId:
+        typeof relation.rootTicketId === "string"
+          ? relation.rootTicketId
+          : null,
+      operation:
+        typeof relation.operation === "string" ? relation.operation : null,
+      status: typeof relation.status === "string" ? relation.status : "unknown",
+      workflowDomain,
+      assignedMemberId:
+        Number.isSafeInteger(assignedMemberId) && assignedMemberId > 0
+          ? assignedMemberId
+          : null,
+      assignedMemberName:
+        typeof relation.assignedMemberName === "string" &&
+        relation.assignedMemberName.trim()
+          ? relation.assignedMemberName.trim()
+          : null,
+    };
+  };
+  const workflowRelations = asRecord(payload.workflowRelations);
+  const rootRelation = normalizeWorkflowRelation(workflowRelations.root);
+  const childRelations = Array.isArray(workflowRelations.children)
+    ? workflowRelations.children.flatMap((relation) => {
+        const normalized = normalizeWorkflowRelation(relation);
+        return normalized ? [normalized] : [];
       })
     : [];
   return {
@@ -381,6 +471,14 @@ export function normalizeTicketDetail(
                   asRecord(asRecord(event).operationResult).executedAt ??
                   event.createdAt,
               })),
+    ...(rootRelation || childRelations.length
+      ? {
+          workflowRelations: {
+            root: rootRelation,
+            children: childRelations,
+          },
+        }
+      : {}),
   };
 }
 
@@ -405,13 +503,78 @@ export function formatAdminTicketDate(
   });
 }
 
-function ticketTitle(ticket: AdminDeliveryTicket) {
-  return ticket.title || ticket.topic || "未命名工单";
+function presentedTicketTitle(ticket: {
+  title?: string | null;
+  topic?: string | null;
+  type?: AdminDeliveryTicket["type"];
+  operation?: string | null;
+  category?: string | null;
+  categoryLabel?: string | null;
+}) {
+  const rawTitle = ticket.title?.trim() || ticket.topic?.trim();
+  if (rawTitle) {
+    return deliveryTicketPresentationTitle({ ...ticket, title: rawTitle });
+  }
+  if (
+    ticket.operation === "question_catalog" ||
+    ticket.category === "question_catalog"
+  ) {
+    return deliveryTicketPresentationTitle(ticket);
+  }
+  return "未命名需求";
 }
 
-export function ticketTypeLabel(type: AdminDeliveryTicket["type"]) {
+function ticketTitle(ticket: AdminDeliveryTicket) {
+  return presentedTicketTitle(ticket);
+}
+
+function ticketTopic(ticket: AdminDeliveryTicket) {
+  if (!ticket.topic?.trim()) return null;
+  const topic = deliveryTicketPresentationTopic(ticket);
+  return topic === ticketTitle(ticket) ? null : topic;
+}
+
+export function ticketTypeLabel(
+  type: AdminDeliveryTicket["type"],
+  operation?: AdminDeliveryTicket["operation"] | string | null,
+) {
+  const value = operation?.trim();
+  const operationSpec = value ? getDeliveryOperationSpec(value) : null;
+  if (operationSpec) return operationSpec.label;
+  if (value) {
+    const categoryLabel = deliveryCategoryLabel({ type, category: value });
+    const genericCategoryLabel = deliveryCategoryLabel({ type });
+    if (categoryLabel !== genericCategoryLabel) return categoryLabel;
+    return "历史交付任务";
+  }
   if (type === "knowledge_base") return "品牌知识库";
   return type === "website_operation" ? "官网运营" : "内容资产";
+}
+
+export function buildSystemAdminTicketWorkbenchHref(ticket: {
+  id: string;
+  operation?: string | null;
+  category?: string | null;
+  assignedProjectAssignmentId?: string | null;
+}) {
+  const projectAssignmentId = ticket.assignedProjectAssignmentId?.trim();
+  if (!projectAssignmentId) return null;
+  return deliveryWorkbenchHref({
+    projectAssignmentId,
+    ticketId: ticket.id,
+    operation: ticket.operation ?? ticket.category,
+    systemAdminMode: true,
+  });
+}
+
+export function permanentDeliveryTicketDeletionConfirmation(ticket: {
+  title?: string | null;
+  topic?: string | null;
+  operation?: string | null;
+  category?: string | null;
+}) {
+  const title = presentedTicketTitle(ticket);
+  return `确认永久删除需求“${title}”？关联附件、官网样例与需求处理记录也会永久删除；删除后用户、工程师和管理员的列表中都不再展示，且无法恢复。`;
 }
 
 function StatusPill({
@@ -420,9 +583,12 @@ function StatusPill({
   ticket: Pick<AdminDeliveryTicket, "status" | "publicStatus">;
 }) {
   const status = deliveryTicketPublicStatus(ticket);
+  const isPendingTicket = status === "pending";
   return (
-    <span className={`admin-ticket-status is-${status}`}>
-      {ADMIN_DELIVERY_TICKET_PUBLIC_STATUS_LABELS[status]}
+    <span
+      className={`admin-ticket-status is-${ticket.status}${isPendingTicket ? " is-pending-alert" : ""}`}
+    >
+      {adminDeliveryTicketPublicStatusLabel(ticket)}
     </span>
   );
 }
@@ -472,21 +638,35 @@ function Timeline({
       {events.length ? (
         <div className="admin-ticket-timeline-list">
           {events.map((event) => {
-            const publicStatusLabel = adminDeliveryEventPublicStatusLabel(
-              event.statusTo,
+            const transitionLabel =
+              event.statusFrom != null || event.statusTo != null
+                ? deliveryStatusTransitionLabel(
+                    event.statusFrom,
+                    event.statusTo,
+                    "internal",
+                  )
+                : null;
+            const displayMessage = deliveryEventDisplayMessage(
+              {
+                message: event.message,
+                eventType: event.eventType,
+                fromStatus: event.statusFrom,
+                toStatus: event.statusTo,
+              },
+              "internal",
             );
             return (
               <article key={event.id}>
                 <div>
-                  <strong>{event.actorLabel || "管理员"}</strong>
+                  <strong>{adminDeliveryEventActorLabel(event)}</strong>
                   <time>{formatAdminTicketDate(event.createdAt)}</time>
                 </div>
-                {publicStatusLabel && (
+                {transitionLabel && (
                   <span className="admin-ticket-event-label">
-                    状态更新为 {publicStatusLabel}
+                    {transitionLabel}
                   </span>
                 )}
-                {event.message && <p>{event.message}</p>}
+                {displayMessage !== transitionLabel && <p>{displayMessage}</p>}
                 {event.attachments?.length ? (
                   <div className="admin-ticket-attachment-list">
                     {event.attachments.map((attachment, index) => (
@@ -532,6 +712,7 @@ export default function AdminDeliveryTicketWorkspace({
   serviceStatus,
   canAdjustQuota = false,
   canExecuteDelivery = false,
+  onOpenCustomerDashboard,
   preview = false,
   previewFixtures,
 }: {
@@ -542,6 +723,7 @@ export default function AdminDeliveryTicketWorkspace({
   serviceStatus?: string | null;
   canAdjustQuota?: boolean;
   canExecuteDelivery?: boolean;
+  onOpenCustomerDashboard?: () => void;
   preview?: boolean;
   previewFixtures?: AdminDeliveryTicketPreviewFixtures;
 }) {
@@ -635,11 +817,9 @@ export default function AdminDeliveryTicketWorkspace({
   const quotaRevision = Number(
     contentQuota.revision ?? websiteQuota.revision ?? 0,
   );
-  const quotaAdjustmentAvailable =
-    quotaAdmin &&
-    (previewMode ||
-      (serviceStatus === "active" &&
-        (servicePlanCode === "advanced" || servicePlanCode === "luxury")));
+  // The administrator overview is intentionally read-only. Quota and delivery
+  // mutations remain available only in the dedicated role workbenches.
+  const quotaAdjustmentAvailable = false;
   const [quotaEditing, setQuotaEditing] = useState(false);
   const [contentQuotaLimit, setContentQuotaLimit] = useState(0);
   const [websiteQuotaLimit, setWebsiteQuotaLimit] = useState(0);
@@ -650,15 +830,11 @@ export default function AdminDeliveryTicketWorkspace({
         : flattenAdminTicketPages(listPages),
     [listPages, previewMode],
   );
+  const ticketListResolved = previewMode || listQuery.data !== undefined;
   useEffect(() => {
-    if (
-      selectedTicketId &&
-      tickets.some((ticket) => ticket.id === selectedTicketId)
-    ) {
-      return;
-    }
+    if (!ticketListResolved || selectedTicketId) return;
     setSelectedTicketId(tickets[0]?.id || "");
-  }, [selectedTicketId, tickets]);
+  }, [selectedTicketId, ticketListResolved, tickets]);
 
   useEffect(() => {
     if (quotaEditing) return;
@@ -678,6 +854,7 @@ export default function AdminDeliveryTicketWorkspace({
       retry: false,
     },
   );
+  const deleteMutation = api.delete.useMutation();
   const detail = previewMode
     ? selectedTicket
       ? {
@@ -809,11 +986,46 @@ export default function AdminDeliveryTicketWorkspace({
     }
   };
 
-  const selectTicket = (ticketId: string) => {
+  const selectTicket = (ticket: AdminDeliveryTicket) => {
+    const workbenchHref =
+      canExecuteDelivery && deliveryTicketPublicStatus(ticket) === "pending"
+        ? buildSystemAdminTicketWorkbenchHref(ticket)
+        : null;
+    if (workbenchHref) {
+      setLocation(workbenchHref);
+      return;
+    }
+    const ticketId = ticket.id;
     setSelectedTicketId(ticketId);
     if (!previewMode) {
       setLocation(
-        `/admin/customers/${userId}/tickets?ticketId=${encodeURIComponent(ticketId)}`,
+        `/admin/customers/${userId}/workspace?ticketId=${encodeURIComponent(ticketId)}`,
+      );
+    }
+  };
+
+  const deleteTicket = async (ticket: AdminDeliveryTicket) => {
+    if (!canExecuteDelivery) return;
+    if (!window.confirm(permanentDeliveryTicketDeletionConfirmation(ticket))) {
+      return;
+    }
+    if (previewMode) {
+      toast.info("预览环境不会删除需求");
+      return;
+    }
+    try {
+      await deleteMutation.mutateAsync({
+        userId,
+        ticketId: ticket.id,
+        expectedRevision: ticket.revision,
+        confirmation: "DELETE_TICKET",
+      });
+      if (selectedTicketId === ticket.id) setSelectedTicketId("");
+      await listQuery.refetch();
+      toast.success("需求已永久删除");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "需求删除失败，请刷新后重试",
       );
     }
   };
@@ -827,8 +1039,8 @@ export default function AdminDeliveryTicketWorkspace({
     if (!summary) {
       toast.error(
         isDomainApplication
-          ? "完成域名工单前请填写要返回给客户的备案服务码"
-          : "完成工单前请填写公开内容总结",
+          ? "完成域名需求前请填写要返回给客户的备案服务码"
+          : "完成需求前请填写公开内容总结",
       );
       return;
     }
@@ -848,7 +1060,7 @@ export default function AdminDeliveryTicketWorkspace({
       }
     }
     if (previewMode) {
-      toast.success("工单状态已更新（预览）");
+      toast.success("需求状态已更新（预览）");
       return;
     }
     const publicMessage = contentAssetTicket ? publicReply.trim() : "";
@@ -867,7 +1079,7 @@ export default function AdminDeliveryTicketWorkspace({
       setPublicReply("");
       setPublicSummary("");
       setInternalNote("");
-      toast.success("工单状态已更新");
+      toast.success("需求状态已更新");
     } catch (error) {
       toast.error("状态更新失败", {
         description: error instanceof Error ? error.message : "请刷新后重试。",
@@ -909,7 +1121,8 @@ export default function AdminDeliveryTicketWorkspace({
       }
       await refresh();
       toast.success("新知识库版本已通过校验并发布", {
-        description: "现在可以填写公开总结并完成维护工单。",
+        description:
+          "正式数据已发布，需求尚未完成。请核对客户看板并填写交付结果。",
       });
     } catch (error) {
       toast.error("知识库维护版本上传失败", {
@@ -1059,36 +1272,52 @@ export default function AdminDeliveryTicketWorkspace({
     detail?.ticket.assignedProjectAssignmentId ??
     selectedTicket?.assignedProjectAssignmentId ??
     null;
-  const canExecuteSelectedTicket =
-    canExecuteDelivery && !selectedWorkflowDomain;
+  const canExecuteSelectedTicket = false;
+  const systemAdminWorkbenchHref = detail?.ticket
+    ? buildSystemAdminTicketWorkbenchHref(detail.ticket)
+    : selectedTicket
+      ? buildSystemAdminTicketWorkbenchHref(selectedTicket)
+      : null;
   const canOpenSystemAdminWorkbench =
-    canExecuteDelivery && Boolean(selectedWorkflowDomain);
-  const systemAdminWorkbenchHref = selectedProjectAssignmentId
-    ? `/admin/delivery-workbench?projectAssignmentId=${encodeURIComponent(selectedProjectAssignmentId)}`
-    : "/admin/delivery-workbench";
+    canExecuteDelivery &&
+    deliveryTicketPublicStatus(detail?.ticket ?? selectedTicket) ===
+      "pending" &&
+    Boolean(selectedWorkflowDomain) &&
+    Boolean(selectedProjectAssignmentId) &&
+    Boolean(systemAdminWorkbenchHref);
 
   return (
     <div className="admin-delivery-workspace">
       <div className="admin-delivery-toolbar">
         <div>
-          <p>客户工单</p>
-          <h2>{enterpriseName || "客户"}工单记录</h2>
+          <p>客户需求</p>
+          <h2>{enterpriseName || "客户"}需求记录</h2>
           <span>
-            {canExecuteSelectedTicket
-              ? "当前为旧版无岗位工单兜底：系统管理员可以处理并留存准确的客户交付记录。"
-              : canOpenSystemAdminWorkbench
-                ? "系统管理员可进入完整处理工作台，使用与对应岗位工程师一致的工单流程。"
-                : "按待处理与已完成两种公开状态查看和沟通；实际执行与交付由对应岗位工程师完成。"}
+            需求仅用于任务提醒与历史追溯；上传、回复、备注、交付与完成操作统一在对应客户工作台进行。
           </span>
         </div>
+        {onOpenCustomerDashboard && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className={CUSTOMER_DASHBOARD_BUTTON_CLASS}
+            onClick={onOpenCustomerDashboard}
+          >
+            进入客户看板
+            <PanelRightOpen className="h-4 w-4" />
+          </Button>
+        )}
       </div>
-      {!canExecuteDelivery && (
+      {selectedTicket && (
         <div className="admin-ticket-closed-notice">
           <LockKeyhole className="h-4 w-4" />
           <span>
-            {selectedWorkflowDomain
-              ? `当前为交付协调模式：该工单由${DELIVERY_ROLE_LABELS[selectedWorkflowDomain]}执行。交付管理员可以查看、回复客户和记录内部备注，但不能代替工程师发布成果或完成工单。`
-              : "当前为交付协调模式：交付管理员可以查看完整工单、回复客户和记录内部备注，但不能代替工程师发布成果、上传知识库或完成工单。"}
+            {selectedWorkflowDomain && selectedProjectAssignmentId
+              ? `当前为只读总览：该需求由${DELIVERY_ROLE_LABELS[selectedWorkflowDomain]}处理。`
+              : selectedWorkflowDomain
+                ? "项目岗位尚未同步，本页只读；请先同步项目岗位后，再进入对应客户工作台处理。"
+                : "旧版需求未关联项目岗位，本页只读；请先同步项目岗位后，再进入对应客户工作台处理。"}
           </span>
         </div>
       )}
@@ -1099,15 +1328,15 @@ export default function AdminDeliveryTicketWorkspace({
               使用完整岗位处理流程
             </strong>
             <p className="mt-1 text-xs leading-5 text-[#716a80]">
-              当前工单属于
+              当前需求属于
               {selectedWorkflowDomain
                 ? DELIVERY_ROLE_LABELS[selectedWorkflowDomain]
                 : "对应岗位"}
-              ，请在系统管理员处理工作台执行、上传成果并完成工单。
+              ，请在系统管理员处理工作台执行、上传成果并完成需求。
             </p>
           </div>
-          <Button asChild size="sm" className="bg-[#5b2a86] hover:bg-[#49216c]">
-            <a href={systemAdminWorkbenchHref}>
+          <Button asChild size="sm" variant="operator">
+            <a href={systemAdminWorkbenchHref || "/admin/delivery-workbench"}>
               进入系统管理员处理工作台
               <ExternalLink className="h-4 w-4" />
             </a>
@@ -1120,12 +1349,12 @@ export default function AdminDeliveryTicketWorkspace({
           <div className="admin-delivery-quota-heading">
             <div>
               <strong>当前服务周期发布额度</strong>
-              <span>提交时预留，工单完成后正式消耗；交付管理员仅可查看。</span>
+              <span>提交时预留，需求完成后正式消耗；交付管理员仅可查看。</span>
             </div>
             {quotaAdjustmentAvailable && !quotaEditing && (
               <Button
                 type="button"
-                variant="outline"
+                variant="operatorOutline"
                 size="sm"
                 onClick={() => setQuotaEditing(true)}
               >
@@ -1195,7 +1424,7 @@ export default function AdminDeliveryTicketWorkspace({
                 </Button>
                 <Button
                   type="button"
-                  className="bg-[#5b2a86] hover:bg-[#49216c]"
+                  variant="operator"
                   disabled={adjustQuotaMutation.isPending}
                   onClick={() => void saveQuotaLimits()}
                 >
@@ -1216,7 +1445,7 @@ export default function AdminDeliveryTicketWorkspace({
         <aside className="admin-ticket-list-panel">
           <div className="admin-ticket-list-header">
             <div>
-              <strong>客户工单</strong>
+              <strong>客户需求</strong>
               <span>
                 {listQuery.isLoading && !previewMode
                   ? "读取中…"
@@ -1228,7 +1457,7 @@ export default function AdminDeliveryTicketWorkspace({
             <Button
               variant="outline"
               size="sm"
-              aria-label="刷新工单"
+              aria-label="刷新需求"
               disabled={listQuery.isFetching}
               onClick={() => void refresh()}
             >
@@ -1250,7 +1479,7 @@ export default function AdminDeliveryTicketWorkspace({
               <select
                 value={typeFilter}
                 onChange={(event) => setTypeFilter(event.target.value)}
-                aria-label="筛选工单类型"
+                aria-label="筛选需求类型"
               >
                 <option value="all">全部类型</option>
                 <option value="knowledge_base">品牌知识库</option>
@@ -1266,48 +1495,77 @@ export default function AdminDeliveryTicketWorkspace({
                       | AdminDeliveryTicketPublicStatus,
                   )
                 }
-                aria-label="筛选工单状态"
+                aria-label="筛选需求状态"
               >
                 <option value="all">全部状态</option>
                 <option value="pending">待处理</option>
-                <option value="completed">已完成</option>
+                <option value="completed">已结束</option>
               </select>
             </div>
           </div>
           {listQuery.error && !previewMode ? (
             <div className="admin-ticket-list-error">
               <AlertCircle className="h-5 w-5" />
-              <strong>工单暂时无法读取</strong>
+              <strong>需求暂时无法读取</strong>
               <span>{listQuery.error.message || "请刷新后重试。"}</span>
             </div>
           ) : filteredTickets.length ? (
             <div className="admin-ticket-list">
-              {filteredTickets.map((ticket) => (
-                <button
-                  key={ticket.id}
-                  type="button"
-                  className={
-                    ticket.id === selectedTicketId ? "is-selected" : ""
-                  }
-                  onClick={() => selectTicket(ticket.id)}
-                >
-                  <div>
-                    <span>{ticketTypeLabel(ticket.type)}</span>
-                    <StatusPill ticket={ticket} />
-                  </div>
-                  <strong>{ticketTitle(ticket)}</strong>
-                  {ticket.topic && ticket.title !== ticket.topic && (
-                    <p>{ticket.topic}</p>
-                  )}
-                  {ticket.type === "content_asset" && ticket.preferredMedia && (
-                    <p>意向媒体：{ticket.preferredMedia}</p>
-                  )}
-                  <footer>
-                    <time>{formatAdminTicketDate(ticket.updatedAt)}</time>
-                    <ChevronRight className="h-4 w-4" />
-                  </footer>
-                </button>
-              ))}
+              {filteredTickets.map((ticket) => {
+                const pending =
+                  deliveryTicketPublicStatus(ticket) === "pending";
+                return (
+                  <article
+                    key={ticket.id}
+                    data-pending-ticket={pending ? "true" : undefined}
+                    className={[
+                      ticket.id === selectedTicketId ? "is-selected" : "",
+                      pending ? "is-pending-alert" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <button
+                      type="button"
+                      className="admin-ticket-list-main"
+                      onClick={() => selectTicket(ticket)}
+                    >
+                      <div>
+                        <span>
+                          {ticketTypeLabel(
+                            ticket.type,
+                            ticket.isWorkflowContainer
+                              ? ticket.category
+                              : (ticket.operation ?? ticket.category),
+                          )}
+                        </span>
+                        <StatusPill ticket={ticket} />
+                      </div>
+                      <strong>{ticketTitle(ticket)}</strong>
+                      {ticketTopic(ticket) && <p>{ticketTopic(ticket)}</p>}
+                      {ticket.type === "content_asset" &&
+                        ticket.preferredMedia && (
+                          <p>意向媒体：{ticket.preferredMedia}</p>
+                        )}
+                      <footer>
+                        <time>{formatAdminTicketDate(ticket.updatedAt)}</time>
+                        <ChevronRight className="h-4 w-4" />
+                      </footer>
+                    </button>
+                    {canExecuteDelivery && (
+                      <button
+                        type="button"
+                        className="admin-ticket-list-delete"
+                        aria-label={`永久删除需求：${ticketTitle(ticket)}`}
+                        disabled={deleteMutation.isPending}
+                        onClick={() => void deleteTicket(ticket)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
               {listQuery.hasNextPage && !previewMode && (
                 <Button
                   type="button"
@@ -1321,33 +1579,33 @@ export default function AdminDeliveryTicketWorkspace({
                   ) : (
                     <ChevronRight className="h-4 w-4 rotate-90" />
                   )}
-                  {listQuery.isFetchingNextPage ? "正在加载…" : "加载更多工单"}
+                  {listQuery.isFetchingNextPage ? "正在加载…" : "加载更多需求"}
                 </Button>
               )}
             </div>
           ) : (
             <EmptyState
-              title="没有符合条件的工单"
+              title="没有符合条件的需求"
               description="调整筛选条件，或等待客户提交新的交付需求。"
             />
           )}
         </aside>
 
         <main className="admin-ticket-detail-panel">
-          {!selectedTicket ? (
+          {!selectedTicketId ? (
             <EmptyState
-              title="请选择一张工单"
-              description="右侧会展示需求、资料、公开交流、内部备注和处理动作。"
+              title="请选择一张需求"
+              description="右侧会只读展示需求、资料与历史处理记录。"
             />
           ) : detailQuery.isLoading && !previewMode ? (
             <div className="admin-ticket-loading">
               <Loader2 className="h-5 w-5 animate-spin" />
-              正在读取工单详情…
+              正在读取需求详情…
             </div>
           ) : detailQuery.error && !previewMode ? (
             <div className="admin-ticket-detail-error">
               <AlertCircle className="h-5 w-5" />
-              <strong>工单详情暂时无法读取</strong>
+              <strong>需求详情暂时无法读取</strong>
               <p>{detailQuery.error.message || "请刷新后重试。"}</p>
             </div>
           ) : detail ? (
@@ -1355,19 +1613,37 @@ export default function AdminDeliveryTicketWorkspace({
               <header className="admin-ticket-detail-header">
                 <div>
                   <div className="admin-ticket-detail-meta">
-                    <span>{ticketTypeLabel(detail.ticket.type)}</span>
+                    <span>
+                      {ticketTypeLabel(
+                        detail.ticket.type,
+                        detail.ticket.isWorkflowContainer
+                          ? detail.ticket.category
+                          : (detail.ticket.operation ?? detail.ticket.category),
+                      )}
+                    </span>
                     <StatusPill ticket={detail.ticket} />
                   </div>
                   <h3>{ticketTitle(detail.ticket)}</h3>
-                  {detail.ticket.topic &&
-                    detail.ticket.title !== detail.ticket.topic && (
-                      <p>{detail.ticket.topic}</p>
-                    )}
+                  {ticketTopic(detail.ticket) && (
+                    <p>{ticketTopic(detail.ticket)}</p>
+                  )}
                 </div>
                 <div className="admin-ticket-detail-time">
                   <CalendarClock className="h-4 w-4" />
                   更新于 {formatAdminTicketDate(detail.ticket.updatedAt)}
                 </div>
+                {canExecuteDelivery && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={deleteMutation.isPending}
+                    onClick={() => void deleteTicket(detail.ticket)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {deleteMutation.isPending ? "正在删除…" : "永久删除需求"}
+                  </Button>
+                )}
               </header>
               <section className="admin-ticket-customer-card">
                 <div>
@@ -1395,7 +1671,7 @@ export default function AdminDeliveryTicketWorkspace({
                   <strong>
                     {detail.ticket.workflowDomain
                       ? DELIVERY_ROLE_LABELS[detail.ticket.workflowDomain]
-                      : "旧版工单"}
+                      : "旧版需求"}
                   </strong>
                 </div>
                 <div>
@@ -1410,11 +1686,101 @@ export default function AdminDeliveryTicketWorkspace({
                   </strong>
                 </div>
               </section>
+              {detail.workflowRelations &&
+                (detail.workflowRelations.root ||
+                  detail.workflowRelations.children.length > 0) && (
+                  <section
+                    className="rounded-xl border border-[#ded5e6] bg-[#fbf9fd] p-4"
+                    aria-label="内部工单链路"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <span className="text-xs font-medium text-[#716a80]">
+                          父子关系
+                        </span>
+                        <h3 className="mt-1 text-sm font-semibold text-[#332842]">
+                          内部工单链路
+                        </h3>
+                      </div>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs text-[#716a80]">
+                        客户仅看到原始需求
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {detail.workflowRelations.root && (
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left disabled:cursor-default"
+                          data-ticket-id={detail.workflowRelations.root.id}
+                          disabled={
+                            detail.workflowRelations.root.id ===
+                            detail.ticket.id
+                          }
+                          onClick={() =>
+                            setSelectedTicketId(
+                              detail.workflowRelations!.root!.id,
+                            )
+                          }
+                        >
+                          <span>
+                            <strong className="block text-sm text-[#332842]">
+                              客户原始需求
+                            </strong>
+                            <small className="text-[#857e91]">
+                              流程容器 · 不分配工程师
+                            </small>
+                          </span>
+                          <span className="text-xs font-medium text-[#5b2a86]">
+                            {deliveryTicketStatusLabel(
+                              detail.workflowRelations.root.status,
+                              "internal",
+                            )}
+                          </span>
+                        </button>
+                      )}
+                      {detail.workflowRelations.children.map(
+                        (relation, index) => (
+                          <button
+                            key={relation.id}
+                            type="button"
+                            className="flex w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left disabled:cursor-default"
+                            data-ticket-id={relation.id}
+                            disabled={relation.id === detail.ticket.id}
+                            onClick={() => setSelectedTicketId(relation.id)}
+                          >
+                            <span className="min-w-0">
+                              <strong className="block truncate text-sm text-[#332842]">
+                                第 {index + 1} 步 ·{" "}
+                                {deliveryOperationLabel(relation.operation)}
+                              </strong>
+                              <small className="block truncate text-[#857e91]">
+                                {relation.workflowDomain
+                                  ? DELIVERY_ROLE_LABELS[
+                                      relation.workflowDomain
+                                    ]
+                                  : "系统流程"}
+                                {relation.assignedMemberName
+                                  ? ` · ${relation.assignedMemberName}`
+                                  : ""}
+                              </small>
+                            </span>
+                            <span className="shrink-0 text-xs font-medium text-[#5b2a86]">
+                              {deliveryTicketStatusLabel(
+                                relation.status,
+                                "internal",
+                              )}
+                            </span>
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </section>
+                )}
               {!OPEN_TICKET_STATUSES.has(detail.ticket.status) && (
                 <div className="admin-ticket-closed-notice">
                   <LockKeyhole className="h-4 w-4" />
                   <span>
-                    该工单已结束，当前仅展示与该需求直接相关的处理记录。
+                    该需求已结束，当前仅展示与该需求直接相关的处理记录。
                   </span>
                 </div>
               )}
@@ -1433,8 +1799,8 @@ export default function AdminDeliveryTicketWorkspace({
                   </div>
                   <FileText className="h-5 w-5" />
                 </div>
-                {detail.ticket.description ? (
-                  <p>{detail.ticket.description}</p>
+                {deliveryTicketDisplayDescription(detail.ticket) ? (
+                  <p>{deliveryTicketDisplayDescription(detail.ticket)}</p>
                 ) : (
                   <p className="is-empty">
                     {isKnowledgeReset
@@ -1521,7 +1887,7 @@ export default function AdminDeliveryTicketWorkspace({
                 )}
               </div>
 
-              {!isKnowledgeTicket && (
+              {canExecuteSelectedTicket && !isKnowledgeTicket && (
                 <div className="admin-ticket-compose-grid">
                   {detail.ticket.type === "content_asset" && (
                     <section className="admin-ticket-compose">
@@ -1558,7 +1924,7 @@ export default function AdminDeliveryTicketWorkspace({
                         </span>
                       </div>
                       <Button
-                        variant="outline"
+                        variant="operator"
                         disabled={
                           uploading ||
                           addMessageMutation.isPending ||
@@ -1740,7 +2106,7 @@ export default function AdminDeliveryTicketWorkspace({
                       </div>
                       <div className="admin-ticket-form-actions is-wide">
                         <Button
-                          className="bg-[#5b2a86] hover:bg-[#49216c]"
+                          variant="operator"
                           disabled={
                             recordDeliveryMutation.isPending ||
                             uploading ||
@@ -1769,7 +2135,7 @@ export default function AdminDeliveryTicketWorkspace({
                         <span>知识库替换版本</span>
                         <h3>上传并发布通过校验的新知识库 ZIP</h3>
                         <p>
-                          新版本会直接替换客户当前展示知识库，并与本维护工单绑定；发布成功后才能完成工单。
+                          新版本会直接替换客户当前展示知识库，并与本维护需求绑定；发布成功后才能完成需求。
                         </p>
                       </div>
                       <UploadCloud className="h-5 w-5" />
@@ -1786,7 +2152,7 @@ export default function AdminDeliveryTicketWorkspace({
                     />
                     <div className="admin-ticket-status-action">
                       <Button
-                        className="bg-[#5b2a86] hover:bg-[#49216c]"
+                        variant="operator"
                         disabled={
                           maintenanceUploading ||
                           !OPEN_TICKET_STATUSES.has(detail.ticket.status)
@@ -1840,12 +2206,12 @@ export default function AdminDeliveryTicketWorkspace({
                       <span>处理状态</span>
                       <h3>
                         {isDomainApplication
-                          ? "完成域名工单并返回备案服务码"
-                          : "完成工单并发布内容总结"}
+                          ? "完成域名需求并返回备案服务码"
+                          : "完成需求并发布内容总结"}
                       </h3>
                       <p>
                         {isDomainApplication
-                          ? "请确认域名状态正常，再将备案服务码写入下方处理结果；客户会在已完成工单中领取。"
+                          ? "请确认域名状态正常，再将备案服务码写入下方处理结果；客户会在已完成需求中领取。"
                           : "用户列表只显示待处理或已完成；完成摘要会进入用户历史记录。"}
                       </p>
                     </div>
@@ -1863,14 +2229,14 @@ export default function AdminDeliveryTicketWorkspace({
                       onChange={(event) => setPublicSummary(event.target.value)}
                       placeholder={
                         isDomainApplication
-                          ? "例如：备案服务码：XXXXXXXX（请复制核对无误后再完成工单）"
-                          : "完成工单时必填，简要说明实际完成的内容与结果"
+                          ? "例如：备案服务码：XXXXXXXX（请复制核对无误后再完成需求）"
+                          : "完成需求时必填，简要说明实际完成的内容与结果"
                       }
                     />
                   </label>
                   <div className="admin-ticket-status-action">
                     <Button
-                      className="bg-[#5b2a86] hover:bg-[#49216c]"
+                      variant="operator"
                       disabled={
                         updateMutation.isPending ||
                         !publicSummary.trim() ||
@@ -1883,7 +2249,7 @@ export default function AdminDeliveryTicketWorkspace({
                       ) : (
                         <CheckCircle2 className="h-4 w-4" />
                       )}
-                      完成工单
+                      完成需求
                     </Button>
                   </div>
                 </section>

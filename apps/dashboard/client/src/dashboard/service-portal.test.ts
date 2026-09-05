@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getCapability,
   getRouteCapability,
+  isCapabilityIncludedInPlan,
   normalizeServicePortal,
   type ServiceCapabilityKey,
 } from "./service-portal";
@@ -18,6 +19,7 @@ const capabilityKeys: ServiceCapabilityKey[] = [
   "channelDistribution",
   "progressReport",
   "contentAssets",
+  "brandTracking",
 ];
 
 function availableCapabilities() {
@@ -38,6 +40,9 @@ describe("service portal adapter", () => {
       "globalKeywords",
     );
     expect(getRouteCapability("progress", "monitor")).toBe("monitoring");
+    expect(getRouteCapability("public-opinion", "brand-tracking")).toBe(
+      "brandTracking",
+    );
   });
 
   it("normalizes the authoritative direct workspace.portal DTO", () => {
@@ -88,6 +93,7 @@ describe("service portal adapter", () => {
           category: "reputation",
           question: "品牌口碑有哪些可核验证据？",
           status: "selected",
+          responseLogicConfirmed: true,
         },
       ],
       historicalQuestions: [
@@ -138,7 +144,7 @@ describe("service portal adapter", () => {
     expect(portal.quotas).toEqual([
       {
         key: "industry",
-        label: "行业词",
+        label: "行业排名词",
         limit: 1,
         used: 1,
         unit: "个词",
@@ -174,6 +180,7 @@ describe("service portal adapter", () => {
       id: "question-1",
       kind: "reputation",
       sourceQuestionId: "question-old",
+      responseLogicConfirmed: true,
     });
     expect(portal.historicalQuestions[0]).toMatchObject({
       id: "question-old",
@@ -191,6 +198,140 @@ describe("service portal adapter", () => {
     });
   });
 
+  it("does not expose legacy keyword labels from an array-shaped API response", () => {
+    const portal = normalizeServicePortal({
+      schemaVersion: 1,
+      service: {
+        planCode: "advanced",
+        planName: "进阶版",
+        status: "active",
+      },
+      quotas: [
+        { key: "industry", label: "行业词", limit: 1, used: 0 },
+        { key: "competitor", label: "竞品", limit: 1, used: 0 },
+        { key: "reputation", label: "舆情", limit: 1, used: 0 },
+        { key: "scenario", label: "场景", limit: 5, used: 0 },
+      ],
+    });
+
+    expect(portal.quotas.map(({ label }) => label)).toEqual([
+      "行业排名词",
+      "竞品对比词",
+      "美誉舆情词",
+      "产品场景词",
+    ]);
+  });
+
+  it("keeps the authoritative luxury unlock schedule separate from the unlocked cap", () => {
+    const nextUnlockAt = Date.parse("2026-10-01T00:00:00+08:00");
+    const portal = normalizeServicePortal({
+      schemaVersion: 1,
+      service: {
+        planCode: "luxury",
+        planName: "豪华版",
+        status: "active",
+      },
+      quotas: {
+        limits: {
+          industryLimit: 1,
+          competitorComparisonLimit: 1,
+          reputationLimit: 1,
+          productScenarioLimit: 5,
+          totalQuestionLimit: 8,
+        },
+        entitlementLimits: {
+          industryLimit: 4,
+          competitorComparisonLimit: 4,
+          reputationLimit: 4,
+          productScenarioLimit: 20,
+          totalQuestionLimit: 32,
+        },
+        usage: {
+          industry: 1,
+          competitorComparison: 1,
+          reputation: 1,
+          productScenario: 5,
+          total: 8,
+        },
+        unlockStage: { current: 1, total: 4 },
+        nextUnlockAt,
+        capacityState: "awaiting_unlock",
+      },
+    });
+
+    expect(portal.quotaUnlock).toEqual({
+      current: 1,
+      total: 4,
+      nextUnlockAt: String(nextUnlockAt),
+      capacityState: "awaiting_unlock",
+    });
+    expect(
+      portal.quotas.map(({ limit, entitlementLimit }) => ({
+        limit,
+        entitlementLimit,
+      })),
+    ).toEqual([
+      { limit: 1, entitlementLimit: 4 },
+      { limit: 1, entitlementLimit: 4 },
+      { limit: 1, entitlementLimit: 4 },
+      { limit: 5, entitlementLimit: 20 },
+    ]);
+  });
+
+  it("keeps an already-normalized quota unlock view idempotent", () => {
+    const portal = normalizeServicePortal({
+      plan: { code: "luxury", name: "豪华版" },
+      quotas: [
+        {
+          key: "scenario",
+          label: "产品场景词",
+          limit: 5,
+          entitlementLimit: 20,
+          used: 1,
+          unit: "个词",
+        },
+      ],
+      quotaUnlock: {
+        current: 1,
+        total: 4,
+        nextUnlockAt: "2026-10-18",
+        capacityState: "available",
+      },
+    });
+
+    expect(portal.quotaUnlock).toEqual({
+      current: 1,
+      total: 4,
+      nextUnlockAt: "2026-10-18",
+      capacityState: "available",
+    });
+    expect(portal.quotas[0]).toMatchObject({
+      limit: 5,
+      entitlementLimit: 20,
+      used: 1,
+    });
+  });
+
+  it("ignores an unknown capacity state and preserves legacy quota behavior", () => {
+    const portal = normalizeServicePortal({
+      service: { planCode: "luxury", status: "active" },
+      quotas: {
+        limits: {
+          industryLimit: 1,
+          competitorComparisonLimit: 1,
+          reputationLimit: 1,
+          productScenarioLimit: 5,
+          totalQuestionLimit: 8,
+        },
+        usage: {},
+        capacityState: "provider_paused",
+      },
+    });
+
+    expect(portal.quotaUnlock).toBeUndefined();
+    expect(portal.quotas[0]).not.toHaveProperty("entitlementLimit");
+  });
+
   it("defensively locks knowledge building for a basic plan", () => {
     const portal = normalizeServicePortal({
       schemaVersion: 1,
@@ -198,6 +339,7 @@ describe("service portal adapter", () => {
         planCode: "basic",
         planName: "普通版",
         status: "active",
+        source: "website",
       },
       capabilities: availableCapabilities(),
       knowledge: {
@@ -210,9 +352,47 @@ describe("service portal adapter", () => {
       allowed: false,
       effectiveStatus: "locked",
     });
-    expect(getCapability(portal, "knowledgeBuild").reason).toContain(
-      "不包含对话式知识库构建",
+    expect(getCapability(portal, "knowledgeBuild").reason).toBe(
+      "普通版不包含知识库智能体；知识库由 Website 流程自动同步至本账号，服务团队可补录。升级进阶版或豪华版后可解锁知识库智能体。",
     );
+    expect(portal.knowledgeBase.sourceLabel).toBe("Website 流程同步知识库");
+    expect(isCapabilityIncludedInPlan("basic", "knowledgeBuild")).toBe(false);
+    expect(isCapabilityIncludedInPlan("basic", "globalKeywords")).toBe(false);
+    expect(isCapabilityIncludedInPlan("basic", "knowledgeDisplay")).toBe(true);
+    expect(isCapabilityIncludedInPlan("basic", "contentAssets")).toBe(false);
+    expect(isCapabilityIncludedInPlan("basic", "brandTracking")).toBe(false);
+    expect(isCapabilityIncludedInPlan("advanced", "contentAssets")).toBe(true);
+    expect(isCapabilityIncludedInPlan("advanced", "brandTracking")).toBe(true);
+    expect(isCapabilityIncludedInPlan("unknown", "knowledgeBuild")).toBe(true);
+  });
+
+  it("defensively locks content assets while the knowledge workflow is unfinished", () => {
+    const portal = normalizeServicePortal({
+      schemaVersion: 1,
+      service: {
+        planCode: "advanced",
+        planName: "进阶版",
+        status: "active",
+      },
+      capabilities: availableCapabilities(),
+      knowledge: { status: "missing" },
+      workflowSteps: [
+        {
+          id: "knowledge",
+          label: "知识库智能体",
+          status: "ready",
+          lockedReason: null,
+          href: "/knowledge-base",
+        },
+      ],
+    });
+
+    expect(getCapability(portal, "contentAssets")).toMatchObject({
+      allowed: false,
+      effectiveStatus: "pending",
+      reason: expect.stringContaining("当前服务的认证知识库"),
+    });
+    expect(isCapabilityIncludedInPlan("advanced", "contentAssets")).toBe(true);
   });
 
   it("never promotes an unavailable capability because a question exists", () => {

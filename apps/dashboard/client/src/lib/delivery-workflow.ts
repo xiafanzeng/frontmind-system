@@ -1,7 +1,9 @@
-import type {
-  DeliveryRoleType,
-  DeliveryWorkflowOperation,
+import {
+  deliveryWorkflowOperationSchema,
+  type DeliveryRoleType,
+  type DeliveryWorkflowOperation,
 } from "@shared/delivery-roles";
+import { DELIVERY_OPERATION_SPECS } from "@shared/delivery-operation-spec";
 import type { DeliveryTicketStatus } from "@shared/delivery-ticket";
 
 export type DeliveryRoleWorkflowDefinition = {
@@ -42,10 +44,10 @@ export const DELIVERY_ROLE_WORKFLOWS: Record<
     sequence: 2,
     mission: "把客户目标转成可监控的问题，并用真实回答和信源判断效果。",
     receives: "已发布知识库、客户选题、内容发布结果和历史监控基线",
-    delivers: "问题目录、监控答案与信源、复测结论和阶段效果报告",
-    handoff: "发现表达缺口后，交给内容分发工程师制作应答逻辑和内容。",
+    delivers: "品牌词库、监控答案与信源、复测结论和阶段效果报告",
+    handoff: "发现表达缺口后，交给内容制作工程师制作应答逻辑和内容。",
     responsibilities: [
-      "配置品牌词库、问题目录并审核客户选择",
+      "配置品牌词库并审核客户选题",
       "执行首次监控、数据导入和内容发布后复测",
       "形成有证据的阶段效果报告并决定是否继续优化",
     ],
@@ -68,28 +70,60 @@ export const DELIVERY_ROLE_WORKFLOWS: Record<
 export const DELIVERY_OPERATION_LABELS: Record<
   DeliveryWorkflowOperation,
   string
-> = {
-  build_exception: "构建异常处理",
-  knowledge_maintenance: "知识库维护",
-  knowledge_reset: "知识库重置",
-  question_catalog: "品牌词库与问题目录",
-  initial_monitoring: "首次监控",
-  monitoring_import: "监控导入",
-  monitoring_retest: "监控复测",
-  stage_report: "阶段报告",
-  response_logic: "应答逻辑",
-  content_asset_publish: "内容资产发布",
-  channel_distribution: "渠道分发",
-  domain_application: "域名注册",
-  icp_filing: "ICP 备案",
-  website_style_samples: "官网风格样例",
-  company_facts: "企业事实内容",
-  product_case_docs: "产品案例内容",
-  industry_news: "行业新闻",
-  company_news: "企业新闻",
-  faq_content: "FAQ 内容",
-  site_check: "站点检查",
-};
+> = Object.freeze(
+  // Keep the client-facing map for existing callers, but derive every value
+  // from the shared contract so forms and labels cannot drift apart.
+  Object.fromEntries(
+    deliveryWorkflowOperationSchema.options.map((operation) => [
+      operation,
+      DELIVERY_OPERATION_SPECS[operation].label,
+    ]),
+  ) as Record<DeliveryWorkflowOperation, string>,
+);
+
+export function deliveryTicketDisplayDescription(ticket: {
+  operation?: DeliveryWorkflowOperation | string | null;
+  category?: string | null;
+  topic?: string | null;
+  description?: string | null;
+}) {
+  if (ticket.operation !== "question_maintenance") {
+    return ticket.description || "";
+  }
+  try {
+    const payload = JSON.parse(ticket.description || "") as {
+      questionSnapshot?: unknown;
+      proposedQuestion?: unknown;
+      reason?: unknown;
+    };
+    const question =
+      typeof payload.questionSnapshot === "string" &&
+      payload.questionSnapshot.trim()
+        ? payload.questionSnapshot.trim()
+        : ticket.topic?.trim() || "未记录的问题";
+    const reason =
+      typeof payload.reason === "string" && payload.reason.trim()
+        ? `\n申请说明：${payload.reason.trim()}`
+        : "";
+    if (ticket.category === "question_review") {
+      return `申请审核自主填写问题“${question}”。${reason}`;
+    }
+    if (ticket.category === "question_modify") {
+      const proposed =
+        typeof payload.proposedQuestion === "string" &&
+        payload.proposedQuestion.trim()
+          ? payload.proposedQuestion.trim()
+          : "未填写";
+      return `申请将问题“${question}”修改为“${proposed}”。${reason}`;
+    }
+    if (ticket.category === "question_delete") {
+      return `申请删除问题“${question}”。${reason}`;
+    }
+    return `申请清空问题“${question}”的已确认应答逻辑。${reason}`;
+  } catch {
+    return "问题维护申请内容暂时无法解析，请使用专用审批入口核对。";
+  }
+}
 
 export type DeliveryTicketActionGuidance = {
   label: string;
@@ -105,21 +139,21 @@ export function deliveryTicketActionGuidance(
     case "in_progress":
       return {
         label: "继续处理并交付",
-        description: "完成实际交付、核对用户页面，再回填结果并结束工单。",
+        description: "完成实际交付、核对用户页面，再回填结果并结束需求。",
         priority: 0,
         waiting: false,
       };
     case "submitted":
       return {
         label: "领取并开始处理",
-        description: "先核对客户需求和附件，再将工单切换为处理中。",
+        description: "先核对客户需求和附件，再将需求切换为处理中。",
         priority: 1,
         waiting: false,
       };
     case "scheduled":
       return {
         label: "按排期开始处理",
-        description: "排期已经确认；开始执行时将工单切换为处理中。",
+        description: "排期已经确认；开始执行时将需求切换为处理中。",
         priority: 2,
         waiting: false,
       };
@@ -127,7 +161,7 @@ export function deliveryTicketActionGuidance(
       return {
         label: "等待客户补充",
         description:
-          "缺少的资料已向客户说明；收到补充后继续原工单，不新建工单。",
+          "缺少的资料已向客户说明；收到补充后继续原需求，不新建需求。",
         priority: 3,
         waiting: true,
       };
@@ -141,14 +175,14 @@ export function deliveryTicketActionGuidance(
     case "rejected":
       return {
         label: "未受理",
-        description: "工单已经结束，拒绝原因保留在处理记录中。",
+        description: "需求已经结束，拒绝原因保留在处理记录中。",
         priority: 5,
         waiting: false,
       };
     case "cancelled":
       return {
         label: "已取消",
-        description: "工单已经取消，不再进入交付队列。",
+        description: "需求已经取消，不再进入交付队列。",
         priority: 6,
         waiting: false,
       };
@@ -193,7 +227,7 @@ export function deliveryTicketDependencyBlockReason(
         candidate.status === "completed",
     )
   ) {
-    return "请先完成“品牌词库与问题目录”：至少一条客户选择的问题需要审核通过，随后才能开始首次监控。";
+    return "请先完成“配置品牌词库”并确认至少一条优化问题，随后才能开始首次监控。";
   }
   return null;
 }

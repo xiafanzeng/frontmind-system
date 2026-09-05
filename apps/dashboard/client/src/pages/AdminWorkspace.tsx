@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  ClipboardList,
+  ArrowLeft,
   Loader2,
   PackageCheck,
+  PanelRightOpen,
   RefreshCw,
   UserCog,
 } from "lucide-react";
@@ -24,22 +25,152 @@ import {
   type WorkspaceTab,
 } from "@/lib/admin-workspace-tabs";
 import { trpc } from "@/lib/trpc";
-import { getAdminNav } from "@/pages/AdminDashboard";
+import {
+  AdminBrandTrackingKeyManager,
+  getAdminNav,
+} from "@/pages/AdminDashboard";
 
 export { ADMIN_WORKSPACE_TAB_IDS };
 export type { WorkspaceTab };
 
-export const ADMIN_WORKSPACE_TABS = [
-  { value: "service", label: "用户流程", icon: PackageCheck },
-  { value: "tickets", label: "工单", icon: ClipboardList },
-] as const satisfies ReadonlyArray<{
-  value: WorkspaceTab;
-  label: string;
-  icon: typeof PackageCheck;
-}>;
+type AdminServicePlanCode = "basic" | "advanced" | "luxury";
 
-export function adminWorkspaceTabsForAccess() {
-  return ADMIN_WORKSPACE_TABS;
+type AdminServicePurchase = {
+  id: string;
+  planCode: AdminServicePlanCode;
+  status: string;
+  validFrom?: number | null;
+  validUntil?: number | null;
+};
+
+function shanghaiServiceDateInput(value: number) {
+  return new Date(value + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+}
+
+export function resolveAdminServiceStartsAtEpoch(input: {
+  dateInput: string;
+  sourcePlanCode?: AdminServicePlanCode | null;
+  targetPlanCode: AdminServicePlanCode;
+  currentContractId?: string | null;
+  purchases?: AdminServicePurchase[];
+}) {
+  const midnight = new Date(`${input.dateInput}T00:00:00+08:00`).getTime();
+  if (!Number.isFinite(midnight)) return null;
+  const source = input.purchases?.find(
+    (purchase) => purchase.id === input.currentContractId,
+  );
+  if (
+    input.sourcePlanCode === "luxury" &&
+    input.targetPlanCode === "luxury" &&
+    source?.planCode === "luxury" &&
+    Number.isFinite(source.validUntil) &&
+    shanghaiServiceDateInput(source.validUntil!) === input.dateInput
+  ) {
+    return source.validUntil!;
+  }
+  if (
+    source &&
+    source.planCode === input.sourcePlanCode &&
+    input.targetPlanCode === input.sourcePlanCode &&
+    Number.isFinite(source.validFrom) &&
+    shanghaiServiceDateInput(source.validFrom!) === input.dateInput
+  ) {
+    return source.validFrom!;
+  }
+  return midnight;
+}
+
+export function isAdminProgressiveLuxuryRenewal(input: {
+  sourcePlanCode?: AdminServicePlanCode | null;
+  targetPlanCode: AdminServicePlanCode;
+  currentContractId?: string | null;
+  targetStartsAt?: number | null;
+  purchases?: AdminServicePurchase[];
+}) {
+  if (
+    input.sourcePlanCode !== "luxury" ||
+    input.targetPlanCode !== "luxury" ||
+    !Number.isFinite(input.targetStartsAt)
+  ) {
+    return false;
+  }
+  const source = input.purchases?.find(
+    (purchase) => purchase.id === input.currentContractId,
+  );
+  return Boolean(
+    source?.planCode === "luxury" &&
+      Number.isFinite(source.validUntil) &&
+      input.targetStartsAt! >= source.validUntil!,
+  );
+}
+
+export function resolveAdminTargetLuxuryPlanVersion(input: {
+  sourcePlanCode?: AdminServicePlanCode | null;
+  sourcePlanVersion?: number | null;
+  sourceValidUntil?: number | null;
+  targetStartsAt?: number | null;
+}) {
+  return input.sourcePlanCode === "luxury" &&
+    (input.sourcePlanVersion ?? 1) < 2 &&
+    Number.isFinite(input.sourceValidUntil) &&
+    Number.isFinite(input.targetStartsAt) &&
+    input.targetStartsAt! < input.sourceValidUntil!
+    ? 1
+    : 2;
+}
+
+export function isFutureDatedServiceCancellation(input: {
+  status: string;
+  startsAt: number | null;
+  now?: number;
+}) {
+  return (
+    input.status === "cancelled" &&
+    Number.isFinite(input.startsAt) &&
+    input.startsAt! > (input.now ?? Date.now())
+  );
+}
+
+export function defaultAdminServiceCarryQuestionIds(input: {
+  sourcePlanCode?: AdminServicePlanCode | null;
+  targetPlanCode: AdminServicePlanCode;
+  currentContractId?: string | null;
+  targetStartsAt?: number | null;
+  purchases?: AdminServicePurchase[];
+  questions?: Array<{
+    id: string;
+    contractId?: string | null;
+    status: string;
+  }>;
+}) {
+  if (isAdminProgressiveLuxuryRenewal(input)) {
+    return [];
+  }
+  const activeBasicIds =
+    input.sourcePlanCode === "basic"
+      ? (input.purchases ?? [])
+          .filter(
+            (purchase) =>
+              purchase.planCode === "basic" &&
+              (purchase.status === "active" || purchase.status === "scheduled"),
+          )
+          .map((purchase) => purchase.id)
+      : [];
+  const sourceContractIds = activeBasicIds.length
+    ? activeBasicIds
+    : input.currentContractId
+      ? [input.currentContractId]
+      : [];
+  return (input.questions ?? [])
+    .filter(
+      (question) =>
+        question.status === "selected" &&
+        Boolean(
+          question.contractId &&
+            sourceContractIds.includes(question.contractId),
+        ),
+    )
+    .map((question) => question.id);
 }
 
 function toDateTimeLocal(value?: number | string | Date | null) {
@@ -99,7 +230,6 @@ async function uploadWorkspaceFile(input: {
 
 export default function AdminWorkspace({
   initialUserId = null,
-  initialTab = "service",
 }: {
   initialUserId?: number | null;
   initialTab?: WorkspaceTab;
@@ -110,10 +240,8 @@ export default function AdminWorkspace({
   const [selectedUserId, setSelectedUserId] = useState<number | null>(
     initialUserId,
   );
-  const [tab, setTab] = useState<WorkspaceTab>(initialTab);
-  const [servicePlan, setServicePlan] = useState<
-    "basic" | "advanced" | "luxury"
-  >("basic");
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [servicePlan, setServicePlan] = useState<AdminServicePlanCode>("basic");
   const [serviceStatus, setServiceStatus] = useState<
     "pending_confirmation" | "scheduled" | "active" | "suspended" | "cancelled"
   >("active");
@@ -133,12 +261,10 @@ export default function AdminWorkspace({
     (item) => item.id === selectedUserId,
   );
   const isSystemAdmin = Boolean(workspaceQuery.data?.isSystemAdmin);
-  const availableTabs = adminWorkspaceTabsForAccess();
-
   useEffect(() => {
     setSelectedUserId(initialUserId);
-    setTab(initialTab);
-  }, [initialTab, initialUserId]);
+    setDashboardOpen(false);
+  }, [initialUserId]);
 
   const queryInput = { userId: selectedUserId || 1 };
   const dashboardQuery = trpc.admin.workspace.dashboard.useQuery(queryInput, {
@@ -195,6 +321,8 @@ export default function AdminWorkspace({
           contentDistribution: true,
         },
         websiteWorkflow: deliveryPreviewMetadata.websiteWorkflow ?? null,
+        siteOpsProjectActive:
+          deliveryPreviewMetadata.siteOpsProjectActive === true,
         tickets: deliveryPreviewPages.flatMap(
           (page: any) => page?.tickets ?? page?.items ?? [],
         ),
@@ -254,34 +382,20 @@ export default function AdminWorkspace({
     );
     setServiceSignedAt(toDateTimeLocal(currentPurchase?.signedAt));
     setServiceSignatory(currentPurchase?.signatoryId ?? "");
-    const activeBasicIds =
-      service?.planCode === "basic"
-        ? (serviceQuery.data?.purchases ?? [])
-            .filter(
-              (purchase: any) =>
-                purchase.planCode === "basic" &&
-                (purchase.status === "active" ||
-                  purchase.status === "scheduled"),
-            )
-            .map((purchase: any) => purchase.id)
-        : [];
-    const sourceContractIds = activeBasicIds.length
-      ? activeBasicIds
-      : service?.contractId
-        ? [service.contractId]
-        : [];
     setCarryQuestionIds(
-      (questionPortfolioQuery.data?.questions ?? [])
-        .filter(
-          (question: any) =>
-            question.status === "selected" &&
-            sourceContractIds.includes(question.contractId),
-        )
-        .map((question: any) => question.id),
+      defaultAdminServiceCarryQuestionIds({
+        sourcePlanCode: service?.planCode,
+        targetPlanCode: nextPlan ?? "basic",
+        currentContractId: service?.contractId,
+        targetStartsAt: service?.validFrom,
+        purchases: serviceQuery.data?.purchases,
+        questions: questionPortfolioQuery.data?.questions,
+      }),
     );
   }, [
     questionPortfolioQuery.data?.questions,
     selectedUserId,
+    serviceQuery.data?.purchases,
     serviceQuery.data?.service,
   ]);
 
@@ -330,6 +444,176 @@ export default function AdminWorkspace({
       setUploading(null);
     }
   };
+
+  const customerKnowledgePreview = {
+    progress: knowledgeProgressQuery.data?.progress,
+    snapshot: knowledgeQuery.data?.snapshot,
+    activity: knowledgeActivityQuery.data,
+    activityLoading: knowledgeActivityQuery.isLoading,
+    activityError: knowledgeActivityQuery.error?.message ?? null,
+    progressLoading: knowledgeProgressQuery.isLoading,
+    progressError: knowledgeProgressQuery.error?.message ?? null,
+    snapshotLoading: knowledgeQuery.isLoading,
+    snapshotError: knowledgeQuery.error?.message ?? null,
+  };
+
+  const serviceStartsAtEpoch = serviceStartsAt
+    ? resolveAdminServiceStartsAtEpoch({
+        dateInput: serviceStartsAt,
+        sourcePlanCode: serviceQuery.data?.service?.planCode,
+        targetPlanCode: servicePlan,
+        currentContractId: serviceQuery.data?.service?.contractId,
+        purchases: serviceQuery.data?.purchases,
+      })
+    : null;
+  const progressiveLuxuryRenewal = isAdminProgressiveLuxuryRenewal({
+    sourcePlanCode: serviceQuery.data?.service?.planCode,
+    targetPlanCode: servicePlan,
+    currentContractId: serviceQuery.data?.service?.contractId,
+    targetStartsAt: serviceStartsAtEpoch,
+    purchases: serviceQuery.data?.purchases,
+  });
+  const serviceTermination = serviceStatus === "cancelled";
+  const currentServicePurchase = serviceQuery.data?.purchases?.find(
+    (purchase: AdminServicePurchase) =>
+      purchase.id === serviceQuery.data?.service?.contractId,
+  );
+  const targetLuxuryPlanVersion = resolveAdminTargetLuxuryPlanVersion({
+    sourcePlanCode: serviceQuery.data?.service?.planCode,
+    sourcePlanVersion: serviceQuery.data?.service?.planVersion,
+    sourceValidUntil: currentServicePurchase?.validUntil,
+    targetStartsAt: serviceStartsAtEpoch,
+  });
+
+  const refreshDashboardWorkspace = async () => {
+    await Promise.all([
+      dashboardQuery.refetch(),
+      workspaceQuery.refetch(),
+      serviceQuery.refetch(),
+      questionPortfolioQuery.refetch(),
+      deliveryPreviewQuery.refetch(),
+    ]);
+  };
+  const brandTrackingManagement =
+    selectedUser?.marketEdition === "overseas" ? (
+      isSystemAdmin ? (
+        <AdminBrandTrackingKeyManager
+          previewMode={false}
+          restrictedUserId={selectedUser.id}
+        />
+      ) : (
+        <PortalCard className="p-6 text-sm leading-6 text-[#716a80]">
+          舆情监控由当前客户的 AI
+          运维工程师或系统管理员启用；交付管理员可在这里核对启用状态。
+        </PortalCard>
+      )
+    ) : undefined;
+
+  if (dashboardOpen && selectedUser) {
+    const customerName =
+      selectedUser.enterpriseName ||
+      selectedUser.displayName ||
+      selectedUser.username;
+
+    return (
+      <PortalShell
+        mode="fullscreen"
+        eyebrow="管理中心 · 客户与服务"
+        title={`${customerName} · 客户看板`}
+        navItems={getAdminNav(Boolean(workspaceQuery.data?.isSystemAdmin))}
+      >
+        {dashboardQuery.error ? (
+          <div className="grid h-full place-items-center overflow-y-auto p-5">
+            <PortalCard className="w-full max-w-xl border-[#ebc8d4] bg-[#fff8fa] p-6 text-sm text-[#a02652]">
+              <p className="font-semibold">客户看板暂时无法载入</p>
+              <p className="mt-1 leading-6">
+                {dashboardQuery.error.message || "请刷新后重试。"}
+              </p>
+              <Button
+                className="mt-4"
+                size="sm"
+                variant="operatorOutline"
+                onClick={() => setDashboardOpen(false)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回工作台
+              </Button>
+            </PortalCard>
+          </div>
+        ) : isSystemAdmin ? (
+          <DashboardSkeletonEditor
+            userId={selectedUser.id}
+            workspace={dashboardQuery.data}
+            loading={dashboardQuery.isLoading}
+            dashboardLayout="workspace"
+            marketEdition={selectedUser.marketEdition}
+            brandTrackingManagement={brandTrackingManagement}
+            onExitDashboard={() => setDashboardOpen(false)}
+            knowledgePreview={customerKnowledgePreview}
+            websiteWorkspace={websiteWorkspacePreview}
+            servicePortal={serviceQuery.data}
+            servicePortalLoading={serviceQuery.isLoading}
+            servicePortalError={serviceQuery.isError}
+            onRefreshServicePortal={() => serviceQuery.refetch()}
+            knowledgeUploading={uploading === "knowledge"}
+            onUploadKnowledge={handleUpload}
+            onOpenWebsiteWorkspace={() => setDashboardOpen(false)}
+            authoritativeQuestions={serviceQuery.data?.purchasedQuestions}
+            authoritativeQuestionsLoading={serviceQuery.isLoading}
+            authoritativeQuestionsError={serviceQuery.error?.message ?? null}
+            onWorkspaceChanged={refreshDashboardWorkspace}
+          />
+        ) : dashboardQuery.isLoading ? (
+          <div className="grid h-full place-items-center bg-white text-sm text-[#716a80]">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              正在读取客户看板…
+            </div>
+          </div>
+        ) : dashboardQuery.data?.payload ? (
+          <CustomerDashboardMirror
+            layout="workspace"
+            payload={dashboardQuery.data.payload}
+            websiteWorkspace={websiteWorkspacePreview}
+            servicePortal={serviceQuery.data}
+            servicePortalLoading={serviceQuery.isLoading}
+            servicePortalError={serviceQuery.isError}
+            marketEdition={selectedUser.marketEdition}
+            allowBrandTrackingManagement={Boolean(brandTrackingManagement)}
+            brandTrackingManagement={brandTrackingManagement}
+            onRefreshServicePortal={() => serviceQuery.refetch()}
+            knowledgePreview={customerKnowledgePreview}
+            heading={`${customerName} · 客户看板`}
+            editActions={
+              <Button
+                size="sm"
+                variant="operatorOutline"
+                onClick={() => setDashboardOpen(false)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回工作台
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid h-full place-items-center overflow-y-auto p-5">
+            <PortalCard className="w-full max-w-xl p-8 text-center text-sm text-[#716a80]">
+              <p>该客户尚未发布正式用户页面。</p>
+              <Button
+                className="mt-4"
+                size="sm"
+                variant="operatorOutline"
+                onClick={() => setDashboardOpen(false)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+                返回工作台
+              </Button>
+            </PortalCard>
+          </div>
+        )}
+      </PortalShell>
+    );
+  }
 
   return (
     <PortalShell
@@ -392,8 +676,9 @@ export default function AdminWorkspace({
                   key={account.id}
                   type="button"
                   onClick={() => {
+                    setDashboardOpen(false);
                     setSelectedUserId(account.id);
-                    setLocation(`/admin/customers/${account.id}/${tab}`);
+                    setLocation(`/admin/customers/${account.id}/workspace`);
                   }}
                   className={`w-full p-4 text-left transition ${
                     selectedUserId === account.id
@@ -431,7 +716,7 @@ export default function AdminWorkspace({
                     <Badge variant="secondary" className="text-xs">
                       {account.marketEdition === "overseas"
                         ? "海外版"
-                        : "海内版"}
+                        : "国内版"}
                     </Badge>
                     <Badge variant="secondary" className="text-xs">
                       管理员 {account.assignedAdmins.length}
@@ -564,30 +849,19 @@ export default function AdminWorkspace({
               )}
 
               <div className="mt-6 flex flex-wrap gap-2 border-t border-[#eee8f2] pt-4">
-                {availableTabs.map(({ value, label, icon: Icon }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => {
-                      setTab(value);
-                      setLocation(
-                        `/admin/customers/${selectedUser.id}/${value}`,
-                      );
-                    }}
-                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-                      tab === value
-                        ? "bg-[#5b2a86] text-white"
-                        : "bg-[#f3eef6] text-[#716a80] hover:text-[#5b2a86]"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {label}
-                  </button>
-                ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="operatorOutline"
+                  onClick={() => setDashboardOpen(true)}
+                >
+                  进入客户看板
+                  <PanelRightOpen className="h-4 w-4" />
+                </Button>
               </div>
             </PortalCard>
 
-            {tab === "service" && (
+            <>
               <div className="space-y-5">
                 <PortalCard className="p-5 sm:p-6">
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
@@ -641,6 +915,19 @@ export default function AdminWorkspace({
                                 | "advanced"
                                 | "luxury";
                               setServicePlan(nextPlan);
+                              setCarryQuestionIds(
+                                defaultAdminServiceCarryQuestionIds({
+                                  sourcePlanCode:
+                                    serviceQuery.data?.service?.planCode,
+                                  targetPlanCode: nextPlan,
+                                  currentContractId:
+                                    serviceQuery.data?.service?.contractId,
+                                  targetStartsAt: serviceStartsAtEpoch,
+                                  purchases: serviceQuery.data?.purchases,
+                                  questions:
+                                    questionPortfolioQuery.data?.questions,
+                                }),
+                              );
                             }}
                             className="mt-2 h-10 w-full rounded-xl border border-[#ddd3e4] bg-white px-3 text-sm text-[#332842]"
                           >
@@ -648,6 +935,13 @@ export default function AdminWorkspace({
                             <option value="advanced">进阶版</option>
                             <option value="luxury">豪华版</option>
                           </select>
+                          {servicePlan === "luxury" && (
+                            <span className="mt-2 block text-[11px] font-normal leading-5 text-[#8b8496]">
+                              {targetLuxuryPlanVersion >= 2
+                                ? "豪华版 v2 为 12 个月权益，按季度自动解锁问题额度；预付月份仍按 3 个月记录。"
+                                : "当前为豪华版 v1 重叠修正：继续沿用原 3 个月合同与完整问题额度；到期续费时才进入 v2 季度解锁。"}
+                            </span>
+                          )}
                         </label>
                         <label className="text-xs font-semibold text-[#716a80]">
                           生效日期
@@ -655,9 +949,34 @@ export default function AdminWorkspace({
                             type="date"
                             className="mt-2"
                             value={serviceStartsAt}
-                            onChange={(event) =>
-                              setServiceStartsAt(event.target.value)
-                            }
+                            onChange={(event) => {
+                              const nextStartsAt = event.target.value;
+                              setServiceStartsAt(nextStartsAt);
+                              setCarryQuestionIds(
+                                defaultAdminServiceCarryQuestionIds({
+                                  sourcePlanCode:
+                                    serviceQuery.data?.service?.planCode,
+                                  targetPlanCode: servicePlan,
+                                  currentContractId:
+                                    serviceQuery.data?.service?.contractId,
+                                  targetStartsAt: nextStartsAt
+                                    ? resolveAdminServiceStartsAtEpoch({
+                                        dateInput: nextStartsAt,
+                                        sourcePlanCode:
+                                          serviceQuery.data?.service?.planCode,
+                                        targetPlanCode: servicePlan,
+                                        currentContractId:
+                                          serviceQuery.data?.service
+                                            ?.contractId,
+                                        purchases: serviceQuery.data?.purchases,
+                                      })
+                                    : null,
+                                  purchases: serviceQuery.data?.purchases,
+                                  questions:
+                                    questionPortfolioQuery.data?.questions,
+                                }),
+                              );
+                            }}
                           />
                         </label>
                         <label className="text-xs font-semibold text-[#716a80]">
@@ -705,11 +1024,21 @@ export default function AdminWorkspace({
                         ) && (
                           <div className="lg:col-span-3 rounded-2xl border border-[#e7dced] bg-[#fbf9fd] p-4">
                             <p className="text-sm font-semibold text-[#332842]">
-                              升级后继续服务的问题
+                              新合同中继续服务的问题
                             </p>
                             <p className="mt-1 text-xs leading-5 text-[#857e91]">
-                              已勾选问题会复制到新套餐并计入对应分类额度；若超额，保存会被服务端拒绝，必须先明确保留项。
+                              豪华版年度续费默认不结转，旧问题保留为历史；其他套餐与跨套餐升级沿用当前选择，也可手动调整。已勾选问题会复制到新套餐并计入额度，超额时保存会被拒绝。
                             </p>
+                            {progressiveLuxuryRenewal && (
+                              <p className="mt-2 text-xs font-medium text-[#7a4aa1]">
+                                当前生效日期属于豪华版年度续费，旧问题仅保留为历史，不能勾选结转。
+                              </p>
+                            )}
+                            {serviceTermination && (
+                              <p className="mt-2 text-xs font-medium text-[#7a4aa1]">
+                                取消合同会立即终止当前问题工作流，旧问题不会结转。
+                              </p>
+                            )}
                             <div className="mt-3 space-y-2">
                               {(questionPortfolioQuery.data?.questions ?? [])
                                 .filter(
@@ -724,6 +1053,10 @@ export default function AdminWorkspace({
                                     <input
                                       type="checkbox"
                                       className="mt-1"
+                                      disabled={
+                                        progressiveLuxuryRenewal ||
+                                        serviceTermination
+                                      }
                                       checked={carryQuestionIds.includes(
                                         question.id,
                                       )}
@@ -751,7 +1084,7 @@ export default function AdminWorkspace({
 
                         <div className="lg:col-span-3 flex justify-end">
                           <Button
-                            className="bg-[#5b2a86] hover:bg-[#49216c]"
+                            variant="operator"
                             disabled={
                               !serviceStartsAt ||
                               updateServiceMutation.isPending
@@ -771,9 +1104,20 @@ export default function AdminWorkspace({
                                 });
                                 return;
                               }
-                              const startsAt = new Date(
-                                `${serviceStartsAt}T00:00:00+08:00`,
-                              ).getTime();
+                              if (serviceStartsAtEpoch === null) return;
+                              const startsAt = serviceStartsAtEpoch;
+                              if (
+                                isFutureDatedServiceCancellation({
+                                  status: serviceStatus,
+                                  startsAt,
+                                })
+                              ) {
+                                toast.error("暂不支持预约取消", {
+                                  description:
+                                    "请在合同需要终止的当天执行取消，避免提前影响仍在处理的问题与交付需求。",
+                                });
+                                return;
+                              }
                               const currentContractId =
                                 serviceQuery.data?.service?.contractId;
                               const activeBasicIds =
@@ -820,9 +1164,13 @@ export default function AdminWorkspace({
                                   signatoryId:
                                     serviceSignatory.trim() || undefined,
                                   sourceContractIds,
-                                  carryQuestionIds: carryQuestionIds.filter(
-                                    (id) => allowedCarryIds.has(id),
-                                  ),
+                                  carryQuestionIds:
+                                    progressiveLuxuryRenewal ||
+                                    serviceTermination
+                                      ? []
+                                      : carryQuestionIds.filter((id) =>
+                                          allowedCarryIds.has(id),
+                                        ),
                                 });
                               } catch (error) {
                                 toast.error("服务版本更新失败", {
@@ -844,116 +1192,11 @@ export default function AdminWorkspace({
                     )}
                 </PortalCard>
               </div>
-            )}
+            </>
 
-            {tab === "service" &&
-              (dashboardQuery.error ? (
-                <PortalCard className="border-[#ebc8d4] bg-[#fff8fa] p-6 text-sm text-[#a02652]">
-                  <p className="font-semibold">交付内容暂时无法载入</p>
-                  <p className="mt-1 leading-6">
-                    {dashboardQuery.error.message || "请刷新后重试。"}
-                  </p>
-                </PortalCard>
-              ) : (
-                <div className="space-y-5">
-                  {isSystemAdmin ? (
-                    <>
-                      <DashboardSkeletonEditor
-                        userId={selectedUser.id}
-                        workspace={dashboardQuery.data}
-                        loading={dashboardQuery.isLoading}
-                        knowledgePreview={{
-                          progress: knowledgeProgressQuery.data?.progress,
-                          snapshot: knowledgeQuery.data?.snapshot,
-                          activity: knowledgeActivityQuery.data,
-                          activityLoading: knowledgeActivityQuery.isLoading,
-                          activityError:
-                            knowledgeActivityQuery.error?.message ?? null,
-                          progressLoading: knowledgeProgressQuery.isLoading,
-                          progressError:
-                            knowledgeProgressQuery.error?.message ?? null,
-                          snapshotLoading: knowledgeQuery.isLoading,
-                          snapshotError: knowledgeQuery.error?.message ?? null,
-                        }}
-                        websiteWorkspace={websiteWorkspacePreview}
-                        servicePortal={serviceQuery.data}
-                        servicePortalLoading={serviceQuery.isLoading}
-                        servicePortalError={serviceQuery.isError}
-                        onRefreshServicePortal={() => serviceQuery.refetch()}
-                        knowledgeUploading={uploading === "knowledge"}
-                        onUploadKnowledge={handleUpload}
-                        onOpenWebsiteWorkspace={() => {
-                          setTab("tickets");
-                          setLocation(
-                            `/admin/customers/${selectedUser.id}/tickets`,
-                          );
-                        }}
-                        authoritativeQuestions={
-                          serviceQuery.data?.purchasedQuestions
-                        }
-                        authoritativeQuestionsLoading={serviceQuery.isLoading}
-                        authoritativeQuestionsError={
-                          serviceQuery.error?.message ?? null
-                        }
-                        onWorkspaceChanged={async () => {
-                          await Promise.all([
-                            dashboardQuery.refetch(),
-                            workspaceQuery.refetch(),
-                            serviceQuery.refetch(),
-                            questionPortfolioQuery.refetch(),
-                            deliveryPreviewQuery.refetch(),
-                          ]);
-                        }}
-                      />
-                      <DashboardVersionHistory
-                        userId={selectedUser.id}
-                        onWorkspaceChanged={async () => {
-                          await Promise.all([
-                            dashboardQuery.refetch(),
-                            workspaceQuery.refetch(),
-                          ]);
-                        }}
-                      />
-                    </>
-                  ) : dashboardQuery.isLoading ? (
-                    <PortalCard className="p-8 text-center text-sm text-[#716a80]">
-                      <Loader2 className="mx-auto mb-3 h-5 w-5 animate-spin" />
-                      正在读取客户正式页面…
-                    </PortalCard>
-                  ) : dashboardQuery.data?.payload ? (
-                    <CustomerDashboardMirror
-                      payload={dashboardQuery.data.payload}
-                      websiteWorkspace={websiteWorkspacePreview}
-                      servicePortal={serviceQuery.data}
-                      servicePortalLoading={serviceQuery.isLoading}
-                      servicePortalError={serviceQuery.isError}
-                      onRefreshServicePortal={() => serviceQuery.refetch()}
-                      knowledgePreview={{
-                        progress: knowledgeProgressQuery.data?.progress,
-                        snapshot: knowledgeQuery.data?.snapshot,
-                        activity: knowledgeActivityQuery.data,
-                        activityLoading: knowledgeActivityQuery.isLoading,
-                        activityError:
-                          knowledgeActivityQuery.error?.message ?? null,
-                        progressLoading: knowledgeProgressQuery.isLoading,
-                        progressError:
-                          knowledgeProgressQuery.error?.message ?? null,
-                        snapshotLoading: knowledgeQuery.isLoading,
-                        snapshotError: knowledgeQuery.error?.message ?? null,
-                      }}
-                    />
-                  ) : (
-                    <PortalCard className="p-8 text-center text-sm text-[#716a80]">
-                      {isSystemAdmin
-                        ? "该客户尚未发布正式用户页面；请先确认项目岗位是否已配齐，也可在客户工单中进入系统管理员处理工作台接管。"
-                        : "该客户尚未发布正式用户页面；请先确认项目岗位是否已配齐，并协调对应工程师处理。"}
-                    </PortalCard>
-                  )}
-                </div>
-              ))}
-
-            {tab === "tickets" && (
+            <>
               <AdminDeliveryTicketWorkspace
+                key={selectedUser.id}
                 userId={selectedUser.id}
                 enterpriseName={
                   selectedUser.enterpriseName ||
@@ -966,7 +1209,18 @@ export default function AdminWorkspace({
                 canAdjustQuota={isSystemAdmin}
                 canExecuteDelivery={isSystemAdmin}
               />
-            )}
+              {isSystemAdmin && (
+                <DashboardVersionHistory
+                  userId={selectedUser.id}
+                  onWorkspaceChanged={async () => {
+                    await Promise.all([
+                      dashboardQuery.refetch(),
+                      workspaceQuery.refetch(),
+                    ]);
+                  }}
+                />
+              )}
+            </>
           </div>
         )}
       </div>

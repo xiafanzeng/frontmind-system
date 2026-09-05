@@ -1,0 +1,16 @@
+/* FrontMind publishing tokens. Screen-specific files consume these values. */
+.monitoring-module .publishing-page {
+  --publishing-canvas: #f5f6fa;
+  --publishing-surface: #fff;
+  --publishing-ink: #202134;
+  --publishing-muted: #77798d;
+  --publishing-line: #e8e9f1;
+  --publishing-purple: #3636e2;
+  --publishing-purple-dark: #2727be;
+  --publishing-purple-soft: #f0f0ff;
+  --publishing-gold: #e9a900;
+  --publishing-green: #079553;
+  --publishing-red: #d72c35;
+  --publishing-orange: #d37a00;
+  --publishing-shadow: 0 3px 14px rgba(33, 36, 74, 0.045);
+}

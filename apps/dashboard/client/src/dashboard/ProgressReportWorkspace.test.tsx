@@ -14,7 +14,7 @@ const report = dashboardOptimizationReportSchema.parse({
       id: "question-1",
       questionId: "question-1",
       question: "企业如何建立权威知识库？",
-      category: "行业词",
+      category: "行业排名词",
       title: "知识库问题优化前基准",
       totalScore: 61,
       grade: "C",
@@ -51,7 +51,7 @@ const report = dashboardOptimizationReportSchema.parse({
   questionReports: [
     {
       id: "question-1",
-      category: "行业词",
+      category: "行业排名词",
       question: "企业如何建立权威知识库？",
       summary: "第一题独立结论",
       metrics: [
@@ -169,6 +169,38 @@ const report = dashboardOptimizationReportSchema.parse({
 });
 
 describe("ProgressReportWorkspace", () => {
+  it("lists confirmed workflow questions while their progress records are still syncing", () => {
+    render(
+      <ProgressReportWorkspace
+        report={null}
+        questionGroups={[
+          {
+            id: "ranking",
+            title: "行业排名词",
+            subtitle: "行业入口与品牌优胜问题",
+            tone: "amber",
+            questions: [
+              {
+                id: "question-pending",
+                question: "企业级 GEO 服务商如何选择？",
+                intent: "说明选择标准",
+                summary: "",
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("complementary", { name: "报告问题" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("企业级 GEO 服务商如何选择？")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "尚未发布问题进度报告" }),
+    ).toBeInTheDocument();
+  });
+
   it("switches between the baseline and progress report without inventing shared question data", () => {
     render(<ProgressReportWorkspace report={report} />);
 
@@ -187,6 +219,7 @@ describe("ProgressReportWorkspace", () => {
     ]) {
       expect(screen.getByRole("tab", { name: category })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("tab", { name: "行业词" })).toBeNull();
     expect(screen.getAllByText("优化前基准").length).toBeGreaterThan(0);
     expect(screen.queryByText("PRE-OPTIMIZATION BASELINE")).toBeNull();
     expect(screen.queryByText("SEMANTIC ASSET DIMENSIONS")).toBeNull();

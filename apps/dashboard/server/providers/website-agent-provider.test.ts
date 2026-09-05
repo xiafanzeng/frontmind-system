@@ -208,6 +208,87 @@ describe("Website provider compatibility", () => {
     expect(state.record.providerRuntime!.sessionId).toBe("sess_2");
   });
 });
+describe("session output ownership", () => {
+  it("never publishes mounted inputs or another session's files", async () => {
+    state.record.providerRuntime = {
+      revision: 1,
+      model: "glm-5.3",
+      mutations: {},
+      sessionId: "sess_output",
+      files: [
+        {
+          id: "input_1",
+          filename: "private.skill.zip",
+          sha256: "f".repeat(64),
+          bytes: 4,
+          role: "input",
+        },
+      ],
+    };
+    const files = [
+      {
+        id: "input_copy",
+        filename: "private.skill.zip",
+        downloadable: true,
+        scope: { id: "sess_output" },
+      },
+      {
+        id: "foreign",
+        filename: "foreign.zip",
+        downloadable: true,
+        scope: { id: "sess_elsewhere" },
+      },
+      {
+        id: "output",
+        filename: "result.zip",
+        mime_type: "application/zip",
+        downloadable: true,
+        scope: { id: "sess_output" },
+      },
+    ];
+    const api = {
+      request: vi.fn(async () => ({
+        status: "idle",
+        usage: { input_tokens: 10, output_tokens: 2 },
+      })),
+      listAll: vi.fn(async (path: string) =>
+        path === "/v1/files"
+          ? files
+          : [
+              {
+                id: "ended",
+                type: "session.status_idle",
+                processed_at: stamp,
+                stop_reason: { type: "end_turn" },
+              },
+            ],
+      ),
+    } as unknown as ZhipuManagedClient;
+    const provider = new ZhipuWebsiteAgentProvider(
+      state.record,
+      update,
+      "test",
+      api,
+    );
+    const events = await provider.listAllMessages({ taskId: "sess_output" });
+    const attached = events.find((event) => event.type === "assistant_message")!
+      .assistant_message as { attachments: Array<{ filename: string }> };
+    expect(attached.attachments.map((file) => file.filename)).toEqual([
+      "result.zip",
+    ]);
+    expect(state.record.providerRuntime!.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 2,
+    });
+    await expect(provider.downloadArtifact("foreign")).rejects.toThrow(
+      "ARTIFACT_OWNERSHIP_INVALID",
+    );
+    await expect(provider.downloadArtifact("input_copy")).rejects.toThrow(
+      "ARTIFACT_OWNERSHIP_INVALID",
+    );
+  });
+});
+
 describe("public execution text", () => {
   it("redacts credentials, cookies and signed URLs without reading tool output", () => {
     const text = safeExecutionText(

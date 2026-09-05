@@ -7,10 +7,10 @@ Initial fused runtime: `543b0db016398a49f6724003cab9d958ae87463b`.
 Initial CN Website runtime: `cb5aad9705dd74eed6ecdac1081bd01c55d2e81b`.
 
 Current live Dashboard/Worker: `6bb5864407dea59cd0ff02a7dd2722ba1461ad09`.
-Current live CN Website: `60974b45d0db34d3774e43b5f029aab6fa0aad6c`.
+Current live CN Website: `f1dc5182819574aea32dbc50a2f715c414d50e41`.
 Dashboard digest: `sha256:d1c786ee2bbe12f4f39b2f3787c98cf3251301d3147a1940544c9ac03c0da9c4`.
 Worker digest: `sha256:1b9e2e47f38ecfaed116e22d90b6d5faaaa479ad8df4272d2d8dcf1cb5d98f5e`.
-Website digest: `sha256:d61db3aea5ca01021251cac9586117f230aeba7522e4fd7578fbd92fc34098a5`.
+Website digest: `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e`.
 
 Migration 0058 initially brought the new server's journal to 59 entries.
 Migration 0059 subsequently brought it to the current 60 entries, as recorded
@@ -285,3 +285,26 @@ repository references and revisions were recorded on the host for re-pull.
 The live and compatible rollback images, all containers and data were retained.
 The temporary quote-fix relay/tunnel and their scoped TLS certificate, key and
 loopback CA were removed after transfer.
+
+## Website log presentation update — 2026-09-06 07:29 UTC+08:00
+
+Website commit `f1dc5182819574aea32dbc50a2f715c414d50e41` hides only the
+standalone generic messages 开始调用工具, 工具执行完成, 工具执行失败 and 正在执行
+from the customer log. Matching permits surrounding whitespace and a final
+period or exclamation mark. Filtering precedes the latest-30 slice and history
+count; original events and absolute timers remain unchanged. Specific research
+updates, concrete errors and task failure status are retained.
+
+The existing four execution-log browser tests, typecheck and explicit CN
+production image build passed. Only the Website service was recreated; the
+Dashboard, site-operations worker, monitoring worker, MySQL and backup container
+identities/start times were unchanged. Website persistent mounts were identical,
+and public HTTPS health/readiness checks returned the new SHA successfully.
+No provider execution was submitted for this presentation change.
+
+After reloading the retained production project, the enterprise-analysis log
+decreased from 140 to 29 entries: all 111 generic messages were hidden, and
+the remaining sequence matched the original events with only those messages
+removed. Every detailed research update remained; the timer stayed 00:10:10.
+The failed assessment retained its error details, failed status and 00:00:06
+timer. This browser verification sent no execution mutations.

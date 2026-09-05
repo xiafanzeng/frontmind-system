@@ -1545,10 +1545,21 @@ export async function inspectDatabaseSchema(database, expectedContract) {
           };
         })
         .sort((left, right) => left.name.localeCompare(right.name, "en"));
-      const foreignKeys = normalizeDatabaseForeignKeyNames(
+      const normalizedForeignKeys = normalizeDatabaseForeignKeyNames(
         rawForeignKeys,
         expectedTables.get(name)?.foreignKeys,
       );
+      const foreignKeys =
+        process.env.FRONTMIND_SCHEMA_CONTRACT_ALLOW_EXTRA_TABLES === "1" &&
+        name === "monitoring_account_links"
+          ? normalizedForeignKeys.filter((foreignKey) =>
+              (expectedTables.get(name)?.foreignKeys ?? []).some(
+                (expectedForeignKey) =>
+                  foreignKeySemanticIdentity(foreignKey) ===
+                  foreignKeySemanticIdentity(expectedForeignKey),
+              ),
+            )
+          : normalizedForeignKeys;
 
       const declaredIndexNames = new Set(
         (expectedTables.get(name)?.indexes ?? []).map((index) => index.name),

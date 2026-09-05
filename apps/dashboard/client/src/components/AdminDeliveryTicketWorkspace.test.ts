@@ -265,19 +265,19 @@ describe("administrator delivery ticket workspace contract", () => {
     expect(
       safeAdminDeliveryUrl(
         "/api/delivery-ticket-attachments/opaque-id/content",
-        "https://dashboard.frontmind.net",
+        "https://dashboard.frontmind.cn",
       ),
     ).toBe("/api/delivery-ticket-attachments/opaque-id/content");
     expect(
       safeAdminDeliveryUrl(
         "https://example.com/result",
-        "https://dashboard.frontmind.net",
+        "https://dashboard.frontmind.cn",
       ),
     ).toBe("https://example.com/result");
     expect(
       safeAdminDeliveryUrl(
         "javascript:alert(1)",
-        "https://dashboard.frontmind.net",
+        "https://dashboard.frontmind.cn",
       ),
     ).toBeNull();
   });

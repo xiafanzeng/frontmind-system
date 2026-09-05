@@ -1040,7 +1040,7 @@ export async function createServicePurchaseIntent(input: {
   });
   const websiteUrl =
     process.env.FRONTMIND_WEBSITE_URL?.trim().replace(/\/$/, "") ||
-    "https://www.frontmind.net";
+    "https://www.frontmind.cn";
   const purchaseUrl =
     input.kind === "repeat_basic"
       ? `${websiteUrl}/?purchaseIntent=${encodeURIComponent(token)}#geo-builder`

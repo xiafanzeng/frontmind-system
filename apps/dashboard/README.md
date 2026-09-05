@@ -62,7 +62,7 @@ root-only runtime/migrator 配置和受限 digest 部署控制器；不得在服
 
 本地 `.env` 至少设置 `DATABASE_URL`、`FRONTMIND_CREDENTIAL_ENCRYPTION_KEY`、`FRONTMIND_PRESALES_SERVICE_TOKEN`、`FRONTMIND_PROVISIONING_SERVICE_TOKEN`、`FRONTMIND_MONITOR_API_KEY`、`FRONTMIND_PUBLIC_URL` 和 `FRONTMIND_DASHBOARD_IMPORT_PREFLIGHT_SECRET`。`FRONTMIND_MONITOR_API_KEY` 必须是监控服务专用凭据，生产环境不会回退使用普通售前 Key；`FRONTMIND_PUBLIC_URL` 必须是可供客户浏览器访问的真实 HTTPS 地址，用于生成开户与工作台链接。凭据密钥、两个服务令牌和预检签名密钥都应使用至少 32 位的独立随机值，并只保存在服务端，且不得互相复用。轮换预检签名密钥会使尚未发布的短时预检凭证失效，但不会影响已发布内容。
 
-Dashboard 正式环境使用 `FRONTMIND_PUBLIC_URL=https://dashboard.frontmind.net`。页面路由、静态资源和 `/api/*` 均按同源相对路径工作，因此 1Panel 应将该域名的根路径整体反向代理到应用端口，不要部署在 `/dashboard/` 等子路径。`FRONTMIND_WEBSITE_URL=https://www.frontmind.net` 仍指向官网。
+Dashboard 正式环境使用 `FRONTMIND_PUBLIC_URL=https://dashboard.frontmind.cn`。页面路由、静态资源和 `/api/*` 均按同源相对路径工作，因此 1Panel 应将该域名的根路径整体反向代理到应用端口，不要部署在 `/dashboard/` 等子路径。`FRONTMIND_WEBSITE_URL=https://www.frontmind.cn` 仍指向官网。
 
 ```bash
 pnpm db:migrate

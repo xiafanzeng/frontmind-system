@@ -58,7 +58,7 @@ describe("Login", () => {
     );
     expect(screen.getByRole("link", { name: "返回官网" })).toHaveAttribute(
       "href",
-      "https://www.frontmind.net",
+      "https://www.frontmind.cn",
     );
   });
 

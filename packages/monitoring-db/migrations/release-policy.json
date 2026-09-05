@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "migrations": [
+    {
+      "tag": "0000_frontmind_monitoring",
+      "when": 1787798400000,
+      "sqlSha256": "dc572917770a353545b5554a079b4b1242dfce363aea29a0b8aa1ee63381c5d2",
+      "snapshotSha256": "bcc5c9436594aeffcbf0d8cbb6cd1ecfad641c94fd1e4c7cc39bf3715d35f610",
+      "kind": "expand",
+      "bootstrapBaseline": true
+    },
+    {
+      "tag": "0001_result_discovered_sources",
+      "when": 1788016059871,
+      "sqlSha256": "cc0813183669041e2ec236026ca14e0d46b86b42defbffaf08031f11421f5199",
+      "snapshotSha256": "45f899dc167cf1818a24b2f123e19703743ffae3e44e2c712838717f231cb443",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0002_provider_source_positions",
+      "when": 1788021215121,
+      "sqlSha256": "66b9030bc0429bf85e51352cd6384d4da33ac3e0c114e680462bd9cfd60a44fd",
+      "snapshotSha256": "a0846a9be20dbbadc3b880c4eb232abee3ad1dc9326b6d57b760cd1126cb0d8e",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0003_money_billing",
+      "when": 1788107898062,
+      "sqlSha256": "520244435067a4c9fcad7f919b68949b56499c8e42d4e6a4199b8753d1956cfc",
+      "snapshotSha256": "19823b738518d181a7686cf56a9be1fa494efe95dfd01652fd05c986f58fca80",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0004_media_publishing",
+      "when": 1788157824320,
+      "sqlSha256": "a01a1b5e0f72e41d7d601af736bda1b3f6255b60bc4d424c491b98d182213c77",
+      "snapshotSha256": "b428f07ad3570be4ccd47ddd04746b3e92ebf7ac1ecd8d6a90a3e092f15450ba",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0005_monitoring_scope_index",
+      "when": 1788419953635,
+      "sqlSha256": "2948ab482996e5ffabc671b7f1613de0323bb095fef7d0314c69802ff3c9a3f0",
+      "snapshotSha256": "986b507f6cb078c814dd7ef5ae367251ec92b7e904abe398b9fefbd69b2f048a",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0006_publisher_dual_media",
+      "when": 1788434580005,
+      "sqlSha256": "5a8f3638ee443293c82c7730944bbd7850c51dd24d8099cfac4b02b5791f5d30",
+      "snapshotSha256": "7904d24b071d6369a0cf843ac6e241675bece3db5d74d674673931e532b2ce0a",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0007_local_real_catalog_acceptance",
+      "when": 1788446175138,
+      "sqlSha256": "e6bd429f42f73c4007b6eb5e0c4aa0281114534ad597c6e31724bd7e79d2476a",
+      "snapshotSha256": "298e74f88b1d522660ec3f318cb45516de5ce92e3ec1a210d17e9ce49c9ed3a9",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    },
+    {
+      "tag": "0008_publisher_logo_provenance",
+      "when": 1788462036126,
+      "sqlSha256": "174a453f3318b9d5de3db90650b1b1d92cb39bc9e0621d70eb9cb7b94d6eda8f",
+      "snapshotSha256": "b01041e8c1bf93e360e22ad3b6bc1b01a419f50fca25afd1e0b15c4c54e1878f",
+      "kind": "expand",
+      "bootstrapBaseline": false
+    }
+  ]
+}

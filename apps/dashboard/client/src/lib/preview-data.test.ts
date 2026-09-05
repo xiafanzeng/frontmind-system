@@ -12,7 +12,7 @@ describe("preview service portal fixtures", () => {
       {
         kind: "purchase_basic",
         label: "继续购买普通版",
-        href: "https://www.frontmind.net",
+        href: "https://www.frontmind.cn",
         targetPlan: "basic",
       },
       {

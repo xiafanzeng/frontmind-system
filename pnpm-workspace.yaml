@@ -1,0 +1,4 @@
+packages:
+  - apps/dashboard
+  - apps/monitoring-worker
+  - packages/*

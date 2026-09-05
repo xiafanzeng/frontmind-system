@@ -358,13 +358,13 @@ describe("DeliveryTicketDetailDialog safety helpers", () => {
     expect(
       safeDeliveryAttachmentUrl(
         "https://evil.example/file",
-        "https://dashboard.frontmind.net",
+        "https://dashboard.frontmind.cn",
       ),
     ).toBeNull();
     expect(
       safeDeliveryAttachmentUrl(
         "/api/delivery-ticket-attachments/4a67e445-37bb-45ed-9268-4ca9437e4d70/content",
-        "https://dashboard.frontmind.net",
+        "https://dashboard.frontmind.cn",
       ),
     ).toBe(
       "/api/delivery-ticket-attachments/4a67e445-37bb-45ed-9268-4ca9437e4d70/content",

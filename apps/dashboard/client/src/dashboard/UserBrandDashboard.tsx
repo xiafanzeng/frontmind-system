@@ -938,6 +938,8 @@ function UserBrandDashboardContent({
   const [route, setRoute] = useState(
     initialSection === "knowledge-agent"
       ? { section: "knowledge-agent", sub: "build" }
+      : initialSection === "monitoring"
+        ? { section: "progress", sub: "monitor" }
       : { section: "service", sub: null },
   );
   const [accountOpen, setAccountOpen] = useState(false);

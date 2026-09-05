@@ -50,7 +50,7 @@
       "account": {
         "username": "acme.geo",
         "displayName": "Acme",
-        "workspaceUrl": "https://dashboard.frontmind.net/workspaces/acme"
+        "workspaceUrl": "https://dashboard.frontmind.cn/workspaces/acme"
       }
     }
   },

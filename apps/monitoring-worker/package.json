@@ -1,0 +1,16 @@
+{
+  "name": "@frontmind/monitoring-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "import": "./dist/index.js", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "start": "node dist/entrypoint.js" },
+  "dependencies": {
+    "@frontmind/monitoring-db": "workspace:*",
+    "@frontmind/monitoring-object-store": "workspace:*",
+    "@frontmind/monitoring-provider-kol": "workspace:*",
+    "@frontmind/monitoring-provider-moli": "workspace:*",
+    "@frontmind/monitoring-publisher": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "^24.10.1", "tsx": "^4.21.0", "typescript": "^5.9.3" }
+}

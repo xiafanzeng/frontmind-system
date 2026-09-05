@@ -1,0 +1,42 @@
+{
+  "name": "@frontmind/monitoring-db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./src/schema.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./worker-adapter": {
+      "types": "./src/worker-adapter.ts",
+      "import": "./dist/worker-adapter.js",
+      "default": "./dist/worker-adapter.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate": "drizzle-kit generate",
+    "migrate": "tsx --env-file-if-exists=../../.env src/migrate.ts"
+  },
+  "dependencies": {
+    "@frontmind/monitoring-contracts": "workspace:*",
+    "@frontmind/monitoring-publisher": "workspace:*",
+    "@frontmind/monitoring-provider-moli": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "mysql2": "^3.15.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "drizzle-kit": "^0.31.8",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

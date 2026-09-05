@@ -163,7 +163,7 @@ export default function Login() {
             >
               请
               <a
-                href="https://www.frontmind.net"
+                href="https://www.frontmind.cn"
                 className="mx-1 inline-flex rounded-[4px] bg-[#641b96] px-2 py-0.5 font-medium text-white transition-colors hover:bg-[#511278] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#641b96]/30"
               >
                 返回官网

@@ -331,8 +331,8 @@ async function createFinalPackageFixture() {
     alt: "FrontMind超前智能 Logo",
     branchId: "products",
     documentIds: ["1.1"],
-    sourcePageUrl: "https://www.frontmind.net/",
-    sourceAssetUrl: "https://www.frontmind.net/frontmind-logo.png",
+    sourcePageUrl: "https://www.frontmind.cn/",
+    sourceAssetUrl: "https://www.frontmind.cn/frontmind-logo.png",
     sourceKind: "official_web",
     ownership: "first_party",
     assetType: "brand_identity",
@@ -1083,7 +1083,7 @@ mysqlDescribe(
         conversationId: publicConversationId,
         clientRequestId: `request-initial-${runId}`,
         companyName: "FrontMind超前智能",
-        companyWebsite: "https://www.frontmind.net/",
+        companyWebsite: "https://www.frontmind.cn/",
       };
       const initial = await postKnowledgeBase("/start", startRequest);
       const build = (

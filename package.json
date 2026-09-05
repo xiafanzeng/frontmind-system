@@ -1,0 +1,12 @@
+{
+  "name": "frontmind-system",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.4.1",
+  "scripts": {
+    "build": "pnpm --filter frontmind-client build && pnpm --filter @frontmind/monitoring-worker build",
+    "typecheck": "pnpm --filter frontmind-client check && pnpm --filter @frontmind/monitoring-worker typecheck && pnpm --filter @frontmind/monitoring-db typecheck",
+    "test": "pnpm --filter frontmind-client test",
+    "build:packages": "pnpm -r --filter './packages/**' --if-present build"
+  }
+}

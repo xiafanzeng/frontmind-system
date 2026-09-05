@@ -73,6 +73,11 @@ const AdminDeliveryDispatch = lazy(() =>
     default: component,
   })),
 );
+const AdminMonitoring = lazy(() =>
+  import("./pages/AdminMonitoring").then(({ default: component }) => ({
+    default: component,
+  })),
+);
 
 const DevelopmentPreviewRouter = import.meta.env.DEV
   ? lazy(() => import("./pages/DevelopmentPreviewRouter"))
@@ -168,6 +173,16 @@ function Router() {
           <UserDashboard initialSection="knowledge-agent" />
         </UserOnly>
       </Route>
+      <Route path={"/monitoring"}>
+        <UserOnly>
+          <UserDashboard initialSection="monitoring" />
+        </UserOnly>
+      </Route>
+      <Route path={"/monitoring/:monitorId"}>
+        <UserOnly>
+          <UserDashboard initialSection="monitoring" />
+        </UserOnly>
+      </Route>
       <Route path={"/admin/workspace"}>
         <AdminOnly>
           <AdminWorkspace />
@@ -197,6 +212,16 @@ function Router() {
       <Route path={"/admin/presales"}>
         <SystemAdminOnly>
           <AdminPresales />
+        </SystemAdminOnly>
+      </Route>
+      <Route path={"/admin/monitoring"}>
+        <SystemAdminOnly>
+          <AdminMonitoring />
+        </SystemAdminOnly>
+      </Route>
+      <Route path={"/admin/monitoring/:section"}>
+        <SystemAdminOnly>
+          <AdminMonitoring />
         </SystemAdminOnly>
       </Route>
       <Route path={"/admin/delivery-roles"}>

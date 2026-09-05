@@ -91,7 +91,7 @@ export function buildPreviewHistoricalResults(
           question: question.question,
           model: "deepseek",
           title: "企业官网产品与服务说明",
-          url: "https://www.frontmind.net",
+          url: "https://www.frontmind.cn",
           media: "企业官网",
           domain: "frontmind.net",
           publishedAt: null,

@@ -99,6 +99,28 @@ export const sessions = mysqlTable(
 );
 
 /**
+ * Maps the Dashboard's canonical integer user id to the UUID retained by the
+ * monitoring domain tables. Monitoring never authenticates through this
+ * projection; it exists only to preserve domain foreign keys while both
+ * products share the Dashboard session.
+ */
+export const monitoringAccountLinks = mysqlTable(
+  "monitoring_account_links",
+  {
+    dashboardUserId: int("dashboardUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" })
+      .unique(),
+    monitoringUserId: varchar("monitoringUserId", { length: 36 })
+      .notNull()
+      .unique(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [index("monitoring_account_links_dashboard_idx").on(table.dashboardUserId)],
+);
+
+/**
  * One-time activation links issued when a system administrator creates a
  * customer account. Only the SHA-256 token hash is persisted.
  */

@@ -543,7 +543,7 @@ const previewLuxuryQuestions: PurchasedServiceQuestion[] = [
   }),
 ];
 
-const purchaseUrl = "https://www.frontmind.net";
+const purchaseUrl = "https://www.frontmind.cn";
 
 type PreviewWorkflowStepId = Exclude<
   ServiceWorkflowStep["id"],

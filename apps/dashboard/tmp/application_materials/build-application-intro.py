@@ -832,7 +832,7 @@ def add_sources(doc: Document) -> None:
                 ("国家网信办", "https://www.cac.gov.cn/2026-04/16/c_1778078563279563.htm"),
             ],
         ),
-        ("FrontMind 官方网站与产品页面。", [("frontmind.net", "https://www.frontmind.net/")]),
+        ("FrontMind 官方网站与产品页面。", [("frontmind.net", "https://www.frontmind.cn/")]),
         (
             "香港中文大学（深圳）智能决策实验室官方网站、团队与新闻页面。",
             [("cuhkgeo.com", "https://www.cuhkgeo.com/")],

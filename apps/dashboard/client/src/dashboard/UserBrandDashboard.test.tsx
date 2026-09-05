@@ -577,7 +577,7 @@ describe("UserBrandDashboard service experience", () => {
     expect(screen.queryByText("普通版 · 账号与服务")).not.toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "继续购买普通版" }),
-    ).toHaveAttribute("href", "https://www.frontmind.net");
+    ).toHaveAttribute("href", "https://www.frontmind.cn");
     const upgradeAdvanced = screen.getByRole("button", {
       name: "升级进阶版",
     });

@@ -1123,7 +1123,7 @@ describe("UserBrandDashboard formal workspace", () => {
               kind: "upgrade",
               label: "升级豪华版",
               targetPlan: "luxury",
-              href: "https://www.frontmind.net",
+              href: "https://www.frontmind.cn",
             },
           ],
         },

@@ -214,7 +214,7 @@ function apiKeyUsageTone(
 }
 
 export const issueMonitorUrl =
-  "https://business.molizhishu.com/business/dashboard?view=projects";
+  "/admin/monitoring";
 export const channelDistributionUrl = "https://i.kol.cn/";
 
 type AssignedTicketManager = { id: string; name: string };
@@ -441,9 +441,7 @@ export const adminNav: PortalNavItem[] = [
     label: "问题监控",
     href: issueMonitorUrl,
     icon: Activity,
-    group: "外部系统",
-    external: true,
-    newWindow: true,
+    group: "系统管理",
   },
   {
     label: "渠道分发",

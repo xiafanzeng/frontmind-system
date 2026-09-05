@@ -17,7 +17,7 @@ import type { PortalNavItem } from "@/components/PortalShell";
 export type PreviewAdminAccessLevel = "delivery_admin" | "system_admin";
 
 export const previewIssueMonitorUrl =
-  "https://business.molizhishu.com/business/dashboard?view=projects";
+  "/admin/monitoring";
 export const previewChannelDistributionUrl = "https://i.kol.cn/";
 
 export const previewUserNav: PortalNavItem[] = [
@@ -66,9 +66,7 @@ export const previewAdminNav: PortalNavItem[] = [
     label: "问题监控",
     href: previewIssueMonitorUrl,
     icon: Activity,
-    group: "外部系统",
-    external: true,
-    newWindow: true,
+    group: "系统管理",
   },
   {
     label: "渠道分发",

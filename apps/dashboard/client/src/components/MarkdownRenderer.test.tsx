@@ -40,7 +40,7 @@ describe("MarkdownRenderer security", () => {
     const original =
       "https://siliconflow.cn/files/report.pdf?download=1&lang=zh";
     const historical =
-      `https://dashboard.frontmind.net/api/frontmind/proxy-download?url=${encodeURIComponent(
+      `https://dashboard.frontmind.cn/api/frontmind/proxy-download?url=${encodeURIComponent(
         original,
       )}&filename=report.pdf`;
 

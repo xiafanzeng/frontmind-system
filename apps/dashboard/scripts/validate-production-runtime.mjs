@@ -18,8 +18,8 @@ const fail = (code) => {
 const exactValues = {
   NODE_ENV: "production",
   PORT: "3001",
-  FRONTMIND_PUBLIC_URL: "https://dashboard.frontmind.net",
-  FRONTMIND_WEBSITE_URL: "https://www.frontmind.net",
+  FRONTMIND_PUBLIC_URL: "https://dashboard.frontmind.cn",
+  FRONTMIND_WEBSITE_URL: "https://www.frontmind.cn",
   FRONTMIND_DASHBOARD_IMPORT_PREFLIGHT_TTL_SECONDS: "300",
   FRONTMIND_PREPARED_FILE_DIR: "/var/lib/frontmind/prepared-files",
   FRONTMIND_PREPARED_FILE_TTL_MS: "2592000000",

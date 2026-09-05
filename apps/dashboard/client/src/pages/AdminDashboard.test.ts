@@ -62,8 +62,6 @@ describe("administrator channel navigation", () => {
       expect(distributionIndex).toBe(issueIndex + 1);
       expect(issueMonitor).toMatchObject({
         label: "问题监控",
-        external: true,
-        newWindow: true,
       });
       expect(distribution).toMatchObject({
         label: "渠道分发",

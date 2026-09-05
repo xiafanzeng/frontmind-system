@@ -80,7 +80,7 @@ describe("knowledge-base P0 invariant audit", () => {
       userId: 7,
       conversationId: "conversation-1",
       companyName: "FrontMind",
-      companyWebsite: "https://www.frontmind.net",
+      companyWebsite: "https://www.frontmind.cn",
       skillVersion: "4",
       skillContentHash: "skill-hash",
       generation: 2,

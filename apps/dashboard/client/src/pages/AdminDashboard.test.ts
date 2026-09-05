@@ -96,40 +96,35 @@ describe("administrator channel navigation", () => {
         "需求管理",
         "账号与权限",
         "问题监控",
-        "渠道分发",
+        _name === "real" ? "媒体发布" : "渠道分发",
       ]);
     },
   );
 
-  it.each([
-    ["real", adminNav],
-    ["preview", previewAdminNav],
-  ])(
-    "places the channel distribution link after issue monitoring in %s navigation",
-    (_name, navigation) => {
-      const issueIndex = navigation.findIndex(
-        (item) => item.href === issueMonitorUrl,
-      );
-      const distributionIndex = navigation.findIndex(
-        (item) => item.href === channelDistributionUrl,
-      );
-      const issueMonitor = navigation[issueIndex];
-      const distribution = navigation[distributionIndex];
-
-      expect(issueIndex).toBeGreaterThanOrEqual(0);
-      expect(distributionIndex).toBe(issueIndex + 1);
-      expect(issueMonitor).toMatchObject({
-        label: "问题监控",
-        external: true,
-        newWindow: true,
-      });
-      expect(distribution).toMatchObject({
-        label: "渠道分发",
-        external: true,
-        newWindow: true,
-      });
-    },
-  );
+  it("keeps monitoring and publishing inside the unified system administration", () => {
+    const issueIndex = adminNav.findIndex(
+      (item) => item.href === issueMonitorUrl,
+    );
+    const distributionIndex = adminNav.findIndex(
+      (item) => item.href === channelDistributionUrl,
+    );
+    expect(issueIndex).toBeGreaterThanOrEqual(0);
+    expect(distributionIndex).toBe(issueIndex + 1);
+    expect(adminNav[issueIndex]).toMatchObject({
+      label: "问题监控",
+      href: "/admin/monitoring/accounts",
+      group: "监控与发布管理",
+    });
+    expect(adminNav[distributionIndex]).toMatchObject({
+      label: "媒体发布",
+      href: "/admin/monitoring/media-publishing/integration",
+      group: "监控与发布管理",
+    });
+    for (const item of [adminNav[issueIndex], adminNav[distributionIndex]]) {
+      expect(item.external).not.toBe(true);
+      expect(item.newWindow).not.toBe(true);
+    }
+  });
 
   it.each([
     ["real", adminNav],

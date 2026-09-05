@@ -291,81 +291,88 @@ export function assertNoEmptyMigrationBlocks(tag, sql) {
   }
 }
 
-const journal = await readJson(path.join(drizzleRoot, "meta/_journal.json"));
-assertJournalShape(journal.entries);
+async function main() {
+  const journal = await readJson(path.join(drizzleRoot, "meta/_journal.json"));
+  assertJournalShape(journal.entries);
 
-if (process.argv.includes("--print-baseline")) {
-  const through = Number(process.env.FRONTMIND_BASELINE_IDX || "48");
-  const entries = journal.entries.slice(0, through + 1);
+  if (process.argv.includes("--print-baseline")) {
+    const through = Number(process.env.FRONTMIND_BASELINE_IDX || "48");
+    const entries = journal.entries.slice(0, through + 1);
+    console.log(
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          throughIdx: through,
+          throughTag: entries.at(-1)?.tag,
+          entryCount: entries.length,
+          canonicalSha256: await canonicalBaseline(entries),
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(0);
+  }
+
+  const [baseline, policy] = await Promise.all([
+    readJson(baselinePath),
+    readJson(policyPath),
+  ]);
+  if (
+    baseline.schemaVersion !== 1 ||
+    baseline.throughIdx !== 48 ||
+    baseline.throughTag !== "0048_api_usage_coverage_claims" ||
+    baseline.entryCount !== 49 ||
+    !/^[a-f0-9]{64}$/u.test(baseline.canonicalSha256)
+  ) {
+    throw new Error("MIGRATION_BASELINE_CONFIG_INVALID");
+  }
+  const baselineEntries = journal.entries.slice(0, baseline.entryCount);
+  if (
+    baselineEntries.length !== baseline.entryCount ||
+    baselineEntries.at(-1)?.tag !== baseline.throughTag
+  ) {
+    throw new Error("MIGRATION_BASELINE_REMOVED_OR_REORDERED");
+  }
+  const actualBaselineSha = await canonicalBaseline(baselineEntries);
+  if (actualBaselineSha !== baseline.canonicalSha256) {
+    throw new Error("MIGRATION_BASELINE_0000_0048_MUTATED");
+  }
+
+  if (
+    policy?.schemaVersion !== 1 ||
+    policy.historicalBaselineThrough !== baseline.throughTag ||
+    !policy.migrations ||
+    Array.isArray(policy.migrations) ||
+    typeof policy.migrations !== "object"
+  ) {
+    throw new Error("MIGRATION_POLICY_INVALID");
+  }
+
+  const futureEntries = journal.entries.slice(baseline.entryCount);
+  const futureTags = new Set(futureEntries.map((entry) => entry.tag));
+  for (const configuredTag of Object.keys(policy.migrations)) {
+    if (!futureTags.has(configuredTag)) {
+      throw new Error(`MIGRATION_POLICY_ORPHAN:${configuredTag}`);
+    }
+  }
+  for (const entry of futureEntries) {
+    const classification = policy.migrations[entry.tag];
+    if (classification !== "expand" && classification !== "contract") {
+      throw new Error(`MIGRATION_CLASSIFICATION_REQUIRED:${entry.tag}`);
+    }
+    const sql = await readFile(migrationFile(entry), "utf8");
+    await readFile(snapshotFile(entry));
+    assertNoEmptyMigrationBlocks(entry.tag, sql);
+    if (classification === "expand") assertExpandSql(entry.tag, sql);
+  }
+
   console.log(
-    JSON.stringify(
-      {
-        schemaVersion: 1,
-        throughIdx: through,
-        throughTag: entries.at(-1)?.tag,
-        entryCount: entries.length,
-        canonicalSha256: await canonicalBaseline(entries),
-      },
-      null,
-      2,
-    ),
+    `MIGRATION_APPEND_ONLY_OK baseline=${baseline.throughTag} future=${futureEntries.length}`,
   );
-  process.exit(0);
 }
 
-const [baseline, policy] = await Promise.all([
-  readJson(baselinePath),
-  readJson(policyPath),
-]);
-if (
-  baseline.schemaVersion !== 1 ||
-  baseline.throughIdx !== 48 ||
-  baseline.throughTag !== "0048_api_usage_coverage_claims" ||
-  baseline.entryCount !== 49 ||
-  !/^[a-f0-9]{64}$/u.test(baseline.canonicalSha256)
-) {
-  throw new Error("MIGRATION_BASELINE_CONFIG_INVALID");
+// Importing SQL validators must not execute the repository-wide CLI audit.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }
-const baselineEntries = journal.entries.slice(0, baseline.entryCount);
-if (
-  baselineEntries.length !== baseline.entryCount ||
-  baselineEntries.at(-1)?.tag !== baseline.throughTag
-) {
-  throw new Error("MIGRATION_BASELINE_REMOVED_OR_REORDERED");
-}
-const actualBaselineSha = await canonicalBaseline(baselineEntries);
-if (actualBaselineSha !== baseline.canonicalSha256) {
-  throw new Error("MIGRATION_BASELINE_0000_0048_MUTATED");
-}
-
-if (
-  policy?.schemaVersion !== 1 ||
-  policy.historicalBaselineThrough !== baseline.throughTag ||
-  !policy.migrations ||
-  Array.isArray(policy.migrations) ||
-  typeof policy.migrations !== "object"
-) {
-  throw new Error("MIGRATION_POLICY_INVALID");
-}
-
-const futureEntries = journal.entries.slice(baseline.entryCount);
-const futureTags = new Set(futureEntries.map((entry) => entry.tag));
-for (const configuredTag of Object.keys(policy.migrations)) {
-  if (!futureTags.has(configuredTag)) {
-    throw new Error(`MIGRATION_POLICY_ORPHAN:${configuredTag}`);
-  }
-}
-for (const entry of futureEntries) {
-  const classification = policy.migrations[entry.tag];
-  if (classification !== "expand" && classification !== "contract") {
-    throw new Error(`MIGRATION_CLASSIFICATION_REQUIRED:${entry.tag}`);
-  }
-  const sql = await readFile(migrationFile(entry), "utf8");
-  await readFile(snapshotFile(entry));
-  assertNoEmptyMigrationBlocks(entry.tag, sql);
-  if (classification === "expand") assertExpandSql(entry.tag, sql);
-}
-
-console.log(
-  `MIGRATION_APPEND_ONLY_OK baseline=${baseline.throughTag} future=${futureEntries.length}`,
-);

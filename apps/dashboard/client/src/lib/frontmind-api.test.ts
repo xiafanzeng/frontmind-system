@@ -114,7 +114,7 @@ describe("sanitizeBrandText", () => {
     expect(visible).not.toContain("frontmind.knowledge-base.presentation");
   });
 
-  it("keeps the source provider name out of production client source", () => {
+  it("keeps the source provider name out of customer-facing client source", () => {
     const sourceBrand = ["ma", "nus"].join("");
     const sourceRoot = resolve(process.cwd(), "client/src");
     const offenders: string[] = [];
@@ -129,6 +129,11 @@ describe("sanitizeBrandText", () => {
           !/\.(?:ts|tsx)$/.test(entry.name) ||
           /\.(?:test|spec)\.(?:ts|tsx)$/.test(entry.name)
         ) {
+          continue;
+        }
+        // System administrators must distinguish historical provider credits
+        // from the Website's new native token usage during provider migration.
+        if (pathname === join(sourceRoot, "pages/AdminPresales.tsx")) {
           continue;
         }
         if (

@@ -7,6 +7,7 @@ readonly DEPLOY_ROOT="/opt/frontmind-deploy"
 readonly CONFIG_ROOT="/etc/frontmind-deploy"
 readonly RUNTIME_CONFIG_ROOT="/etc/frontmind"
 readonly DEPLOY_USER="frontmind-deploy"
+readonly CONTROLLER_VERSION="7"
 
 die() {
   printf '%s\n' "$1" >&2
@@ -30,6 +31,18 @@ for command in cosign curl docker flock getent gzip gunzip jq mysql mysqldump sh
   command -v "$command" >/dev/null 2>&1 || die "REQUIRED_COMMAND_MISSING:${command}"
 done
 docker compose version >/dev/null || die "DOCKER_COMPOSE_V2_REQUIRED"
+[[ $(grep -Fxc -- "# frontmind-production-controller-version: ${CONTROLLER_VERSION}" \
+  "$SCRIPT_DIR/controller/frontmind-deploy-controller" || true) == 1 ]] \
+  || die "PRODUCTION_CONTROLLER_TEMPLATE_VERSION_REJECTED"
+grep -Fq -- 'seed_static_template_catalog' \
+  "$SCRIPT_DIR/controller/frontmind-deploy-controller" \
+  && grep -Fq -- '/app/dist/seed-static-template-catalog.js' \
+    "$SCRIPT_DIR/controller/frontmind-deploy-controller" \
+  && grep -Fq -- 'STATIC_TEMPLATE_CATALOG_SEED_TIMEOUT_SECONDS=1800' \
+    "$SCRIPT_DIR/controller/frontmind-deploy-controller" \
+  && grep -Fq -- 'PRODUCTION_STATIC_TEMPLATE_CATALOG_SEED_FAILED' \
+    "$SCRIPT_DIR/controller/frontmind-deploy-controller" \
+  || die "PRODUCTION_CONTROLLER_TEMPLATE_CATALOG_SEED_REJECTED"
 
 dashboard_public_key="$(read_deploy_public_key "$dashboard_public_key_file")" \
   || die "DEPLOY_PUBLIC_KEY_REJECTED:${dashboard_public_key_file}"
@@ -154,6 +167,9 @@ Before the first deployment:
 4. Configure the GitHub repository variables/secrets listed in
    docs/operations/RELEASE.md.
 5. Add the generated frontmind-deploy user's SSH public endpoint to GitHub.
+6. Keep both Knowledge Base Manus v2 flags false in the initial Dashboard
+   runtime env. Apply later phases only through the exact signed same-digest
+   workflow described by docs/operations/RELEASE.md.
 
 The installer never imports production data, runs migrations, changes the
 1Panel reverse proxy, or starts either application. Re-running it refreshes

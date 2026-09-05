@@ -469,8 +469,8 @@ describe("conversation multi-device merge", () => {
       lastKnownOutputLength: 0,
       deletedMessageIds: [],
     };
-    const uploadedAt = new Date("2026-08-01T00:00:00.000Z");
-    const contentExpiresAt = new Date("2026-08-31T00:00:00.000Z");
+    const uploadedAt = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+    const contentExpiresAt = new Date(uploadedAt.getTime() + 30 * 24 * 60 * 60 * 1_000);
     const rowsForTable = (table: unknown) => {
       if (table === conversations) return [conversation];
       if (table === messages) return [userMessage];

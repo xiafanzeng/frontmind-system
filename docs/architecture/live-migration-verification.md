@@ -52,14 +52,14 @@ KOL formal API credentials and logo-search configuration were absent from the
 source runtime. Real publishing is disabled; draft management and private DOCX
 processing are available. No mock media or provider orders were created.
 
-Aliyun OAuth credentials were copied, but the application authorizes the old
-`.net` callback. A normal attempt to validate the CN callback was rejected by
-Aliyun; the failed replacement retained the existing credential version. The
-Aliyun application's redirect allowlist must include
-`https://dashboard.frontmind.cn/api/site-ops/aliyun/oauth/callback`, followed by
-normal credential replacement and customer authorization. Existing Chrome
-console tabs could be inventoried, but browser attachment timed out, so this
-external console setting was not silently marked complete.
+Aliyun OAuth application configuration is corrected: the original `.net`
+callback remains allowed, the CN callback
+`https://dashboard.frontmind.cn/api/site-ops/aliyun/oauth/callback` was added,
+and the original code-required `/acs/alidns` permission was granted in the RAM
+console. The normal Dashboard credential replacement then passed live upstream
+validation and saved version 3. Tenant DNS management still requires that
+tenant's own verified OAuth authorization; application readiness does not
+substitute for a customer grant.
 
 ## Certificate issuance
 
@@ -73,3 +73,24 @@ ACME webroot routes remain reachable before HTTP redirects. Existing acme.sh
 cron checks four times daily, installs renewed certificates to the configured
 paths and reloads OpenResty. These services are host-managed rather than
 represented by the 1Panel site list. See `deploy/openresty/HTTPS.md`.
+
+## Production dependency parity
+
+The monorepo initially resolved semver ranges differently from the actual
+Dashboard production lock. This broke the native React build contract and
+loaded an incompatible transitive motion runtime. The 70 native contract
+dependencies are now pinned to their existing exact versions, the original
+patches/overrides live at the workspace root where pnpm applies them, and
+130 original Dashboard dependency coordinates and their transitive graph were
+restored from production `74ad2397`. Seven integration-specific dependencies
+remain. Frozen offline installation and workspace typechecking passed; the
+complete frontend suite passed 1,228 tests (7 explicitly skipped).
+
+Original production deployment reference files under `apps/dashboard/` were
+also restored to that source SHA. New-server deployment continues to use the
+root Compose and workflow. Migration tests retain the original constraints
+while checking the consolidated 0058/0059 schema: 132 tests passed. Importing
+SQL policy helpers no longer runs the standalone historical CLI audit. That
+legacy audit still rejects historical 0055/0057 classifications; no applied
+SQL or historical policy was rewritten to hide it. The actual release CLI
+validates the applied journal and the one pending additive migration.

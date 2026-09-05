@@ -49,7 +49,7 @@ services:
     env_file:
       - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/dashboard.env
     environment:
-      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_DASHBOARD_IMAGE}
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_DASHBOARD_DIGEST:?set FRONTMIND_DASHBOARD_DIGEST to sha256 digest}
     ports:
       - 127.0.0.1:${FRONTMIND_DASHBOARD_HOST_PORT:-3001}:3001
     volumes:
@@ -71,7 +71,7 @@ services:
     env_file:
       - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/worker.env
     environment:
-      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_MONITORING_WORKER_IMAGE}
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_MONITORING_WORKER_DIGEST:?set FRONTMIND_MONITORING_WORKER_DIGEST to sha256 digest}
     depends_on:
       mysql: {condition: service_healthy}
     networks: [database, egress]

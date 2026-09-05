@@ -17,7 +17,9 @@ WORKDIR /app
 RUN groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/frontmind/prepared-files /var/lib/frontmind/dashboard-assets
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/package.json /app/apps/dashboard/pnpm-lock.yaml ./
-COPY --from=build --chown=10001:10001 /app/apps/dashboard/node_modules ./node_modules
+# The workspace installs dependencies in the repository-level .pnpm store;
+# copying the root node_modules preserves its symlink graph in the runtime.
+COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/dist ./dist
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/drizzle ./drizzle
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/scripts/validate-production-runtime.mjs ./scripts/validate-production-runtime.mjs

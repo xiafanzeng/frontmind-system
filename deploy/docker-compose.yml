@@ -83,7 +83,7 @@ services:
     image: ${FRONTMIND_DASHBOARD_IMAGE:?set FRONTMIND_DASHBOARD_IMAGE to an immutable image@sha256 digest}
     profiles: [migration]
     restart: "no"
-    entrypoint: [node, /app/dist/release-db.js]
+    entrypoint: [node, /app/apps/dashboard/dist/release-db.js]
     command: [migrate, --json]
     env_file:
       - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/dashboard.env

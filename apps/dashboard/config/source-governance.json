@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "productionTsNocheckAllowlist": [
+    "client/src/dashboard/UserBrandDashboard.tsx"
+  ],
+  "moduleLineBudgets": {
+    "server/dashboard-api.ts": 8109,
+    "server/knowledge-base-api.ts": 5014,
+    "client/src/dashboard/UserBrandDashboard.tsx": 3999
+  }
+}

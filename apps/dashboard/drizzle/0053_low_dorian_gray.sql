@@ -1,0 +1,1 @@
+ALTER TABLE `knowledge_base_reset_cleanup_jobs` ADD `localAssetKey` text;

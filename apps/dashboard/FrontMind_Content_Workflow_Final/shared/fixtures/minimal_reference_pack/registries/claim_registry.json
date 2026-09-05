@@ -1,0 +1,38 @@
+{
+  "schema_version": "2.2.0",
+  "registry_type": "claim_registry",
+  "claims": [
+    {
+      "claim_id": "clm_service_scope",
+      "claim_text": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "claim_type": "capability",
+      "about_entities": [
+        "匿名示例企业"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "usage_status": "usable",
+      "qualification": null,
+      "verification_status": "verified",
+      "allowed_usage": "public_fact",
+      "as_of": "2026-08-17T00:00:00+08:00"
+    },
+    {
+      "claim_id": "clm_fixture_limit",
+      "claim_text": "该匿名样例只用于工作流测试，不代表任何真实企业。",
+      "claim_type": "limitation",
+      "about_entities": [
+        "匿名示例企业"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "usage_status": "usable",
+      "qualification": null,
+      "verification_status": "verified",
+      "allowed_usage": "public_fact",
+      "as_of": "2026-08-17T00:00:00+08:00"
+    }
+  ]
+}

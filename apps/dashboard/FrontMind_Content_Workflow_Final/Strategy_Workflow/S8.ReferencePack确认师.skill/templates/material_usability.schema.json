@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/material-usability-v2.3.json",
+  "title": "FrontMind S8 Material Usability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "status", "brand", "summaries", "exclusions", "warnings", "blocker"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S8_material_usability"},
+    "status": {"enum": ["completed", "completed_with_limits", "blocked"]},
+    "brand": {"type": "string", "minLength": 1},
+    "summaries": {"type": "object"},
+    "exclusions": {"type": "array"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "blocker": {"type": ["string", "null"]}
+  }
+}

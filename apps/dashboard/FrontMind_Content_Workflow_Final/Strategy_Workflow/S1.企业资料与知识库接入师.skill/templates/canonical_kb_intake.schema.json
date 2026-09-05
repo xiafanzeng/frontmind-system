@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/material-intake-v2.3.json",
+  "title": "FrontMind S1 Material Intake",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "status", "brand", "created_at", "input", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S1_material_intake"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "brand": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_name", "input_kind", "format_mode", "profile", "source_schema_version", "primary_index", "selected_route", "legacy_enrichment_skill", "optional_indexes", "usable_files", "skipped_files"],
+      "properties": {
+        "input_name": {"type": "string", "minLength": 1},
+        "input_kind": {
+          "enum": [
+            "frontmind_reference_pack", "frontmind_reference_pack_v2_1",
+            "canonical_enterprise_kb", "canonical_enterprise_kb_v4",
+            "frontmind_kb_working_set", "frontmind_kb_working_set_v5",
+            "ordinary_zip", "ordinary_directory", "standalone_document", "standalone_image"
+          ]
+        },
+        "format_mode": {"enum": ["archive", "directory", "file"]},
+        "profile": {"type": ["string", "null"]},
+        "source_schema_version": {"type": ["string", "integer", "number", "null"]},
+        "primary_index": {"type": ["string", "null"]},
+        "selected_route": {"enum": ["direct_normalization", "legacy_s1_enrichment_then_normalization"]},
+        "legacy_enrichment_skill": {"type": ["string", "null"]},
+        "optional_indexes": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
+        "usable_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "media_kind", "bytes"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "media_kind": {"enum": ["document", "image"]},
+              "bytes": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "skipped_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "reason"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

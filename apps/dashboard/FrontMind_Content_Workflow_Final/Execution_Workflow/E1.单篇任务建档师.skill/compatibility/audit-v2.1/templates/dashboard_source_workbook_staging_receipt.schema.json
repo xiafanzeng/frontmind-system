@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/dashboard-source-workbook-staging-receipt-v2.1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "stage", "status", "staged_at", "source_file",
+    "source_sha256", "staged_workbook_path", "staged_workbook_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1.0"},
+    "job_id": {"type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{5,80}$"},
+    "stage": {"const": "E1_dashboard_source_workbook_staging"},
+    "status": {"const": "passed"},
+    "staged_at": {"type": "string", "format": "date-time"},
+    "source_file": {"type": "string", "minLength": 6, "pattern": "^[^/\\\\]+\\.xlsx$"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "staged_workbook_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+\\.xlsx$"},
+    "staged_workbook_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

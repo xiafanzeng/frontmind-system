@@ -1,0 +1,28 @@
+{
+  "candidateDescriptor": {
+    "outputItemId": "output-candidate-001:content:0",
+    "fileId": "file-candidate-001",
+    "filename": "示例企业_candidate.zip",
+    "mimeType": "application/zip"
+  },
+  "knowledgeImport": {
+    "schemaVersion": 4,
+    "companyName": "跨仓契约示例企业",
+    "candidate": {
+      "taskId": "task-knowledge-v4-001",
+      "outputItemId": "output-candidate-001:content:0",
+      "fileId": "file-candidate-001",
+      "descriptorHash": "218190cf6e068972d5d1b1110998e5e4ceecd00ef5ad9bf936a2dadbb4ac522e",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "finalArtifact": {
+      "fileId": "file-final-001",
+      "filename": "示例企业_标准知识库.zip",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "archiveContractVersion": 3,
+      "validationProfile": "website-lead-v1",
+      "packageManifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "finalizerVersion": "website-kb-finalizer-v1"
+    }
+  }
+}

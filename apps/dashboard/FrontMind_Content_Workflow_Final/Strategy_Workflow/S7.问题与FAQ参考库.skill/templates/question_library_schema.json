@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/question-library-v2.3.json",
+  "title": "FrontMind S7 Observed Question Library",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "status", "brand", "collection_policy", "questions", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S7_question_faq_reference_library"},
+    "status": {"enum": ["completed", "skipped_optional"]},
+    "brand": {"type": "string", "minLength": 1},
+    "collection_policy": {"type": "string", "minLength": 1},
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question_id", "question_text", "source_kind", "knowledge_ids", "source_ids", "entry_category", "suggested_pattern_ids", "answer_boundary"]
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

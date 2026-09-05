@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/runtime-image-registry-receipt-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "stage", "created_at", "base_registry_file", "base_registry_sha256",
+    "runtime_registry_file", "seeded_runtime_sha256", "base_asset_ids"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E3_runtime_image_registry_seed"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "base_registry_file": {"type": "string", "minLength": 1},
+    "base_registry_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "runtime_registry_file": {"type": "string", "minLength": 1},
+    "seeded_runtime_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "base_asset_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^img_"}}
+  }
+}

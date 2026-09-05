@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/scope_analysis.schema.json",
+  "title": "FrontMind Adaptive Scope Analysis v2.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "geographic_scope", "decision_context", "time_basis", "inference_basis", "clarification"],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "pattern": "^job_" },
+    "geographic_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value", "basis"],
+      "properties": {
+        "status": { "enum": ["specific", "global", "not_applicable"] },
+        "value": { "type": ["string", "null"], "maxLength": 120 },
+        "basis": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      }
+    },
+    "decision_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roles", "problem", "decision_criteria", "professional_depth"],
+      "properties": {
+        "roles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true },
+        "problem": { "type": "string", "minLength": 4 },
+        "decision_criteria": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true },
+        "professional_depth": { "enum": ["general", "professional", "technical", "research"] }
+      }
+    },
+    "time_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of", "freshness_class", "valid_until", "basis"],
+      "properties": {
+        "as_of": { "type": "string", "format": "date" },
+        "freshness_class": { "enum": ["stable", "moderate", "volatile"] },
+        "valid_until": { "type": ["string", "null"], "format": "date" },
+        "basis": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      }
+    },
+    "inference_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledge_ids", "source_ids", "monitoring_observation_ids", "notes"],
+      "properties": {
+        "knowledge_ids": { "type": "array", "items": { "type": "string", "pattern": "^kn_" }, "uniqueItems": true },
+        "source_ids": { "type": "array", "items": { "type": "string", "pattern": "^src_" }, "uniqueItems": true },
+        "monitoring_observation_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "notes": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "clarification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "question", "answer", "material_effect"],
+      "properties": {
+        "status": { "enum": ["not_required", "required", "resolved"] },
+        "question": { "type": ["string", "null"] },
+        "answer": { "type": ["string", "null"] },
+        "material_effect": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `marketEdition` enum('domestic','overseas') DEFAULT 'domestic' NOT NULL;

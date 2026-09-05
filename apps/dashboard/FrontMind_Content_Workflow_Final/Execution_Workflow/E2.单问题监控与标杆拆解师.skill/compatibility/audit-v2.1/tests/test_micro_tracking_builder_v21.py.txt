@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Regression tests for the title-free, pattern-free v2.1 Monitoring producer."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = SKILL_ROOT / "scripts" / "micro_tracking_builder.py"
+SPEC = importlib.util.spec_from_file_location("e2_test_micro_tracking_builder", SCRIPT)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load {SCRIPT}")
+BUILDER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BUILDER)
+
+
+class MicroTrackingBuilderV21Tests(unittest.TestCase):
+    def test_producer_emits_schema_valid_observations_without_pattern_guess(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            answers = root / "answers.json"
+            sources = root / "sources.json"
+            derived = root / "derived.json"
+            output = root / "monitoring.json"
+            metadata = root / "monitoring.raw.json"
+            answers.write_text(json.dumps([{
+                "answer_id": "ans_001",
+                "question": "哪家服务商值得考虑？",
+                "platform": "fixture-engine",
+                "answer": "可结合适用场景、能力边界和公开资料判断。",
+                "captured_at": "2026-08-12T08:00:00+08:00",
+            }], ensure_ascii=False), encoding="utf-8")
+            sources.write_text(json.dumps([{
+                "citation_id": "src_001",
+                "answer_id": "ans_001",
+                "url": "https://example.com/guide",
+                "title": "选择指南",
+                "publisher": "示例媒体",
+                "accessed_at": "2026-08-12T08:05:00+08:00",
+                "body_excerpt": "公开页面提供了选择维度。",
+                "citation_context": "回答在选择标准处引用该页面。",
+                "cited_claim": "选择时应核验适用条件。",
+                "source_type": "editorial_media",
+                "primary_source_status": "secondary",
+                "freshness_risk": "none",
+            }], ensure_ascii=False), encoding="utf-8")
+            derived.write_text(json.dumps({
+                "competitors": [],
+                "excluded_observations": [],
+                "answer_landscape": [{
+                    "platform": "fixture-engine",
+                    "answer_id": "ans_001",
+                    "direct_answer": "应按需求和公开证据判断。",
+                    "entities": [],
+                    "stance": "neutral",
+                    "dimensions": ["适用条件", "证据"],
+                    "unanswered_subquestions": [],
+                }],
+                "supplementary_primary_sources": [],
+                "recurring_subquestions": ["如何核验适用条件？"],
+                "warnings": [],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            argv = [
+                "micro_tracking_builder.py",
+                "--job-id", "job_micro_tracking_v21",
+                "--question", "哪家服务商值得考虑？",
+                "--answers", str(answers),
+                "--citations", str(sources),
+                "--derived-analysis", str(derived),
+                "--output", str(output),
+                "--raw-metadata-output", str(metadata),
+                "--package-root", str(root),
+            ]
+            with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(BUILDER.main(), 0)
+
+            payload = json.loads(output.read_text(encoding="utf-8"))
+            observation = payload["source_observations"][0]
+            self.assertNotIn("content_pattern_guess", observation)
+            self.assertIsNone(observation["question_similarity"])
+            self.assertEqual(payload["schema_version"], "2.1.0")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/runtime_evidence_extension.schema.json",
+  "title": "FrontMind Job-local Runtime Evidence Extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "sources", "claims", "evidence_files"],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "job_id": {"type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{5,80}$"},
+    "sources": {
+      "type": "array",
+      "items": {"$ref": "../../../registries.schema.json#/$defs/source"}
+    },
+    "claims": {
+      "type": "array",
+      "items": {"$ref": "../../../registries.schema.json#/$defs/claim"}
+    },
+    "evidence_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "authorization_status"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+          },
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "authorization_status": {
+            "enum": ["public_approved", "anonymized_approved", "runtime_approved", "internal_only"]
+          }
+        }
+      }
+    }
+  }
+}

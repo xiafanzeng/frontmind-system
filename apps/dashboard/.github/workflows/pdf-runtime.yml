@@ -1,0 +1,93 @@
+name: PDF runtime image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - deploy/1panel-node-pdf/**
+      - .github/workflows/pdf-runtime.yml
+      - scripts/assert-current-pdf-runtime-revision.mjs
+      - scripts/mark-ghcr-promoted.mjs
+  workflow_dispatch:
+
+concurrency:
+  # Every PDF base that could move `stable` shares one ordered lane. An old
+  # run must prove its PDF/workflow tree still matches remote main immediately
+  # before both promotion and dispatch. Unrelated main commits remain valid.
+  group: dashboard-pdf-runtime-main
+  cancel-in-progress: false
+
+jobs:
+  build-sign:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "repository=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/frontmind-dashboard-pdf-runtime" >>"$GITHUB_OUTPUT"
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/1panel-node-pdf
+          file: deploy/1panel-node-pdf/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.repository }}:sha-${{ github.sha }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_VERSION=sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Sign exact PDF runtime digest
+        env:
+          IMAGE: ${{ steps.image.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - id: promotion-revision
+        name: Verify current PDF revision and promote exact digest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.image.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(node scripts/assert-current-pdf-runtime-revision.mjs --phase promotion)"
+          [[ "$revision" =~ ^[a-f0-9]{64}$ ]]
+          echo "revision=$revision" >>"$GITHUB_OUTPUT"
+          node scripts/mark-ghcr-promoted.mjs \
+            --marker-prefix released \
+            --source-revision "$revision" \
+            --extra-current-tag stable
+      - name: Trigger application build against the new signed base
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.image.outputs.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(node scripts/assert-current-pdf-runtime-revision.mjs --phase dispatch)"
+          [[ "$revision" == '${{ steps.promotion-revision.outputs.revision }}' ]]
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
+            -f event_type=pdf-runtime-updated \
+            -f "client_payload[pdf_runtime_image]=$IMAGE@$DIGEST" \
+            -f "client_payload[pdf_runtime_revision]=$revision"

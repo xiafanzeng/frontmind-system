@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/job_state.schema.json",
+  "title": "FrontMind Workflow Job State v2.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "workflow_mode",
+    "current_stage",
+    "status",
+    "selected_pattern_id",
+    "title_count",
+    "warnings",
+    "blocker",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{2,80}$" },
+    "workflow_mode": { "enum": ["prepare", "article"] },
+    "current_stage": {
+      "enum": [
+        "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9",
+        "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"
+      ]
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "completed_with_limits",
+        "skipped_optional",
+        "awaiting_pack_confirmation",
+        "awaiting_research_inputs",
+        "awaiting_pattern_confirmation",
+        "awaiting_blueprint_confirmation",
+        "awaiting_title_count",
+        "blocked"
+      ]
+    },
+    "selected_pattern_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])$" }
+      ]
+    },
+    "title_count": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1, "maximum": 20 }
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    },
+    "blocker": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "no_usable_content",
+                "unknown_subject",
+                "irreconcilable_core_fact",
+                "restricted_core_dependency",
+                "unanswerable_core_question",
+                "unsafe_input",
+                "render_failed"
+              ]
+            },
+            "message": { "type": "string", "minLength": 1, "maxLength": 2000 }
+          }
+        }
+      ]
+    },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "awaiting_pack_confirmation" } }, "required": ["status"] },
+      "then": { "properties": { "current_stage": { "const": "S8" }, "blocker": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "awaiting_research_inputs" } }, "required": ["status"] },
+      "then": { "properties": { "current_stage": { "const": "E1" }, "blocker": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "awaiting_pattern_confirmation" } }, "required": ["status"] },
+      "then": { "properties": { "current_stage": { "const": "E2" }, "blocker": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "awaiting_blueprint_confirmation" } }, "required": ["status"] },
+      "then": { "properties": { "current_stage": { "const": "E4" }, "blocker": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "awaiting_title_count" } }, "required": ["status"] },
+      "then": { "properties": { "current_stage": { "const": "E10" }, "title_count": { "type": "null" }, "blocker": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "blocked" } }, "required": ["status"] },
+      "then": { "properties": { "blocker": { "type": "object" } } },
+      "else": { "properties": { "blocker": { "type": "null" } } }
+    }
+  ]
+}

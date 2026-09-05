@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/article_blueprint.schema.json",
+  "title": "FrontMind Editorial Article Blueprint v2.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "entry_category", "primary_question", "question_origin",
+    "product_scenario_subintent", "selected_pattern_id", "pattern_selection", "priority_angle",
+    "candidate_contract", "benchmark_refs", "title_formula_plan", "lead_plan", "sections",
+    "faq_plan", "conclusion_plan", "visual_plan", "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{2,80}$" },
+    "entry_category": { "$ref": "#/$defs/contentEntry" },
+    "primary_question": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "question_origin": { "enum": ["external_confirmed", "upload_inferred", "foundation_derived"] },
+    "product_scenario_subintent": {
+      "type": ["string", "null"],
+      "enum": [null, "offering_definition", "feature_mechanism", "scenario_fit", "delivery_usage", "support_boundary", "price_selection"]
+    },
+    "selected_pattern_id": { "$ref": "#/$defs/patternId" },
+    "pattern_selection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "recommended_pattern_id", "changed_from_recommendation", "reason"],
+      "properties": {
+        "source": { "enum": ["user_confirmed", "foundation_template"] },
+        "recommended_pattern_id": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/patternId" }] },
+        "changed_from_recommendation": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "priority_angle": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["angle", "fact_ids", "editorial_priority_only"],
+          "properties": {
+            "angle": { "type": "string", "minLength": 1 },
+            "fact_ids": { "$ref": "#/$defs/factIds" },
+            "editorial_priority_only": { "const": true }
+          }
+        }
+      ]
+    },
+    "candidate_contract": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidateContract" }] },
+    "benchmark_refs": {
+      "type": "array", "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": [
+          "rank", "title", "url", "pattern_id", "classification_confidence", "citation_count",
+          "benchmark_id", "structure_summary", "structure_observations", "subquestions",
+          "evidence_positions", "selection_rationale", "benchmark_moves"
+        ],
+        "properties": {
+          "rank": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "title": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "format": "uri" },
+          "pattern_id": { "$ref": "#/$defs/patternId" },
+          "classification_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "citation_count": { "type": "integer", "minimum": 0 },
+          "benchmark_id": {
+            "oneOf": [
+              { "type": "null" },
+              { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])-B[0-9]{2}$" }
+            ]
+          },
+          "structure_summary": { "type": "string", "minLength": 1 },
+          "structure_observations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "subquestions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "evidence_positions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "selection_rationale": { "type": ["string", "null"], "minLength": 1 },
+          "benchmark_moves": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        },
+        "allOf": [{
+          "if": { "properties": { "benchmark_id": { "type": "string" } }, "required": ["benchmark_id"] },
+          "then": {
+            "properties": {
+              "structure_observations": { "minItems": 1 },
+              "selection_rationale": { "type": "string", "minLength": 1 }
+            }
+          }
+        }]
+      }
+    },
+    "title_formula_plan": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "lead_plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "fact_ids", "candidate_ids", "limitations", "length_target"],
+      "properties": {
+        "purpose": { "type": "string", "minLength": 1 },
+        "fact_ids": { "$ref": "#/$defs/factIds" },
+        "candidate_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "length_target": {
+          "type": "object", "additionalProperties": false,
+          "required": ["minimum", "maximum"],
+          "properties": {
+            "minimum": { "type": "integer", "minimum": 1 },
+            "maximum": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "sections": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["section_id", "display_heading", "editorial_job", "reader_takeaway", "fact_ids", "candidate_ids", "benchmark_moves", "visual_role"],
+        "properties": {
+          "section_id": { "type": "string", "pattern": "^sec_[a-z0-9_-]+$" },
+          "display_heading": { "type": "string", "minLength": 1 },
+          "editorial_job": { "type": "string", "minLength": 1 },
+          "reader_takeaway": { "type": "string", "minLength": 1 },
+          "fact_ids": { "$ref": "#/$defs/factIds" },
+          "candidate_ids": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "benchmark_moves": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+          "visual_role": { "enum": [null, "brand_editorial", "navigate", "explain", "prove"] }
+        }
+      }
+    },
+    "faq_plan": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "conclusion_plan": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "fact_ids", "limitations"],
+      "properties": {
+        "purpose": { "type": "string", "minLength": 1 },
+        "fact_ids": { "$ref": "#/$defs/factIds" },
+        "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "visual_plan": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["after_section_id", "role", "brief", "required"],
+        "properties": {
+          "after_section_id": { "type": ["string", "null"] },
+          "role": { "enum": ["brand_editorial", "navigate", "explain", "prove"] },
+          "brief": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "entry_category": { "const": "foundation_start" } }, "required": ["entry_category"] },
+      "then": { "properties": { "selected_pattern_id": { "const": "P14" }, "question_origin": { "const": "foundation_derived" } } },
+      "else": { "not": { "properties": { "selected_pattern_id": { "const": "P14" } }, "required": ["selected_pattern_id"] } }
+    },
+    {
+      "if": { "properties": { "selected_pattern_id": { "enum": ["P01", "P02"] } }, "required": ["selected_pattern_id"] },
+      "then": { "properties": { "candidate_contract": { "type": "object" } } },
+      "else": { "properties": { "candidate_contract": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "selected_pattern_id": { "const": "P01" } }, "required": ["selected_pattern_id"] },
+      "then": { "properties": { "candidate_contract": { "properties": { "ordered_candidates": { "minItems": 1, "maxItems": 1 } } } } }
+    },
+    {
+      "if": { "properties": { "selected_pattern_id": { "const": "P02" } }, "required": ["selected_pattern_id"] },
+      "then": { "properties": { "candidate_contract": { "properties": { "ordered_candidates": { "minItems": 3 } } } } }
+    }
+  ],
+  "$defs": {
+    "contentEntry": { "enum": ["industry_ranking", "competitor_comparison", "reputation", "product_scenario", "foundation_start"] },
+    "patternId": { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])$" },
+    "factIds": { "type": "array", "items": { "type": "string", "pattern": "^(?:fact|clm)_" }, "uniqueItems": true },
+    "candidateContract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["featured_brand_entity_id", "ordered_candidates", "common_dimensions"],
+      "properties": {
+        "featured_brand_entity_id": { "type": "string", "minLength": 1 },
+        "ordered_candidates": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["entity_id", "display_name", "source_ids", "fact_ids", "role"],
+            "properties": {
+              "entity_id": { "type": "string", "minLength": 1 },
+              "display_name": { "type": "string", "minLength": 1 },
+              "source_ids": { "type": "array", "items": { "type": "string", "pattern": "^src_" }, "uniqueItems": true },
+              "fact_ids": { "$ref": "#/$defs/factIds" },
+              "role": { "enum": ["featured_brand", "candidate"] }
+            }
+          }
+        },
+        "common_dimensions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    }
+  }
+}

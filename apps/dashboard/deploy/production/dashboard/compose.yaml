@@ -1,0 +1,96 @@
+name: frontmind-dashboard
+
+x-image: &dashboard-image
+  image: ${FRONTMIND_DASHBOARD_IMAGE:?set FRONTMIND_DASHBOARD_IMAGE to an immutable image@sha256 digest}
+  pull_policy: never
+
+services:
+  dashboard:
+    <<: *dashboard-image
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${FRONTMIND_DASHBOARD_ENV_FILE:-/etc/frontmind/dashboard.env}
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_IMAGE_DIGEST:?set by the deploy controller}
+    ports:
+      - "127.0.0.1:${FRONTMIND_DASHBOARD_HOST_PORT:-3001}:3001"
+    volumes:
+      - type: bind
+        source: ${FRONTMIND_PREPARED_FILE_DIR_HOST:-/var/lib/frontmind/prepared-files}
+        target: /var/lib/frontmind/prepared-files
+      - type: bind
+        source: ${FRONTMIND_DASHBOARD_ASSET_DIR_HOST:-/var/lib/frontmind/dashboard-assets}
+        target: /var/lib/frontmind/dashboard-assets
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    networks:
+      applications:
+        aliases:
+          - frontmind-dashboard
+      database: {}
+
+  release-db-plan:
+    <<: *dashboard-image
+    profiles:
+      - release
+    restart: "no"
+    init: true
+    entrypoint:
+      - node
+      - /app/dist/release-db.js
+    env_file:
+      - ${FRONTMIND_DASHBOARD_READINESS_ENV_FILE:-/etc/frontmind/dashboard-readiness.env}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      database: {}
+
+  release-db-migrate:
+    <<: *dashboard-image
+    profiles:
+      - release
+    restart: "no"
+    init: true
+    entrypoint:
+      - node
+      - /app/dist/release-db.js
+    env_file:
+      - ${FRONTMIND_DASHBOARD_MIGRATOR_ENV_FILE:-/etc/frontmind/dashboard-migrator.env}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      database: {}
+
+networks:
+  applications:
+    external: true
+    name: ${FRONTMIND_APPLICATION_NETWORK:-frontmind-applications}
+  database:
+    external: true
+    name: ${FRONTMIND_DATABASE_NETWORK:-1panel-network}

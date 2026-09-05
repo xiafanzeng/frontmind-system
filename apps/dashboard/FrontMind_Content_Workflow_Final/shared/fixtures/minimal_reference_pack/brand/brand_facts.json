@@ -1,0 +1,108 @@
+{
+  "schema_version": "2.3.0",
+  "stage": "S4_brand_facts",
+  "brand_identity": {
+    "canonical_name": "匿名示例企业",
+    "aliases": [
+      "匿名品牌"
+    ],
+    "source_ids": [
+      "src_brand_overview"
+    ]
+  },
+  "positioning": {
+    "category_frame": "企业内容生产支持",
+    "brand_role": "把已有企业事实整理为清晰、可发布的文章内容",
+    "differentiated_value": "让事实、结构与品牌表达在一篇文章中自然衔接",
+    "reasons_to_believe": [
+      {
+        "statement": "服务范围包括资料整理、事实提炼、结构设计和双格式交付。",
+        "claim_ids": [
+          "clm_service_scope"
+        ],
+        "source_ids": [
+          "src_brand_overview"
+        ],
+        "usage_status": "usable"
+      }
+    ],
+    "functional_value": [
+      "形成可直接用于写作的企业事实与内容结构"
+    ],
+    "narrative_hypotheses": []
+  },
+  "offerings": [
+    {
+      "fact_id": "offering_content_support",
+      "statement": "服务包括资料整理、事实提炼、写作结构设计和双格式交付。",
+      "claim_ids": [
+        "clm_service_scope"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "usage_status": "usable"
+    }
+  ],
+  "capabilities": [
+    {
+      "fact_id": "capability_content_translation",
+      "statement": "企业事实可以被整理为文章所需的结构与表达。",
+      "claim_ids": [
+        "clm_service_scope"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "usage_status": "usable"
+    }
+  ],
+  "proof_points": [
+    {
+      "proof_id": "proof_service_scope",
+      "claim": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "claim_ids": [
+        "clm_service_scope"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "knowledge_ids": [
+        "kn_brand_overview"
+      ],
+      "evidence_status": "supported",
+      "allowed_wording": "匿名示例企业的服务覆盖资料整理、事实提炼、结构设计和双格式交付。",
+      "necessary_qualification": null,
+      "applicable_patterns": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16"
+      ]
+    }
+  ],
+  "limitations": [
+    {
+      "fact_id": "limitation_fixture_only",
+      "statement": "该匿名样例只用于工作流测试。",
+      "claim_ids": [
+        "clm_fixture_limit"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ]
+    }
+  ]
+}

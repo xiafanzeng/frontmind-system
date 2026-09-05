@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ $EUID -eq 0 ]] || {
+  echo "CONTRACT_MAINTENANCE_REQUIRES_ROOT" >&2
+  exit 1
+}
+[[ $# -eq 2 ]] || {
+  echo "usage: frontmind-contract-maintenance image@sha256:<digest> source-sha" >&2
+  exit 64
+}
+
+# This executable is mode 0700 and has no authorized_keys/sudoers entry. It
+# reuses exactly the same signature, backup, restore-test, state, postflight,
+# readiness and rollback gates as automatic expand deployment, while adding
+# the explicit release-db --allow-contract authorization.
+exec /usr/local/sbin/frontmind-deploy-controller \
+  --allow-contract dashboard "$1" "$2"

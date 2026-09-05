@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e8-editorial-summary-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "status", "editing_passes", "automatic_repairs", "warnings", "blocker"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E8"},
+    "status": {"enum": ["completed", "completed_with_limits", "blocked"]},
+    "editing_passes": {
+      "type": "array", "const": ["content", "line", "fact_recheck"]
+    },
+    "automatic_repairs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "blocker": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["no_usable_content", "unknown_subject", "unanswerable_core_question"]},
+            "message": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "2.2.0",
+  "items": [
+    {
+      "material_id": "material_brand_overview",
+      "path": "materials/brand_overview.md",
+      "kind": "first_party_public_text",
+      "usage_status": "usable"
+    }
+  ]
+}

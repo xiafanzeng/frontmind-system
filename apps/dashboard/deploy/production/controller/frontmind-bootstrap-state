@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+[[ $EUID -eq 0 ]] || {
+  echo "BOOTSTRAP_STATE_REQUIRES_ROOT" >&2
+  exit 1
+}
+[[ $# -eq 3 ]] || {
+  echo "usage: frontmind-bootstrap-state service image@sha256:<digest> source-sha" >&2
+  exit 64
+}
+case "$1" in
+  dashboard | website) ;;
+  *)
+    echo "BOOTSTRAP_STATE_SERVICE_REJECTED" >&2
+    exit 64
+    ;;
+esac
+
+# This mode is intentionally absent from authorized_keys and sudoers. The
+# controller accepts it only once, for an already-running signed image whose
+# local and public readiness identities match both source SHA and digest. It
+# records no invented previous image and performs no database command.
+exec /usr/local/sbin/frontmind-deploy-controller \
+  --bootstrap-state "$1" "$2" "$3"

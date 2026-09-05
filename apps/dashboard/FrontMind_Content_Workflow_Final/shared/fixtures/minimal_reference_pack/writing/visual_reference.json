@@ -1,0 +1,30 @@
+{
+  "schema_version": "2.3.0",
+  "stage": "S6_visual_reference_system",
+  "status": "completed_with_limits",
+  "brand": "匿名示例企业",
+  "delivery_mode": "text_first_no_approved_asset",
+  "asset_pool": [],
+  "visual_roles": {
+    "brand_editorial": "品牌编辑视觉",
+    "navigate": "章节导航",
+    "explain": "解释流程与关系",
+    "prove": "对应公开事实的证明图"
+  },
+  "brand_rules": {
+    "logo": "只使用真实原文件，不生成或重绘",
+    "colors": [],
+    "font_fallback": [
+      "Noto Sans CJK SC",
+      "PingFang SC",
+      "sans-serif"
+    ]
+  },
+  "aigc_boundaries": [
+    "不得冒充真实产品、团队、客户、病例、证书或现场"
+  ],
+  "pattern_recipes": [],
+  "warnings": [
+    "没有可直接使用的视觉资产，后续按纯文字交付"
+  ]
+}

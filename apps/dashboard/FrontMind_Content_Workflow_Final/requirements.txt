@@ -1,0 +1,7 @@
+# Required v2.3 runtime for Dashboard XLSX research, PDF extraction, visual
+# handling and high-fidelity DOCX delivery. Python 3.10+ is required. E10 does
+# not use a low-fidelity stdlib DOCX fallback.
+openpyxl>=3.1,<4
+Pillow>=10,<13
+python-docx>=1.1,<2
+pypdf>=5,<7

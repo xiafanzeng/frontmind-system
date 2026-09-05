@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e5-writing-summary-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "status", "automatic_repairs", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E5"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "automatic_repairs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

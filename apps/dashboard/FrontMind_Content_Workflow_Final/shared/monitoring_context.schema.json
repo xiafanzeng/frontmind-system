@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/monitoring_context.schema.json",
+  "title": "FrontMind Monitoring Context v2.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "question", "captured_at", "answers",
+    "source_observations", "analysis_status", "derived"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{2,80}$" },
+    "question": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "analysis_status": { "enum": ["available", "partial"] },
+    "answers": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["answer_id", "platform", "model", "sampled_at", "answer_text", "citations"],
+        "properties": {
+          "answer_id": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "platform": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "model": { "type": ["string", "null"], "maxLength": 120 },
+          "sampled_at": { "type": ["string", "null"], "format": "date-time" },
+          "answer_text": { "type": "string", "minLength": 1 },
+          "citations": {
+            "type": "array", "items": { "$ref": "#/$defs/sourceObservation" }
+          }
+        }
+      }
+    },
+    "source_observations": {
+      "type": "array", "items": { "$ref": "#/$defs/sourceObservation" }
+    },
+    "derived": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "answer_landscape", "competitors", "candidate_order_signals",
+        "recurring_dimensions", "recurring_subquestions", "unanswered_subquestions", "warnings"
+      ],
+      "properties": {
+        "answer_landscape": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["answer_id", "platform", "direct_answer", "entities", "stance", "dimensions", "unanswered_subquestions"],
+            "properties": {
+              "answer_id": { "type": "string", "minLength": 1 },
+              "platform": { "type": "string", "minLength": 1 },
+              "direct_answer": { "type": "string", "minLength": 1 },
+              "entities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "stance": { "enum": ["positive", "neutral", "negative", "mixed", "not_applicable"] },
+              "dimensions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "unanswered_subquestions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+            }
+          }
+        },
+        "competitors": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "answer_ids"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "answer_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "uniqueItems": true }
+            }
+          }
+        },
+        "candidate_order_signals": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["entity", "positions"],
+            "properties": {
+              "entity": { "type": "string", "minLength": 1 },
+              "positions": { "type": "array", "items": { "type": "integer", "minimum": 1 } }
+            }
+          }
+        },
+        "recurring_dimensions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "recurring_subquestions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "unanswered_subquestions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  },
+  "$defs": {
+    "sourceObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["url", "title", "publisher"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "title": { "type": ["string", "null"] },
+        "publisher": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

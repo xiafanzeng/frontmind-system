@@ -1,0 +1,110 @@
+{
+  "schema_version": "2.3.0",
+  "stage": "S5_article_voice_contract",
+  "brand": "匿名示例企业",
+  "voice_mode": "third_party_objective_reporting_plus_brand_promotion",
+  "editorial_position": "以第三人称编辑视角直接回答问题，用事实自然呈现品牌价值。",
+  "reader_experience": [
+    "答案前置",
+    "实体清楚",
+    "判断标准具体",
+    "品牌价值自然进入"
+  ],
+  "style": {
+    "perspective": "third_person_editorial",
+    "tone": "客观、清晰、有判断力",
+    "sentence_rhythm": "长短句交替，避免连续同构句",
+    "evidence_expression": "已知事实直接写，时效和条件自然写入原句",
+    "brand_expression": "按事实—能力意义—适合情境展开"
+  },
+  "brand_messages": [
+    {
+      "angle_id": "angle_content_translation",
+      "message": "把已有企业事实转化为结构清晰、适合公开阅读的文章。",
+      "proof_refs": [
+        "proof_service_scope"
+      ]
+    }
+  ],
+  "publication_language": {
+    "supported_fact": "直接陈述",
+    "time_sensitive_fact": "在原句自然注明条件",
+    "qualified_fact": "缩小主张或明确归因",
+    "unsupported_nonessential": "删除",
+    "decision_critical_unknown": "改为一次性的具体行动"
+  },
+  "comparison_style": {
+    "minimum_common_dimensions": true,
+    "client_brand_first_allowed": true,
+    "objective_ranking_without_evidence": false,
+    "unknown_competitor_detail": "省略该维度或转为统一选择标准"
+  },
+  "forbidden_public_phrases": [
+    "资料较完整",
+    "相关资料显示",
+    "以审核为准",
+    "服务边界",
+    "信息边界",
+    "保持克制",
+    "用户提交资料",
+    "需要说明",
+    "不构成对",
+    "待核验候选",
+    "当前团队与产品待核验",
+    "当前可公开资料不足",
+    "资料粒度不同"
+  ],
+  "forbidden_moves": [
+    "展示内部字段",
+    "解释工作流排序",
+    "反复提示资料缺失"
+  ],
+  "entry_overrides": [
+    {
+      "entry_category": "industry_ranking",
+      "eligible_patterns": [
+        "P01",
+        "P02"
+      ],
+      "tone_adjustment": "保持报道与品牌宣传融合的自然文风。"
+    },
+    {
+      "entry_category": "competitor_comparison",
+      "eligible_patterns": [
+        "P03"
+      ],
+      "tone_adjustment": "保持报道与品牌宣传融合的自然文风。"
+    },
+    {
+      "entry_category": "reputation",
+      "eligible_patterns": [
+        "P04",
+        "P16"
+      ],
+      "tone_adjustment": "保持报道与品牌宣传融合的自然文风。"
+    },
+    {
+      "entry_category": "product_scenario",
+      "eligible_patterns": [
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P15"
+      ],
+      "tone_adjustment": "保持报道与品牌宣传融合的自然文风。"
+    },
+    {
+      "entry_category": "foundation_start",
+      "eligible_patterns": [
+        "P14"
+      ],
+      "tone_adjustment": "保持报道与品牌宣传融合的自然文风。"
+    }
+  ]
+}

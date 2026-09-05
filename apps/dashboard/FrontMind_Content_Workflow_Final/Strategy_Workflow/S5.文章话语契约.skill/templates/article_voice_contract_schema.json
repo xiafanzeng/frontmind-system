@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/article-voice-contract-v2.3.json",
+  "title": "FrontMind S5 Article Voice Contract",
+  "type": "object",
+  "required": ["schema_version", "stage", "brand", "voice_mode", "editorial_position", "reader_experience", "style", "brand_messages", "publication_language", "comparison_style", "forbidden_public_phrases", "forbidden_moves", "entry_overrides"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S5_article_voice_contract"},
+    "brand": {"type": "string", "minLength": 1},
+    "voice_mode": {"const": "third_party_objective_reporting_plus_brand_promotion"},
+    "editorial_position": {"type": "string", "minLength": 1},
+    "reader_experience": {"type": "array", "minItems": 3, "items": {"type": "string"}},
+    "style": {"type": "object"},
+    "brand_messages": {"type": "array"},
+    "publication_language": {"type": "object"},
+    "comparison_style": {"type": "object"},
+    "forbidden_public_phrases": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "forbidden_moves": {"type": "array", "items": {"type": "string"}},
+    "entry_overrides": {"type": "array", "minItems": 5}
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/runtime-evidence-bundle-receipt-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "stage", "status", "created_at",
+    "base_claim_registry_sha256", "base_source_registry_sha256",
+    "runtime_claim_registry_sha256", "runtime_source_registry_sha256",
+    "base_claim_ids", "base_source_ids", "extension_claim_ids", "extension_source_ids", "evidence_files"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E3_runtime_evidence_bundle"},
+    "status": {"const": "passed"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "base_claim_registry_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "base_source_registry_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "runtime_claim_registry_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "runtime_source_registry_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "base_claim_ids": {"type": "array", "items": {"type": "string", "pattern": "^clm_"}, "uniqueItems": true},
+    "base_source_ids": {"type": "array", "items": {"type": "string", "pattern": "^src_"}, "uniqueItems": true},
+    "extension_claim_ids": {"type": "array", "items": {"type": "string", "pattern": "^clm_"}, "uniqueItems": true},
+    "extension_source_ids": {"type": "array", "items": {"type": "string", "pattern": "^src_"}, "uniqueItems": true},
+    "evidence_files": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "sha256", "authorization_status"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "authorization_status": {"enum": ["public_approved", "anonymized_approved", "internal_only"]}
+        }
+      }
+    }
+  }
+}

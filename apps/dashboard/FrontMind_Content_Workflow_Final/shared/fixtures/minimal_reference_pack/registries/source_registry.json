@@ -1,0 +1,20 @@
+{
+  "schema_version": "2.2.0",
+  "registry_type": "source_registry",
+  "sources": [
+    {
+      "source_id": "src_brand_overview",
+      "title": "匿名示例企业公开概览",
+      "publisher": "匿名示例企业",
+      "source_type": "first_party_official",
+      "source_origin_class": "first_party_official",
+      "url": null,
+      "file_path": "materials/brand_overview.md",
+      "published_at": null,
+      "accessed_at": "2026-08-17T00:00:00+08:00",
+      "usage_status": "usable",
+      "qualification": null,
+      "notes": "匿名工作流样例。"
+    }
+  ]
+}

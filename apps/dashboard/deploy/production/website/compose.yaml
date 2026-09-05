@@ -1,0 +1,44 @@
+name: frontmind-website
+
+services:
+  website:
+    image: ${FRONTMIND_WEBSITE_IMAGE:?set FRONTMIND_WEBSITE_IMAGE to an immutable image@sha256 digest}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${FRONTMIND_WEBSITE_ENV_FILE:-/etc/frontmind/website.env}
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_IMAGE_DIGEST:?set by the deploy controller}
+    ports:
+      - "127.0.0.1:${FRONTMIND_WEBSITE_HOST_PORT:-8888}:8888"
+    volumes:
+      - type: bind
+        source: ${FRONTMIND_WEBSITE_DATA_DIR_HOST:-/var/lib/frontmind-website}
+        target: /var/lib/frontmind-website
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8888/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    networks:
+      applications:
+        aliases:
+          - frontmind-website
+
+networks:
+  applications:
+    external: true
+    name: ${FRONTMIND_APPLICATION_NETWORK:-frontmind-applications}

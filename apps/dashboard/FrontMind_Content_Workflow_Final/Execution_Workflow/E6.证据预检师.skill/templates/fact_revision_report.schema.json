@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e6-fact-revision-report-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "status", "revision_counts", "warnings", "blocker"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E6"},
+    "status": {"enum": ["completed", "completed_with_limits", "blocked"]},
+    "revision_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keep": {"type": "integer", "minimum": 0},
+        "qualify": {"type": "integer", "minimum": 0},
+        "rewrite": {"type": "integer", "minimum": 0},
+        "remove": {"type": "integer", "minimum": 0}
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "blocker": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"const": "unanswerable_core_question"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Hostile ZIP regressions for the shared XLSX preflight used by E2."""
+
+from __future__ import annotations
+
+import importlib.util
+import stat
+import sys
+import tempfile
+import unittest
+import warnings
+import zipfile
+from pathlib import Path
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SAFETY_PATH = SKILL_ROOT.parent / "shared" / "xlsx_safety.py"
+SPEC = importlib.util.spec_from_file_location("e2_test_xlsx_safety", SAFETY_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load {SAFETY_PATH}")
+SAFETY = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(SAFETY)
+
+
+REQUIRED = {
+    "[Content_Types].xml": b"<Types/>",
+    "_rels/.rels": b"<Relationships/>",
+    "xl/workbook.xml": b"<workbook/>",
+}
+
+
+class XlsxSafetyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def archive(self, extras: list[tuple[zipfile.ZipInfo | str, bytes]] | None = None) -> Path:
+        path = self.root / "hostile.xlsx"
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, content in REQUIRED.items():
+                archive.writestr(name, content)
+            for member, content in extras or []:
+                archive.writestr(member, content)
+        return path
+
+    def test_rejects_duplicate_member_names(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            path = self.archive([("xl/workbook.xml", b"<forged-workbook/>")])
+
+        with self.assertRaisesRegex(ValueError, "duplicate member names"):
+            SAFETY.validate_xlsx(path)
+
+    def test_rejects_path_traversal_member(self) -> None:
+        path = self.archive([("../outside.xml", b"forged")])
+
+        with self.assertRaisesRegex(ValueError, "unsafe OOXML member path"):
+            SAFETY.validate_xlsx(path)
+
+    def test_rejects_encrypted_member_flag(self) -> None:
+        path = self.archive([("xl/worksheets/sheet1.xml", b"secret")])
+        raw = bytearray(path.read_bytes())
+        for signature, offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+            cursor = 0
+            while True:
+                cursor = raw.find(signature, cursor)
+                if cursor < 0:
+                    break
+                flags = int.from_bytes(raw[cursor + offset:cursor + offset + 2], "little") | 0x1
+                raw[cursor + offset:cursor + offset + 2] = flags.to_bytes(2, "little")
+                cursor += len(signature)
+        path.write_bytes(raw)
+
+        with self.assertRaisesRegex(ValueError, "encrypted OOXML member is forbidden"):
+            SAFETY.validate_xlsx(path)
+
+    def test_rejects_symlink_member(self) -> None:
+        link = zipfile.ZipInfo("xl/worksheets/sheet1.xml")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        path = self.archive([(link, b"../../outside")])
+
+        with self.assertRaisesRegex(ValueError, "symlink OOXML member is forbidden"):
+            SAFETY.validate_xlsx(path)
+
+    def test_rejects_excessive_compression_ratio(self) -> None:
+        path = self.root / "hostile.xlsx"
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, content in REQUIRED.items():
+                archive.writestr(name, content, compress_type=zipfile.ZIP_STORED)
+            archive.writestr(
+                "xl/worksheets/bomb.xml", b"0" * 200_000,
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
+
+        with self.assertRaisesRegex(ValueError, "compression ratio exceeds"):
+            SAFETY.validate_xlsx(path)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

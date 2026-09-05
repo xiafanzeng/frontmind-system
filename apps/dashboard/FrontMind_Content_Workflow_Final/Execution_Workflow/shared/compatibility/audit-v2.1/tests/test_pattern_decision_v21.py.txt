@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SHARED = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SHARED))
+from pattern_decision_binding import (  # noqa: E402
+    file_sha256,
+    validate_blueprint_decision_handoff,
+    validate_pattern_decision,
+)
+
+ROOT_SHARED = SHARED.parents[1] / "shared"
+FACTORY_SPEC = importlib.util.spec_from_file_location(
+    "frontmind_v21_test_factory",
+    ROOT_SHARED / "scripts" / "test_validate_json_instance.py",
+)
+if FACTORY_SPEC is None or FACTORY_SPEC.loader is None:
+    raise RuntimeError("canonical v2.1 fixture factory unavailable")
+FACTORY = importlib.util.module_from_spec(FACTORY_SPEC)
+FACTORY_SPEC.loader.exec_module(FACTORY)
+
+
+def write(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+class PatternDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.registry_path = self.root / "reference/shared/content-pattern-registry.json"
+        self.research_path = self.root / "reference/shared/pattern-research/index.json"
+        self.analysis_path = self.root / "inputs/e2_pattern_analysis.json"
+        self.snapshot = self.root / "research/obs_rank_01.json"
+        self.decision_path = self.root / "blueprint/e4_pattern_decision.json"
+        self.registry = json.loads((ROOT_SHARED / "content-pattern-registry.json").read_text(encoding="utf-8"))
+        self.research = json.loads((ROOT_SHARED / "pattern-research/index.json").read_text(encoding="utf-8"))
+        write(self.registry_path, self.registry)
+        write(self.research_path, self.research)
+        self.snapshot.parent.mkdir(parents=True, exist_ok=True)
+        self.snapshot.write_text("retrieved article", encoding="utf-8")
+        snapshot_sha = hashlib.sha256(self.snapshot.read_bytes()).hexdigest()
+        self.analysis = FACTORY.valid_e2_pattern_analysis()
+        self.analysis["job_id"] = "job_fixture1"
+        self.analysis["pattern_registry_ref"] = self.ref(self.registry_path)
+        self.analysis["pattern_research_index_ref"] = self.ref(self.research_path)
+        observation = self.analysis["content_observations"][0]
+        observation["retrieval_receipt"]["snapshot_relative_path"] = self.snapshot.relative_to(self.root).as_posix()
+        observation["retrieval_receipt"]["snapshot_sha256"] = snapshot_sha
+        observation["classification"]["snapshot_sha256"] = snapshot_sha
+        observation["classification"]["registry_sha256"] = file_sha256(self.registry_path)
+        write(self.analysis_path, self.analysis)
+        self.job = {
+            "job_id": "job_fixture1", "entry_category": "reputation",
+            "e2_pattern_analysis_path": self.analysis_path.relative_to(self.root).as_posix(),
+            "task": {
+                "question_text": self.analysis["question"],
+                "product_scenario_subintent": None,
+            },
+        }
+        self.decision = {
+            "job_id": "job_fixture1", "entry_category": "reputation",
+            "product_scenario_subintent": None, "selected_pattern_id": "P04",
+            "recommended_pattern_id": "P04", "decision": "accepted",
+            "e2_pattern_analysis_ref": self.ref(self.analysis_path),
+            "pattern_registry_ref": self.ref(self.registry_path),
+            "pattern_research_index_ref": self.ref(self.research_path),
+            "selected_benchmark_ranks": [1],
+            "selected_benchmark_observation_ids": ["obs_runtime_1"],
+            "entry_route_check": {"status": "passed"},
+            "question_fit_check": {"status": "passed"},
+            "evidence_readiness_check": {"status": "passed"},
+        }
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def ref(self, path: Path) -> dict[str, str]:
+        return {"path": path.relative_to(self.root).as_posix(), "sha256": file_sha256(path)}
+
+    def test_accepted_decision_binds_retrieved_classified_top20(self) -> None:
+        self.assertEqual(validate_pattern_decision(
+            decision=self.decision, content_job=self.job,
+            analysis=self.analysis, analysis_path=self.analysis_path,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        ), [])
+
+    def test_unrelated_benchmark_pattern_is_rejected(self) -> None:
+        self.analysis["content_observations"][0]["classification"]["primary_pattern_id"] = "P03"
+        errors = validate_pattern_decision(
+            decision=self.decision, content_job=self.job,
+            analysis=self.analysis, analysis_path=self.analysis_path,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        )
+        self.assertTrue(any("is not a classified P04 article" in value for value in errors))
+
+    def test_alternative_pattern_does_not_qualify_as_selected_benchmark(self) -> None:
+        classification = self.analysis["content_observations"][0]["classification"]
+        classification["primary_pattern_id"] = "P03"
+        classification["alternative_pattern_ids"] = ["P04"]
+        errors = validate_pattern_decision(
+            decision=self.decision, content_job=self.job,
+            analysis=self.analysis, analysis_path=self.analysis_path,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        )
+        self.assertTrue(any("is not a classified P04 article" in value for value in errors))
+
+    def test_eligible_primary_benchmark_cannot_be_silently_omitted(self) -> None:
+        self.decision["selected_benchmark_ranks"] = []
+        self.decision["selected_benchmark_observation_ids"] = []
+        errors = validate_pattern_decision(
+            decision=self.decision, content_job=self.job,
+            analysis=self.analysis, analysis_path=self.analysis_path,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        )
+        self.assertTrue(any("must use every available matching benchmark" in value for value in errors))
+
+    def test_template_fallback_cannot_silently_change_recommendation(self) -> None:
+        self.analysis["recommendation"]["recommendation_status"] = "template_fallback"
+        self.analysis["recommendation"]["recommended_pattern_id"] = "P16"
+        self.decision["recommended_pattern_id"] = "P16"
+        self.decision["decision"] = "template_fallback"
+        self.decision["selected_benchmark_ranks"] = []
+        self.decision["selected_benchmark_observation_ids"] = []
+        errors = validate_pattern_decision(
+            decision=self.decision, content_job=self.job,
+            analysis=self.analysis, analysis_path=self.analysis_path,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        )
+        self.assertTrue(any("fallback P" in value and "overridden" in value for value in errors), errors)
+
+    def test_blueprint_handoff_binds_exact_decision_file(self) -> None:
+        write(self.decision_path, self.decision)
+        blueprint = {
+            "job_id": "job_fixture1", "entry_category": "reputation",
+            "product_scenario_subintent": None, "pattern_id": "P04",
+            "pattern_decision_ref": self.ref(self.decision_path),
+            "benchmark_fusion": {"benchmark_decisions": [{"observation_id": "obs_runtime_1"}]},
+        }
+        self.assertEqual(validate_blueprint_decision_handoff(
+            blueprint=blueprint, decision=self.decision,
+            decision_path=self.decision_path, package_root=self.root,
+        ), [])
+        blueprint["pattern_id"] = "P16"
+        self.assertTrue(validate_blueprint_decision_handoff(
+            blueprint=blueprint, decision=self.decision,
+            decision_path=self.decision_path, package_root=self.root,
+        ))
+
+    def test_blueprint_cannot_omit_e4_selected_benchmarks(self) -> None:
+        decision = dict(self.decision)
+        decision["selected_benchmark_ranks"] = [1, 2, 3]
+        decision["selected_benchmark_observation_ids"] = [
+            "obs_runtime_1", "obs_runtime_2", "obs_runtime_3",
+        ]
+        write(self.decision_path, decision)
+        blueprint = {
+            "job_id": "job_fixture1", "entry_category": "reputation",
+            "product_scenario_subintent": None, "pattern_id": "P04",
+            "pattern_decision_ref": self.ref(self.decision_path),
+            "benchmark_fusion": {
+                "benchmark_decisions": [{"observation_id": "obs_runtime_1"}],
+            },
+        }
+        errors = validate_blueprint_decision_handoff(
+            blueprint=blueprint, decision=decision,
+            decision_path=self.decision_path, package_root=self.root,
+        )
+        self.assertTrue(any("selected benchmark set" in value for value in errors), errors)
+
+    def test_foundation_selects_p14_without_e2_or_runtime_benchmarks(self) -> None:
+        foundation = {
+            "job_id": "job_foundation1", "entry_category": "foundation_start",
+            "product_scenario_subintent": None,
+            "recommended_pattern_id": None, "selected_pattern_id": "P14",
+            "decision": "template_fallback", "override_reason_code": None,
+            "override_rationale": None, "e2_pattern_analysis_ref": None,
+            "pattern_registry_ref": self.ref(self.registry_path),
+            "pattern_research_index_ref": self.ref(self.research_path),
+            "selected_benchmark_ranks": [], "selected_benchmark_observation_ids": [],
+            "entry_route_check": {"status": "passed"},
+            "question_fit_check": {"status": "passed"},
+            "evidence_readiness_check": {"status": "passed"},
+        }
+        job = {
+            "job_id": "job_foundation1", "entry_category": "foundation_start",
+            "task": {"question_text": None, "product_scenario_subintent": None},
+        }
+        self.assertEqual(validate_pattern_decision(
+            decision=foundation, content_job=job,
+            analysis=None, analysis_path=None,
+            registry=self.registry, registry_path=self.registry_path,
+            research_index=self.research, research_index_path=self.research_path,
+            package_root=self.root,
+        ), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

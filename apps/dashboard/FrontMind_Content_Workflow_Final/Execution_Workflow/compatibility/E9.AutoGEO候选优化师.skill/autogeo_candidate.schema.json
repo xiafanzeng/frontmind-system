@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e9-autogeo-candidate-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "source", "adapter", "raw_markdown", "candidate_model", "issues"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E9"},
+    "source": {"const": "autogeo_api"},
+    "adapter": {"enum": ["harnessgeo.rewriters", "autogeo.rewriters"]},
+    "raw_markdown": {"type": "string", "minLength": 1},
+    "candidate_model": {"type": ["object", "null"]},
+    "issues": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "allOf": [{
+    "if": {"properties": {"candidate_model": {"type": "null"}}},
+    "then": {"properties": {"issues": {"minItems": 1}}}
+  }]
+}

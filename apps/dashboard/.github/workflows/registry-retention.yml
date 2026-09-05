@@ -1,0 +1,62 @@
+name: GHCR successful-release retention
+
+on:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retain-dashboard-images:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: Keep 10 successful deployments and rollback artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER_TYPE: ${{ github.event.repository.owner.type || 'User' }}
+        run: >-
+          node scripts/ghcr-success-retention.mjs
+          --owner "$GITHUB_REPOSITORY_OWNER"
+          --owner-type "$GITHUB_REPOSITORY_OWNER_TYPE"
+          --package frontmind-dashboard
+          --marker-prefix deployed
+          --keep-successful 10
+          --execute
+
+  retain-pdf-runtime-images:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+      - name: Keep 10 successfully signed and promoted PDF bases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER_TYPE: ${{ github.event.repository.owner.type || 'User' }}
+        run: >-
+          node scripts/ghcr-success-retention.mjs
+          --owner "$GITHUB_REPOSITORY_OWNER"
+          --owner-type "$GITHUB_REPOSITORY_OWNER_TYPE"
+          --package frontmind-dashboard-pdf-runtime
+          --marker-prefix released
+          --keep-successful 10
+          --execute

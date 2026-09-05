@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/reference_pack.schema.json",
+  "title": "FrontMind Lightweight Reference Pack",
+  "description": "v2.2 is canonical; v2.1 remains readable and is normalized at intake.",
+  "oneOf": [{ "$ref": "#/$defs/v22" }, { "$ref": "#/$defs/v21Compatibility" }],
+  "$defs": {
+    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+    "brand": {
+      "type": "object", "additionalProperties": false, "required": ["canonical_name", "aliases"],
+      "properties": {
+        "canonical_name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "legal_entity_name": { "type": ["string", "null"], "maxLength": 200 },
+        "official_website": { "type": ["string", "null"], "format": "uri" }
+      }
+    },
+    "v22": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "profile", "pack_id", "version", "created_at", "brand", "material_index_path", "registries", "writing_assets", "warnings"],
+      "properties": {
+        "schema_version": { "const": "2.2.0" },
+        "profile": { "const": "frontmind-content-reference-pack-v2.2" },
+        "pack_id": { "type": "string", "pattern": "^rp_[a-z0-9][a-z0-9_-]{2,80}$" },
+        "version": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "brand": { "$ref": "#/$defs/brand" },
+        "material_index_path": { "$ref": "#/$defs/relativePath" },
+        "registries": {
+          "type": "object", "additionalProperties": false,
+          "required": ["knowledge_registry_path", "source_registry_path", "claim_registry_path", "image_registry_path"],
+          "properties": {
+            "knowledge_registry_path": { "$ref": "#/$defs/relativePath" },
+            "source_registry_path": { "$ref": "#/$defs/relativePath" },
+            "claim_registry_path": { "$ref": "#/$defs/relativePath" },
+            "image_registry_path": { "$ref": "#/$defs/relativePath" }
+          }
+        },
+        "writing_assets": {
+          "type": "object", "additionalProperties": false,
+          "required": ["information_architecture_path", "trend_viewpoints_path", "voice_path", "visual_rules_path", "question_library_path"],
+          "properties": {
+            "information_architecture_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+            "trend_viewpoints_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+            "voice_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+            "visual_rules_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+            "question_library_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] }
+          }
+        },
+        "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "v21Compatibility": {
+      "type": "object", "required": ["schema_version", "profile", "pack_id", "brand", "registries"],
+      "properties": {
+        "schema_version": { "const": "2.1.0" },
+        "profile": { "const": "frontmind-content-reference-pack-v2.1" },
+        "pack_id": { "type": "string", "minLength": 1 },
+        "brand": { "$ref": "#/$defs/brand" },
+        "registries": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

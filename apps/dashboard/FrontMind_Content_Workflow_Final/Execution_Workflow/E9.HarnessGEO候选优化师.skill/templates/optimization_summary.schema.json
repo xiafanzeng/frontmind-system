@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e9-optimization-summary-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "status", "source", "model", "candidate_ready", "issues"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E9"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "source": {"const": "harnessgeo_api"},
+    "model": {"const": "gpt-5.6-luna"},
+    "candidate_ready": {"type": "boolean"},
+    "issues": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

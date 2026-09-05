@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e7-visual-selection-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "status", "used", "dropped", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E7"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "used": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["visual_id", "image_id", "file_path", "role", "rights_status", "credit", "width", "height"],
+        "properties": {
+          "visual_id": {"type": "string", "pattern": "^vis_"},
+          "image_id": {"type": "string", "pattern": "^img_"},
+          "file_path": {"type": "string", "minLength": 1},
+          "role": {"enum": ["brand_editorial", "navigate", "explain", "prove"]},
+          "rights_status": {"enum": ["approved", "approved_with_credit"]},
+          "credit": {"type": ["string", "null"]},
+          "width": {"type": "integer", "minimum": 320},
+          "height": {"type": "integer", "minimum": 180}
+        }
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["visual_id", "reason"],
+        "properties": {
+          "visual_id": {"type": "string", "pattern": "^vis_"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Focused E1 v2.1 tests for the canonical Dashboard workbook path."""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_PATH = SKILL_ROOT / "scripts" / "normalize_content_job.py"
+SPEC = importlib.util.spec_from_file_location("e1_normalize_v21_test", SCRIPT_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load {SCRIPT_PATH}")
+NORMALIZER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(NORMALIZER)
+
+
+def ordinary_job(source_workbook_path: str) -> dict[str, object]:
+    return {
+        "schema_version": "2.1.0",
+        "job_id": "job_e1_workbook_path_test",
+        "pack_id": "rp_e1_workbook_path_test",
+        "created_at": "2026-08-12T00:00:00+00:00",
+        "entry_category": "industry_ranking",
+        "task": {
+            "question_text": "哪家 GEO 服务商值得选？",
+            "question_origin": "external_confirmed",
+            "foundation_subject": None,
+            "manual_foundation_selection": False,
+            "product_scenario_subintent": None,
+        },
+        "scope_analysis_path": "00_input/scope_analysis.json",
+        "monitoring_input_path": "01_monitoring/monitoring_input.json",
+        "source_workbook_path": source_workbook_path,
+        "e2_pattern_analysis_path": "02_pattern_analysis/E2_job_e1_workbook_path_test_pattern_analysis.json",
+        "optimizer_target": {"dataset": "fixture", "engine_llm": "fixture"},
+        "deliverables": {"docx_body": True, "html_body_fragment": True, "title_map": True},
+        "editorial_profile": "third_party_objective_with_evidence_based_brand_promotion",
+    }
+
+
+class ContentJobV21Tests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def run_normalizer(self, value: dict[str, object]) -> int:
+        source = self.root / "content_job.raw.json"
+        output = self.root / "content_job.json"
+        receipt = self.root / "normalization-receipt.json"
+        source.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+        argv = [
+            "normalize_content_job.py", "--input", str(source), "--output", str(output),
+            "--receipt", str(receipt),
+        ]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            return NORMALIZER.main()
+
+    def test_accepts_the_single_canonical_e2_workbook_path(self) -> None:
+        self.assertEqual(
+            self.run_normalizer(ordinary_job("01_monitoring/dashboard_source_workbook.xlsx")),
+            0,
+        )
+        normalized = json.loads((self.root / "content_job.json").read_text(encoding="utf-8"))
+        self.assertEqual(normalized["task"]["question_text"], "哪家 GEO 服务商值得选?")
+
+    def test_rejects_a_second_dashboard_workbook_path_convention(self) -> None:
+        with self.assertRaisesRegex(ValueError, "01_monitoring/dashboard_source_workbook.xlsx"):
+            self.run_normalizer(ordinary_job("00_input/dashboard_source.xlsx"))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

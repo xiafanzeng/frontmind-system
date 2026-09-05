@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/staged-reference-pack-receipt-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "stage", "status", "source_zip_file", "source_zip_sha256", "staged_at",
+    "staged_package_dir", "reference_pack_path", "pack_id", "pack_version", "file_count",
+    "total_uncompressed_bytes", "canonical_pre_validation", "canonical_post_validation"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1.0"},
+    "stage": {"const": "E1_reference_pack_staging"},
+    "status": {"const": "passed"},
+    "source_zip_file": {"type": "string", "minLength": 5, "pattern": "^[^/\\\\]+\\.zip$"},
+    "source_zip_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "staged_at": {"type": "string", "format": "date-time"},
+    "staged_package_dir": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "reference_pack_path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+/reference_pack\\.json$"},
+    "pack_id": {"type": "string", "pattern": "^rp_"},
+    "pack_version": {"type": "integer", "minimum": 1},
+    "file_count": {"type": "integer", "minimum": 1},
+    "total_uncompressed_bytes": {"type": "integer", "minimum": 1},
+    "canonical_pre_validation": {"const": "pass"},
+    "canonical_post_validation": {"const": "pass"}
+  }
+}

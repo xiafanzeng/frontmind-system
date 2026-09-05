@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/content-job-normalization-receipt-v2.1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "stage", "status", "normalized_at",
+    "source_file", "source_sha256", "canonical_file", "canonical_sha256", "normalized_aliases"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "stage": {"const": "E1_content_job_normalization"},
+    "status": {"const": "passed"},
+    "normalized_at": {"type": "string", "format": "date-time"},
+    "source_file": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "canonical_file": {"type": "string", "minLength": 1},
+    "canonical_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "normalized_aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "from", "to"],
+        "properties": {
+          "path": {"type": "string"},
+          "from": {"type": "string", "maxLength": 300},
+          "to": {"type": "string", "maxLength": 300}
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "path": {"enum": ["entry_category", "question.category"]},
+              "from": {"const": "industry"},
+              "to": {"const": "industry_ranking"}
+            }
+          },
+          {
+            "properties": {
+              "path": {"const": "task.question_text"},
+              "from": {"type": "string", "maxLength": 300},
+              "to": {"type": "string", "minLength": 4, "maxLength": 300}
+            }
+          }
+        ]
+      },
+      "maxItems": 2
+    }
+  }
+}

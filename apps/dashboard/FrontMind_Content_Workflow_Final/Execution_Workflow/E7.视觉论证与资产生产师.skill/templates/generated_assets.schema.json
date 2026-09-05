@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e7-generated-assets-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "status", "attempts", "images"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "attempts": {
+      "type": "array", "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["visual_id", "status"],
+        "properties": {
+          "visual_id": {"type": "string", "pattern": "^vis_"},
+          "status": {"enum": ["completed", "completed_with_limits"]},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "allOf": [{
+          "if": {"properties": {"status": {"const": "completed_with_limits"}}},
+          "then": {"required": ["reason"]},
+          "else": {"not": {"required": ["reason"]}}
+        }]
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": [
+          "image_id", "file_path", "asset_kind", "origin", "usage_status", "rights_status",
+          "width", "height", "visual_id", "role", "after_section_id", "alt_text", "supports_fact_ids"
+        ],
+        "properties": {
+          "image_id": {"type": "string", "pattern": "^img_"},
+          "file_path": {"type": "string", "minLength": 1},
+          "asset_kind": {"enum": ["brand_image", "diagram"]},
+          "origin": {"const": "generated"},
+          "usage_status": {"const": "usable"},
+          "rights_status": {"const": "approved"},
+          "width": {"type": "integer", "minimum": 320},
+          "height": {"type": "integer", "minimum": 180},
+          "visual_id": {"type": "string", "pattern": "^vis_"},
+          "role": {"enum": ["brand_editorial", "navigate", "explain"]},
+          "after_section_id": {"type": ["string", "null"]},
+          "alt_text": {"type": "string", "minLength": 1},
+          "supports_fact_ids": {"type": "array", "items": {"type": "string", "pattern": "^(?:fact|clm)_"}, "uniqueItems": true}
+        }
+      }
+    }
+  }
+}

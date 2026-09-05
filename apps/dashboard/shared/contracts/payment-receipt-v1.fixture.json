@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "receipt": {
+    "orderId": "202607281234567890123456",
+    "tradeNo": "zpay-trade-20260728-0001",
+    "amountFen": 150000,
+    "paidAt": "2026-07-28T08:30:00.123Z",
+    "purchaseType": "service",
+    "scopeHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authorizationDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reviewRequired": false
+  }
+}

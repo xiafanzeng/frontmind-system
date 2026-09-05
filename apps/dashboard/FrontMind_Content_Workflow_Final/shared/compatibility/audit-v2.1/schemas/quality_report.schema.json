@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/quality_report.schema.json",
+  "title": "FrontMind Content Quality Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "stage", "content_model_sha256", "overall_status", "gates", "blocking_issues", "warnings"],
+  "properties": {
+    "schema_version": { "const": "2.1.0" },
+    "job_id": { "type": "string", "pattern": "^job_" },
+    "stage": { "enum": ["E8_pre_optimization", "E10_final"] },
+    "content_model_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "overall_status": { "enum": ["pass", "fail"] },
+    "gates": {
+      "type": "array",
+      "minItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate_id", "status", "evidence"],
+        "properties": {
+          "gate_id": {
+            "enum": [
+              "question_answered",
+              "micro_answer_complete",
+              "claim_evidence_complete",
+              "statistics_and_price_scoped",
+              "competitor_fairness",
+              "entity_clarity",
+              "freshness_and_dates",
+              "first_party_publication_and_claim_limits",
+              "faq_relevance",
+              "pattern_consistency",
+              "voice_and_no_meta_language",
+              "visual_argument_and_rights",
+              "html_structure_and_visible_schema",
+              "docx_html_semantic_parity",
+              "optimization_fact_integrity"
+            ]
+          },
+          "status": { "enum": ["pass", "fail", "not_applicable"] },
+          "evidence": { "type": "string", "minLength": 1 },
+          "issue_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+        }
+      }
+    },
+    "blocking_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["issue_id", "gate_id", "message", "repair_owner"],
+        "properties": {
+          "issue_id": { "type": "string", "pattern": "^issue_" },
+          "gate_id": { "type": "string" },
+          "message": { "type": "string", "minLength": 1 },
+          "repair_owner": { "enum": ["E4", "E5", "E6", "E7", "E8", "E9", "E10", "human_evidence_request"] }
+        }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "faq_count": { "type": "integer", "minimum": 0 },
+        "unsupported_claim_count": { "type": "integer", "minimum": 0 },
+        "unscoped_stat_count": { "type": "integer", "minimum": 0 },
+        "visual_total_count": { "type": "integer", "minimum": 0 },
+        "brand_editorial_visual_count": { "type": "integer", "minimum": 0 },
+        "navigation_visual_count": { "type": "integer", "minimum": 0 },
+        "explain_visual_count": { "type": "integer", "minimum": 0 },
+        "prove_visual_count": { "type": "integer", "minimum": 0 },
+        "prove_binding_failure_count": { "type": "integer", "minimum": 0 },
+        "heading_depth": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "direct_answer_unicode_length": { "type": "integer", "minimum": 0 },
+        "direct_answer_substantive_length": { "type": "integer", "minimum": 0 },
+        "micro_answer_unicode_length": { "type": "integer", "minimum": 0 },
+        "micro_answer_substantive_length": { "type": "integer", "minimum": 0 },
+        "subquestion_coverage_count": { "type": "integer", "minimum": 0 },
+        "approved_first_party_source_count": { "type": "integer", "minimum": 0 },
+        "benchmark_page_count": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

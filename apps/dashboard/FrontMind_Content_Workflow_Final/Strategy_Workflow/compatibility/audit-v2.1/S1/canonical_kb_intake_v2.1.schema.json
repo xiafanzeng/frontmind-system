@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/canonical-kb-intake-v2.json",
+  "title": "FrontMind S1 Canonical KB Intake Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "stage", "status", "brand", "source_mode", "created_at",
+    "canonical_kb", "legacy_s1", "builder_receipt"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "stage": {"const": "S1_canonical_kb_intake"},
+    "status": {"const": "passed"},
+    "brand": {"type": "string", "minLength": 1, "maxLength": 200},
+    "source_mode": {"enum": ["existing_canonical_kb", "legacy_s1_then_builder"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "canonical_kb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_name", "bytes", "sha256", "schema_version", "profile", "build_revision",
+        "manifest_path", "source_index_path", "knowledge_tree_path", "document_count", "asset_count"
+      ],
+      "properties": {
+        "file_name": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"const": 4},
+        "profile": {"const": "dashboard-enterprise-v1"},
+        "build_revision": {"type": ["integer", "string", "null"]},
+        "manifest_path": {"type": "string", "minLength": 1},
+        "source_index_path": {"type": "string", "minLength": 1},
+        "knowledge_tree_path": {"type": "string", "minLength": 1},
+        "document_count": {"type": "integer", "minimum": 1},
+        "asset_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "legacy_s1": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["directory_name", "file_count", "content_sha256"],
+          "properties": {
+            "directory_name": {"const": "legacy-s1"},
+            "file_count": {"type": "integer", "minimum": 1},
+            "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      ]
+    },
+    "builder_receipt": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file_name", "sha256"],
+          "properties": {
+            "file_name": {"type": "string", "minLength": 1},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"source_mode": {"const": "existing_canonical_kb"}}, "required": ["source_mode"]},
+      "then": {"properties": {"legacy_s1": {"type": "null"}, "builder_receipt": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"source_mode": {"const": "legacy_s1_then_builder"}}, "required": ["source_mode"]},
+      "then": {"properties": {"legacy_s1": {"type": "object"}, "builder_receipt": {"type": "object"}}}
+    }
+  ]
+}

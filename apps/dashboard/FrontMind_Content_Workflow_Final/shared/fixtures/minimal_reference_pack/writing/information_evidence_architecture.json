@@ -1,0 +1,216 @@
+{
+  "schema_version": "2.3.0",
+  "stage": "S4_information_evidence_architecture",
+  "brand": "匿名示例企业",
+  "positioning": {
+    "category_frame": "企业内容生产支持",
+    "brand_role": "把已有企业事实整理为清晰、可发布的文章内容",
+    "differentiated_value": "让事实、结构与品牌表达在一篇文章中自然衔接",
+    "reasons_to_believe": [
+      {
+        "statement": "服务范围包括资料整理、事实提炼、结构设计和双格式交付。",
+        "claim_ids": [
+          "clm_service_scope"
+        ],
+        "source_ids": [
+          "src_brand_overview"
+        ],
+        "usage_status": "usable"
+      }
+    ],
+    "functional_value": [
+      "形成可直接用于写作的企业事实与内容结构"
+    ],
+    "narrative_hypotheses": []
+  },
+  "information_pillars": [
+    {
+      "pillar_id": "pillar_service",
+      "name": "内容生产支持",
+      "core_message": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "proof_refs": [
+        "proof_service_scope"
+      ]
+    }
+  ],
+  "differentiation_evidence_map": [
+    {
+      "dimension_id": "dimension_service_scope",
+      "dimension": "服务内容",
+      "brand_fact": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "evidence_status": "supported",
+      "proof_refs": [
+        "proof_service_scope"
+      ],
+      "comparison_allowed": false,
+      "allowed_wording": "匿名示例企业的服务覆盖资料整理、事实提炼、结构设计和双格式交付。",
+      "forbidden_inference": "不得由本品牌事实推导行业领先、客观排名或竞品劣势。"
+    }
+  ],
+  "proof_bundles": [
+    {
+      "proof_id": "proof_service_scope",
+      "claim": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "claim_ids": [
+        "clm_service_scope"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "knowledge_ids": [
+        "kn_brand_overview"
+      ],
+      "evidence_status": "supported",
+      "allowed_wording": "匿名示例企业的服务覆盖资料整理、事实提炼、结构设计和双格式交付。",
+      "necessary_qualification": null,
+      "applicable_patterns": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16"
+      ]
+    }
+  ],
+  "brand_priority_angles": [
+    {
+      "angle_id": "angle_content_translation",
+      "priority_message": "把已有企业事实转化为结构清晰、适合公开阅读的文章。",
+      "editorial_role": "用具体服务动作呈现品牌价值及适用情境。",
+      "trigger_conditions": [
+        "企业内容如何形成完整文章"
+      ],
+      "eligible_entry_categories": [
+        "industry_ranking",
+        "competitor_comparison",
+        "reputation",
+        "product_scenario",
+        "foundation_start"
+      ],
+      "eligible_pattern_ids": [
+        "P01",
+        "P02",
+        "P03",
+        "P04",
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16"
+      ],
+      "proof_refs": [
+        "proof_service_scope"
+      ],
+      "claim_ids": [
+        "clm_service_scope"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ]
+    }
+  ],
+  "comparison_boundary": {
+    "allowed": "只比较有独立公开事实支持的共同维度。",
+    "client_first_rule": "客户品牌可以首先出现并重点详写，但编辑顺序不代表客观名次。",
+    "prohibited": [
+      "无统一口径的客观排名",
+      "用客户资料推导竞品劣势"
+    ]
+  },
+  "publication_boundary": {
+    "first_party_can_support": [
+      "企业身份",
+      "产品与服务",
+      "流程",
+      "公开限制"
+    ],
+    "first_party_cannot_alone_support": [
+      "市场口碑",
+      "行业领先",
+      "客观排名",
+      "优于竞品"
+    ]
+  },
+  "entry_guidance": [
+    {
+      "entry_category": "industry_ranking",
+      "entry_label": "行业排名",
+      "eligible_patterns": [
+        "P01",
+        "P02"
+      ],
+      "brand_priority_angle_ids": [
+        "angle_content_translation"
+      ]
+    },
+    {
+      "entry_category": "competitor_comparison",
+      "entry_label": "竞品对比",
+      "eligible_patterns": [
+        "P03"
+      ],
+      "brand_priority_angle_ids": [
+        "angle_content_translation"
+      ]
+    },
+    {
+      "entry_category": "reputation",
+      "entry_label": "美誉舆情",
+      "eligible_patterns": [
+        "P04",
+        "P16"
+      ],
+      "brand_priority_angle_ids": [
+        "angle_content_translation"
+      ]
+    },
+    {
+      "entry_category": "product_scenario",
+      "entry_label": "产品场景",
+      "eligible_patterns": [
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P15"
+      ],
+      "brand_priority_angle_ids": [
+        "angle_content_translation"
+      ]
+    },
+    {
+      "entry_category": "foundation_start",
+      "entry_label": "基础启动",
+      "eligible_patterns": [
+        "P14"
+      ],
+      "brand_priority_angle_ids": [
+        "angle_content_translation"
+      ]
+    }
+  ],
+  "research_gaps": []
+}

@@ -1,0 +1,120 @@
+[
+  {
+    "id": 101,
+    "name": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "updated_at": "2026-08-01T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "deployed-current",
+          "deployed-v1-20260801T120000Z-run-1001-attempt-1-sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      }
+    }
+  },
+  {
+    "id": 102,
+    "name": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "updated_at": "2026-07-31T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "deployed-v1-20260731T120000Z-run-1000-attempt-1-sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      }
+    }
+  },
+  {
+    "id": 103,
+    "name": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "updated_at": "2026-07-20T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha-cccccccccccccccccccccccccccccccccccccccc",
+          "deployed-previous",
+          "deployed-v1-20260720T120000Z-run-900-attempt-1-sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ]
+      }
+    }
+  },
+  {
+    "id": 104,
+    "name": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "updated_at": "2026-07-19T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha-dddddddddddddddddddddddddddddddddddddddd",
+          "deployed-v1-20260719T120000Z-run-899-attempt-1-sha256-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        ]
+      }
+    }
+  },
+  {
+    "id": 105,
+    "name": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": {
+      "container": { "tags": ["sha-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"] }
+    }
+  },
+  {
+    "id": 106,
+    "name": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "updated_at": "2026-08-01T23:30:00Z",
+    "metadata": {
+      "container": { "tags": ["sha-ffffffffffffffffffffffffffffffffffffffff"] }
+    }
+  },
+  {
+    "id": 107,
+    "name": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.sig"
+        ]
+      }
+    }
+  },
+  {
+    "id": 108,
+    "name": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha256-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.att"
+        ]
+      }
+    }
+  },
+  {
+    "id": 109,
+    "name": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": { "container": { "tags": [] } }
+  },
+  {
+    "id": 110,
+    "name": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": { "container": { "tags": ["manual-hold"] } }
+  },
+  {
+    "id": 111,
+    "name": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "updated_at": "2026-07-18T12:00:00Z",
+    "metadata": {
+      "container": {
+        "tags": [
+          "sha256-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.sig"
+        ]
+      }
+    }
+  }
+]

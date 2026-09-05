@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/delivery_manifest.schema.json",
+  "title": "FrontMind Content Delivery Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "created_at", "selected_revision", "source_equivalence", "artifacts", "optimization"],
+  "properties": {
+    "schema_version": { "const": "2.1.0" },
+    "job_id": { "type": "string", "pattern": "^job_" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "selected_revision": { "enum": ["editorial_master", "optimized_candidate"] },
+    "source_equivalence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_model_sha256", "docx_rendered_from_same_model", "html_rendered_from_same_model", "title_map_bound_to_same_model", "structured_data_template_bound_to_title_map"],
+      "properties": {
+        "content_model_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "docx_rendered_from_same_model": { "const": true },
+        "html_rendered_from_same_model": { "const": true },
+        "title_map_bound_to_same_model": { "const": true },
+        "structured_data_template_bound_to_title_map": { "const": true }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "path", "sha256", "media_type"],
+        "properties": {
+          "role": {
+            "enum": [
+              "docx_body",
+              "html_body_fragment",
+              "structured_data_template",
+              "title_options_markdown",
+              "title_map",
+              "publishing_metadata_map",
+              "visual"
+            ]
+          },
+          "path": { "$ref": "#/$defs/relativePath" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "media_type": { "type": "string", "minLength": 3 }
+        }
+      }
+    },
+    "optimization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "candidate_selected", "fact_diff_status"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "candidate_selected": { "type": "boolean" },
+        "fact_diff_status": { "enum": ["pass", "fail", "not_run"] }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "selected_revision": { "const": "optimized_candidate" } }, "required": ["selected_revision"] },
+      "then": {
+        "properties": {
+          "optimization": {
+            "properties": {
+              "attempted": { "const": true },
+              "candidate_selected": { "const": true },
+              "fact_diff_status": { "const": "pass" }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "optimization": {
+            "properties": { "candidate_selected": { "const": false } }
+          }
+        }
+      }
+    }
+  ]
+}

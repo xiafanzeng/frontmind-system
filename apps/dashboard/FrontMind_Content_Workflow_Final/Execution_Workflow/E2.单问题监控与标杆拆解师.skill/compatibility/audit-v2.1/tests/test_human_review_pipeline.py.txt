@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""End-to-end human review receipt and freeze tests for E2 v2.1."""
+
+from __future__ import annotations
+
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = SKILL_ROOT / "scripts"
+SHARED_ROOT = SKILL_ROOT.parent / "shared"
+QUESTION = "哪家 GEO 服务商值得选?"
+JOB_ID = "job_e2_human_review_test"
+
+
+def load_script(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(f"e2_human_test_{name}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+RETRIEVER = load_script("safe_page_retriever", SCRIPT_ROOT / "safe_page_retriever.py")
+REVIEWER = load_script("apply_page_analysis_review", SCRIPT_ROOT / "apply_page_analysis_review.py")
+BUILDER = load_script("pattern_analysis_builder", SCRIPT_ROOT / "pattern_analysis_builder.py")
+CONTRACT = load_script("e2_pattern_contract", SHARED_ROOT / "e2_pattern_contract.py")
+
+
+def signed_registry() -> dict[str, object]:
+    patterns: list[dict[str, object]] = []
+    for number in range(1, 17):
+        pattern_id = f"P{number:02d}"
+        component_id = f"{pattern_id}_component_core"
+        contract: dict[str, object] = {
+            "eligible_content_forms": ["comparison_review"],
+            "positive_intent_signals": [],
+            "typical_structure_signals": [],
+            "exclusion_signals": [],
+            "confusable_patterns": [],
+        }
+        if pattern_id == "P01":
+            contract.update({
+                "positive_intent_signals": [{"signal_id": "P01_intent_initial", "cues": ["初始意图"]}],
+                "typical_structure_signals": [{"component_id": component_id, "cues": ["初始结构"]}],
+                "confusable_patterns": [{"pattern_id": "P02"}],
+            })
+        elif pattern_id == "P02":
+            contract.update({
+                "positive_intent_signals": [{"signal_id": "P02_intent_adjacent", "cues": ["相邻模式"]}],
+                "typical_structure_signals": [{"component_id": component_id, "cues": ["相邻结构"]}],
+                "confusable_patterns": [{"pattern_id": "P01"}],
+            })
+        patterns.append({
+            "id": pattern_id,
+            "trigger_signals": ["值得选"] if pattern_id in {"P01", "P02"} else [],
+            "structure_components": [{"component_id": component_id}],
+            "classification_contract": contract,
+        })
+    return {
+        "schema_version": "2.1.0",
+        "routing": {
+            "industry_ranking": {
+                "primary_patterns": ["P01", "P02"],
+                "secondary_patterns": [],
+            },
+        },
+        "patterns": patterns,
+    }
+
+
+def signed_research() -> dict[str, object]:
+    return {
+        "schema_version": "2.1.0",
+        "patterns": [
+            {
+                "id": f"P{number:02d}",
+                "structure_components": [{"component_id": f"P{number:02d}_component_core"}],
+            }
+            for number in range(1, 17)
+        ],
+    }
+
+
+def pool_item(rank: int, count: int) -> dict[str, object]:
+    url = f"https://article.example/{rank}"
+    return {
+        "raw_rank": rank,
+        "content_title": f"页面 {rank}",
+        "original_url": url,
+        "canonical_url": url,
+        "media_name": "测试媒体",
+        "media_domain": "article.example",
+        "citation_date_range": {"from": None, "to": None},
+        "citation_count": count,
+        "citation_share": count / 3,
+        "detailed_row_refs": [rank + 1],
+    }
+
+
+class HumanReviewPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.registry_path = self.root / "content-pattern-registry.json"
+        self.research_path = self.root / "pattern-research-index.json"
+        self.workbook_path = self.root / "dashboard.xlsx"
+        self.source_pool_path = self.root / "source-pool.json"
+        self.auto_path = self.root / "automatic-page-analysis.json"
+        self.review_input_path = self.root / "human-review.json"
+        self.reviewed_path = self.root / "reviewed-page-analysis.json"
+        self.review_receipt_path = self.root / "human-review-receipt.json"
+        self.registry_path.write_text(json.dumps(signed_registry(), ensure_ascii=False), encoding="utf-8")
+        self.research_path.write_text(json.dumps(signed_research(), ensure_ascii=False), encoding="utf-8")
+        self.workbook_path.write_bytes(b"hash-bound-dashboard-workbook")
+        self.source_pool = self.make_source_pool()
+        self.source_pool_path.write_text(json.dumps(self.source_pool, ensure_ascii=False), encoding="utf-8")
+        self.make_automatic_page_analysis()
+        self.make_review_input()
+        self.apply_review()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def make_source_pool(self) -> dict[str, object]:
+        return {
+            "schema_version": "2.1.0",
+            "artifact_type": "E2_dashboard_source_pool",
+            "job_id": JOB_ID,
+            "question": QUESTION,
+            "entry_category": "industry_ranking",
+            "product_scenario_subintent": None,
+            "created_at": "2026-08-12T00:00:00+00:00",
+            "source_workbook_receipt": {
+                "source_path": self.workbook_path.name,
+                "sha256": CONTRACT.file_sha256(self.workbook_path),
+                "sheet_names": ["内容统计", "详细表格", "字段说明"],
+                "effective_ranges": {
+                    "内容统计": "A1:I3", "详细表格": "A1:G4", "字段说明": "A1:B6",
+                },
+                "normalized_question": QUESTION,
+                "content_status_ignored": True,
+                "ranking_basis": "dashboard_citation_rank",
+                "citation_rank_definition": "citation_count_descending",
+                "dashboard_total_citation_count": 3,
+                "top20_citation_count": 3,
+            },
+            "pool_status": "partial_pool",
+            "cited_content_pool": [pool_item(1, 2), pool_item(2, 1)],
+        }
+
+    @staticmethod
+    def fake_fetcher(url: str, timeout: float, max_bytes: int) -> dict[str, object]:
+        del timeout, max_bytes
+        body = (
+            "<html><title>GEO 排行榜</title><h1>初始意图</h1><h2>初始结构</h2>"
+            "<h2>相邻模式</h2><h3>相邻结构</h3><p>可复核的文章结构。</p></html>"
+        ).encode("utf-8")
+        return {
+            "final_url": url,
+            "redirect_chain": [],
+            "http_status": 200,
+            "mime_type": "text/html",
+            "body": body,
+            "charset": "utf-8",
+            "approved_addresses": ["8.8.8.8"],
+            "connected_peer_ip": "8.8.8.8",
+        }
+
+    def make_automatic_page_analysis(self) -> None:
+        with patch.object(RETRIEVER, "validate_public_url", return_value=["8.8.8.8"]):
+            automatic = RETRIEVER.build_page_analysis(
+                self.source_pool, signed_registry(), signed_research(), self.root,
+                self.root / "retrieval", self.fake_fetcher, 5, 1024 * 1024,
+            )
+        automatic["source_pool_sha256"] = CONTRACT.file_sha256(self.source_pool_path)
+        automatic["pattern_registry_sha256"] = CONTRACT.file_sha256(self.registry_path)
+        automatic["pattern_research_index_sha256"] = CONTRACT.file_sha256(self.research_path)
+        self.auto_path.write_text(json.dumps(automatic, ensure_ascii=False, indent=2), encoding="utf-8")
+        for observation in automatic["content_observations"]:
+            self.assertEqual(observation["classification"]["primary_pattern_id"], "P01")
+            extract = json.loads(
+                (self.root / observation["retrieval_receipt"]["extract_relative_path"]).read_text(encoding="utf-8")
+            )
+            self.assertTrue({"初始意图", "初始结构", "相邻模式", "相邻结构"} <= set(extract["observed_cues"]))
+
+    def make_review_input(self) -> None:
+        review = {
+            "schema_version": "2.1.0",
+            "job_id": JOB_ID,
+            "review_id": "e2review_human_test_01",
+            "reviewer": "reviewer@example.test",
+            "reviewer_role": "senior content pattern reviewer",
+            "reviewed_at": "2026-08-12T08:00:00+00:00",
+            "attestation": "I reviewed the hashed structural evidence and accept responsibility for these decisions.",
+            "decisions": [
+                {
+                    "raw_rank": 1,
+                    "action": "correct",
+                    "replacement_status": "classified_article",
+                    "replacement_content_form": "comparison_review",
+                    "rationale": "页面中已经出现 P02 的签名意图 cue 与结构 cue，人工修正为相邻模式。",
+                    "classification": {
+                        "primary_pattern_id": "P02",
+                        "alternative_pattern_ids": ["P01"],
+                        "classification_confidence": 0.9,
+                        "matched_intent_signal_ids": ["P02_intent_adjacent"],
+                        "matched_structure_component_ids": ["P02_component_core"],
+                        "negative_signal_ids": [],
+                        "question_similarity": 0.8,
+                        "classification_rationale": "人工复核确认页面的意图与结构均更符合相邻 P02 模式。",
+                    },
+                },
+                {
+                    "raw_rank": 2,
+                    "action": "correct",
+                    "replacement_status": "non_article",
+                    "replacement_content_form": "homepage",
+                    "rationale": "人工复核确认该页面实际为入口首页，不应继续作为文章分类。",
+                    "classification": None,
+                },
+            ],
+        }
+        self.review_input_path.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def apply_review(self) -> None:
+        argv = [
+            "apply_page_analysis_review.py",
+            "--auto-page-analysis", str(self.auto_path),
+            "--review", str(self.review_input_path),
+            "--package-root", str(self.root),
+            "--output", str(self.reviewed_path),
+            "--receipt", str(self.review_receipt_path),
+        ]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            REVIEWER.main()
+
+    def build_final(self, *, receipt: Path | None, output_name: str = "final-e2.json") -> dict[str, object]:
+        output = self.root / output_name
+        argv = [
+            "pattern_analysis_builder.py",
+            "--source-pool", str(self.source_pool_path),
+            "--page-analysis", str(self.reviewed_path),
+            "--pattern-registry", str(self.registry_path),
+            "--pattern-research-index", str(self.research_path),
+            "--package-root", str(self.root),
+            "--output", str(output),
+        ]
+        if receipt is not None:
+            argv.extend(["--page-analysis-review-receipt", str(receipt)])
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            BUILDER.main()
+        return json.loads(output.read_text(encoding="utf-8"))
+
+    def test_corrects_adjacent_pattern_and_article_to_nonarticle_with_frozen_receipt_chain(self) -> None:
+        final = self.build_final(receipt=self.review_receipt_path)
+
+        first, second = final["content_observations"]
+        self.assertEqual((first["status"], first["review_status"]), ("classified_article", "human_corrected"))
+        self.assertEqual(first["classification"]["primary_pattern_id"], "P02")
+        self.assertEqual((second["status"], second["review_status"]), ("non_article", "human_corrected"))
+        self.assertEqual(second["content_form"], "homepage")
+        self.assertIsNone(second["classification"])
+        self.assertEqual(final["human_review_receipt_ref"]["path"], self.review_receipt_path.name)
+        self.assertEqual(
+            final["human_review_receipt_ref"]["sha256"],
+            CONTRACT.file_sha256(self.review_receipt_path),
+        )
+        receipt = json.loads(self.review_receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["review_id"], "e2review_human_test_01")
+        self.assertEqual(
+            {item["decision"] for item in receipt["decisions"]},
+            {"corrected"},
+        )
+        errors, frozen = CONTRACT.validate_e2_relations(
+            final, self.root, self.registry_path, self.research_path,
+        )
+        self.assertEqual(errors, [], errors)
+        for path in (
+            self.review_receipt_path, self.auto_path, self.review_input_path, self.reviewed_path,
+        ):
+            self.assertEqual(frozen[path.name], CONTRACT.file_sha256(path))
+
+    def test_builder_rejects_human_review_without_receipt(self) -> None:
+        with self.assertRaisesRegex(ValueError, "require --page-analysis-review-receipt"):
+            self.build_final(receipt=None, output_name="missing-receipt.json")
+
+    def test_builder_rejects_forged_review_receipt_binding(self) -> None:
+        forged = json.loads(self.review_receipt_path.read_text(encoding="utf-8"))
+        forged["reviewed_page_analysis_ref"]["sha256"] = "0" * 64
+        forged_path = self.root / "forged-human-review-receipt.json"
+        forged_path.write_text(json.dumps(forged, ensure_ascii=False), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "reviewed_page_analysis_ref hash binding failed"):
+            self.build_final(receipt=forged_path, output_name="forged-receipt.json")
+
+    def test_helper_rejects_missing_or_tampered_human_review_receipt_ref(self) -> None:
+        final = self.build_final(receipt=self.review_receipt_path)
+        missing = copy.deepcopy(final)
+        missing["human_review_receipt_ref"] = None
+        missing_errors, _ = CONTRACT.validate_e2_relations(
+            missing, self.root, self.registry_path, self.research_path,
+        )
+        self.assertTrue(any("require human_review_receipt_ref" in error for error in missing_errors), missing_errors)
+
+        forged = copy.deepcopy(final)
+        forged["human_review_receipt_ref"]["sha256"] = "f" * 64
+        forged_errors, _ = CONTRACT.validate_e2_relations(
+            forged, self.root, self.registry_path, self.research_path,
+        )
+        self.assertTrue(any("receipt is missing or its SHA256 changed" in error for error in forged_errors), forged_errors)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

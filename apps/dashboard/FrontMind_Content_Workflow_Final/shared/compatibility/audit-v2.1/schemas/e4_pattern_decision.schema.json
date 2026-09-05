@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e4_pattern_decision.schema.json",
+  "title": "FrontMind E4 Pattern Decision v2.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "entry_category",
+    "product_scenario_subintent",
+    "completed_at",
+    "e2_pattern_analysis_ref",
+    "recommended_pattern_id",
+    "selected_pattern_id",
+    "decision",
+    "override_reason_code",
+    "override_rationale",
+    "entry_route_check",
+    "question_fit_check",
+    "evidence_readiness_check",
+    "selected_benchmark_ranks",
+    "selected_benchmark_observation_ids",
+    "pattern_registry_ref",
+    "pattern_research_index_ref"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.1.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{5,80}$" },
+    "entry_category": { "$ref": "#/$defs/contentEntry" },
+    "product_scenario_subintent": { "$ref": "#/$defs/nullableSubintent" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "e2_pattern_analysis_ref": {
+      "oneOf": [{ "$ref": "#/$defs/fileRef" }, { "type": "null" }]
+    },
+    "recommended_pattern_id": {
+      "oneOf": [{ "$ref": "#/$defs/patternId" }, { "type": "null" }]
+    },
+    "selected_pattern_id": { "$ref": "#/$defs/patternId" },
+    "decision": { "enum": ["accepted", "overridden", "template_fallback"] },
+    "override_reason_code": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "question_intent_mismatch",
+        "entry_route_conflict",
+        "evidence_requirement_unmet",
+        "non_article_sample_bias",
+        "insufficient_classification_coverage",
+        "explicit_engineer_constraint"
+      ]
+    },
+    "override_rationale": { "type": ["string", "null"], "maxLength": 3000 },
+    "entry_route_check": { "$ref": "#/$defs/decisionCheck" },
+    "question_fit_check": { "$ref": "#/$defs/decisionCheck" },
+    "evidence_readiness_check": { "$ref": "#/$defs/decisionCheck" },
+    "selected_benchmark_ranks": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1, "maximum": 20 },
+      "maxItems": 5,
+      "uniqueItems": true
+    },
+    "selected_benchmark_observation_ids": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^obs_[a-z0-9][a-z0-9_-]{2,80}$" },
+      "maxItems": 5,
+      "uniqueItems": true
+    },
+    "pattern_registry_ref": { "$ref": "#/$defs/fileRef" },
+    "pattern_research_index_ref": { "$ref": "#/$defs/fileRef" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "entry_category": { "const": "product_scenario" } }, "required": ["entry_category"] },
+      "then": { "properties": { "product_scenario_subintent": { "type": "string" } } },
+      "else": { "properties": { "product_scenario_subintent": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "decision": { "const": "overridden" } }, "required": ["decision"] },
+      "then": {
+        "properties": {
+          "e2_pattern_analysis_ref": { "$ref": "#/$defs/fileRef" },
+          "recommended_pattern_id": { "$ref": "#/$defs/patternId" },
+          "override_reason_code": { "type": "string" },
+          "override_rationale": { "type": "string", "minLength": 20 }
+        }
+      },
+      "else": {
+        "properties": {
+          "override_reason_code": { "type": "null" },
+          "override_rationale": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "decision": { "const": "accepted" } }, "required": ["decision"] },
+      "then": {
+        "properties": {
+          "e2_pattern_analysis_ref": { "$ref": "#/$defs/fileRef" },
+          "recommended_pattern_id": { "$ref": "#/$defs/patternId" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "entry_category": { "const": "foundation_start" } }, "required": ["entry_category"] },
+      "then": {
+        "properties": {
+          "product_scenario_subintent": { "type": "null" },
+          "e2_pattern_analysis_ref": { "type": "null" },
+          "recommended_pattern_id": { "type": "null" },
+          "selected_pattern_id": { "const": "P14" },
+          "decision": { "const": "template_fallback" },
+          "selected_benchmark_ranks": { "maxItems": 0 },
+          "selected_benchmark_observation_ids": { "maxItems": 0 }
+        }
+      },
+      "else": {
+        "not": { "properties": { "selected_pattern_id": { "const": "P14" } }, "required": ["selected_pattern_id"] }
+      }
+    }
+  ],
+  "$defs": {
+    "contentEntry": { "enum": ["industry_ranking", "competitor_comparison", "reputation", "product_scenario", "foundation_start"] },
+    "nullableSubintent": {
+      "type": ["string", "null"],
+      "enum": [null, "offering_definition", "feature_mechanism", "scenario_fit", "delivery_usage", "support_boundary", "price_selection"]
+    },
+    "patternId": { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])$" },
+    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "decisionCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "rationale"],
+      "properties": {
+        "status": { "enum": ["passed", "failed"] },
+        "rationale": { "type": "string", "minLength": 10, "maxLength": 2000 }
+      }
+    }
+  }
+}

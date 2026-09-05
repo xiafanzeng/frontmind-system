@@ -1,0 +1,74 @@
+{
+  "fixtureVersion": 1,
+  "questionCategories": [
+    "product_scenario",
+    "reputation",
+    "competitor_comparison"
+  ],
+  "purchaseRequest": {
+    "schemaVersion": 2,
+    "project": {
+      "id": "project-contract-20260726",
+      "companyName": "跨仓契约示例企业"
+    },
+    "order": {
+      "id": "order-contract-20260726",
+      "tradeNo": "trade-contract-20260726",
+      "status": "paid",
+      "amountFen": 150000,
+      "paidAt": "2026-07-26T00:00:00.000Z"
+    },
+    "service": {
+      "planCode": "basic",
+      "serviceDays": 30,
+      "startsAt": "2026-07-26T00:00:00.000Z",
+      "endsAt": "2026-08-25T00:00:00.000Z",
+      "purchasedQuestion": {
+        "id": "question-contract-001",
+        "category": "product_scenario",
+        "question": "跨仓契约示例企业如何支持当前产品场景？"
+      }
+    },
+    "contract": {
+      "id": "contract-contract-20260726",
+      "status": "pending_admin_confirmation",
+      "projectId": "project-contract-20260726",
+      "orderId": "order-contract-20260726",
+      "questionId": "question-contract-001",
+      "templateVersion": "geo-basic-v2",
+      "evidence": {
+        "type": "system_admin_confirmation",
+        "artifact": {
+          "taskId": null,
+          "fileId": null,
+          "outputDescriptor": null,
+          "sha256": null
+        }
+      }
+    },
+    "account": {
+      "mode": "create",
+      "username": "contract.fixture",
+      "displayName": "跨仓契约示例企业"
+    }
+  },
+  "artifactDescriptor": {
+    "outputItemId": "output-knowledge-001:content:0",
+    "fileId": "file-knowledge-001",
+    "filename": "示例企业_标准知识库.zip",
+    "mimeType": "application/zip"
+  },
+  "knowledgeImport": {
+    "schemaVersion": 3,
+    "archiveContractVersion": 1,
+    "validationProfile": "website-lead-v1",
+    "packageManifestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "companyName": "跨仓契约示例企业",
+    "taskId": "task-knowledge-001",
+    "outputItemId": "output-knowledge-001:content:0",
+    "fileId": "file-knowledge-001",
+    "descriptorHash": "a2882bfc7f4e2d22c2cb4ebc9f40300ea179dc8aeabf68b77033019973813333",
+    "artifactSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "filename": "示例企业_标准知识库.zip"
+  }
+}

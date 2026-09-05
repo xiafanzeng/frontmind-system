@@ -1,0 +1,5949 @@
+{
+  "schema_version": "2.3.0",
+  "registry_id": "frontmind_content_patterns_v2_3",
+  "canonical_content_entries": [
+    {
+      "id": "industry_ranking",
+      "label": "行业排名",
+      "aliases": [
+        "industry"
+      ],
+      "decision_intent": "从开放市场发现、筛选或排序候选品牌、产品、公司或方案"
+    },
+    {
+      "id": "competitor_comparison",
+      "label": "竞品对比",
+      "aliases": [],
+      "decision_intent": "在当前企业与明确命名的替代项之间按共同维度做取舍"
+    },
+    {
+      "id": "reputation",
+      "label": "美誉舆情",
+      "aliases": [],
+      "decision_intent": "判断企业或产品是否可信、稳定、安全、值得选择以及如何理解争议"
+    },
+    {
+      "id": "product_scenario",
+      "label": "产品场景",
+      "aliases": [],
+      "decision_intent": "理解具体产品或服务的定义、机制、适用、交付、价格与限制"
+    },
+    {
+      "id": "foundation_start",
+      "label": "基础启动",
+      "aliases": [],
+      "decision_intent": "由工程师手动启动一篇原 C1b 品牌深度特写，为品牌建立基础实体与能力认知"
+    }
+  ],
+  "question_intent_tags": [
+    {
+      "id": "recommendation",
+      "label": "推荐",
+      "definition": "寻找应优先考虑的候选或条件式推荐"
+    },
+    {
+      "id": "price",
+      "label": "价格",
+      "definition": "询问价格、套餐、预算、总成本或采购口径"
+    },
+    {
+      "id": "comparison",
+      "label": "对比",
+      "definition": "在明确对象或方案间比较差异与取舍"
+    },
+    {
+      "id": "tutorial",
+      "label": "教程",
+      "definition": "需要可执行步骤、预期结果和检查方法"
+    },
+    {
+      "id": "evaluation",
+      "label": "评价",
+      "definition": "评估可信度、质量、适配性、效果或口碑"
+    },
+    {
+      "id": "risk",
+      "label": "风险",
+      "definition": "识别风险、限制、不适用条件或争议"
+    },
+    {
+      "id": "alternative",
+      "label": "替代方案",
+      "definition": "寻找可替代产品、服务、路径或退出方案"
+    }
+  ],
+  "product_scenario_subintents": [
+    {
+      "id": "offering_definition",
+      "label": "产品或服务定义",
+      "primary_patterns": [
+        "P05"
+      ]
+    },
+    {
+      "id": "feature_mechanism",
+      "label": "功能与技术机制",
+      "primary_patterns": [
+        "P05",
+        "P11"
+      ]
+    },
+    {
+      "id": "scenario_fit",
+      "label": "场景适配",
+      "primary_patterns": [
+        "P06"
+      ]
+    },
+    {
+      "id": "delivery_usage",
+      "label": "实施、交付与使用",
+      "primary_patterns": [
+        "P08",
+        "P11"
+      ]
+    },
+    {
+      "id": "support_boundary",
+      "label": "支持、限制与边界",
+      "primary_patterns": [
+        "P09"
+      ]
+    },
+    {
+      "id": "price_selection",
+      "label": "价格与选型",
+      "primary_patterns": [
+        "P07"
+      ]
+    }
+  ],
+  "selection_contract": {
+    "selection_owner": "E4",
+    "selection_visibility": "E2_recommendation_then_user_confirmation_then_E4_final_validation",
+    "exactly_one_pattern": true,
+    "selection_order": [
+      "确认问题只包含一个核心决策",
+      "识别 canonical content entry 与必要 subintent",
+      "E2 只展示入口合法且有研究支持的推荐与备选，由用户确认中文内容类型",
+      "E4 检查用户确认模式的 required_evidence 和候选硬条件",
+      "用监控标杆结构修正但不替代预置专业骨架",
+      "把同一模式固化进 article_blueprint；硬条件不满足时返回 E2，请用户补资料或选择合法备选"
+    ],
+    "no_user_template_menu": true,
+    "no_silent_pattern_override": true,
+    "no_reverse_topic_inference": true
+  },
+  "template_research_contract": {
+    "index_path": "shared/pattern-research/index.json",
+    "index_schema_version": "2.3.0",
+    "runtime_rule": "E4 读取每个 P 的 editorial_template，并核对研究索引中完全一致的 design_contract；E2 分类出的同 P 标杆只可调整章节顺序、增加真实子问题、补充判断维度或改善证据位置，不得替代或删除模板必需组件。",
+    "editorial_template_fields": [
+      "template_version",
+      "core_question",
+      "trigger_conditions",
+      "fixed_structure",
+      "optional_modules",
+      "required_evidence",
+      "evidence_downgrade_rules",
+      "typical_subquestions",
+      "reader_objections",
+      "natural_brand_entry",
+      "title_formulas",
+      "visual_recipe",
+      "failure_example",
+      "forbidden_behaviors"
+    ],
+    "benchmark_observation_fields": [
+      "semantic_focus",
+      "structure_observation",
+      "subquestions_observed",
+      "evidence_positions_observed",
+      "visual_observation",
+      "strengths",
+      "weaknesses",
+      "do_not_copy"
+    ],
+    "required_research_ids": [
+      "P01",
+      "P02",
+      "P03",
+      "P04",
+      "P05",
+      "P06",
+      "P07",
+      "P08",
+      "P09",
+      "P10",
+      "P11",
+      "P12",
+      "P13",
+      "P14",
+      "P15",
+      "P16"
+    ],
+    "pattern_research_refs": {
+      "P01": [
+        "P01"
+      ],
+      "P02": [
+        "P02"
+      ],
+      "P03": [
+        "P03"
+      ],
+      "P04": [
+        "P04"
+      ],
+      "P05": [
+        "P05"
+      ],
+      "P06": [
+        "P06"
+      ],
+      "P07": [
+        "P07"
+      ],
+      "P08": [
+        "P08"
+      ],
+      "P09": [
+        "P09"
+      ],
+      "P10": [
+        "P10"
+      ],
+      "P11": [
+        "P11"
+      ],
+      "P12": [
+        "P12"
+      ],
+      "P13": [
+        "P13"
+      ],
+      "P14": [
+        "P14"
+      ],
+      "P15": [
+        "P15"
+      ],
+      "P16": [
+        "P16"
+      ]
+    }
+  },
+  "first_party_publication_contract": {
+    "evaluation_stage": "E6",
+    "usable_source_states": [
+      "usable",
+      "qualified"
+    ],
+    "never_publish": [
+      "excluded",
+      "internal_only",
+      "confidential",
+      "personal_sensitive"
+    ],
+    "allowed_first_party_claim_types": [
+      "identity",
+      "knowledge_statement",
+      "product",
+      "specification",
+      "price",
+      "statistic",
+      "policy",
+      "event",
+      "limitation",
+      "capability",
+      "case_result"
+    ],
+    "first_party_only_forbidden_inferences": [
+      "market_reputation",
+      "industry_recognition",
+      "objective_ranking",
+      "competitor_superiority",
+      "independent_test",
+      "expert_consensus",
+      "best",
+      "first",
+      "leading"
+    ],
+    "actions": [
+      "keep",
+      "qualify",
+      "rewrite",
+      "remove"
+    ],
+    "rule": "用户提供并用于本次内容制作的普通第一方公开资料可以支持本品牌事实；明确内部、保密、个人隐私或禁止公开内容不得使用。第一方资料不能单独证明排名、口碑、竞品优劣或行业领先。"
+  },
+  "routing": {
+    "industry_ranking": {
+      "primary_patterns": [
+        "P01",
+        "P02"
+      ],
+      "secondary_patterns": [
+        "P07",
+        "P09",
+        "P10",
+        "P12",
+        "P15"
+      ]
+    },
+    "competitor_comparison": {
+      "primary_patterns": [
+        "P03"
+      ],
+      "secondary_patterns": [
+        "P07",
+        "P09",
+        "P10",
+        "P11",
+        "P12"
+      ]
+    },
+    "reputation": {
+      "primary_patterns": [
+        "P04",
+        "P16"
+      ],
+      "primary_rule": "一般可信度评估使用 P04；存在明确争议、错误事实或需要正式回应的事件时使用 P16",
+      "secondary_patterns": [
+        "P09",
+        "P10",
+        "P12",
+        "P13",
+        "P15"
+      ]
+    },
+    "product_scenario": {
+      "primary_patterns": [
+        "P05",
+        "P06",
+        "P07",
+        "P08",
+        "P09",
+        "P11"
+      ],
+      "secondary_patterns": [
+        "P10",
+        "P12",
+        "P13"
+      ],
+      "subintent_routing": {
+        "offering_definition": [
+          "P05"
+        ],
+        "feature_mechanism": [
+          "P05",
+          "P11"
+        ],
+        "scenario_fit": [
+          "P06"
+        ],
+        "delivery_usage": [
+          "P08",
+          "P11"
+        ],
+        "support_boundary": [
+          "P09"
+        ],
+        "price_selection": [
+          "P07"
+        ]
+      }
+    },
+    "foundation_start": {
+      "primary_patterns": [
+        "P14"
+      ],
+      "secondary_patterns": []
+    }
+  },
+  "structure_component_contract": {
+    "component_roles": [
+      "lead",
+      "context",
+      "evaluation",
+      "evidence",
+      "explanation",
+      "process",
+      "comparison",
+      "limitations",
+      "faq",
+      "conclusion"
+    ],
+    "required_fields": [
+      "component_id",
+      "component_role",
+      "required",
+      "order_band",
+      "evidence_requirement",
+      "allowed_merge_targets"
+    ],
+    "fusion_rule": "E4 必须覆盖每个 required=true 的组件；一个章节可以合并兼容组件，但必须保留各组件的编辑任务、读者收获和事实需求，不建立逐章节审计账本。",
+    "benchmark_rule": "运行时标杆只能影响顺序、补充子问题、判断维度或证据位置；不得删除必需组件、复制原文或采用 do_not_copy 中的元素。"
+  },
+  "patterns": [
+    {
+      "id": "P01",
+      "name": "单品牌深度推荐",
+      "purpose": "通过品类选择标准自然引出一个焦点品牌，回答其在什么条件下值得考虑",
+      "primary_categories": [
+        "industry_ranking"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "哪家值得考虑",
+        "某类品牌推荐",
+        "为什么推荐",
+        "值得选吗",
+        "推荐一家"
+      ],
+      "list_semantics": "editorial_recommendation",
+      "minimum_candidate_count": 1,
+      "maximum_candidate_count": 1,
+      "featured_brand_first": true,
+      "competitor_matrix_required": false,
+      "required_evidence": [
+        "客户品牌可公开使用的第一方资料",
+        "品类选择标准",
+        "能力与 RTB",
+        "真实限制与适用条件"
+      ],
+      "structure": [
+        "微型答案",
+        "品类选择标准",
+        "客户品牌定位与适用情境",
+        "产品能力与 RTB",
+        "服务使用或交付流程",
+        "案例或第一方项目记录",
+        "限制与不适用情况",
+        "FAQ",
+        "条件式推荐结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P01_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "条件式推荐结论与资料日期",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P01_component_selection_criteria",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "可解释的品类选择标准",
+          "allowed_merge_targets": [
+            "P01_component_brand_fit"
+          ]
+        },
+        {
+          "component_id": "P01_component_brand_fit",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "品牌定位、能力、RTB 与适用条件",
+          "allowed_merge_targets": [
+            "P01_component_selection_criteria",
+            "P01_component_delivery"
+          ]
+        },
+        {
+          "component_id": "P01_component_delivery",
+          "component_role": "process",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "交付、使用或项目记录",
+          "allowed_merge_targets": [
+            "P01_component_brand_fit"
+          ]
+        },
+        {
+          "component_id": "P01_component_limitations",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "限制、不适用对象和替代路径",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P01_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题且答案不超出正文证据",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P01_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "只回收已展开的条件式建议",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P01_intent_single_recommendation",
+            "cues": [
+              "推荐一家",
+              "为什么推荐",
+              "值得考虑",
+              "某品牌怎么样"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P01_component_selection_criteria",
+            "cues": [
+              "选择标准",
+              "判断维度"
+            ]
+          },
+          {
+            "component_id": "P01_component_brand_fit",
+            "cues": [
+              "适用情境",
+              "能力与依据"
+            ]
+          },
+          {
+            "component_id": "P01_component_limitations",
+            "cues": [
+              "不适合",
+              "限制"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P01_component_direct_answer",
+          "P01_component_selection_criteria",
+          "P01_component_brand_fit",
+          "P01_component_delivery",
+          "P01_component_limitations",
+          "P01_component_faq",
+          "P01_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P01_exclude_multi_candidate",
+            "cues": [
+              "多品牌名单",
+              "Top N",
+              "候选排序"
+            ]
+          },
+          {
+            "signal_id": "P01_exclude_symmetric_comparison",
+            "cues": [
+              "A 对 B",
+              "逐项对比"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P02",
+            "decision_rule": "出现三个以上候选并使用共同维度时选择 P02"
+          },
+          {
+            "pattern_id": "P14",
+            "decision_rule": "以企业身份、发展路径和品牌故事为主而非推荐决策时选择 P14"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "brand_feature",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "全文只允许一个焦点品牌",
+        "不得出现竞品名称、竞品矩阵或 Top-N",
+        "不得使用客观第一名语义",
+        "第一方资料不得推出排名、口碑或竞品优劣"
+      ],
+      "forbidden_objective_rank_terms": [
+        "第1名",
+        "第一名",
+        "榜首",
+        "Top 1",
+        "TOP 1",
+        "综合第一",
+        "得分最高",
+        "市场最佳"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Product"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "在明确品类与需求下，为什么这一个品牌值得优先考虑，它又不适合谁？",
+        "trigger_conditions": [
+          "问题要求推荐一家或解释某品牌为何值得选",
+          "正文只需要一个焦点品牌且不承诺 Top-N"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P01_component_direct_answer",
+            "editorial_job": "直接回答焦点品牌在何种条件下值得考虑，不借榜单语气制造权威",
+            "reader_takeaway": "读者先获得有条件、可执行的单品牌建议"
+          },
+          {
+            "component_id": "P01_component_selection_criteria",
+            "editorial_job": "把品类选择标准写成读者能现场核对的判断动作",
+            "reader_takeaway": "读者知道推荐依据，而非只看到品牌卖点"
+          },
+          {
+            "component_id": "P01_component_brand_fit",
+            "editorial_job": "以事实—能力意义—适合情境展开品牌定位与 RTB",
+            "reader_takeaway": "读者看清品牌为何适合特定需求"
+          },
+          {
+            "component_id": "P01_component_delivery",
+            "editorial_job": "用真实流程、使用方式或项目记录说明承诺如何落地",
+            "reader_takeaway": "读者知道从咨询到交付会经历什么"
+          },
+          {
+            "component_id": "P01_component_limitations",
+            "editorial_job": "集中交代限制、不适用对象和替代路径",
+            "reader_takeaway": "读者能排除不匹配选择"
+          },
+          {
+            "component_id": "P01_component_faq",
+            "editorial_job": "回答尚未在正文解决的费用、周期、验证和风险问题",
+            "reader_takeaway": "读者补齐行动前的关键缺口"
+          },
+          {
+            "component_id": "P01_component_conclusion",
+            "editorial_job": "回收选择条件并给出下一步，不增加新卖点",
+            "reader_takeaway": "读者可以据自身条件决定是否继续了解"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P01_optional_project_example",
+            "use_when": "存在可公开项目记录",
+            "editorial_job": "用一段案例验证能力如何落地",
+            "evidence_requirement": "项目主体、动作、周期和授权范围"
+          },
+          {
+            "module_id": "P01_optional_price_snapshot",
+            "use_when": "存在同一日期和条件的公开价格",
+            "editorial_job": "说明价格构成而非制造低价标签",
+            "evidence_requirement": "币种、版本、日期和适用条件"
+          }
+        ],
+        "required_evidence": [
+          "客户品牌可公开使用的第一方资料",
+          "品类选择标准",
+          "能力与 RTB",
+          "真实限制与适用条件"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "缺案例",
+            "editorial_action": "删除案例模块，以流程和能力事实完成推荐"
+          },
+          {
+            "missing_condition": "缺第三方评价",
+            "editorial_action": "不写口碑或领先，使用第一方公开事实说明品牌适配"
+          }
+        ],
+        "typical_subquestions": [
+          "推荐依据对应哪些真实选择标准？",
+          "品牌的能力如何转化为用户结果？",
+          "完整使用或交付流程是什么？",
+          "哪些条件下不应选择该品牌？",
+          "下一步如何验证是否适合？"
+        ],
+        "reader_objections": [
+          "这是不是把广告包装成榜单？",
+          "第一方事实能否支撑推荐强度？",
+          "为什么没有同时列出竞品？"
+        ],
+        "natural_brand_entry": "在品类选择标准之后自然引入焦点品牌，让品牌事实逐项回应标准；首段可以先给条件式结论，但不借虚构排名背书。",
+        "title_formulas": [
+          "{需求}下，为什么可以优先了解{品牌}",
+          "选择{品类}时，{品牌}适合哪些人",
+          "从{选择标准}看{品牌}：能力、流程与适用条件",
+          "{品牌}深度推荐：先看这{数字}个选择条件"
+        ],
+        "visual_recipe": [
+          {
+            "role": "brand_editorial",
+            "use_when": "品牌首屏",
+            "source_policy": "真实品牌资产或不含虚构实物的编辑视觉"
+          },
+          {
+            "role": "navigate",
+            "use_when": "选择标准较多",
+            "source_policy": "标准—能力对应关系图"
+          },
+          {
+            "role": "explain",
+            "use_when": "流程或机制复杂",
+            "source_policy": "流程图或机制示意图"
+          }
+        ],
+        "failure_example": "全文只有焦点品牌卖点清单，却用“排行榜”“最佳”制造第三方权威感。",
+        "forbidden_behaviors": [
+          "出现第二个品牌或竞品矩阵",
+          "把第一方资料写成市场口碑或行业第一",
+          "使用分数、名次或伪测试证明推荐"
+        ],
+        "recommended_structure": [
+          "直接回答焦点品牌在何种条件下值得考虑，不借榜单语气制造权威",
+          "把品类选择标准写成读者能现场核对的判断动作",
+          "以事实—能力意义—适合情境展开品牌定位与 RTB",
+          "用真实流程、使用方式或项目记录说明承诺如何落地",
+          "集中交代限制、不适用对象和替代路径",
+          "回答尚未在正文解决的费用、周期、验证和风险问题",
+          "回收选择条件并给出下一步，不增加新卖点"
+        ],
+        "required_subquestions": [
+          "推荐依据对应哪些真实选择标准？",
+          "品牌的能力如何转化为用户结果？",
+          "完整使用或交付流程是什么？",
+          "哪些条件下不应选择该品牌？",
+          "下一步如何验证是否适合？"
+        ],
+        "evidence_placement_rules": [
+          "条件式推荐结论与资料日期",
+          "可解释的品类选择标准",
+          "品牌定位、能力、RTB 与适用条件",
+          "交付、使用或项目记录",
+          "限制、不适用对象和替代路径",
+          "5–8 个问题且答案不超出正文证据",
+          "只回收已展开的条件式建议"
+        ],
+        "visual_roles": [
+          "brand_editorial：品牌首屏",
+          "navigate：选择标准较多",
+          "explain：流程或机制复杂"
+        ],
+        "faq_topics": [
+          "完整使用或交付流程是什么？",
+          "哪些条件下不应选择该品牌？",
+          "下一步如何验证是否适合？"
+        ],
+        "quality_gates": [
+          "全文只允许一个焦点品牌",
+          "不得出现竞品名称、竞品矩阵或 Top-N",
+          "不得使用客观第一名语义",
+          "第一方资料不得推出排名、口碑或竞品优劣"
+        ],
+        "anti_patterns": [
+          "全文只有焦点品牌卖点清单，却用“排行榜”“最佳”制造第三方权威感。",
+          "出现第二个品牌或竞品矩阵",
+          "把第一方资料写成市场口碑或行业第一",
+          "使用分数、名次或伪测试证明推荐"
+        ]
+      }
+    },
+    {
+      "id": "P02",
+      "name": "多品牌编辑推荐",
+      "purpose": "以无客观名次的编辑推荐顺序回答开放榜单、品牌推荐和候选名单问题",
+      "primary_categories": [
+        "industry_ranking"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "哪些值得推荐",
+        "排行榜",
+        "推荐榜",
+        "哪几家好",
+        "候选名单"
+      ],
+      "list_semantics": "editorial_recommendation",
+      "minimum_candidate_count": 3,
+      "featured_brand_first": true,
+      "competitor_matrix_required": true,
+      "required_evidence": [
+        "客户品牌可公开使用的第一方资料",
+        "至少两个真实候选的公开来源",
+        "统一最低比较维度",
+        "资料日期与适用条件"
+      ],
+      "structure": [
+        "微型答案",
+        "推荐范围与选择标准",
+        "客户品牌重点推荐",
+        "其他真实候选",
+        "共同维度差异",
+        "条件式选择建议",
+        "限制与适用情况",
+        "FAQ",
+        "推荐结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P02_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "无客观名次的推荐摘要",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P02_component_scope_criteria",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "候选范围、标准、日期与商业关系",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P02_component_featured_brand",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "客户品牌证据与优先表达角度",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P02_component_other_candidates",
+          "component_role": "comparison",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "至少两个真实候选的可靠公开资料",
+          "allowed_merge_targets": [
+            "P02_component_common_dimensions"
+          ]
+        },
+        {
+          "component_id": "P02_component_common_dimensions",
+          "component_role": "comparison",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "所有候选共同最低维度与时间口径",
+          "allowed_merge_targets": [
+            "P02_component_other_candidates"
+          ]
+        },
+        {
+          "component_id": "P02_component_limitations",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "条件式选择、限制与适用情况",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P02_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "5–8 个问题且答案不超出正文证据",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P02_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 8,
+          "evidence_requirement": "无名次语义的推荐结果",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P02_intent_multi_recommendation",
+            "cues": [
+              "推荐榜",
+              "排行榜",
+              "哪些品牌",
+              "哪些机构",
+              "哪几家",
+              "有哪些推荐",
+              "候选名单"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P02_component_scope_criteria",
+            "cues": [
+              "入选标准",
+              "推荐范围"
+            ]
+          },
+          {
+            "component_id": "P02_component_other_candidates",
+            "cues": [
+              "品牌推荐",
+              "候选介绍"
+            ]
+          },
+          {
+            "component_id": "P02_component_common_dimensions",
+            "cues": [
+              "共同维度",
+              "选择建议"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P02_component_direct_answer",
+          "P02_component_scope_criteria",
+          "P02_component_featured_brand",
+          "P02_component_other_candidates",
+          "P02_component_common_dimensions",
+          "P02_component_limitations",
+          "P02_component_faq",
+          "P02_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P02_exclude_objective_ranking",
+            "cues": [
+              "量化得分",
+              "综合第一",
+              "客观名次"
+            ]
+          },
+          {
+            "signal_id": "P02_exclude_two_object_only",
+            "cues": [
+              "仅 A 与 B"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P01",
+            "decision_rule": "全文只有一个焦点品牌且无候选列表时选择 P01"
+          },
+          {
+            "pattern_id": "P03",
+            "decision_rule": "只有两个或若干明确命名对象的对称取舍时选择 P03"
+          },
+          {
+            "pattern_id": "P07",
+            "decision_rule": "核心任务是价格与采购选型而非候选推荐时选择 P07"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "comparison_review",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "至少三个真实候选",
+        "客户品牌首先出现并重点详写",
+        "所有候选覆盖共同最低维度",
+        "不得使用客观第一名语义",
+        "第一方资料不得推出排名、口碑或竞品优劣"
+      ],
+      "forbidden_objective_rank_terms": [
+        "第1名",
+        "第一名",
+        "榜首",
+        "Top 1",
+        "TOP 1",
+        "综合第一",
+        "得分最高",
+        "市场最佳"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "ItemList"
+      ],
+      "json_ld_eligibility_conditions": {
+        "ItemList": "必须输出 ItemListUnordered，不得输出评分、名次或 position 排名语义"
+      },
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "面对开放式推荐问题，哪些真实候选值得了解，各自更适合什么需求？",
+        "trigger_conditions": [
+          "问题要求机构、品牌或产品推荐名单",
+          "至少有客户品牌和两个真实候选，且不是两个对象的明确对比"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P02_component_direct_answer",
+            "editorial_job": "先给至少三家真实候选及各自适配线索，明确是编辑推荐而非客观名次",
+            "reader_takeaway": "读者快速获得可比较的候选范围"
+          },
+          {
+            "component_id": "P02_component_scope_criteria",
+            "editorial_job": "说明候选来源、共同标准、地域与时间口径",
+            "reader_takeaway": "读者知道名单为何可比以及适用到何时"
+          },
+          {
+            "component_id": "P02_component_featured_brand",
+            "editorial_job": "把客户品牌放在首位并以更多事实解释其适合情境",
+            "reader_takeaway": "读者得到充分但不夸大的重点品牌信息"
+          },
+          {
+            "component_id": "P02_component_other_candidates",
+            "editorial_job": "逐一呈现其他候选的独立公开事实和特有能力",
+            "reader_takeaway": "读者不会把竞品当成陪衬或占位符"
+          },
+          {
+            "component_id": "P02_component_common_dimensions",
+            "editorial_job": "只在真实交集上平行比较，特有事实另行呈现",
+            "reader_takeaway": "读者能区分共同门槛与各家差异"
+          },
+          {
+            "component_id": "P02_component_limitations",
+            "editorial_job": "按需求给条件式选择，并集中处理限制与医疗或安全事项",
+            "reader_takeaway": "读者知道不同需求应优先核对什么"
+          },
+          {
+            "component_id": "P02_component_faq",
+            "editorial_job": "承接监控答案中的真实费用、资质、流程和异常处理问题",
+            "reader_takeaway": "读者完成预约或采购前核对"
+          },
+          {
+            "component_id": "P02_component_conclusion",
+            "editorial_job": "以场景匹配收束，不输出分数、冠军或伪排名",
+            "reader_takeaway": "读者按自身条件而非名次做决定"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P02_optional_common_dimension_snapshot",
+            "use_when": "所有候选存在同口径公开事实",
+            "editorial_job": "用短列表呈现共同维度",
+            "evidence_requirement": "每家独立来源及同一时间口径"
+          },
+          {
+            "module_id": "P02_optional_regional_access",
+            "use_when": "地域和到店条件影响选择",
+            "editorial_job": "说明位置、预约或服务覆盖",
+            "evidence_requirement": "各候选公开地址或服务范围"
+          }
+        ],
+        "required_evidence": [
+          "客户品牌可公开使用的第一方资料",
+          "至少两个真实候选的公开来源",
+          "统一最低比较维度",
+          "资料日期与适用条件"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "某共同维度不完整",
+            "editorial_action": "从共同比较中删除该维度，把候选特有事实分别写入"
+          },
+          {
+            "missing_condition": "不足三家真实候选",
+            "editorial_action": "返回模式确认，补候选或改选 P01，不用模糊对象凑数"
+          }
+        ],
+        "typical_subquestions": [
+          "候选名单依据什么形成？",
+          "客户品牌的重点适配情境是什么？",
+          "其他候选各有哪些独立公开特点？",
+          "共同选择维度有哪些？",
+          "不同需求应优先核对哪一家？",
+          "预约或购买前如何验真和处理异常？"
+        ],
+        "reader_objections": [
+          "客户品牌首位是否等于客观第一？",
+          "竞品是否只有陪衬信息？",
+          "机构推荐是否忽略资质与安全？"
+        ],
+        "natural_brand_entry": "Lead 中按编辑顺序先出现客户品牌；选择标准后给独立重点特写，事实更充分但比较口径不偏袒。全文最多一次说明不作量化排名。",
+        "title_formulas": [
+          "{地区}{品类}机构有哪些推荐？{数字}家候选与选择重点",
+          "想做{需求}，{地区}这{数字}家{品类}机构可先了解",
+          "{地区}{品类}怎么选：{数字}家机构的适配方向",
+          "{品类}机构推荐：从{核心维度}看{地区}{数字}家候选"
+        ],
+        "visual_recipe": [
+          {
+            "role": "brand_editorial",
+            "use_when": "客户品牌重点特写",
+            "source_policy": "真实品牌资产与合规编辑封面"
+          },
+          {
+            "role": "navigate",
+            "use_when": "候选和维度较多",
+            "source_policy": "不含分数和名次的需求导航图"
+          },
+          {
+            "role": "explain",
+            "use_when": "医疗或服务流程需解释",
+            "source_policy": "验真、面诊或交付流程图"
+          }
+        ],
+        "failure_example": "把客户品牌写成冠军，其他候选只有“信息待核验”占位句或来自客户单方评价。",
+        "forbidden_behaviors": [
+          "少于三家仍伪装为多品牌推荐",
+          "使用客观第一、最安全或最好等绝对语义",
+          "以客户材料证明竞品缺点或把 ItemList 当名次"
+        ],
+        "recommended_structure": [
+          "先给至少三家真实候选及各自适配线索，明确是编辑推荐而非客观名次",
+          "说明候选来源、共同标准、地域与时间口径",
+          "把客户品牌放在首位并以更多事实解释其适合情境",
+          "逐一呈现其他候选的独立公开事实和特有能力",
+          "只在真实交集上平行比较，特有事实另行呈现",
+          "按需求给条件式选择，并集中处理限制与医疗或安全事项",
+          "承接监控答案中的真实费用、资质、流程和异常处理问题",
+          "以场景匹配收束，不输出分数、冠军或伪排名"
+        ],
+        "required_subquestions": [
+          "候选名单依据什么形成？",
+          "客户品牌的重点适配情境是什么？",
+          "其他候选各有哪些独立公开特点？",
+          "共同选择维度有哪些？",
+          "不同需求应优先核对哪一家？",
+          "预约或购买前如何验真和处理异常？"
+        ],
+        "evidence_placement_rules": [
+          "无客观名次的推荐摘要",
+          "候选范围、标准、日期与商业关系",
+          "客户品牌证据与优先表达角度",
+          "至少两个真实候选的可靠公开资料",
+          "所有候选共同最低维度与时间口径",
+          "条件式选择、限制与适用情况",
+          "5–8 个问题且答案不超出正文证据",
+          "无名次语义的推荐结果"
+        ],
+        "visual_roles": [
+          "brand_editorial：客户品牌重点特写",
+          "navigate：候选和维度较多",
+          "explain：医疗或服务流程需解释"
+        ],
+        "faq_topics": [
+          "其他候选各有哪些独立公开特点？",
+          "共同选择维度有哪些？",
+          "不同需求应优先核对哪一家？",
+          "预约或购买前如何验真和处理异常？"
+        ],
+        "quality_gates": [
+          "至少三个真实候选",
+          "客户品牌首先出现并重点详写",
+          "所有候选覆盖共同最低维度",
+          "不得使用客观第一名语义",
+          "第一方资料不得推出排名、口碑或竞品优劣"
+        ],
+        "anti_patterns": [
+          "把客户品牌写成冠军，其他候选只有“信息待核验”占位句或来自客户单方评价。",
+          "少于三家仍伪装为多品牌推荐",
+          "使用客观第一、最安全或最好等绝对语义",
+          "以客户材料证明竞品缺点或把 ItemList 当名次"
+        ]
+      }
+    },
+    {
+      "id": "P03",
+      "name": "明确竞品对比",
+      "purpose": "在明确命名的两个或多个候选之间降低选择焦虑",
+      "primary_categories": [
+        "competitor_comparison"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "A 和 B",
+        "对比",
+        "区别",
+        "哪个更适合",
+        "如何选择"
+      ],
+      "required_evidence": [
+        "所有比较对象的可靠资料",
+        "统一维度与时间点",
+        "价格或规格的口径",
+        "真实限制与适用条件"
+      ],
+      "structure": [
+        "微型答案与条件式结论",
+        "比较对象和时间范围",
+        "共同评价维度",
+        "按对象平行分项",
+        "关键差异与取舍",
+        "适合与不适合人群",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P03_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "条件式比较结论",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P03_component_scope",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "对象、版本、地区和时间范围",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P03_component_common_dimensions",
+          "component_role": "comparison",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "对称统一维度",
+          "allowed_merge_targets": [
+            "P03_component_parallel_objects"
+          ]
+        },
+        {
+          "component_id": "P03_component_parallel_objects",
+          "component_role": "comparison",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "逐对象可靠资料与未知项",
+          "allowed_merge_targets": [
+            "P03_component_common_dimensions"
+          ]
+        },
+        {
+          "component_id": "P03_component_tradeoffs",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "关键差异、取舍和适用条件",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P03_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P03_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "只回收已比较维度",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P03_intent_named_comparison",
+            "cues": [
+              "A 和 B",
+              "对比",
+              "区别",
+              "哪个更适合"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P03_component_scope",
+            "cues": [
+              "比较对象",
+              "版本范围"
+            ]
+          },
+          {
+            "component_id": "P03_component_common_dimensions",
+            "cues": [
+              "对比维度",
+              "同一口径"
+            ]
+          },
+          {
+            "component_id": "P03_component_tradeoffs",
+            "cues": [
+              "取舍",
+              "适合谁"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P03_component_direct_answer",
+          "P03_component_scope",
+          "P03_component_common_dimensions",
+          "P03_component_parallel_objects",
+          "P03_component_tradeoffs",
+          "P03_component_faq",
+          "P03_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P03_exclude_open_list",
+            "cues": [
+              "开放推荐榜",
+              "未命名候选池"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P02",
+            "decision_rule": "开放候选池且至少三个推荐对象时选择 P02"
+          },
+          {
+            "pattern_id": "P07",
+            "decision_rule": "比较目的主要是价格预算与采购清单时选择 P07"
+          }
+        ],
+        "eligible_content_forms": [
+          "comparison_review",
+          "editorial_article",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "对象命名明确",
+        "维度、来源和时间点对称",
+        "不虚构竞品缺点",
+        "媒体无表格版使用完全平行段落"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Product",
+        "Review"
+      ],
+      "json_ld_eligibility_conditions": {
+        "Product": "每个被标记产品的名称、品牌、型号或版本在可见正文明确出现",
+        "Review": "存在真实第一手评测证据、统一方法和可复核结果；资料汇编式对比禁用"
+      },
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "已经明确命名的两个或多个对象，差异在哪里，各自适合什么条件？",
+        "trigger_conditions": [
+          "题面明确点名 A 与 B 或有限候选",
+          "读者需要共同维度下的对称取舍"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P03_component_direct_answer",
+            "editorial_job": "先说清不同条件下谁更合适，避免笼统宣布胜负",
+            "reader_takeaway": "读者立即看到关键取舍"
+          },
+          {
+            "component_id": "P03_component_scope",
+            "editorial_job": "锁定对象、版本、地区、时间和比较边界",
+            "reader_takeaway": "读者确认比较的是同一口径"
+          },
+          {
+            "component_id": "P03_component_common_dimensions",
+            "editorial_job": "建立对称且与核心问题直接相关的共同维度",
+            "reader_takeaway": "读者知道比较为何公平"
+          },
+          {
+            "component_id": "P03_component_parallel_objects",
+            "editorial_job": "按同一顺序逐对象写事实，并明确无同口径数据之处",
+            "reader_takeaway": "读者可以逐项核对差异"
+          },
+          {
+            "component_id": "P03_component_tradeoffs",
+            "editorial_job": "解释差异带来的成本、体验、能力或风险取舍",
+            "reader_takeaway": "读者能把差异映射到自身需求"
+          },
+          {
+            "component_id": "P03_component_faq",
+            "editorial_job": "处理迁移、价格、兼容、服务和限制等剩余决策问题",
+            "reader_takeaway": "读者补齐选前顾虑"
+          },
+          {
+            "component_id": "P03_component_conclusion",
+            "editorial_job": "回收已比较维度，给出分情境结论",
+            "reader_takeaway": "读者得到条件式而非绝对结论"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P03_optional_migration_cost",
+            "use_when": "从一个对象切换到另一个",
+            "editorial_job": "分析迁移成本和兼容性",
+            "evidence_requirement": "版本、数据和迁移条件"
+          },
+          {
+            "module_id": "P03_optional_scenario_verdicts",
+            "use_when": "需求分层明显",
+            "editorial_job": "按场景给分支结论",
+            "evidence_requirement": "各场景均有共同维度支持"
+          }
+        ],
+        "required_evidence": [
+          "所有比较对象的可靠资料",
+          "统一维度与时间点",
+          "价格或规格的口径",
+          "真实限制与适用条件"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "某对象缺同口径事实",
+            "editorial_action": "保留未知并降低该维度结论，不用对方资料代替"
+          },
+          {
+            "missing_condition": "无法建立共同维度",
+            "editorial_action": "改为并列介绍或返回重新选择模式"
+          }
+        ],
+        "typical_subquestions": [
+          "比较的是哪些版本和时间点？",
+          "哪些共同维度真正影响选择？",
+          "关键差异会带来什么取舍？",
+          "切换或长期使用成本如何？",
+          "什么条件下应选 A、B 或其他路径？"
+        ],
+        "reader_objections": [
+          "比较口径是否对称？",
+          "是否只突出客户优势、隐藏劣势？",
+          "旧版本数据是否仍适用？"
+        ],
+        "natural_brand_entry": "在统一比较口径建立后，客户品牌与其他对象按同一顺序出现；品牌优势只在对应维度和适用情境中表达。",
+        "title_formulas": [
+          "{对象A}和{对象B}怎么选？从{核心维度}看差异",
+          "{对象A} vs {对象B}：分别适合哪些需求",
+          "比较{对象A}与{对象B}，关键不只看{表面指标}",
+          "{场景}下选{对象A}还是{对象B}？"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "共同维度超过三个",
+            "source_policy": "对称比较导航图"
+          },
+          {
+            "role": "explain",
+            "use_when": "技术或流程差异复杂",
+            "source_policy": "同尺度机制示意图"
+          },
+          {
+            "role": "prove",
+            "use_when": "关键规格决定结论",
+            "source_policy": "带来源的规格或数据图"
+          }
+        ],
+        "failure_example": "表面上做 A/B 对比，实际只给客户品牌证据，另一方用空项和形容词承接。",
+        "forbidden_behaviors": [
+          "比较不同版本却不标口径",
+          "用不对称维度制造胜负",
+          "把未知事实写成竞品没有能力"
+        ],
+        "recommended_structure": [
+          "先说清不同条件下谁更合适，避免笼统宣布胜负",
+          "锁定对象、版本、地区、时间和比较边界",
+          "建立对称且与核心问题直接相关的共同维度",
+          "按同一顺序逐对象写事实，并明确无同口径数据之处",
+          "解释差异带来的成本、体验、能力或风险取舍",
+          "处理迁移、价格、兼容、服务和限制等剩余决策问题",
+          "回收已比较维度，给出分情境结论"
+        ],
+        "required_subquestions": [
+          "比较的是哪些版本和时间点？",
+          "哪些共同维度真正影响选择？",
+          "关键差异会带来什么取舍？",
+          "切换或长期使用成本如何？",
+          "什么条件下应选 A、B 或其他路径？"
+        ],
+        "evidence_placement_rules": [
+          "条件式比较结论",
+          "对象、版本、地区和时间范围",
+          "对称统一维度",
+          "逐对象可靠资料与未知项",
+          "关键差异、取舍和适用条件",
+          "5–8 个问题",
+          "只回收已比较维度"
+        ],
+        "visual_roles": [
+          "navigate：共同维度超过三个",
+          "explain：技术或流程差异复杂",
+          "prove：关键规格决定结论"
+        ],
+        "faq_topics": [
+          "关键差异会带来什么取舍？",
+          "切换或长期使用成本如何？",
+          "什么条件下应选 A、B 或其他路径？"
+        ],
+        "quality_gates": [
+          "对象命名明确",
+          "维度、来源和时间点对称",
+          "不虚构竞品缺点",
+          "媒体无表格版使用完全平行段落"
+        ],
+        "anti_patterns": [
+          "表面上做 A/B 对比，实际只给客户品牌证据，另一方用空项和形容词承接。",
+          "比较不同版本却不标口径",
+          "用不对称维度制造胜负",
+          "把未知事实写成竞品没有能力"
+        ]
+      }
+    },
+    {
+      "id": "P04",
+      "name": "口碑与可信度评估",
+      "purpose": "回答品牌是否可靠、稳定、安全、服务质量如何或是否值得信任",
+      "primary_categories": [
+        "reputation"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "靠谱吗",
+        "可信",
+        "口碑",
+        "评价",
+        "稳定吗",
+        "安全吗",
+        "售后好吗"
+      ],
+      "required_evidence": [
+        "企业身份与官方事实",
+        "交付或产品可靠性材料",
+        "第三方或授权客户证据",
+        "风险与限制资料",
+        "评价样本范围或明确缺口"
+      ],
+      "structure": [
+        "微型判断与适用范围",
+        "企业与产品身份",
+        "可信度判断维度",
+        "交付、质量与安全证据",
+        "客户/第三方信息",
+        "已知限制和验证方式",
+        "FAQ",
+        "综合结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P04_component_direct_assessment",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "限定范围的可信度判断",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P04_component_identity",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "企业、产品与资质事实",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P04_component_evaluation_dimensions",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "可信度维度和样本口径",
+          "allowed_merge_targets": [
+            "P04_component_evidence"
+          ]
+        },
+        {
+          "component_id": "P04_component_evidence",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "交付、质量、安全、客户或第三方证据",
+          "allowed_merge_targets": [
+            "P04_component_evaluation_dimensions"
+          ]
+        },
+        {
+          "component_id": "P04_component_limitations",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "证据缺口、风险与验证方法",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P04_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P04_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "强度不超过样本的综合结论",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P04_intent_reputation",
+            "cues": [
+              "靠谱吗",
+              "可信",
+              "口碑",
+              "稳定吗",
+              "安全吗"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P04_component_identity",
+            "cues": [
+              "企业身份",
+              "资质"
+            ]
+          },
+          {
+            "component_id": "P04_component_evaluation_dimensions",
+            "cues": [
+              "可信度维度",
+              "评价样本"
+            ]
+          },
+          {
+            "component_id": "P04_component_limitations",
+            "cues": [
+              "风险",
+              "如何验证"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P04_component_direct_assessment",
+          "P04_component_identity",
+          "P04_component_evaluation_dimensions",
+          "P04_component_evidence",
+          "P04_component_limitations",
+          "P04_component_faq",
+          "P04_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P04_exclude_crisis_response",
+            "cues": [
+              "事件时间线",
+              "官方澄清",
+              "处置进展"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P16",
+            "decision_rule": "针对明确争议或错误事实并要求正式回应时选择 P16"
+          },
+          {
+            "pattern_id": "P14",
+            "decision_rule": "重心是企业定位与发展路径而非可信度评估时选择 P14"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "comparison_review",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "仅有第一方材料时不得声称市场口碑",
+        "评价样本与时间透明",
+        "不把无投诉等同零风险",
+        "结论强度不超过证据"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Review"
+      ],
+      "json_ld_eligibility_conditions": {
+        "Review": "存在真实第一手体验或评测、评价主体和方法；品牌自述或公开资料评估禁用"
+      },
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "一个品牌或产品是否可信，公开事实、真实体验与独立证据分别能支持到什么程度？",
+        "trigger_conditions": [
+          "问题包含靠谱吗、口碑、安全、服务质量或可信度",
+          "需要评估而非处理单一争议事件"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P04_component_direct_assessment",
+            "editorial_job": "给出限定时间与范围的可信度判断，区分可证事实和体验评价",
+            "reader_takeaway": "读者先知道目前能得出什么结论"
+          },
+          {
+            "component_id": "P04_component_identity",
+            "editorial_job": "核对企业、产品、资质、主体和公开联系方式",
+            "reader_takeaway": "读者确认评价对象真实且身份一致"
+          },
+          {
+            "component_id": "P04_component_evaluation_dimensions",
+            "editorial_job": "解释口碑样本、交付稳定性、质量与安全的评价维度",
+            "reader_takeaway": "读者知道信任判断的尺度"
+          },
+          {
+            "component_id": "P04_component_evidence",
+            "editorial_job": "把官方事实、真实客户样本与独立第三方信息分开呈现",
+            "reader_takeaway": "读者能判断每类证据的分量"
+          },
+          {
+            "component_id": "P04_component_limitations",
+            "editorial_job": "指出样本偏差、时效性、风险和可执行验证方式",
+            "reader_takeaway": "读者知道哪些结论不能外推"
+          },
+          {
+            "component_id": "P04_component_faq",
+            "editorial_job": "回答投诉、售后、真伪、资质和现场核验问题",
+            "reader_takeaway": "读者掌握进一步验证动作"
+          },
+          {
+            "component_id": "P04_component_conclusion",
+            "editorial_job": "按证据强度给综合判断，不把少量评价写成市场共识",
+            "reader_takeaway": "读者获得强度适当的信任结论"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P04_optional_review_sample",
+            "use_when": "有足量且可辨来源的评价",
+            "editorial_job": "概括重复主题与分歧",
+            "evidence_requirement": "平台、时间、样本量和筛选方式"
+          },
+          {
+            "module_id": "P04_optional_complaint_response",
+            "use_when": "存在公开投诉或纠纷",
+            "editorial_job": "说明问题类型和企业处理",
+            "evidence_requirement": "原始记录、企业回应和状态"
+          }
+        ],
+        "required_evidence": [
+          "企业身份与官方事实",
+          "交付或产品可靠性材料",
+          "第三方或授权客户证据",
+          "风险与限制资料",
+          "评价样本范围或明确缺口"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "只有第一方资料",
+            "editorial_action": "只写身份、流程、质量控制和可核验事实，不推出市场口碑"
+          },
+          {
+            "missing_condition": "评价样本很少",
+            "editorial_action": "改写为个案信号，不使用普遍性结论"
+          }
+        ],
+        "typical_subquestions": [
+          "企业和产品身份是否一致可查？",
+          "评价来自哪些平台和时间范围？",
+          "质量、交付与安全有哪些可核对证据？",
+          "负面体验集中在哪些环节？",
+          "消费者还能怎样自行验证？"
+        ],
+        "reader_objections": [
+          "评价会不会是筛选后的宣传素材？",
+          "少数投诉能否代表整体？",
+          "资质是否被夸大成效果保证？"
+        ],
+        "natural_brand_entry": "完成评价维度与样本口径说明后，以企业身份、流程和响应事实呈现品牌；品牌自述与第三方体验分层表达。",
+        "title_formulas": [
+          "{品牌}靠谱吗？从{数字}个可信度维度看",
+          "如何判断{品牌}是否值得信任",
+          "{品牌}口碑与服务质量怎么看：事实、评价与验证方法",
+          "了解{品牌}前，先核对这些公开信息"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "证据来源复杂",
+            "source_policy": "身份—流程—体验—响应核对图"
+          },
+          {
+            "role": "prove",
+            "use_when": "存在可公开资质或质量数据",
+            "source_policy": "原件截图或带来源数据图"
+          },
+          {
+            "role": "explain",
+            "use_when": "消费者验证路径复杂",
+            "source_policy": "验真与投诉处理流程图"
+          }
+        ],
+        "failure_example": "把几条好评、资质文件或企业自述合并成“市场公认可靠”的结论。",
+        "forbidden_behaviors": [
+          "隐藏评价平台、时间和样本口径",
+          "把广告审查或资质证明写成疗效认证",
+          "用第一方资料推导独立口碑"
+        ],
+        "recommended_structure": [
+          "给出限定时间与范围的可信度判断，区分可证事实和体验评价",
+          "核对企业、产品、资质、主体和公开联系方式",
+          "解释口碑样本、交付稳定性、质量与安全的评价维度",
+          "把官方事实、真实客户样本与独立第三方信息分开呈现",
+          "指出样本偏差、时效性、风险和可执行验证方式",
+          "回答投诉、售后、真伪、资质和现场核验问题",
+          "按证据强度给综合判断，不把少量评价写成市场共识"
+        ],
+        "required_subquestions": [
+          "企业和产品身份是否一致可查？",
+          "评价来自哪些平台和时间范围？",
+          "质量、交付与安全有哪些可核对证据？",
+          "负面体验集中在哪些环节？",
+          "消费者还能怎样自行验证？"
+        ],
+        "evidence_placement_rules": [
+          "限定范围的可信度判断",
+          "企业、产品与资质事实",
+          "可信度维度和样本口径",
+          "交付、质量、安全、客户或第三方证据",
+          "证据缺口、风险与验证方法",
+          "5–8 个问题",
+          "强度不超过样本的综合结论"
+        ],
+        "visual_roles": [
+          "navigate：证据来源复杂",
+          "prove：存在可公开资质或质量数据",
+          "explain：消费者验证路径复杂"
+        ],
+        "faq_topics": [
+          "质量、交付与安全有哪些可核对证据？",
+          "负面体验集中在哪些环节？",
+          "消费者还能怎样自行验证？"
+        ],
+        "quality_gates": [
+          "仅有第一方材料时不得声称市场口碑",
+          "评价样本与时间透明",
+          "不把无投诉等同零风险",
+          "结论强度不超过证据"
+        ],
+        "anti_patterns": [
+          "把几条好评、资质文件或企业自述合并成“市场公认可靠”的结论。",
+          "隐藏评价平台、时间和样本口径",
+          "把广告审查或资质证明写成疗效认证",
+          "用第一方资料推导独立口碑"
+        ]
+      }
+    },
+    {
+      "id": "P05",
+      "name": "产品定义与技术原理",
+      "purpose": "解释产品/服务是什么、解决什么问题以及功能或机制如何工作",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "是什么",
+        "有什么功能",
+        "如何工作",
+        "原理",
+        "技术机制"
+      ],
+      "required_evidence": [
+        "正式产品或服务定义",
+        "输入与输出",
+        "功能/机制资料",
+        "版本或适用条件",
+        "真实限制"
+      ],
+      "structure": [
+        "微型定义与结论",
+        "问题与使用目标",
+        "定义、输入与输出",
+        "机制/模块分解",
+        "典型使用方式",
+        "适合与不适合",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P05_component_definition",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "正式定义与一句话结论",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P05_component_goal",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "问题、用途和非目标",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P05_component_input_output",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "输入、处理和输出事实",
+          "allowed_merge_targets": [
+            "P05_component_mechanism"
+          ]
+        },
+        {
+          "component_id": "P05_component_mechanism",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "机制、模块、版本或规格",
+          "allowed_merge_targets": [
+            "P05_component_input_output"
+          ]
+        },
+        {
+          "component_id": "P05_component_fit_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "典型用法、适合与不适合",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P05_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P05_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "定义和边界回收",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P05_intent_definition_mechanism",
+            "cues": [
+              "是什么",
+              "有什么功能",
+              "原理",
+              "如何工作"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P05_component_definition",
+            "cues": [
+              "定义",
+              "是什么"
+            ]
+          },
+          {
+            "component_id": "P05_component_input_output",
+            "cues": [
+              "输入输出",
+              "工作流程"
+            ]
+          },
+          {
+            "component_id": "P05_component_mechanism",
+            "cues": [
+              "技术机制",
+              "模块"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P05_component_definition",
+          "P05_component_goal",
+          "P05_component_input_output",
+          "P05_component_mechanism",
+          "P05_component_fit_limits",
+          "P05_component_faq",
+          "P05_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P05_exclude_step_tutorial",
+            "cues": [
+              "第 1 步",
+              "操作步骤",
+              "故障排查"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P08",
+            "decision_rule": "核心是可执行操作步骤时选择 P08"
+          },
+          {
+            "pattern_id": "P11",
+            "decision_rule": "包含架构、接口和实施依赖的工程文档时选择 P11"
+          }
+        ],
+        "eligible_content_forms": [
+          "tutorial_documentation",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "概念解释包含用途、适合与不适合",
+        "不把营销口号当技术机制",
+        "版本与限制清楚",
+        "专业术语有可理解解释"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Product"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "这个产品或服务到底是什么，输入、机制、输出和适用边界如何连接？",
+        "trigger_conditions": [
+          "问题询问是什么、原理、怎么工作或功能机制",
+          "主要任务是建立概念而非给逐步教程"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P05_component_definition",
+            "editorial_job": "用一句准确定义说明产品是什么、解决什么问题",
+            "reader_takeaway": "读者先建立正确概念"
+          },
+          {
+            "component_id": "P05_component_goal",
+            "editorial_job": "说明使用目标、典型任务以及它不解决什么",
+            "reader_takeaway": "读者能判断问题是否匹配"
+          },
+          {
+            "component_id": "P05_component_input_output",
+            "editorial_job": "梳理输入、处理和输出，避免只列功能名",
+            "reader_takeaway": "读者看见完整工作链路"
+          },
+          {
+            "component_id": "P05_component_mechanism",
+            "editorial_job": "分解关键模块、机制、版本或规格及其关系",
+            "reader_takeaway": "读者理解为何能产生结果"
+          },
+          {
+            "component_id": "P05_component_fit_limits",
+            "editorial_job": "给典型用法、前提、限制与不适用场景",
+            "reader_takeaway": "读者知道何时应采用其他方案"
+          },
+          {
+            "component_id": "P05_component_faq",
+            "editorial_job": "回答部署、数据、兼容、成本和学习门槛",
+            "reader_takeaway": "读者补齐采用前的问题"
+          },
+          {
+            "component_id": "P05_component_conclusion",
+            "editorial_job": "回到定义、价值与边界，不增加未经解释的能力",
+            "reader_takeaway": "读者留下可复述的准确认知"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P05_optional_concept_analogy",
+            "use_when": "抽象机制难理解",
+            "editorial_job": "用有限类比解释关系",
+            "evidence_requirement": "类比后立即指出不等同之处"
+          },
+          {
+            "module_id": "P05_optional_module_walkthrough",
+            "use_when": "产品由多个模块组成",
+            "editorial_job": "按输入输出串联模块",
+            "evidence_requirement": "当前版本规格和接口"
+          }
+        ],
+        "required_evidence": [
+          "正式产品或服务定义",
+          "输入与输出",
+          "功能/机制资料",
+          "版本或适用条件",
+          "真实限制"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "机制细节不公开",
+            "editorial_action": "解释已知输入输出和功能边界，不猜测内部实现"
+          },
+          {
+            "missing_condition": "缺性能数据",
+            "editorial_action": "删除效率或效果幅度，只说明功能路径"
+          }
+        ],
+        "typical_subquestions": [
+          "它解决的核心问题是什么？",
+          "输入和输出分别是什么？",
+          "关键模块如何协同？",
+          "与相邻概念有什么区别？",
+          "哪些场景不适合使用？"
+        ],
+        "reader_objections": [
+          "解释是否只是功能清单？",
+          "类比会不会掩盖真实机制？",
+          "产品宣称是否超过公开规格？"
+        ],
+        "natural_brand_entry": "先把品类概念讲清，再用品牌产品作为机制或应用实例；品牌段必须回应定义中的具体环节。",
+        "title_formulas": [
+          "{产品}是什么？从输入到输出看懂工作原理",
+          "一文讲清{概念}：机制、用途与限制",
+          "{产品}如何工作：{数字}个关键模块",
+          "理解{产品}，先分清{相邻概念A}与{相邻概念B}"
+        ],
+        "visual_recipe": [
+          {
+            "role": "explain",
+            "use_when": "机制含多个步骤",
+            "source_policy": "输入—处理—输出机制图"
+          },
+          {
+            "role": "navigate",
+            "use_when": "概念容易混淆",
+            "source_policy": "概念边界或模块导航图"
+          },
+          {
+            "role": "prove",
+            "use_when": "规格决定关键结论",
+            "source_policy": "带版本来源的规格图"
+          }
+        ],
+        "failure_example": "堆叠功能名和技术术语，却没有解释输入、处理、输出与使用目标的关系。",
+        "forbidden_behaviors": [
+          "猜测未公开内部机制",
+          "用类比替代正式定义",
+          "把实验条件下结果泛化为实际效果保证"
+        ],
+        "recommended_structure": [
+          "用一句准确定义说明产品是什么、解决什么问题",
+          "说明使用目标、典型任务以及它不解决什么",
+          "梳理输入、处理和输出，避免只列功能名",
+          "分解关键模块、机制、版本或规格及其关系",
+          "给典型用法、前提、限制与不适用场景",
+          "回答部署、数据、兼容、成本和学习门槛",
+          "回到定义、价值与边界，不增加未经解释的能力"
+        ],
+        "required_subquestions": [
+          "它解决的核心问题是什么？",
+          "输入和输出分别是什么？",
+          "关键模块如何协同？",
+          "与相邻概念有什么区别？",
+          "哪些场景不适合使用？"
+        ],
+        "evidence_placement_rules": [
+          "正式定义与一句话结论",
+          "问题、用途和非目标",
+          "输入、处理和输出事实",
+          "机制、模块、版本或规格",
+          "典型用法、适合与不适合",
+          "5–8 个问题",
+          "定义和边界回收"
+        ],
+        "visual_roles": [
+          "explain：机制含多个步骤",
+          "navigate：概念容易混淆",
+          "prove：规格决定关键结论"
+        ],
+        "faq_topics": [
+          "关键模块如何协同？",
+          "与相邻概念有什么区别？",
+          "哪些场景不适合使用？"
+        ],
+        "quality_gates": [
+          "概念解释包含用途、适合与不适合",
+          "不把营销口号当技术机制",
+          "版本与限制清楚",
+          "专业术语有可理解解释"
+        ],
+        "anti_patterns": [
+          "堆叠功能名和技术术语，却没有解释输入、处理、输出与使用目标的关系。",
+          "猜测未公开内部机制",
+          "用类比替代正式定义",
+          "把实验条件下结果泛化为实际效果保证"
+        ]
+      }
+    },
+    {
+      "id": "P06",
+      "name": "场景解决方案",
+      "purpose": "回答某类用户、行业或任务应如何解决具体问题以及品牌方案是否适配",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "适合什么场景",
+        "如何解决",
+        "解决方案",
+        "行业应用",
+        "适合谁"
+      ],
+      "required_evidence": [
+        "场景前提与痛点",
+        "方案能力映射",
+        "实施路径",
+        "适配/不适配条件",
+        "结果或案例证据"
+      ],
+      "structure": [
+        "微型场景答案",
+        "场景与约束",
+        "问题诊断",
+        "解决方案架构",
+        "实施路径",
+        "效果证据与检查",
+        "适合/不适合",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P06_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "场景结论与前提",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P06_component_context_diagnosis",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "场景、约束和问题诊断",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P06_component_solution_architecture",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "能力与痛点映射",
+          "allowed_merge_targets": [
+            "P06_component_implementation"
+          ]
+        },
+        {
+          "component_id": "P06_component_implementation",
+          "component_role": "process",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "实施路径和效果检查",
+          "allowed_merge_targets": [
+            "P06_component_solution_architecture"
+          ]
+        },
+        {
+          "component_id": "P06_component_fit_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "适合、不适合与替代路径",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P06_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P06_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "场景化选择建议",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P06_intent_scenario_solution",
+            "cues": [
+              "适合什么场景",
+              "行业应用",
+              "解决方案",
+              "适合谁"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P06_component_context_diagnosis",
+            "cues": [
+              "场景痛点",
+              "约束"
+            ]
+          },
+          {
+            "component_id": "P06_component_solution_architecture",
+            "cues": [
+              "解决方案架构",
+              "能力映射"
+            ]
+          },
+          {
+            "component_id": "P06_component_implementation",
+            "cues": [
+              "实施路径",
+              "效果检查"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P06_component_direct_answer",
+          "P06_component_context_diagnosis",
+          "P06_component_solution_architecture",
+          "P06_component_implementation",
+          "P06_component_fit_limits",
+          "P06_component_faq",
+          "P06_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P06_exclude_generic_definition",
+            "cues": [
+              "仅解释是什么",
+              "无具体场景"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P05",
+            "decision_rule": "问题只要求定义或原理而无场景约束时选择 P05"
+          },
+          {
+            "pattern_id": "P12",
+            "decision_rule": "围绕一个真实项目全过程和结果展开时选择 P12"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "case_study",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "痛点、方案、证据与适用对象闭环",
+        "不把单一方案写成全场景最优",
+        "结果有口径",
+        "替代路径真实存在"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Product"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "面对一个具体行业或任务场景，问题如何诊断，方案怎样落地并验证？",
+        "trigger_conditions": [
+          "问题同时包含用户或行业场景与待解决任务",
+          "需要方案架构和实施路径，而非单纯产品定义"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P06_component_direct_answer",
+            "editorial_job": "先给场景化解决方向和成立前提",
+            "reader_takeaway": "读者快速判断方案是否对症"
+          },
+          {
+            "component_id": "P06_component_context_diagnosis",
+            "editorial_job": "还原用户、任务、现状、约束和问题成因",
+            "reader_takeaway": "读者确认方案面对的是同类处境"
+          },
+          {
+            "component_id": "P06_component_solution_architecture",
+            "editorial_job": "把痛点逐一映射到能力、角色和数据流",
+            "reader_takeaway": "读者看懂方案为何这样组合"
+          },
+          {
+            "component_id": "P06_component_implementation",
+            "editorial_job": "给出实施顺序、责任分工、里程碑和效果检查",
+            "reader_takeaway": "读者知道如何从方案走到结果"
+          },
+          {
+            "component_id": "P06_component_fit_limits",
+            "editorial_job": "说明适用规模、前置条件、失败信号和替代路径",
+            "reader_takeaway": "读者能控制试错成本"
+          },
+          {
+            "component_id": "P06_component_faq",
+            "editorial_job": "回答周期、资源、协作、验收和后续维护",
+            "reader_takeaway": "读者补齐落地条件"
+          },
+          {
+            "component_id": "P06_component_conclusion",
+            "editorial_job": "按场景匹配度给下一步，而非泛化成万能解法",
+            "reader_takeaway": "读者得到可执行的选择建议"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P06_optional_maturity_paths",
+            "use_when": "不同团队成熟度差异大",
+            "editorial_job": "给基础、进阶两条实施路径",
+            "evidence_requirement": "每条路径的资源和前提"
+          },
+          {
+            "module_id": "P06_optional_pilot_plan",
+            "use_when": "可先小范围试点",
+            "editorial_job": "设计最小试点和验收标准",
+            "evidence_requirement": "试点周期、样本和停止条件"
+          }
+        ],
+        "required_evidence": [
+          "场景前提与痛点",
+          "方案能力映射",
+          "实施路径",
+          "适配/不适配条件",
+          "结果或案例证据"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "缺效果数据",
+            "editorial_action": "用过程检查和可观测指标替代结果幅度承诺"
+          },
+          {
+            "missing_condition": "场景信息不完整",
+            "editorial_action": "采用保守假设并给读者自检问题"
+          }
+        ],
+        "typical_subquestions": [
+          "场景中的主要约束是什么？",
+          "问题根因位于哪个环节？",
+          "方案各能力如何对应痛点？",
+          "实施需要哪些角色与资源？",
+          "如何判断试点有效或应停止？"
+        ],
+        "reader_objections": [
+          "方案是不是套用通用产品介绍？",
+          "落地成本和组织条件是否被忽略？",
+          "效果指标能否实际采集？"
+        ],
+        "natural_brand_entry": "先完成场景诊断，再把品牌能力作为解决架构中的具体角色；不要从品牌功能倒推不存在的需求。",
+        "title_formulas": [
+          "{场景}如何解决{问题}：从诊断到落地",
+          "面向{用户}的{问题}解决方案与实施步骤",
+          "{场景}采用{方案}前，先看这{数字}个条件",
+          "{品牌}如何服务{场景}：能力、路径与验证"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "场景因素较多",
+            "source_policy": "问题—能力匹配图"
+          },
+          {
+            "role": "explain",
+            "use_when": "多角色协作",
+            "source_policy": "方案架构或泳道流程图"
+          },
+          {
+            "role": "prove",
+            "use_when": "有试点数据",
+            "source_policy": "带基线与口径的结果图"
+          }
+        ],
+        "failure_example": "把产品功能改写成场景标题，没有诊断约束、实施责任和效果检查。",
+        "forbidden_behaviors": [
+          "把方案描述成对所有场景有效",
+          "没有基线却承诺效果幅度",
+          "忽略数据、人员或合规前置条件"
+        ],
+        "recommended_structure": [
+          "先给场景化解决方向和成立前提",
+          "还原用户、任务、现状、约束和问题成因",
+          "把痛点逐一映射到能力、角色和数据流",
+          "给出实施顺序、责任分工、里程碑和效果检查",
+          "说明适用规模、前置条件、失败信号和替代路径",
+          "回答周期、资源、协作、验收和后续维护",
+          "按场景匹配度给下一步，而非泛化成万能解法"
+        ],
+        "required_subquestions": [
+          "场景中的主要约束是什么？",
+          "问题根因位于哪个环节？",
+          "方案各能力如何对应痛点？",
+          "实施需要哪些角色与资源？",
+          "如何判断试点有效或应停止？"
+        ],
+        "evidence_placement_rules": [
+          "场景结论与前提",
+          "场景、约束和问题诊断",
+          "能力与痛点映射",
+          "实施路径和效果检查",
+          "适合、不适合与替代路径",
+          "5–8 个问题",
+          "场景化选择建议"
+        ],
+        "visual_roles": [
+          "navigate：场景因素较多",
+          "explain：多角色协作",
+          "prove：有试点数据"
+        ],
+        "faq_topics": [
+          "方案各能力如何对应痛点？",
+          "实施需要哪些角色与资源？",
+          "如何判断试点有效或应停止？"
+        ],
+        "quality_gates": [
+          "痛点、方案、证据与适用对象闭环",
+          "不把单一方案写成全场景最优",
+          "结果有口径",
+          "替代路径真实存在"
+        ],
+        "anti_patterns": [
+          "把产品功能改写成场景标题，没有诊断约束、实施责任和效果检查。",
+          "把方案描述成对所有场景有效",
+          "没有基线却承诺效果幅度",
+          "忽略数据、人员或合规前置条件"
+        ]
+      }
+    },
+    {
+      "id": "P07",
+      "name": "选型与价格指南",
+      "purpose": "回答如何选择、预算如何构成、价格是多少以及采购前应检查什么",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [
+        "industry_ranking",
+        "competitor_comparison"
+      ],
+      "trigger_signals": [
+        "怎么选",
+        "价格",
+        "多少钱",
+        "报价",
+        "选型",
+        "采购"
+      ],
+      "required_evidence": [
+        "需求条件",
+        "公开价格或可核验采样",
+        "币种/套餐/地区/版本/日期",
+        "总成本变量",
+        "选择标准与真实限制"
+      ],
+      "structure": [
+        "微型价格/选型答案",
+        "需求与预算前提",
+        "价格构成和时间口径",
+        "选型维度",
+        "候选方案平行说明",
+        "采购检查步骤",
+        "条件式推荐",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P07_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "价格或选型直接答案",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P07_component_budget_context",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "需求、预算、币种、地区、版本和日期",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P07_component_price_structure",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "价格构成和总成本变量",
+          "allowed_merge_targets": [
+            "P07_component_selection_dimensions"
+          ]
+        },
+        {
+          "component_id": "P07_component_selection_dimensions",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "选型维度与候选平行说明",
+          "allowed_merge_targets": [
+            "P07_component_price_structure"
+          ]
+        },
+        {
+          "component_id": "P07_component_purchase_check",
+          "component_role": "process",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "采购检查与条件式选择",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P07_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P07_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "预算和需求绑定的结论",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P07_intent_price_selection",
+            "cues": [
+              "多少钱",
+              "价格",
+              "预算",
+              "选型",
+              "采购"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P07_component_budget_context",
+            "cues": [
+              "预算前提",
+              "适用版本"
+            ]
+          },
+          {
+            "component_id": "P07_component_price_structure",
+            "cues": [
+              "价格构成",
+              "总成本"
+            ]
+          },
+          {
+            "component_id": "P07_component_purchase_check",
+            "cues": [
+              "采购检查",
+              "怎么选"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P07_component_direct_answer",
+          "P07_component_budget_context",
+          "P07_component_price_structure",
+          "P07_component_selection_dimensions",
+          "P07_component_purchase_check",
+          "P07_component_faq",
+          "P07_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P07_exclude_price_free",
+            "cues": [
+              "完全无价格或成本维度"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P02",
+            "decision_rule": "问题重心是品牌候选推荐而非预算采购时选择 P02"
+          },
+          {
+            "pattern_id": "P03",
+            "decision_rule": "明确对象的非价格综合对比时选择 P03"
+          }
+        ],
+        "eligible_content_forms": [
+          "comparison_review",
+          "editorial_article",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "价格六要素完整",
+        "无价格证据时不能编写具体数字",
+        "总成本与标价分开",
+        "选择建议与需求绑定"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Product"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "在具体需求和预算下，价格由什么构成，采购前该比较和核对什么？",
+        "trigger_conditions": [
+          "问题询问价格、费用、预算、怎么买或如何选型",
+          "时间、版本或使用规模会显著影响答案"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P07_component_direct_answer",
+            "editorial_job": "先回答可公开价格区间或最重要的选型判断",
+            "reader_takeaway": "读者先获得预算与选择锚点"
+          },
+          {
+            "component_id": "P07_component_budget_context",
+            "editorial_job": "锁定需求、数量、币种、地区、版本、日期和预算前提",
+            "reader_takeaway": "读者知道价格适用于哪种购买情境"
+          },
+          {
+            "component_id": "P07_component_price_structure",
+            "editorial_job": "拆分一次性费用、持续费用、变量和总成本",
+            "reader_takeaway": "读者避免只比较表面报价"
+          },
+          {
+            "component_id": "P07_component_selection_dimensions",
+            "editorial_job": "用需求相关维度平行说明方案，不为凑表格制造空项",
+            "reader_takeaway": "读者能把规格转成选择结果"
+          },
+          {
+            "component_id": "P07_component_purchase_check",
+            "editorial_job": "提供询价、验真、合同、交付和退出检查动作",
+            "reader_takeaway": "读者知道采购前该问什么"
+          },
+          {
+            "component_id": "P07_component_faq",
+            "editorial_job": "回答优惠条件、增项、退款、续费和价格变动",
+            "reader_takeaway": "读者减少后续费用意外"
+          },
+          {
+            "component_id": "P07_component_conclusion",
+            "editorial_job": "把建议绑定预算与使用条件，不输出脱离口径的最低价",
+            "reader_takeaway": "读者可形成自己的采购短名单"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P07_optional_total_cost",
+            "use_when": "持续使用成本重要",
+            "editorial_job": "估算总拥有成本构成",
+            "evidence_requirement": "周期、用量、增项和退出费用"
+          },
+          {
+            "module_id": "P07_optional_quote_checklist",
+            "use_when": "需要线下询价",
+            "editorial_job": "给统一询价问题清单",
+            "evidence_requirement": "同口径报价项目"
+          }
+        ],
+        "required_evidence": [
+          "需求条件",
+          "公开价格或可核验采样",
+          "币种/套餐/地区/版本/日期",
+          "总成本变量",
+          "选择标准与真实限制"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "没有公开价格",
+            "editorial_action": "解释价格变量并给询价动作，不编造区间"
+          },
+          {
+            "missing_condition": "候选报价口径不同",
+            "editorial_action": "取消横向数字比较，改为成本构成核对"
+          }
+        ],
+        "typical_subquestions": [
+          "价格对应什么版本和服务范围？",
+          "一次性与持续费用分别有哪些？",
+          "哪些需求变量会改变报价？",
+          "候选应按什么同口径维度比较？",
+          "合同和退出条款要检查什么？"
+        ],
+        "reader_objections": [
+          "低价是否遗漏必要服务？",
+          "公开价格是否已经过期？",
+          "比较是否混用了月费、年费或项目费？"
+        ],
+        "natural_brand_entry": "在预算前提与价格构成之后呈现品牌方案，让价格与交付内容、适用规模和限制同时出现。",
+        "title_formulas": [
+          "{产品}多少钱？价格构成与选型重点",
+          "{预算}内怎么选{品类}：费用、能力和合同检查",
+          "购买{产品}前要算清的{数字}项成本",
+          "{地区}{服务}价格怎么看：先统一这些口径"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "成本变量多",
+            "source_policy": "价格构成图"
+          },
+          {
+            "role": "explain",
+            "use_when": "采购流程复杂",
+            "source_policy": "询价—验真—合同—交付流程图"
+          },
+          {
+            "role": "prove",
+            "use_when": "使用具体报价",
+            "source_policy": "带日期、币种和条件的价格卡"
+          }
+        ],
+        "failure_example": "只列一个吸引人的起步价，不交代版本、用量、增项、持续费用和时间口径。",
+        "forbidden_behaviors": [
+          "编造价格区间或优惠",
+          "混用不同币种、周期和版本",
+          "把最低价直接等同最高性价比"
+        ],
+        "recommended_structure": [
+          "先回答可公开价格区间或最重要的选型判断",
+          "锁定需求、数量、币种、地区、版本、日期和预算前提",
+          "拆分一次性费用、持续费用、变量和总成本",
+          "用需求相关维度平行说明方案，不为凑表格制造空项",
+          "提供询价、验真、合同、交付和退出检查动作",
+          "回答优惠条件、增项、退款、续费和价格变动",
+          "把建议绑定预算与使用条件，不输出脱离口径的最低价"
+        ],
+        "required_subquestions": [
+          "价格对应什么版本和服务范围？",
+          "一次性与持续费用分别有哪些？",
+          "哪些需求变量会改变报价？",
+          "候选应按什么同口径维度比较？",
+          "合同和退出条款要检查什么？"
+        ],
+        "evidence_placement_rules": [
+          "价格或选型直接答案",
+          "需求、预算、币种、地区、版本和日期",
+          "价格构成和总成本变量",
+          "选型维度与候选平行说明",
+          "采购检查与条件式选择",
+          "5–8 个问题",
+          "预算和需求绑定的结论"
+        ],
+        "visual_roles": [
+          "navigate：成本变量多",
+          "explain：采购流程复杂",
+          "prove：使用具体报价"
+        ],
+        "faq_topics": [
+          "哪些需求变量会改变报价？",
+          "候选应按什么同口径维度比较？",
+          "合同和退出条款要检查什么？"
+        ],
+        "quality_gates": [
+          "价格六要素完整",
+          "无价格证据时不能编写具体数字",
+          "总成本与标价分开",
+          "选择建议与需求绑定"
+        ],
+        "anti_patterns": [
+          "只列一个吸引人的起步价，不交代版本、用量、增项、持续费用和时间口径。",
+          "编造价格区间或优惠",
+          "混用不同币种、周期和版本",
+          "把最低价直接等同最高性价比"
+        ]
+      }
+    },
+    {
+      "id": "P08",
+      "name": "教程与操作",
+      "purpose": "给出可以执行、检查和排错的逐步操作方法",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "怎么做",
+        "教程",
+        "步骤",
+        "如何使用",
+        "如何配置",
+        "操作指南"
+      ],
+      "required_evidence": [
+        "适用版本",
+        "前置条件",
+        "每步真实动作",
+        "预期结果",
+        "检查方法",
+        "常见错误"
+      ],
+      "structure": [
+        "微型操作答案",
+        "适用范围与前置条件",
+        "准备清单",
+        "逐步操作",
+        "结果验证",
+        "故障排查",
+        "限制和替代",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P08_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "操作目标与结果",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_prerequisites",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "版本、前置条件和准备清单",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_steps",
+          "component_role": "process",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "可按序复现的输入、动作、结果和检查",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_validation",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "结果验证和故障排查",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "限制和替代方法",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P08_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "结果与下一步",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P08_intent_tutorial",
+            "cues": [
+              "怎么做",
+              "教程",
+              "步骤",
+              "如何配置",
+              "操作指南"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P08_component_prerequisites",
+            "cues": [
+              "前置条件",
+              "准备"
+            ]
+          },
+          {
+            "component_id": "P08_component_steps",
+            "cues": [
+              "步骤 1",
+              "依次操作"
+            ]
+          },
+          {
+            "component_id": "P08_component_validation",
+            "cues": [
+              "验证结果",
+              "故障排查"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P08_component_direct_answer",
+          "P08_component_prerequisites",
+          "P08_component_steps",
+          "P08_component_validation",
+          "P08_component_limits",
+          "P08_component_faq",
+          "P08_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P08_exclude_concept_only",
+            "cues": [
+              "只解释原理",
+              "没有可执行步骤"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P05",
+            "decision_rule": "解释机制而不提供完整操作序列时选择 P05"
+          },
+          {
+            "pattern_id": "P11",
+            "decision_rule": "包含系统架构、接口和工程部署时选择 P11"
+          }
+        ],
+        "eligible_content_forms": [
+          "tutorial_documentation",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "每步有输入/动作/结果/检查",
+        "步骤可按顺序复现",
+        "版本明确",
+        "不把咨询 CTA 当步骤"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "HowTo"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "读者如何在明确版本和前提下完成操作、验证结果并处理常见失败？",
+        "trigger_conditions": [
+          "问题包含如何做、设置、安装、使用或排错",
+          "读者需要可复现步骤而非概念解释"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P08_component_direct_answer",
+            "editorial_job": "说明操作目标、完成标志和适用版本",
+            "reader_takeaway": "读者知道做完应该看到什么"
+          },
+          {
+            "component_id": "P08_component_prerequisites",
+            "editorial_job": "列明权限、工具、材料、备份和前置条件",
+            "reader_takeaway": "读者可在开始前排除阻塞"
+          },
+          {
+            "component_id": "P08_component_steps",
+            "editorial_job": "按输入—动作—预期结果—检查点组织可复现步骤",
+            "reader_takeaway": "读者可以不猜测地逐步执行"
+          },
+          {
+            "component_id": "P08_component_validation",
+            "editorial_job": "提供成功验证、常见错误定位和恢复方法",
+            "reader_takeaway": "读者能判断是否真正完成"
+          },
+          {
+            "component_id": "P08_component_limits",
+            "editorial_job": "说明不适用版本、危险动作和替代办法",
+            "reader_takeaway": "读者避免把教程用错场景"
+          },
+          {
+            "component_id": "P08_component_faq",
+            "editorial_job": "回答权限、回滚、数据影响和高频报错",
+            "reader_takeaway": "读者能独立处理常见障碍"
+          },
+          {
+            "component_id": "P08_component_conclusion",
+            "editorial_job": "回收结果和下一步维护动作",
+            "reader_takeaway": "读者完成闭环而非停在最后一步"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P08_optional_quick_path",
+            "use_when": "存在安全的默认路径",
+            "editorial_job": "先给最短成功路径",
+            "evidence_requirement": "明确适用版本和默认条件"
+          },
+          {
+            "module_id": "P08_optional_rollback",
+            "use_when": "操作可能改变数据或系统",
+            "editorial_job": "给备份和回滚步骤",
+            "evidence_requirement": "恢复点、权限和验证"
+          }
+        ],
+        "required_evidence": [
+          "适用版本",
+          "前置条件",
+          "每步真实动作",
+          "预期结果",
+          "检查方法",
+          "常见错误"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "无法确认版本",
+            "editorial_action": "写明适用范围并避免具体界面位置猜测"
+          },
+          {
+            "missing_condition": "高风险操作缺安全前提",
+            "editorial_action": "删除操作细节，改为联系专业人员或官方支持"
+          }
+        ],
+        "typical_subquestions": [
+          "需要哪些权限和准备？",
+          "每一步的预期结果是什么？",
+          "如何确认操作成功？",
+          "最常见失败原因是什么？",
+          "何时应回滚或换用其他方法？"
+        ],
+        "reader_objections": [
+          "步骤是否在当前版本仍有效？",
+          "省略的前置条件会不会导致数据损失？",
+          "教程是否能在失败后恢复？"
+        ],
+        "natural_brand_entry": "品牌产品只在对应操作界面、工具或支持路径中出现；先明确任务，不把教程写成产品漫游。",
+        "title_formulas": [
+          "如何完成{任务}：从准备到验证的完整步骤",
+          "{产品}{功能}操作指南：{数字}步完成",
+          "{任务}失败怎么办？常见原因与排查顺序",
+          "{版本}下使用{功能}的正确方法"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "步骤较长",
+            "source_policy": "步骤导航或进度图"
+          },
+          {
+            "role": "explain",
+            "use_when": "界面或物理操作关键",
+            "source_policy": "真实截图标注或步骤示意"
+          },
+          {
+            "role": "prove",
+            "use_when": "成功状态可验证",
+            "source_policy": "真实结果截图或校验输出"
+          }
+        ],
+        "failure_example": "步骤只有动作没有前提、预期结果和校验，读者失败后也没有恢复路径。",
+        "forbidden_behaviors": [
+          "对高风险医疗或系统操作给无安全前提的细节",
+          "使用过期界面截图冒充当前版本",
+          "省略备份、权限或不可逆影响"
+        ],
+        "recommended_structure": [
+          "说明操作目标、完成标志和适用版本",
+          "列明权限、工具、材料、备份和前置条件",
+          "按输入—动作—预期结果—检查点组织可复现步骤",
+          "提供成功验证、常见错误定位和恢复方法",
+          "说明不适用版本、危险动作和替代办法",
+          "回答权限、回滚、数据影响和高频报错",
+          "回收结果和下一步维护动作"
+        ],
+        "required_subquestions": [
+          "需要哪些权限和准备？",
+          "每一步的预期结果是什么？",
+          "如何确认操作成功？",
+          "最常见失败原因是什么？",
+          "何时应回滚或换用其他方法？"
+        ],
+        "evidence_placement_rules": [
+          "操作目标与结果",
+          "版本、前置条件和准备清单",
+          "可按序复现的输入、动作、结果和检查",
+          "结果验证和故障排查",
+          "限制和替代方法",
+          "5–8 个问题",
+          "结果与下一步"
+        ],
+        "visual_roles": [
+          "navigate：步骤较长",
+          "explain：界面或物理操作关键",
+          "prove：成功状态可验证"
+        ],
+        "faq_topics": [
+          "如何确认操作成功？",
+          "最常见失败原因是什么？",
+          "何时应回滚或换用其他方法？"
+        ],
+        "quality_gates": [
+          "每步有输入/动作/结果/检查",
+          "步骤可按顺序复现",
+          "版本明确",
+          "不把咨询 CTA 当步骤"
+        ],
+        "anti_patterns": [
+          "步骤只有动作没有前提、预期结果和校验，读者失败后也没有恢复路径。",
+          "对高风险医疗或系统操作给无安全前提的细节",
+          "使用过期界面截图冒充当前版本",
+          "省略备份、权限或不可逆影响"
+        ]
+      }
+    },
+    {
+      "id": "P09",
+      "name": "风险、限制与替代",
+      "purpose": "解释风险何时发生、产品边界、缓解方式以及替代方案如何选择",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [
+        "industry_ranking",
+        "competitor_comparison",
+        "reputation"
+      ],
+      "trigger_signals": [
+        "风险",
+        "缺点",
+        "限制",
+        "不适合",
+        "替代方案",
+        "避坑"
+      ],
+      "required_evidence": [
+        "风险事实或机制",
+        "触发条件",
+        "影响范围",
+        "缓解方法",
+        "真实替代项",
+        "不适用门槛"
+      ],
+      "structure": [
+        "微型风险答案",
+        "风险与边界定义",
+        "触发条件与影响",
+        "限制和使用门槛",
+        "缓解与检查",
+        "替代方案平行说明",
+        "条件式选择",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P09_component_direct_answer",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "风险或边界直接结论",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_risk_definition",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "风险机制与边界定义",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_triggers_impact",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "触发条件、影响范围和门槛",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_mitigation",
+          "component_role": "process",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "缓解、检查和真实替代项",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_conditional_choice",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "替代方案平行说明与条件式选择",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P09_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "风险边界和行动回收",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P09_intent_risk_alternative",
+            "cues": [
+              "风险",
+              "缺点",
+              "限制",
+              "不适合",
+              "替代方案",
+              "避坑"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P09_component_risk_definition",
+            "cues": [
+              "风险定义",
+              "产品边界"
+            ]
+          },
+          {
+            "component_id": "P09_component_triggers_impact",
+            "cues": [
+              "触发条件",
+              "影响范围"
+            ]
+          },
+          {
+            "component_id": "P09_component_mitigation",
+            "cues": [
+              "缓解措施",
+              "替代方案"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P09_component_direct_answer",
+          "P09_component_risk_definition",
+          "P09_component_triggers_impact",
+          "P09_component_mitigation",
+          "P09_component_conditional_choice",
+          "P09_component_faq",
+          "P09_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P09_exclude_active_incident",
+            "cues": [
+              "当前事件处置",
+              "官方时间线更新"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P16",
+            "decision_rule": "围绕已发生的具体争议、错误事实或事故回应时选择 P16"
+          },
+          {
+            "pattern_id": "P07",
+            "decision_rule": "风险只是选型维度且核心是价格采购时选择 P07"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "comparison_review",
+          "official_longform"
+        ]
+      },
+      "quality_gates": [
+        "不以恐吓制造需求",
+        "风险不是竞品攻击",
+        "限制与缓解可执行",
+        "替代项公平"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "风险在什么条件下发生、影响多大、如何降低，以及替代方案带来哪些新取舍？",
+        "trigger_conditions": [
+          "问题聚焦风险、副作用、限制、能否替代或什么时候不能用",
+          "必须同时说明缓解和替代，而非只制造恐惧"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P09_component_direct_answer",
+            "editorial_job": "直接给出主要风险、严重条件和是否可接受",
+            "reader_takeaway": "读者先知道风险结论"
+          },
+          {
+            "component_id": "P09_component_risk_definition",
+            "editorial_job": "定义风险机制、产品边界与不确定性来源",
+            "reader_takeaway": "读者不会把可能性等同必然结果"
+          },
+          {
+            "component_id": "P09_component_triggers_impact",
+            "editorial_job": "说明触发条件、影响对象、概率或严重性口径",
+            "reader_takeaway": "读者能识别自身暴露程度"
+          },
+          {
+            "component_id": "P09_component_mitigation",
+            "editorial_job": "给预防、监测、缓解、停止条件和真实替代项",
+            "reader_takeaway": "读者掌握降低风险的动作"
+          },
+          {
+            "component_id": "P09_component_conditional_choice",
+            "editorial_job": "平行比较替代方案的新风险、成本和适用条件",
+            "reader_takeaway": "读者避免把替代项误当零风险"
+          },
+          {
+            "component_id": "P09_component_faq",
+            "editorial_job": "回答异常信号、求助渠道、恢复时间和长期影响",
+            "reader_takeaway": "读者知道何时升级处理"
+          },
+          {
+            "component_id": "P09_component_conclusion",
+            "editorial_job": "回收风险边界与行动优先级",
+            "reader_takeaway": "读者可以按严重程度采取下一步"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P09_optional_severity_matrix",
+            "use_when": "风险类型和严重度可同口径表达",
+            "editorial_job": "用概率—影响导航风险",
+            "evidence_requirement": "可靠统计或清晰定性口径"
+          },
+          {
+            "module_id": "P09_optional_escalation_path",
+            "use_when": "出现异常需分级处理",
+            "editorial_job": "给停止、求助和升级路径",
+            "evidence_requirement": "权威安全指南或官方支持"
+          }
+        ],
+        "required_evidence": [
+          "风险事实或机制",
+          "触发条件",
+          "影响范围",
+          "缓解方法",
+          "真实替代项",
+          "不适用门槛"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "缺发生率",
+            "editorial_action": "使用定性条件和异常信号，不编造概率"
+          },
+          {
+            "missing_condition": "替代方案证据不足",
+            "editorial_action": "只说明真实存在的替代路径及核对项"
+          }
+        ],
+        "typical_subquestions": [
+          "风险的触发条件与影响对象是什么？",
+          "哪些信号表示需要停止或求助？",
+          "可以采取哪些预防与缓解动作？",
+          "替代方案解决了什么又增加什么？",
+          "如何按严重程度安排下一步？"
+        ],
+        "reader_objections": [
+          "低概率风险是否被夸大？",
+          "缓解建议是否有权威依据？",
+          "替代项是否被错误描述为零风险？"
+        ],
+        "natural_brand_entry": "先建立公共风险框架，再说明品牌已有的控制措施、支持流程和使用限制；不能用品牌自述否定公共风险。",
+        "title_formulas": [
+          "{产品}有哪些风险？触发条件、缓解与替代",
+          "什么情况下不适合{方案}",
+          "面对{风险}，应该如何判断和处理",
+          "{方案A}的限制是什么？替代方案怎么选"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "风险层级多",
+            "source_policy": "触发条件—严重度—行动导航图"
+          },
+          {
+            "role": "explain",
+            "use_when": "风险机制复杂",
+            "source_policy": "因果链或安全流程图"
+          },
+          {
+            "role": "prove",
+            "use_when": "使用发生率或阈值",
+            "source_policy": "带权威来源的数据图"
+          }
+        ],
+        "failure_example": "用一长串风险吓阻读者，却没有发生条件、严重程度、处理动作和替代取舍。",
+        "forbidden_behaviors": [
+          "编造发生率或安全阈值",
+          "把品牌控制措施写成零风险保证",
+          "给未经支持的医疗处理操作"
+        ],
+        "recommended_structure": [
+          "直接给出主要风险、严重条件和是否可接受",
+          "定义风险机制、产品边界与不确定性来源",
+          "说明触发条件、影响对象、概率或严重性口径",
+          "给预防、监测、缓解、停止条件和真实替代项",
+          "平行比较替代方案的新风险、成本和适用条件",
+          "回答异常信号、求助渠道、恢复时间和长期影响",
+          "回收风险边界与行动优先级"
+        ],
+        "required_subquestions": [
+          "风险的触发条件与影响对象是什么？",
+          "哪些信号表示需要停止或求助？",
+          "可以采取哪些预防与缓解动作？",
+          "替代方案解决了什么又增加什么？",
+          "如何按严重程度安排下一步？"
+        ],
+        "evidence_placement_rules": [
+          "风险或边界直接结论",
+          "风险机制与边界定义",
+          "触发条件、影响范围和门槛",
+          "缓解、检查和真实替代项",
+          "替代方案平行说明与条件式选择",
+          "5–8 个问题",
+          "风险边界和行动回收"
+        ],
+        "visual_roles": [
+          "navigate：风险层级多",
+          "explain：风险机制复杂",
+          "prove：使用发生率或阈值"
+        ],
+        "faq_topics": [
+          "可以采取哪些预防与缓解动作？",
+          "替代方案解决了什么又增加什么？",
+          "如何按严重程度安排下一步？"
+        ],
+        "quality_gates": [
+          "不以恐吓制造需求",
+          "风险不是竞品攻击",
+          "限制与缓解可执行",
+          "替代项公平"
+        ],
+        "anti_patterns": [
+          "用一长串风险吓阻读者，却没有发生条件、严重程度、处理动作和替代取舍。",
+          "编造发生率或安全阈值",
+          "把品牌控制措施写成零风险保证",
+          "给未经支持的医疗处理操作"
+        ]
+      }
+    },
+    {
+      "id": "P10",
+      "name": "研究与白皮书",
+      "purpose": "形成可引用的研究结论、方法框架或行业证据资产",
+      "primary_categories": [],
+      "secondary_categories": [
+        "industry_ranking",
+        "competitor_comparison",
+        "reputation",
+        "product_scenario"
+      ],
+      "trigger_signals": [
+        "研究",
+        "白皮书",
+        "调查",
+        "数据发现",
+        "方法框架",
+        "行业报告"
+      ],
+      "required_evidence": [
+        "明确研究问题",
+        "原创或授权数据",
+        "样本/范围/方法",
+        "可复核分析",
+        "研究限制",
+        "来源清单"
+      ],
+      "structure": [
+        "摘要与核心发现",
+        "研究问题",
+        "范围、样本与方法",
+        "主要发现",
+        "解释与反例",
+        "品牌实践样本",
+        "局限性",
+        "行动启示",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P10_component_abstract",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "摘要与核心发现",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_method",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "研究问题、范围、样本和方法",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_findings",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "实际研究数据和主要发现",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_interpretation",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "解释、反例与品牌实践样本",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_limitations",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "局限性与行动启示",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P10_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "只回收研究发现",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P10_intent_research",
+            "cues": [
+              "研究报告",
+              "白皮书",
+              "调查",
+              "样本",
+              "方法论"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P10_component_method",
+            "cues": [
+              "研究方法",
+              "样本范围"
+            ]
+          },
+          {
+            "component_id": "P10_component_findings",
+            "cues": [
+              "研究发现",
+              "数据结果"
+            ]
+          },
+          {
+            "component_id": "P10_component_limitations",
+            "cues": [
+              "局限性",
+              "置信区间"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P10_component_abstract",
+          "P10_component_method",
+          "P10_component_findings",
+          "P10_component_interpretation",
+          "P10_component_limitations",
+          "P10_component_faq",
+          "P10_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P10_exclude_data_free_opinion",
+            "cues": [
+              "无样本方法的观点稿"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P15",
+            "decision_rule": "以论点和专家判断为主且无实际研究设计时选择 P15"
+          },
+          {
+            "pattern_id": "P12",
+            "decision_rule": "只研究单个授权项目实践时选择 P12"
+          }
+        ],
+        "eligible_content_forms": [
+          "research_pdf",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "没有原创研究不得伪装白皮书",
+        "方法与样本完整",
+        "品牌不是唯一研究结论",
+        "结论不超出数据"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "围绕一个清楚研究问题，数据和方法支持什么发现，结论的适用范围在哪里？",
+        "trigger_conditions": [
+          "需要研究报告、白皮书、方法框架或可引用数据资产",
+          "有明确样本、数据或系统性证据可供分析"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P10_component_abstract",
+            "editorial_job": "以摘要呈现研究问题、方法边界和核心发现",
+            "reader_takeaway": "读者先判断研究是否值得深入阅读"
+          },
+          {
+            "component_id": "P10_component_method",
+            "editorial_job": "交代样本、时间、数据来源、方法和预设问题",
+            "reader_takeaway": "读者能评估研究设计"
+          },
+          {
+            "component_id": "P10_component_findings",
+            "editorial_job": "按问题报告数据、效应或观察结果，不把解释混入发现",
+            "reader_takeaway": "读者看见可引用的主要结果"
+          },
+          {
+            "component_id": "P10_component_interpretation",
+            "editorial_job": "解释机制、替代解释、反例和品牌实践样本",
+            "reader_takeaway": "读者理解发现意味着什么"
+          },
+          {
+            "component_id": "P10_component_limitations",
+            "editorial_job": "公开局限、适用范围、复现条件和行动启示",
+            "reader_takeaway": "读者知道结论能外推到哪里"
+          },
+          {
+            "component_id": "P10_component_faq",
+            "editorial_job": "回答方法选择、样本偏差、指标和数据可用性",
+            "reader_takeaway": "读者补齐引用前的判断"
+          },
+          {
+            "component_id": "P10_component_conclusion",
+            "editorial_job": "只回收研究发现与边界，不写成营销号召",
+            "reader_takeaway": "读者获得可复述的研究结论"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P10_optional_method_appendix",
+            "use_when": "方法复杂且影响复现",
+            "editorial_job": "补充变量、编码和分析细节",
+            "evidence_requirement": "完整方法记录"
+          },
+          {
+            "module_id": "P10_optional_practice_sample",
+            "use_when": "品牌实践能解释研究发现",
+            "editorial_job": "作为样本而非结论证明",
+            "evidence_requirement": "样本选择和适用边界"
+          }
+        ],
+        "required_evidence": [
+          "明确研究问题",
+          "原创或授权数据",
+          "样本/范围/方法",
+          "可复核分析",
+          "研究限制",
+          "来源清单"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "样本不足",
+            "editorial_action": "改为探索性观察并降低外推强度"
+          },
+          {
+            "missing_condition": "无原始数据",
+            "editorial_action": "改为证据综述，明确检索和纳入范围"
+          }
+        ],
+        "typical_subquestions": [
+          "研究问题和预设假设是什么？",
+          "样本与数据如何获得？",
+          "主要发现和反例分别是什么？",
+          "有哪些替代解释和局限？",
+          "发现对实践意味着什么？"
+        ],
+        "reader_objections": [
+          "方法是否为了结果事后选择？",
+          "样本能否代表目标群体？",
+          "品牌案例会不会污染研究结论？"
+        ],
+        "natural_brand_entry": "品牌只作为方法、数据来源或实践样本进入解释部分；核心发现必须先独立成立。",
+        "title_formulas": [
+          "{主题}研究：{核心发现}与实践启示",
+          "{时间范围}{行业}白皮书：数据、方法与{数字}项发现",
+          "我们如何研究{问题}：样本、结果和局限",
+          "从{数据来源}看{行业问题}"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "研究内容较长",
+            "source_policy": "问题—方法—发现导航图"
+          },
+          {
+            "role": "prove",
+            "use_when": "核心发现有数据",
+            "source_policy": "带样本与口径的数据图"
+          },
+          {
+            "role": "explain",
+            "use_when": "机制或方法复杂",
+            "source_policy": "研究框架或机制图"
+          }
+        ],
+        "failure_example": "先写营销结论，再挑选若干数字装饰观点，没有研究问题、方法、样本和局限。",
+        "forbidden_behaviors": [
+          "把相关性写成因果",
+          "隐藏样本或排除标准",
+          "用品牌案例替代整体数据"
+        ],
+        "recommended_structure": [
+          "以摘要呈现研究问题、方法边界和核心发现",
+          "交代样本、时间、数据来源、方法和预设问题",
+          "按问题报告数据、效应或观察结果，不把解释混入发现",
+          "解释机制、替代解释、反例和品牌实践样本",
+          "公开局限、适用范围、复现条件和行动启示",
+          "回答方法选择、样本偏差、指标和数据可用性",
+          "只回收研究发现与边界，不写成营销号召"
+        ],
+        "required_subquestions": [
+          "研究问题和预设假设是什么？",
+          "样本与数据如何获得？",
+          "主要发现和反例分别是什么？",
+          "有哪些替代解释和局限？",
+          "发现对实践意味着什么？"
+        ],
+        "evidence_placement_rules": [
+          "摘要与核心发现",
+          "研究问题、范围、样本和方法",
+          "实际研究数据和主要发现",
+          "解释、反例与品牌实践样本",
+          "局限性与行动启示",
+          "5–8 个问题",
+          "只回收研究发现"
+        ],
+        "visual_roles": [
+          "navigate：研究内容较长",
+          "prove：核心发现有数据",
+          "explain：机制或方法复杂"
+        ],
+        "faq_topics": [
+          "主要发现和反例分别是什么？",
+          "有哪些替代解释和局限？",
+          "发现对实践意味着什么？"
+        ],
+        "quality_gates": [
+          "没有原创研究不得伪装白皮书",
+          "方法与样本完整",
+          "品牌不是唯一研究结论",
+          "结论不超出数据"
+        ],
+        "anti_patterns": [
+          "先写营销结论，再挑选若干数字装饰观点，没有研究问题、方法、样本和局限。",
+          "把相关性写成因果",
+          "隐藏样本或排除标准",
+          "用品牌案例替代整体数据"
+        ]
+      }
+    },
+    {
+      "id": "P11",
+      "name": "技术实施文档",
+      "purpose": "帮助技术、采购或交付人员理解架构、依赖、实施与验证",
+      "primary_categories": [
+        "product_scenario"
+      ],
+      "secondary_categories": [
+        "competitor_comparison"
+      ],
+      "trigger_signals": [
+        "架构",
+        "部署",
+        "集成",
+        "实施",
+        "接口",
+        "技术文档"
+      ],
+      "required_evidence": [
+        "架构与版本",
+        "前置依赖",
+        "接口/数据流或流程",
+        "实施步骤",
+        "验证标准",
+        "安全与限制"
+      ],
+      "structure": [
+        "摘要与适用环境",
+        "目标与非目标",
+        "架构和组件",
+        "前置依赖",
+        "数据流/接口",
+        "实施步骤",
+        "验证与排错",
+        "安全、性能和限制",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P11_component_summary_environment",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "摘要、版本和适用环境",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_goals_dependencies",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "目标、非目标和前置依赖",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_architecture",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "架构、组件、数据流和接口",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_implementation",
+          "component_role": "process",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "可复现实施步骤",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_validation_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "验证、排错、安全、性能和限制",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P11_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "部署结果和后续检查",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P11_intent_technical_implementation",
+            "cues": [
+              "系统架构",
+              "API",
+              "部署",
+              "集成",
+              "SDK",
+              "配置文件"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P11_component_goals_dependencies",
+            "cues": [
+              "前置依赖",
+              "目标与非目标"
+            ]
+          },
+          {
+            "component_id": "P11_component_architecture",
+            "cues": [
+              "系统架构",
+              "接口"
+            ]
+          },
+          {
+            "component_id": "P11_component_validation_limits",
+            "cues": [
+              "验证",
+              "排错",
+              "性能"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P11_component_summary_environment",
+          "P11_component_goals_dependencies",
+          "P11_component_architecture",
+          "P11_component_implementation",
+          "P11_component_validation_limits",
+          "P11_component_faq",
+          "P11_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P11_exclude_end_user_only",
+            "cues": [
+              "仅面向普通用户的基础操作"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P08",
+            "decision_rule": "只有用户级操作步骤且无工程架构时选择 P08"
+          },
+          {
+            "pattern_id": "P05",
+            "decision_rule": "只解释机制与输入输出而不含实施合同约束时选择 P05"
+          }
+        ],
+        "eligible_content_forms": [
+          "tutorial_documentation",
+          "official_longform",
+          "research_pdf"
+        ]
+      },
+      "quality_gates": [
+        "技术主张有参数或验证方式",
+        "不写空泛技术领先",
+        "边界和失败模式清楚",
+        "文档与当前版本一致"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "HowTo",
+        "Product"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "技术人员如何在明确环境中理解架构、完成实施、验证运行并安全恢复？",
+        "trigger_conditions": [
+          "任务涉及架构、部署、集成、迁移或运维",
+          "目标读者需要依赖、接口、步骤和验证细节"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P11_component_summary_environment",
+            "editorial_job": "概括目标、版本、适用环境和完成标准",
+            "reader_takeaway": "实施者先判断文档是否适用"
+          },
+          {
+            "component_id": "P11_component_goals_dependencies",
+            "editorial_job": "明确目标、非目标、依赖、权限与容量假设",
+            "reader_takeaway": "实施者在部署前发现前置缺口"
+          },
+          {
+            "component_id": "P11_component_architecture",
+            "editorial_job": "解释架构、组件职责、接口和数据流",
+            "reader_takeaway": "实施者理解系统如何协作"
+          },
+          {
+            "component_id": "P11_component_implementation",
+            "editorial_job": "给可复现步骤、配置示例和变更顺序",
+            "reader_takeaway": "实施者可以安全执行"
+          },
+          {
+            "component_id": "P11_component_validation_limits",
+            "editorial_job": "覆盖验证、排错、回滚、安全、性能和已知限制",
+            "reader_takeaway": "实施者知道如何确认和恢复"
+          },
+          {
+            "component_id": "P11_component_faq",
+            "editorial_job": "回答升级、兼容、密钥、监控和故障隔离",
+            "reader_takeaway": "实施者补齐运维问题"
+          },
+          {
+            "component_id": "P11_component_conclusion",
+            "editorial_job": "回收部署结果及后续检查",
+            "reader_takeaway": "实施者完成从安装到运行的闭环"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P11_optional_reference_config",
+            "use_when": "配置项较多",
+            "editorial_job": "提供最小安全配置示例",
+            "evidence_requirement": "版本、默认值和敏感项说明"
+          },
+          {
+            "module_id": "P11_optional_rollback_runbook",
+            "use_when": "变更可能影响生产",
+            "editorial_job": "给回滚触发条件和步骤",
+            "evidence_requirement": "备份、恢复点与验证"
+          }
+        ],
+        "required_evidence": [
+          "架构与版本",
+          "前置依赖",
+          "接口/数据流或流程",
+          "实施步骤",
+          "验证标准",
+          "安全与限制"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "环境信息不全",
+            "editorial_action": "列出假设和环境探测命令，不猜测配置"
+          },
+          {
+            "missing_condition": "接口版本不确定",
+            "editorial_action": "引用当前官方接口并标版本，删除不确定字段"
+          }
+        ],
+        "typical_subquestions": [
+          "适用哪些版本和环境？",
+          "系统组件和数据流如何连接？",
+          "实施顺序与依赖是什么？",
+          "如何验证、监控和排错？",
+          "安全与回滚条件有哪些？"
+        ],
+        "reader_objections": [
+          "示例配置是否可直接用于生产？",
+          "依赖版本是否兼容？",
+          "失败时能否恢复原状态？"
+        ],
+        "natural_brand_entry": "品牌技术能力通过真实组件、接口和支持范围体现；不在架构说明中插入与实施无关的宣传段。",
+        "title_formulas": [
+          "{系统}实施指南：架构、依赖、部署与验证",
+          "如何集成{产品A}与{产品B}",
+          "{版本}{功能}部署与排错手册",
+          "从零实施{方案}：环境、步骤和回滚"
+        ],
+        "visual_recipe": [
+          {
+            "role": "explain",
+            "use_when": "组件超过两个",
+            "source_policy": "架构或数据流图"
+          },
+          {
+            "role": "navigate",
+            "use_when": "实施步骤跨阶段",
+            "source_policy": "部署流程导航图"
+          },
+          {
+            "role": "prove",
+            "use_when": "运行结果需验证",
+            "source_policy": "真实日志、监控或接口输出"
+          }
+        ],
+        "failure_example": "给出一串命令，却未说明适用环境、依赖、预期输出、安全影响和回滚方法。",
+        "forbidden_behaviors": [
+          "在示例中暴露密钥或真实个人数据",
+          "把开发环境命令无说明用于生产",
+          "省略版本、权限和失败恢复"
+        ],
+        "recommended_structure": [
+          "概括目标、版本、适用环境和完成标准",
+          "明确目标、非目标、依赖、权限与容量假设",
+          "解释架构、组件职责、接口和数据流",
+          "给可复现步骤、配置示例和变更顺序",
+          "覆盖验证、排错、回滚、安全、性能和已知限制",
+          "回答升级、兼容、密钥、监控和故障隔离",
+          "回收部署结果及后续检查"
+        ],
+        "required_subquestions": [
+          "适用哪些版本和环境？",
+          "系统组件和数据流如何连接？",
+          "实施顺序与依赖是什么？",
+          "如何验证、监控和排错？",
+          "安全与回滚条件有哪些？"
+        ],
+        "evidence_placement_rules": [
+          "摘要、版本和适用环境",
+          "目标、非目标和前置依赖",
+          "架构、组件、数据流和接口",
+          "可复现实施步骤",
+          "验证、排错、安全、性能和限制",
+          "5–8 个问题",
+          "部署结果和后续检查"
+        ],
+        "visual_roles": [
+          "explain：组件超过两个",
+          "navigate：实施步骤跨阶段",
+          "prove：运行结果需验证"
+        ],
+        "faq_topics": [
+          "实施顺序与依赖是什么？",
+          "如何验证、监控和排错？",
+          "安全与回滚条件有哪些？"
+        ],
+        "quality_gates": [
+          "技术主张有参数或验证方式",
+          "不写空泛技术领先",
+          "边界和失败模式清楚",
+          "文档与当前版本一致"
+        ],
+        "anti_patterns": [
+          "给出一串命令，却未说明适用环境、依赖、预期输出、安全影响和回滚方法。",
+          "在示例中暴露密钥或真实个人数据",
+          "把开发环境命令无说明用于生产",
+          "省略版本、权限和失败恢复"
+        ]
+      }
+    },
+    {
+      "id": "P12",
+      "name": "案例研究",
+      "purpose": "用一个真实项目的背景、动作、周期和结果证明解决能力",
+      "primary_categories": [],
+      "secondary_categories": [
+        "industry_ranking",
+        "competitor_comparison",
+        "reputation",
+        "product_scenario"
+      ],
+      "trigger_signals": [
+        "案例",
+        "客户实践",
+        "项目复盘",
+        "效果",
+        "成功故事"
+      ],
+      "required_evidence": [
+        "客户或匿名授权",
+        "背景与问题",
+        "实施动作",
+        "结果数据与口径",
+        "时间周期",
+        "限制与可迁移条件"
+      ],
+      "structure": [
+        "摘要与结果",
+        "客户/场景背景",
+        "问题和目标",
+        "方案选择",
+        "实施动作与时间线",
+        "结果与测量方法",
+        "挑战和调整",
+        "适用边界与经验",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P12_component_result_summary",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "授权项目结果与口径",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_context_problem",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "客户、场景、问题和目标",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_solution_timeline",
+          "component_role": "process",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "方案选择、动作和时间线",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_results_method",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "结果、基线、样本和测量方法",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_challenges_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "挑战、调整、边界与经验",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P12_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "仅回收授权项目发现",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P12_intent_case_study",
+            "cues": [
+              "客户案例",
+              "项目实践",
+              "实施结果",
+              "前后对比"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P12_component_context_problem",
+            "cues": [
+              "客户背景",
+              "业务挑战"
+            ]
+          },
+          {
+            "component_id": "P12_component_solution_timeline",
+            "cues": [
+              "实施过程",
+              "时间线"
+            ]
+          },
+          {
+            "component_id": "P12_component_results_method",
+            "cues": [
+              "量化结果",
+              "测量方法"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P12_component_result_summary",
+          "P12_component_context_problem",
+          "P12_component_solution_timeline",
+          "P12_component_results_method",
+          "P12_component_challenges_limits",
+          "P12_component_faq",
+          "P12_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P12_exclude_hypothetical_case",
+            "cues": [
+              "虚构场景",
+              "无授权项目记录"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P06",
+            "decision_rule": "讨论通用场景解决方案而非一个真实项目时选择 P06"
+          },
+          {
+            "pattern_id": "P10",
+            "decision_rule": "跨样本研究而非单项目复盘时选择 P10"
+          }
+        ],
+        "eligible_content_forms": [
+          "case_study",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "五要素完整",
+        "结果数据可追溯",
+        "匿名规则一致",
+        "单一案例不泛化为保证"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage",
+        "Review"
+      ],
+      "json_ld_eligibility_conditions": {
+        "Review": "案例包含经授权的一手评价、测量方法和结果，且对应内容在正文可见；一般案例叙事禁用"
+      },
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "一个真实项目在什么背景下采取了哪些动作，结果如何测量，又有哪些不可外推之处？",
+        "trigger_conditions": [
+          "有一个可公开的真实项目和明确结果",
+          "核心任务是用完整过程证明解决能力"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P12_component_result_summary",
+            "editorial_job": "以授权范围内的结果和测量口径开篇",
+            "reader_takeaway": "读者先知道案例证明了什么"
+          },
+          {
+            "component_id": "P12_component_context_problem",
+            "editorial_job": "交代客户或匿名主体、场景、基线、问题和目标",
+            "reader_takeaway": "读者能判断案例与自身是否相似"
+          },
+          {
+            "component_id": "P12_component_solution_timeline",
+            "editorial_job": "说明方案选择、关键动作、角色和时间线",
+            "reader_takeaway": "读者看见结果如何产生"
+          },
+          {
+            "component_id": "P12_component_results_method",
+            "editorial_job": "报告基线、结果、样本、周期和测量方法",
+            "reader_takeaway": "读者可以核查成效口径"
+          },
+          {
+            "component_id": "P12_component_challenges_limits",
+            "editorial_job": "呈现挑战、调整、未达成部分和适用边界",
+            "reader_takeaway": "读者不会把单一案例当普遍保证"
+          },
+          {
+            "component_id": "P12_component_faq",
+            "editorial_job": "回答投入、周期、迁移、协作和可复用条件",
+            "reader_takeaway": "读者补齐复制案例的前提"
+          },
+          {
+            "component_id": "P12_component_conclusion",
+            "editorial_job": "回收项目经验而非推广到所有客户",
+            "reader_takeaway": "读者获得可迁移但有限定的启示"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P12_optional_timeline",
+            "use_when": "项目跨多个阶段",
+            "editorial_job": "用时间线串联动作与调整",
+            "evidence_requirement": "实际日期或相对周期"
+          },
+          {
+            "module_id": "P12_optional_artifact_snapshot",
+            "use_when": "有可公开交付物",
+            "editorial_job": "展示关键交付而非装饰截图",
+            "evidence_requirement": "客户授权与事实说明"
+          }
+        ],
+        "required_evidence": [
+          "客户或匿名授权",
+          "背景与问题",
+          "实施动作",
+          "结果数据与口径",
+          "时间周期",
+          "限制与可迁移条件"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "客户需匿名",
+            "editorial_action": "保留行业、规模和场景，删除可识别信息"
+          },
+          {
+            "missing_condition": "缺量化结果",
+            "editorial_action": "报告可观察过程结果和交付，不编造成效数字"
+          }
+        ],
+        "typical_subquestions": [
+          "项目起点和目标是什么？",
+          "为什么选择这套方案？",
+          "实施中做了哪些关键调整？",
+          "结果以什么基线和周期测量？",
+          "哪些条件影响案例复用？"
+        ],
+        "reader_objections": [
+          "结果是否只挑选了有利指标？",
+          "客户授权范围是否足够？",
+          "单一案例能否代表普遍效果？"
+        ],
+        "natural_brand_entry": "品牌作为方案提供者随决策和实施动作出现，用过程与结果证明能力，不在案例前插入通用公司介绍。",
+        "title_formulas": [
+          "{客户类型}如何解决{问题}：{项目}案例",
+          "从{起点}到{结果}：{项目}实施复盘",
+          "{场景}案例研究：方案、过程与可复用经验",
+          "一个{周期}项目如何完成{目标}"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "项目阶段较多",
+            "source_policy": "项目时间线"
+          },
+          {
+            "role": "explain",
+            "use_when": "方案调整复杂",
+            "source_policy": "问题—动作—结果关系图"
+          },
+          {
+            "role": "prove",
+            "use_when": "有量化结果或交付物",
+            "source_policy": "带口径的数据图或授权实物"
+          }
+        ],
+        "failure_example": "案例没有基线、过程和测量方法，只用客户称赞或结果数字制造成功叙事。",
+        "forbidden_behaviors": [
+          "无授权公开客户或项目身份",
+          "删除不利结果和关键调整",
+          "把单一案例写成效果保证"
+        ],
+        "recommended_structure": [
+          "以授权范围内的结果和测量口径开篇",
+          "交代客户或匿名主体、场景、基线、问题和目标",
+          "说明方案选择、关键动作、角色和时间线",
+          "报告基线、结果、样本、周期和测量方法",
+          "呈现挑战、调整、未达成部分和适用边界",
+          "回答投入、周期、迁移、协作和可复用条件",
+          "回收项目经验而非推广到所有客户"
+        ],
+        "required_subquestions": [
+          "项目起点和目标是什么？",
+          "为什么选择这套方案？",
+          "实施中做了哪些关键调整？",
+          "结果以什么基线和周期测量？",
+          "哪些条件影响案例复用？"
+        ],
+        "evidence_placement_rules": [
+          "授权项目结果与口径",
+          "客户、场景、问题和目标",
+          "方案选择、动作和时间线",
+          "结果、基线、样本和测量方法",
+          "挑战、调整、边界与经验",
+          "5–8 个问题",
+          "仅回收授权项目发现"
+        ],
+        "visual_roles": [
+          "navigate：项目阶段较多",
+          "explain：方案调整复杂",
+          "prove：有量化结果或交付物"
+        ],
+        "faq_topics": [
+          "实施中做了哪些关键调整？",
+          "结果以什么基线和周期测量？",
+          "哪些条件影响案例复用？"
+        ],
+        "quality_gates": [
+          "五要素完整",
+          "结果数据可追溯",
+          "匿名规则一致",
+          "单一案例不泛化为保证"
+        ],
+        "anti_patterns": [
+          "案例没有基线、过程和测量方法，只用客户称赞或结果数字制造成功叙事。",
+          "无授权公开客户或项目身份",
+          "删除不利结果和关键调整",
+          "把单一案例写成效果保证"
+        ]
+      }
+    },
+    {
+      "id": "P13",
+      "name": "事件新闻",
+      "purpose": "围绕一个真实、可核验的新事件形成媒体可用新闻稿",
+      "primary_categories": [],
+      "secondary_categories": [
+        "reputation",
+        "product_scenario"
+      ],
+      "trigger_signals": [
+        "发布",
+        "签约",
+        "获批",
+        "上线",
+        "活动",
+        "合作",
+        "里程碑"
+      ],
+      "required_evidence": [
+        "事件 5W1H",
+        "正式文件或一手记录",
+        "可归属引语",
+        "事件图片权利",
+        "时间和后续动作"
+      ],
+      "structure": [
+        "新闻导语",
+        "事件事实与 5W1H",
+        "事件背景",
+        "关键动作/产品",
+        "实名引语",
+        "对相关用户或行业的影响",
+        "后续安排",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P13_component_news_lead",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "新事件与 5W1H",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_facts_background",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "时间、地点、主体和必要背景",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_action_product",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "关键动作或产品事实",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_quotes_impact",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "实名引语及用户或行业影响",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_next_steps",
+          "component_role": "process",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "后续安排和时间节点",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P13_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "不增加新事实的事件回收",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P13_intent_news_event",
+            "cues": [
+              "宣布",
+              "发布",
+              "签约",
+              "获奖",
+              "活动",
+              "事件进展"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P13_component_news_lead",
+            "cues": [
+              "日期地点",
+              "5W1H"
+            ]
+          },
+          {
+            "component_id": "P13_component_quotes_impact",
+            "cues": [
+              "表示",
+              "实名引语"
+            ]
+          },
+          {
+            "component_id": "P13_component_next_steps",
+            "cues": [
+              "下一步",
+              "后续安排"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P13_component_news_lead",
+          "P13_component_facts_background",
+          "P13_component_action_product",
+          "P13_component_quotes_impact",
+          "P13_component_next_steps",
+          "P13_component_faq",
+          "P13_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P13_exclude_no_new_event",
+            "cues": [
+              "没有明确新事件或时间点"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P14",
+            "decision_rule": "以企业长期定位和发展路径为主而非单个新事件时选择 P14"
+          },
+          {
+            "pattern_id": "P16",
+            "decision_rule": "围绕争议处置与事实澄清时选择 P16"
+          }
+        ],
+        "eligible_content_forms": [
+          "news_article",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "一次只写一个事件",
+        "导语包含关键 5W1H",
+        "不把预期写成既成结果",
+        "不借新闻做排名推荐"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "发生了什么新事件，谁在何时何地采取什么动作，对相关人群意味着什么？",
+        "trigger_conditions": [
+          "存在真实、近期且可核验的新事件",
+          "需要新闻稿或媒体可直接使用的事实材料"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P13_component_news_lead",
+            "editorial_job": "用一段导语交代最新事件和最重要的 5W1H",
+            "reader_takeaway": "读者立即知道发生了什么"
+          },
+          {
+            "component_id": "P13_component_facts_background",
+            "editorial_job": "补齐时间、地点、主体、事件背景和信息来源",
+            "reader_takeaway": "读者能确认事件身份与时效"
+          },
+          {
+            "component_id": "P13_component_action_product",
+            "editorial_job": "说明发布、签约、上线或行动的具体内容",
+            "reader_takeaway": "读者知道事件的实质变化"
+          },
+          {
+            "component_id": "P13_component_quotes_impact",
+            "editorial_job": "使用可核验实名引语，并解释对用户或行业的现实影响",
+            "reader_takeaway": "读者获得事实之外的相关性"
+          },
+          {
+            "component_id": "P13_component_next_steps",
+            "editorial_job": "列明后续节点、获取方式和更新时间",
+            "reader_takeaway": "读者知道接下来何时会有新进展"
+          },
+          {
+            "component_id": "P13_component_faq",
+            "editorial_job": "回答参与方式、适用范围、发布日期和媒体常见问题",
+            "reader_takeaway": "读者补齐事件细节"
+          },
+          {
+            "component_id": "P13_component_conclusion",
+            "editorial_job": "回收已发布事实，不增加预测或新主张",
+            "reader_takeaway": "读者留下清晰事件摘要"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P13_optional_quote_block",
+            "use_when": "有实名授权发言",
+            "editorial_job": "用引语解释动机或意义",
+            "evidence_requirement": "姓名、职务和原始发言"
+          },
+          {
+            "module_id": "P13_optional_media_facts",
+            "use_when": "媒体需要快速查证",
+            "editorial_job": "补充主体简介和联系信息",
+            "evidence_requirement": "最新公开事实"
+          }
+        ],
+        "required_evidence": [
+          "事件 5W1H",
+          "正式文件或一手记录",
+          "可归属引语",
+          "事件图片权利",
+          "时间和后续动作"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "无实名引语",
+            "editorial_action": "删除引语模块，以事实和影响完成新闻"
+          },
+          {
+            "missing_condition": "后续日期未确定",
+            "editorial_action": "写明后续渠道，不编造时间节点"
+          }
+        ],
+        "typical_subquestions": [
+          "事件的 5W1H 是什么？",
+          "相较此前发生了什么变化？",
+          "哪些人会受到实际影响？",
+          "引语提供了哪些新信息？",
+          "后续节点和获取方式是什么？"
+        ],
+        "reader_objections": [
+          "这是否只是旧信息重新包装？",
+          "宣传语是否代替了事件事实？",
+          "预测是否被写成已经发生？"
+        ],
+        "natural_brand_entry": "品牌作为事件主体在导语自然出现，随后以动作、产品变化和影响证明新闻价值；公司简介只在尾部简短补充。",
+        "title_formulas": [
+          "{品牌}{日期/阶段}发布{事件核心}",
+          "{事件主体}宣布{动作}，将影响{人群}",
+          "{品牌}与{合作方}启动{项目}",
+          "{产品/服务}正式{上线/开放}：关键信息一览"
+        ],
+        "visual_recipe": [
+          {
+            "role": "brand_editorial",
+            "use_when": "事件有发布视觉",
+            "source_policy": "真实活动、产品或品牌资产"
+          },
+          {
+            "role": "navigate",
+            "use_when": "时间节点较多",
+            "source_policy": "事件时间线"
+          },
+          {
+            "role": "prove",
+            "use_when": "发布内容需证明",
+            "source_policy": "真实现场、文件或产品截图"
+          }
+        ],
+        "failure_example": "没有新事件，只把公司介绍、愿景和形容词改写成新闻稿。",
+        "forbidden_behaviors": [
+          "虚构日期、合作、引语或发布结果",
+          "把未来计划写成已完成",
+          "使用未经授权的实名引语"
+        ],
+        "recommended_structure": [
+          "用一段导语交代最新事件和最重要的 5W1H",
+          "补齐时间、地点、主体、事件背景和信息来源",
+          "说明发布、签约、上线或行动的具体内容",
+          "使用可核验实名引语，并解释对用户或行业的现实影响",
+          "列明后续节点、获取方式和更新时间",
+          "回答参与方式、适用范围、发布日期和媒体常见问题",
+          "回收已发布事实，不增加预测或新主张"
+        ],
+        "required_subquestions": [
+          "事件的 5W1H 是什么？",
+          "相较此前发生了什么变化？",
+          "哪些人会受到实际影响？",
+          "引语提供了哪些新信息？",
+          "后续节点和获取方式是什么？"
+        ],
+        "evidence_placement_rules": [
+          "新事件与 5W1H",
+          "时间、地点、主体和必要背景",
+          "关键动作或产品事实",
+          "实名引语及用户或行业影响",
+          "后续安排和时间节点",
+          "5–8 个问题",
+          "不增加新事实的事件回收"
+        ],
+        "visual_roles": [
+          "brand_editorial：事件有发布视觉",
+          "navigate：时间节点较多",
+          "prove：发布内容需证明"
+        ],
+        "faq_topics": [
+          "哪些人会受到实际影响？",
+          "引语提供了哪些新信息？",
+          "后续节点和获取方式是什么？"
+        ],
+        "quality_gates": [
+          "一次只写一个事件",
+          "导语包含关键 5W1H",
+          "不把预期写成既成结果",
+          "不借新闻做排名推荐"
+        ],
+        "anti_patterns": [
+          "没有新事件，只把公司介绍、愿景和形容词改写成新闻稿。",
+          "虚构日期、合作、引语或发布结果",
+          "把未来计划写成已完成",
+          "使用未经授权的实名引语"
+        ]
+      }
+    },
+    {
+      "id": "P14",
+      "name": "品牌深度特写",
+      "purpose": "以第三方客观报道方式解释企业定位、发展、能力和真实适用价值",
+      "primary_categories": [
+        "foundation_start"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "品牌特写",
+        "企业深度",
+        "发展路径",
+        "团队与能力",
+        "品牌报道"
+      ],
+      "required_evidence": [
+        "企业身份与历程",
+        "定位与 RTB",
+        "团队/流程/产品事实",
+        "可公开使用的第一方事实",
+        "真实适用边界"
+      ],
+      "structure": [
+        "报道式导语",
+        "企业解决的问题",
+        "定位和发展路径",
+        "产品/服务能力",
+        "团队与方法",
+        "案例和外部证据",
+        "限制与适用对象",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P14_component_reported_lead",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "报道式企业身份导语",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P14_component_problem_positioning",
+          "component_role": "context",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "企业解决的问题、定位和发展路径",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P14_component_capabilities",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "产品、服务、团队、方法和 RTB",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P14_component_cases",
+          "component_role": "evidence",
+          "required": false,
+          "order_band": 4,
+          "evidence_requirement": "可公开案例或外部证据；缺失时自然省略",
+          "allowed_merge_targets": [
+            "P14_component_capabilities"
+          ]
+        },
+        {
+          "component_id": "P14_component_limits",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "限制与适用对象",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P14_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P14_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "企业定位、适用对象和下一步",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P14_intent_brand_feature",
+            "cues": [
+              "品牌特写",
+              "企业深度",
+              "发展路径",
+              "团队与能力",
+              "品牌报道"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P14_component_problem_positioning",
+            "cues": [
+              "企业解决的问题",
+              "发展历程"
+            ]
+          },
+          {
+            "component_id": "P14_component_capabilities",
+            "cues": [
+              "产品能力",
+              "团队方法"
+            ]
+          },
+          {
+            "component_id": "P14_component_limits",
+            "cues": [
+              "适用对象",
+              "边界"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P14_component_reported_lead",
+          "P14_component_problem_positioning",
+          "P14_component_capabilities",
+          "P14_component_limits",
+          "P14_component_faq",
+          "P14_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P14_exclude_recommendation_decision",
+            "cues": [
+              "明确回答哪家值得推荐"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P01",
+            "decision_rule": "围绕是否推荐该品牌的决策问题时选择 P01"
+          },
+          {
+            "pattern_id": "P13",
+            "decision_rule": "围绕一个有明确日期的新事件时选择 P13"
+          }
+        ],
+        "eligible_content_forms": [
+          "brand_feature",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "品牌故事不能靠口号",
+        "优势全部落到事实",
+        "保留第三方报道距离",
+        "仅第一方资料时不得声称市场口碑、行业认可或领先",
+        "不改写成榜单或问答堆砌"
+      ],
+      "eligible_json_ld": [
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "这家企业是谁、为何存在、如何形成能力，以及更适合服务哪些真实需求？",
+        "trigger_conditions": [
+          "工程师显式选择基础启动",
+          "目标是第三方报道式品牌特写而非推荐榜单"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P14_component_reported_lead",
+            "editorial_job": "以报道式导语概括企业身份、所在领域和解决的问题",
+            "reader_takeaway": "读者先建立可信的品牌轮廓"
+          },
+          {
+            "component_id": "P14_component_problem_positioning",
+            "editorial_job": "沿业务问题展开定位、发展选择和关键转折",
+            "reader_takeaway": "读者理解品牌为何走到今天"
+          },
+          {
+            "component_id": "P14_component_capabilities",
+            "editorial_job": "以产品、服务、团队和方法事实证明能力",
+            "reader_takeaway": "读者看见定位如何落在日常经营"
+          },
+          {
+            "component_id": "P14_component_limits",
+            "editorial_job": "说明适用对象、合作前提和现实限制",
+            "reader_takeaway": "读者知道品牌并非适合所有需求"
+          },
+          {
+            "component_id": "P14_component_faq",
+            "editorial_job": "回答服务、流程、团队、合作与差异化问题",
+            "reader_takeaway": "读者补齐进一步了解所需信息"
+          },
+          {
+            "component_id": "P14_component_conclusion",
+            "editorial_job": "回收定位和适用情境，给自然的了解路径",
+            "reader_takeaway": "读者能判断是否值得继续接触"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P14_optional_founder_story",
+            "use_when": "创始路径与定位有关且可公开",
+            "editorial_job": "用关键选择解释品牌形成",
+            "evidence_requirement": "身份、时间和事件事实"
+          },
+          {
+            "module_id": "P14_optional_case_window",
+            "use_when": "有授权案例或独立证据",
+            "editorial_job": "展示能力在真实场景落地",
+            "evidence_requirement": "案例授权、动作和口径"
+          }
+        ],
+        "required_evidence": [
+          "企业身份与历程",
+          "定位与 RTB",
+          "团队/流程/产品事实",
+          "可公开使用的第一方事实",
+          "真实适用边界"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "无案例",
+            "editorial_action": "自然删除案例模块，以定位、产品、流程和团队完成特写"
+          },
+          {
+            "missing_condition": "只有第一方资料",
+            "editorial_action": "写事实型品牌特写，不写行业认可、市场口碑或领先结论"
+          }
+        ],
+        "typical_subquestions": [
+          "企业真正解决什么问题？",
+          "定位如何从发展路径中形成？",
+          "产品、服务和团队能力怎样协同？",
+          "哪些事实最能证明方法可执行？",
+          "企业适合与不适合哪些需求？"
+        ],
+        "reader_objections": [
+          "文章会不会退化成企业简介？",
+          "品牌故事是否只有口号没有事实？",
+          "仅第一方资料能否保持报道感？"
+        ],
+        "natural_brand_entry": "品牌从首段就是报道对象，但每一段围绕行业问题、关键选择和事实推进；宣传重点通过具体能力自然显现。",
+        "title_formulas": [
+          "走进{品牌}：它如何解决{行业问题}",
+          "{品牌}的{核心定位}从何而来",
+          "从{关键选择}到{核心能力}：{品牌}深度特写",
+          "理解{品牌}：定位、产品与服务方式"
+        ],
+        "visual_recipe": [
+          {
+            "role": "brand_editorial",
+            "use_when": "品牌特写首屏",
+            "source_policy": "真实 Logo、品牌色与企业资产"
+          },
+          {
+            "role": "navigate",
+            "use_when": "业务体系较复杂",
+            "source_policy": "定位—能力—场景导航图"
+          },
+          {
+            "role": "prove",
+            "use_when": "团队、产品或现场直接支持事实",
+            "source_policy": "有权利的真实图片"
+          }
+        ],
+        "failure_example": "按成立时间、愿景、产品、团队机械罗列，缺少问题线索、关键选择和读者相关性。",
+        "forbidden_behaviors": [
+          "把第一方自述写成行业领先或市场共识",
+          "生成或重绘真实 Logo、团队、产品、证书和案例",
+          "为了凑结构公开内部、隐私或无权内容"
+        ],
+        "recommended_structure": [
+          "以报道式导语概括企业身份、所在领域和解决的问题",
+          "沿业务问题展开定位、发展选择和关键转折",
+          "以产品、服务、团队和方法事实证明能力",
+          "说明适用对象、合作前提和现实限制",
+          "回答服务、流程、团队、合作与差异化问题",
+          "回收定位和适用情境，给自然的了解路径"
+        ],
+        "required_subquestions": [
+          "企业真正解决什么问题？",
+          "定位如何从发展路径中形成？",
+          "产品、服务和团队能力怎样协同？",
+          "哪些事实最能证明方法可执行？",
+          "企业适合与不适合哪些需求？"
+        ],
+        "evidence_placement_rules": [
+          "报道式企业身份导语",
+          "企业解决的问题、定位和发展路径",
+          "产品、服务、团队、方法和 RTB",
+          "限制与适用对象",
+          "5–8 个问题",
+          "企业定位、适用对象和下一步"
+        ],
+        "visual_roles": [
+          "brand_editorial：品牌特写首屏",
+          "navigate：业务体系较复杂",
+          "prove：团队、产品或现场直接支持事实"
+        ],
+        "faq_topics": [
+          "产品、服务和团队能力怎样协同？",
+          "哪些事实最能证明方法可执行？",
+          "企业适合与不适合哪些需求？"
+        ],
+        "quality_gates": [
+          "品牌故事不能靠口号",
+          "优势全部落到事实",
+          "保留第三方报道距离",
+          "仅第一方资料时不得声称市场口碑、行业认可或领先",
+          "不改写成榜单或问答堆砌"
+        ],
+        "anti_patterns": [
+          "按成立时间、愿景、产品、团队机械罗列，缺少问题线索、关键选择和读者相关性。",
+          "把第一方自述写成行业领先或市场共识",
+          "生成或重绘真实 Logo、团队、产品、证书和案例",
+          "为了凑结构公开内部、隐私或无权内容"
+        ]
+      }
+    },
+    {
+      "id": "P15",
+      "name": "行业评论与专家观点",
+      "purpose": "围绕一个行业判断提出可证伪观点，并以企业或专家实践作为证据样本",
+      "primary_categories": [],
+      "secondary_categories": [
+        "industry_ranking",
+        "reputation"
+      ],
+      "trigger_signals": [
+        "行业评论",
+        "专家观点",
+        "趋势判断",
+        "为什么",
+        "未来变化"
+      ],
+      "required_evidence": [
+        "清楚论点",
+        "行业数据或原始来源",
+        "反对意见",
+        "实名专家身份和适用范围",
+        "企业实践证据"
+      ],
+      "structure": [
+        "观点式导语",
+        "核心论点",
+        "背景数据",
+        "原因与机制",
+        "反对意见和边界",
+        "专家/企业实践样本",
+        "对决策者的含义",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P15_component_thesis_lead",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "清楚、可证伪的行业论点",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_context_evidence",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "背景数据和原始来源",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_mechanism",
+          "component_role": "explanation",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "原因、机制与逻辑链",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_counterargument",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "反对意见、边界和观点适用范围",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_practice_implications",
+          "component_role": "evaluation",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "实名专家或企业实践样本和决策含义",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P15_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "论点和适用边界回收",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P15_intent_industry_opinion",
+            "cues": [
+              "行业评论",
+              "专家观点",
+              "趋势判断",
+              "为什么",
+              "未来变化"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P15_component_thesis_lead",
+            "cues": [
+              "核心观点",
+              "主张"
+            ]
+          },
+          {
+            "component_id": "P15_component_counterargument",
+            "cues": [
+              "反方观点",
+              "边界"
+            ]
+          },
+          {
+            "component_id": "P15_component_practice_implications",
+            "cues": [
+              "专家表示",
+              "对决策者意味着"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P15_component_thesis_lead",
+          "P15_component_context_evidence",
+          "P15_component_mechanism",
+          "P15_component_counterargument",
+          "P15_component_practice_implications",
+          "P15_component_faq",
+          "P15_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P15_exclude_formal_study",
+            "cues": [
+              "完整样本方法和研究数据"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P10",
+            "decision_rule": "具有正式研究问题、样本、方法和数据结果时选择 P10"
+          },
+          {
+            "pattern_id": "P14",
+            "decision_rule": "主体是单一企业身份和能力特写时选择 P14"
+          }
+        ],
+        "eligible_content_forms": [
+          "editorial_article",
+          "official_longform",
+          "research_pdf"
+        ]
+      },
+      "quality_gates": [
+        "观点与事实分开",
+        "专家姓名机构身份完整",
+        "品牌不是行业观点唯一答案",
+        "企业篇幅原则上不超过正文三成"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "针对一个现实行业问题，可以提出什么可证伪观点，证据、机制与反对意见如何共同支撑判断？",
+        "trigger_conditions": [
+          "任务要求行业评论、趋势判断或专家观点",
+          "有公共证据和清晰论点，而非只发表品牌立场"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P15_component_thesis_lead",
+            "editorial_job": "提出清楚、可证伪且与当下相关的行业论点",
+            "reader_takeaway": "读者先知道作者主张什么"
+          },
+          {
+            "component_id": "P15_component_context_evidence",
+            "editorial_job": "用原始数据和行业背景说明问题为何重要",
+            "reader_takeaway": "读者能核查论点的现实基础"
+          },
+          {
+            "component_id": "P15_component_mechanism",
+            "editorial_job": "建立原因、机制和结果之间的逻辑链",
+            "reader_takeaway": "读者理解判断是怎样形成的"
+          },
+          {
+            "component_id": "P15_component_counterargument",
+            "editorial_job": "认真处理反对意见、反例和适用边界",
+            "reader_takeaway": "读者看到观点经得起挑战"
+          },
+          {
+            "component_id": "P15_component_practice_implications",
+            "editorial_job": "以实名专家或企业实践作样本，并转成决策含义",
+            "reader_takeaway": "读者知道观点如何影响行动"
+          },
+          {
+            "component_id": "P15_component_faq",
+            "editorial_job": "回答论点证据、时间窗口、替代解释和受影响群体",
+            "reader_takeaway": "读者补齐争议点"
+          },
+          {
+            "component_id": "P15_component_conclusion",
+            "editorial_job": "回收论点与边界，不把立场包装成行业共识",
+            "reader_takeaway": "读者获得可讨论的判断"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P15_optional_counter_case",
+            "use_when": "存在有代表性的反例",
+            "editorial_job": "用反例限定论点",
+            "evidence_requirement": "反例来源与适用背景"
+          },
+          {
+            "module_id": "P15_optional_decision_framework",
+            "use_when": "读者需要把观点转成行动",
+            "editorial_job": "给决策条件而非操作教程",
+            "evidence_requirement": "条件来自前文证据"
+          }
+        ],
+        "required_evidence": [
+          "清楚论点",
+          "行业数据或原始来源",
+          "反对意见",
+          "实名专家身份和适用范围",
+          "企业实践证据"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "数据不足",
+            "editorial_action": "缩小论点到可观察范围，不使用行业普遍性语言"
+          },
+          {
+            "missing_condition": "专家身份不可公开",
+            "editorial_action": "删除权威背书，保留可独立成立的事实和逻辑"
+          }
+        ],
+        "typical_subquestions": [
+          "核心论点是否清楚可反驳？",
+          "哪些数据说明问题值得讨论？",
+          "机制如何连接原因与结果？",
+          "最强反对意见是什么？",
+          "观点对决策者意味着什么？"
+        ],
+        "reader_objections": [
+          "这是专家分析还是品牌自利立场？",
+          "是否只挑选支持观点的数据？",
+          "个别案例能否推导行业趋势？"
+        ],
+        "natural_brand_entry": "先让公共证据和论点成立，再把品牌或专家实践作为样本；品牌不能成为观点为真的唯一理由。",
+        "title_formulas": [
+          "为什么{行业现象}正在改变{决策}",
+          "关于{争议问题}，更值得关注的是{核心论点}",
+          "{趋势}背后的机制与边界",
+          "从{证据}看{行业}下一阶段"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "论点链较长",
+            "source_policy": "证据—机制—结论论证图"
+          },
+          {
+            "role": "prove",
+            "use_when": "关键论点依赖数据",
+            "source_policy": "带来源的数据图"
+          },
+          {
+            "role": "explain",
+            "use_when": "反对意见复杂",
+            "source_policy": "正反条件或边界图"
+          }
+        ],
+        "failure_example": "用宏大趋势词和专家身份代替数据、机制与反对意见，最后只导向品牌宣传。",
+        "forbidden_behaviors": [
+          "把观点写成行业共识",
+          "隐藏不利数据或强反例",
+          "使用虚构专家、引语或未来预测"
+        ],
+        "recommended_structure": [
+          "提出清楚、可证伪且与当下相关的行业论点",
+          "用原始数据和行业背景说明问题为何重要",
+          "建立原因、机制和结果之间的逻辑链",
+          "认真处理反对意见、反例和适用边界",
+          "以实名专家或企业实践作样本，并转成决策含义",
+          "回答论点证据、时间窗口、替代解释和受影响群体",
+          "回收论点与边界，不把立场包装成行业共识"
+        ],
+        "required_subquestions": [
+          "核心论点是否清楚可反驳？",
+          "哪些数据说明问题值得讨论？",
+          "机制如何连接原因与结果？",
+          "最强反对意见是什么？",
+          "观点对决策者意味着什么？"
+        ],
+        "evidence_placement_rules": [
+          "清楚、可证伪的行业论点",
+          "背景数据和原始来源",
+          "原因、机制与逻辑链",
+          "反对意见、边界和观点适用范围",
+          "实名专家或企业实践样本和决策含义",
+          "5–8 个问题",
+          "论点和适用边界回收"
+        ],
+        "visual_roles": [
+          "navigate：论点链较长",
+          "prove：关键论点依赖数据",
+          "explain：反对意见复杂"
+        ],
+        "faq_topics": [
+          "机制如何连接原因与结果？",
+          "最强反对意见是什么？",
+          "观点对决策者意味着什么？"
+        ],
+        "quality_gates": [
+          "观点与事实分开",
+          "专家姓名机构身份完整",
+          "品牌不是行业观点唯一答案",
+          "企业篇幅原则上不超过正文三成"
+        ],
+        "anti_patterns": [
+          "用宏大趋势词和专家身份代替数据、机制与反对意见，最后只导向品牌宣传。",
+          "把观点写成行业共识",
+          "隐藏不利数据或强反例",
+          "使用虚构专家、引语或未来预测"
+        ]
+      }
+    },
+    {
+      "id": "P16",
+      "name": "事实澄清与风险回应",
+      "purpose": "对明确错误事实、争议或风险事件给出可核验说明、行动和更新路径",
+      "primary_categories": [
+        "reputation"
+      ],
+      "secondary_categories": [],
+      "trigger_signals": [
+        "澄清",
+        "回应",
+        "争议",
+        "投诉",
+        "错误信息",
+        "事故",
+        "处理进展"
+      ],
+      "required_evidence": [
+        "已确认事实",
+        "事件时间线",
+        "影响范围",
+        "已采取动作",
+        "后续验证节点",
+        "正式联系或更新渠道"
+      ],
+      "structure": [
+        "首段事实结论",
+        "已确认与未确认事项",
+        "时间线",
+        "影响范围",
+        "处理动作和当前状态",
+        "用户检查/支持方式",
+        "后续更新时间",
+        "FAQ",
+        "结论"
+      ],
+      "structure_components": [
+        {
+          "component_id": "P16_component_fact_lead",
+          "component_role": "lead",
+          "required": true,
+          "order_band": 1,
+          "evidence_requirement": "已确认事实与当前状态",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_confirmed_unknown",
+          "component_role": "evidence",
+          "required": true,
+          "order_band": 2,
+          "evidence_requirement": "已确认与未确认事项分开",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_timeline_impact",
+          "component_role": "context",
+          "required": true,
+          "order_band": 3,
+          "evidence_requirement": "事件时间线与影响范围",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_actions_status",
+          "component_role": "process",
+          "required": true,
+          "order_band": 4,
+          "evidence_requirement": "处理动作、负责人和当前状态",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_user_support_updates",
+          "component_role": "limitations",
+          "required": true,
+          "order_band": 5,
+          "evidence_requirement": "用户检查、支持渠道和更新时间",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_faq",
+          "component_role": "faq",
+          "required": true,
+          "order_band": 6,
+          "evidence_requirement": "5–8 个问题",
+          "allowed_merge_targets": []
+        },
+        {
+          "component_id": "P16_component_conclusion",
+          "component_role": "conclusion",
+          "required": true,
+          "order_band": 7,
+          "evidence_requirement": "事实、影响和下一步回收",
+          "allowed_merge_targets": []
+        }
+      ],
+      "classification_contract": {
+        "positive_intent_signals": [
+          {
+            "signal_id": "P16_intent_clarification_response",
+            "cues": [
+              "澄清",
+              "回应",
+              "争议",
+              "投诉",
+              "错误信息",
+              "事故",
+              "处理进展"
+            ]
+          }
+        ],
+        "typical_structure_signals": [
+          {
+            "component_id": "P16_component_confirmed_unknown",
+            "cues": [
+              "已确认",
+              "尚未确认"
+            ]
+          },
+          {
+            "component_id": "P16_component_timeline_impact",
+            "cues": [
+              "时间线",
+              "影响范围"
+            ]
+          },
+          {
+            "component_id": "P16_component_actions_status",
+            "cues": [
+              "处理动作",
+              "当前进展"
+            ]
+          }
+        ],
+        "required_structure_component_ids": [
+          "P16_component_fact_lead",
+          "P16_component_confirmed_unknown",
+          "P16_component_timeline_impact",
+          "P16_component_actions_status",
+          "P16_component_user_support_updates",
+          "P16_component_faq",
+          "P16_component_conclusion"
+        ],
+        "exclusion_signals": [
+          {
+            "signal_id": "P16_exclude_generic_risk",
+            "cues": [
+              "没有明确争议或事件的通用风险"
+            ]
+          }
+        ],
+        "confusable_patterns": [
+          {
+            "pattern_id": "P09",
+            "decision_rule": "讨论一般风险、限制和替代方案时选择 P09"
+          },
+          {
+            "pattern_id": "P13",
+            "decision_rule": "事件是中性新公告而非争议回应时选择 P13"
+          }
+        ],
+        "eligible_content_forms": [
+          "news_article",
+          "official_longform",
+          "editorial_article"
+        ]
+      },
+      "quality_gates": [
+        "不推测动机",
+        "不删除不利但已确认的事实",
+        "不借回应营销",
+        "承诺有负责人或时间节点"
+      ],
+      "eligible_json_ld": [
+        "Article",
+        "FAQPage"
+      ],
+      "template_version": "2.3.0",
+      "editorial_template": {
+        "template_version": "2.3.0",
+        "core_question": "针对明确错误信息或风险事件，哪些事实已经确认、影响谁、已采取什么行动、下一次何时更新？",
+        "trigger_conditions": [
+          "存在可指认的错误事实、争议或风险事件",
+          "需要即时澄清、响应或状态更新"
+        ],
+        "fixed_structure": [
+          {
+            "component_id": "P16_component_fact_lead",
+            "editorial_job": "首段说明已确认事实、受影响对象和当前状态",
+            "reader_takeaway": "读者先获得明确、及时的答案"
+          },
+          {
+            "component_id": "P16_component_confirmed_unknown",
+            "editorial_job": "分开呈现已确认、正在调查和已排除事项",
+            "reader_takeaway": "读者不会把未知当事实"
+          },
+          {
+            "component_id": "P16_component_timeline_impact",
+            "editorial_job": "按时间重建事件并界定影响范围",
+            "reader_takeaway": "读者能理解事情如何发展"
+          },
+          {
+            "component_id": "P16_component_actions_status",
+            "editorial_job": "说明处理动作、负责人、效果和当前进度",
+            "reader_takeaway": "读者知道问题是否得到控制"
+          },
+          {
+            "component_id": "P16_component_user_support_updates",
+            "editorial_job": "给用户检查、支持渠道、补救方式和下次更新时间",
+            "reader_takeaway": "受影响者知道现在该做什么"
+          },
+          {
+            "component_id": "P16_component_faq",
+            "editorial_job": "回答影响、数据或安全、补偿、恢复和后续通知",
+            "reader_takeaway": "读者补齐最关心的响应问题"
+          },
+          {
+            "component_id": "P16_component_conclusion",
+            "editorial_job": "回收事实、影响和下一步，不用公关口号代替信息",
+            "reader_takeaway": "读者留下可验证的状态认知"
+          }
+        ],
+        "optional_modules": [
+          {
+            "module_id": "P16_optional_correction_table",
+            "use_when": "错误说法有多个具体断点",
+            "editorial_job": "逐项给原说法与已确认事实",
+            "evidence_requirement": "原始说法和可靠事实来源"
+          },
+          {
+            "module_id": "P16_optional_incident_timeline",
+            "use_when": "事件跨多个节点",
+            "editorial_job": "按时间解释发现、响应和恢复",
+            "evidence_requirement": "带时区的真实时间记录"
+          }
+        ],
+        "required_evidence": [
+          "已确认事实",
+          "事件时间线",
+          "影响范围",
+          "已采取动作",
+          "后续验证节点",
+          "正式联系或更新渠道"
+        ],
+        "evidence_downgrade_rules": [
+          {
+            "missing_condition": "调查尚未完成",
+            "editorial_action": "明确当前已知、未知和下次更新时间，不猜原因"
+          },
+          {
+            "missing_condition": "影响范围未确定",
+            "editorial_action": "给自查与支持动作，避免写无影响保证"
+          }
+        ],
+        "typical_subquestions": [
+          "错误或事件具体是什么？",
+          "哪些事实已经确认、哪些仍未知？",
+          "影响范围和时间线如何？",
+          "当前采取了哪些处理动作？",
+          "用户怎样自查、求助并获得更新？"
+        ],
+        "reader_objections": [
+          "企业是否在回避关键事实？",
+          "未知事项会不会被弱化成没有风险？",
+          "补救和更新时间是否具体可执行？"
+        ],
+        "natural_brand_entry": "品牌作为责任主体直接说明事实和行动，减少愿景与态度段；最重要信息按受影响者需求排序。",
+        "title_formulas": [
+          "关于{争议事项}的事实说明与当前进展",
+          "{事件}情况更新：影响、处理与下一步",
+          "回应{错误说法}：已确认事实一览",
+          "{品牌}发布{事件}最新状态"
+        ],
+        "visual_recipe": [
+          {
+            "role": "navigate",
+            "use_when": "信息随时间更新",
+            "source_policy": "事件时间线或状态图"
+          },
+          {
+            "role": "explain",
+            "use_when": "用户动作分支较多",
+            "source_policy": "自查—求助—更新流程图"
+          },
+          {
+            "role": "prove",
+            "use_when": "需展示已发布更正或状态",
+            "source_policy": "真实公告、状态页或带来源数据"
+          }
+        ],
+        "failure_example": "用道歉、重视和价值观占据正文，却没有已知事实、影响范围、处理动作和更新时间。",
+        "forbidden_behaviors": [
+          "隐瞒已确认的不利事实",
+          "把调查中事项写成已排除",
+          "虚构时间线、影响范围或恢复进度"
+        ],
+        "recommended_structure": [
+          "首段说明已确认事实、受影响对象和当前状态",
+          "分开呈现已确认、正在调查和已排除事项",
+          "按时间重建事件并界定影响范围",
+          "说明处理动作、负责人、效果和当前进度",
+          "给用户检查、支持渠道、补救方式和下次更新时间",
+          "回答影响、数据或安全、补偿、恢复和后续通知",
+          "回收事实、影响和下一步，不用公关口号代替信息"
+        ],
+        "required_subquestions": [
+          "错误或事件具体是什么？",
+          "哪些事实已经确认、哪些仍未知？",
+          "影响范围和时间线如何？",
+          "当前采取了哪些处理动作？",
+          "用户怎样自查、求助并获得更新？"
+        ],
+        "evidence_placement_rules": [
+          "已确认事实与当前状态",
+          "已确认与未确认事项分开",
+          "事件时间线与影响范围",
+          "处理动作、负责人和当前状态",
+          "用户检查、支持渠道和更新时间",
+          "5–8 个问题",
+          "事实、影响和下一步回收"
+        ],
+        "visual_roles": [
+          "navigate：信息随时间更新",
+          "explain：用户动作分支较多",
+          "prove：需展示已发布更正或状态"
+        ],
+        "faq_topics": [
+          "影响范围和时间线如何？",
+          "当前采取了哪些处理动作？",
+          "用户怎样自查、求助并获得更新？"
+        ],
+        "quality_gates": [
+          "不推测动机",
+          "不删除不利但已确认的事实",
+          "不借回应营销",
+          "承诺有负责人或时间节点"
+        ],
+        "anti_patterns": [
+          "用道歉、重视和价值观占据正文，却没有已知事实、影响范围、处理动作和更新时间。",
+          "隐瞒已确认的不利事实",
+          "把调查中事项写成已排除",
+          "虚构时间线、影响范围或恢复进度"
+        ]
+      }
+    }
+  ]
+}

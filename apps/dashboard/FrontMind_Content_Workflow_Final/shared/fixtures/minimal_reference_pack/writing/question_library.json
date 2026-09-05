@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.3.0",
+  "stage": "S7_question_faq_reference_library",
+  "status": "completed",
+  "brand": "匿名示例企业",
+  "collection_policy": "只保留企业资料中实际出现的问题，不为数量改写问题",
+  "questions": [
+    {
+      "question_id": "question_service_001",
+      "question_text": "匿名示例企业提供哪些内容生产支持？",
+      "source_kind": "enterprise_material",
+      "knowledge_ids": [
+        "kn_brand_overview"
+      ],
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "entry_category": "product_scenario",
+      "suggested_pattern_ids": [
+        "P05",
+        "P06"
+      ],
+      "answer_boundary": {
+        "answer_thesis": null,
+        "must_cover": [
+          "服务内容",
+          "适用情境"
+        ],
+        "must_not_claim": [
+          "行业领先"
+        ]
+      }
+    }
+  ],
+  "warnings": []
+}

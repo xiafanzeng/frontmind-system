@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e2-page-structure-extract-v2.1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "artifact_type", "page_title", "heading_summary",
+    "short_excerpt", "visible_text_length", "body_sha256", "snapshot_sha256",
+    "observed_cues"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1.0"},
+    "artifact_type": {"const": "E2_page_structure_extract"},
+    "page_title": {"type": "string", "maxLength": 1000},
+    "heading_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["h1", "h2", "h3"],
+      "properties": {
+        "h1": {"type": "array", "maxItems": 5, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "h2": {"type": "array", "maxItems": 60, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "h3": {"type": "array", "maxItems": 120, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+      }
+    },
+    "short_excerpt": {"type": "string", "maxLength": 500},
+    "visible_text_length": {"type": "integer", "minimum": 1},
+    "body_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "snapshot_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "observed_cues": {
+      "type": "object",
+      "maxProperties": 50,
+      "propertyNames": {"minLength": 1, "maxLength": 200},
+      "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 80}
+    }
+  }
+}

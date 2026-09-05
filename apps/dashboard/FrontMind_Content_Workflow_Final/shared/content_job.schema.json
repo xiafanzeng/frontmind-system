@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/content_job.schema.json",
+  "title": "FrontMind Content Job v2.3",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "job_id", "created_at", "input_mode", "pack_id", "reference_pack_path", "material_paths", "entry_category", "task", "monitoring_answers_path", "source_workbook_path", "user_constraints"],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{2,80}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "input_mode": { "enum": ["pack", "materials", "mixed"] },
+    "pack_id": { "type": ["string", "null"], "maxLength": 100 },
+    "reference_pack_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+    "material_paths": { "type": "array", "items": { "$ref": "#/$defs/relativePath" }, "uniqueItems": true },
+    "entry_category": { "$ref": "#/$defs/contentEntry" },
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["question_text", "question_origin", "foundation_subject", "product_scenario_subintent"],
+      "properties": {
+        "question_text": { "type": ["string", "null"], "maxLength": 500 },
+        "question_origin": { "enum": ["external_confirmed", "upload_inferred", "foundation_derived"] },
+        "foundation_subject": { "type": ["string", "null"], "maxLength": 200 },
+        "product_scenario_subintent": { "type": ["string", "null"], "enum": [null, "offering_definition", "feature_mechanism", "scenario_fit", "delivery_usage", "support_boundary", "price_selection"] }
+      }
+    },
+    "monitoring_answers_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+    "source_workbook_path": { "oneOf": [{ "$ref": "#/$defs/relativePath" }, { "type": "null" }] },
+    "user_constraints": { "type": "array", "items": { "type": "string", "maxLength": 1000 } }
+  },
+  "allOf": [{
+    "if": { "properties": { "entry_category": { "const": "foundation_start" } }, "required": ["entry_category"] },
+    "then": { "properties": { "task": { "properties": { "question_origin": { "const": "foundation_derived" }, "foundation_subject": { "type": "string", "minLength": 1 }, "product_scenario_subintent": { "type": "null" } } } } },
+    "else": { "properties": { "task": { "properties": { "question_text": { "type": "string", "minLength": 1 }, "foundation_subject": { "type": "null" } } } } }
+  }],
+  "$defs": {
+    "contentEntry": { "enum": ["industry_ranking", "competitor_comparison", "reputation", "product_scenario", "foundation_start"] },
+    "relativePath": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" }
+  }
+}

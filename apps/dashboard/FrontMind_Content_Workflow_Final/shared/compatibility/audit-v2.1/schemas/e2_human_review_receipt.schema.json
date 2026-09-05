@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e2_human_review_receipt.schema.json",
+  "title": "FrontMind E2 Human Classification Review Receipt v2.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "review_id",
+    "reviewer",
+    "reviewer_role",
+    "reviewed_at",
+    "automatic_page_analysis_ref",
+    "review_input_ref",
+    "reviewed_page_analysis_ref",
+    "decisions",
+    "attestation"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.1.0" },
+    "job_id": { "type": "string", "pattern": "^job_[a-z0-9][a-z0-9_-]{5,80}$" },
+    "review_id": { "type": "string", "pattern": "^e2review_[a-z0-9][a-z0-9_-]{5,80}$" },
+    "reviewer": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "reviewer_role": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "reviewed_at": { "type": "string", "format": "date-time" },
+    "automatic_page_analysis_ref": { "$ref": "#/$defs/fileRef" },
+    "review_input_ref": { "$ref": "#/$defs/fileRef" },
+    "reviewed_page_analysis_ref": { "$ref": "#/$defs/fileRef" },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "observation_id",
+          "decision",
+          "automatic_pattern_id",
+          "final_pattern_id",
+          "final_review_status",
+          "rationale"
+        ],
+        "properties": {
+          "observation_id": { "type": "string", "pattern": "^obs_[a-z0-9][a-z0-9_-]{2,80}$" },
+          "decision": { "enum": ["confirmed", "corrected"] },
+          "automatic_pattern_id": {
+            "oneOf": [{ "$ref": "#/$defs/patternId" }, { "type": "null" }]
+          },
+          "final_pattern_id": {
+            "oneOf": [{ "$ref": "#/$defs/patternId" }, { "type": "null" }]
+          },
+          "final_review_status": { "enum": ["human_confirmed", "human_corrected"] },
+          "rationale": { "type": "string", "minLength": 10, "maxLength": 2000 }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "decision": { "const": "confirmed" } }, "required": ["decision"] },
+            "then": { "properties": { "final_review_status": { "const": "human_confirmed" } } }
+          },
+          {
+            "if": { "properties": { "decision": { "const": "corrected" } }, "required": ["decision"] },
+            "then": { "properties": { "final_review_status": { "const": "human_corrected" } } }
+          }
+        ]
+      }
+    },
+    "attestation": { "type": "string", "minLength": 20, "maxLength": 2000 }
+  },
+  "$defs": {
+    "patternId": { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

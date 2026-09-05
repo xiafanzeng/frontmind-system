@@ -1,0 +1,9 @@
+# Install only for the named optional paths.
+CairoSVG>=2.7,<3          # SVG Logo overlay in E7 and deterministic PNG embedding for E10 DOCX
+requests>=2.31,<3         # unchanged optional S1 web asset capture
+beautifulsoup4>=4.12,<5   # unchanged optional S1 web asset capture
+colorthief>=0.2.1,<0.3    # unchanged optional S1 color extraction
+
+# HarnessGEO uses Python's standard-library HTTPS client against the fixed XTY
+# chat-completions endpoint and gpt-5.6-luna. No local model, AutoGEO package,
+# provider SDK or extra Python dependency is installed for E9.

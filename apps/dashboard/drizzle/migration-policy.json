@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "historicalBaselineThrough": "0048_api_usage_coverage_claims",
+  "migrations": {
+    "0049_external_wechat_contract_authorization": "contract",
+    "0050_nullable_manual_order_commercial_evidence": "contract",
+    "0051_delivery_ticket_retention": "contract",
+    "0052_delivery_ticket_retention_guards": "contract",
+    "0053_low_dorian_gray": "expand",
+    "0054_file_content_retention": "expand"
+  }
+}

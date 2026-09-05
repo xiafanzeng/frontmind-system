@@ -1,0 +1,2 @@
+# Generated bundles can contain intentional literal whitespace in vendored code.
+dist/** -whitespace

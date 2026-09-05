@@ -1,0 +1,1 @@
+ALTER TABLE `presales_monitor_runs` ADD `deletedAt` timestamp;

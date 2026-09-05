@@ -1,0 +1,391 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1774143224392,
+      "tag": "0000_fine_shotgun",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1783955311040,
+      "tag": "0001_smooth_madripoor",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1783956390188,
+      "tag": "0002_living_shinobi_shaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1784655268447,
+      "tag": "0003_natural_legion",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1784657244642,
+      "tag": "0004_light_tag",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1784659305682,
+      "tag": "0005_dry_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1784662847677,
+      "tag": "0006_gray_serpent_society",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1784663378959,
+      "tag": "0007_tiresome_captain_universe",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1784688718315,
+      "tag": "0008_noisy_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1784730053942,
+      "tag": "0009_nappy_menace",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1784792658302,
+      "tag": "0010_condemned_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1784805706605,
+      "tag": "0011_perfect_banshee",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1784821776381,
+      "tag": "0012_curious_warstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1784856118804,
+      "tag": "0013_fluffy_ulik",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1784954292632,
+      "tag": "0014_glossy_tarot",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1785047929394,
+      "tag": "0015_service_portal",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1785047978148,
+      "tag": "0016_backfill_website_basic",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1785050190761,
+      "tag": "0017_contract_commercial_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1785050220966,
+      "tag": "0018_backfill_contract_commercial_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1785050705577,
+      "tag": "0019_scheduled_replacement_linkage",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1785056627349,
+      "tag": "0020_busy_zemo",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1785059412692,
+      "tag": "0021_flawless_husk",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1785064483534,
+      "tag": "0022_manual_service_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1785066597098,
+      "tag": "0023_wide_turbo",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1785084604466,
+      "tag": "0024_condemned_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1785136330131,
+      "tag": "0025_admin_control_plane",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1785140224162,
+      "tag": "0026_workspace_content_revisions",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1785145200000,
+      "tag": "0027_delivery_tickets",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1785232800000,
+      "tag": "0028_production_delivery_workflows",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1785238200000,
+      "tag": "0029_dashboard_import_preflights",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1785241800000,
+      "tag": "0030_response_logic_record_revisions",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1785245400000,
+      "tag": "0031_payment_receipt_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1785249000000,
+      "tag": "0032_project_order_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1785252600000,
+      "tag": "0033_huge_toxin",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "5",
+      "when": 1785256200000,
+      "tag": "0034_known_scarlet_spider",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "5",
+      "when": 1785257474280,
+      "tag": "0035_nervous_sauron",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1785329608867,
+      "tag": "0036_account-market-edition",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1785330078305,
+      "tag": "0037_remove-knowledge-plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1785343323293,
+      "tag": "0038_fine_loners",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "5",
+      "when": 1785398400000,
+      "tag": "0039_delivery_roles_and_knowledge_reset",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1785402000000,
+      "tag": "0040_flaky_the_executioner",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1785405600000,
+      "tag": "0041_lovely_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "5",
+      "when": 1785409200000,
+      "tag": "0042_heavy_xorn",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "5",
+      "when": 1785412800000,
+      "tag": "0043_clumsy_lilandra",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "5",
+      "when": 1785416400000,
+      "tag": "0044_delivery_history_credentials_and_website_style",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "5",
+      "when": 1785573487841,
+      "tag": "0045_knowledge_base_state_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1785610980355,
+      "tag": "0046_api_usage_snapshot_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1785611612284,
+      "tag": "0047_api_usage_task_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "5",
+      "when": 1785611861130,
+      "tag": "0048_api_usage_coverage_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "5",
+      "when": 1785672421783,
+      "tag": "0049_external_wechat_contract_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1785673659172,
+      "tag": "0050_nullable_manual_order_commercial_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "5",
+      "when": 1785673776677,
+      "tag": "0051_delivery_ticket_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "5",
+      "when": 1785674946919,
+      "tag": "0052_delivery_ticket_retention_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1785732966251,
+      "tag": "0053_low_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "5",
+      "when": 1785812243451,
+      "tag": "0054_file_content_retention",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,279 @@
+/* highlight.js dual-theme (light + dark mode) */
+.markdown-content pre {
+  position: relative;
+}
+
+.markdown-content pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+/* ===== Enhanced Typography ===== */
+.markdown-content {
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  color: inherit;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.markdown-content p {
+  margin: 0.5em 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+  color: oklch(25% 0.03 260);
+}
+
+.dark .markdown-content strong {
+  color: oklch(90% 0.02 260);
+}
+
+.markdown-content em {
+  font-style: italic;
+}
+
+/* ===== Enhanced Table Styles ===== */
+.markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.markdown-content thead {
+  background: oklch(95% 0.01 260 / 80%);
+  border-bottom: 2px solid oklch(85% 0.02 260);
+}
+
+.dark .markdown-content thead {
+  background: oklch(25% 0.02 260 / 80%);
+  border-bottom: 2px solid oklch(35% 0.02 260);
+}
+
+.markdown-content th {
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: oklch(40% 0.03 260);
+  white-space: nowrap;
+}
+
+.dark .markdown-content th {
+  color: oklch(80% 0.02 260);
+}
+
+.markdown-content td {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid oklch(92% 0.01 260 / 60%);
+  vertical-align: top;
+}
+
+.dark .markdown-content td {
+  border-top-color: oklch(30% 0.02 260 / 60%);
+}
+
+.markdown-content tbody tr:hover {
+  background: oklch(96% 0.005 260 / 50%);
+}
+
+.dark .markdown-content tbody tr:hover {
+  background: oklch(24% 0.01 260 / 50%);
+}
+
+.markdown-content tbody tr:nth-child(even) {
+  background: oklch(97% 0.005 260 / 40%);
+}
+
+.dark .markdown-content tbody tr:nth-child(even) {
+  background: oklch(22% 0.01 260 / 40%);
+}
+
+/* ===== Enhanced List Styles ===== */
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.25em;
+}
+
+.markdown-content li {
+  margin: 0.25em 0;
+}
+
+.markdown-content li > p {
+  margin: 0.25em 0;
+}
+
+/* ===== Enhanced Blockquote ===== */
+.markdown-content blockquote {
+  border-left: 3px solid oklch(55% 0.18 265 / 40%);
+  padding: 0.5em 1em;
+  margin: 0.75em 0;
+  background: oklch(96% 0.005 265 / 30%);
+  border-radius: 0 0.5rem 0.5rem 0;
+}
+
+.dark .markdown-content blockquote {
+  background: oklch(22% 0.01 265 / 30%);
+  border-left-color: oklch(55% 0.18 265 / 60%);
+}
+
+/* ===== Light Mode (default) ===== */
+.markdown-content .hljs {
+  color: oklch(35% 0.03 280);
+  background: oklch(97% 0.01 280);
+}
+
+.markdown-content .hljs-comment,
+.markdown-content .hljs-quote {
+  color: oklch(55% 0.02 280);
+  font-style: italic;
+}
+
+.markdown-content .hljs-keyword,
+.markdown-content .hljs-selector-tag,
+.markdown-content .hljs-addition {
+  color: oklch(45% 0.18 300);
+  font-weight: 600;
+}
+
+.markdown-content .hljs-number,
+.markdown-content .hljs-string,
+.markdown-content .hljs-meta .hljs-meta-string,
+.markdown-content .hljs-literal,
+.markdown-content .hljs-doctag,
+.markdown-content .hljs-regexp {
+  color: oklch(45% 0.2 30);
+}
+
+.markdown-content .hljs-title,
+.markdown-content .hljs-section,
+.markdown-content .hljs-name,
+.markdown-content .hljs-selector-id,
+.markdown-content .hljs-selector-class {
+  color: oklch(42% 0.18 265);
+  font-weight: 600;
+}
+
+.markdown-content .hljs-attribute,
+.markdown-content .hljs-attr,
+.markdown-content .hljs-variable,
+.markdown-content .hljs-template-variable,
+.markdown-content .hljs-class .hljs-title,
+.markdown-content .hljs-type {
+  color: oklch(42% 0.15 280);
+}
+
+.markdown-content .hljs-symbol,
+.markdown-content .hljs-bullet,
+.markdown-content .hljs-subst,
+.markdown-content .hljs-meta,
+.markdown-content .hljs-meta .hljs-keyword,
+.markdown-content .hljs-selector-attr,
+.markdown-content .hljs-selector-pseudo,
+.markdown-content .hljs-link {
+  color: oklch(50% 0.15 30);
+}
+
+.markdown-content .hljs-built_in,
+.markdown-content .hljs-deletion {
+  color: oklch(42% 0.18 160);
+}
+
+.markdown-content .hljs-formula {
+  background: oklch(93% 0.02 280);
+}
+
+.markdown-content .hljs-emphasis {
+  font-style: italic;
+}
+
+.markdown-content .hljs-strong {
+  font-weight: bold;
+}
+
+/* ===== Dark Mode ===== */
+.dark .markdown-content .hljs,
+.markdown-content .hljs.dark {
+  color: oklch(85% 0.02 280);
+  background: oklch(22% 0.02 280);
+}
+
+.dark .markdown-content .hljs-comment,
+.dark .markdown-content .hljs-quote,
+.markdown-content .hljs.dark .hljs-comment {
+  color: oklch(65% 0.02 280);
+  font-style: italic;
+}
+
+.dark .markdown-content .hljs-keyword,
+.dark .markdown-content .hljs-selector-tag,
+.dark .markdown-content .hljs-addition,
+.markdown-content .hljs.dark .hljs-keyword {
+  color: oklch(75% 0.15 300);
+  font-weight: 600;
+}
+
+.dark .markdown-content .hljs-number,
+.dark .markdown-content .hljs-string,
+.dark .markdown-content .hljs-meta .hljs-meta-string,
+.dark .markdown-content .hljs-literal,
+.dark .markdown-content .hljs-doctag,
+.dark .markdown-content .hljs-regexp,
+.markdown-content .hljs.dark .hljs-string {
+  color: oklch(80% 0.12 30);
+}
+
+.dark .markdown-content .hljs-title,
+.dark .markdown-content .hljs-section,
+.dark .markdown-content .hljs-name,
+.dark .markdown-content .hljs-selector-id,
+.dark .markdown-content .hljs-selector-class,
+.markdown-content .hljs.dark .hljs-title {
+  color: oklch(80% 0.12 265);
+  font-weight: 600;
+}
+
+.dark .markdown-content .hljs-attribute,
+.dark .markdown-content .hljs-attr,
+.dark .markdown-content .hljs-variable,
+.dark .markdown-content .hljs-template-variable,
+.dark .markdown-content .hljs-class .hljs-title,
+.dark .markdown-content .hljs-type,
+.markdown-content .hljs.dark .hljs-attr {
+  color: oklch(78% 0.1 280);
+}
+
+.dark .markdown-content .hljs-symbol,
+.dark .markdown-content .hljs-bullet,
+.dark .markdown-content .hljs-subst,
+.dark .markdown-content .hljs-meta,
+.dark .markdown-content .hljs-meta .hljs-keyword,
+.dark .markdown-content .hljs-selector-attr,
+.dark .markdown-content .hljs-selector-pseudo,
+.dark .markdown-content .hljs-link,
+.markdown-content .hljs.dark .hljs-selector-attr {
+  color: oklch(75% 0.1 30);
+}
+
+.dark .markdown-content .hljs-built_in,
+.dark .markdown-content .hljs-deletion,
+.markdown-content .hljs.dark .hljs-built_in {
+  color: oklch(75% 0.15 160);
+}
+
+.dark .markdown-content .hljs-formula {
+  background: oklch(28% 0.02 280);
+}
+
+.dark .markdown-content .hljs-emphasis {
+  font-style: italic;
+}
+
+.dark .markdown-content .hljs-strong {
+  font-weight: bold;
+}

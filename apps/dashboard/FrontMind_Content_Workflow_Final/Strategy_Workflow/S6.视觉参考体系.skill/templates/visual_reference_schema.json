@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/visual-reference-v2.3.json",
+  "title": "FrontMind S6 Visual Reference System",
+  "type": "object",
+  "required": ["schema_version", "stage", "status", "brand", "delivery_mode", "asset_pool", "visual_roles", "brand_rules", "aigc_boundaries", "pattern_recipes", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S6_visual_reference_system"},
+    "status": {"enum": ["completed", "completed_with_limits"]},
+    "brand": {"type": "string", "minLength": 1},
+    "delivery_mode": {"enum": ["visual_enhanced", "text_first_no_approved_asset"]},
+    "asset_pool": {"type": "array"},
+    "visual_roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["brand_editorial", "navigate", "explain", "prove"],
+      "properties": {
+        "brand_editorial": {"type": "string"},
+        "navigate": {"type": "string"},
+        "explain": {"type": "string"},
+        "prove": {"type": "string"}
+      }
+    },
+    "brand_rules": {"type": "object"},
+    "aigc_boundaries": {"type": "array", "items": {"type": "string"}},
+    "pattern_recipes": {"type": "array", "minItems": 16},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

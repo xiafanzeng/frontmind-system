@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Lock the v2.1 citation-weight formula and deterministic tie-break chain."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_PATH = SKILL_ROOT.parent / "shared" / "e2_pattern_contract.py"
+SPEC = importlib.util.spec_from_file_location("e2_test_pattern_contract", CONTRACT_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load {CONTRACT_PATH}")
+CONTRACT = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CONTRACT)
+
+
+def registry(*, p01_triggers: list[str] | None = None, p02_triggers: list[str] | None = None):
+    return {
+        "routing": {
+            "industry_ranking": {
+                "primary_patterns": ["P01", "P02"],
+                "secondary_patterns": [],
+            },
+        },
+        "patterns": [
+            {"id": "P01", "trigger_signals": p01_triggers or []},
+            {"id": "P02", "trigger_signals": p02_triggers or []},
+        ],
+    }
+
+
+def compute(
+    rows: list[tuple[int, int, float, str]],
+    *,
+    question: str = "哪家 GEO 服务商值得选？",
+    pattern_registry: dict[str, object] | None = None,
+):
+    pool = [
+        {
+            "raw_rank": rank,
+            "citation_count": citation_count,
+            # Deliberately unrelated values: neither field may influence support.
+            "citation_share": 0.999 if rank % 2 else 0.001,
+        }
+        for rank, citation_count, _confidence, _pattern_id in rows
+    ]
+    observations = [
+        {
+            "raw_rank": rank,
+            "status": "classified_article",
+            "classification": {
+                "primary_pattern_id": pattern_id,
+                "classification_confidence": confidence,
+            },
+        }
+        for rank, _citation_count, confidence, pattern_id in rows
+    ]
+    return CONTRACT.compute_e2_recommendation(
+        pool, observations, pattern_registry or registry(),
+        "industry_ranking", None, question,
+    )
+
+
+class PatternRecommendationTests(unittest.TestCase):
+    def test_support_is_exactly_citation_count_times_confidence(self) -> None:
+        recommendation = compute([
+            (1, 10, 0.41, "P01"),
+            (20, 5, 0.90, "P02"),
+        ])
+
+        weights = {
+            item["pattern_id"]: item["support_weight"]
+            for item in recommendation["weighted_distribution"]
+        }
+        self.assertEqual(weights, {"P02": 4.5, "P01": 4.1})
+        self.assertEqual(recommendation["recommended_pattern_id"], "P02")
+
+    def test_tied_weight_prefers_more_classified_articles(self) -> None:
+        recommendation = compute([
+            (1, 10, 1.0, "P01"),
+            (2, 5, 1.0, "P02"),
+            (3, 5, 1.0, "P02"),
+        ])
+
+        self.assertEqual(recommendation["recommended_pattern_id"], "P02")
+        self.assertFalse(recommendation["ambiguous"])
+
+    def test_tied_weight_and_count_prefers_lower_average_raw_rank(self) -> None:
+        recommendation = compute([
+            (1, 5, 1.0, "P01"),
+            (4, 5, 1.0, "P01"),
+            (2, 5, 1.0, "P02"),
+            (5, 5, 1.0, "P02"),
+        ])
+
+        self.assertEqual(recommendation["recommended_pattern_id"], "P01")
+        self.assertFalse(recommendation["ambiguous"])
+
+    def test_full_numeric_tie_prefers_more_question_trigger_signals(self) -> None:
+        recommendation = compute(
+            [
+                (1, 5, 1.0, "P01"),
+                (4, 5, 1.0, "P01"),
+                (2, 5, 1.0, "P02"),
+                (3, 5, 1.0, "P02"),
+            ],
+            pattern_registry=registry(p02_triggers=["哪家", "值得选"]),
+        )
+
+        self.assertEqual(recommendation["recommended_pattern_id"], "P02")
+        self.assertFalse(recommendation["ambiguous"])
+
+    def test_complete_tie_uses_pattern_id_and_preserves_ambiguity_flag(self) -> None:
+        recommendation = compute([
+            (1, 5, 1.0, "P01"),
+            (4, 5, 1.0, "P01"),
+            (2, 5, 1.0, "P02"),
+            (3, 5, 1.0, "P02"),
+        ])
+
+        self.assertEqual(recommendation["recommended_pattern_id"], "P01")
+        self.assertTrue(recommendation["ambiguous"])
+        self.assertEqual(recommendation["recommendation_status"], "partial_support")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

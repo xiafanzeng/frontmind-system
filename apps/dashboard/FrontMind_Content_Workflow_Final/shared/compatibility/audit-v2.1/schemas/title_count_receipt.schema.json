@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/title_count_receipt.schema.json",
+  "title": "FrontMind E10 Title Count Receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "approved_body_sha256", "requested_count", "requested_by", "requested_at"],
+  "properties": {
+    "schema_version": { "const": "2.1.0" },
+    "job_id": { "type": "string", "pattern": "^job_" },
+    "approved_body_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "requested_count": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "requested_by": { "type": "string", "minLength": 1 },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "requirements": { "type": "array", "items": { "type": "string", "maxLength": 300 } }
+  }
+}

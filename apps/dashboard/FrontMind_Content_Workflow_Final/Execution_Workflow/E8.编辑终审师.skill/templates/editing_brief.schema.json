@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FrontMind E8 Whole-Article Editing Brief v2.3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "job_id", "stage", "voice_profile", "brand_priority_angle",
+    "primary_question", "pattern_id", "preedited_model", "automatic_pre_edits",
+    "editing_targets", "three_pass_instructions"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.3.0" },
+    "job_id": { "type": "string", "minLength": 1 },
+    "stage": { "const": "E8" },
+    "voice_profile": { "type": "object" },
+    "brand_priority_angle": { "type": ["object", "string", "null"] },
+    "primary_question": { "type": "string", "minLength": 1 },
+    "pattern_id": { "type": "string", "pattern": "^P(?:0[1-9]|1[0-6])$" },
+    "preedited_model": { "type": "object" },
+    "automatic_pre_edits": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "editing_targets": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "three_pass_instructions": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

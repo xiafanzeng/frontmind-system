@@ -1,0 +1,2 @@
+ALTER TABLE `purchase_intents` MODIFY COLUMN `targetPlanCode` enum('basic','knowledge','advanced','luxury') NOT NULL;--> statement-breakpoint
+ALTER TABLE `service_contracts` MODIFY COLUMN `planCode` enum('basic','knowledge','advanced','luxury') NOT NULL;

@@ -1,0 +1,1259 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+readonly CONFIG_ROOT="/etc/frontmind-deploy/services"
+readonly REGISTRY_AUTH_RUNTIME_ROOT="/run"
+readonly DEPLOY_TIMEOUT_SECONDS=120
+readonly CANDIDATE_READY_BUDGET_SECONDS=90
+readonly RELEASE_DB_READ_TIMEOUT_SECONDS=90
+readonly RELEASE_DB_MIGRATE_TIMEOUT_SECONDS=1800
+
+log() {
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2
+}
+
+die() {
+  log "$1"
+  exit "${2:-1}"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "REQUIRED_COMMAND_MISSING:$1"
+}
+
+require_value() {
+  local name="$1"
+  [[ -n ${!name:-} ]] || die "DEPLOY_CONFIG_MISSING:${name}"
+}
+
+atomic_copy() {
+  local source="$1" target="$2" temporary
+  temporary="$(mktemp "${target}.tmp.XXXXXX")"
+  cp -- "$source" "$temporary"
+  chmod 0600 "$temporary"
+  mv -f -- "$temporary" "$target"
+}
+
+config_is_root_only() {
+  local file="$1" owner mode
+  [[ -f $file && ! -L $file ]] || return 1
+  owner="$(stat -c '%u' "$file")"
+  mode="$(stat -c '%a' "$file")"
+  [[ $owner == "0" && $((8#$mode & 0077)) -eq 0 ]]
+}
+
+registry_auth_dir=""
+candidate_env=""
+initial_runtime_env=""
+
+cleanup_ephemeral_registry_auth() {
+  local expected_prefix
+  [[ -n $registry_auth_dir ]] || return 0
+  expected_prefix="${REGISTRY_AUTH_RUNTIME_ROOT}/frontmind-ghcr-${service}."
+  if [[ $registry_auth_dir != "${expected_prefix}"* || ! -d $registry_auth_dir || -L $registry_auth_dir ]]; then
+    log "REGISTRY_AUTH_TEMP_DIR_INVALID"
+    return 1
+  fi
+  if [[ -L ${registry_auth_dir}/config.json ]]; then
+    log "REGISTRY_AUTH_CONFIG_SYMLINK_REJECTED"
+    return 1
+  fi
+  rm -f -- "${registry_auth_dir}/config.json" || return 1
+  rmdir -- "$registry_auth_dir" || return 1
+  registry_auth_dir=""
+  unset DOCKER_CONFIG
+}
+
+cleanup_on_exit() {
+  if [[ -n $candidate_env ]]; then
+    rm -f -- "$candidate_env" || true
+  fi
+  if [[ -n $initial_runtime_env ]]; then
+    rm -f -- "$initial_runtime_env" || true
+  fi
+  cleanup_ephemeral_registry_auth || true
+}
+
+read_ephemeral_registry_auth() {
+  local registry_username="" registry_token="" trailing_line="" trailing_status=0
+  IFS= read -r -t 10 registry_username || die "REGISTRY_AUTH_USERNAME_REQUIRED" 77
+  IFS= read -r -t 10 registry_token || die "REGISTRY_AUTH_TOKEN_REQUIRED" 77
+  if IFS= read -r -t 1 trailing_line; then
+    registry_token=""
+    die "REGISTRY_AUTH_ENVELOPE_REJECTED" 77
+  else
+    trailing_status=$?
+  fi
+  [[ $trailing_status -eq 1 ]] || {
+    registry_token=""
+    die "REGISTRY_AUTH_ENVELOPE_NOT_CLOSED" 77
+  }
+  [[ ${#registry_username} -le 100 && $registry_username =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*(\[bot\])?$ ]] || {
+    registry_token=""
+    die "REGISTRY_AUTH_USERNAME_REJECTED" 77
+  }
+  [[ ${#registry_token} -ge 20 && ${#registry_token} -le 1024 && $registry_token != *[[:space:]]* ]] || {
+    registry_token=""
+    die "REGISTRY_AUTH_TOKEN_REJECTED" 77
+  }
+
+  registry_auth_dir="$(mktemp -d "${REGISTRY_AUTH_RUNTIME_ROOT}/frontmind-ghcr-${service}.XXXXXX")" \
+    || {
+      registry_token=""
+      die "REGISTRY_AUTH_TEMP_DIR_CREATE_FAILED"
+    }
+  chmod 0700 "$registry_auth_dir"
+  export DOCKER_CONFIG="$registry_auth_dir"
+  if ! printf '%s' "$registry_token" | docker login ghcr.io \
+    --username "$registry_username" --password-stdin >/dev/null; then
+    registry_token=""
+    die "REGISTRY_AUTH_LOGIN_FAILED" 77
+  fi
+  registry_token=""
+}
+
+mode="deploy"
+allow_contract=0
+case "${1:-}" in
+  --allow-contract)
+    allow_contract=1
+    shift
+    ;;
+  --bootstrap-state)
+    mode="bootstrap-state"
+    shift
+    ;;
+  --acknowledge-incident)
+    mode="acknowledge-incident"
+    shift
+    ;;
+esac
+
+service="${1:-}"
+image="${2:-}"
+source_sha="${3:-}"
+
+[[ $EUID -eq 0 ]] || die "DEPLOY_CONTROLLER_REQUIRES_ROOT"
+[[ $# -eq 3 ]] || die "USAGE:frontmind-deploy-controller [--allow-contract|--bootstrap-state|--acknowledge-incident] service image@sha256 source-sha" 64
+case "$service" in
+  dashboard | website) ;;
+  *) die "DEPLOY_SERVICE_REJECTED" 64 ;;
+esac
+trap cleanup_on_exit EXIT
+if (( allow_contract == 1 )) && [[ $service != "dashboard" ]]; then
+  die "CONTRACT_MODE_DASHBOARD_ONLY" 64
+fi
+if (( allow_contract == 1 )) && [[ ${SUDO_USER:-} == "frontmind-deploy" ]]; then
+  die "CONTRACT_MODE_FORCED_DEPLOY_USER_FORBIDDEN" 77
+fi
+if [[ $mode == "bootstrap-state" && ${SUDO_USER:-} == "frontmind-deploy" ]]; then
+  die "BOOTSTRAP_MODE_FORCED_DEPLOY_USER_FORBIDDEN" 77
+fi
+if [[ $mode == "acknowledge-incident" && ${SUDO_USER:-} == "frontmind-deploy" ]]; then
+  die "INCIDENT_ACKNOWLEDGEMENT_FORCED_DEPLOY_USER_FORBIDDEN" 77
+fi
+[[ $source_sha =~ ^[a-f0-9]{40}$ ]] || die "DEPLOY_SOURCE_SHA_REJECTED" 64
+
+config_file="${CONFIG_ROOT}/${service}.env"
+config_is_root_only "$config_file" || die "DEPLOY_CONFIG_NOT_ROOT_ONLY:${config_file}"
+# shellcheck disable=SC1090
+source "$config_file"
+
+for name in \
+  IMAGE_REPOSITORY COSIGN_IDENTITY COSIGN_ISSUER COMPOSE_DIR COMPOSE_FILE \
+  COMPOSE_ENV_FILE IMAGE_ENV_FILE COMPOSE_SERVICE IMAGE_ENV_KEY \
+  LOCAL_READY_URL PUBLIC_READY_URL READY_SHA_SHAPE STATE_DIR; do
+  require_value "$name"
+done
+
+[[ $COMPOSE_SERVICE == "$service" ]] || die "DEPLOY_SERVICE_CONFIG_MISMATCH"
+case "$service" in
+  dashboard) expected_image_env_key="FRONTMIND_DASHBOARD_IMAGE" ;;
+  website) expected_image_env_key="FRONTMIND_WEBSITE_IMAGE" ;;
+esac
+[[ $IMAGE_ENV_KEY == "$expected_image_env_key" ]] || die "DEPLOY_IMAGE_KEY_MISMATCH"
+[[ $image == "${IMAGE_REPOSITORY}@sha256:"* ]] || die "DEPLOY_REPOSITORY_REJECTED"
+[[ $image =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]] || die "DEPLOY_DIGEST_REJECTED"
+[[ $COSIGN_IDENTITY == https://github.com/*/.github/workflows/*@refs/heads/main ]] || die "COSIGN_IDENTITY_REJECTED"
+[[ $COSIGN_ISSUER == "https://token.actions.githubusercontent.com" ]] || die "COSIGN_ISSUER_REJECTED"
+[[ -d $COMPOSE_DIR && -f $COMPOSE_FILE ]] || die "COMPOSE_PROJECT_MISSING"
+config_is_root_only "$COMPOSE_ENV_FILE" || die "COMPOSE_ENV_NOT_ROOT_ONLY"
+if grep -Eq "^(${IMAGE_ENV_KEY}|FRONTMIND_IMAGE_DIGEST|FRONTMIND_SOURCE_SHA)=" \
+  "$COMPOSE_ENV_FILE"; then
+  die "COMPOSE_ENV_CONTAINS_CONTROLLER_OWNED_IDENTITY"
+fi
+
+for command in cosign curl docker flock jq mktemp sha256sum timeout; do
+  require_command "$command"
+done
+docker compose version >/dev/null
+
+mkdir -p -m 0700 "$STATE_DIR"
+state_file="${STATE_DIR}/state.json"
+lock_file="/run/lock/frontmind-deploy-${service}.lock"
+exec 9>"$lock_file"
+flock -n 9 || die "DEPLOY_ALREADY_RUNNING:${service}" 75
+
+if [[ $mode == "bootstrap-state" && ( -e $state_file || -L $state_file ) ]]; then
+  die "BOOTSTRAP_STATE_ALREADY_EXISTS" 73
+fi
+initial_signed_takeover=0
+if [[ $mode != "bootstrap-state" && ! -f $state_file ]]; then
+  if [[ -e $state_file || -L $state_file ]]; then
+    die "DEPLOY_STATE_INVALID"
+  fi
+  if [[ $mode == "deploy" && ${SUDO_USER:-} == "frontmind-deploy" ]]; then
+    # A restricted GitHub Actions deployment may establish the first signed
+    # state only by replacing an already-running, internally consistent
+    # service. The dedicated path below is deliberately unable to migrate,
+    # back up, restore or otherwise write the database.
+    initial_signed_takeover=1
+  else
+    die "DEPLOY_STATE_NOT_BOOTSTRAPPED" 73
+  fi
+fi
+
+digest="${image##*@}"
+current_digest=""
+previous_digest=""
+current_source_sha=""
+current_journal_hash=""
+current_deployed_at=""
+unfinished_status=""
+unfinished_attempted_digest=""
+unfinished_release_id=""
+unfinished_backup_file=""
+
+if [[ -f $state_file ]]; then
+  jq -e '
+    type == "object" and
+    (.currentDigest | type == "string") and
+    (.previousDigest | type == "string") and
+    (.sourceSha | type == "string") and
+    (.journalHash | type == "string") and
+    (.deployedAt | type == "string") and
+    (.lastResult | type == "object")
+  ' "$state_file" >/dev/null || die "DEPLOY_STATE_INVALID"
+  current_digest="$(jq -r '.currentDigest' "$state_file")"
+  previous_digest="$(jq -r '.previousDigest' "$state_file")"
+  current_source_sha="$(jq -r '.sourceSha' "$state_file")"
+  current_journal_hash="$(jq -r '.journalHash' "$state_file")"
+  current_deployed_at="$(jq -r '.deployedAt' "$state_file")"
+  unfinished_status="$(jq -r '.lastResult.status // ""' "$state_file")"
+  unfinished_attempted_digest="$(jq -r '.lastResult.attemptedDigest // ""' "$state_file")"
+  unfinished_release_id="$(jq -r '.lastResult.releaseId // ""' "$state_file")"
+  unfinished_backup_file="$(jq -r '.lastResult.backupFile // ""' "$state_file")"
+fi
+
+if [[ $unfinished_status == "in_progress" && $unfinished_attempted_digest != "$digest" ]]; then
+  die "UNFINISHED_RELEASE_REQUIRES_SAME_DIGEST_RECONCILIATION" 75
+fi
+if [[ $unfinished_status == "quarantined" && $mode != "acknowledge-incident" ]]; then
+  die "DEPLOY_INCIDENT_QUARANTINED_REQUIRES_ROOT_ACKNOWLEDGEMENT" 75
+fi
+if [[ $mode == "acknowledge-incident" && $unfinished_status != "quarantined" ]]; then
+  die "NO_QUARANTINED_INCIDENT_TO_ACKNOWLEDGE" 73
+fi
+if [[ $mode != "acknowledge-incident" && $current_digest == "$digest" && -n $current_source_sha && $current_source_sha != "$source_sha" ]]; then
+  die "CURRENT_DIGEST_SOURCE_SHA_STATE_MISMATCH"
+fi
+rollback_digest="$current_digest"
+rollback_source_sha="$current_source_sha"
+if [[ $current_digest == "$digest" ]]; then
+  rollback_digest="$previous_digest"
+  rollback_source_sha=""
+fi
+
+write_state() {
+  local next_current="$1" next_previous="$2" next_source="$3"
+  local next_journal="$4" deployed_at="$5" result="$6" message="$7"
+  local attempted_digest="$8" release_id="${9:-}" backup_file="${10:-}" temporary
+  temporary="$(mktemp "${state_file}.tmp.XXXXXX")"
+  jq -n \
+    --arg currentDigest "$next_current" \
+    --arg previousDigest "$next_previous" \
+    --arg sourceSha "$next_source" \
+    --arg journalHash "$next_journal" \
+    --arg deployedAt "$deployed_at" \
+    --arg status "$result" \
+    --arg message "$message" \
+    --arg attemptedDigest "$attempted_digest" \
+    --arg releaseId "$release_id" \
+    --arg backupFile "$backup_file" \
+    --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      schemaVersion: 1,
+      currentDigest: $currentDigest,
+      previousDigest: $previousDigest,
+      sourceSha: $sourceSha,
+      journalHash: $journalHash,
+      deployedAt: $deployedAt,
+      lastResult: {
+        status: $status,
+        message: $message,
+        attemptedDigest: $attemptedDigest,
+        releaseId: $releaseId,
+        backupFile: $backupFile,
+        completedAt: $completedAt
+      }
+    }' >"$temporary"
+  chmod 0600 "$temporary"
+  mv -f -- "$temporary" "$state_file"
+}
+
+record_in_progress() {
+  local release_id="$1" backup_file="$2"
+  write_state \
+    "$current_digest" "$previous_digest" "$current_source_sha" \
+    "$current_journal_hash" "$current_deployed_at" \
+    "in_progress" "migration-started" "$digest" "$release_id" "$backup_file"
+}
+
+record_failure() {
+  write_state \
+    "$current_digest" "$previous_digest" "$current_source_sha" \
+    "$current_journal_hash" "$current_deployed_at" \
+    "failed" "$1" "$digest"
+}
+
+record_quarantine() {
+  local message="$1" release_id="$2" backup_file="$3"
+  write_state \
+    "$current_digest" "$previous_digest" "$current_source_sha" \
+    "$current_journal_hash" "$current_deployed_at" \
+    "quarantined" "$message" "$digest" "$release_id" "$backup_file"
+}
+
+make_compose_env() {
+  local target="$1" selected_image="$2"
+  local selected_digest="${selected_image##*@}"
+  cp -- "$COMPOSE_ENV_FILE" "$target" || return 1
+  printf '%s=%s\n' "$IMAGE_ENV_KEY" "$selected_image" >>"$target" || return 1
+  printf 'FRONTMIND_IMAGE_DIGEST=%s\n' "$selected_digest" >>"$target" || return 1
+  chmod 0600 "$target" || return 1
+}
+
+compose() {
+  local environment_file="$1"
+  shift
+  docker compose \
+    --project-directory "$COMPOSE_DIR" \
+    --env-file "$environment_file" \
+    -f "$COMPOSE_FILE" "$@"
+}
+
+compose_before_deadline() {
+  local deadline="$1" environment_file="$2" remaining
+  shift 2
+  remaining=$((deadline - SECONDS))
+  (( remaining > 0 )) || return 1
+  timeout --signal=TERM "${remaining}s" docker compose \
+    --project-directory "$COMPOSE_DIR" \
+    --env-file "$environment_file" \
+    -f "$COMPOSE_FILE" "$@"
+}
+
+ready_payload_matches_identity() {
+  local payload="$1" expected_sha="$2" expected_digest="$3"
+  [[ $expected_digest =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
+  case "$READY_SHA_SHAPE" in
+    dashboard)
+      jq -e --arg sha "$expected_sha" --arg digest "$expected_digest" \
+        '.status == "ok" and .build.imageDigest == $digest and ($sha == "" or .build.sha == $sha)' \
+        <<<"$payload" >/dev/null
+      ;;
+    website)
+      jq -e --arg sha "$expected_sha" --arg digest "$expected_digest" \
+        '.status == "ok" and .imageDigest == $digest and ($sha == "" or .buildSha == $sha)' \
+        <<<"$payload" >/dev/null
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+LAST_READY_PAYLOAD=""
+wait_until_ready() {
+  local expected_sha="$1" expected_digest="$2" deadline="${3:-}" local_payload public_payload
+  if [[ -z $deadline ]]; then
+    deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
+  fi
+  while (( SECONDS < deadline )); do
+    local_payload="$(curl --fail --silent --show-error --max-time 4 "$LOCAL_READY_URL" 2>/dev/null || true)"
+    if [[ -n $local_payload ]] && \
+      ready_payload_matches_identity "$local_payload" "$expected_sha" "$expected_digest"; then
+      public_payload="$(curl --fail --silent --show-error --max-time 6 "$PUBLIC_READY_URL" 2>/dev/null || true)"
+      if [[ -n $public_payload ]] && \
+        ready_payload_matches_identity "$public_payload" "$expected_sha" "$expected_digest"; then
+        LAST_READY_PAYLOAD="$local_payload"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+ready_payload_digest() {
+  local payload="$1"
+  case "$READY_SHA_SHAPE" in
+    dashboard)
+      jq -er '.build.imageDigest | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))' \
+        <<<"$payload"
+      ;;
+    website)
+      jq -er '.imageDigest | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))' \
+        <<<"$payload"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+INITIAL_RUNTIME_SOURCE_SHA=""
+INITIAL_RUNTIME_DIGEST=""
+INITIAL_RUNTIME_IMAGE_REFERENCE=""
+INITIAL_RUNTIME_IMAGE_ID=""
+
+capture_initial_runtime() {
+  local environment_file="$1" container_id running active_source image_reference
+  local image_id local_payload public_payload active_digest deadline
+  container_id="$(compose "$environment_file" ps -q "$COMPOSE_SERVICE")"
+  [[ -n $container_id && $container_id != *$'\n'* ]] \
+    || die "INITIAL_TAKEOVER_ACTIVE_CONTAINER_NOT_UNIQUE" 73
+  running="$(docker inspect --format '{{.State.Running}}' "$container_id")"
+  [[ $running == "true" ]] || die "INITIAL_TAKEOVER_ACTIVE_CONTAINER_NOT_RUNNING" 73
+  active_source="$(docker inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$container_id")"
+  [[ $active_source =~ ^[a-f0-9]{40}$ ]] \
+    || die "INITIAL_TAKEOVER_ACTIVE_SOURCE_SHA_INVALID" 73
+  image_reference="$(docker inspect --format '{{.Config.Image}}' "$container_id")"
+  [[ $image_reference =~ ^[A-Za-z0-9][A-Za-z0-9._/@:-]*$ ]] \
+    || die "INITIAL_TAKEOVER_ACTIVE_IMAGE_REFERENCE_INVALID" 73
+  image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
+  [[ $image_id =~ ^sha256:[a-f0-9]{64}$ ]] \
+    || die "INITIAL_TAKEOVER_ACTIVE_IMAGE_ID_INVALID" 73
+
+  deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    local_payload="$(curl --fail --silent --show-error --max-time 4 \
+      "$LOCAL_READY_URL" 2>/dev/null || true)"
+    active_digest="$(ready_payload_digest "$local_payload" 2>/dev/null || true)"
+    if [[ -n $active_digest ]] && \
+      ready_payload_matches_identity "$local_payload" "$active_source" "$active_digest"; then
+      public_payload="$(curl --fail --silent --show-error --max-time 6 \
+        "$PUBLIC_READY_URL" 2>/dev/null || true)"
+      if ready_payload_matches_identity \
+        "$public_payload" "$active_source" "$active_digest"; then
+        INITIAL_RUNTIME_SOURCE_SHA="$active_source"
+        INITIAL_RUNTIME_DIGEST="$active_digest"
+        INITIAL_RUNTIME_IMAGE_REFERENCE="$image_reference"
+        INITIAL_RUNTIME_IMAGE_ID="$image_id"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  die "INITIAL_TAKEOVER_ACTIVE_RUNTIME_NOT_READY" 75
+}
+
+make_initial_runtime_env() {
+  local target="$1" selected_image="$INITIAL_RUNTIME_IMAGE_REFERENCE"
+  local resolved_image_id=""
+  resolved_image_id="$(docker image inspect --format '{{.Id}}' \
+    "$selected_image" 2>/dev/null || true)"
+  if [[ $resolved_image_id != "$INITIAL_RUNTIME_IMAGE_ID" ]]; then
+    # A mutable local tag must never redirect rollback. Docker accepts the
+    # immutable local image ID as an image reference when the original tag no
+    # longer resolves to the captured image.
+    selected_image="$INITIAL_RUNTIME_IMAGE_ID"
+  fi
+  cp -- "$COMPOSE_ENV_FILE" "$target" || return 1
+  printf '%s=%s\n' "$IMAGE_ENV_KEY" "$selected_image" >>"$target" || return 1
+  printf 'FRONTMIND_IMAGE_DIGEST=%s\n' "$INITIAL_RUNTIME_DIGEST" >>"$target" || return 1
+  chmod 0600 "$target" || return 1
+}
+
+restore_initial_runtime() {
+  local candidate_environment="$1" deadline="$2"
+  compose "$candidate_environment" stop "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
+  compose_before_deadline "$deadline" "$initial_runtime_env" \
+    up -d --no-deps --force-recreate "$COMPOSE_SERVICE" || return 1
+  wait_until_ready \
+    "$INITIAL_RUNTIME_SOURCE_SHA" "$INITIAL_RUNTIME_DIGEST" "$deadline"
+}
+
+run_release_db() {
+  local environment_file="$1"
+  shift
+  local command="${1:-}" release_service timeout_seconds
+  case "$command" in
+    migrate)
+      release_service="release-db-migrate"
+      timeout_seconds="$RELEASE_DB_MIGRATE_TIMEOUT_SECONDS"
+      ;;
+    plan | postflight)
+      release_service="release-db-plan"
+      timeout_seconds="$RELEASE_DB_READ_TIMEOUT_SECONDS"
+      ;;
+    *) return 64 ;;
+  esac
+  timeout --foreground --signal=TERM --kill-after=10s \
+    "${timeout_seconds}s" docker compose \
+    --project-directory "$COMPOSE_DIR" \
+    --env-file "$environment_file" \
+    -f "$COMPOSE_FILE" \
+    --profile release run --rm --no-deps "$release_service" "$@"
+}
+
+run_release_db_json() {
+  local environment_file="$1"
+  shift
+  local output json
+  output="$(run_release_db "$environment_file" "$@")" || {
+    json="$(printf '%s\n' "$output" | tail -n 1)"
+    if jq -e 'type == "object"' <<<"$json" >/dev/null 2>&1; then
+      printf '%s\n' "$json"
+    else
+      printf '%s\n' "$output" >&2
+    fi
+    return 1
+  }
+  json="$(printf '%s\n' "$output" | tail -n 1)"
+  jq -e 'type == "object"' <<<"$json" >/dev/null || {
+    printf '%s\n' "$output" >&2
+    return 1
+  }
+  printf '%s\n' "$json"
+}
+
+applied_fact_from_plan() {
+  local payload="$1"
+  jq -er '
+    if ((.applied.count | type) == "number")
+       and ((.applied.count | floor) == .applied.count)
+       and (.applied.count >= 0)
+       and ((.applied.journalHash | type) == "string")
+       and (.applied.journalHash | test("^[a-f0-9]{64}$"))
+    then "\(.applied.count) \(.applied.journalHash)"
+    else error("MIGRATION_APPLIED_FACT_INVALID")
+    end
+  ' <<<"$payload"
+}
+
+migration_prefix_fact() {
+  local payload="$1"
+  jq -ceS '
+    if .status == "pending"
+       and ((.pending | type) == "array")
+       and ((.pending | length) > 0)
+       and ((.allPendingExpand | type) == "boolean")
+       and ((.journalHash | type) == "string")
+       and (.journalHash | test("^[a-f0-9]{64}$"))
+       and ((.applied.count | type) == "number")
+       and ((.applied.count | floor) == .applied.count)
+       and (.applied.count >= 0)
+       and ((.applied.journalHash | type) == "string")
+       and (.applied.journalHash | test("^[a-f0-9]{64}$"))
+    then {
+      journalHash: .journalHash,
+      applied: {count: .applied.count, journalHash: .applied.journalHash},
+      pending: .pending,
+      allPendingExpand: .allPendingExpand
+    }
+    else error("MIGRATION_PREFIX_FACT_INVALID")
+    end
+  ' <<<"$payload"
+}
+
+write_active_image_env() {
+  local selected_image="$1" temporary
+  mkdir -p -m 0700 "$(dirname "$IMAGE_ENV_FILE")"
+  temporary="$(mktemp "${IMAGE_ENV_FILE}.tmp.XXXXXX")"
+  cp -- "$COMPOSE_ENV_FILE" "$temporary"
+  printf '%s=%s\n' "$IMAGE_ENV_KEY" "$selected_image" >>"$temporary"
+  printf 'FRONTMIND_IMAGE_DIGEST=%s\n' "${selected_image##*@}" >>"$temporary"
+  printf 'FRONTMIND_SOURCE_SHA=%s\n' "$source_sha" >>"$temporary"
+  atomic_copy "$temporary" "$IMAGE_ENV_FILE"
+  rm -f -- "$temporary"
+}
+
+roll_out() {
+  local environment_file="$1" expected_sha="$2" expected_digest="$3" deadline="$4"
+  compose_before_deadline "$deadline" "$environment_file" \
+    up -d --no-deps --force-recreate "$COMPOSE_SERVICE" || return 1
+  wait_until_ready "$expected_sha" "$expected_digest" "$deadline" || return 1
+}
+
+restore_previous_application() {
+  local candidate_environment="$1" deadline="${2:-}" previous_environment=""
+  if [[ -z $deadline ]]; then
+    deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
+  fi
+  compose "$candidate_environment" stop "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
+  if [[ -z $rollback_digest ]]; then
+    log "NO_PREVIOUS_IMAGE_AVAILABLE"
+    return 1
+  fi
+  previous_environment="$(mktemp)" || return 1
+  if ! make_compose_env "$previous_environment" "${IMAGE_REPOSITORY}@${rollback_digest}"; then
+    rm -f -- "$previous_environment" || true
+    return 1
+  fi
+  if ! compose_before_deadline "$deadline" "$previous_environment" \
+    up -d --no-deps --force-recreate "$COMPOSE_SERVICE"; then
+    rm -f -- "$previous_environment"
+    return 1
+  fi
+  if ! wait_until_ready "$rollback_source_sha" "$rollback_digest" "$deadline"; then
+    rm -f -- "$previous_environment"
+    return 1
+  fi
+  rm -f -- "$previous_environment" || return 1
+}
+
+verify_candidate() {
+  log "VERIFY_SIGNATURE service=${service} image=${image}"
+  cosign verify \
+    --certificate-identity "$COSIGN_IDENTITY" \
+    --certificate-oidc-issuer "$COSIGN_ISSUER" \
+    "$image" >/dev/null
+  docker pull "$image" >/dev/null
+  local label_sha
+  label_sha="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+  if [[ $label_sha != "$source_sha" ]]; then
+    if [[ $mode != "bootstrap-state" ]]; then
+      rotate_service_images "$current_digest" "$previous_digest"
+    fi
+    die "IMAGE_SOURCE_SHA_MISMATCH"
+  fi
+}
+
+rotate_service_images() {
+  local keep_current="$1" keep_previous="$2" candidate
+  while IFS= read -r candidate; do
+    [[ -n $candidate && $candidate != "<none>@<none>" ]] || continue
+    [[ $candidate == "${IMAGE_REPOSITORY}@${keep_current}" ]] && continue
+    [[ -n $keep_previous && $candidate == "${IMAGE_REPOSITORY}@${keep_previous}" ]] && continue
+    docker image rm "$candidate" >/dev/null 2>&1 || true
+  done < <(docker image ls --digests --format '{{.Repository}}@{{.Digest}}' "$IMAGE_REPOSITORY")
+}
+
+record_recovered_failure() {
+  local candidate_environment="$1" message="$2" incident="$3"
+  if restore_previous_application "$candidate_environment"; then
+    record_failure "$message"
+    rotate_service_images "$current_digest" "$previous_digest"
+    return 0
+  fi
+  # When application rollback is not proven healthy, retain the in-progress
+  # state and candidate image as incident evidence. In particular, do not
+  # erase releaseId/backupFile after the database was restored successfully.
+  die "$incident" 75
+}
+
+record_recovered_incident() {
+  local candidate_environment="$1" message="$2" incident="$3"
+  local release_id="$4" backup_file="$5"
+  if restore_previous_application "$candidate_environment"; then
+    record_quarantine "$message" "$release_id" "$backup_file"
+    return 0
+  fi
+  # Database restoration succeeded, but the prior application was not proven
+  # ready. Preserve the same terminal quarantine and all recovery facts; only a
+  # root acknowledgement may authorize a later, distinct migration attempt.
+  record_quarantine "${message}-application-rollback-unproven" "$release_id" "$backup_file"
+  die "$incident" 75
+}
+
+assert_candidate_is_active() {
+  local environment_file="$1" container_id running_image_id expected_image_id
+  container_id="$(compose "$environment_file" ps -q "$COMPOSE_SERVICE")"
+  [[ -n $container_id && $container_id != *$'\n'* ]] || die "BOOTSTRAP_ACTIVE_CONTAINER_NOT_UNIQUE"
+  running_image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
+  expected_image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+  [[ -n $running_image_id && $running_image_id == "$expected_image_id" ]] \
+    || die "BOOTSTRAP_ACTIVE_IMAGE_MISMATCH"
+}
+
+applied_ledger_fact() {
+  local credential_file="$1" database="$2" rows canonical checksum count hash
+  rows="$(mysql --defaults-extra-file="$credential_file" --batch --raw --skip-column-names \
+    --database="$database" \
+    --execute='SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, id ASC')" \
+    || return 1
+  canonical="$(printf '%s\n' "$rows" | jq -Rsc '
+    split("\n")
+    | map(select(length > 0) | split("\t"))
+    | map(
+        if length == 2
+           and (.[0] | test("^[A-Fa-f0-9]{64}$"))
+           and (.[1] | test("^[0-9]+$"))
+        then {hash: (.[0] | ascii_downcase), createdAt: (.[1] | tonumber)}
+        else error("MIGRATION_LEDGER_ROW_INVALID")
+        end
+      )
+  ')" || return 1
+  count="$(jq -r 'length' <<<"$canonical")" || return 1
+  checksum="$(printf '%s\n' "$canonical" | sha256sum)" || return 1
+  hash="${checksum%% *}"
+  [[ $count =~ ^[0-9]+$ && $hash =~ ^[a-f0-9]{64}$ ]] || return 1
+  printf '%s %s\n' "$count" "$hash"
+}
+
+drop_restore_test_database_best_effort() {
+  local database="$1"
+  [[ $database =~ ^[A-Za-z0-9_]+$ ]] || return 0
+  mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" \
+    --execute="DROP DATABASE IF EXISTS \`${database}\`" >/dev/null 2>&1 || true
+}
+
+backup_database() {
+  local target_file="$1" expected_migration_count="$2" expected_journal_hash="$3"
+  local restore_database="" source_tables source_migrations source_journal_hash
+  local restored_tables restored_migrations database_charset database_collation
+  local restored_journal_hash extra_identity="" extra_ledger_fact=""
+  local database_identity="" ledger_fact=""
+  [[ $expected_migration_count =~ ^[0-9]+$ && $expected_journal_hash =~ ^[a-f0-9]{64}$ ]] \
+    || return 1
+  for name in BACKUP_DIR BACKUP_DATABASE BACKUP_MYSQL_CNF RESTORE_MYSQL_CNF; do
+    require_value "$name"
+  done
+  [[ $BACKUP_DATABASE =~ ^[A-Za-z0-9_]+$ ]] || die "BACKUP_DATABASE_REJECTED"
+  config_is_root_only "$BACKUP_MYSQL_CNF" || die "BACKUP_CREDENTIAL_NOT_ROOT_ONLY"
+  config_is_root_only "$RESTORE_MYSQL_CNF" || die "RESTORE_CREDENTIAL_NOT_ROOT_ONLY"
+  for command in gzip gunzip mysql mysqldump; do
+    require_command "$command"
+  done
+  mkdir -p -m 0700 "$BACKUP_DIR" || return 1
+
+  log "DATABASE_BACKUP_START"
+  if ! mysqldump \
+    --defaults-extra-file="$BACKUP_MYSQL_CNF" \
+    --single-transaction --quick --hex-blob --routines --triggers --events \
+    --set-gtid-purged=OFF --no-tablespaces \
+    "$BACKUP_DATABASE" | gzip -9 >"${target_file}.tmp"; then
+    rm -f -- "${target_file}.tmp" || true
+    return 1
+  fi
+  if [[ ! -s ${target_file}.tmp ]]; then
+    rm -f -- "${target_file}.tmp" || true
+    return 1
+  fi
+  mv -f -- "${target_file}.tmp" "$target_file" || return 1
+  source_tables="$(mysql --defaults-extra-file="$BACKUP_MYSQL_CNF" --batch --skip-column-names \
+    --database="$BACKUP_DATABASE" \
+    --execute='SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()')" \
+    || return 1
+  ledger_fact="$(applied_ledger_fact "$BACKUP_MYSQL_CNF" "$BACKUP_DATABASE")" || return 1
+  read -r source_migrations source_journal_hash extra_ledger_fact <<<"$ledger_fact" || return 1
+  [[ -z ${extra_ledger_fact:-} ]] || return 1
+  [[ $source_tables =~ ^[0-9]+$ && $source_migrations =~ ^[0-9]+$ ]] || return 1
+  [[ $source_migrations == "$expected_migration_count" && $source_journal_hash == "$expected_journal_hash" ]] \
+    || return 1
+  database_identity="$(mysql --defaults-extra-file="$BACKUP_MYSQL_CNF" --batch --skip-column-names \
+    --execute="SELECT default_character_set_name, default_collation_name FROM information_schema.schemata WHERE schema_name = '${BACKUP_DATABASE}'")" \
+    || return 1
+  read -r database_charset database_collation extra_identity <<<"$database_identity" || return 1
+  [[ -z ${extra_identity:-} ]] || return 1
+  [[ $database_charset =~ ^[A-Za-z0-9_]+$ && $database_collation =~ ^[A-Za-z0-9_]+$ ]] \
+    || return 1
+  jq -n \
+    --arg database "$BACKUP_DATABASE" \
+    --arg charset "$database_charset" \
+    --arg collation "$database_collation" \
+    --arg migrationJournalHash "$source_journal_hash" \
+    --argjson tableCount "$source_tables" \
+    --argjson migrationCount "$source_migrations" \
+    '{schemaVersion: 1, database: $database, charset: $charset, collation: $collation, tableCount: $tableCount, migrationCount: $migrationCount, migrationJournalHash: $migrationJournalHash}' \
+    >"${target_file}.meta.json" || return 1
+  sha256sum "$target_file" "${target_file}.meta.json" >"${target_file}.sha256.tmp" \
+    || return 1
+  mv -f -- "${target_file}.sha256.tmp" "${target_file}.sha256" || return 1
+  restore_database="frontmind_restore_${source_sha:0:12}_$RANDOM"
+  [[ $restore_database =~ ^[A-Za-z0-9_]+$ ]] || die "RESTORE_TEST_DATABASE_REJECTED"
+
+  mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" \
+    --execute="CREATE DATABASE \`${restore_database}\` CHARACTER SET ${database_charset} COLLATE ${database_collation}" \
+    || return 1
+  if ! gunzip --stdout "$target_file" | mysql \
+    --defaults-extra-file="$RESTORE_MYSQL_CNF" --database="$restore_database"; then
+    drop_restore_test_database_best_effort "$restore_database"
+    return 1
+  fi
+  if ! restored_tables="$(mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" --batch --skip-column-names \
+    --database="$restore_database" \
+    --execute="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '${restore_database}'")"; then
+    drop_restore_test_database_best_effort "$restore_database"
+    return 1
+  fi
+  if ! ledger_fact="$(applied_ledger_fact "$RESTORE_MYSQL_CNF" "$restore_database")"; then
+    drop_restore_test_database_best_effort "$restore_database"
+    return 1
+  fi
+  if ! read -r restored_migrations restored_journal_hash extra_ledger_fact <<<"$ledger_fact" || \
+    [[ -n ${extra_ledger_fact:-} ]] || \
+    [[ ! $restored_tables =~ ^[0-9]+$ || ! $restored_migrations =~ ^[0-9]+$ ]] || \
+    [[ $restored_tables != "$source_tables" ]] || \
+    [[ $restored_migrations != "$source_migrations" ]] || \
+    [[ $restored_journal_hash != "$source_journal_hash" ]]; then
+    drop_restore_test_database_best_effort "$restore_database"
+    return 1
+  fi
+  if ! mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" \
+    --execute="DROP DATABASE \`${restore_database}\`"; then
+    drop_restore_test_database_best_effort "$restore_database"
+    return 1
+  fi
+  log "DATABASE_BACKUP_RESTORE_TEST_OK file=${target_file}"
+}
+
+restore_production_database() {
+  local backup_file="$1" database_charset database_collation metadata_file
+  local expected_tables expected_migrations expected_journal_hash
+  local restored_tables restored_migrations restored_journal_hash ledger_fact extra_ledger_fact
+  log "DATABASE_RESTORE_START file=${backup_file}"
+  sha256sum --check "${backup_file}.sha256" >/dev/null || return 1
+  metadata_file="${backup_file}.meta.json"
+  jq -e --arg database "$BACKUP_DATABASE" \
+    '.schemaVersion == 1 and .database == $database
+      and (.charset | type == "string") and (.collation | type == "string")
+      and (.tableCount | type == "number" and floor == . and . >= 0)
+      and (.migrationCount | type == "number" and floor == . and . >= 0)
+      and (.migrationJournalHash | type == "string" and test("^[a-f0-9]{64}$"))' \
+    "$metadata_file" >/dev/null || return 1
+  database_charset="$(jq -r '.charset' "$metadata_file")" || return 1
+  database_collation="$(jq -r '.collation' "$metadata_file")" || return 1
+  expected_tables="$(jq -r '.tableCount' "$metadata_file")" || return 1
+  expected_migrations="$(jq -r '.migrationCount' "$metadata_file")" || return 1
+  expected_journal_hash="$(jq -r '.migrationJournalHash' "$metadata_file")" || return 1
+  [[ $database_charset =~ ^[A-Za-z0-9_]+$ && $database_collation =~ ^[A-Za-z0-9_]+$ ]] \
+    || die "DATABASE_BACKUP_METADATA_INVALID"
+  mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" \
+    --execute="DROP DATABASE IF EXISTS \`${BACKUP_DATABASE}\`; CREATE DATABASE \`${BACKUP_DATABASE}\` CHARACTER SET ${database_charset} COLLATE ${database_collation}" \
+    || return 1
+  gunzip --stdout "$backup_file" | mysql \
+    --defaults-extra-file="$RESTORE_MYSQL_CNF" --database="$BACKUP_DATABASE" \
+    || return 1
+  restored_tables="$(mysql --defaults-extra-file="$RESTORE_MYSQL_CNF" --batch --skip-column-names \
+    --database="$BACKUP_DATABASE" \
+    --execute='SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()')" \
+    || return 1
+  ledger_fact="$(applied_ledger_fact "$RESTORE_MYSQL_CNF" "$BACKUP_DATABASE")" || return 1
+  read -r restored_migrations restored_journal_hash extra_ledger_fact <<<"$ledger_fact" || return 1
+  [[ -z ${extra_ledger_fact:-} ]] || return 1
+  [[ $restored_tables == "$expected_tables" && \
+    $restored_migrations == "$expected_migrations" && \
+    $restored_journal_hash == "$expected_journal_hash" ]] || return 1
+  log "DATABASE_RESTORE_OK"
+}
+
+rotate_backups() {
+  local -a backups=()
+  local old
+  mapfile -t backups < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'frontmind-dashboard-*.sql.gz' -print | sort -r)
+  if (( ${#backups[@]} <= 3 )); then
+    return
+  fi
+  for old in "${backups[@]:3}"; do
+    rm -f -- "$old" "${old}.sha256" "${old}.meta.json"
+  done
+}
+
+if [[ $mode == "acknowledge-incident" ]]; then
+  [[ $unfinished_attempted_digest == "$digest" ]] \
+    || die "INCIDENT_ACKNOWLEDGEMENT_DIGEST_MISMATCH" 64
+  [[ -n $unfinished_release_id && $unfinished_release_id == "${source_sha}-"* ]] \
+    || die "INCIDENT_ACKNOWLEDGEMENT_RELEASE_MISMATCH" 64
+  [[ -n $unfinished_backup_file && -f $unfinished_backup_file ]] \
+    || die "INCIDENT_ACKNOWLEDGEMENT_BACKUP_MISSING" 75
+  write_state \
+    "$current_digest" "$previous_digest" "$current_source_sha" \
+    "$current_journal_hash" "$current_deployed_at" \
+    "incident_acknowledged" "root-authorized-new-attempt" "$digest" \
+    "$unfinished_release_id" "$unfinished_backup_file"
+  log "DEPLOY_INCIDENT_ACKNOWLEDGED service=${service} release=${unfinished_release_id} digest=${digest}; no database or application command executed"
+  exit 0
+fi
+
+if [[ $mode == "deploy" && ${SUDO_USER:-} == "frontmind-deploy" ]]; then
+  read_ephemeral_registry_auth
+fi
+verify_candidate
+if [[ -n $registry_auth_dir ]]; then
+  cleanup_ephemeral_registry_auth || die "REGISTRY_AUTH_CLEANUP_FAILED"
+fi
+
+candidate_env="$(mktemp)"
+make_compose_env "$candidate_env" "$image"
+
+if [[ $mode == "bootstrap-state" ]]; then
+  # Bootstrap only records an already-running, signed release. It never starts
+  # a container or invokes release-db, backup, restore, or migration commands.
+  # The first normal successful deployment rotates this digest into previous.
+  assert_candidate_is_active "$candidate_env"
+  bootstrap_deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
+  if ! wait_until_ready "$source_sha" "$digest" "$bootstrap_deadline"; then
+    die "BOOTSTRAP_CURRENT_NOT_READY" 75
+  fi
+  if [[ $service == "dashboard" ]]; then
+    journal_hash="$(jq -r '.migration.journalHash // ""' <<<"$LAST_READY_PAYLOAD")"
+    [[ $journal_hash =~ ^[a-f0-9]{64}$ ]] || die "BOOTSTRAP_READY_JOURNAL_HASH_INVALID"
+  else
+    journal_hash="not-applicable"
+  fi
+  write_active_image_env "$image"
+  deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_state \
+    "$digest" "" "$source_sha" "$journal_hash" "$deployed_at" \
+    "success" "bootstrap-current" "$digest"
+  rotate_service_images "$digest" ""
+  log "BOOTSTRAP_STATE_SUCCESS service=${service} current=${digest} previous=empty source=${source_sha}"
+  exit 0
+fi
+
+if (( initial_signed_takeover == 1 )); then
+  # This path is the only automatic way to establish a missing state file. It
+  # can replace only an already-running service whose image label and local /
+  # public readiness identities agree with each other. The old source SHA may
+  # differ from the signed candidate revision. Dashboard accepts an exact
+  # ledger and exact schema only; pending migrations are intentionally blocked
+  # before backup or migration code is reachable.
+  log "INITIAL_SIGNED_TAKEOVER_PREFLIGHT service=${service} source=${source_sha}"
+  capture_initial_runtime "$candidate_env"
+  initial_runtime_env="$(mktemp)"
+  make_initial_runtime_env "$initial_runtime_env" \
+    || die "INITIAL_TAKEOVER_RUNTIME_ENV_CAPTURE_FAILED" 73
+
+  journal_hash="not-applicable"
+  if [[ $service == "dashboard" ]]; then
+    log "INITIAL_SIGNED_TAKEOVER_DATABASE_PLAN_START"
+    initial_plan_json="$(run_release_db_json "$candidate_env" plan --json)" \
+      || die "INITIAL_TAKEOVER_DATABASE_PLAN_FAILED" 78
+    initial_plan_status="$(jq -r '.status // "missing"' <<<"$initial_plan_json")"
+    initial_schema_status="$(jq -r '.schema.status // "missing"' <<<"$initial_plan_json")"
+    if [[ $initial_plan_status != "exact" ]]; then
+      die "INITIAL_TAKEOVER_DATABASE_NOT_EXACT:${initial_plan_status}" 78
+    fi
+    if [[ $initial_schema_status != "exact" ]]; then
+      die "INITIAL_TAKEOVER_DATABASE_SCHEMA_NOT_EXACT:${initial_schema_status}" 78
+    fi
+    journal_hash="$(jq -r '.journalHash // .expected.journalHash // ""' \
+      <<<"$initial_plan_json")"
+    [[ $journal_hash =~ ^[a-f0-9]{64}$ ]] \
+      || die "INITIAL_TAKEOVER_JOURNAL_HASH_INVALID" 78
+  fi
+
+  log "INITIAL_SIGNED_TAKEOVER_ROLLOUT_START service=${service}"
+  initial_rollout_deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
+  initial_candidate_deadline=$((SECONDS + CANDIDATE_READY_BUDGET_SECONDS))
+  if ! roll_out \
+    "$candidate_env" "$source_sha" "$digest" "$initial_candidate_deadline"; then
+    log "INITIAL_SIGNED_TAKEOVER_CANDIDATE_FAILED"
+    if restore_initial_runtime "$candidate_env" "$initial_rollout_deadline"; then
+      die "INITIAL_SIGNED_TAKEOVER_FAILED_PREVIOUS_RUNTIME_RESTORED" 75
+    fi
+    die "INITIAL_SIGNED_TAKEOVER_FAILED_ROLLBACK_UNPROVEN" 75
+  fi
+
+  if [[ -e $state_file || -L $state_file ]]; then
+    if restore_initial_runtime "$candidate_env" "$initial_rollout_deadline"; then
+      die "INITIAL_SIGNED_TAKEOVER_STATE_APPEARED_PREVIOUS_RUNTIME_RESTORED" 75
+    fi
+    die "INITIAL_SIGNED_TAKEOVER_STATE_APPEARED_ROLLBACK_UNPROVEN" 75
+  fi
+  write_active_image_env "$image"
+  deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_state \
+    "$digest" "" "$source_sha" "$journal_hash" "$deployed_at" \
+    "success" "initial-signed-takeover" "$digest"
+  rotate_service_images "$digest" ""
+  log "INITIAL_SIGNED_TAKEOVER_SUCCESS service=${service} current=${digest} previous=empty source=${source_sha}"
+  exit 0
+fi
+
+journal_hash="not-applicable"
+database_changed=0
+backup_file=""
+
+if [[ $service == "dashboard" ]]; then
+  log "DATABASE_PLAN_START"
+  plan_json="$(run_release_db_json "$candidate_env" plan --json)" || {
+    if [[ $unfinished_status == "in_progress" ]]; then
+      # A read failure is not evidence that the interrupted migration failed.
+      # Keep the only durable releaseId/backupFile facts intact and leave the
+      # application stopped. A later invocation for the same digest must begin
+      # with this same read-only reconciliation and can never treat pending as
+      # authorization for another migrate command.
+      die "UNFINISHED_RELEASE_PLAN_UNAVAILABLE_STATE_PRESERVED" 75
+    fi
+    record_failure "database-plan-failed"
+    rotate_service_images "$current_digest" "$previous_digest"
+    die "DATABASE_PLAN_FAILED"
+  }
+  plan_status="$(jq -r '.status' <<<"$plan_json")"
+  plan_schema_status="$(jq -r '.schema.status // "missing"' <<<"$plan_json")"
+  journal_hash="$(jq -r '.journalHash // .expected.journalHash // ""' <<<"$plan_json")"
+
+  # An interrupted migration is reconciled from facts before any new attempt:
+  # exact means the prior one-shot job committed and rollout may resume;
+  # every other state restores the verified backup. A pending ledger alone is
+  # not proof that MySQL DDL never started, so the controller never reruns it.
+  if [[ $unfinished_status == "in_progress" ]]; then
+    [[ -n $unfinished_backup_file && -f $unfinished_backup_file ]] \
+      || die "UNFINISHED_RELEASE_BACKUP_MISSING" 75
+    if [[ $plan_status == "exact" && $plan_schema_status == "exact" ]]; then
+      log "UNFINISHED_MIGRATION_RECONCILED_EXACT release=${unfinished_release_id}"
+      backup_file="$unfinished_backup_file"
+      database_changed=1
+      reconciliation_postflight="$(run_release_db_json "$candidate_env" postflight --json)" || {
+        restore_production_database "$unfinished_backup_file" \
+          || die "UNFINISHED_RELEASE_DATABASE_RESTORE_FAILED"
+        record_recovered_incident "$candidate_env" \
+          "unfinished-postflight-failed-database-restored" \
+          "UNFINISHED_RELEASE_APPLICATION_ROLLBACK_FAILED_STATE_PRESERVED" \
+          "$unfinished_release_id" "$unfinished_backup_file"
+        die "UNFINISHED_RELEASE_POSTFLIGHT_FAILED"
+      }
+      if ! jq -e '.status == "exact" and .schema.status == "exact"' \
+        <<<"$reconciliation_postflight" >/dev/null; then
+        restore_production_database "$unfinished_backup_file" \
+          || die "UNFINISHED_RELEASE_DATABASE_RESTORE_FAILED"
+        record_recovered_incident "$candidate_env" \
+          "unfinished-postflight-not-exact-database-restored" \
+          "UNFINISHED_RELEASE_APPLICATION_ROLLBACK_FAILED_STATE_PRESERVED" \
+          "$unfinished_release_id" "$unfinished_backup_file"
+        die "UNFINISHED_RELEASE_POSTFLIGHT_NOT_EXACT"
+      fi
+    else
+      restore_production_database "$unfinished_backup_file" \
+        || die "UNFINISHED_RELEASE_DATABASE_RESTORE_FAILED"
+      record_recovered_incident "$candidate_env" \
+        "unfinished-migration-restored-from-backup" \
+        "UNFINISHED_RELEASE_APPLICATION_ROLLBACK_FAILED_STATE_PRESERVED" \
+        "$unfinished_release_id" "$unfinished_backup_file"
+      die "UNFINISHED_RELEASE_RESTORED_NOT_RERUN" 75
+    fi
+  fi
+
+  case "$plan_status" in
+    exact)
+      if [[ $plan_schema_status != "exact" ]]; then
+        record_failure "database-schema-${plan_schema_status}"
+        rotate_service_images "$current_digest" "$previous_digest"
+        die "DATABASE_SCHEMA_NOT_EXACT" 78
+      fi
+      log "DATABASE_PLAN_EXACT"
+      ;;
+    pending)
+      if [[ $unfinished_status == "in_progress" ]]; then
+        die "UNFINISHED_PENDING_SHOULD_HAVE_BEEN_RESTORED" 75
+      fi
+      initial_prefix_fact="$(migration_prefix_fact "$plan_json")" || {
+        record_failure "database-pending-prefix-invalid"
+        rotate_service_images "$current_digest" "$previous_digest"
+        die "DATABASE_PENDING_PREFIX_INVALID" 78
+      }
+      initial_applied_fact="$(applied_fact_from_plan "$plan_json")" || {
+        record_failure "database-applied-fact-invalid"
+        rotate_service_images "$current_digest" "$previous_digest"
+        die "DATABASE_APPLIED_FACT_INVALID" 78
+      }
+      read -r expected_applied_count expected_applied_journal_hash extra_applied_fact \
+        <<<"$initial_applied_fact"
+      [[ -z ${extra_applied_fact:-} && $expected_applied_count =~ ^[0-9]+$ && \
+        $expected_applied_journal_hash =~ ^[a-f0-9]{64}$ ]] || {
+        record_failure "database-applied-fact-invalid"
+        rotate_service_images "$current_digest" "$previous_digest"
+        die "DATABASE_APPLIED_FACT_INVALID" 78
+      }
+      migration_kind=""
+      if jq -e '.allPendingExpand == true and (.pending | length > 0) and all(.pending[]; .classification == "expand")' \
+        <<<"$plan_json" >/dev/null; then
+        migration_kind="expand"
+      elif (( allow_contract == 1 )) && jq -e '(.pending | length > 0) and all(.pending[]; .classification == "expand" or .classification == "contract")' \
+        <<<"$plan_json" >/dev/null; then
+        migration_kind="contract"
+      else
+        record_failure "contract-or-unclassified-migration-blocked"
+        rotate_service_images "$current_digest" "$previous_digest"
+        die "CONTRACT_MIGRATION_REQUIRES_MAINTENANCE_WINDOW" 78
+      fi
+      log "MIGRATION_APPROVED kind=${migration_kind}"
+      if [[ -n $current_digest ]]; then
+        current_env="$(mktemp)"
+        make_compose_env "$current_env" "${IMAGE_REPOSITORY}@${current_digest}"
+        compose "$current_env" stop "$COMPOSE_SERVICE"
+        rm -f -- "$current_env"
+      fi
+      backup_file="${BACKUP_DIR:-/var/backups/frontmind-dashboard}/frontmind-dashboard-$(date -u +%Y%m%dT%H%M%SZ)-${source_sha:0:12}.sql.gz"
+      if ! backup_database \
+        "$backup_file" "$expected_applied_count" "$expected_applied_journal_hash"; then
+        if restore_previous_application "$candidate_env"; then
+          record_failure "database-backup-or-restore-test-failed"
+          rotate_service_images "$current_digest" "$previous_digest"
+        else
+          record_failure "database-backup-or-restore-test-failed-rollback-failed"
+        fi
+        die "DATABASE_BACKUP_GATE_FAILED"
+      fi
+      release_id="${source_sha}-$(date -u +%Y%m%dT%H%M%SZ)"
+      log "DATABASE_PREFIX_RECHECK_START"
+      pre_migrate_plan="$(run_release_db_json "$candidate_env" plan --json)" || {
+        record_quarantine \
+          "pre-migration-plan-unavailable-dashboard-remains-stopped" \
+          "$release_id" "$backup_file"
+        die "DATABASE_PREFIX_RECHECK_UNAVAILABLE_INCIDENT_QUARANTINED" 75
+      }
+      pre_migrate_prefix_fact="$(migration_prefix_fact "$pre_migrate_plan")" || {
+        record_quarantine \
+          "pre-migration-prefix-not-pending-dashboard-remains-stopped" \
+          "$release_id" "$backup_file"
+        die "DATABASE_PREFIX_RECHECK_NOT_PENDING_INCIDENT_QUARANTINED" 75
+      }
+      if [[ $pre_migrate_prefix_fact != "$initial_prefix_fact" ]]; then
+        record_quarantine \
+          "pre-migration-prefix-changed-dashboard-remains-stopped" \
+          "$release_id" "$backup_file"
+        die "DATABASE_PREFIX_CHANGED_INCIDENT_QUARANTINED" 75
+      fi
+      record_in_progress "$release_id" "$backup_file"
+      migration_arguments=(
+        migrate
+        --release-id "$release_id"
+        --expected-applied-count "$expected_applied_count"
+        --expected-applied-journal-hash "$expected_applied_journal_hash"
+      )
+      if [[ $migration_kind == "contract" ]]; then
+        migration_arguments+=(--allow-contract)
+      fi
+      migration_arguments+=(--json)
+      if ! migration_json="$(run_release_db_json "$candidate_env" "${migration_arguments[@]}")"; then
+        if jq -e \
+          '.status == "error" and .error.code == "MIGRATION_APPLIED_FACT_CHANGED"' \
+          <<<"$migration_json" >/dev/null 2>&1; then
+          # release-db checks this fact while holding the advisory lock and
+          # before invoking Drizzle. The ledger change therefore belongs to an
+          # external actor, not this release. Never overwrite it with our old
+          # backup and keep Dashboard writes stopped for incident review.
+          record_quarantine \
+            "migration-applied-fact-changed-before-ddl-dashboard-remains-stopped" \
+            "$release_id" "$backup_file"
+          die "MIGRATION_APPLIED_FACT_CHANGED_INCIDENT_QUARANTINED" 75
+        fi
+        log "MIGRATION_RESULT_UNKNOWN_RECONCILING"
+        recovery_plan="$(run_release_db_json "$candidate_env" plan --json)" || \
+          recovery_plan='{"status":"unknown"}'
+        if jq -e '.status == "exact" and .schema.status == "exact"' \
+          <<<"$recovery_plan" >/dev/null; then
+          log "MIGRATION_RECONCILED_EXACT"
+          migration_json="$recovery_plan"
+        else
+          restore_production_database "$backup_file" \
+            || die "DATABASE_RESTORE_FAILED_AFTER_MIGRATION_ERROR"
+          record_recovered_incident "$candidate_env" \
+            "migration-result-unknown-database-restored" \
+            "APPLICATION_ROLLBACK_FAILED_AFTER_MIGRATION_ERROR_STATE_PRESERVED" \
+            "$release_id" "$backup_file"
+          die "DATABASE_MIGRATION_UNKNOWN_NOT_RERUN"
+        fi
+      fi
+      jq -e '.status == "exact" and .schema.status == "exact"' \
+        <<<"$migration_json" >/dev/null || {
+        restore_production_database "$backup_file" \
+          || die "DATABASE_RESTORE_FAILED_AFTER_MIGRATION_MISMATCH"
+        record_recovered_incident "$candidate_env" \
+          "migration-result-not-exact-database-restored" \
+          "APPLICATION_ROLLBACK_FAILED_AFTER_MIGRATION_MISMATCH_STATE_PRESERVED" \
+          "$release_id" "$backup_file"
+        die "DATABASE_MIGRATION_RESULT_NOT_EXACT"
+      }
+      postflight_json="$(run_release_db_json "$candidate_env" postflight --json)" || {
+        restore_production_database "$backup_file" || die "DATABASE_RESTORE_FAILED_AFTER_POSTFLIGHT_ERROR"
+        record_recovered_incident "$candidate_env" \
+          "postflight-failed-database-restored" \
+          "APPLICATION_ROLLBACK_FAILED_AFTER_POSTFLIGHT_ERROR_STATE_PRESERVED" \
+          "$release_id" "$backup_file"
+        die "DATABASE_POSTFLIGHT_FAILED"
+      }
+      jq -e '.status == "exact" and .schema.status == "exact"' \
+        <<<"$postflight_json" >/dev/null || {
+        restore_production_database "$backup_file" || die "DATABASE_RESTORE_FAILED_AFTER_POSTFLIGHT_MISMATCH"
+        record_recovered_incident "$candidate_env" \
+          "postflight-not-exact-database-restored" \
+          "APPLICATION_ROLLBACK_FAILED_AFTER_POSTFLIGHT_MISMATCH_STATE_PRESERVED" \
+          "$release_id" "$backup_file"
+        die "DATABASE_POSTFLIGHT_NOT_EXACT"
+      }
+      journal_hash="$(jq -r '.journalHash // .expected.journalHash // ""' <<<"$postflight_json")"
+      database_changed=1
+      ;;
+    ahead)
+      record_failure "database-journal-ahead"
+      rotate_service_images "$current_digest" "$previous_digest"
+      die "DATABASE_JOURNAL_AHEAD" 78
+      ;;
+    diverged)
+      record_failure "database-journal-diverged"
+      rotate_service_images "$current_digest" "$previous_digest"
+      die "DATABASE_JOURNAL_DIVERGED" 78
+      ;;
+    *)
+      record_failure "database-plan-invalid-status"
+      rotate_service_images "$current_digest" "$previous_digest"
+      die "DATABASE_PLAN_STATUS_INVALID"
+      ;;
+  esac
+fi
+
+if [[ $current_digest == "$digest" && $unfinished_status != "in_progress" ]]; then
+  idempotent_deadline=$((SECONDS + 30))
+  if wait_until_ready "$source_sha" "$digest" "$idempotent_deadline"; then
+    write_state \
+      "$current_digest" "$previous_digest" "$current_source_sha" "$journal_hash" \
+      "$current_deployed_at" "success" "already-current" "$digest"
+    rotate_service_images "$current_digest" "$previous_digest"
+    log "DEPLOY_ALREADY_CURRENT service=${service} digest=${digest}"
+    exit 0
+  fi
+  record_failure "current-digest-unready-no-state-rotation"
+  die "CURRENT_DIGEST_UNREADY_REQUIRES_EXPLICIT_ROLLBACK" 75
+fi
+
+log "APPLICATION_ROLLOUT_START service=${service}"
+rollout_deadline=$((SECONDS + DEPLOY_TIMEOUT_SECONDS))
+candidate_ready_deadline=$((SECONDS + CANDIDATE_READY_BUDGET_SECONDS))
+if ! roll_out "$candidate_env" "$source_sha" "$digest" "$candidate_ready_deadline"; then
+  log "APPLICATION_ROLLOUT_FAILED"
+  compose "$candidate_env" stop "$COMPOSE_SERVICE" >/dev/null 2>&1 || true
+  if (( database_changed == 1 )); then
+    restore_production_database "$backup_file" || die "DATABASE_RESTORE_FAILED_AFTER_APPLICATION_ERROR"
+    record_recovered_failure "$candidate_env" \
+      "candidate-unready-previous-restored" \
+      "APPLICATION_ROLLBACK_FAILED_AFTER_CANDIDATE_ERROR_STATE_PRESERVED"
+    die "APPLICATION_READINESS_TIMEOUT"
+  fi
+  if restore_previous_application "$candidate_env" "$rollout_deadline"; then
+    record_failure "candidate-unready-previous-restored"
+    rotate_service_images "$current_digest" "$previous_digest"
+  else
+    record_failure "candidate-unready-rollback-failed"
+  fi
+  die "APPLICATION_READINESS_TIMEOUT"
+fi
+
+write_active_image_env "$image"
+deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+next_previous_digest="$current_digest"
+if [[ $current_digest == "$digest" ]]; then
+  next_previous_digest="$previous_digest"
+fi
+write_state \
+  "$digest" "$next_previous_digest" "$source_sha" "$journal_hash" \
+  "$deployed_at" "success" "ready" "$digest"
+
+if (( database_changed == 1 )); then
+  rotate_backups
+fi
+rotate_service_images "$digest" "$current_digest"
+log "DEPLOY_SUCCESS service=${service} digest=${digest} source=${source_sha}"

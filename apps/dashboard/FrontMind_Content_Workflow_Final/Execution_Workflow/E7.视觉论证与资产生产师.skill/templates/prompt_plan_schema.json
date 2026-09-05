@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e7-prompt-plan-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "images"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["visual_id", "role", "after_section_id", "alt_text", "supports_fact_ids", "prompt_guidance", "negative_constraints", "logo_overlay_asset_id"],
+        "properties": {
+          "visual_id": {"type": "string", "pattern": "^vis_"},
+          "role": {"enum": ["brand_editorial", "navigate", "explain"]},
+          "after_section_id": {"type": ["string", "null"]},
+          "alt_text": {"type": "string", "minLength": 1},
+          "supports_fact_ids": {"type": "array", "items": {"type": "string", "pattern": "^(?:fact|clm)_"}, "uniqueItems": true},
+          "prompt_guidance": {"type": "string", "minLength": 1},
+          "negative_constraints": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "logo_overlay_asset_id": {"type": ["string", "null"], "pattern": "^img_"}
+        }
+      }
+    }
+  }
+}

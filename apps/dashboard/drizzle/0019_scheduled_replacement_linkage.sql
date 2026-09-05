@@ -1,0 +1,1 @@
+ALTER TABLE `service_contracts` ADD `replacesContractIds` json DEFAULT ('[]') NOT NULL;

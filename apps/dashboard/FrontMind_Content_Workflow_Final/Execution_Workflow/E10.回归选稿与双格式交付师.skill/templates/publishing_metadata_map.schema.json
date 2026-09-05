@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/e10-publishing-metadata-map-v2.3.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "entries"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "job_id": {"type": "string", "pattern": "^job_"},
+    "entries": {
+      "type": "array", "minItems": 1, "maxItems": 20,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["title_id", "title", "h1", "meta_description", "structured_data_replacements"],
+        "properties": {
+          "title_id": {"type": "string", "pattern": "^title_[a-z0-9_-]+$"},
+          "title": {"type": "string", "minLength": 1, "maxLength": 120},
+          "h1": {"type": "string", "minLength": 1, "maxLength": 160},
+          "meta_description": {"type": "string", "minLength": 1, "maxLength": 300},
+          "structured_data_replacements": {
+            "type": "object", "additionalProperties": false,
+            "required": ["{{TITLE}}", "{{META_DESCRIPTION}}"],
+            "properties": {
+              "{{TITLE}}": {"type": "string", "minLength": 1, "maxLength": 120},
+              "{{META_DESCRIPTION}}": {"type": "string", "minLength": 1, "maxLength": 300}
+            }
+          }
+        }
+      }
+    }
+  }
+}

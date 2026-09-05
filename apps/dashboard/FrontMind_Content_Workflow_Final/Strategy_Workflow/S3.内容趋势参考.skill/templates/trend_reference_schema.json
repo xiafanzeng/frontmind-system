@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/trend-reference-v2.3.json",
+  "title": "FrontMind S3 Content Trend Reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage", "status", "brand", "reason", "trends", "warnings"],
+  "properties": {
+    "schema_version": {"const": "2.3.0"},
+    "stage": {"const": "S3_content_trend_reference"},
+    "status": {"enum": ["completed", "skipped_optional"]},
+    "brand": {"type": "string", "minLength": 1},
+    "reason": {"type": ["string", "null"]},
+    "trends": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["trend_id", "statement", "what_changed", "observed_at", "geographic_scope", "source", "content_impact", "freshness_rule"],
+        "properties": {
+          "trend_id": {"type": "string", "pattern": "^trend_[0-9]{3}$"},
+          "statement": {"type": "string", "minLength": 1},
+          "what_changed": {"type": "string", "minLength": 1},
+          "observed_at": {"type": "string", "minLength": 1},
+          "geographic_scope": {"type": "string", "minLength": 1},
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "url"],
+            "properties": {"name": {"type": "string", "minLength": 1}, "url": {"type": "string", "format": "uri"}}
+          },
+          "content_impact": {"type": "string", "minLength": 1},
+          "freshness_rule": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}

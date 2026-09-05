@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""Adversarial E3 v2.1 intake tests for the complete E2 evidence chain."""
+
+from __future__ import annotations
+
+import contextlib
+import copy
+import importlib.util
+import io
+import json
+import sys
+import tempfile
+import unittest
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import patch
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+EXECUTION_ROOT = SKILL_ROOT.parent
+E2_SCRIPT_ROOT = EXECUTION_ROOT / "E2.单问题监控与标杆拆解师.skill" / "scripts"
+SCRIPT_ROOT = SKILL_ROOT / "scripts"
+QUESTION = "哪家 GEO 服务商值得选?"
+JOB_ID = "job_e3_v21_freeze_test"
+
+
+def load_script(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(f"e3_v21_test_{name}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+INTAKE = load_script("intake_validator", SCRIPT_ROOT / "intake_validator.py")
+RETRIEVER = load_script("safe_page_retriever", E2_SCRIPT_ROOT / "safe_page_retriever.py")
+REVIEWER = load_script("apply_page_analysis_review", E2_SCRIPT_ROOT / "apply_page_analysis_review.py")
+BUILDER = load_script("pattern_analysis_builder", E2_SCRIPT_ROOT / "pattern_analysis_builder.py")
+
+
+def write_json(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def signed_registry() -> dict[str, object]:
+    patterns: list[dict[str, object]] = []
+    for number in range(1, 17):
+        pattern_id = f"P{number:02d}"
+        component_id = f"{pattern_id}_component_core"
+        contract: dict[str, object] = {
+            "eligible_content_forms": ["comparison_review"],
+            "positive_intent_signals": [],
+            "typical_structure_signals": [],
+            "exclusion_signals": [],
+            "confusable_patterns": [],
+        }
+        if pattern_id == "P01":
+            contract.update({
+                "positive_intent_signals": [
+                    {"signal_id": "P01_intent_rank", "cues": ["服务商排行"]},
+                ],
+                "typical_structure_signals": [
+                    {"component_id": component_id, "cues": ["评价标准"]},
+                ],
+            })
+        patterns.append({
+            "id": pattern_id,
+            "trigger_signals": ["值得选"] if pattern_id == "P01" else [],
+            "structure_components": [{"component_id": component_id}],
+            "classification_contract": contract,
+        })
+    return {
+        "schema_version": "2.1.0",
+        "routing": {
+            "industry_ranking": {
+                "primary_patterns": ["P01"],
+                "secondary_patterns": [],
+            },
+            "foundation_start": {
+                "primary_patterns": ["P14"],
+                "secondary_patterns": [],
+            },
+        },
+        "patterns": patterns,
+    }
+
+
+def signed_research() -> dict[str, object]:
+    return {
+        "schema_version": "2.1.0",
+        "patterns": [
+            {
+                "id": f"P{number:02d}",
+                "structure_components": [
+                    {"component_id": f"P{number:02d}_component_core"},
+                ],
+            }
+            for number in range(1, 17)
+        ],
+    }
+
+
+class IntakeV21FreezeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.pack_dir = self.root / "00_reference_pack"
+        self.job_dir = self.root / "00_job"
+        self.monitoring_dir = self.root / "01_monitoring"
+        self.e2_dir = self.root / "02_pattern_analysis"
+        for directory in (self.pack_dir, self.job_dir, self.monitoring_dir, self.e2_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+        self.registry_path = self.pack_dir / "content-pattern-registry.json"
+        self.research_path = self.pack_dir / "pattern-research-index.json"
+        write_json(self.registry_path, signed_registry())
+        write_json(self.research_path, signed_research())
+
+        self.architecture_path = self.pack_dir / "information-evidence-architecture.json"
+        write_json(self.architecture_path, {"schema_version": "2.1.0"})
+        self.reference_pack_path = self.pack_dir / "reference_pack.json"
+        self.pack = {
+            "schema_version": "2.1.0",
+            "profile": "frontmind-content-reference-pack-v2.1",
+            "pack_id": "pack_e3_v21_freeze_test",
+            "version": "2.1.0-test",
+            "brand": {"canonical_name": "测试品牌", "aliases": ["测试"]},
+            "content_pattern_registry_path": self.registry_path.name,
+            "content_pattern_research_index_path": self.research_path.name,
+            "writing_assets": {
+                "information_evidence_architecture_path": self.architecture_path.name,
+            },
+            "files": [{
+                "path": self.architecture_path.name,
+                "role": "information_evidence_architecture",
+                "sha256": INTAKE.sha256(self.architecture_path),
+            }],
+        }
+        write_json(self.reference_pack_path, self.pack)
+
+        self.source_zip = self.root / "source-reference-pack.zip"
+        self.source_zip.write_bytes(b"immutable source ZIP receipt fixture")
+        self.staging_receipt_path = self.job_dir / "staging-receipt.json"
+        write_json(self.staging_receipt_path, {
+            "pack_id": self.pack["pack_id"],
+            "pack_version": self.pack["version"],
+            "reference_pack_path": self.reference_pack_path.relative_to(self.root).as_posix(),
+            "staged_package_dir": self.pack_dir.relative_to(self.root).as_posix(),
+            "source_zip_file": self.source_zip.name,
+            "source_zip_sha256": INTAKE.sha256(self.source_zip),
+            "canonical_pre_validation": "pass",
+            "canonical_post_validation": "pass",
+        })
+
+        self.scope_path = self.job_dir / "scope-analysis.json"
+        write_json(self.scope_path, {"schema_version": "2.1.0", "job_id": JOB_ID})
+        self.workbook_path = self.monitoring_dir / "dashboard_source_workbook.xlsx"
+        self.workbook_path.write_bytes(b"single-question Dashboard workbook fixture")
+        self._make_monitoring()
+        self._make_e2_analysis_with_human_receipt()
+        self.job_path = self.job_dir / "content-job.json"
+        write_json(self.job_path, self._ordinary_job())
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _ordinary_job(self) -> dict[str, object]:
+        return {
+            "schema_version": "2.1.0",
+            "job_id": JOB_ID,
+            "pack_id": self.pack["pack_id"],
+            "entry_category": "industry_ranking",
+            "task": {
+                "question_text": QUESTION,
+                "question_origin": "external_confirmed",
+                "foundation_subject": None,
+                "manual_foundation_selection": False,
+                "product_scenario_subintent": None,
+            },
+            "scope_analysis_path": self.scope_path.relative_to(self.root).as_posix(),
+            "monitoring_input_path": self.monitoring_path.relative_to(self.root).as_posix(),
+            "source_workbook_path": self.workbook_path.relative_to(self.root).as_posix(),
+            "e2_pattern_analysis_path": self.e2_path.relative_to(self.root).as_posix(),
+            "optimizer_target": {"dataset": "frontmind-e3-test", "engine_llm": "test-engine"},
+            "deliverables": {"docx_body": True, "html_body_fragment": True, "title_map": True},
+            "editorial_profile": "third_party_objective_with_evidence_based_brand_promotion",
+            "user_constraints": [],
+        }
+
+    def _foundation_job(self) -> dict[str, object]:
+        job = self._ordinary_job()
+        job.update({
+            "entry_category": "foundation_start",
+            "monitoring_input_path": None,
+            "source_workbook_path": None,
+            "e2_pattern_analysis_path": None,
+            "task": {
+                "question_text": None,
+                "question_origin": "foundation_derived",
+                "foundation_subject": "品牌基础事实说明",
+                "manual_foundation_selection": True,
+                "product_scenario_subintent": None,
+            },
+        })
+        return job
+
+    def _make_monitoring(self) -> None:
+        self.answers_table = self.monitoring_dir / "answers.csv"
+        self.sources_table = self.monitoring_dir / "sources.csv"
+        self.answers_table.write_text("answer_id,answer\na1,测试答案\n", encoding="utf-8")
+        self.sources_table.write_text("source_id,url\ns1,https://article.example/1\n", encoding="utf-8")
+        self.monitoring_path = self.monitoring_dir / "monitoring_input.json"
+        write_json(self.monitoring_path, {
+            "schema_version": "2.1.0",
+            "job_id": JOB_ID,
+            "question": QUESTION,
+            "analysis_status": "available",
+            "answers": [{"answer_id": "a1"}],
+            "source_observations": [{"record_id": "s1"}],
+            "input_files": {
+                "answers_table_path": self.answers_table.relative_to(self.root).as_posix(),
+                "answers_table_sha256": INTAKE.sha256(self.answers_table),
+                "sources_table_path": self.sources_table.relative_to(self.root).as_posix(),
+                "sources_table_sha256": INTAKE.sha256(self.sources_table),
+            },
+            "derived": {
+                "answer_landscape": [{"answer_id": "a1"}],
+                "competitors": [],
+                "excluded_observations": [],
+            },
+        })
+
+    @staticmethod
+    def _fake_fetcher(url: str, timeout: float, max_bytes: int) -> dict[str, object]:
+        del timeout, max_bytes
+        body = (
+            "<html><title>GEO 服务商排行榜</title><h1>服务商排行榜</h1>"
+            "<h2>评价标准</h2><p>逐项解释评价标准和选择依据。</p></html>"
+        ).encode("utf-8")
+        return {
+            "final_url": url,
+            "redirect_chain": [],
+            "http_status": 200,
+            "mime_type": "text/html",
+            "body": body,
+            "charset": "utf-8",
+            "approved_addresses": ["8.8.8.8"],
+            "connected_peer_ip": "8.8.8.8",
+        }
+
+    def _make_e2_analysis_with_human_receipt(self) -> None:
+        self.source_pool_path = self.e2_dir / "dashboard-source-pool.json"
+        source_pool = {
+            "schema_version": "2.1.0",
+            "artifact_type": "E2_dashboard_source_pool",
+            "job_id": JOB_ID,
+            "question": QUESTION,
+            "entry_category": "industry_ranking",
+            "product_scenario_subintent": None,
+            "created_at": "2026-08-12T00:00:00+00:00",
+            "source_workbook_receipt": {
+                "source_path": self.workbook_path.relative_to(self.root).as_posix(),
+                "sha256": INTAKE.sha256(self.workbook_path),
+                "sheet_names": ["内容统计", "详细表格", "字段说明"],
+                "effective_ranges": {"内容统计": "A1:I2", "详细表格": "A1:G2", "字段说明": "A1:B6"},
+                "normalized_question": QUESTION,
+                "content_status_ignored": True,
+                "ranking_basis": "dashboard_citation_rank",
+                "citation_rank_definition": "citation_count_descending",
+                "dashboard_total_citation_count": 2,
+                "top20_citation_count": 2,
+            },
+            "pool_status": "partial_pool",
+            "cited_content_pool": [{
+                "raw_rank": 1,
+                "content_title": "GEO 服务商排行榜",
+                "original_url": "https://article.example/1",
+                "canonical_url": "https://article.example/1",
+                "media_name": "测试媒体",
+                "media_domain": "article.example",
+                "citation_date_range": {"from": None, "to": None},
+                "citation_count": 2,
+                "citation_share": 1.0,
+                "detailed_row_refs": [2],
+            }],
+        }
+        write_json(self.source_pool_path, source_pool)
+
+        registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
+        research = json.loads(self.research_path.read_text(encoding="utf-8"))
+        self.retrieval_dir = self.e2_dir / "retrieval"
+        with patch.object(RETRIEVER, "validate_public_url", return_value=["8.8.8.8"]):
+            automatic = RETRIEVER.build_page_analysis(
+                source_pool, registry, research, self.root, self.retrieval_dir,
+                self._fake_fetcher, 5, 1024 * 1024,
+            )
+        automatic["source_pool_sha256"] = INTAKE.sha256(self.source_pool_path)
+        automatic["pattern_registry_sha256"] = INTAKE.sha256(self.registry_path)
+        automatic["pattern_research_index_sha256"] = INTAKE.sha256(self.research_path)
+        self.automatic_path = self.e2_dir / "automatic-page-analysis.json"
+        write_json(self.automatic_path, automatic)
+
+        self.review_input_path = self.e2_dir / "human-review-input.json"
+        write_json(self.review_input_path, {
+            "schema_version": "2.1.0",
+            "job_id": JOB_ID,
+            "review_id": "e2review_e3_freeze_01",
+            "reviewer": "reviewer@example.test",
+            "reviewer_role": "senior content pattern reviewer",
+            "reviewed_at": "2026-08-12T08:00:00+00:00",
+            "attestation": "I reviewed the hash-bound structural evidence and confirm this decision.",
+            "decisions": [{
+                "raw_rank": 1,
+                "action": "confirm",
+                "replacement_status": None,
+                "replacement_content_form": None,
+                "classification": None,
+                "rationale": "人工复核确认该页面的意图信号和结构信号均符合 P01。",
+            }],
+        })
+        self.reviewed_path = self.e2_dir / "reviewed-page-analysis.json"
+        self.human_receipt_path = self.e2_dir / "human-review-receipt.json"
+        review_argv = [
+            "apply_page_analysis_review.py",
+            "--auto-page-analysis", str(self.automatic_path),
+            "--review", str(self.review_input_path),
+            "--package-root", str(self.root),
+            "--output", str(self.reviewed_path),
+            "--receipt", str(self.human_receipt_path),
+        ]
+        with patch.object(sys, "argv", review_argv), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(REVIEWER.main(), 0)
+
+        self.e2_path = self.e2_dir / "e2-pattern-analysis.json"
+        builder_argv = [
+            "pattern_analysis_builder.py",
+            "--source-pool", str(self.source_pool_path),
+            "--page-analysis", str(self.reviewed_path),
+            "--page-analysis-review-receipt", str(self.human_receipt_path),
+            "--pattern-registry", str(self.registry_path),
+            "--pattern-research-index", str(self.research_path),
+            "--package-root", str(self.root),
+            "--output", str(self.e2_path),
+        ]
+        with patch.object(sys, "argv", builder_argv), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(BUILDER.main(), 0)
+
+    def _run_intake(
+        self, report_name: str, *, job: dict[str, object] | None = None,
+        forbid_e2_validation: bool = False,
+    ) -> tuple[int, dict[str, object]]:
+        selected_job = copy.deepcopy(job or self._ordinary_job())
+        write_json(self.job_path, selected_job)
+        report_path = self.root / "03_intake" / report_name
+        argv = [
+            "intake_validator.py",
+            "--content-job", str(self.job_path),
+            "--reference-pack", str(self.reference_pack_path),
+            "--scope-analysis", str(self.scope_path),
+            "--staging-receipt", str(self.staging_receipt_path),
+            "--source-zip", str(self.source_zip),
+            "--package-root", str(self.root),
+            "--report", str(report_path),
+        ]
+        if selected_job["entry_category"] != "foundation_start":
+            argv.extend([
+                "--monitoring-input", str(self.monitoring_path),
+                "--source-workbook", str(self.workbook_path),
+                "--e2-pattern-analysis", str(self.e2_path),
+            ])
+        registries = {
+            name: {"registry_type": name}
+            for name in ("knowledge_registry", "source_registry", "claim_registry", "image_registry")
+        }
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", argv))
+            stack.enter_context(patch.object(INTAKE, "validate_schema", return_value=None))
+            stack.enter_context(patch.object(INTAKE, "validate_root", return_value=None))
+            stack.enter_context(patch.object(
+                INTAKE, "run_root_pack_validator", return_value={"status": "pass", "errors": []},
+            ))
+            stack.enter_context(patch.object(INTAKE, "validate_pack", return_value=(registries, {})))
+            if forbid_e2_validation:
+                stack.enter_context(patch.object(
+                    INTAKE, "validate_e2_relations",
+                    side_effect=AssertionError("foundation_start must not call E2 validation"),
+                ))
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = INTAKE.main()
+        return result, json.loads(report_path.read_text(encoding="utf-8"))
+
+    def _human_reference_paths(self) -> list[Path]:
+        receipt = json.loads(self.human_receipt_path.read_text(encoding="utf-8"))
+        return [
+            self.root / receipt[key]["path"]
+            for key in (
+                "automatic_page_analysis_ref", "review_input_ref", "reviewed_page_analysis_ref",
+            )
+        ]
+
+    def test_ordinary_report_freezes_every_e2_and_monitoring_artifact(self) -> None:
+        result, report = self._run_intake("ordinary-pass.json")
+        self.assertEqual(result, 0, report["errors"])
+        self.assertEqual(report["status"], "passed")
+
+        analysis = json.loads(self.e2_path.read_text(encoding="utf-8"))
+        observation = analysis["content_observations"][0]
+        snapshot_path = self.root / observation["retrieval_receipt"]["snapshot_relative_path"]
+        extract_path = self.root / observation["retrieval_receipt"]["extract_relative_path"]
+        expected_frozen_paths = {
+            self.workbook_path,
+            snapshot_path,
+            extract_path,
+            self.human_receipt_path,
+            *self._human_reference_paths(),
+        }
+        frozen = report["e2_frozen_artifact_sha256"]
+        self.assertEqual(
+            set(frozen),
+            {path.relative_to(self.root).as_posix() for path in expected_frozen_paths},
+        )
+        for path in expected_frozen_paths:
+            relative = path.relative_to(self.root).as_posix()
+            self.assertEqual(frozen[relative], INTAKE.sha256(path))
+
+        self.assertEqual(report["source_workbook_sha256"], INTAKE.sha256(self.workbook_path))
+        self.assertEqual(report["monitoring_input_file_sha256"], INTAKE.sha256(self.monitoring_path))
+        self.assertEqual(
+            report["monitoring_input_sha256"],
+            INTAKE.canonical_sha256(json.loads(self.monitoring_path.read_text(encoding="utf-8"))),
+        )
+        self.assertEqual(report["e2_pattern_analysis_sha256"], INTAKE.sha256(self.e2_path))
+        self.assertEqual(
+            report["e2_pattern_analysis_canonical_sha256"],
+            INTAKE.canonical_sha256(json.loads(self.e2_path.read_text(encoding="utf-8"))),
+        )
+        self.assertEqual(report["content_pattern_registry_sha256"], INTAKE.sha256(self.registry_path))
+        self.assertEqual(report["pattern_research_index_sha256"], INTAKE.sha256(self.research_path))
+
+    def test_tampering_any_bound_input_or_receipt_link_fails_intake(self) -> None:
+        analysis = json.loads(self.e2_path.read_text(encoding="utf-8"))
+        observation = analysis["content_observations"][0]
+        snapshot_path = self.root / observation["retrieval_receipt"]["snapshot_relative_path"]
+        extract_path = self.root / observation["retrieval_receipt"]["extract_relative_path"]
+        automatic_path, review_input_path, reviewed_path = self._human_reference_paths()
+
+        append_only_targets = {
+            "dashboard_workbook": self.workbook_path,
+            "registry": self.registry_path,
+            "research_index": self.research_path,
+            "snapshot": snapshot_path,
+            "extract": extract_path,
+            "human_receipt": self.human_receipt_path,
+            "review_automatic_ref": automatic_path,
+            "review_input_ref": review_input_path,
+            "reviewed_page_ref": reviewed_path,
+            "monitoring_answers_table": self.answers_table,
+        }
+        for label, path in append_only_targets.items():
+            with self.subTest(artifact=label):
+                original = path.read_bytes()
+                try:
+                    path.write_bytes(original + b"\n")
+                    result, report = self._run_intake(f"tampered-{label}.json")
+                    self.assertEqual(result, 1, report["errors"])
+                    self.assertEqual(report["status"], "failed")
+                    self.assertTrue(report["errors"], label)
+                finally:
+                    path.write_bytes(original)
+
+        with self.subTest(artifact="monitoring_input"):
+            original = self.monitoring_path.read_bytes()
+            try:
+                monitoring = json.loads(original)
+                monitoring["question"] = "被篡改的另一个问题"
+                write_json(self.monitoring_path, monitoring)
+                result, report = self._run_intake("tampered-monitoring-input.json")
+                self.assertEqual(result, 1, report["errors"])
+                self.assertTrue(any("monitoring_input.question" in item for item in report["errors"]))
+            finally:
+                self.monitoring_path.write_bytes(original)
+
+        with self.subTest(artifact="e2_pattern_analysis"):
+            original = self.e2_path.read_bytes()
+            try:
+                e2 = json.loads(original)
+                e2["recommendation"]["advisory_only"] = False
+                write_json(self.e2_path, e2)
+                result, report = self._run_intake("tampered-e2-analysis.json")
+                self.assertEqual(result, 1, report["errors"])
+                self.assertTrue(any("advisory_only" in item for item in report["errors"]))
+            finally:
+                self.e2_path.write_bytes(original)
+
+    def test_foundation_start_skips_monitoring_workbook_and_e2(self) -> None:
+        result, report = self._run_intake(
+            "foundation-pass.json", job=self._foundation_job(), forbid_e2_validation=True,
+        )
+        self.assertEqual(result, 0, report["errors"])
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["checks"]["monitoring_input"], "not_applicable")
+        self.assertEqual(report["checks"]["e2_pattern_analysis"], "not_applicable")
+        for key in (
+            "source_workbook_sha256", "monitoring_input_sha256", "monitoring_input_file_sha256",
+            "e2_pattern_analysis_sha256", "e2_pattern_analysis_canonical_sha256",
+        ):
+            self.assertIsNone(report[key], key)
+        self.assertEqual(report["e2_frozen_artifact_sha256"], {})
+        self.assertEqual(report["e2_retrieval_artifact_sha256"], {})
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

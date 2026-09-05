@@ -1,0 +1,7 @@
+interface:
+  display_name: "品牌全域词库"
+  short_description: "基于企业知识库和套餐额度生成可核验的企业专属候选问题"
+  brand_color: "#6D28D9"
+  default_prompt: "Use $brand-question-portfolio to generate evidence-backed GEO question candidates for the active service quota."
+policy:
+  allow_implicit_invocation: false

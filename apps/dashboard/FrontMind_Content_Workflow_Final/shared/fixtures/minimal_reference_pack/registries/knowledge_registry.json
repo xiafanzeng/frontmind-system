@@ -1,0 +1,19 @@
+{
+  "schema_version": "2.2.0",
+  "registry_type": "knowledge_registry",
+  "knowledge_units": [
+    {
+      "knowledge_id": "kn_brand_overview",
+      "title": "品牌与服务概览",
+      "kind": "brand_overview",
+      "content": "匿名示例企业提供资料整理、事实提炼、写作结构设计和双格式交付支持。",
+      "package_path": "materials/brand_overview.md",
+      "source_ids": [
+        "src_brand_overview"
+      ],
+      "asset_ids": [],
+      "usage_status": "usable",
+      "qualification": null
+    }
+  ]
+}

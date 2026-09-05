@@ -1,0 +1,82 @@
+{
+  "fixtureId": "frontmind-manual-service-order-v1-2026-08-02",
+  "externalWechatFlow": {
+    "created": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "manual-order-20260802",
+        "projectId": "website-project-20260802",
+        "status": "pending_admin",
+        "message": "签约资料已记录，等待管理员确认",
+        "updatedAt": "2026-08-02T08:00:00.000Z"
+      }
+    },
+    "authorized": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "manual-order-20260802",
+        "projectId": "website-project-20260802",
+        "status": "payment_required",
+        "contractAuthorizationMode": "external_wechat",
+        "contractAuthorizedAt": "2026-08-02T08:05:00.000Z",
+        "message": "合同已在企业微信确认，可以付款",
+        "updatedAt": "2026-08-02T08:05:00.000Z"
+      }
+    },
+    "paid": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "manual-order-20260802",
+        "projectId": "website-project-20260802",
+        "status": "account_setup_required",
+        "amountFen": 200000,
+        "contractAuthorizationMode": "external_wechat",
+        "contractAuthorizedAt": "2026-08-02T08:05:00.000Z",
+        "updatedAt": "2026-08-02T08:20:00.000Z"
+      }
+    },
+    "active": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "manual-order-20260802",
+        "projectId": "website-project-20260802",
+        "status": "active",
+        "amountFen": 200000,
+        "contractAuthorizationMode": "external_wechat",
+        "contractAuthorizedAt": "2026-08-02T08:05:00.000Z",
+        "provisioningReference": "website-provision-20260802",
+        "updatedAt": "2026-08-02T08:30:00.000Z"
+      },
+      "account": {
+        "username": "acme.geo",
+        "displayName": "Acme",
+        "workspaceUrl": "https://dashboard.frontmind.net/workspaces/acme"
+      }
+    }
+  },
+  "legacyElectronicSignatureFlow": {
+    "signatureRequired": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "legacy-order-20260701",
+        "projectId": "legacy-project-20260701",
+        "status": "signature_required",
+        "contractId": "esign-contract-20260701",
+        "signingUrl": "https://sign.frontmind.net/contracts/20260701",
+        "updatedAt": "2026-07-01T08:00:00.000Z"
+      }
+    },
+    "paid": {
+      "schemaVersion": 1,
+      "order": {
+        "reference": "legacy-order-20260701",
+        "projectId": "legacy-project-20260701",
+        "status": "account_setup_required",
+        "amountFen": 200000,
+        "contractId": "esign-contract-20260701",
+        "signedAt": "2026-07-01T08:10:00.000Z",
+        "updatedAt": "2026-07-01T08:20:00.000Z"
+      }
+    }
+  }
+}

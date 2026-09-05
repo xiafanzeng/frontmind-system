@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""Adversarial fake-fetcher tests for E2 safe page retrieval artifacts."""
+
+from __future__ import annotations
+
+import copy
+import importlib.util
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+sys.dont_write_bytecode = True
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SHARED_ROOT = SKILL_ROOT.parent / "shared"
+
+
+def load_script(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(f"e2_test_{name}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+RETRIEVER = load_script("safe_page_retriever", SKILL_ROOT / "scripts" / "safe_page_retriever.py")
+CONTRACT = load_script("e2_pattern_contract", SHARED_ROOT / "e2_pattern_contract.py")
+
+
+def registry() -> dict[str, object]:
+    patterns: list[dict[str, object]] = []
+    for number in range(1, 17):
+        pattern_id = f"P{number:02d}"
+        component_id = f"{pattern_id}_component_core"
+        contract = {
+            "eligible_content_forms": ["comparison_review"],
+            "positive_intent_signals": [],
+            "typical_structure_signals": [],
+            "exclusion_signals": [],
+        }
+        if pattern_id == "P01":
+            contract["positive_intent_signals"] = [
+                {"signal_id": "P01_intent_best", "cues": ["最佳选择"]},
+            ]
+            contract["typical_structure_signals"] = [
+                {"component_id": component_id, "cues": ["排名依据"]},
+            ]
+        patterns.append({
+            "id": pattern_id,
+            "trigger_signals": ["哪家"],
+            "structure_components": [{"component_id": component_id}],
+            "classification_contract": contract,
+        })
+    return {
+        "schema_version": "2.1.0",
+        "routing": {
+            "industry_ranking": {"primary_patterns": ["P01"], "secondary_patterns": []},
+        },
+        "patterns": patterns,
+    }
+
+
+def research_index() -> dict[str, object]:
+    return {
+        "schema_version": "2.1.0",
+        "patterns": [{
+            "id": "P01",
+            "structure_components": [{"component_id": "P01_component_core"}],
+        }],
+    }
+
+
+def pool_item(rank: int, original_url: str, canonical_url: str | None = None) -> dict[str, object]:
+    return {
+        "raw_rank": rank,
+        "content_title": f"页面 {rank}",
+        "original_url": original_url,
+        "canonical_url": canonical_url or original_url,
+        "media_name": "测试媒体",
+        "media_domain": "example.test",
+        "citation_date_range": {"from": None, "to": None},
+        "citation_count": 1,
+        "citation_share": 1,
+        "detailed_row_refs": [rank + 1],
+    }
+
+
+class SafePageRetrieverTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.artifact_dir = self.root / "retrieval"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    @staticmethod
+    def validator(url: str) -> list[str]:
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("only absolute HTTP(S) URLs are retrievable")
+        return ["93.184.216.34"]
+
+    @staticmethod
+    def fake_fetcher(url: str, timeout: float, max_bytes: int) -> dict[str, object]:
+        del timeout, max_bytes
+        if "unavailable" in url:
+            raise ValueError("simulated upstream outage")
+        if "qcc.com" in url:
+            body = b"<html><title>Company Registry</title><h1>Company</h1><p>record</p></html>"
+        else:
+            padding = "这是用于证明全文不会持久化的长正文。" * 80
+            body = (
+                "<html><title>2026 GEO 排行榜</title><h1>最佳选择</h1>"
+                f"<h2>排名依据</h2><p>{padding}</p><p>FULL_SOURCE_SECRET_TAIL</p></html>"
+            ).encode("utf-8")
+        return {
+            "final_url": url,
+            "redirect_chain": [],
+            "http_status": 200,
+            "mime_type": "text/html",
+            "body": body,
+            "charset": "utf-8",
+            "approved_addresses": ["93.184.216.34"],
+            "connected_peer_ip": "93.184.216.34",
+        }
+
+    def source_pool(self, items: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            "schema_version": "2.1.0",
+            "artifact_type": "E2_dashboard_source_pool",
+            "job_id": "job_e2_retriever_test",
+            "question": "哪家 GEO 服务商值得选？",
+            "entry_category": "industry_ranking",
+            "product_scenario_subintent": None,
+            "created_at": "2026-08-12T00:00:00+00:00",
+            "source_workbook_receipt": {},
+            "pool_status": "partial_pool",
+            "cited_content_pool": items,
+        }
+
+    def build(self, items: list[dict[str, object]]) -> dict[str, object]:
+        with patch.object(RETRIEVER, "validate_public_url", self.validator):
+            return RETRIEVER.build_page_analysis(
+                self.source_pool(items), registry(), research_index(), self.root,
+                self.artifact_dir, self.fake_fetcher, 5, 1024 * 1024,
+            )
+
+    def test_fake_fetcher_finalizes_all_five_statuses_without_backfill(self) -> None:
+        first = "https://article.example/ranking?utm_source=monitor"
+        items = [
+            pool_item(1, first, "https://article.example/ranking"),
+            pool_item(2, "https://qcc.com/company/123"),
+            pool_item(3, "https://article.example/ranking?utm_source=alias", "https://article.example/ranking"),
+            pool_item(4, "file:///etc/passwd"),
+            pool_item(5, "https://unavailable.example/page"),
+        ]
+
+        result = self.build(items)
+
+        statuses = [item["status"] for item in result["content_observations"]]
+        self.assertEqual(statuses, [
+            "classified_article", "non_article", "duplicate_alias", "unsafe_url", "unavailable",
+        ])
+        self.assertEqual(
+            {item["review_status"] for item in result["content_observations"]},
+            {"machine_classified"},
+        )
+        self.assertEqual(len(result["content_observations"]), len(items))
+        self.assertEqual(result["content_observations"][0]["content_form"], "comparison_review")
+        self.assertEqual(result["content_observations"][1]["content_form"], "company_registry")
+        self.assertIsNone(result["content_observations"][2]["classification"])
+        self.assertEqual(
+            result["content_observations"][2]["retrieval_receipt"]["extraction_status"],
+            "not_attempted",
+        )
+
+    def test_successful_fetches_persist_only_structural_json_not_full_source(self) -> None:
+        items = [
+            pool_item(1, "https://article.example/ranking"),
+            pool_item(2, "https://qcc.com/company/123"),
+            pool_item(3, "https://unavailable.example/page"),
+        ]
+
+        result = self.build(items)
+
+        files = sorted(path.relative_to(self.artifact_dir).as_posix() for path in self.artifact_dir.rglob("*") if path.is_file())
+        self.assertEqual(files, [
+            "rank_01/extract.json", "rank_01/snapshot.json",
+            "rank_02/extract.json", "rank_02/snapshot.json",
+        ])
+        serialized = "\n".join((self.artifact_dir / name).read_text(encoding="utf-8") for name in files)
+        self.assertNotIn("FULL_SOURCE_SECRET_TAIL", serialized)
+        self.assertNotIn("<html>", serialized.casefold())
+        for observation in result["content_observations"][:2]:
+            receipt = observation["retrieval_receipt"]
+            snapshot = json.loads((self.root / receipt["snapshot_relative_path"]).read_text(encoding="utf-8"))
+            extract = json.loads((self.root / receipt["extract_relative_path"]).read_text(encoding="utf-8"))
+            self.assertNotIn("body", snapshot)
+            self.assertNotIn("visible_text", extract)
+            self.assertLessEqual(len(extract["short_excerpt"]), 500)
+            self.assertTrue(all(len(value) <= 80 for value in extract["observed_cues"].values()))
+            self.assertLessEqual(sum(len(value) for value in extract["observed_cues"].values()), 2000)
+            self.assertEqual(len(set(extract["observed_cues"].values())), len(extract["observed_cues"]))
+            self.assertEqual(set(snapshot), CONTRACT.SNAPSHOT_ARTIFACT_KEYS)
+            self.assertEqual(set(extract), CONTRACT.EXTRACT_ARTIFACT_KEYS)
+
+    def test_more_than_fifty_signed_cues_preserve_every_selected_id_witness(self) -> None:
+        crowded_registry = registry()
+        second = crowded_registry["patterns"][1]
+        second["classification_contract"]["eligible_content_forms"] = ["news_article"]
+        second["classification_contract"]["positive_intent_signals"] = [
+            {"signal_id": f"P02_filler_{number:02d}", "cues": [f"填充线索{number:02d}"]}
+            for number in range(60)
+        ]
+        filler = " ".join(f"填充线索{number:02d}" for number in range(60))
+
+        def crowded_fetcher(url: str, timeout: float, max_bytes: int) -> dict[str, object]:
+            del timeout, max_bytes
+            body = (
+                f"<html><title>2026 GEO 排行榜</title><h1>最佳选择</h1>"
+                f"<h2>排名依据</h2><p>{filler}</p></html>"
+            ).encode("utf-8")
+            return {
+                "final_url": url, "redirect_chain": [], "http_status": 200,
+                "mime_type": "text/html", "body": body, "charset": "utf-8",
+                "approved_addresses": ["93.184.216.34"], "connected_peer_ip": "93.184.216.34",
+            }
+
+        source_pool = self.source_pool([pool_item(1, "https://article.example/crowded")])
+        with patch.object(RETRIEVER, "validate_public_url", self.validator):
+            result = RETRIEVER.build_page_analysis(
+                source_pool, crowded_registry, research_index(), self.root,
+                self.artifact_dir, crowded_fetcher, 5, 1024 * 1024,
+            )
+        observation = result["content_observations"][0]
+        extract = json.loads(
+            (self.root / observation["retrieval_receipt"]["extract_relative_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(observation["classification"]["primary_pattern_id"], "P01")
+        self.assertTrue({"最佳选择", "排名依据"} <= set(extract["observed_cues"]))
+        self.assertLessEqual(len(extract["observed_cues"]), 50)
+        self.assertLessEqual(sum(len(value) for value in extract["observed_cues"].values()), 2000)
+
+        workbook = self.root / "crowded-dashboard.xlsx"
+        workbook.write_bytes(b"hash-bound-dashboard-workbook")
+        registry_path = self.root / "crowded-registry.json"
+        research_path = self.root / "crowded-research.json"
+        registry_path.write_text(json.dumps(crowded_registry, ensure_ascii=False), encoding="utf-8")
+        research_path.write_text(json.dumps(research_index(), ensure_ascii=False), encoding="utf-8")
+        observation["observation_id"] = "obs_rank_01"
+        observation["canonical_url"] = "https://article.example/crowded"
+        observation["classification"]["registry_sha256"] = CONTRACT.file_sha256(registry_path)
+        analysis = {
+            "job_id": source_pool["job_id"], "question": source_pool["question"],
+            "entry_category": "industry_ranking", "product_scenario_subintent": None,
+            "classifier_version": result["classifier_version"],
+            "source_workbook_receipt": {
+                "source_path": workbook.name, "sha256": CONTRACT.file_sha256(workbook),
+                "normalized_question": source_pool["question"], "content_status_ignored": True,
+                "citation_rank_definition": "citation_count_descending",
+                "dashboard_total_citation_count": 1, "top20_citation_count": 1,
+            },
+            "pool_status": "partial_pool", "cited_content_pool": source_pool["cited_content_pool"],
+            "content_observations": [observation],
+            "pattern_registry_ref": {"path": registry_path.name, "sha256": CONTRACT.file_sha256(registry_path)},
+            "pattern_research_index_ref": {"path": research_path.name, "sha256": CONTRACT.file_sha256(research_path)},
+            "human_review_receipt_ref": None,
+        }
+        analysis["recommendation"] = CONTRACT.compute_e2_recommendation(
+            analysis["cited_content_pool"], analysis["content_observations"], crowded_registry,
+            "industry_ranking", None, source_pool["question"],
+        )
+        errors, _ = CONTRACT.validate_e2_relations(
+            analysis, self.root, registry_path, research_path, workbook,
+        )
+        self.assertEqual(errors, [], errors)
+
+    def test_dns_resolution_rejects_any_private_address(self) -> None:
+        private_dns = [
+            (2, 1, 6, "", ("10.0.0.8", 443)),
+            (2, 1, 6, "", ("8.8.8.8", 443)),
+        ]
+
+        with patch.object(RETRIEVER.socket, "getaddrinfo", return_value=private_dns):
+            with self.assertRaisesRegex(ValueError, "non-global address"):
+                RETRIEVER._public_addresses("rebind.example", 443)
+
+    def test_connected_peer_rejects_private_address_even_if_dns_approved_it(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-global connected peer"):
+            RETRIEVER._validate_peer_address("10.0.0.8", ["10.0.0.8"])
+
+    def test_connected_peer_rejects_global_address_not_in_dns_approval_set(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unapproved connected peer"):
+            RETRIEVER._validate_peer_address("1.1.1.1", ["8.8.8.8"])
+
+    def valid_relational_analysis(self) -> tuple[dict[str, object], Path, Path]:
+        result = self.build([pool_item(1, "https://article.example/ranking")])
+        workbook = self.root / "dashboard.xlsx"
+        workbook.write_bytes(b"signed-workbook-placeholder")
+        registry_path = self.root / "content-pattern-registry.json"
+        research_path = self.root / "pattern-research-index.json"
+        registry_path.write_text(json.dumps(registry(), ensure_ascii=False), encoding="utf-8")
+        research_path.write_text(json.dumps(research_index(), ensure_ascii=False), encoding="utf-8")
+        observation = result["content_observations"][0]
+        observation["observation_id"] = "obs_rank_01"
+        observation["canonical_url"] = "https://article.example/ranking"
+        observation["classification"]["registry_sha256"] = CONTRACT.file_sha256(registry_path)
+        analysis = {
+            "job_id": "job_e2_retriever_test",
+            "question": "哪家 GEO 服务商值得选？",
+            "entry_category": "industry_ranking",
+            "product_scenario_subintent": None,
+            "classifier_version": result["classifier_version"],
+            "source_workbook_receipt": {
+                "source_path": "dashboard.xlsx", "sha256": CONTRACT.file_sha256(workbook),
+                "normalized_question": "哪家 GEO 服务商值得选？",
+                "content_status_ignored": True,
+                "citation_rank_definition": "citation_count_descending",
+                "dashboard_total_citation_count": 1,
+                "top20_citation_count": 1,
+            },
+            "pool_status": "partial_pool",
+            "cited_content_pool": [pool_item(1, "https://article.example/ranking")],
+            "content_observations": [observation],
+            "pattern_registry_ref": {
+                "path": registry_path.name, "sha256": CONTRACT.file_sha256(registry_path),
+            },
+            "pattern_research_index_ref": {
+                "path": research_path.name, "sha256": CONTRACT.file_sha256(research_path),
+            },
+            "human_review_receipt_ref": None,
+        }
+        analysis["recommendation"] = CONTRACT.compute_e2_recommendation(
+            analysis["cited_content_pool"], analysis["content_observations"], registry(),
+            analysis["entry_category"], analysis["product_scenario_subintent"], analysis["question"],
+        )
+        errors, _ = CONTRACT.validate_e2_relations(analysis, self.root, registry_path, research_path)
+        self.assertEqual(errors, [], "baseline relation fixture must be valid: " + "; ".join(errors))
+        return analysis, registry_path, research_path
+
+    def test_extract_file_tampering_fails_physical_hash_gate(self) -> None:
+        analysis, registry_path, research_path = self.valid_relational_analysis()
+        receipt = analysis["content_observations"][0]["retrieval_receipt"]
+        extract_path = self.root / receipt["extract_relative_path"]
+        extract_path.write_text(extract_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+        errors, _ = CONTRACT.validate_e2_relations(analysis, self.root, registry_path, research_path)
+
+        self.assertTrue(any("extract_relative_path" in error and "SHA256 changed" in error for error in errors), errors)
+
+    def test_rehashed_semantic_extract_tampering_still_fails_binding_gate(self) -> None:
+        analysis, registry_path, research_path = self.valid_relational_analysis()
+        receipt = analysis["content_observations"][0]["retrieval_receipt"]
+        extract_path = self.root / receipt["extract_relative_path"]
+        extract = json.loads(extract_path.read_text(encoding="utf-8"))
+        extract["body_sha256"] = "f" * 64
+        extract_path.write_text(json.dumps(extract, ensure_ascii=False), encoding="utf-8")
+        receipt["extract_sha256"] = CONTRACT.file_sha256(extract_path)
+
+        errors, _ = CONTRACT.validate_e2_relations(analysis, self.root, registry_path, research_path)
+
+        self.assertTrue(any("body_sha256 differs" in error for error in errors), errors)
+
+    def test_forged_declared_snapshot_hash_fails_physical_hash_gate(self) -> None:
+        analysis, registry_path, research_path = self.valid_relational_analysis()
+        forged = copy.deepcopy(analysis)
+        forged["content_observations"][0]["retrieval_receipt"]["snapshot_sha256"] = "0" * 64
+
+        errors, _ = CONTRACT.validate_e2_relations(forged, self.root, registry_path, research_path)
+
+        self.assertTrue(any("snapshot_relative_path" in error and "SHA256 changed" in error for error in errors), errors)
+
+    def test_forged_recommendation_fails_deterministic_recomputation_gate(self) -> None:
+        analysis, registry_path, research_path = self.valid_relational_analysis()
+        forged = copy.deepcopy(analysis)
+        forged["recommendation"]["weighted_distribution"][0]["support_weight"] += 99
+
+        errors, _ = CONTRACT.validate_e2_relations(forged, self.root, registry_path, research_path)
+
+        self.assertTrue(any("differs from deterministic recomputation" in error for error in errors), errors)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

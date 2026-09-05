@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.local/schemas/reference-pack-approval-v2.json",
+  "title": "FrontMind Reference Pack Approval Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "brand",
+    "approval",
+    "input_files",
+    "pattern_registry_sha256",
+    "pattern_research_index_sha256",
+    "review_decisions",
+    "confirmations",
+    "workbook"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.0.0" },
+    "brand": { "type": "string", "minLength": 1 },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reviewer",
+        "reviewer_role",
+        "approved_at",
+        "conditions",
+        "unresolved_risks",
+        "notes"
+      ],
+      "properties": {
+        "status": { "enum": ["approved", "changes_requested"] },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "reviewer_role": { "type": "string", "minLength": 1 },
+        "approved_at": {
+          "oneOf": [
+            { "type": "string", "format": "date" },
+            { "type": "string", "format": "date-time" }
+          ]
+        },
+        "conditions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "unresolved_risks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "notes": { "type": "string" }
+      }
+    },
+    "input_files": {
+      "type": "array",
+      "minItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "file_name", "sha256", "bytes"],
+        "properties": {
+          "role": {
+            "enum": [
+              "adapter_report",
+              "knowledge_registry",
+              "source_registry",
+              "claim_registry",
+              "image_registry",
+              "brand_facts",
+              "information_evidence_architecture",
+              "voice_contract",
+              "visual_reference",
+              "question_library",
+              "pattern_registry",
+              "pattern_research_index",
+              "trend_reference"
+            ]
+          },
+          "file_name": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "bytes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "pattern_registry_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "pattern_research_index_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "review_decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sheet", "object_id", "decision", "requested_change", "notes"],
+        "properties": {
+          "sheet": {
+            "enum": ["声明与证据", "受众与话语", "问题覆盖", "视觉资产"]
+          },
+          "object_id": { "type": "string", "minLength": 1 },
+          "decision": { "enum": ["keep", "change", "block"] },
+          "requested_change": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "confirmations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "第一方资料公开授权与声明边界已确认",
+        "自适应决策情境与适用范围已确认",
+        "话语与竞品比较边界已确认",
+        "七意图与五入口参考资产已确认",
+        "图片权利与Logo规则已确认",
+        "未决风险与附带条件已确认"
+      ],
+      "properties": {
+        "第一方资料公开授权与声明边界已确认": { "type": "boolean" },
+        "自适应决策情境与适用范围已确认": { "type": "boolean" },
+        "话语与竞品比较边界已确认": { "type": "boolean" },
+        "七意图与五入口参考资产已确认": { "type": "boolean" },
+        "图片权利与Logo规则已确认": { "type": "boolean" },
+        "未决风险与附带条件已确认": { "type": "boolean" }
+      }
+    },
+    "workbook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name", "sha256"],
+      "properties": {
+        "file_name": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approval": {
+            "properties": { "status": { "const": "approved" } },
+            "required": ["status"]
+          }
+        },
+        "required": ["approval"]
+      },
+      "then": {
+        "properties": {
+          "approval": {
+            "properties": {
+              "conditions": { "maxItems": 0 },
+              "unresolved_risks": { "maxItems": 0 }
+            }
+          },
+          "confirmations": {
+            "properties": {
+              "第一方资料公开授权与声明边界已确认": { "const": true },
+              "自适应决策情境与适用范围已确认": { "const": true },
+              "话语与竞品比较边界已确认": { "const": true },
+              "七意图与五入口参考资产已确认": { "const": true },
+              "图片权利与Logo规则已确认": { "const": true },
+              "未决风险与附带条件已确认": { "const": true }
+            }
+          },
+          "review_decisions": {
+            "items": {
+              "properties": { "decision": { "const": "keep" } }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -160,19 +160,6 @@ import { derivePublisherAssetCapability } from "./publisher-service.js";
 
 const t = initTRPC.context<ApiContext>().create();
 
-function isLocalDatabaseUrl(value: string): boolean {
-  try {
-    const hostname = new URL(value).hostname.toLowerCase();
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname === "[::1]"
-    );
-  } catch {
-    return false;
-  }
-}
-
 const requireUser = t.middleware(({ ctx, next }) => {
   if (!ctx.user)
     throw new TRPCError({
@@ -1963,16 +1950,6 @@ export const appRouter = t.router({
           .input(platformAcceptanceStartInputSchema)
           .output(platformAcceptanceBatchOutputSchema)
           .mutation(({ ctx, input }) => {
-            if (
-              ctx.config.NODE_ENV !== "development" ||
-              !isLocalDatabaseUrl(ctx.config.DATABASE_URL)
-            ) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message:
-                  "Platform acceptance probes are restricted to a localhost development database",
-              });
-            }
             const configuredBudget =
               ctx.config.MONITORING_ACCEPTANCE_MAX_TEN_THOUSANDTHS;
             if (configuredBudget <= 0n) {
@@ -1989,7 +1966,7 @@ export const appRouter = t.router({
               throw new TRPCError({
                 code: "PRECONDITION_FAILED",
                 message:
-                  "Confirmed acceptance quote exceeds the configured local budget ceiling",
+                  "Confirmed acceptance quote exceeds the configured budget ceiling",
               });
             }
             return translateRepositoryErrors(() =>

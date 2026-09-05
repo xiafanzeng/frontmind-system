@@ -8129,3 +8129,27 @@
     min-height: 40px;
   }
 }
+
+.monitoring-module .platform-acceptance-panel { padding: 20px; }
+.monitoring-module .acceptance-fields,
+.monitoring-module .acceptance-quote,
+.monitoring-module .acceptance-history { display: grid; gap: 16px; margin-top: 20px; min-width: 0; }
+.monitoring-module .acceptance-fields { border: 0; padding: 0; }
+.monitoring-module .acceptance-fields > label,
+.monitoring-module .acceptance-regions > label { display: grid; gap: 8px; }
+.monitoring-module .acceptance-fields select,
+.monitoring-module .acceptance-fields textarea { width: 100%; padding: 10px; border: 1px solid #dedfe7; border-radius: 8px; background: white; color: inherit; font: inherit; }
+.monitoring-module .acceptance-models,
+.monitoring-module .acceptance-regions { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.monitoring-module .acceptance-models { border: 1px solid #e8e8ef; border-radius: 8px; padding: 12px; }
+.monitoring-module .acceptance-models label,
+.monitoring-module .acceptance-confirm { display: flex; gap: 8px; align-items: center; }
+.monitoring-module .acceptance-table-scroll { overflow-x: auto; }
+.monitoring-module .acceptance-table-scroll table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.monitoring-module .acceptance-table-scroll th,
+.monitoring-module .acceptance-table-scroll td { padding: 10px; border-bottom: 1px solid #e8e8ef; }
+.monitoring-module .acceptance-table-scroll small { display: block; max-width: 420px; overflow-wrap: anywhere; }
+.monitoring-module .acceptance-history ul { display: grid; gap: 8px; list-style: none; padding: 0; }
+.monitoring-module .acceptance-history button { text-align: left; }
+.monitoring-module .platform-acceptance-panel .primary-button { justify-self: start; }
+.monitoring-module .platform-acceptance-panel [role="alert"] { color: #ad3f4f; overflow-wrap: anywhere; }

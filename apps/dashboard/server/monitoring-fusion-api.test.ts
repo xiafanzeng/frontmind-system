@@ -107,3 +107,57 @@ it("keeps DOCX processing available with no KOL client or mock catalog", async (
   expect(repository.leasePublisherJobs).toHaveBeenCalledWith(expect.objectContaining({ allowedTypes: ["import_docx", "purge_publisher_assets"] }));
   expect(repository.enqueuePublisherMaintenanceJobs).not.toHaveBeenCalled();
 });
+
+describe("production platform acceptance", () => {
+  const ownerId = "11111111-1111-5111-8111-111111111111";
+  const input = {
+    ownerId, projectId: "22222222-2222-5222-8222-222222222222",
+    platformIds: ["33333333-3333-5333-8333-333333333333"], question: "介绍公开品牌",
+    domesticRegionCode: null, overseasRegionCode: null,
+    planFingerprint: "a".repeat(64), confirmedTotalAmountTenThousandths: "9000",
+    idempotencyKey: `platform-acceptance:${"a".repeat(64)}`,
+  };
+  const batch = {
+    id: "44444444-4444-5444-8444-444444444444", ownerId, projectId: input.projectId,
+    requestedBy: ownerId, planFingerprint: input.planFingerprint, questionHash: "b".repeat(64),
+    status: "running", attemptCount: 7, totalAmountTenThousandths: "9000",
+    idempotencyKey: input.idempotencyKey, startedAt: new Date(), completedAt: null,
+    createdAt: new Date(), updatedAt: new Date(), checks: [],
+  };
+  function acceptanceContext(role: "admin" | "user" | null, budget: bigint) {
+    const ctx = context(role);
+    ctx.config = { ...ctx.config, NODE_ENV: "production", DATABASE_URL: "mysql://database.internal/monitoring", MONITORING_ACCEPTANCE_MAX_TEN_THOUSANDTHS: budget };
+    ctx.audit = { ...ctx.audit, actorId: ctx.user?.id ?? null, actorRole: ctx.user?.role ?? null };
+    ctx.repository.startPlatformAcceptanceBatch = vi.fn().mockResolvedValue(batch);
+    return ctx;
+  }
+  it("keeps paid production probes disabled by the default zero budget", async () => {
+    expect(config.MONITORING_ACCEPTANCE_MAX_TEN_THOUSANDTHS).toBe(0n);
+    const ctx = acceptanceContext("admin", 0n);
+    await expect(appRouter.createCaller(ctx).admin.platforms.acceptance.start(input)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(ctx.repository.startPlatformAcceptanceBatch).not.toHaveBeenCalled();
+  });
+  it("allows authenticated production admins at the exact explicit budget and preserves confirmation and audit", async () => {
+    const ctx = acceptanceContext("admin", 9000n);
+    await expect(appRouter.createCaller(ctx).admin.platforms.acceptance.start(input)).resolves.toMatchObject({ id: batch.id });
+    expect(ctx.repository.startPlatformAcceptanceBatch).toHaveBeenCalledTimes(1);
+    expect(ctx.repository.startPlatformAcceptanceBatch).toHaveBeenCalledWith(input, ctx.audit);
+    expect(ctx.config.NODE_ENV).toBe("production");
+  });
+  it("rejects over-budget plans before dispatch", async () => {
+    const ctx = acceptanceContext("admin", 8999n);
+    await expect(appRouter.createCaller(ctx).admin.platforms.acceptance.start(input)).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(ctx.repository.startPlatformAcceptanceBatch).not.toHaveBeenCalled();
+  });
+  it.each(["user", null] as const)("rejects non-administrator %s before dispatch", async (role) => {
+    const ctx = acceptanceContext(role, 9000n);
+    await expect(appRouter.createCaller(ctx).admin.platforms.acceptance.start(input)).rejects.toMatchObject({ code: role ? "FORBIDDEN" : "UNAUTHORIZED" });
+    expect(ctx.repository.startPlatformAcceptanceBatch).not.toHaveBeenCalled();
+  });
+  it("preserves authoritative repository rejection of stale plans", async () => {
+    const { RepositoryError } = await import("@frontmind/monitoring-db");
+    const ctx = acceptanceContext("admin", 9000n);
+    vi.mocked(ctx.repository.startPlatformAcceptanceBatch).mockRejectedValue(new RepositoryError("CONFLICT", "Fresh quote required"));
+    await expect(appRouter.createCaller(ctx).admin.platforms.acceptance.start(input)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});

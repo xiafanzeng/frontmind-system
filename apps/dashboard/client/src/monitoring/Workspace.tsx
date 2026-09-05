@@ -46,6 +46,7 @@ import {
   monitorDetailToInput,
 } from "./apiMappers";
 import AppShell from "./components/AppShell";
+import PlatformAcceptancePanel from "./components/PlatformAcceptancePanel";
 import RunConfirmationDialog from "./components/RunConfirmationDialog";
 import type {
   MonitorInput,
@@ -1660,6 +1661,9 @@ function AdminWorkspace({
           : bankTransfers.isFetching
       }
       models={modelRows}
+      acceptancePanel={
+        section === "models" ? <PlatformAcceptancePanel /> : undefined
+      }
       runs={
         section === "operations"
           ? operationRuns

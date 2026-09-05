@@ -12,7 +12,7 @@ import {
   ServerCog,
   UsersRound,
 } from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import {
   formatCnyTenThousandths,
@@ -114,6 +114,7 @@ type AdminPageProps = {
   error?: string;
   users: AdminUser[];
   models?: ProviderModel[];
+  acceptancePanel?: ReactNode;
   runs?: AdminRun[];
   audit?: AdminAuditEntry[];
   auditHasMore?: boolean;
@@ -326,6 +327,7 @@ export default function AdminPage({
   error,
   users,
   models = [],
+  acceptancePanel,
   runs = [],
   audit = [],
   auditHasMore = false,
@@ -535,7 +537,7 @@ export default function AdminPage({
           <article>
             <span>待验收模型</span>
             <strong>{models.filter((model) => !model.verified).length}</strong>
-            <small>真实冒烟后再记录能力</small>
+            <small>依据真实运行结果更新能力</small>
           </article>
         </section>
       )}
@@ -772,7 +774,7 @@ export default function AdminPage({
             <div>
               <h2>模型目录与能力矩阵</h2>
               <p>
-                同步只会发现目录；逐模型真实冒烟后人工记录能力、完成验收，再单独开放。
+                同步后通过真实运行验收各项能力，系统依据结果更新能力，再由管理员开放模型。
               </p>
             </div>
             <button
@@ -817,7 +819,7 @@ export default function AdminPage({
                       className="capability-chip on"
                       disabled={modelPending || model.acceptanceRequired}
                       aria-label={`${model.name}客户端类型：${model.clientType === "web" ? "网页版" : "手机版"}`}
-                      title="新模型必须在验收时人工确认客户端类型"
+                      title="客户端类型来自同步目录"
                       onClick={() =>
                         void updateModel({
                           ...model,
@@ -999,6 +1001,8 @@ export default function AdminPage({
           </div>
         </section>
       )}
+
+      {section === "models" && acceptancePanel}
 
       {section === "operations" && (
         <>

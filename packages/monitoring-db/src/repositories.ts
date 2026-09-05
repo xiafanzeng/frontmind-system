@@ -2178,7 +2178,7 @@ export class MonitoringRepository {
     if (!project) {
       throw new RepositoryError(
         "NOT_FOUND",
-        "Acceptance test project does not belong to the selected local customer",
+        "Acceptance test project does not belong to the selected customer",
       );
     }
     const selectedIds = input.platformIds

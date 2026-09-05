@@ -1,6 +1,8 @@
 # Brand Question Portfolio Output Contract
 
-Return one JSON object and nothing else:
+Serialize this JSON object exactly once into the Manus v2 structured-output
+`payload` string. The application-provided `modelProfile` must be echoed as
+`skill.model`:
 
 ```json
 {
@@ -8,7 +10,7 @@ Return one JSON object and nothing else:
   "skill": {
     "name": "brand-question-portfolio",
     "version": "2",
-    "model": "frontmind-pro"
+    "model": "frontmind-base"
   },
   "knowledgeSnapshot": {
     "id": "server-supplied-id",
@@ -79,9 +81,11 @@ Contract rules:
   normalization, it must be a contiguous substring of the cited document.
 - Top-level and candidate `risks` contain concise customer-visible strings.
 - Echo the server-supplied snapshot ID, version, archive hash, enterprise
-  identity, plan code, quota period ID, and candidate targets exactly.
+  identity, plan code, quota period ID, model profile, and candidate targets
+  exactly.
   Mismatches make the result invalid.
 - This contract is valid only for an application-authorized `advanced` or
   `luxury` invocation. Rejected Basic or inactive access has no model output.
 - Do not include selected state, quota usage, prices, user IDs, administrator
-  data, credentials, Markdown fences, or additional keys.
+  data, credentials, Markdown fences, `output_text`, `output_file`, or
+  additional keys.

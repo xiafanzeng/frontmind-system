@@ -243,6 +243,8 @@ router.post("/prepare", async (req, res) => {
         await preparedFileService.registerFile({
           ownerUserId,
           credentialId: authorization.credentialId,
+          sourceKind: authorization.sourceKind,
+          sourceAuthorityId: authorization.sourceAuthorityId,
           projectAssignmentId: requestProjectAssignmentId(req),
           fileId: source.fileId,
           filename,
@@ -351,11 +353,20 @@ router.post("/:assetId/download-token", async (req, res) => {
         },
       );
     }
+    const sourceAuthorityId =
+      manifest.sourceAuthorityId ?? manifest.credentialId;
+    if (!sourceAuthorityId) {
+      throw new PreparedFileError(
+        "SOURCE_FORBIDDEN",
+        "文件缺少可信的所有权来源",
+        { statusCode: 403, recoveryAction: "contact_admin" },
+      );
+    }
     const token = createSignedDownloadToken({
       kind: "prepared_file",
       assetId: manifest.id,
       userId: ownerUserId,
-      credentialId: manifest.credentialId,
+      credentialId: sourceAuthorityId,
       projectAssignmentId: requestProjectAssignmentId(req),
       exp: expiresAt,
     });
@@ -505,7 +516,10 @@ router.get("/download/:token", async (req, res) => {
       ownerUserId,
       token.projectAssignmentId,
     );
-    if (manifest.credentialId !== token.credentialId) {
+    if (
+      (manifest.sourceAuthorityId ?? manifest.credentialId) !==
+      token.credentialId
+    ) {
       throw new SignedDownloadTokenError(
         "DOWNLOAD_TOKEN_INVALID",
         "下载链接对应的文件凭据已变化",

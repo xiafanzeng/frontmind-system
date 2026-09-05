@@ -29,6 +29,27 @@ describe("upstream base URL readiness", () => {
     );
   });
 
+  it("pins production to the exact official Manus origin", () => {
+    expect(
+      configuredUpstreamBaseUrl({
+        NODE_ENV: "production",
+        FRONTMIND_UPSTREAM_BASE_URL: "https://api.manus.ai/",
+      }),
+    ).toBe("https://api.manus.ai");
+    for (const value of [
+      "https://api.manus.ai/custom",
+      "https://api.manus.ai:444",
+      "https://upstream.frontmind.test",
+    ]) {
+      expect(
+        configuredUpstreamBaseUrl({
+          NODE_ENV: "production",
+          FRONTMIND_UPSTREAM_BASE_URL: value,
+        }),
+      ).toBeNull();
+    }
+  });
+
   it.each([
     ["plain HTTP", "http://upstream.frontmind.test/api"],
     ["loopback HTTP", "http://127.0.0.1:4010/api"],

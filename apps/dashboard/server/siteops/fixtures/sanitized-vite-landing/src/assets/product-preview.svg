@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="520" viewBox="0 0 760 520" role="img" aria-labelledby="title desc">
+  <title id="title">Sample project workspace</title>
+  <desc id="desc">A local illustration of milestones, notes, and project tasks.</desc>
+  <rect width="760" height="520" rx="28" fill="#ffffff" />
+  <rect width="760" height="72" rx="28" fill="#292b4e" />
+  <rect y="46" width="760" height="26" fill="#292b4e" />
+  <circle cx="40" cy="36" r="8" fill="#c8f36b" />
+  <rect x="62" y="29" width="112" height="14" rx="7" fill="#f2f1ff" />
+  <rect x="28" y="102" width="184" height="388" rx="18" fill="#f4f3fa" />
+  <rect x="48" y="126" width="92" height="12" rx="6" fill="#a4a6b9" />
+  <rect x="48" y="166" width="132" height="40" rx="12" fill="#dedcff" />
+  <rect x="48" y="220" width="132" height="40" rx="12" fill="#ffffff" />
+  <rect x="48" y="274" width="132" height="40" rx="12" fill="#ffffff" />
+  <rect x="244" y="108" width="218" height="24" rx="12" fill="#343653" />
+  <rect x="244" y="148" width="354" height="12" rx="6" fill="#d1d2dd" />
+  <rect x="244" y="184" width="224" height="118" rx="18" fill="#ecebff" />
+  <rect x="486" y="184" width="246" height="118" rx="18" fill="#f3f4f8" />
+  <circle cx="278" cy="220" r="16" fill="#5b5cf0" />
+  <rect x="306" y="210" width="126" height="13" rx="6" fill="#757891" />
+  <rect x="306" y="235" width="94" height="10" rx="5" fill="#b8bacb" />
+  <rect x="514" y="210" width="74" height="13" rx="6" fill="#757891" />
+  <rect x="514" y="238" width="188" height="12" rx="6" fill="#d0d1db" />
+  <rect x="244" y="326" width="488" height="136" rx="18" fill="#fbfbfd" stroke="#e1e2ea" />
+  <rect x="268" y="350" width="118" height="12" rx="6" fill="#85889d" />
+  <rect x="268" y="382" width="340" height="10" rx="5" fill="#dedfe7" />
+  <rect x="268" y="410" width="272" height="10" rx="5" fill="#dedfe7" />
+  <rect x="620" y="374" width="84" height="34" rx="17" fill="#c8f36b" />
+</svg>

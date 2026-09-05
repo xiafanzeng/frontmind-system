@@ -1,9 +1,21 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  notInArray,
+  or,
+} from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   apiCredentials,
+  agentEvents,
+  agentOperations,
+  agentTasks,
   attachments,
   conversations,
   conversationTurns,
@@ -12,24 +24,21 @@ import {
   knowledgeBaseConversationRetentionTombstones,
   knowledgeBaseConversationTombstones,
   knowledgeBaseResetRequests,
+  localAssets,
   messages,
+  responseLogicEntries,
+  siteProjects,
   upstreamResources,
-  userUsageOwners,
   users,
   type MessageMetadata,
 } from "../drizzle/schema";
 import { normalizeKnowledgeCollectionCopy } from "../shared/knowledge-base-copy";
 import { normalizeKnowledgeBaseAttachmentFilename } from "../shared/knowledge-base-attachment";
-import {
-  knowledgeBasePresentationMessagePublicId,
-  knowledgeBaseUserMessagePublicId,
-} from "../shared/knowledge-base-message";
 import { uniquifyOrderedIds } from "../shared/ordered-id";
+import { generalChatDispatchSchema } from "../shared/frontmind-general-chat-dispatch";
 import {
   type AuthenticatedUser,
   credentialMayServeAccount,
-  getEffectiveDecryptedCredentialForAccount,
-  isUpstreamApiKeyShared,
 } from "./auth-service";
 import { assertDeliveryProjectContext } from "./delivery-role-service";
 import { getDb } from "./db";
@@ -37,10 +46,22 @@ import { FILE_CONTENT_RETENTION_MS } from "./file-content-retention";
 import {
   knowledgeBaseCustomerUploadResources,
   knowledgeBaseOfficialLogoUploadFromTurn,
+  logKnowledgeBaseCustomerUploadEnrichmentSkipped,
 } from "./knowledge-base-customer-upload";
-import { knowledgeBaseMarkdownSha256 } from "./knowledge-base-package-validation";
+import {
+  knowledgeBaseOfficialLogoInternalIdentity,
+  knowledgeBasePublicResource,
+} from "./knowledge-base-public-resource";
+import {
+  knowledgeBaseMessageSchema,
+  matchesAuthoritativeKnowledgeBaseMessageTuple,
+  parsedKnowledgeBaseMessageMetadata,
+  type KnowledgeBaseMessageMetadata,
+  type ServerOwnedBuildIdentity,
+  type ServerOwnedMessageIdentity,
+  type ServerOwnedTurnIdentity,
+} from "./knowledge-base-authoritative-message";
 import { protectedProcedure, router } from "./_core/trpc";
-import { getUpstreamBaseUrl } from "./upstream-config";
 
 const attachmentSchema = z.object({
   id: z.string().min(1).max(128),
@@ -62,42 +83,14 @@ const inlineImageSchema = z.object({
   alt: z.string().max(512).optional(),
 });
 
-const knowledgeBaseMessageSchema = z.object({
-  schemaVersion: z.literal(1).optional(),
-  kind: z.enum(["pending_user", "presentation"]),
-  buildId: z.string().min(1).max(128).optional(),
-  operationKey: z.string().min(1).max(128).optional(),
-  clientRequestId: z.string().min(1).max(128).optional(),
-  turnId: z.string().min(1).max(128).optional(),
-  presentationKey: z.string().min(1).max(191).optional(),
-  generation: z.number().int().nonnegative().optional(),
-  revision: z.number().int().nonnegative().optional(),
-  leafId: z.string().max(191).nullable().optional(),
-  serverOwned: z.boolean().optional(),
+const generalChatMessageSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("assistant_projection"),
+  turnId: z.string().uuid(),
+  agentTaskId: z.string().uuid(),
+  providerEventId: z.string().min(1).max(512),
+  serverOwned: z.literal(true),
 });
-
-type KnowledgeBaseMessageMetadata = z.infer<typeof knowledgeBaseMessageSchema>;
-
-type ServerOwnedMessageIdentity = {
-  id: string;
-  conversationId: string;
-  turnId: string | null;
-  userId: number;
-  role: string;
-  content: string;
-};
-
-type ServerOwnedTurnIdentity = {
-  id: string;
-  conversationId: string;
-  userId: number;
-  clientRequestId: string;
-  buildId: string | null;
-  buildGeneration: number | null;
-  operationKey: string | null;
-  expectedRevision: number | null;
-  expectedLeafId: string | null;
-};
 
 type ServerOwnedTurnResourceIdentity = ServerOwnedTurnIdentity &
   Pick<
@@ -105,21 +98,28 @@ type ServerOwnedTurnResourceIdentity = ServerOwnedTurnIdentity &
     "operationType" | "attachmentFileIds" | "metadata" | "status"
   >;
 
-type ServerOwnedBuildIdentity = {
-  id: string;
-  userId: number;
-  conversationId: string;
-};
-
 type ServerOwnedBuildResourceIdentity = ServerOwnedBuildIdentity &
   Pick<
     typeof knowledgeBaseBuilds.$inferSelect,
+    | "generation"
     | "logoStorageKey"
     | "logoSha256"
     | "logoBytes"
     | "logoFilename"
     | "logoMimeType"
   >;
+
+const serverOwnedBuildResourceSelection = {
+  id: knowledgeBaseBuilds.id,
+  userId: knowledgeBaseBuilds.userId,
+  conversationId: knowledgeBaseBuilds.conversationId,
+  generation: knowledgeBaseBuilds.generation,
+  logoStorageKey: knowledgeBaseBuilds.logoStorageKey,
+  logoSha256: knowledgeBaseBuilds.logoSha256,
+  logoBytes: knowledgeBaseBuilds.logoBytes,
+  logoFilename: knowledgeBaseBuilds.logoFilename,
+  logoMimeType: knowledgeBaseBuilds.logoMimeType,
+} satisfies Record<keyof ServerOwnedBuildResourceIdentity, unknown>;
 
 type ServerOwnedBuildNodeIdentity = {
   buildId: string;
@@ -128,113 +128,7 @@ type ServerOwnedBuildNodeIdentity = {
   sourceTurnId: string | null;
 };
 
-function knowledgeBasePresentationKey(input: {
-  buildId: string;
-  generation: number;
-  revision: number;
-  leafId: string;
-  content: string;
-}) {
-  return createHash("sha256")
-    .update(
-      [
-        input.buildId,
-        input.generation,
-        input.revision,
-        input.leafId,
-        knowledgeBaseMarkdownSha256(input.content),
-      ].join(":"),
-    )
-    .digest("hex");
-}
-
-/**
- * `serverOwned` is not an authentication token. A database message receives
- * immutable KB treatment only when its complete identity still matches the
- * server-reserved turn/build and the deterministic public message identity.
- */
-export function matchesAuthoritativeKnowledgeBaseMessageTuple(input: {
-  message: ServerOwnedMessageIdentity;
-  publicMessageId: string;
-  knowledgeBase: KnowledgeBaseMessageMetadata;
-  turn: ServerOwnedTurnIdentity | undefined;
-  build: ServerOwnedBuildIdentity | undefined;
-  publicConversationId: string;
-}) {
-  const { message, publicMessageId, knowledgeBase, turn, build } = input;
-  if (
-    knowledgeBase.serverOwned !== true ||
-    knowledgeBase.schemaVersion !== 1 ||
-    !turn ||
-    !build ||
-    message.userId !== turn.userId ||
-    message.conversationId !== turn.conversationId ||
-    message.turnId !== turn.id ||
-    build.userId !== message.userId ||
-    build.conversationId !== input.publicConversationId ||
-    knowledgeBase.turnId !== turn.id ||
-    knowledgeBase.buildId !== turn.buildId ||
-    knowledgeBase.buildId !== build.id ||
-    knowledgeBase.generation !== turn.buildGeneration ||
-    knowledgeBase.operationKey !== turn.operationKey ||
-    knowledgeBase.revision === undefined ||
-    knowledgeBase.leafId === undefined
-  ) {
-    return false;
-  }
-
-  if (knowledgeBase.kind === "pending_user") {
-    try {
-      if (
-        message.role !== "user" ||
-        publicMessageId !== knowledgeBaseUserMessagePublicId(turn.id) ||
-        knowledgeBase.clientRequestId !== turn.clientRequestId ||
-        knowledgeBase.presentationKey !== undefined ||
-        knowledgeBase.revision !== turn.expectedRevision ||
-        (knowledgeBase.leafId ?? null) !== (turn.expectedLeafId ?? null)
-      ) {
-        return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  if (
-    message.role !== "assistant" ||
-    knowledgeBase.clientRequestId !== undefined ||
-    !knowledgeBase.presentationKey ||
-    !knowledgeBase.leafId ||
-    (knowledgeBase.revision !== turn.expectedRevision &&
-      knowledgeBase.revision !== (turn.expectedRevision ?? -2) + 1)
-  ) {
-    return false;
-  }
-  try {
-    return (
-      publicMessageId ===
-        knowledgeBasePresentationMessagePublicId(
-          knowledgeBase.presentationKey,
-        ) &&
-      knowledgeBase.presentationKey ===
-        knowledgeBasePresentationKey({
-          buildId: build.id,
-          generation: knowledgeBase.generation,
-          revision: knowledgeBase.revision,
-          leafId: knowledgeBase.leafId,
-          content: message.content,
-        })
-    );
-  } catch {
-    return false;
-  }
-}
-
-function parsedKnowledgeBaseMessageMetadata(metadata: MessageMetadata) {
-  const parsed = knowledgeBaseMessageSchema.safeParse(metadata.knowledgeBase);
-  return parsed.success ? parsed.data : undefined;
-}
+export { matchesAuthoritativeKnowledgeBaseMessageTuple };
 
 const messageSchema = z.object({
   id: z.string().min(1).max(128),
@@ -253,6 +147,8 @@ const messageSchema = z.object({
   isStepsPlaceholder: z.boolean().optional(),
   modelName: z.string().max(128).optional(),
   knowledgeBase: knowledgeBaseMessageSchema.optional(),
+  generalChat: generalChatMessageSchema.optional(),
+  generalChatDispatch: generalChatDispatchSchema.optional(),
 });
 
 export const conversationSnapshotSchema = z.object({
@@ -261,6 +157,7 @@ export const conversationSnapshotSchema = z.object({
   messages: z.array(messageSchema).max(5_000),
   taskId: z.string().max(255).optional(),
   previousResponseId: z.string().max(255).optional(),
+  executionKind: z.enum(["general_chat_v2", "response_logic"]).optional(),
   status: z.enum([
     "idle",
     "running",
@@ -398,8 +295,6 @@ export function reconstructKnowledgeBaseUserMessageAttachments(input: {
 
 type UpstreamResourceRef = { kind: "task" | "file"; id: string };
 const LEGACY_IMPORT_MAX_RESOURCES = 200;
-const LEGACY_IMPORT_VALIDATION_CONCURRENCY = 4;
-const LEGACY_IMPORT_VALIDATION_TIMEOUT_MS = 30_000;
 type AttachmentRetention = {
   expiresAt: number;
   expired: boolean;
@@ -414,29 +309,64 @@ async function attachmentRetentionByFileId(
 ) {
   const uniqueFileIds = [...new Set(fileIds.filter(Boolean))];
   if (uniqueFileIds.length === 0) return new Map<string, AttachmentRetention>();
-  const rows = await executor
-    .select({
-      upstreamId: upstreamResources.upstreamId,
-      createdAt: upstreamResources.createdAt,
-      uploadedAt: upstreamResources.uploadedAt,
-      contentExpiresAt: upstreamResources.contentExpiresAt,
-      contentDeletedAt: upstreamResources.contentDeletedAt,
-    })
-    .from(upstreamResources)
-    .where(
-      and(
-        eq(upstreamResources.kind, "file"),
-        inArray(upstreamResources.upstreamId, uniqueFileIds),
-        projectAssignmentId
-          ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
-          : and(
-              eq(upstreamResources.userId, userId),
-              isNull(upstreamResources.projectAssignmentId),
+  const localFileIds = uniqueFileIds.filter((fileId) =>
+    fileId.startsWith("asset_"),
+  );
+  const providerFileIds = uniqueFileIds.filter(
+    (fileId) => !fileId.startsWith("asset_"),
+  );
+  const localRows =
+    localFileIds.length === 0
+      ? []
+      : await executor
+          .select({
+            id: localAssets.id,
+            retainUntil: localAssets.retainUntil,
+          })
+          .from(localAssets)
+          .where(
+            and(
+              eq(localAssets.scope, "managed_user"),
+              eq(localAssets.accountUserId, userId),
+              inArray(localAssets.id, localFileIds),
             ),
-      ),
-    );
-  return new Map<string, AttachmentRetention>(
-    rows.map(
+          );
+  const rows =
+    providerFileIds.length === 0
+      ? []
+      : await executor
+          .select({
+            upstreamId: upstreamResources.upstreamId,
+            createdAt: upstreamResources.createdAt,
+            uploadedAt: upstreamResources.uploadedAt,
+            contentExpiresAt: upstreamResources.contentExpiresAt,
+            contentDeletedAt: upstreamResources.contentDeletedAt,
+          })
+          .from(upstreamResources)
+          .where(
+            and(
+              eq(upstreamResources.kind, "file"),
+              inArray(upstreamResources.upstreamId, providerFileIds),
+              projectAssignmentId
+                ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
+                : and(
+                    eq(upstreamResources.userId, userId),
+                    isNull(upstreamResources.projectAssignmentId),
+                  ),
+            ),
+          );
+  return new Map<string, AttachmentRetention>([
+    ...localRows.map((row: { id: string; retainUntil: Date | null }) => {
+      const expiresAt = row.retainUntil?.getTime() ?? 0;
+      return [
+        row.id,
+        {
+          expiresAt,
+          expired: expiresAt <= now,
+        },
+      ] as const;
+    }),
+    ...rows.map(
       (row: {
         upstreamId: string;
         createdAt: Date;
@@ -460,10 +390,10 @@ async function attachmentRetentionByFileId(
             expiresAt,
             expired: Boolean(row.contentDeletedAt) || expiresAt <= now,
           },
-        ];
+        ] as const;
       },
     ),
-  );
+  ]);
 }
 
 function applyAttachmentRetention<T extends { fileId?: string }>(
@@ -761,11 +691,7 @@ async function getLatestActiveCredentialIdForUser(
   return rows[0]?.id as string | undefined;
 }
 
-/**
- * Mirrors runtime credential selection: the account's own active credential
- * wins, and only legacy customer accounts without one inherit their current
- * delivery owner's credential.
- */
+/** Mirrors runtime credential selection: only the account's own Key applies. */
 export async function getActiveCredentialId(executor: any, userId: number) {
   const accountRows = await executor
     .select({ role: users.role })
@@ -774,23 +700,7 @@ export async function getActiveCredentialId(executor: any, userId: number) {
     .limit(1);
   if (!accountRows[0]) return undefined;
 
-  const directCredentialId = await getLatestActiveCredentialIdForUser(
-    executor,
-    userId,
-  );
-  if (directCredentialId || accountRows[0].role === "admin") {
-    return directCredentialId;
-  }
-
-  const ownerRows = await executor
-    .select({ deliveryAdminId: userUsageOwners.deliveryAdminId })
-    .from(userUsageOwners)
-    .where(eq(userUsageOwners.userId, userId))
-    .limit(1);
-  const ownerId = ownerRows[0]?.deliveryAdminId;
-  return ownerId
-    ? getLatestActiveCredentialIdForUser(executor, ownerId)
-    : undefined;
+  return getLatestActiveCredentialIdForUser(executor, userId);
 }
 
 async function assertResourceOwnership(
@@ -831,23 +741,21 @@ async function assertResourceOwnership(
   return rows[0] ?? null;
 }
 
+const GENERAL_CHAT_CONTRACT = "dashboard.general-chat";
+const GENERAL_CHAT_CONTRACT_REVISION = 2;
+const GENERAL_CHAT_TURN_TYPE = "general_chat_v2";
+
 type SnapshotResourceBinding = {
+  domain: "general_chat_v2" | "legacy_upstream";
   kind: "task" | "file";
   upstreamId: string;
-  apiCredentialId: string;
+  apiCredentialId?: string;
   projectAssignmentId: string | null;
   createdAt?: Date;
 };
 
-async function loadSnapshotResourceBindings(
-  executor: any,
-  userId: number,
-  projectAssignmentId: string | null,
-  snapshot: ConversationSnapshot,
-) {
-  const bindings = new Map<string, SnapshotResourceBinding>();
-  const taskIds = snapshotTaskIds(snapshot);
-  const fileIds = Array.from(
+function snapshotFileIds(snapshot: ConversationSnapshot) {
+  return Array.from(
     new Set(
       snapshot.messages.flatMap((message) =>
         (message.attachments ?? [])
@@ -856,7 +764,17 @@ async function loadSnapshotResourceBindings(
       ),
     ),
   );
+}
 
+async function loadLegacySnapshotResourceBindings(
+  executor: any,
+  userId: number,
+  projectAssignmentId: string | null,
+  taskIds: readonly string[],
+  fileIds: readonly string[],
+  options: { strictOwnership?: boolean } = {},
+) {
+  const bindings = new Map<string, SnapshotResourceBinding>();
   for (const [kind, ids] of [
     ["task", taskIds],
     ["file", fileIds],
@@ -883,12 +801,14 @@ async function loadSnapshotResourceBindings(
         ? row.projectAssignmentId === projectAssignmentId
         : row.userId === userId && row.projectAssignmentId == null;
       if (!owned) {
+        if (options.strictOwnership === false) continue;
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "上游资源不属于当前账号",
         });
       }
       bindings.set(upstreamResourceKey(kind, row.upstreamId), {
+        domain: "legacy_upstream",
         kind,
         upstreamId: row.upstreamId,
         apiCredentialId: row.apiCredentialId,
@@ -899,6 +819,337 @@ async function loadSnapshotResourceBindings(
   }
 
   return bindings;
+}
+
+async function loadGeneralChatTaskBindings(
+  executor: any,
+  userId: number,
+  taskIds: readonly string[],
+  options: { strictOwnership?: boolean } = {},
+) {
+  const bindings = new Map<string, SnapshotResourceBinding>();
+  if (taskIds.length === 0) return bindings;
+  const taskRows = await executor
+    .select({
+      id: agentTasks.id,
+      operationId: agentTasks.operationId,
+      createdAt: agentTasks.createdAt,
+    })
+    .from(agentTasks)
+    .where(inArray(agentTasks.id, taskIds));
+  const operationIds: string[] = Array.from(
+    new Set<string>(
+      taskRows.map((row: { operationId: string }) => row.operationId),
+    ),
+  );
+  const operationRows =
+    operationIds.length === 0
+      ? []
+      : await executor
+          .select({
+            id: agentOperations.id,
+            scope: agentOperations.scope,
+            accountUserId: agentOperations.accountUserId,
+            presalesProjectId: agentOperations.presalesProjectId,
+            operationType: agentOperations.operationType,
+            contractName: agentOperations.contractName,
+            contractRevision: agentOperations.contractRevision,
+            apiCredentialId: agentOperations.apiCredentialId,
+          })
+          .from(agentOperations)
+          .where(inArray(agentOperations.id, operationIds));
+  const operationsById = new Map(
+    operationRows.map((row: { id: string }) => [row.id, row]),
+  );
+  for (const task of taskRows) {
+    const operation = operationsById.get(task.operationId) as
+      | {
+          scope: string;
+          accountUserId: number | null;
+          presalesProjectId: string | null;
+          operationType: string;
+          contractName: string;
+          contractRevision: number;
+          apiCredentialId: string;
+        }
+      | undefined;
+    if (
+      !operation ||
+      operation.scope !== "managed_user" ||
+      operation.accountUserId !== userId ||
+      operation.presalesProjectId !== null ||
+      operation.operationType !== GENERAL_CHAT_CONTRACT ||
+      operation.contractName !== GENERAL_CHAT_CONTRACT ||
+      operation.contractRevision !== GENERAL_CHAT_CONTRACT_REVISION
+    ) {
+      if (options.strictOwnership === false) continue;
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "通用聊天任务不属于当前账号或协议版本不匹配",
+      });
+    }
+    bindings.set(upstreamResourceKey("task", task.id), {
+      domain: "general_chat_v2",
+      kind: "task",
+      upstreamId: task.id,
+      apiCredentialId: operation.apiCredentialId,
+      projectAssignmentId: null,
+      createdAt: task.createdAt,
+    });
+  }
+  return bindings;
+}
+
+async function assertProjectGeneralChatTaskBindings(
+  executor: any,
+  input: {
+    userId: number;
+    projectAssignmentId: string;
+    persistedConversationId: string;
+    taskIds: readonly string[];
+  },
+) {
+  if (input.taskIds.length === 0) return;
+  const requestedTaskIds = new Set(input.taskIds);
+  const turnRows = (await executor
+    .select({
+      conversationId: conversationTurns.conversationId,
+      userId: conversationTurns.userId,
+      operationType: conversationTurns.operationType,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
+    })
+    .from(conversationTurns)
+    .where(
+      and(
+        eq(conversationTurns.operationType, GENERAL_CHAT_TURN_TYPE),
+        inArray(conversationTurns.upstreamTaskId, input.taskIds),
+      ),
+    )) as Array<{
+    conversationId: string;
+    userId: number;
+    operationType: string | null;
+    upstreamTaskId: string | null;
+  }>;
+  const authoritativeTurns = turnRows.filter(
+    (turn) =>
+      turn.operationType === GENERAL_CHAT_TURN_TYPE &&
+      Boolean(turn.upstreamTaskId && requestedTaskIds.has(turn.upstreamTaskId)),
+  );
+  const turnsByTaskId = new Map<string, typeof authoritativeTurns>();
+  for (const taskId of input.taskIds) turnsByTaskId.set(taskId, []);
+  for (const turn of authoritativeTurns) {
+    turnsByTaskId.get(turn.upstreamTaskId!)!.push(turn);
+  }
+  if (input.taskIds.some((taskId) => turnsByTaskId.get(taskId)!.length === 0)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "通用聊天任务尚未绑定当前工程师项目",
+    });
+  }
+
+  const boundConversationIds = Array.from(
+    new Set(authoritativeTurns.map((turn) => turn.conversationId)),
+  );
+  const conversationRows = (await executor
+    .select({
+      id: conversations.id,
+      userId: conversations.userId,
+      projectAssignmentId: conversations.projectAssignmentId,
+      deletedAt: conversations.deletedAt,
+    })
+    .from(conversations)
+    .where(inArray(conversations.id, boundConversationIds))) as Array<{
+    id: string;
+    userId: number;
+    projectAssignmentId: string | null;
+    deletedAt: Date | null;
+  }>;
+  const conversationsById = new Map(
+    conversationRows.map((conversation) => [conversation.id, conversation]),
+  );
+  const hasConflictingBinding = authoritativeTurns.some((turn) => {
+    const conversation = conversationsById.get(turn.conversationId);
+    return (
+      turn.userId !== input.userId ||
+      turn.conversationId !== input.persistedConversationId ||
+      !conversation ||
+      conversation.id !== input.persistedConversationId ||
+      conversation.userId !== input.userId ||
+      conversation.projectAssignmentId !== input.projectAssignmentId ||
+      Boolean(conversation.deletedAt)
+    );
+  });
+  if (hasConflictingBinding) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "通用聊天任务与当前工程师项目会话冲突",
+    });
+  }
+}
+
+async function loadLocalAssetBindings(
+  executor: any,
+  userId: number,
+  fileIds: readonly string[],
+  options: { strictOwnership?: boolean } = {},
+) {
+  const bindings = new Map<string, SnapshotResourceBinding>();
+  if (fileIds.length === 0) return bindings;
+  const rows = await executor
+    .select({
+      id: localAssets.id,
+      scope: localAssets.scope,
+      accountUserId: localAssets.accountUserId,
+      presalesProjectId: localAssets.presalesProjectId,
+      retainUntil: localAssets.retainUntil,
+      createdAt: localAssets.createdAt,
+    })
+    .from(localAssets)
+    .where(inArray(localAssets.id, fileIds));
+  for (const row of rows) {
+    const invalidOwnership =
+      row.scope !== "managed_user" ||
+      row.accountUserId !== userId ||
+      row.presalesProjectId !== null;
+    const expired =
+      row.retainUntil instanceof Date &&
+      row.retainUntil.getTime() <= Date.now();
+    if (invalidOwnership || expired) {
+      if (options.strictOwnership === false) continue;
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: expired
+          ? "通用聊天本地文件已超过保留期"
+          : "通用聊天本地文件不属于当前账号",
+      });
+    }
+    bindings.set(upstreamResourceKey("file", row.id), {
+      domain: "general_chat_v2",
+      kind: "file",
+      upstreamId: row.id,
+      projectAssignmentId: null,
+      createdAt: row.createdAt,
+    });
+  }
+  return bindings;
+}
+
+function requireExactlyOneIdentityDomain(
+  kind: "task" | "file",
+  ids: readonly string[],
+  local: ReadonlyMap<string, SnapshotResourceBinding>,
+  legacy: ReadonlyMap<string, SnapshotResourceBinding>,
+) {
+  const bindings = new Map<string, SnapshotResourceBinding>();
+  for (const id of ids) {
+    const key = upstreamResourceKey(kind, id);
+    const candidates = [local.get(key), legacy.get(key)].filter(
+      (candidate): candidate is SnapshotResourceBinding => Boolean(candidate),
+    );
+    if (candidates.length !== 1) {
+      throw new TRPCError({
+        code: candidates.length === 0 ? "FORBIDDEN" : "CONFLICT",
+        message:
+          candidates.length === 0
+            ? "任务或文件尚未验证，无法同步会话"
+            : "任务或文件身份域冲突，无法同步会话",
+      });
+    }
+    bindings.set(key, candidates[0]);
+  }
+  return bindings;
+}
+
+export async function loadSnapshotResourceBindings(
+  executor: any,
+  userId: number,
+  projectAssignmentId: string | null,
+  snapshot: ConversationSnapshot,
+) {
+  const taskIds = snapshotTaskIds(snapshot);
+  const fileIds = snapshotFileIds(snapshot);
+
+  if (snapshot.executionKind === "general_chat_v2") {
+    const tasks = await loadGeneralChatTaskBindings(executor, userId, taskIds);
+    const files = await loadLocalAssetBindings(executor, userId, fileIds);
+    if (tasks.size !== taskIds.length || files.size !== fileIds.length) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "通用聊天任务或文件尚未验证",
+      });
+    }
+    if (projectAssignmentId) {
+      await assertProjectGeneralChatTaskBindings(executor, {
+        userId,
+        projectAssignmentId,
+        persistedConversationId: storageId(
+          userId,
+          snapshot.id,
+          projectAssignmentId,
+        ),
+        taskIds,
+      });
+    }
+    return new Map([...tasks, ...files]);
+  }
+
+  if (snapshot.executionKind === "response_logic") {
+    return loadLegacySnapshotResourceBindings(
+      executor,
+      userId,
+      projectAssignmentId,
+      taskIds,
+      fileIds,
+    );
+  }
+
+  const localTasks = await loadGeneralChatTaskBindings(
+    executor,
+    userId,
+    taskIds,
+    { strictOwnership: false },
+  );
+  const localFiles = await loadLocalAssetBindings(executor, userId, fileIds, {
+    strictOwnership: false,
+  });
+  const legacy = await loadLegacySnapshotResourceBindings(
+    executor,
+    userId,
+    projectAssignmentId,
+    taskIds,
+    fileIds,
+    { strictOwnership: false },
+  );
+  const tasks = requireExactlyOneIdentityDomain(
+    "task",
+    taskIds,
+    localTasks,
+    legacy,
+  );
+  const files = requireExactlyOneIdentityDomain(
+    "file",
+    fileIds,
+    localFiles,
+    legacy,
+  );
+  if (projectAssignmentId) {
+    const generalChatTaskIds = taskIds.filter(
+      (taskId) =>
+        tasks.get(upstreamResourceKey("task", taskId))?.domain ===
+        "general_chat_v2",
+    );
+    await assertProjectGeneralChatTaskBindings(executor, {
+      userId,
+      projectAssignmentId,
+      persistedConversationId: storageId(
+        userId,
+        snapshot.id,
+        projectAssignmentId,
+      ),
+      taskIds: generalChatTaskIds,
+    });
+  }
+  return new Map([...tasks, ...files]);
 }
 
 async function credentialIsAvailable(executor: any, credentialId: string) {
@@ -1095,31 +1346,68 @@ async function resolveTaskPointersForSnapshot(
   );
   const resourceCreatedAt = new Map<string, number>();
   if (taskIds.length > 0) {
-    const rows = await executor
-      .select({
-        userId: upstreamResources.userId,
-        projectAssignmentId: upstreamResources.projectAssignmentId,
-        upstreamId: upstreamResources.upstreamId,
-        createdAt: upstreamResources.createdAt,
-      })
-      .from(upstreamResources)
-      .where(
-        and(
-          eq(upstreamResources.kind, "task"),
-          inArray(upstreamResources.upstreamId, taskIds),
-        ),
+    let taskBindings: ReadonlyMap<string, SnapshotResourceBinding>;
+    if (snapshot.executionKind === "general_chat_v2") {
+      taskBindings = await loadGeneralChatTaskBindings(
+        executor,
+        userId,
+        taskIds,
       );
-    for (const row of rows) {
-      const owned = projectAssignmentId
-        ? row.projectAssignmentId === projectAssignmentId
-        : row.userId === userId && row.projectAssignmentId == null;
-      if (!owned) {
+      if (taskBindings.size !== taskIds.length) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "上游资源不属于当前账号",
+          message: "通用聊天任务尚未验证",
         });
       }
-      resourceCreatedAt.set(row.upstreamId, row.createdAt.getTime());
+    } else if (snapshot.executionKind === "response_logic") {
+      taskBindings = await loadLegacySnapshotResourceBindings(
+        executor,
+        userId,
+        projectAssignmentId,
+        taskIds,
+        [],
+      );
+    } else {
+      const local = await loadGeneralChatTaskBindings(
+        executor,
+        userId,
+        taskIds,
+      );
+      const legacy = await loadLegacySnapshotResourceBindings(
+        executor,
+        userId,
+        projectAssignmentId,
+        taskIds,
+        [],
+      );
+      taskBindings = requireExactlyOneIdentityDomain(
+        "task",
+        taskIds,
+        local,
+        legacy,
+      );
+    }
+    if (projectAssignmentId) {
+      const generalChatTaskIds = taskIds.filter(
+        (taskId) =>
+          taskBindings.get(upstreamResourceKey("task", taskId))?.domain ===
+          "general_chat_v2",
+      );
+      await assertProjectGeneralChatTaskBindings(executor, {
+        userId,
+        projectAssignmentId,
+        persistedConversationId: storageId(
+          userId,
+          snapshot.id,
+          projectAssignmentId,
+        ),
+        taskIds: generalChatTaskIds,
+      });
+    }
+    for (const binding of taskBindings.values()) {
+      if (binding.createdAt) {
+        resourceCreatedAt.set(binding.upstreamId, binding.createdAt.getTime());
+      }
     }
   }
 
@@ -1141,54 +1429,18 @@ async function resolveTaskPointersForSnapshot(
 }
 
 /**
- * A client-supplied legacy ID is not ownership proof. Before writing a new
- * ledger row, verify that the credential selected for this conversation can
- * actually read the resource from the upstream API.
+ * v2-only imports may preserve local text, but a browser-supplied Provider ID
+ * can never be adopted. Old task/file conversations must restart under the
+ * local task/asset contract; no Key is probed and no Provider request occurs.
  */
-export async function validateUpstreamResourceAccess(
-  apiKey: string,
-  kind: "task" | "file",
-  upstreamId: string,
-  request: typeof fetch = fetch,
-  signal: AbortSignal = AbortSignal.timeout(15_000),
+export function assertLocalImportHasNoProviderResources(
+  resources: readonly UpstreamResourceRef[],
 ) {
-  let response: Response;
-  try {
-    const collection = kind === "task" ? "tasks" : "files";
-    response = await request(
-      `${getUpstreamBaseUrl()}/v1/${collection}/${encodeURIComponent(upstreamId)}`,
-      {
-        method: "GET",
-        redirect: "error",
-        headers: {
-          API_KEY: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-          Accept: "application/json",
-        },
-        signal,
-      },
-    );
-  } catch {
-    throw new TRPCError({
-      code: "SERVICE_UNAVAILABLE",
-      message: "上游服务暂时不可用，无法验证历史任务或文件归属",
-    });
-  }
-
-  const { ok, status } = response;
-  await response.body?.cancel().catch(() => undefined);
-  if (status === 401 || status === 403 || status === 404) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "当前 API Key 无法访问该历史任务或文件",
-    });
-  }
-  if (!ok) {
-    throw new TRPCError({
-      code: "SERVICE_UNAVAILABLE",
-      message: "上游服务暂时无法验证历史任务或文件归属",
-    });
-  }
+  if (resources.length === 0) return;
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: "旧任务或文件会话不再导入；请新建内容流程并重新上传本地资料",
+  });
 }
 
 async function persistResource(
@@ -1232,7 +1484,7 @@ async function persistResource(
   ) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: "历史任务或文件尚未验证，请通过本地记录迁移入口导入",
+      message: "任务或文件尚未验证；消息和附件已保留，请重试，请勿重复发送",
     });
   }
   await executor
@@ -1281,6 +1533,10 @@ export function buildMessageMetadata(
   }
   if (message.modelName) metadata.modelName = message.modelName;
   if (message.knowledgeBase) metadata.knowledgeBase = message.knowledgeBase;
+  if (message.generalChat) metadata.generalChat = message.generalChat;
+  if (message.generalChatDispatch) {
+    metadata.generalChatDispatch = message.generalChatDispatch;
+  }
   return Object.keys(metadata).length > 0 ? metadata : null;
 }
 
@@ -1347,20 +1603,11 @@ async function authoritativeKnowledgeBaseMetadataForMessages(
         .filter((buildId): buildId is string => Boolean(buildId)),
     ),
   );
-  const buildRows =
+  const buildRows: ServerOwnedBuildResourceIdentity[] =
     buildIds.length === 0
       ? []
       : ((await executor
-          .select({
-            id: knowledgeBaseBuilds.id,
-            userId: knowledgeBaseBuilds.userId,
-            conversationId: knowledgeBaseBuilds.conversationId,
-            logoStorageKey: knowledgeBaseBuilds.logoStorageKey,
-            logoSha256: knowledgeBaseBuilds.logoSha256,
-            logoBytes: knowledgeBaseBuilds.logoBytes,
-            logoFilename: knowledgeBaseBuilds.logoFilename,
-            logoMimeType: knowledgeBaseBuilds.logoMimeType,
-          })
+          .select(serverOwnedBuildResourceSelection)
           .from(knowledgeBaseBuilds)
           .where(
             and(
@@ -1393,7 +1640,6 @@ async function authoritativeKnowledgeBaseMetadataForMessages(
     if (
       matchesAuthoritativeKnowledgeBaseMessageTuple({
         message,
-        publicMessageId: publicId(userId, message.id, projectAssignmentId),
         knowledgeBase,
         turn,
         build,
@@ -1443,6 +1689,171 @@ function persistedKnowledgeBaseMetadata(
   return authoritative.get(message.id);
 }
 
+type GeneralChatMessageMetadata = z.infer<typeof generalChatMessageSchema>;
+
+export function parsedGeneralChatMessageMetadata(
+  metadata: unknown,
+): GeneralChatMessageMetadata | undefined {
+  const candidate = plainRecord(metadata)?.generalChat;
+  const parsed = generalChatMessageSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function parsedGeneralChatDispatchMetadata(metadata: unknown) {
+  const candidate = plainRecord(metadata)?.generalChatDispatch;
+  const parsed = generalChatDispatchSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+async function authoritativeGeneralChatMetadataForMessages(
+  executor: any,
+  userId: number,
+  messageRows: Array<typeof messages.$inferSelect>,
+) {
+  const candidates = messageRows.flatMap((message) => {
+    const generalChat = parsedGeneralChatMessageMetadata(message.metadata);
+    return generalChat?.serverOwned === true && message.turnId
+      ? [{ message, generalChat }]
+      : [];
+  });
+  const verified = new Map<string, GeneralChatMessageMetadata>();
+  if (candidates.length === 0) return verified;
+
+  const turnIds = Array.from(
+    new Set(candidates.map(({ message }) => message.turnId!)),
+  );
+  const taskIds = Array.from(
+    new Set(candidates.map(({ generalChat }) => generalChat.agentTaskId)),
+  );
+  const providerEventIds = Array.from(
+    new Set(candidates.map(({ generalChat }) => generalChat.providerEventId)),
+  );
+  const turnRows = await executor
+    .select({
+      id: conversationTurns.id,
+      conversationId: conversationTurns.conversationId,
+      userId: conversationTurns.userId,
+      apiCredentialId: conversationTurns.apiCredentialId,
+      operationType: conversationTurns.operationType,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
+      metadata: conversationTurns.metadata,
+    })
+    .from(conversationTurns)
+    .where(
+      and(
+        eq(conversationTurns.userId, userId),
+        inArray(conversationTurns.id, turnIds),
+      ),
+    );
+  const taskRows = await executor
+    .select({ id: agentTasks.id, operationId: agentTasks.operationId })
+    .from(agentTasks)
+    .where(inArray(agentTasks.id, taskIds));
+  const operationIds: string[] = Array.from(
+    new Set<string>(
+      taskRows.map((row: { operationId: string }) => row.operationId),
+    ),
+  );
+  const operationRows =
+    operationIds.length === 0
+      ? []
+      : await executor
+          .select({
+            id: agentOperations.id,
+            scope: agentOperations.scope,
+            accountUserId: agentOperations.accountUserId,
+            presalesProjectId: agentOperations.presalesProjectId,
+            operationType: agentOperations.operationType,
+            contractName: agentOperations.contractName,
+            contractRevision: agentOperations.contractRevision,
+            apiCredentialId: agentOperations.apiCredentialId,
+          })
+          .from(agentOperations)
+          .where(inArray(agentOperations.id, operationIds));
+  const eventRows = await executor
+    .select({
+      taskId: agentEvents.taskId,
+      providerEventId: agentEvents.providerEventId,
+    })
+    .from(agentEvents)
+    .where(
+      and(
+        inArray(agentEvents.taskId, taskIds),
+        inArray(agentEvents.providerEventId, providerEventIds),
+      ),
+    );
+
+  const turnsById = new Map(
+    turnRows.map((row: { id: string }) => [row.id, row]),
+  );
+  const tasksById = new Map(
+    taskRows.map((row: { id: string }) => [row.id, row]),
+  );
+  const operationsById = new Map(
+    operationRows.map((row: { id: string }) => [row.id, row]),
+  );
+  const eventKeys = new Set(
+    eventRows.map(
+      (row: { taskId: string; providerEventId: string }) =>
+        `${row.taskId}\u0000${row.providerEventId}`,
+    ),
+  );
+
+  for (const { message, generalChat } of candidates) {
+    const turn = turnsById.get(message.turnId!);
+    const task = tasksById.get(generalChat.agentTaskId);
+    const operation = task
+      ? operationsById.get((task as { operationId: string }).operationId)
+      : undefined;
+    const turnMetadata = plainRecord(
+      (turn as { metadata?: unknown } | undefined)?.metadata,
+    );
+    const turnTaskId = String(
+      turnMetadata?.agentTaskId ??
+        (turn as { upstreamTaskId?: string | null } | undefined)
+          ?.upstreamTaskId ??
+        "",
+    );
+    const validOperation = operation as
+      | {
+          scope: string;
+          accountUserId: number | null;
+          presalesProjectId: string | null;
+          operationType: string;
+          contractName: string;
+          contractRevision: number;
+          apiCredentialId: string;
+        }
+      | undefined;
+    if (
+      message.role === "assistant" &&
+      generalChat.turnId === message.turnId &&
+      (turn as { conversationId?: string } | undefined)?.conversationId ===
+        message.conversationId &&
+      (turn as { userId?: number } | undefined)?.userId === userId &&
+      (turn as { operationType?: string | null } | undefined)?.operationType ===
+        "general_chat_v2" &&
+      turnTaskId === generalChat.agentTaskId &&
+      validOperation?.scope === "managed_user" &&
+      validOperation.accountUserId === userId &&
+      validOperation.presalesProjectId === null &&
+      validOperation.operationType === GENERAL_CHAT_CONTRACT &&
+      validOperation.contractName === GENERAL_CHAT_CONTRACT &&
+      validOperation.contractRevision === GENERAL_CHAT_CONTRACT_REVISION &&
+      (!(turn as { apiCredentialId?: string | null } | undefined)
+        ?.apiCredentialId ||
+        (turn as { apiCredentialId?: string | null }).apiCredentialId ===
+          validOperation.apiCredentialId) &&
+      eventKeys.has(
+        `${generalChat.agentTaskId}\u0000${generalChat.providerEventId}`,
+      )
+    ) {
+      verified.set(message.id, generalChat);
+    }
+  }
+  return verified;
+}
+
 export async function reconstructKnowledgeBasePresentationInlineImages(
   input: {
     build: ServerOwnedBuildResourceIdentity;
@@ -1483,9 +1894,20 @@ export async function reconstructKnowledgeBasePresentationInlineImages(
     input.build.logoFilename &&
     input.build.logoMimeType
   ) {
+    const logo = knowledgeBasePublicResource({
+      buildId: input.build.id,
+      kind: "logo",
+      internalIdentity: knowledgeBaseOfficialLogoInternalIdentity({
+        generation: input.build.generation,
+        sha256: input.build.logoSha256,
+      }),
+      contentSha256: input.build.logoSha256,
+      mimeType: input.build.logoMimeType,
+      sizeBytes: input.build.logoBytes,
+    });
     images.push({
-      src: `/api/knowledge-base/artifacts/${encodeURIComponent(input.build.id)}/logo`,
-      alt: input.build.logoFilename,
+      src: logo.sameOriginUrl,
+      alt: logo.caption,
     });
   }
 
@@ -1495,11 +1917,23 @@ export async function reconstructKnowledgeBasePresentationInlineImages(
     input.node.leafId === input.knowledgeBase.leafId &&
     input.turn.expectedLeafId === input.node.leafId;
   if (isExactCustomerUploadPresentation) {
-    const resources = await loadResources(input.build.id, input.turn);
+    const resources = await loadResources(input.build.id, input.turn).catch(
+      (error) => {
+        logKnowledgeBaseCustomerUploadEnrichmentSkipped({
+          surface: "conversation",
+          buildId: input.build.id,
+          turnId: input.turn.id,
+          error,
+        });
+        return [];
+      },
+    );
     images.push(
       ...resources.map((resource) => ({
         src: resource.sameOriginUrl,
-        alt: resource.filename,
+        // Legacy cached resources may not have caption yet. Do not promote
+        // their storage filename back into newly persisted assistant alt text.
+        alt: resource.caption || "知识库配图",
       })),
     );
   }
@@ -1551,6 +1985,12 @@ export async function loadPersistedMessages(
       messageRows,
       projectAssignmentId,
     );
+  const authoritativeGeneralChat =
+    await authoritativeGeneralChatMetadataForMessages(
+      executor,
+      userId,
+      messageRows,
+    );
   const retentionByFileId = await attachmentRetentionByFileId(
     executor,
     userId,
@@ -1581,6 +2021,11 @@ export async function loadPersistedMessages(
     const reconstructedAttachments = claimedServerOwnedKnowledgeBase
       ? authoritativeKnowledgeBase.userAttachments.get(message.id)
       : undefined;
+    const generalChat = authoritativeGeneralChat.get(message.id);
+    const generalChatDispatch =
+      message.role === "user"
+        ? parsedGeneralChatDispatchMetadata(metadata)
+        : undefined;
     return {
       id: publicId(userId, message.id, projectAssignmentId),
       serverSequence: message.sequence,
@@ -1625,6 +2070,8 @@ export async function loadPersistedMessages(
         : {}),
       ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
       ...(knowledgeBase ? { knowledgeBase } : {}),
+      ...(generalChat ? { generalChat } : {}),
+      ...(generalChatDispatch ? { generalChatDispatch } : {}),
     };
   });
 }
@@ -1638,6 +2085,39 @@ export function isServerOwnedKnowledgeBaseMessage(
   return message.knowledgeBase?.serverOwned === true;
 }
 
+export function isServerOwnedGeneralChatMessage(
+  message: SnapshotMessage,
+): boolean {
+  return message.generalChat?.serverOwned === true;
+}
+
+function isServerOwnedMessage(message: SnapshotMessage): boolean {
+  return (
+    isServerOwnedKnowledgeBaseMessage(message) ||
+    isServerOwnedGeneralChatMessage(message)
+  );
+}
+
+export function assignBrowserOwnedSnapshotMessageSequences(
+  snapshotMessages: readonly SnapshotMessage[],
+  persistedSequenceByPublicMessageId: ReadonlyMap<string, number>,
+) {
+  let nextSequence = Math.max(
+    0,
+    ...[...persistedSequenceByPublicMessageId.values()].map(
+      (sequence) => sequence + 1,
+    ),
+  );
+  return snapshotMessages.flatMap((message) => {
+    if (isServerOwnedMessage(message)) return [];
+    const persistedSequence = persistedSequenceByPublicMessageId.get(
+      message.id,
+    );
+    const sequence = persistedSequence ?? nextSequence++;
+    return [{ message, sequence }];
+  });
+}
+
 /**
  * Browser snapshots may echo server messages, but they can never originate
  * them. Echoes are recovered from the locked database copy during merge; a
@@ -1646,15 +2126,13 @@ export function isServerOwnedKnowledgeBaseMessage(
 export function discardClientClaimedServerOwnedKnowledgeBaseMessages(
   incoming: SnapshotMessage[],
 ) {
-  return incoming.filter(
-    (message) => !isServerOwnedKnowledgeBaseMessage(message),
-  );
+  return incoming.filter((message) => !isServerOwnedMessage(message));
 }
 
-function turnHasServerOwnedKnowledgeBaseMessage(turn: MessageTurn) {
+function turnHasServerOwnedMessage(turn: MessageTurn) {
   return (
-    isServerOwnedKnowledgeBaseMessage(turn.user) ||
-    turn.assistants.some(isServerOwnedKnowledgeBaseMessage)
+    isServerOwnedMessage(turn.user) ||
+    turn.assistants.some(isServerOwnedMessage)
   );
 }
 
@@ -1675,9 +2153,7 @@ export function sanitizeKnowledgeBaseDeletionTombstones(
   // at this boundary and therefore cannot grant deletion immunity.
   void incoming;
   const protectedIds = new Set(
-    persisted
-      .filter(isServerOwnedKnowledgeBaseMessage)
-      .map((message) => message.id),
+    persisted.filter(isServerOwnedMessage).map((message) => message.id),
   );
   return Array.from(new Set(deletedMessageIds)).filter(
     (messageId) => !protectedIds.has(messageId),
@@ -1702,6 +2178,330 @@ export function repairSnapshotMessageIds(
     attachmentIndex += message.attachments.length;
     return { ...message, attachments: nextAttachments };
   });
+}
+
+export type GeneralChatTurnAuthority = {
+  id: string;
+  clientRequestId: string;
+  upstreamTaskId: string;
+  operationId: string;
+  settlementKind: "acknowledged" | "rejected" | null;
+  safeToSettle: boolean;
+};
+
+type GeneralChatSnapshotTurnAuthority = {
+  turnByClientRequestId: ReadonlyMap<string, GeneralChatTurnAuthority>;
+  persistedTurnIdByPublicMessageId: ReadonlyMap<string, string>;
+};
+
+function generalChatAuthorityHash(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function generalChatDispatchSettlementIsSafe(input: {
+  reservationStatus: unknown;
+  rejectionProven: unknown;
+}) {
+  return generalChatDispatchSettlementKind(input) !== null;
+}
+
+export function generalChatDispatchSettlementKind(input: {
+  reservationStatus: unknown;
+  rejectionProven: unknown;
+}): GeneralChatTurnAuthority["settlementKind"] {
+  if (input.reservationStatus === "acknowledged") return "acknowledged";
+  if (
+    input.reservationStatus === "rejected" &&
+    input.rejectionProven === true
+  ) {
+    return "rejected";
+  }
+  return null;
+}
+
+async function loadGeneralChatSnapshotTurnAuthority(
+  executor: any,
+  userId: number,
+  persistedConversationId: string,
+  projectAssignmentId: string | null,
+): Promise<GeneralChatSnapshotTurnAuthority> {
+  const turnRows = (await executor
+    .select({
+      id: conversationTurns.id,
+      clientRequestId: conversationTurns.clientRequestId,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
+      requestHash: conversationTurns.requestHash,
+      metadata: conversationTurns.metadata,
+    })
+    .from(conversationTurns)
+    .where(
+      and(
+        projectAssignmentId ? undefined : eq(conversationTurns.userId, userId),
+        eq(conversationTurns.conversationId, persistedConversationId),
+        eq(conversationTurns.operationType, "general_chat_v2"),
+      ),
+    )) as Array<{
+    id: string;
+    clientRequestId: string;
+    upstreamTaskId: string | null;
+    requestHash: string | null;
+    metadata: Record<string, unknown>;
+  }>;
+  const persistedUserRows = (await executor
+    .select({ id: messages.id, turnId: messages.turnId })
+    .from(messages)
+    .where(
+      and(
+        projectAssignmentId ? undefined : eq(messages.userId, userId),
+        eq(messages.conversationId, persistedConversationId),
+        eq(messages.role, "user"),
+        isNull(messages.deletedAt),
+      ),
+    )) as Array<{ id: string; turnId: string | null }>;
+
+  const taskIds = Array.from(
+    new Set(
+      turnRows.flatMap((turn) =>
+        turn.upstreamTaskId ? [turn.upstreamTaskId] : [],
+      ),
+    ),
+  );
+  const taskRows =
+    taskIds.length === 0
+      ? []
+      : ((await executor
+          .select({
+            id: agentTasks.id,
+            operationId: agentTasks.operationId,
+            providerTaskId: agentTasks.providerTaskId,
+          })
+          .from(agentTasks)
+          .where(inArray(agentTasks.id, taskIds))) as Array<{
+          id: string;
+          operationId: string;
+          providerTaskId: string | null;
+        }>);
+  const operationIds = Array.from(
+    new Set(taskRows.map((task) => task.operationId)),
+  );
+  const operationRows =
+    operationIds.length === 0
+      ? []
+      : ((await executor
+          .select({
+            id: agentOperations.id,
+            scope: agentOperations.scope,
+            accountUserId: agentOperations.accountUserId,
+            presalesProjectId: agentOperations.presalesProjectId,
+            operationType: agentOperations.operationType,
+            idempotencyKeyHash: agentOperations.idempotencyKeyHash,
+            requestHash: agentOperations.requestHash,
+            contractName: agentOperations.contractName,
+            contractRevision: agentOperations.contractRevision,
+          })
+          .from(agentOperations)
+          .where(inArray(agentOperations.id, operationIds))) as Array<{
+          id: string;
+          scope: string;
+          accountUserId: number | null;
+          presalesProjectId: string | null;
+          operationType: string;
+          idempotencyKeyHash: string;
+          requestHash: string;
+          contractName: string;
+          contractRevision: number;
+        }>);
+  const eventRows =
+    taskIds.length === 0
+      ? []
+      : ((await executor
+          .select({
+            taskId: agentEvents.taskId,
+            providerEventId: agentEvents.providerEventId,
+            eventType: agentEvents.eventType,
+            normalizedPayload: agentEvents.normalizedPayload,
+          })
+          .from(agentEvents)
+          .where(
+            and(
+              inArray(agentEvents.taskId, taskIds),
+              inArray(agentEvents.eventType, [
+                "local_create_reservation",
+                "local_send_reservation",
+              ]),
+            ),
+          )) as Array<{
+          taskId: string;
+          providerEventId: string;
+          eventType: string;
+          normalizedPayload: Record<string, unknown>;
+        }>);
+  const tasksById = new Map(taskRows.map((task) => [task.id, task]));
+  const operationsById = new Map(
+    operationRows.map((operation) => [operation.id, operation]),
+  );
+  const eventsByKey = new Map(
+    eventRows.map((event) => [
+      `${event.taskId}\u0000${event.providerEventId}`,
+      event,
+    ]),
+  );
+  const turnByClientRequestId = new Map<string, GeneralChatTurnAuthority>();
+  for (const turn of turnRows) {
+    if (!turn.upstreamTaskId) continue;
+    const task = tasksById.get(turn.upstreamTaskId);
+    const operation = task ? operationsById.get(task.operationId) : undefined;
+    const turnMetadata = plainRecord(turn.metadata);
+    const validOperation = Boolean(
+      task &&
+        operation &&
+        turnMetadata?.operationId === operation.id &&
+        operation.scope === "managed_user" &&
+        operation.accountUserId === userId &&
+        operation.presalesProjectId === null &&
+        operation.operationType === GENERAL_CHAT_CONTRACT &&
+        operation.contractName === GENERAL_CHAT_CONTRACT &&
+        operation.contractRevision === GENERAL_CHAT_CONTRACT_REVISION,
+    );
+    const sendProviderEventId = `local-send:${generalChatAuthorityHash(
+      `${userId}\0${turn.upstreamTaskId}\0${turn.clientRequestId}`,
+    )}`;
+    const createProviderEventId = `local-create:${turn.upstreamTaskId}`;
+    const sendEvent = eventsByKey.get(
+      `${turn.upstreamTaskId}\u0000${sendProviderEventId}`,
+    );
+    const createEvent =
+      operation?.idempotencyKeyHash ===
+      generalChatAuthorityHash(`${userId}\0${turn.clientRequestId}`)
+        ? eventsByKey.get(
+            `${turn.upstreamTaskId}\u0000${createProviderEventId}`,
+          )
+        : undefined;
+    const reservation = sendEvent ?? createEvent;
+    const reservationPayload = plainRecord(reservation?.normalizedPayload);
+    const exactReservation = Boolean(
+      validOperation &&
+        reservation &&
+        reservationPayload &&
+        ((reservation === sendEvent &&
+          reservation.eventType === "local_send_reservation" &&
+          reservationPayload.kind === "local_send_reservation" &&
+          reservationPayload.requestHash === turn.requestHash) ||
+          (reservation === createEvent &&
+            reservation.eventType === "local_create_reservation" &&
+            reservationPayload.kind === "local_create_reservation" &&
+            reservationPayload.requestHash === operation?.requestHash)),
+    );
+    const reservationSettlementKind = exactReservation
+      ? generalChatDispatchSettlementKind({
+          reservationStatus: reservationPayload?.status,
+          rejectionProven: reservationPayload?.rejectionProven,
+        })
+      : null;
+    const settlementKind =
+      reservationSettlementKind === "acknowledged" && !task?.providerTaskId
+        ? null
+        : reservationSettlementKind;
+    turnByClientRequestId.set(turn.clientRequestId, {
+      id: turn.id,
+      clientRequestId: turn.clientRequestId,
+      upstreamTaskId: turn.upstreamTaskId,
+      operationId: task?.operationId ?? "",
+      settlementKind,
+      safeToSettle: settlementKind !== null,
+    });
+  }
+
+  return {
+    turnByClientRequestId,
+    persistedTurnIdByPublicMessageId: new Map(
+      persistedUserRows.flatMap((message) =>
+        message.turnId
+          ? [
+              [
+                publicId(userId, message.id, projectAssignmentId),
+                message.turnId,
+              ] as const,
+            ]
+          : [],
+      ),
+    ),
+  };
+}
+
+export function removeAcknowledgedGeneralChatDispatchMetadata(input: {
+  persistedMessages: readonly SnapshotMessage[];
+  incomingMessages: readonly SnapshotMessage[];
+  executionKind?: ConversationSnapshot["executionKind"];
+  taskId?: string;
+  previousResponseId?: string;
+  authority: GeneralChatSnapshotTurnAuthority;
+}): SnapshotMessage[] {
+  const incomingById = new Map(
+    input.incomingMessages.map((message) => [message.id, message]),
+  );
+  const snapshotPointers = [input.taskId, input.previousResponseId].filter(
+    (pointer): pointer is string => Boolean(pointer),
+  );
+  return input.persistedMessages.map((persistedMessage) => {
+    const dispatch = persistedMessage.generalChatDispatch;
+    const incomingMessage = incomingById.get(persistedMessage.id);
+    if (
+      persistedMessage.role !== "user" ||
+      !dispatch ||
+      incomingMessage?.role !== "user" ||
+      incomingMessage.generalChatDispatch !== undefined ||
+      input.executionKind !== "general_chat_v2"
+    ) {
+      return persistedMessage;
+    }
+    const turn = input.authority.turnByClientRequestId.get(
+      dispatch.clientRequestId,
+    );
+    if (
+      !turn ||
+      !turn.safeToSettle ||
+      dispatch.clientRequestId !== persistedMessage.id ||
+      input.authority.persistedTurnIdByPublicMessageId.get(
+        persistedMessage.id,
+      ) !== turn.id ||
+      (turn.settlementKind === "acknowledged"
+        ? input.taskId !== turn.upstreamTaskId ||
+          input.previousResponseId !== turn.upstreamTaskId
+        : snapshotPointers.some((pointer) => pointer !== turn.upstreamTaskId))
+    ) {
+      return persistedMessage;
+    }
+    const { generalChatDispatch: _settledDispatch, ...settledMessage } =
+      persistedMessage;
+    return settledMessage;
+  });
+}
+
+export function protectUnsettledGeneralChatBoundUserMessageTombstones(
+  deletedMessageIds: readonly string[],
+  authority: GeneralChatSnapshotTurnAuthority,
+) {
+  const protectedIds = new Set(
+    Array.from(authority.turnByClientRequestId.values()).flatMap((turn) =>
+      !turn.safeToSettle &&
+      authority.persistedTurnIdByPublicMessageId.get(turn.clientRequestId) ===
+        turn.id
+        ? [turn.clientRequestId]
+        : [],
+    ),
+  );
+  return Array.from(new Set(deletedMessageIds)).filter(
+    (messageId) => !protectedIds.has(messageId),
+  );
+}
+
+export function authoritativeGeneralChatTurnIdForBrowserMessage(
+  message: SnapshotMessage,
+  turnByClientRequestId: ReadonlyMap<string, GeneralChatTurnAuthority>,
+) {
+  if (message.role !== "user") return null;
+  return turnByClientRequestId.get(message.id)?.id ?? null;
 }
 
 function splitMessageTurns(messagesToSplit: SnapshotMessage[]) {
@@ -1786,7 +2586,7 @@ export function mergeConversationMessages(
     prelude.set(message.id, message);
   for (const message of incomingSplit.prelude) {
     const existing = prelude.get(message.id);
-    if (!existing || !isServerOwnedKnowledgeBaseMessage(existing)) {
+    if (!existing || !isServerOwnedMessage(existing)) {
       prelude.set(message.id, message);
     }
   }
@@ -1795,7 +2595,7 @@ export function mergeConversationMessages(
   for (const turn of persistedSplit.turns) {
     const identity = messageTurnIdentity(turn);
     const existing = turns.get(identity);
-    if (!existing || !turnHasServerOwnedKnowledgeBaseMessage(existing)) {
+    if (!existing || !turnHasServerOwnedMessage(existing)) {
       turns.set(identity, turn);
     }
   }
@@ -1816,8 +2616,8 @@ export function mergeConversationMessages(
     }
     // Once the server has accepted a KB confirmation/presentation, a stale
     // browser snapshot is never authoritative for any part of that turn.
-    if (turnHasServerOwnedKnowledgeBaseMessage(persistedTurn)) continue;
-    const mergedUser = isServerOwnedKnowledgeBaseMessage(turn.user)
+    if (turnHasServerOwnedMessage(persistedTurn)) continue;
+    const mergedUser = isServerOwnedMessage(turn.user)
       ? turn.user
       : persistedTurn.user;
     // Polling projections only become richer (placeholder -> partial -> final).
@@ -1855,7 +2655,7 @@ export function mergeConversationMessages(
   ];
 }
 
-async function persistSnapshot(
+export async function persistSnapshot(
   executor: any,
   userId: number,
   snapshot: ConversationSnapshot,
@@ -1873,6 +2673,33 @@ async function persistSnapshot(
     ),
   };
   const projectAssignmentId = options.projectAssignmentId ?? null;
+  const persistedConversationId = storageId(
+    userId,
+    snapshot.id,
+    projectAssignmentId,
+  );
+  const siteOpsProjects = projectAssignmentId
+    ? []
+    : await executor
+        .select({ id: siteProjects.id })
+        .from(siteProjects)
+        .where(
+          and(
+            eq(siteProjects.userId, userId),
+            or(
+              eq(siteProjects.conversationId, snapshot.id),
+              eq(siteProjects.conversationId, persistedConversationId),
+            ),
+          ),
+        )
+        .limit(1);
+  if (siteOpsProjects[0]) {
+    if (options.skipExisting) return "skipped";
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "AI建站会话由服务端持有，请在官网任务与AI建站中操作",
+    });
+  }
   const knowledgeBuildCandidates = await executor
     .select({ id: knowledgeBaseBuilds.id })
     .from(knowledgeBaseBuilds)
@@ -1920,7 +2747,7 @@ async function persistSnapshot(
     if (options.skipExisting) return "skipped";
     throw new TRPCError({
       code: "CONFLICT",
-      message: "知识库重置工单正在审批，当前会话已只读锁定",
+      message: "知识库重置需求正在审批，当前会话已只读锁定",
     });
   }
   const [tombstones, retainedTombstones] = await Promise.all([
@@ -1958,11 +2785,6 @@ async function persistSnapshot(
       message: "该知识库会话已被重置，不能从旧页面重新同步",
     });
   }
-  const persistedConversationId = storageId(
-    userId,
-    snapshot.id,
-    projectAssignmentId,
-  );
   // Do not take a next-key lock for a row that does not exist. Two new public
   // conversations commonly sort into the same PRIMARY-key gap; locking both
   // missing IDs before INSERT makes their insert-intention locks deadlock.
@@ -1994,6 +2816,12 @@ async function persistSnapshot(
   }
   if (existing && options.skipExisting) return "skipped";
 
+  let preservedServerOwnedMessageIds: string[] = [];
+  const persistedSequenceByPublicMessageId = new Map<string, number>();
+  let generalChatTurnAuthority: GeneralChatSnapshotTurnAuthority = {
+    turnByClientRequestId: new Map(),
+    persistedTurnIdByPublicMessageId: new Map(),
+  };
   if (existing) {
     const persistedMessages = await loadPersistedMessages(
       executor,
@@ -2001,11 +2829,45 @@ async function persistSnapshot(
       persistedConversationId,
       projectAssignmentId,
     );
-    const deletedMessageIds = sanitizeKnowledgeBaseDeletionTombstones(
-      persistedMessages,
-      snapshot.messages,
-      [...existing.deletedMessageIds, ...(snapshot.deletedMessageIds ?? [])],
+    generalChatTurnAuthority = await loadGeneralChatSnapshotTurnAuthority(
+      executor,
+      userId,
+      persistedConversationId,
+      projectAssignmentId,
     );
+    const mergeablePersistedMessages =
+      removeAcknowledgedGeneralChatDispatchMetadata({
+        persistedMessages,
+        incomingMessages: snapshot.messages,
+        executionKind: snapshot.executionKind,
+        taskId: snapshot.taskId,
+        previousResponseId: snapshot.previousResponseId,
+        authority: generalChatTurnAuthority,
+      });
+    for (const message of persistedMessages) {
+      if (
+        Number.isSafeInteger(message.serverSequence) &&
+        Number(message.serverSequence) >= 0
+      ) {
+        const sequence = Number(message.serverSequence);
+        persistedSequenceByPublicMessageId.set(message.id, sequence);
+      }
+    }
+    preservedServerOwnedMessageIds = persistedMessages
+      .filter(isServerOwnedMessage)
+      .map((message) => storageId(userId, message.id, projectAssignmentId));
+    const deletedMessageIds =
+      protectUnsettledGeneralChatBoundUserMessageTombstones(
+        sanitizeKnowledgeBaseDeletionTombstones(
+          persistedMessages,
+          snapshot.messages,
+          [
+            ...existing.deletedMessageIds,
+            ...(snapshot.deletedMessageIds ?? []),
+          ],
+        ),
+        generalChatTurnAuthority,
+      );
     const taskPointers = await resolveTaskPointersForSnapshot(
       executor,
       userId,
@@ -2017,7 +2879,7 @@ async function persistSnapshot(
     snapshot = {
       ...snapshot,
       messages: mergeConversationMessages(
-        persistedMessages,
+        mergeablePersistedMessages,
         snapshot.messages,
         deletedMessageIds,
       ),
@@ -2166,15 +3028,28 @@ async function persistSnapshot(
         ).map((turn: { id: string }) => turn.id),
   );
 
-  // A snapshot is authoritative for this conversation. Replacing children also
-  // removes stale polling placeholders and preserves manual-delete tombstones on
-  // the parent conversation.
+  // Browser snapshots own only ordinary browser messages. Knowledge-base user
+  // turns and presentations are written by the server state machine and may
+  // carry a turn FK; deleting/reinserting them here used to invert the
+  // build -> turn lock order and could deadlock an accepted dispatch.
   await executor
     .delete(messages)
-    .where(eq(messages.conversationId, persistedConversationId));
+    .where(
+      and(
+        eq(messages.conversationId, persistedConversationId),
+        ...(preservedServerOwnedMessageIds.length > 0
+          ? [notInArray(messages.id, preservedServerOwnedMessageIds)]
+          : []),
+      ),
+    );
 
-  for (let sequence = 0; sequence < snapshot.messages.length; sequence += 1) {
-    const message = snapshot.messages[sequence];
+  for (const {
+    message,
+    sequence,
+  } of assignBrowserOwnedSnapshotMessageSequences(
+    snapshot.messages,
+    persistedSequenceByPublicMessageId,
+  )) {
     const sentAt = asDate(message.timestamp) ?? new Date();
     await executor.insert(messages).values({
       id: storageId(userId, message.id, projectAssignmentId),
@@ -2183,7 +3058,10 @@ async function persistSnapshot(
         message.knowledgeBase?.turnId &&
         validTurnIds.has(message.knowledgeBase.turnId)
           ? message.knowledgeBase.turnId
-          : null,
+          : authoritativeGeneralChatTurnIdForBrowserMessage(
+              message,
+              generalChatTurnAuthority.turnByClientRequestId,
+            ),
       userId,
       role: message.role,
       content: normalizeKnowledgeCollectionCopy(message.content),
@@ -2197,13 +3075,20 @@ async function persistSnapshot(
       const attachmentResourceKey = attachment.fileId
         ? upstreamResourceKey("file", attachment.fileId)
         : undefined;
+      const attachmentBinding = attachmentResourceKey
+        ? bindings.get(attachmentResourceKey)
+        : undefined;
       const attachmentCredentialId = attachmentResourceKey
-        ? (bindings.get(attachmentResourceKey)?.apiCredentialId ??
+        ? (attachmentBinding?.apiCredentialId ??
           (options.validatedResourceKeys?.has(attachmentResourceKey)
             ? (options.importCredentialId ?? apiCredentialId)
             : apiCredentialId))
         : apiCredentialId;
-      if (attachment.fileId && attachmentCredentialId) {
+      if (
+        attachment.fileId &&
+        attachmentCredentialId &&
+        attachmentBinding?.domain !== "general_chat_v2"
+      ) {
         await persistResource(
           executor,
           {
@@ -2237,11 +3122,13 @@ async function persistSnapshot(
   if (apiCredentialId) {
     for (const taskId of snapshotTaskIds(snapshot)) {
       const taskResourceKey = upstreamResourceKey("task", taskId);
+      const taskBinding = bindings.get(taskResourceKey);
       const taskCredentialId =
-        bindings.get(taskResourceKey)?.apiCredentialId ??
+        taskBinding?.apiCredentialId ??
         (options.validatedResourceKeys?.has(taskResourceKey)
           ? (options.importCredentialId ?? apiCredentialId)
           : apiCredentialId);
+      if (taskBinding?.domain === "general_chat_v2") continue;
       await persistResource(
         executor,
         {
@@ -2258,49 +3145,6 @@ async function persistSnapshot(
   }
 
   return existing ? "updated" : "imported";
-}
-
-async function validateWithBoundedConcurrency(
-  resources: UpstreamResourceRef[],
-  apiKey: string,
-) {
-  if (resources.length === 0) return;
-  const abortController = new AbortController();
-  const signal = AbortSignal.any([
-    abortController.signal,
-    AbortSignal.timeout(LEGACY_IMPORT_VALIDATION_TIMEOUT_MS),
-  ]);
-  let nextIndex = 0;
-  const worker = async () => {
-    while (nextIndex < resources.length) {
-      const resource = resources[nextIndex];
-      nextIndex += 1;
-      await validateUpstreamResourceAccess(
-        apiKey,
-        resource.kind,
-        resource.id,
-        fetch,
-        signal,
-      );
-    }
-  };
-
-  try {
-    await Promise.all(
-      Array.from(
-        {
-          length: Math.min(
-            LEGACY_IMPORT_VALIDATION_CONCURRENCY,
-            resources.length,
-          ),
-        },
-        () => worker(),
-      ),
-    );
-  } catch (error) {
-    abortController.abort();
-    throw error;
-  }
 }
 
 async function prepareLegacyImport(
@@ -2325,6 +3169,7 @@ async function prepareLegacyImport(
       !existingIds.has(storageId(userId, snapshot.id, projectAssignmentId)),
   );
   const resources = collectSnapshotResourceRefs(newSnapshots);
+  assertLocalImportHasNoProviderResources(resources);
   if (resources.length === 0) {
     return {
       credentialId: undefined,
@@ -2332,91 +3177,11 @@ async function prepareLegacyImport(
     };
   }
 
-  const taskIds = resources
-    .filter((item) => item.kind === "task")
-    .map((item) => item.id);
-  const fileIds = resources
-    .filter((item) => item.kind === "file")
-    .map((item) => item.id);
-  const [knownTasks, knownFiles] = await Promise.all([
-    taskIds.length === 0
-      ? []
-      : db
-          .select({
-            kind: upstreamResources.kind,
-            upstreamId: upstreamResources.upstreamId,
-            userId: upstreamResources.userId,
-            projectAssignmentId: upstreamResources.projectAssignmentId,
-          })
-          .from(upstreamResources)
-          .where(
-            and(
-              eq(upstreamResources.kind, "task"),
-              inArray(upstreamResources.upstreamId, taskIds),
-            ),
-          ),
-    fileIds.length === 0
-      ? []
-      : db
-          .select({
-            kind: upstreamResources.kind,
-            upstreamId: upstreamResources.upstreamId,
-            userId: upstreamResources.userId,
-            projectAssignmentId: upstreamResources.projectAssignmentId,
-          })
-          .from(upstreamResources)
-          .where(
-            and(
-              eq(upstreamResources.kind, "file"),
-              inArray(upstreamResources.upstreamId, fileIds),
-            ),
-          ),
-  ]);
-  const known = new Set<string>();
-  for (const resource of [...knownTasks, ...knownFiles]) {
-    const owned = projectAssignmentId
-      ? resource.projectAssignmentId === projectAssignmentId
-      : resource.userId === userId && resource.projectAssignmentId == null;
-    if (!owned) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "历史任务或文件已属于其他账号",
-      });
-    }
-    known.add(upstreamResourceKey(resource.kind, resource.upstreamId));
-  }
-
-  const unknown = resources.filter(
-    (resource) => !known.has(upstreamResourceKey(resource.kind, resource.id)),
-  );
-  if (unknown.length === 0) {
-    return {
-      credentialId: undefined,
-      validatedResourceKeys: new Set<string>(),
-    };
-  }
-  const credential = await getEffectiveDecryptedCredentialForAccount(userId);
-  if (!credential) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "请先迁移或配置该会话原来使用的 API Key，再导入历史会话",
-    });
-  }
-  if (await isUpstreamApiKeyShared(userId, credential.fingerprint)) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        "共享 API Key 无法证明未知历史任务或文件的账号归属，请由系统管理员完成迁移",
-    });
-  }
-  await validateWithBoundedConcurrency(unknown, credential.apiKey);
+  // The assertion above is exhaustive, but keep a total return for type-flow
+  // analysis in case the resource collector changes in the future.
   return {
-    credentialId: credential.id,
-    validatedResourceKeys: new Set(
-      unknown.map((resource) =>
-        upstreamResourceKey(resource.kind, resource.id),
-      ),
-    ),
+    credentialId: undefined,
+    validatedResourceKeys: new Set<string>(),
   };
 }
 
@@ -2426,7 +3191,7 @@ export async function listSnapshots(
   database?: NonNullable<Awaited<ReturnType<typeof getDb>>>,
 ): Promise<ConversationSnapshot[]> {
   const db = database ?? requireDb(await getDb());
-  const conversationRows = await db
+  const allConversationRows = await db
     .select()
     .from(conversations)
     .where(
@@ -2441,9 +3206,36 @@ export async function listSnapshots(
       ),
     )
     .orderBy(desc(conversations.updatedAt));
+  if (allConversationRows.length === 0) return [];
+
+  // SiteOps owns its conversation and messages on the server. Keep it out of
+  // the ordinary chat list so browser snapshots cannot try to mirror it.
+  const siteOpsConversationIds = projectAssignmentId
+    ? new Set<string>()
+    : new Set(
+        (
+          await db
+            .select({ conversationId: siteProjects.conversationId })
+            .from(siteProjects)
+            .where(eq(siteProjects.userId, userId))
+        ).map((row) => row.conversationId),
+      );
+  const conversationRows = allConversationRows.filter(
+    (row) => !siteOpsConversationIds.has(row.id),
+  );
   if (conversationRows.length === 0) return [];
 
   const ids = conversationRows.map((row) => row.id);
+  const responseLogicConversationIds = new Set(
+    projectAssignmentId
+      ? []
+      : (
+          await db
+            .select({ conversationId: responseLogicEntries.conversationId })
+            .from(responseLogicEntries)
+            .where(eq(responseLogicEntries.userId, userId))
+        ).flatMap((row) => (row.conversationId ? [row.conversationId] : [])),
+  );
   const messageRows = await db
     .select()
     .from(messages)
@@ -2491,6 +3283,8 @@ export async function listSnapshots(
       messageRows,
       projectAssignmentId,
     );
+  const authoritativeGeneralChat =
+    await authoritativeGeneralChatMetadataForMessages(db, userId, messageRows);
   const retentionByFileId = await attachmentRetentionByFileId(
     db,
     userId,
@@ -2506,8 +3300,43 @@ export async function listSnapshots(
     projectAssignmentId,
   );
 
+  const candidateGeneralChatTaskIds = Array.from(
+    new Set(
+      conversationRows.flatMap((row) =>
+        [row.upstreamTaskId, row.previousResponseId].filter(
+          (id): id is string => Boolean(id),
+        ),
+      ),
+    ),
+  );
+  const ownedGeneralChatTaskBindings = await loadGeneralChatTaskBindings(
+    db,
+    userId,
+    candidateGeneralChatTaskIds,
+    { strictOwnership: false },
+  );
+  const generalChatConversationIds = new Set(
+    messageRows.flatMap((message) =>
+      authoritativeGeneralChat.has(message.id) ? [message.conversationId] : [],
+    ),
+  );
+
   return conversationRows.map((row) => ({
     id: publicId(userId, row.id, projectAssignmentId),
+    ...(responseLogicConversationIds.has(
+      publicId(userId, row.id, projectAssignmentId),
+    )
+      ? { executionKind: "response_logic" as const }
+      : generalChatConversationIds.has(row.id) ||
+          [row.upstreamTaskId, row.previousResponseId].some(
+            (taskId) =>
+              Boolean(taskId) &&
+              ownedGeneralChatTaskBindings.has(
+                upstreamResourceKey("task", taskId!),
+              ),
+          )
+        ? { executionKind: "general_chat_v2" as const }
+        : {}),
     title: row.title,
     messages: (messagesByConversation.get(row.id) ?? []).map((message) => {
       const metadata = (message.metadata ?? {}) as MessageMetadata;
@@ -2523,6 +3352,11 @@ export async function listSnapshots(
       const reconstructedAttachments = claimedServerOwnedKnowledgeBase
         ? authoritativeKnowledgeBase.userAttachments.get(message.id)
         : undefined;
+      const generalChat = authoritativeGeneralChat.get(message.id);
+      const generalChatDispatch =
+        message.role === "user"
+          ? parsedGeneralChatDispatchMetadata(metadata)
+          : undefined;
       return {
         id: publicId(userId, message.id, projectAssignmentId),
         serverSequence: message.sequence,
@@ -2565,6 +3399,8 @@ export async function listSnapshots(
           : {}),
         ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
         ...(knowledgeBase ? { knowledgeBase } : {}),
+        ...(generalChat ? { generalChat } : {}),
+        ...(generalChatDispatch ? { generalChatDispatch } : {}),
       };
     }),
     ...(row.upstreamTaskId ? { taskId: row.upstreamTaskId } : {}),
@@ -2637,7 +3473,10 @@ export const conversationRouter = router({
           message: "会话保存失败",
         });
       }
-      return persisted;
+      return input.conversation.executionKind === "general_chat_v2" &&
+        persisted.executionKind !== "general_chat_v2"
+        ? { ...persisted, executionKind: "general_chat_v2" as const }
+        : persisted;
     }),
 
   delete: protectedProcedure
@@ -2659,6 +3498,28 @@ export const conversationRouter = router({
         projectAssignmentId,
       );
       await runConversationWriteTransaction(db, async (tx) => {
+        const siteOpsProject = projectAssignmentId
+          ? []
+          : await tx
+              .select({ id: siteProjects.id })
+              .from(siteProjects)
+              .where(
+                and(
+                  eq(siteProjects.userId, ctx.user.id),
+                  or(
+                    eq(siteProjects.conversationId, input.id),
+                    eq(siteProjects.conversationId, persistedConversationId),
+                  ),
+                ),
+              )
+              .limit(1)
+              .for("update");
+        if (siteOpsProject[0]) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "AI建站会话由服务端持有，请在官网任务与AI建站中操作",
+          });
+        }
         // KB transitions lock the build before touching conversation state.
         // Keep the same order here so delete cannot deadlock or race a start.
         const knowledgeBuild = await tx
@@ -2675,7 +3536,7 @@ export const conversationRouter = router({
         if (knowledgeBuild[0]) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "知识库会话由服务端持有；如需清除，请使用知识库重置工单",
+            message: "知识库会话由服务端持有；如需清除，请使用知识库重置需求",
           });
         }
         const existing = await tx

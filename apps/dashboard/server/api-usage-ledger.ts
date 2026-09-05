@@ -427,6 +427,53 @@ export async function readManagedUsageLedger(input: {
   };
 }
 
+/**
+ * Reads the account-owned rolling total independently of the currently active
+ * credential. Retired and deleted Key generations remain represented by the
+ * immutable task ledger until each task crosses the rolling-window boundary.
+ */
+export async function readRollingManagedUsageByAccounts(input: {
+  executor: any;
+  accountIds: number[];
+  startAt: number;
+  endAt: number;
+}) {
+  const accountIds = [...new Set(input.accountIds.filter(Number.isInteger))];
+  if (accountIds.length === 0) {
+    return new Map<number, { used: number; observedAt: number | null }>();
+  }
+  const rows = await input.executor
+    .select({
+      accountUserId: apiUsageTaskLedger.accountUserId,
+      used: sql<number>`COALESCE(SUM(${apiUsageTaskLedger.creditUsage}), 0)`,
+      observedAt: sql<Date | null>`MAX(${apiUsageTaskLedger.observedAt})`,
+    })
+    .from(apiUsageTaskLedger)
+    .where(
+      and(
+        eq(apiUsageTaskLedger.scope, "managed_user"),
+        inArray(apiUsageTaskLedger.accountUserId, accountIds),
+        gte(apiUsageTaskLedger.taskCreatedAtMs, input.startAt),
+        lt(apiUsageTaskLedger.taskCreatedAtMs, input.endAt),
+      ),
+    )
+    .groupBy(apiUsageTaskLedger.accountUserId);
+  return new Map<number, { used: number; observedAt: number | null }>(
+    rows.map((row: any) => [
+      Number(row.accountUserId),
+      {
+        used: Math.max(0, Number(row.used) || 0),
+        observedAt:
+          row.observedAt instanceof Date
+            ? row.observedAt.getTime()
+            : Number.isFinite(Number(row.observedAt))
+              ? Number(row.observedAt)
+              : null,
+      },
+    ]),
+  );
+}
+
 export async function readWebsiteUsageLedger(input: {
   executor: any;
   currentFingerprint: string;

@@ -153,6 +153,12 @@ function isCharacterType(type) {
   );
 }
 
+function isNumericType(type) {
+  return /^(?:tinyint|smallint|mediumint|int|bigint|decimal|numeric|float|double)(?:\(|\s|$)/u.test(
+    type,
+  );
+}
+
 function normalizeNumericLiteral(value) {
   const raw = String(value).trim().toLowerCase();
   const match = raw.match(
@@ -637,7 +643,7 @@ function normalizeInformationSchemaExpression(value) {
   );
 }
 
-function defaultFromSnapshot(column) {
+function defaultFromSnapshot(column, type) {
   if (!Object.hasOwn(column, "default")) return null;
   const value = column.default;
   if (typeof value === "boolean") {
@@ -650,7 +656,12 @@ function defaultFromSnapshot(column) {
     throw new Error("DATABASE_SCHEMA_DEFAULT_INVALID");
   }
   const literal = unwrappedLiteral(value);
-  if (literal !== undefined) return { kind: "literal", value: literal };
+  if (literal !== undefined) {
+    return {
+      kind: "literal",
+      value: isNumericType(type) ? normalizeNumericLiteral(literal) : literal,
+    };
+  }
   return { kind: "expression", value: normalizeSqlExpression(value) };
 }
 
@@ -709,11 +720,7 @@ function defaultFromDatabase(value, type, extra) {
       return { kind: "literal", value: "0" };
     }
   }
-  if (
-    /^(?:tinyint|smallint|mediumint|int|bigint|decimal|numeric|float|double)(?:\(|\s|$)/u.test(
-      type,
-    )
-  ) {
+  if (isNumericType(type)) {
     return { kind: "literal", value: normalizeNumericLiteral(raw) };
   }
   if (
@@ -831,7 +838,7 @@ function expectedTable(tableKey, rawTable) {
       type,
       nullable: !column.notNull,
       autoIncrement: column.autoincrement,
-      default: defaultFromSnapshot(column),
+      default: defaultFromSnapshot(column, type),
       onUpdate: onUpdateFromSnapshot(column, type),
       generated: generatedFromSnapshot(column),
       characterSet: characterType ? TABLE_DEFAULT : null,

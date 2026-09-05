@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   approveWorkspaceQuestionSelection: vi.fn(),
   assertServiceCapability: vi.fn(),
   writeWorkspaceAuditEvent: vi.fn(),
+  completeQuestionReviewRequest: vi.fn(),
+  reconcileInitialMonitoringAfterQuestionSelection: vi.fn(),
 }));
 
 vi.mock("./dashboard-service", async (importOriginal) => {
@@ -44,6 +46,25 @@ vi.mock("./admin-control-plane-service", async (importOriginal) => {
   return {
     ...actual,
     writeWorkspaceAuditEvent: mocks.writeWorkspaceAuditEvent,
+  };
+});
+
+vi.mock("./question-maintenance-service", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./question-maintenance-service")>();
+  return {
+    ...actual,
+    completeQuestionReviewRequest: mocks.completeQuestionReviewRequest,
+  };
+});
+
+vi.mock("./delivery-role-service", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./delivery-role-service")>();
+  return {
+    ...actual,
+    reconcileInitialMonitoringAfterQuestionSelection:
+      mocks.reconcileInitialMonitoringAfterQuestionSelection,
   };
 });
 
@@ -200,6 +221,7 @@ const portal = servicePortalSchema.parse({
     channelDistribution: capability,
     progressReport: capability,
     contentAssets: capability,
+    brandTracking: capability,
   },
   workflowSteps: [],
   nextAction: {
@@ -245,9 +267,24 @@ describe("administrator workspace DTO boundary", () => {
     mocks.getServicePortal.mockResolvedValue(portal);
     mocks.listWorkspaceQuestions.mockResolvedValue([question]);
     mocks.updateWorkspaceQuestionBySystemAdmin.mockResolvedValue(question);
-    mocks.approveWorkspaceQuestionSelection.mockResolvedValue(question);
+    mocks.approveWorkspaceQuestionSelection.mockImplementation(
+      async (_input, options) => {
+        const approvedQuestion = {
+          ...question,
+          status: "selected",
+          selectionApprovalStatus: "approved",
+        };
+        await options?.afterWrite?.("transaction", approvedQuestion);
+        return approvedQuestion;
+      },
+    );
     mocks.assertServiceCapability.mockResolvedValue(undefined);
     mocks.writeWorkspaceAuditEvent.mockResolvedValue(undefined);
+    mocks.completeQuestionReviewRequest.mockResolvedValue(undefined);
+    mocks.reconcileInitialMonitoringAfterQuestionSelection.mockResolvedValue({
+      id: "initial-monitoring-ticket",
+      created: true,
+    });
   });
 
   it("returns a strict public service DTO to an assigned delivery administrator", async () => {
@@ -326,6 +363,25 @@ describe("administrator workspace DTO boundary", () => {
     expect(portfolio.questions[0]).not.toHaveProperty("quotaPeriodId");
     expect(updated.question).toHaveProperty("contractId");
     expect(confirmed.question).toHaveProperty("quotaPeriodId");
+    expect(mocks.completeQuestionReviewRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executor: "transaction",
+        userId: 7,
+        questionId: question.id,
+      }),
+    );
+    expect(
+      mocks.reconcileInitialMonitoringAfterQuestionSelection,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: 1,
+        question: expect.objectContaining({
+          id: question.id,
+          status: "selected",
+          selectionApprovalStatus: "approved",
+        }),
+      }),
+    );
   });
 
   it("keeps internal question linkage for system-admin operations", async () => {

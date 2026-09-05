@@ -1,0 +1,91 @@
+{
+  "schema": "frontmind-siteops-runtime/v9",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a",
+    "role": "immutable-origin-record-only"
+  },
+  "adapterVersion": "2.4.0",
+  "canonicalArtifact": "build-contract.json",
+  "inputSchema": "schemas/frontmind-run-envelope.schema.json",
+  "aiTask": {
+    "taskCount": 1,
+    "stageCount": 1,
+    "output": "SiteContentDraftV1-flat-transport",
+    "outputSchema": "schemas/site-content-draft-v1.schema.json",
+    "outputFilename": "frontmind-site-content-draft-v1.json",
+    "sourceOutputAllowed": false,
+    "designOutputAllowed": false,
+    "fullObjectRepairAllowed": false
+  },
+  "providerWire": {
+    "schema": "schemas/site-content-draft-v1.schema.json",
+    "hostDraft": "SiteContentDraftV1",
+    "canonical": "CanonicalPreviewModelV1",
+    "canonicalizerOwner": "dashboard",
+    "operationTokenRequired": true,
+    "routeCoordinatesAcceptedFromProvider": false,
+    "designCoordinatesAcceptedFromProvider": false,
+    "unknownChildFieldPolicy": "drop-field-not-site"
+  },
+  "hostDesign": {
+    "owner": "dashboard",
+    "factory": "createHostOwnedSiteDesignResultV2",
+    "input": ["SiteBrief", "ReferenceBlueprintV4", "VisualTaxonomy"],
+    "output": "SiteDesignResultV2",
+    "routesAndPathsFrozen": true,
+    "slotsAndComponentsFrozen": true,
+    "responsiveLayoutFrozen": true,
+    "paletteFrozen": true
+  },
+  "knowledgeInput": {
+    "owner": "dashboard",
+    "transport": "manifest-verified-json-attachments",
+    "dossierSchema": "SiteOpsSourceDossierV1",
+    "inlineKnowledgeAllowed": false,
+    "externalAcquisitionAllowed": false
+  },
+  "host": {
+    "profile": "react-static-html-with-trusted-fallback",
+    "starterContract": "assets/host-starter-contract.json",
+    "materializerContract": "assets/materializer-contract.json",
+    "sourceOwner": "dashboard",
+    "sourceDataFormat": "canonical-json",
+    "templateOwner": "dashboard",
+    "templateRuntime": "react-dom/server",
+    "reactVersion": "19",
+    "hydrationAllowed": false,
+    "runtimeJavaScriptAllowed": false,
+    "providerTextInterpolationIntoSource": false,
+    "runtimeInstallAllowed": false,
+    "qaOwner": "dashboard"
+  },
+  "renderer": {
+    "primary": "react_static_v2",
+    "fallback": "trusted_static_html_v1",
+    "componentLibraryVersion": "2.4.0",
+    "materializerVersion": "2.4.0",
+    "routeDocuments": true
+  },
+  "contentSystem": {
+    "providerDraft": "SiteContentDraftV1",
+    "canonical": "CanonicalPreviewModelV1",
+    "buildContract": "BuildContractV4",
+    "inventorySource": "frozen-knowledge-snapshot-only",
+    "companyNewsAbsentPolicy": "host-owned-empty-state",
+    "unknownFieldPolicy": "discard-child",
+    "missingContentPolicy": "verified-brief-fallback"
+  },
+  "typedMaterialization": {
+    "schema": "schemas/materialization-stage-v3.schema.json",
+    "blockingClasses": [
+      "unsafe_input",
+      "artifact_integrity",
+      "artifact_binding",
+      "both_trusted_renderers_failed",
+      "artifact_persistence"
+    ],
+    "warningClasses": ["axe", "lighthouse", "cls", "visual_consistency"],
+    "hostFailureRepairByAiAllowed": false
+  }
+}

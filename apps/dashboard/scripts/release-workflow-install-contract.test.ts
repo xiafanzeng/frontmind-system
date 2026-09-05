@@ -16,7 +16,32 @@ const productionKnownHosts = path.resolve(
 );
 const pdfWorkflow = path.resolve(".github/workflows/pdf-runtime.yml");
 const pdfDockerfile = path.resolve("deploy/1panel-node-pdf/Dockerfile");
+const dashboardDockerfile = path.resolve(
+  "deploy/production/dashboard/Dockerfile",
+);
+const dashboardCompose = path.resolve(
+  "deploy/production/dashboard/compose.yaml",
+);
+const productionBundleBuilder = path.resolve(
+  "scripts/build-unsealed-artifact.mjs",
+);
+const productionArtifactIdentity = path.resolve(
+  "scripts/build-artifact-identity.mjs",
+);
+const productionBundleAudit = path.resolve(
+  "scripts/audit-production-bundle.mjs",
+);
+const productionController = path.resolve(
+  "deploy/production/controller/frontmind-deploy-controller",
+);
+const presalesContractFixture = path.resolve(
+  "shared/contracts/presales-v2-contract-hashes.fixture.json",
+);
+const productionReleaseManual = path.resolve("docs/operations/RELEASE.md");
 const installer = path.resolve("deploy/production/install.sh");
+const controllerUpdater = path.resolve(
+  "deploy/production/update-release-controllers.sh",
+);
 const websiteRuntimeEnvExample = path.resolve(
   "deploy/production/website/runtime.env.example",
 );
@@ -37,25 +62,469 @@ afterEach(async () => {
 });
 
 describe("release workflow source-ordering contracts", () => {
+  it("installs the pinned browser before required native Template tests run", async () => {
+    const workflow = await readFile(dashboardWorkflow, "utf8");
+    const browserInstall = workflow.indexOf(
+      "pnpm exec playwright install --with-deps chromium",
+    );
+    const fullTest = workflow.indexOf("- run: pnpm test\n");
+
+    expect(browserInstall).toBeGreaterThan(-1);
+    expect(fullTest).toBeGreaterThan(-1);
+    expect(browserInstall).toBeLessThan(fullTest);
+  });
+
+  it("pins independent external DNS and isolates the production Dashboard web and worker roles", async () => {
+    const [compose, dockerfile] = await Promise.all([
+      readFile(dashboardCompose, "utf8"),
+      readFile(dashboardDockerfile, "utf8"),
+    ]);
+
+    expect(compose.match(/^    dns:\s*$/gmu)).toHaveLength(2);
+    expect(compose.match(/^    dns_opt:\s*$/gmu)).toHaveLength(2);
+    expect(compose).toContain("      - 1.1.1.1");
+    expect(compose).toContain("      - 8.8.8.8");
+    expect(compose).toContain("      - timeout:2");
+    expect(compose).toContain("      - attempts:2");
+    expect(compose).toContain("  siteops-worker:");
+    expect(compose).toContain("FRONTMIND_RUNTIME_ROLE: web");
+    expect(compose).toContain("FRONTMIND_RUNTIME_ROLE: siteops-worker");
+    expect(compose).toContain("container_name: frontmind-dashboard-siteops-worker");
+    const worker = compose.slice(
+      compose.indexOf("  siteops-worker:"),
+      compose.indexOf("  release-db-plan:"),
+    );
+    expect(worker).not.toContain("ports:");
+    expect(worker).toContain('PORT: "3001"');
+    expect(worker).toContain("      database: {}");
+    expect(worker).not.toContain("      applications:");
+    expect(dockerfile).toContain(
+      'net.frontmind.runtime.roles="web,siteops-worker"',
+    );
+  });
+
+  it("conditionally closes the production incident-repair CLI artifact chain", async () => {
+    const [builder, artifactIdentity, audit, dockerfile] = await Promise.all([
+      readFile(productionBundleBuilder, "utf8"),
+      readFile(productionArtifactIdentity, "utf8"),
+      readFile(productionBundleAudit, "utf8"),
+      readFile(dashboardDockerfile, "utf8"),
+    ]);
+    const source = "server/knowledge-base-incident-repair-cli.ts";
+    const output = "knowledge-base-incident-repair-cli.js";
+
+    for (const contract of [builder, artifactIdentity, audit]) {
+      expect(contract).toContain(source);
+      expect(contract).toContain(output);
+    }
+    expect(builder).toContain("knowledgeBaseIncidentRepairCliRequired");
+    expect(audit).toContain("knowledgeBaseIncidentRepairCliRequired");
+    expect(dockerfile).toContain(`test -e ${source}`);
+    expect(dockerfile).toContain(`test -s dist/${output}`);
+    expect(dockerfile).toContain("/app/dist/artifact-manifest.json");
+    expect(dockerfile).toContain(`/app/dist/${output}`);
+  });
+
+  it("packages the existing-task SiteOps reconciliation CLI into production", async () => {
+    const [builder, dockerfile] = await Promise.all([
+      readFile(productionBundleBuilder, "utf8"),
+      readFile(dashboardDockerfile, "utf8"),
+    ]);
+
+    expect(builder).toContain('"scripts/reconcile-siteops-build.ts"');
+    expect(builder).toContain('"reconcile-siteops-build.js"');
+    expect(builder).toContain("BUILD_SITEOPS_RECONCILE_CLI_OUTPUT_MISSING");
+    expect(dockerfile).toContain(
+      "test -s dist/reconcile-siteops-build.js",
+    );
+    expect(dockerfile).toContain(
+      "test -s /app/dist/reconcile-siteops-build.js",
+    );
+  });
+
+  it("packages and preloads the immutable SiteOps Template catalog before production rollout", async () => {
+    const [builder, dockerfile, controller, updater, installerSource] =
+      await Promise.all([
+        readFile(productionBundleBuilder, "utf8"),
+        readFile(dashboardDockerfile, "utf8"),
+        readFile(productionController, "utf8"),
+        readFile(controllerUpdater, "utf8"),
+        readFile(installer, "utf8"),
+      ]);
+
+    expect(builder).toContain(
+      '"server/siteops/seed-static-template-catalog.ts"',
+    );
+    expect(dockerfile).toContain(
+      "test -s dist/seed-static-template-catalog.js",
+    );
+    expect(dockerfile).toContain(
+      "test -s /app/dist/seed-static-template-catalog.js",
+    );
+    expect(controller).toContain("seed_static_template_catalog");
+    expect(controller).toContain(
+      "STATIC_TEMPLATE_CATALOG_SEED_TIMEOUT_SECONDS=1800",
+    );
+    expect(controller).toContain("/app/dist/seed-static-template-catalog.js");
+    const execution = controller.slice(
+      controller.lastIndexOf('candidate_env="$(mktemp)"'),
+    );
+    expect(execution.indexOf("seed_static_template_catalog")).toBeGreaterThan(
+      execution.indexOf('make_compose_env "$candidate_env" "$image"'),
+    );
+    expect(execution.indexOf("seed_static_template_catalog")).toBeLessThan(
+      execution.indexOf("prepare_coupled_stack"),
+    );
+    expect(execution.indexOf("seed_static_template_catalog")).toBeLessThan(
+      execution.indexOf('log "DATABASE_PLAN_START"'),
+    );
+    for (const contract of [updater, installerSource]) {
+      expect(contract).toContain("seed_static_template_catalog");
+      expect(contract).toContain("/app/dist/seed-static-template-catalog.js");
+      expect(contract).toContain(
+        "STATIC_TEMPLATE_CATALOG_SEED_TIMEOUT_SECONDS=1800",
+      );
+      expect(contract).toContain(
+        "PRODUCTION_STATIC_TEMPLATE_CATALOG_SEED_FAILED",
+      );
+    }
+  });
+
+  it("binds the one ordinary production build directly to github.sha", async () => {
+    const workflow = await readFile(dashboardWorkflow, "utf8");
+    const buildJob = workflow.slice(
+      workflow.indexOf("  build-sign:"),
+      workflow.indexOf("  coupled-stack-deploy:"),
+    );
+
+    expect(workflow).not.toContain("  promotion-gate:");
+    expect(workflow).not.toContain("  promotion-merge-proof:");
+    expect(buildJob).toContain("      - quality");
+    expect(buildJob).toContain("      - mysql-acceptance");
+    expect(buildJob).toContain("needs.quality.result == 'success'");
+    expect(buildJob).toContain("needs.mysql-acceptance.result == 'success'");
+    expect(buildJob).toContain("source_sha: ${{ github.sha }}");
+    expect(buildJob).toContain("FRONTMIND_RELEASE_SOURCE_SHA: ${{ github.sha }}");
+    expect(buildJob).toContain("          ref: ${{ github.sha }}");
+    expect(buildJob).not.toContain("needs.promotion-gate");
+    expect(buildJob.match(/docker\/build-push-action@v6/gu)).toHaveLength(1);
+    expect(buildJob.match(/cosign sign --yes/gu)).toHaveLength(1);
+    expect(
+      buildJob.match(/Deploy through fixed Dashboard capability/gu),
+    ).toHaveLength(1);
+  });
+
+  it("wires one exact coupled production deployment without a rollout control plane", async () => {
+    const workflow = await readFile(dashboardWorkflow, "utf8");
+    const updater = await readFile(controllerUpdater, "utf8");
+    const installerSource = await readFile(installer, "utf8");
+    const releaseManual = await readFile(productionReleaseManual, "utf8");
+    const coupledJob = workflow.slice(
+      workflow.indexOf("  coupled-stack-deploy:"),
+    );
+
+    expect(workflow).toContain("          - reuse-coupled-stack");
+    expect(coupledJob).toContain("inputs.release_mode == 'reuse-coupled-stack'");
+    expect(coupledJob).toContain("Verify both existing signed production artifacts");
+    expect(coupledJob).toContain("coupled-stack ghcr.io/xiafanzeng/frontmind-dashboard@");
+    expect(coupledJob).not.toContain("docker/build-push-action");
+    expect(coupledJob).not.toMatch(/canary|dual-read|shadow/iu);
+    expect(workflow).not.toContain("--kb-manus-v2-rollout");
+    expect(updater).toContain(
+      'VERSION_ARGUMENT="--apply-version=${CONTROLLER_VERSION}"',
+    );
+    expect(updater).toContain('readonly CONTROLLER_VERSION="7"');
+    expect(releaseManual).toContain("production-owned v7 controller");
+    expect(releaseManual).toContain("--apply-version=7");
+    expect(releaseManual).not.toMatch(/--apply-version=[0-6](?:\D|$)/u);
+    expect(updater).toContain("dashboard_image_supports_split_runtime");
+    expect(updater).toContain("dashboard_siteops_worker_matches");
+    expect(updater).toContain("PRODUCTION_CONTROLLER_UPDATE_ROLLED_BACK");
+    expect(updater).toContain("project-business-owner");
+    expect(updater).toContain(
+      "PRODUCTION_COUPLED_DASHBOARD_PRESALES_SURFACE_MISMATCH",
+    );
+    expect(updater).toContain("siteops_alidns_oauth_contract_plan_matches");
+    expect(updater).toContain("contract-0065-migration-started");
+    expect(releaseManual).toContain("forced command 不暴露 0065");
+    expect(installerSource).not.toContain(
+      "frontmind-update-release-controllers",
+    );
+    expect(installerSource).not.toContain("update-release-controllers.sh");
+  });
+
+  it("stops the consumer first and keeps one durable coupled failure recovery path", async () => {
+    const controller = await readFile(productionController, "utf8");
+    const execution = controller.slice(
+      controller.lastIndexOf('candidate_env="$(mktemp)"'),
+    );
+    const prepare = controller.slice(
+      controller.indexOf("prepare_coupled_stack()"),
+      controller.indexOf("dashboard_health_and_changed_surface_once()"),
+    );
+    const success = controller.slice(
+      controller.indexOf("deploy_coupled_website_and_finalize()"),
+      controller.indexOf(
+        'if [[ $operation == "deploy" && $mode == "acknowledge-incident" ]]',
+      ),
+    );
+    const dashboardSmoke = controller.slice(
+      controller.indexOf("dashboard_health_and_changed_surface_once()"),
+      controller.indexOf("coupled_website_health_once()"),
+    );
+    const recovery = controller.slice(
+      controller.indexOf("restore_coupled_stack()"),
+      controller.indexOf("deploy_coupled_website_and_finalize()"),
+    );
+    const main = controller.slice(
+      controller.indexOf(
+        'if [[ $operation == "deploy" && $mode == "acknowledge-incident" ]]',
+      ),
+    );
+
+    expect(controller).toContain(
+      'COUPLED_STACK_CAPSULE_FILE="/var/lib/frontmind-deploy/dashboard/coupled-stack-pending.json"',
+    );
+    expect(controller).toContain(
+      'COUPLED_DASHBOARD_RUNTIME_ROLLBACK_ENV="/var/lib/frontmind-deploy/dashboard/coupled-dashboard-runtime-rollback.env"',
+    );
+    expect(controller).toContain(
+      'COUPLED_DASHBOARD_RUNTIME_RETIRING_ENV="/var/lib/frontmind-deploy/dashboard/coupled-dashboard-runtime-rollback.retiring"',
+    );
+    expect(controller).toContain(
+      'COUPLED_WEBSITE_RUNTIME_ROLLBACK_ENV="/var/lib/frontmind-deploy/dashboard/coupled-website-runtime-rollback.env"',
+    );
+    expect(controller).toContain(
+      'COUPLED_WEBSITE_RUNTIME_RETIRING_ENV="/var/lib/frontmind-deploy/dashboard/coupled-website-runtime-rollback.retiring"',
+    );
+    expect(controller).not.toMatch(/--kb-manus-v2-rollout|dual-read|canary|shadow/u);
+    expect(prepare).toContain('stop website');
+    expect(controller).toContain("resolve_coupled_website_container_id()");
+    expect(controller).toContain(
+      'coupled_website_compose "$environment_file" ps -q website',
+    );
+    expect(prepare).toContain(
+      'resolve_coupled_website_container_id "$coupled_website_env"',
+    );
+    expect(prepare).not.toContain(
+      "docker inspect --format '{{.Config.Image}}' frontmind-website",
+    );
+    expect(prepare).toContain("render_coupled_dashboard_runtime_v5");
+    expect(prepare).toContain("render_coupled_website_runtime_v2");
+    expect(controller).toContain("/^FRONTMIND_KB_V4_ROLLOUT_PERCENT=/ { next }");
+    expect(controller).toContain("/^FRONTMIND_KB_MANUS_V2_WRITER=/ { next }");
+    expect(prepare.indexOf('stop website')).toBeLessThan(
+      prepare.indexOf("render_coupled_dashboard_runtime_v5"),
+    );
+    expect(execution.indexOf("prepare_coupled_stack")).toBeLessThan(
+      execution.indexOf('log "DATABASE_PLAN_START"'),
+    );
+    expect(execution.indexOf('stop "$COMPOSE_SERVICE"')).toBeLessThan(
+      execution.indexOf("backup_database"),
+    );
+    expect(success.match(/dashboard_health_and_changed_surface_once/g)).toHaveLength(1);
+    expect(dashboardSmoke).toContain('"project-business-owner"');
+    expect(dashboardSmoke).toContain(
+      "($status.capabilities | sort) == ($requiredCapabilities | sort)",
+    );
+    expect(dashboardSmoke).toContain(
+      "PRODUCTION_COUPLED_DASHBOARD_PRESALES_SURFACE_MISMATCH",
+    );
+    expect(dashboardSmoke).not.toContain(
+      '.capabilities | type == "array" and length == 4',
+    );
+    expect(dashboardSmoke).not.toContain(
+      '.contractHashes | type == "object" and length == 6',
+    );
+    expect(success.match(/wait_coupled_website_ready/g)).toHaveLength(1);
+    expect(success.match(/coupled_website_health_once/g)).toHaveLength(1);
+    expect(recovery).toContain('restore_production_database "$backup"');
+    expect(recovery).toContain(
+      '"$COUPLED_DASHBOARD_RUNTIME_ROLLBACK_ENV" "$COUPLED_DASHBOARD_RUNTIME_ENV_FILE"',
+    );
+    expect(recovery).toContain(
+      '"$COUPLED_WEBSITE_RUNTIME_ROLLBACK_ENV" "$COUPLED_WEBSITE_RUNTIME_ENV_FILE"',
+    );
+    expect(recovery).toContain('wait_until_ready "$old_dashboard_source"');
+    expect(recovery).toContain('wait_coupled_website_ready');
+    expect(controller).toContain("mark_coupled_stack_external_fact_changed");
+    expect(controller).toContain("commit_coupled_stack_capsule_cleanup");
+    expect(controller).toContain(
+      '.dashboard.databaseRestoreRequired = false |',
+    );
+    expect(controller).toContain("coupled_recovery_pending=1");
+    expect(controller).toContain(
+      "COUPLED_STACK_RECOVERY_MUST_FINISH_BEFORE_INCIDENT_ACKNOWLEDGEMENT",
+    );
+    expect(recovery).toContain(
+      '$persisted_message == migration-applied-fact-changed-*',
+    );
+    expect(main.indexOf("restore_coupled_stack")).toBeLessThan(
+      main.indexOf("read_ephemeral_registry_auth"),
+    );
+    expect(main.indexOf("restore_coupled_stack")).toBeLessThan(
+      main.indexOf("verify_candidate"),
+    );
+  });
+
+  it("binds the coupled smoke to the canonical Presales consumer contract", async () => {
+    const controller = await readFile(productionController, "utf8");
+    const dashboardSmoke = controller.slice(
+      controller.indexOf("dashboard_health_and_changed_surface_once()"),
+      controller.indexOf("coupled_website_health_once()"),
+    );
+    const filter = dashboardSmoke.match(
+      /jq -e '\n([\s\S]*?)\n  ' <<<"\$status" >\/dev\/null/u,
+    )?.[1];
+    expect(filter).toBeTruthy();
+
+    const fixture = JSON.parse(
+      await readFile(presalesContractFixture, "utf8"),
+    ) as {
+      presalesContractVersion: number;
+      capabilities: string[];
+      contractHashes: Record<string, string>;
+    };
+    const status = {
+      ok: true,
+      ...fixture,
+    };
+    const run = (input: unknown) =>
+      spawnSync("jq", ["-e", filter!], {
+        encoding: "utf8",
+        input: JSON.stringify(input),
+      });
+
+    expect(run(status).status).toBe(0);
+    expect(
+      run({ ...status, capabilities: [...status.capabilities].reverse() }).status,
+    ).toBe(0);
+    expect(
+      run({
+        ...status,
+        capabilities: status.capabilities.filter(
+          (capability) => capability !== "project-business-owner",
+        ),
+      }).status,
+    ).toBe(1);
+    expect(
+      run({
+        ...status,
+        capabilities: [...status.capabilities, status.capabilities[0]],
+      }).status,
+    ).toBe(1);
+    expect(
+      run({
+        ...status,
+        capabilities: [...status.capabilities, "unknown-capability"],
+      }).status,
+    ).toBe(1);
+    const incompleteHashes = { ...status.contractHashes };
+    delete incompleteHashes["website.question-recommendation"];
+    expect(run({ ...status, contractHashes: incompleteHashes }).status).toBe(1);
+    expect(
+      run({
+        ...status,
+        contractHashes: {
+          ...status.contractHashes,
+          "unknown.contract": "f".repeat(64),
+        },
+      }).status,
+    ).toBe(1);
+    expect(
+      run({
+        ...status,
+        contractHashes: {
+          ...status.contractHashes,
+          "website.question-recommendation": "0".repeat(64),
+        },
+      }).status,
+    ).toBe(1);
+  });
+
+  it("resolves exactly one compose-managed Website container id", async () => {
+    const controller = await readFile(productionController, "utf8");
+    const resolver = controller.slice(
+      controller.indexOf("resolve_coupled_website_container_id()"),
+      controller.indexOf("make_coupled_website_env()"),
+    );
+    const run = (composeOutput: string, composeStatus = 0) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          `coupled_website_compose() {
+  printf '%s' "$TEST_COMPOSE_OUTPUT"
+  return "$TEST_COMPOSE_STATUS"
+}
+${resolver}
+resolve_coupled_website_container_id fixture.env`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            TEST_COMPOSE_OUTPUT: composeOutput,
+            TEST_COMPOSE_STATUS: String(composeStatus),
+          },
+        },
+      );
+    const containerId = "a".repeat(64);
+
+    expect(run(`${containerId}\n`)).toMatchObject({
+      status: 0,
+      stdout: `${containerId}\n`,
+    });
+    expect(run("").status).toBe(1);
+    expect(run(`${containerId}\n${"b".repeat(64)}\n`).status).toBe(1);
+    expect(run(`${containerId}\n`, 23).status).toBe(1);
+  });
+
   it("takes the pnpm version only from package.json", async () => {
     const workflow = await readFile(dashboardWorkflow, "utf8");
     expect(workflow).not.toMatch(/pnpm\/action-setup@v4\s+with:\s+version:/gu);
   });
 
-  it("builds and signs before every automatic main deployment", async () => {
+  it("runs one changed-surface MySQL acceptance without historical audit matrices", async () => {
+    const workflow = await readFile(dashboardWorkflow, "utf8");
+    const mysqlAcceptance = workflow.slice(
+      workflow.indexOf("  mysql-acceptance:"),
+      workflow.indexOf("  build-sign:"),
+    );
+
+    expect(mysqlAcceptance).toContain(
+      "name: Changed-surface MySQL 8.4.10 acceptance",
+    );
+    expect(mysqlAcceptance).toContain(
+      "node scripts/ci-verify-mysql-migration-upgrade.mjs",
+    );
+    expect(mysqlAcceptance).toContain(
+      "name: Create isolated changed-surface acceptance databases",
+    );
+    expect(mysqlAcceptance).toContain("frontmind_release_acceptance_ci");
+    expect(mysqlAcceptance).toContain("frontmind_auth_acceptance_ci");
+    expect(mysqlAcceptance).toContain("pnpm test:release:mysql-acceptance");
+    expect(mysqlAcceptance).toContain(
+      "scripts/auth-mysql-transaction-acceptance.test.ts",
+    );
+    expect(mysqlAcceptance).not.toContain("matrix:");
+    expect(mysqlAcceptance).not.toContain("migration-upgrade-historical");
+    expect(mysqlAcceptance).not.toContain("pnpm test:kb:mysql-e2e-acceptance");
+  });
+
+  it("builds and signs once before the separately dispatched coupled deployment", async () => {
     const workflow = await readFile(dashboardWorkflow, "utf8");
     expect(workflow).not.toContain("DASHBOARD_AUTO_DEPLOY_ENABLED");
     expect(workflow.indexOf("Build and push image")).toBeLessThan(
-      workflow.indexOf("Install restricted deploy key"),
+      workflow.indexOf("  coupled-stack-deploy:"),
     );
     expect(workflow.indexOf("Sign exact application digest")).toBeLessThan(
-      workflow.indexOf("Install restricted deploy key"),
+      workflow.indexOf("  coupled-stack-deploy:"),
     );
     expect(workflow).toContain(
       "install -m 0644 .github/deploy/production_known_hosts ~/.ssh/known_hosts",
     );
-    expect(workflow).toContain("DEPLOY_HOST: 149.88.85.148");
-    expect(workflow).toContain("DEPLOY_USER: frontmind-deploy");
+    expect(workflow).toContain("frontmind-deploy@149.88.85.148");
     expect(workflow).not.toContain("ssh-keyscan");
 
     const knownHosts = await readFile(productionKnownHosts, "utf8");
@@ -64,14 +533,11 @@ describe("release workflow source-ordering contracts", () => {
     );
   });
 
-  it("streams the job-scoped GHCR credential to the restricted deploy command", async () => {
+  it("streams the job-scoped GHCR credential to the coupled deploy command", async () => {
     const workflow = await readFile(dashboardWorkflow, "utf8");
     const deployStep = workflow.slice(
       workflow.indexOf(
-        "      - name: Deploy through fixed Dashboard capability",
-      ),
-      workflow.indexOf(
-        "      - name: Record immutable successful-deployment marker",
+        "      - name: Run the ordinary coupled stop, migrate, and start command",
       ),
     );
 
@@ -81,11 +547,12 @@ describe("release workflow source-ordering contracts", () => {
       `printf '%s\\n%s\\n' "$GHCR_USERNAME" "$GHCR_TOKEN" |`,
     );
     expect(deployStep).toContain(
-      '"$IMAGE@$DIGEST $FRONTMIND_RELEASE_SOURCE_SHA"',
+      '"coupled-stack ghcr.io/xiafanzeng/frontmind-dashboard@$DASHBOARD_IMAGE_DIGEST',
     );
-    expect(deployStep).not.toContain(
-      '"$IMAGE@$DIGEST $FRONTMIND_RELEASE_SOURCE_SHA $GHCR_TOKEN"',
-    );
+    const remoteCommand = deployStep.match(/"coupled-stack [^\n]+"/u)?.[0];
+    expect(remoteCommand).toBeTruthy();
+    expect(remoteCommand).not.toContain('"--coupled-stack');
+    expect(remoteCommand).not.toContain("GHCR_TOKEN");
   });
 
   it("checks the complete multi-commit push range for PDF base changes", async () => {
@@ -116,10 +583,10 @@ describe("release workflow source-ordering contracts", () => {
     const workflow = await readFile(dashboardWorkflow, "utf8");
     const upgradeStep = workflow.slice(
       workflow.indexOf(
-        "      - if: matrix.suite == 'migration-upgrade-base-ref'",
+        "      - name: Prove the current production base upgrades to this release",
       ),
       workflow.indexOf(
-        "      - if: matrix.suite == 'migration-upgrade-historical'",
+        "      - run: node scripts/verify-api-usage-migration-schema.mjs post",
       ),
     );
 

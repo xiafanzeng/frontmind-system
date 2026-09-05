@@ -4,10 +4,48 @@ import {
   aggregateSharedKeyCreditUsagePage,
   getShanghaiCalendarMonthPeriod,
   getShanghaiRollingUsagePeriod,
+  projectManagedAgentUsageRows,
   usageContributionForCredential,
 } from "./dashboard-service";
 
 describe("shared API Key credit usage", () => {
+  it("attributes ordinary v2 chat tasks without upstream_resources", () => {
+    const projected = projectManagedAgentUsageRows([
+      {
+        providerTaskId: "provider-v2-running",
+        apiCredentialId: "credential-v2-running",
+        accountUserId: 42,
+        status: "running",
+      },
+      {
+        providerTaskId: "provider-v2-complete",
+        apiCredentialId: "credential-v2-complete",
+        accountUserId: 43,
+        status: "succeeded",
+      },
+      {
+        providerTaskId: null,
+        apiCredentialId: "credential-v2-unknown",
+        accountUserId: 44,
+        status: "attention_required",
+      },
+    ]);
+
+    expect(projected.ownerByTask).toEqual(
+      new Map([
+        ["provider-v2-running", 42],
+        ["provider-v2-complete", 43],
+      ]),
+    );
+    expect(
+      projected.expectedTaskIdsByCredential.get("credential-v2-running"),
+    ).toEqual(new Set(["provider-v2-running"]));
+    expect([...projected.unsettledCredentialIds]).toEqual([
+      "credential-v2-running",
+      "credential-v2-unknown",
+    ]);
+  });
+
   it("keeps current physical Key pool totals separate from cross-history account usage", () => {
     const accountIds = new Set([42]);
     const oldA = usageContributionForCredential({

@@ -23,9 +23,11 @@ import {
   knowledgeBaseResetRequests,
   knowledgeBaseSnapshots,
   serviceQuotaPeriods,
+  users,
   websiteStyleSampleBatches,
   websiteStyleSamples,
   websiteStyleWorkflows,
+  workspaceQuestions,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 
@@ -36,6 +38,13 @@ export const DELIVERY_TICKET_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 export const DELIVERY_TICKET_RETENTION_LOCK_NAME =
   "frontmind-dashboard:delivery-ticket-retention";
 
+export class DeliveryTicketImmediateDeleteConflictError extends Error {
+  constructor() {
+    super("需求删除并发校验失败");
+    this.name = "DeliveryTicketImmediateDeleteConflictError";
+  }
+}
+
 const TERMINAL_TICKET_STATUSES = [
   "completed",
   "rejected",
@@ -44,6 +53,9 @@ const TERMINAL_TICKET_STATUSES = [
 
 type RetentionTicketRow = {
   id: string;
+  parentTicketId: string | null;
+  rootTicketId: string | null;
+  isWorkflowContainer: boolean;
   userId: number;
   quotaPeriodId: string;
   quotaPool: "content_asset_publish" | "website_content_publish" | null;
@@ -56,8 +68,11 @@ type RetentionTicketRow = {
     | "completed"
     | "rejected"
     | "cancelled";
+  category: string | null;
   operation: string | null;
+  sourceQuestionId: string | null;
   contentAssetIds: string[];
+  revision: number;
   resolvedAt: Date | null;
   updatedAt: Date;
 };
@@ -209,19 +224,31 @@ export function buildDeliveryTicketRetentionFacts(
 
 const ticketSelection = {
   id: deliveryTickets.id,
+  parentTicketId: deliveryTickets.parentTicketId,
+  rootTicketId: deliveryTickets.rootTicketId,
+  isWorkflowContainer: deliveryTickets.isWorkflowContainer,
   userId: deliveryTickets.userId,
   quotaPeriodId: deliveryTickets.quotaPeriodId,
   quotaPool: deliveryTickets.quotaPool,
   quotaState: deliveryTickets.quotaState,
   status: deliveryTickets.status,
+  category: deliveryTickets.category,
   operation: deliveryTickets.operation,
+  sourceQuestionId: deliveryTickets.sourceQuestionId,
   contentAssetIds: deliveryTickets.contentAssetIds,
+  revision: deliveryTickets.revision,
   resolvedAt: deliveryTickets.resolvedAt,
   updatedAt: deliveryTickets.updatedAt,
 };
 
-function expiredTerminalTicketCondition(cutoff: Date) {
+export function deliveryTicketRetentionCandidateCondition(cutoff: Date) {
   return and(
+    // Workflow children are never purged independently. A terminal root is
+    // the sole retention unit and its root FK cascades the complete workflow,
+    // so a child can neither become customer-visible nor disappear from an
+    // otherwise retained root aggregate.
+    isNull(deliveryTickets.parentTicketId),
+    isNull(deliveryTickets.rootTicketId),
     inArray(deliveryTickets.status, [...TERMINAL_TICKET_STATUSES]),
     or(
       and(
@@ -241,20 +268,68 @@ async function purgeDeliveryTicketBatch(input: {
   candidates: RetentionTicketRow[];
   cutoff: Date;
   now: Date;
+  exactTarget?: {
+    userId: number;
+    ticketId: string;
+    expectedRevision: number;
+  };
 }) {
   return input.database.transaction(async (tx: any) => {
-    const lockedTicketRows = (await tx
-      .select(ticketSelection)
-      .from(deliveryTickets)
-      .where(
-        and(
+    let exactResetRequests: Array<{ id: string; ticketId: string }> | undefined;
+    if (input.exactTarget) {
+      // Question maintenance and other customer-scoped workflows serialize on
+      // the workspace owner. Take the same mutex before locking dependants so
+      // an administrator deletion cannot deadlock with a concurrent decision.
+      const lockedUserRows = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, input.exactTarget.userId))
+        .limit(1)
+        .for("update");
+      if (!lockedUserRows[0]) {
+        return {
+          outcome: "not_found" as const,
+          tickets: 0,
+          milestones: 0,
+          quotaFacts: 0,
+          styleBatches: 0,
+          redirectPreviews: 0,
+          resetRequests: 0,
+        };
+      }
+      // Reset decisions lock reset-request -> ticket after the user mutex.
+      // Match that order for the exact destructive path.
+      exactResetRequests = await tx
+        .select({
+          id: knowledgeBaseResetRequests.id,
+          ticketId: knowledgeBaseResetRequests.ticketId,
+        })
+        .from(knowledgeBaseResetRequests)
+        .where(
+          and(
+            eq(knowledgeBaseResetRequests.ticketId, input.exactTarget.ticketId),
+            eq(knowledgeBaseResetRequests.userId, input.exactTarget.userId),
+          ),
+        )
+        .orderBy(asc(knowledgeBaseResetRequests.id))
+        .for("update");
+    }
+    const ticketCondition = input.exactTarget
+      ? and(
+          eq(deliveryTickets.id, input.exactTarget.ticketId),
+          eq(deliveryTickets.userId, input.exactTarget.userId),
+        )
+      : and(
           inArray(
             deliveryTickets.id,
             input.candidates.map((ticket) => ticket.id),
           ),
-          expiredTerminalTicketCondition(input.cutoff),
-        ),
-      )
+          deliveryTicketRetentionCandidateCondition(input.cutoff),
+        );
+    const lockedTicketRows = (await tx
+      .select(ticketSelection)
+      .from(deliveryTickets)
+      .where(ticketCondition)
       .orderBy(asc(deliveryTickets.id))
       .for("update")) as RetentionTicketRow[];
     const lockedTickets = lockedTicketRows.map((ticket) => ({
@@ -263,6 +338,36 @@ async function purgeDeliveryTicketBatch(input: {
     }));
     if (!lockedTickets.length) {
       return {
+        outcome: input.exactTarget ? ("not_found" as const) : undefined,
+        tickets: 0,
+        milestones: 0,
+        quotaFacts: 0,
+        styleBatches: 0,
+        redirectPreviews: 0,
+        resetRequests: 0,
+      };
+    }
+    if (
+      input.exactTarget &&
+      (lockedTickets[0]!.parentTicketId || lockedTickets[0]!.rootTicketId)
+    ) {
+      return {
+        outcome: "workflow_child_forbidden" as const,
+        tickets: 0,
+        milestones: 0,
+        quotaFacts: 0,
+        styleBatches: 0,
+        redirectPreviews: 0,
+        resetRequests: 0,
+      };
+    }
+    if (
+      input.exactTarget &&
+      lockedTickets[0]!.revision !== input.exactTarget.expectedRevision
+    ) {
+      return {
+        outcome: "revision_conflict" as const,
+        currentRevision: lockedTickets[0]!.revision,
         tickets: 0,
         milestones: 0,
         quotaFacts: 0,
@@ -282,20 +387,25 @@ async function purgeDeliveryTicketBatch(input: {
       .where(inArray(serviceQuotaPeriods.id, periodIds))
       .orderBy(asc(serviceQuotaPeriods.id))
       .for("update");
-    const resetRequests = await tx
-      .select({
-        id: knowledgeBaseResetRequests.id,
-        ticketId: knowledgeBaseResetRequests.ticketId,
-      })
-      .from(knowledgeBaseResetRequests)
-      .where(inArray(knowledgeBaseResetRequests.ticketId, lockedTicketIds))
-      .orderBy(asc(knowledgeBaseResetRequests.id))
-      .for("update");
-    const eligibleTickets = lockedTickets.filter((ticket) =>
-      isDeliveryTicketRetentionEligible(ticket, input.cutoff),
-    );
+    const resetRequests =
+      exactResetRequests ??
+      (await tx
+        .select({
+          id: knowledgeBaseResetRequests.id,
+          ticketId: knowledgeBaseResetRequests.ticketId,
+        })
+        .from(knowledgeBaseResetRequests)
+        .where(inArray(knowledgeBaseResetRequests.ticketId, lockedTicketIds))
+        .orderBy(asc(knowledgeBaseResetRequests.id))
+        .for("update"));
+    const eligibleTickets = input.exactTarget
+      ? lockedTickets
+      : lockedTickets.filter((ticket) =>
+          isDeliveryTicketRetentionEligible(ticket, input.cutoff),
+        );
     if (!eligibleTickets.length) {
       return {
+        outcome: input.exactTarget ? ("not_found" as const) : undefined,
         tickets: 0,
         milestones: 0,
         quotaFacts: 0,
@@ -309,7 +419,18 @@ async function purgeDeliveryTicketBatch(input: {
     const eligibleResetRequestIds = resetRequests
       .filter((request: any) => eligibleTicketIds.includes(request.ticketId))
       .map((request: any) => String(request.id));
-    const facts = buildDeliveryTicketRetentionFacts(eligibleTickets);
+    // Active records disappear completely and therefore release any live
+    // reservation. Terminal usage/completion facts still preserve service
+    // quota accounting and downstream workflow gates after the verbose record
+    // itself is physically removed.
+    const factTickets = input.exactTarget
+      ? eligibleTickets.filter((ticket) =>
+          TERMINAL_TICKET_STATUSES.includes(
+            ticket.status as (typeof TERMINAL_TICKET_STATUSES)[number],
+          ),
+        )
+      : eligibleTickets;
+    const facts = buildDeliveryTicketRetentionFacts(factTickets);
     for (const delta of facts.quotaDeltas) {
       const column =
         delta.quotaPool === "content_asset_publish"
@@ -391,6 +512,45 @@ async function purgeDeliveryTicketBatch(input: {
           updatedAt: input.now,
         });
       }
+    }
+
+    const pendingReviewQuestions = input.exactTarget
+      ? eligibleTickets
+          .filter(
+            (ticket) =>
+              ((ticket.operation === "question_maintenance" &&
+                ticket.category === "question_review") ||
+                ticket.operation === "question_review") &&
+              ticket.sourceQuestionId &&
+              !TERMINAL_TICKET_STATUSES.includes(
+                ticket.status as (typeof TERMINAL_TICKET_STATUSES)[number],
+              ),
+          )
+          .map((ticket) => ({
+            id: ticket.sourceQuestionId!,
+            userId: ticket.userId,
+            quotaPeriodId: ticket.quotaPeriodId,
+          }))
+      : [];
+    for (const question of pendingReviewQuestions) {
+      await tx
+        .update(workspaceQuestions)
+        .set({
+          selectionApprovalStatus: "not_requested",
+          selectionRequestedAt: null,
+          selectionRequestedByUserId: null,
+          revision: sql`${workspaceQuestions.revision} + 1`,
+          updatedAt: input.now,
+        })
+        .where(
+          and(
+            eq(workspaceQuestions.id, question.id),
+            eq(workspaceQuestions.userId, question.userId),
+            eq(workspaceQuestions.quotaPeriodId, question.quotaPeriodId),
+            eq(workspaceQuestions.status, "candidate"),
+            eq(workspaceQuestions.selectionApprovalStatus, "pending"),
+          ),
+        );
     }
 
     const styleBatches = await tx
@@ -488,10 +648,26 @@ async function purgeDeliveryTicketBatch(input: {
       : null;
     const ticketResult = await tx
       .delete(deliveryTickets)
-      .where(inArray(deliveryTickets.id, eligibleTicketIds));
+      .where(
+        input.exactTarget
+          ? and(
+              eq(deliveryTickets.id, input.exactTarget.ticketId),
+              eq(deliveryTickets.userId, input.exactTarget.userId),
+              eq(deliveryTickets.revision, input.exactTarget.expectedRevision),
+            )
+          : inArray(deliveryTickets.id, eligibleTicketIds),
+      );
+
+    const deletedTickets = deliveryTicketRetentionAffectedRows(ticketResult);
+    if (input.exactTarget && deletedTickets !== 1) {
+      // Throw inside the transaction so every dependency update above rolls
+      // back together with a failed final CAS delete.
+      throw new DeliveryTicketImmediateDeleteConflictError();
+    }
 
     return {
-      tickets: deliveryTicketRetentionAffectedRows(ticketResult),
+      outcome: input.exactTarget ? ("deleted" as const) : undefined,
+      tickets: deletedTickets,
       milestones: facts.milestones.length,
       quotaFacts: facts.quotaDeltas.reduce(
         (sum, delta) => sum + delta.count,
@@ -503,6 +679,31 @@ async function purgeDeliveryTicketBatch(input: {
         ? deliveryTicketRetentionAffectedRows(resetResult)
         : 0,
     };
+  });
+}
+
+export async function deleteDeliveryTicketImmediately(input: {
+  database?: any;
+  userId: number;
+  ticketId: string;
+  expectedRevision: number;
+  now?: Date;
+}) {
+  const database = input.database ?? (await getDb());
+  if (!database) {
+    throw new Error("数据库暂时不可用");
+  }
+  const now = input.now ?? new Date();
+  return purgeDeliveryTicketBatch({
+    database,
+    candidates: [],
+    cutoff: now,
+    now,
+    exactTarget: {
+      userId: input.userId,
+      ticketId: input.ticketId,
+      expectedRevision: input.expectedRevision,
+    },
   });
 }
 
@@ -543,7 +744,7 @@ export async function cleanupExpiredDeliveryTickets(input?: {
     const candidates = (await database
       .select(ticketSelection)
       .from(deliveryTickets)
-      .where(expiredTerminalTicketCondition(cutoff))
+      .where(deliveryTicketRetentionCandidateCondition(cutoff))
       .orderBy(
         asc(deliveryTickets.resolvedAt),
         asc(deliveryTickets.updatedAt),

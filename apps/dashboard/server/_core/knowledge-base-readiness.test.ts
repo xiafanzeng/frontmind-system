@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   KnowledgeBaseRecoveryHealthTracker,
-  assertKnowledgeBase0045Schema,
+  assertKnowledgeBaseResilientSchema,
   evaluateKnowledgeBaseReadiness,
   knowledgeBaseReadinessHttpStatus,
   probeDashboardAssetStorage,
@@ -40,6 +40,22 @@ const requiredColumns = {
     "recoveryLeaseExpiresAt",
     "lastAppliedOperationKey",
     "currentPresentationKey",
+    "providerProtocol",
+    "canonicalTaskId",
+    "canonicalTaskGeneration",
+    "canonicalCredentialId",
+    "canonicalTaskState",
+    "canonicalTaskUrl",
+    "canonicalTaskCreatedAt",
+    "handoffProvenance",
+    "skillArchiveSha256",
+    "skillArchiveBytes",
+    "skillArchiveStorageKey",
+    "contentCompletedAt",
+    "packageStatus",
+    "packageAttemptCount",
+    "packageNextRetryAt",
+    "packageLastErrorCode",
     "logoStorageKey",
     "logoSha256",
     "logoBytes",
@@ -89,6 +105,18 @@ const requiredIndexes = [
     columns: ["status", "recoveryLeaseExpiresAt"],
     nonUnique: 1,
   },
+  {
+    tableName: "knowledge_base_builds",
+    indexName: "knowledge_base_builds_canonical_task_idx",
+    columns: ["canonicalTaskId"],
+    nonUnique: 0,
+  },
+  {
+    tableName: "knowledge_base_builds",
+    indexName: "knowledge_base_builds_canonical_credential_idx",
+    columns: ["canonicalCredentialId"],
+    nonUnique: 1,
+  },
 ] as const;
 
 function schemaRows() {
@@ -96,10 +124,15 @@ function schemaRows() {
     ([tableName, names]) =>
       names.map((columnName) => {
         const columnType =
-          columnName === "attachmentFileIds" || columnName === "metadata"
+          columnName === "attachmentFileIds" ||
+          columnName === "metadata" ||
+          columnName === "handoffProvenance"
             ? "json"
             : columnName === "leaseExpiresAt" ||
-                columnName === "recoveryLeaseExpiresAt"
+                columnName === "recoveryLeaseExpiresAt" ||
+                columnName === "canonicalTaskCreatedAt" ||
+                columnName === "contentCompletedAt" ||
+                columnName === "packageNextRetryAt"
               ? "timestamp"
               : [
                     "buildGeneration",
@@ -107,6 +140,9 @@ function schemaRows() {
                     "stateEpoch",
                     "logoBytes",
                     "packageSizeBytes",
+                    "canonicalTaskGeneration",
+                    "skillArchiveBytes",
+                    "packageAttemptCount",
                   ].includes(columnName)
                 ? "int unsigned"
                 : columnName === "expectedRevision"
@@ -123,14 +159,21 @@ function schemaRows() {
                               "contentSha256",
                               "packageArchiveSha256",
                               "recoveryLeaseOwnerHash",
+                              "skillArchiveSha256",
                             ].includes(columnName)
                           ? 64
-                          : columnName === "operationType"
+                          : [
+                                "operationType",
+                                "providerProtocol",
+                                "canonicalTaskState",
+                                "packageStatus",
+                              ].includes(columnName)
                             ? 32
                             : [
                                   "operationKey",
                                   "lastAppliedOperationKey",
                                   "protocolErrorCode",
+                                  "packageLastErrorCode",
                                 ].includes(columnName)
                               ? 128
                               : [
@@ -142,17 +185,25 @@ function schemaRows() {
                                 : [
                                       "logoStorageKey",
                                       "packageStorageKey",
+                                      "canonicalTaskUrl",
+                                      "skillArchiveStorageKey",
                                     ].includes(columnName)
                                   ? 1024
-                                  : columnName === "logoFilename"
-                                    ? 512
-                                    : 255
+                                  : columnName === "canonicalCredentialId"
+                                    ? 36
+                                    : columnName === "logoFilename"
+                                      ? 512
+                                      : 255
                     })`;
         const notNull = [
           "attachmentFileIds",
           "metadata",
           "generation",
           "stateEpoch",
+          "providerProtocol",
+          "canonicalTaskState",
+          "packageStatus",
+          "packageAttemptCount",
         ].includes(columnName);
         const columnDefault =
           columnName === "attachmentFileIds"
@@ -163,7 +214,15 @@ function schemaRows() {
                 ? "1"
                 : columnName === "stateEpoch"
                   ? "0"
-                  : null;
+                  : columnName === "providerProtocol"
+                    ? "legacy_v1"
+                    : columnName === "canonicalTaskState"
+                      ? "unbound"
+                      : columnName === "packageStatus"
+                        ? "not_started"
+                        : columnName === "packageAttemptCount"
+                          ? "0"
+                          : null;
         return {
           tableName,
           columnName,
@@ -234,36 +293,44 @@ afterEach(async () => {
 });
 
 describe("knowledge-base production readiness", () => {
-  it("requires every 0045 column and the exact ordered indexes", async () => {
+  it("requires the complete 0045 + 0061 fallback schema and exact ordered indexes", async () => {
     await expect(
-      assertKnowledgeBase0045Schema(schemaDb()),
+      assertKnowledgeBaseResilientSchema(schemaDb()),
     ).resolves.toBeUndefined();
 
-    const missingColumnRows = schemaRows().columns.slice(1);
+    const missingColumnRows = schemaRows().columns.filter(
+      (row) => row.columnName !== "canonicalTaskId",
+    );
     await expect(
-      assertKnowledgeBase0045Schema(schemaDb({ columns: missingColumnRows })),
+      assertKnowledgeBaseResilientSchema(
+        schemaDb({ columns: missingColumnRows }),
+      ),
     ).rejects.toMatchObject({ code: "KB_SCHEMA_0045_INCOMPLETE" });
 
     const wrongIndexRows = schemaRows().indexes.filter(
       (row) =>
         !(
-          row.indexName === "conversation_turns_lease_idx" &&
-          row.columnName === "leaseExpiresAt"
+          row.indexName === "knowledge_base_builds_canonical_credential_idx" &&
+          row.columnName === "canonicalCredentialId"
         ),
     );
     await expect(
-      assertKnowledgeBase0045Schema(schemaDb({ indexes: wrongIndexRows })),
+      assertKnowledgeBaseResilientSchema(schemaDb({ indexes: wrongIndexRows })),
     ).rejects.toMatchObject({ code: "KB_SCHEMA_0045_INCOMPLETE" });
 
     const wrongDefaultRows = schemaRows().columns.map((row) =>
-      row.columnName === "generation" ? { ...row, columnDefault: "2" } : row,
+      row.columnName === "packageStatus"
+        ? { ...row, columnDefault: "ready" }
+        : row,
     );
     await expect(
-      assertKnowledgeBase0045Schema(schemaDb({ columns: wrongDefaultRows })),
+      assertKnowledgeBaseResilientSchema(
+        schemaDb({ columns: wrongDefaultRows }),
+      ),
     ).rejects.toMatchObject({ code: "KB_SCHEMA_0045_INCOMPLETE" });
 
     await expect(
-      assertKnowledgeBase0045Schema(schemaDb({ foreignKeys: [] })),
+      assertKnowledgeBaseResilientSchema(schemaDb({ foreignKeys: [] })),
     ).rejects.toMatchObject({ code: "KB_SCHEMA_0045_INCOMPLETE" });
   });
 
@@ -281,7 +348,7 @@ describe("knowledge-base production readiness", () => {
     });
 
     await expect(
-      assertKnowledgeBase0045Schema(
+      assertKnowledgeBaseResilientSchema(
         schemaDb({
           columns: uppercaseInformationSchemaRows(mysql84Columns),
           indexes: uppercaseInformationSchemaRows(rows.indexes),
@@ -296,7 +363,7 @@ describe("knowledge-base production readiness", () => {
         : row,
     );
     await expect(
-      assertKnowledgeBase0045Schema(
+      assertKnowledgeBaseResilientSchema(
         schemaDb({
           columns: uppercaseInformationSchemaRows(nonEmptyDefaultColumns),
           indexes: uppercaseInformationSchemaRows(rows.indexes),
@@ -392,6 +459,24 @@ describe("knowledge-base production readiness", () => {
       migration: "complete_migration_journal",
       status: "ok",
     });
+  });
+
+  it("reports degraded builds without turning local findings into a readiness gate", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "frontmind-health-"));
+    temporaryRoots.push(root);
+    const result = await evaluateKnowledgeBaseReadiness({
+      db: schemaDb(),
+      schemaVerified: true,
+      recoveryRequired: false,
+      assetRootDir: root,
+      minimumAvailableBytes: 1,
+      writesBlocked: () => null,
+      degradedBuildCount: 7,
+    });
+
+    expect(result.ready).toBe(true);
+    expect(knowledgeBaseReadinessHttpStatus(result)).toBe(200);
+    expect(result.dto.degradedBuildCount).toBe(7);
   });
 
   it("requires the configured dashboard asset volume in production readiness", async () => {

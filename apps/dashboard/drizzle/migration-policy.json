@@ -10,6 +10,7 @@
     "0054_file_content_retention": "expand",
     "0055_mean_dark_beast": "expand",
     "0056_monitoring_domain": "expand",
-    "0057_concerned_ares": "expand"
+    "0057_concerned_ares": "expand",
+    "0058_dashboard_production_parity": "expand"
   }
 }

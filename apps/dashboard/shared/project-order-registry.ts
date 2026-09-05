@@ -189,6 +189,14 @@ export const projectOrderProjectResponseSchema = z
     }
   });
 
+export const projectOrderProjectDeleteResponseSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectId: projectOrderProjectIdSchema,
+    deletedOrders: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export type ProjectOrderState = z.infer<typeof projectOrderStateSchema>;
 export type ProjectOrder = z.infer<typeof projectOrderSchema>;
 export type ProjectOrderWriteRequest = z.infer<
@@ -203,4 +211,7 @@ export type ProjectOrderIntentCommitResponse = z.infer<
 >;
 export type ProjectOrderProjectResponse = z.infer<
   typeof projectOrderProjectResponseSchema
+>;
+export type ProjectOrderProjectDeleteResponse = z.infer<
+  typeof projectOrderProjectDeleteResponseSchema
 >;

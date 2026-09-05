@@ -1,0 +1,54 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-astro-company-site-workflow",
+  "version": "1.2.0",
+  "entrypoint": "SKILL.md",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "hashScope": "all regular files except MANIFEST.json",
+  "host": {
+    "starterSha256": "441c938e156745de1469f527649397a087ca4379bffa2a4e47d12bcbc94662fe",
+    "componentLibraryVersion": "1.0.0",
+    "materializerVersion": "1.0.0",
+    "materializerSha256": "ba508966169adbd03f87444d499644697b2a5ccaa9b67d0b74730448aaf1eecf"
+  },
+  "files": [
+    {
+      "path": "adapters/frontmind-dashboard.md",
+      "bytes": 1537,
+      "sha256": "c49952424f58ff2d5dc54cf98058b88d3a863c554f5e3108a860f6423e3b6f7e"
+    },
+    {
+      "path": "assets/host-starter-contract.json",
+      "bytes": 674,
+      "sha256": "441c938e156745de1469f527649397a087ca4379bffa2a4e47d12bcbc94662fe"
+    },
+    {
+      "path": "runtime-contract.json",
+      "bytes": 926,
+      "sha256": "17dfdd08cae93fc6ce4562c7a331cdff26cf745378302d03b8cd08edab04737f"
+    },
+    {
+      "path": "schemas/frontmind-run-envelope.schema.json",
+      "bytes": 1669,
+      "sha256": "8752ce0ec0504bb3bcc043d4add8f6c11307e20b67a015ecac5a105504b60edb"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 2305,
+      "sha256": "b1bf612da4edc6b59024cc23d27e02cbe551ff5712a6af4c61046f2a782ca866"
+    },
+    {
+      "path": "UPSTREAM.json",
+      "bytes": 244,
+      "sha256": "bad73d447e991c561832e9c3631555b32119aad07f1f3c00bf5e5ce4dc58a771"
+    },
+    {
+      "path": "VERSION",
+      "bytes": 6,
+      "sha256": "1e5b51cde515396a9fa762909cf8ca6584ccc564b325d2eebeea76175fe95c4d"
+    }
+  ]
+}

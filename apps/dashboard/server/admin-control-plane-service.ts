@@ -158,10 +158,48 @@ export async function writeWorkspaceAuditEvent(
   return event;
 }
 
+/**
+ * Truthful audit identity for an operator action executed from the immutable,
+ * signed product image. It deliberately does not borrow a human administrator
+ * user id or access level.
+ */
+export async function writeSystemMaintenanceWorkspaceAuditEvent(
+  input: {
+    action: string;
+    targetType: string;
+    targetId: string | number;
+    workspaceUserId?: number | null;
+    reasonCode: string;
+    metadata?: Record<string, unknown>;
+    now?: Date;
+  },
+  executor?: any,
+) {
+  const db = executor ?? (await requireDb());
+  const event = {
+    id: randomUUID(),
+    actorUserId: null,
+    actorUsername: "signed-image-maintenance",
+    actorAccessLevel: null,
+    action: input.action.slice(0, 128),
+    targetType: input.targetType.slice(0, 64),
+    targetId: String(input.targetId).slice(0, 191),
+    workspaceUserId: input.workspaceUserId ?? null,
+    reason: input.reasonCode.trim().slice(0, 128) || null,
+    metadata: sanitizeAuditMetadata({
+      ...input.metadata,
+      executionChannel: "signed_image_maintenance",
+    }),
+    createdAt: input.now ?? new Date(),
+  };
+  await db.insert(workspaceAuditEvents).values(event);
+  return event;
+}
+
 type WorkspaceAuditEventDto = {
   id: string;
-  actorUserId: number;
-  actorUsername: string;
+  actorUserId: number | null;
+  actorUsername: string | null;
   actorAccessLevel: AdminAccessLevel | null;
   action: string;
   targetType: string;
@@ -376,7 +414,7 @@ export function buildAdminControlPlaneOverview(input: {
         description: "尚未发布可校验的企业看板内容。",
         status: "unconfigured",
         updatedAt: user.createdAt.getTime(),
-        href: `/admin/customers/${user.id}/service`,
+        href: `/admin/customers/${user.id}/workspace`,
       });
     }
     if (user.isActive && (serviceStatus !== "active" || serviceExpiringSoon)) {
@@ -401,7 +439,7 @@ export function buildAdminControlPlaneOverview(input: {
         updatedAt: currentContract?.createdAt
           ? new Date(currentContract.createdAt).getTime()
           : user.createdAt.getTime(),
-        href: `/admin/customers/${user.id}/service`,
+        href: `/admin/customers/${user.id}/workspace`,
       });
     }
     if (
@@ -421,7 +459,7 @@ export function buildAdminControlPlaneOverview(input: {
             : `当前 Key 校验状态：${status}`,
         status,
         updatedAt: credential?.verifiedAt?.getTime() ?? null,
-        href: `/admin/customers/${user.id}/credential`,
+        href: `/?credentialType=managed_api&credentialUserId=${user.id}&credentialKind=customer`,
       });
     }
   }
@@ -455,7 +493,7 @@ export function buildAdminControlPlaneOverview(input: {
             : `构建状态：${build.status}`),
         status: build.status,
         updatedAt: build.updatedAt.getTime(),
-        href: `/admin/customers/${build.userId}/knowledge`,
+        href: `/admin/customers/${build.userId}/workspace`,
       });
     }
   }
@@ -472,7 +510,7 @@ export function buildAdminControlPlaneOverview(input: {
         description: "存在失败的智能体执行记录，请进入客户工作区检查并重试。",
         status: "failed",
         updatedAt: row.updatedAt?.getTime() ?? null,
-        href: `/admin/customers/${row.userId}/knowledge`,
+        href: `/admin/customers/${row.userId}/workspace`,
       });
     }
   }

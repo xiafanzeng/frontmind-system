@@ -1,9 +1,20 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
+import {
+  BRAND_TRACKING_CREDITS_INPUT_PATTERN,
+  brandTrackingCreditsToAmount,
+} from "../shared/brand-tracking-credits";
 import { deliveryRoleTypeSchema } from "../shared/delivery-roles";
+import {
+  adjustQuestionQuotaSchema,
+  workspaceQuestionCategorySchema,
+} from "../shared/service-portal";
 import { toTrpcError } from "./auth-router";
 import {
+  approveMySiteOpsRebuild,
   approveMyCustomerQuestionSelection,
+  getMyCustomerBrandTrackingUsage,
   getMyDeliveryHistory,
   getMyDeliveryTickets,
   getMyDeliveryTicketDetail,
@@ -11,7 +22,9 @@ import {
   listDeliveryRoleManagement,
   listMyProjectAssignments,
   publishWebsiteStyleSamples,
+  rejectMyCustomerQuestionSelection,
   setProjectEngineer,
+  updateMyCustomerBrandTrackingLimit,
   updateMyDeliveryTicket,
 } from "./delivery-role-service";
 import { adminProcedure, protectedProcedure, router } from "./_core/trpc";
@@ -19,12 +32,51 @@ import {
   decideKnowledgeReset,
   previewKnowledgeReset,
 } from "./knowledge-base-reset-service";
+import { adjustMyCustomerQuestionQuota } from "./question-quota-service";
+import {
+  decideQuestionMaintenance,
+  decideQuestionMaintenanceSchema,
+} from "./question-maintenance-service";
+import {
+  JenovaBrandTrackingError,
+  toJenovaBrandTrackingAuthError,
+} from "./jenova-brand-tracking-service";
 
 function serviceCall<T>(callback: () => Promise<T>) {
   return callback().catch((error) => {
     throw toTrpcError(error);
   });
 }
+
+function jenovaServiceCall<T>(callback: () => Promise<T>) {
+  return callback().catch((error) => {
+    if (
+      error instanceof JenovaBrandTrackingError &&
+      ["UNAUTHORIZED", "FORBIDDEN", "INELIGIBLE"].includes(error.code)
+    ) {
+      throw new TRPCError({
+        code: error.code === "UNAUTHORIZED" ? "UNAUTHORIZED" : "FORBIDDEN",
+        message: error.message,
+        cause: error,
+      });
+    }
+    throw toTrpcError(toJenovaBrandTrackingAuthError(error));
+  });
+}
+
+const jenovaCreditsAmountError =
+  "积分上限必须是非负数，最多 15 位整数和 5 位小数";
+
+const jenovaCreditsAmountSchema = z
+  .string()
+  .trim()
+  .regex(BRAND_TRACKING_CREDITS_INPUT_PATTERN, jenovaCreditsAmountError)
+  .transform((value, context) => {
+    const amount = brandTrackingCreditsToAmount(value);
+    if (amount !== null) return amount;
+    context.addIssue({ code: "custom", message: jenovaCreditsAmountError });
+    return z.NEVER;
+  });
 
 export const deliveryRoleRouter = router({
   management: router({
@@ -82,6 +134,7 @@ export const deliveryRoleRouter = router({
           projectAssignmentId: z.string().uuid(),
           questionId: z.string().trim().min(1).max(64),
           expectedRevision: z.number().int().positive(),
+          category: workspaceQuestionCategorySchema.optional(),
         }),
       )
       .mutation(({ ctx, input }) =>
@@ -89,6 +142,67 @@ export const deliveryRoleRouter = router({
           approveMyCustomerQuestionSelection({
             actor: ctx.user,
             ...input,
+          }),
+        ),
+      ),
+    rejectQuestionSelection: protectedProcedure
+      .input(
+        z.object({
+          projectAssignmentId: z.string().uuid(),
+          questionId: z.string().trim().min(1).max(64),
+          expectedRevision: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(2_000),
+        }),
+      )
+      .mutation(({ ctx, input }) =>
+        serviceCall(() =>
+          rejectMyCustomerQuestionSelection({
+            actor: ctx.user,
+            ...input,
+          }),
+        ),
+      ),
+    adjustQuestionQuota: protectedProcedure
+      .input(adjustQuestionQuotaSchema)
+      .mutation(({ ctx, input }) =>
+        serviceCall(() =>
+          adjustMyCustomerQuestionQuota({
+            actor: ctx.user,
+            value: input,
+          }),
+        ),
+      ),
+    brandTrackingUsage: protectedProcedure
+      .input(
+        z
+          .object({
+            projectAssignmentId: z.string().uuid(),
+          })
+          .strict(),
+      )
+      .query(({ ctx, input }) =>
+        jenovaServiceCall(() =>
+          getMyCustomerBrandTrackingUsage({
+            actor: ctx.user,
+            ...input,
+          }),
+        ),
+      ),
+    updateBrandTrackingLimit: protectedProcedure
+      .input(
+        z
+          .object({
+            projectAssignmentId: z.string().uuid(),
+            limitCredits: jenovaCreditsAmountSchema,
+          })
+          .strict(),
+      )
+      .mutation(({ ctx, input }) =>
+        jenovaServiceCall(() =>
+          updateMyCustomerBrandTrackingLimit({
+            actor: ctx.user,
+            projectAssignmentId: input.projectAssignmentId,
+            limit: input.limitCredits,
           }),
         ),
       ),
@@ -176,70 +290,98 @@ export const deliveryRoleRouter = router({
       .mutation(({ ctx, input }) =>
         serviceCall(() => decideKnowledgeReset({ actor: ctx.user, ...input })),
       ),
+    decideQuestionMaintenance: protectedProcedure
+      .input(decideQuestionMaintenanceSchema)
+      .mutation(({ ctx, input }) =>
+        serviceCall(() =>
+          decideQuestionMaintenance({ actor: ctx.user, ...input }),
+        ),
+      ),
+    approveSiteRebuild: protectedProcedure
+      .input(
+        z
+          .object({
+            projectAssignmentId: z.string().uuid(),
+            ticketId: z.string().uuid(),
+            expectedRevision: z.number().int().positive(),
+          })
+          .strict(),
+      )
+      .mutation(({ ctx, input }) =>
+        serviceCall(() =>
+          approveMySiteOpsRebuild({ actor: ctx.user, ...input }),
+        ),
+      ),
     updateTicket: protectedProcedure
       .input(
-        z.object({
-          projectAssignmentId: z.string().uuid(),
-          ticketId: z.string().uuid(),
-          expectedRevision: z.number().int().positive(),
-          status: z.enum([
-            "in_progress",
-            "needs_information",
-            "completed",
-            "rejected",
-            "cancelled",
-          ]),
-          message: z.string().trim().max(8_000).optional(),
-          publicUrl: z.string().url().max(4_096).optional(),
-          handoff: z
-            .object({
-              monitoringBatchKey: z.string().trim().max(191).optional(),
-              optimizationQuestionIds: z
-                .array(z.string().trim().min(1).max(191))
-                .max(100)
-                .optional(),
-              responseLogicRevision: z.number().int().positive().optional(),
-              contentAssetIds: z
-                .array(z.string().trim().min(1).max(191))
-                .max(500)
-                .optional(),
-              publishTargets: z
-                .array(z.enum(["media", "website"]))
-                .max(2)
-                .optional(),
-              websiteOperation: z
-                .enum([
-                  "company_facts",
-                  "product_case_docs",
-                  "industry_news",
-                  "company_news",
-                  "faq_content",
-                ])
-                .optional(),
-              needsFurtherOptimization: z.boolean().optional(),
-              domain: z.string().trim().max(512).optional(),
-              icpServiceCode: z.string().trim().max(512).optional(),
-              icpProvince: z.string().trim().max(64).optional(),
-              icpNumber: z.string().trim().max(128).optional(),
-              icpNotRequired: z.boolean().optional(),
-              siteCheck: z
-                .object({
-                  key: z.string().trim().min(1).max(64),
-                  label: z.string().trim().min(1).max(160),
-                  status: z.enum([
-                    "passed",
-                    "warning",
-                    "failed",
-                    "not_applicable",
-                  ]),
-                  summary: z.string().trim().max(8_000).optional(),
-                  evidence: z.string().trim().max(8_000).optional(),
-                  source: z.string().trim().max(4_096).optional(),
-                })
-                .optional(),
-            })
-            .optional(),
-        }),
+        z
+          .object({
+            projectAssignmentId: z.string().uuid(),
+            ticketId: z.string().uuid(),
+            expectedRevision: z.number().int().positive(),
+            status: z.enum([
+              "in_progress",
+              "needs_information",
+              "completed",
+              "rejected",
+              "cancelled",
+            ]),
+            message: z.string().trim().max(8_000).optional(),
+            publicUrl: z.string().url().max(4_096).optional(),
+            previewVerified: z.literal(true).optional(),
+            handoff: z
+              .object({
+                monitoringBatchKey: z.string().trim().max(191).optional(),
+                optimizationQuestionIds: z
+                  .array(z.string().trim().min(1).max(191))
+                  .max(100)
+                  .optional(),
+                responseLogicRevision: z.number().int().positive().optional(),
+                contentAssetIds: z
+                  .array(z.string().trim().min(1).max(191))
+                  .max(500)
+                  .optional(),
+                targetMedia: z.string().trim().min(1).max(64).optional(),
+                publishTargets: z
+                  .array(z.enum(["media", "website"]))
+                  .max(2)
+                  .optional(),
+                websiteOperation: z
+                  .enum([
+                    "company_facts",
+                    "product_case_docs",
+                    "industry_news",
+                    "company_news",
+                    "faq_content",
+                  ])
+                  .optional(),
+                needsFurtherOptimization: z.boolean().optional(),
+                domain: z.string().trim().max(512).optional(),
+                icpServiceCode: z.string().trim().max(512).optional(),
+                icpProvince: z.string().trim().max(64).optional(),
+                icpNumber: z.string().trim().max(128).optional(),
+                icpNotRequired: z.boolean().optional(),
+                siteCheck: z
+                  .object({
+                    key: z.string().trim().min(1).max(64),
+                    label: z.string().trim().min(1).max(160),
+                    status: z.enum([
+                      "passed",
+                      "warning",
+                      "failed",
+                      "not_applicable",
+                    ]),
+                    summary: z.string().trim().max(8_000).optional(),
+                    evidence: z.string().trim().max(8_000).optional(),
+                    source: z.string().trim().min(1).max(4_096).optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
       )
       .mutation(({ ctx, input }) =>
         serviceCall(() =>

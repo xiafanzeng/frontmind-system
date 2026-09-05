@@ -16,6 +16,13 @@ const expected = {
   snapshotHash: "archive-sha256",
   quotaPeriodId: "period-1",
   planCode: "advanced" as const,
+  quotaRevision: 4,
+  candidateTargets: {
+    industry: 3,
+    competitor_comparison: 3,
+    reputation: 3,
+    product_scenario: 15,
+  },
 };
 
 describe("brand question task context", () => {
@@ -45,6 +52,39 @@ describe("brand question task context", () => {
     ).toThrowError(
       expect.objectContaining({ code: "BRAND_QUESTION_TASK_STALE" }),
     );
+  });
+
+  it("rejects a task after its quota revision or candidate targets change", () => {
+    const token = createBrandQuestionTaskContextToken({
+      ...expected,
+      secret: SECRET,
+      now: NOW,
+    });
+
+    for (const changed of [
+      { ...expected, quotaRevision: expected.quotaRevision + 1 },
+      {
+        ...expected,
+        candidateTargets: {
+          ...expected.candidateTargets,
+          product_scenario: expected.candidateTargets.product_scenario + 3,
+        },
+      },
+    ]) {
+      expect(() =>
+        verifyBrandQuestionTaskContextToken({
+          token,
+          secret: SECRET,
+          now: new Date(NOW.getTime() + 1_000),
+          expected: changed,
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: "BRAND_QUESTION_TASK_STALE",
+          message: expect.stringContaining("问题额度"),
+        }),
+      );
+    }
   });
 
   it("rejects tampered and expired context instead of reusing a stale task", () => {

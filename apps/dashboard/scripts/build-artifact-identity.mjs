@@ -4,6 +4,10 @@ import path from "node:path";
 
 export const BUILD_ARTIFACT_IDENTITY_FILENAME = "build-source.json";
 export const BUILD_ARTIFACT_MANIFEST_FILENAME = "artifact-manifest.json";
+const KNOWLEDGE_BASE_INCIDENT_REPAIR_CLI_SOURCE =
+  "server/knowledge-base-incident-repair-cli.ts";
+const KNOWLEDGE_BASE_INCIDENT_REPAIR_CLI_OUTPUT =
+  "knowledge-base-incident-repair-cli.js";
 
 function fullSha(value, errorCode) {
   const sha = String(value || "")
@@ -108,6 +112,23 @@ async function collectArtifactFiles(buildRoot, directory = buildRoot) {
   );
 }
 
+async function knowledgeBaseIncidentRepairCliRequired(buildRoot) {
+  const sourcePath = path.join(
+    path.dirname(buildRoot),
+    KNOWLEDGE_BASE_INCIDENT_REPAIR_CLI_SOURCE,
+  );
+  try {
+    const source = await lstat(sourcePath);
+    if (!source.isFile()) {
+      throw new Error("BUILD_INCIDENT_REPAIR_CLI_SOURCE_INVALID");
+    }
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 export async function createBuildArtifactManifest(buildRoot, buildSourceSha) {
   const resolvedBuildRoot = path.resolve(buildRoot);
   const sourceSha = fullSha(
@@ -116,6 +137,9 @@ export async function createBuildArtifactManifest(buildRoot, buildSourceSha) {
   );
   const files = await collectArtifactFiles(resolvedBuildRoot);
   const paths = new Set(files.map((file) => file.path));
+  const incidentRepairCliArtifact = files.find(
+    (file) => file.path === KNOWLEDGE_BASE_INCIDENT_REPAIR_CLI_OUTPUT,
+  );
   const hasClientJavaScript = files.some(
     (file) =>
       file.path.startsWith("public/assets/") && file.path.endsWith(".js"),
@@ -127,6 +151,8 @@ export async function createBuildArtifactManifest(buildRoot, buildSourceSha) {
   const hasRuntimeSkill = files.some((file) =>
     file.path.startsWith("private-workflows/"),
   );
+  const requiresIncidentRepairCli =
+    await knowledgeBaseIncidentRepairCliRequired(resolvedBuildRoot);
   if (
     !paths.has(BUILD_ARTIFACT_IDENTITY_FILENAME) ||
     !paths.has("index.js") ||
@@ -136,6 +162,8 @@ export async function createBuildArtifactManifest(buildRoot, buildSourceSha) {
     !paths.has("drizzle/meta/_journal.json") ||
     !paths.has("drizzle/migration-policy.json") ||
     !paths.has("verify-presales-file-roundtrip.js") ||
+    requiresIncidentRepairCli !== Boolean(incidentRepairCliArtifact) ||
+    (requiresIncidentRepairCli && incidentRepairCliArtifact?.bytes === 0) ||
     !paths.has("public/index.html") ||
     !hasClientJavaScript ||
     !hasClientCss ||

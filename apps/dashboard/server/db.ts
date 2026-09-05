@@ -1,7 +1,9 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { createPool } from "mysql2";
 import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import { ENV } from "./_core/env";
+import { resolveFrontMindRuntimeRole } from "./_core/runtime-role";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -9,13 +11,49 @@ let _db: ReturnType<typeof drizzle> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      const pool = createPool({
+        uri: process.env.DATABASE_URL,
+        timezone: "Z",
+        // The SiteOps process performs bounded, long-running projections and
+        // must never consume the public web process' whole connection budget.
+        connectionLimit:
+          resolveFrontMindRuntimeRole() === "siteops-worker" ? 3 : 10,
+        waitForConnections: true,
+        queueLimit:
+          resolveFrontMindRuntimeRole() === "siteops-worker" ? 24 : 96,
+      });
+      pool.on("connection", (connection) => {
+        connection.query("SET SESSION time_zone = '+00:00'", (error) => {
+          if (!error) return;
+          console.error("[Database] UTC session initialization failed", {
+            code: "DATABASE_UTC_SESSION_INIT_FAILED",
+          });
+          connection.destroy();
+        });
+      });
+      _db = drizzle(pool);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
     }
   }
   return _db;
+}
+
+/** Close only the lazily-owned pool of a terminating one-shot maintenance CLI. */
+export async function closeDbForOneShotMaintenance() {
+  const db = _db;
+  _db = null;
+  if (!db) return;
+  const client = db.$client as unknown as {
+    end?: (callback: (error: Error | null) => void) => void;
+  };
+  if (typeof client.end !== "function") {
+    throw new Error("DATABASE_CLIENT_CLOSE_UNAVAILABLE");
+  }
+  await new Promise<void>((resolve, reject) => {
+    client.end!((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -56,8 +94,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -84,7 +122,11 @@ export async function getUserByOpenId(openId: string) {
     return undefined;
   }
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }

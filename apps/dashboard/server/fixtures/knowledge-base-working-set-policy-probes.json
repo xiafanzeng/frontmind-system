@@ -1,0 +1,210 @@
+[
+  {
+    "name": "markdown-retained",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.1/source.md",
+        "mimeType": "text/markdown; charset=utf-8"
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": ["evidence/1.1/source.md"],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "markdown-long-extension-retained",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.2/source.markdown",
+        "mimeType": "text/plain"
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": ["evidence/1.2/source.markdown"],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "plain-text-retained",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.3/source.txt",
+        "mimeType": "text/plain"
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": ["evidence/1.3/source.txt"],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "binary-evidence-soft-drop",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.4/source.pdf",
+        "mimeType": "application/pdf"
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": ["evidence/1.4/source.pdf"],
+      "warnings": [
+        {
+          "code": "OPTIONAL_BINARY_EVIDENCE_SKIPPED",
+          "area": "evidence"
+        }
+      ],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "wrong-text-mime-soft-drop",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.5/source.md",
+        "mimeType": "application/pdf"
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": ["evidence/1.5/source.md"],
+      "warnings": [{ "code": "EVIDENCE_INCOMPLETE", "area": "evidence" }],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "missing-text-soft-drop",
+    "input": {
+      "evidence": {
+        "path": "evidence/1.6/source.txt",
+        "present": false
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": ["evidence/1.6/source.txt"],
+      "warnings": [{ "code": "EVIDENCE_INCOMPLETE", "area": "evidence" }],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "compression-ratio-boundary-accepted",
+    "input": {
+      "archive": {
+        "compressedBytes": 1024,
+        "entries": [{ "compressedBytes": 5, "uncompressedBytes": 1000 }]
+      }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "compression-ratio-over-limit-rejected",
+    "input": {
+      "archive": {
+        "compressedBytes": 1024,
+        "entries": [{ "compressedBytes": 5, "uncompressedBytes": 1001 }]
+      }
+    },
+    "expected": {
+      "accepted": false,
+      "retained": [],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": "archiveSafety"
+    }
+  },
+  {
+    "name": "empty-archive-rejected",
+    "input": { "archive": { "compressedBytes": 22, "entries": [] } },
+    "expected": {
+      "accepted": false,
+      "retained": [],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": "archiveSafety"
+    }
+  },
+  {
+    "name": "initial-server-coordinate-normalized",
+    "input": {
+      "authority": { "mode": "initial", "field": "buildId", "matches": false }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": [],
+      "warnings": [
+        { "code": "SERVER_COORDINATE_NORMALIZED", "area": "manifest" }
+      ],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "initial-operation-identity-rejected",
+    "input": {
+      "authority": {
+        "mode": "initial",
+        "field": "operationId",
+        "matches": false
+      }
+    },
+    "expected": {
+      "accepted": false,
+      "retained": [],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": "operationId"
+    }
+  },
+  {
+    "name": "revision-build-coordinate-normalized",
+    "input": {
+      "authority": { "mode": "revision", "field": "buildId", "matches": false }
+    },
+    "expected": {
+      "accepted": true,
+      "retained": [],
+      "dropped": [],
+      "warnings": [
+        { "code": "SERVER_COORDINATE_NORMALIZED", "area": "manifest" }
+      ],
+      "hardFailure": null
+    }
+  },
+  {
+    "name": "revision-base-working-set-rejected",
+    "input": {
+      "authority": {
+        "mode": "revision",
+        "field": "baseWorkingSetSha256",
+        "matches": false
+      }
+    },
+    "expected": {
+      "accepted": false,
+      "retained": [],
+      "dropped": [],
+      "warnings": [],
+      "hardFailure": "baseWorkingSetSha256"
+    }
+  }
+]

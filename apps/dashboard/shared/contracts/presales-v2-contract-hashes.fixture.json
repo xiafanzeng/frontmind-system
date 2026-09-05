@@ -1,0 +1,34 @@
+{
+  "presalesContractVersion": 2,
+  "capabilities": [
+    "local-assets",
+    "typed-results",
+    "local-artifacts",
+    "safe-events",
+    "project-business-owner"
+  ],
+  "contractHashes": {
+    "website.question-recommendation": "c2410c0b93f1c67e589e716e254bf9ce6e3f4ec9bb845b99e5f85706315dabb4",
+    "website.knowledge-base-candidate": "f7d08256052c49acd99fff60ca19f8075430851c265072674c3271604a7db4ca",
+    "website.custom-question-classifier": "f810e57e094582892e1434641d20858bd5d7c324d0722411b21ce8e062320c7c",
+    "website.current-state-assessment": "cc5c61ed7841239a2290a7077d7a8ad04296a84a88f6c64858e234d25532bb7c",
+    "website.optimization-forecast": "6bcc46978c9b7a60cc7a3b782d9d678bea5573bc130fbe8f89b370aa0d3044ea",
+    "website.monitor-question-translation": "7c0ceb342ac3bf7410cf6d10fb6d4167f3648c820d79d4fd6600f4965fb02024"
+  },
+  "contractRootFields": {
+    "website.optimization-forecast": [
+      "brandMentionRateTarget",
+      "claimGuardrails",
+      "dimensionNarratives",
+      "dimensions",
+      "executiveSummary",
+      "forecastType",
+      "horizonWeeks",
+      "limitations",
+      "roadmap",
+      "scenario",
+      "schemaVersion",
+      "summary"
+    ]
+  }
+}

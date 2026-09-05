@@ -1,0 +1,40 @@
+{
+  "schema": "frontmind-siteops-host-starter/v1",
+  "version": "1.3.0",
+  "runtime": {
+    "node": ">=22.19.0",
+    "profile": "native-astro-static",
+    "packageManagerAtCustomerBuildTime": false
+  },
+  "hostOwned": [
+    "package.json",
+    "astro.config.mjs",
+    "tsconfig.json",
+    "src/layouts/SiteLayout.astro",
+    "src/pages/404.astro",
+    "public/styles.css"
+  ],
+  "layoutArchetypes": [
+    "hero_led",
+    "editorial",
+    "modular",
+    "split",
+    "asymmetric"
+  ],
+  "heroVariants": [
+    "split_media",
+    "centered_statement",
+    "editorial_lede",
+    "proof_grid"
+  ],
+  "sectionVariants": [
+    "statement",
+    "split",
+    "cards",
+    "timeline",
+    "faq",
+    "proof",
+    "cta"
+  ],
+  "providerSourceAccepted": false
+}

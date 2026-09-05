@@ -4,29 +4,61 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  apiCredentials,
+  apiUsageCredentialCoverage,
+  apiUsageSnapshots,
+  users,
+} from "../drizzle/schema";
+
+import {
   API_USAGE_SCAN_CONCURRENCY,
   API_USAGE_SNAPSHOT_SYNC_LOCK_NAME,
+  apiUsageSyncErrorCode,
   apiUsageSnapshotCompletionState,
   apiUsageSeverity,
   assertBulkManagedApiKeyTargetSelection,
   assertBulkManagedApiKeyTargetVersions,
   assertManagedApiKeyTarget,
+  bulkReplaceManagedApiKeyTargets,
   bulkManagedApiKeyActionTargets,
-  bulkPreviousCredentialGroups,
   claimUsageSnapshotRefresh,
   createManagedApiUsageRefreshQueue,
+  finalizeApiUsageSnapshotClaim,
   isDuplicateApiUsageSnapshotError,
   isRollingUsageSnapshotCurrent,
+  lastSuccessfulUsageSnapshotValue,
   latestUsageSnapshotByPolicy,
+  millisecondsUntilNextShanghaiUsageSync,
   resolveEffectiveUsageCredentials,
   resolveBulkManagedApiKeyTargets,
   runApiUsageSnapshotSyncWithLock,
   syncableManagedWorkspaceUserIds,
   usageCredentialPoolKey,
+  usageKeyPoolStale,
   usageSnapshotUsageValues,
 } from "./api-usage-snapshot-service";
+import { AuthServiceError } from "./auth-service";
+import { ManusUsageSyncError } from "./manus-usage-service";
 
 describe("managed API usage refresh targeting", () => {
+  it("persists the concrete credential failure code instead of the Error class name", () => {
+    expect(
+      apiUsageSyncErrorCode(
+        new AuthServiceError("INVALID_CREDENTIAL", "revoked"),
+      ),
+    ).toBe("CREDENTIAL_REJECTED");
+    expect(
+      apiUsageSyncErrorCode(
+        new ManusUsageSyncError("PAGE_DRIFT", "safe message"),
+      ),
+    ).toBe("PAGE_DRIFT");
+    const timeout = new Error("timeout");
+    timeout.name = "TimeoutError";
+    expect(apiUsageSyncErrorCode(timeout)).toBe("TIMEOUT");
+    expect(apiUsageSyncErrorCode(new Error("unknown"))).toBe(
+      "UPSTREAM_UNAVAILABLE",
+    );
+  });
   it("keeps customers owned by a system administrator in the snapshot scan", () => {
     expect(
       syncableManagedWorkspaceUserIds({
@@ -169,16 +201,14 @@ describe("managed API usage refresh targeting", () => {
 });
 
 describe("API usage snapshot completion state", () => {
-  it("keeps an authoritative total available when only account attribution is partial", () => {
+  it("keeps an authoritative total available without an attribution gate", () => {
     expect(
       apiUsageSnapshotCompletionState({
         totalComplete: true,
-        attributionComplete: false,
-        attributionErrorCode: "PARTIAL_ACCOUNT_ATTRIBUTION",
       }),
     ).toEqual({
       status: "ok",
-      errorCode: "PARTIAL_ACCOUNT_ATTRIBUTION",
+      errorCode: null,
     });
   });
 
@@ -186,12 +216,19 @@ describe("API usage snapshot completion state", () => {
     expect(
       apiUsageSnapshotCompletionState({
         totalComplete: false,
-        attributionComplete: true,
-        attributionErrorCode: "PARTIAL_ACCOUNT_ATTRIBUTION",
       }),
     ).toEqual({
       status: "error",
       errorCode: "PARTIAL_USAGE_SCAN",
+    });
+    expect(
+      apiUsageSnapshotCompletionState({
+        totalComplete: false,
+        issueCode: "PAGINATION_INVALID",
+      }),
+    ).toEqual({
+      status: "error",
+      errorCode: "PAGINATION_INVALID",
     });
   });
 });
@@ -248,6 +285,64 @@ describe("API usage snapshot duplicate-key detection", () => {
         updatedAt: now,
       }),
     });
+  });
+});
+
+describe("API usage snapshot claim finalization", () => {
+  function executorForFinalize(affectedRows: number) {
+    const selectQuery = {
+      from: () => selectQuery,
+      where: () => selectQuery,
+      limit: async () => [
+        {
+          policyId: "policy-1",
+          used: 10,
+          accountUsed: 5,
+          syncStatus: "pending",
+        },
+      ],
+    };
+    const updateQuery = {
+      set: () => updateQuery,
+      where: vi.fn().mockResolvedValue([{ affectedRows }]),
+    };
+    return {
+      select: () => selectQuery,
+      update: () => updateQuery,
+      where: updateQuery.where,
+    };
+  }
+
+  it("reports a lost opaque token instead of claiming synchronization success", async () => {
+    const executor = executorForFinalize(0);
+    await expect(
+      finalizeApiUsageSnapshotClaim({
+        executor,
+        policy: { id: "policy-1" } as any,
+        credentialFingerprint: "fingerprint-1",
+        used: 20,
+        accountUsed: 8,
+        status: "ok",
+        now: new Date("2026-08-03T01:00:00.000Z"),
+        syncToken: "lost-token",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("reports success only when the token-guarded update changes a row", async () => {
+    const executor = executorForFinalize(1);
+    await expect(
+      finalizeApiUsageSnapshotClaim({
+        executor,
+        policy: { id: "policy-1" } as any,
+        credentialFingerprint: "fingerprint-1",
+        used: 20,
+        accountUsed: 8,
+        status: "ok",
+        now: new Date("2026-08-03T01:00:00.000Z"),
+        syncToken: "winning-token",
+      }),
+    ).resolves.toBe(true);
   });
 });
 
@@ -414,7 +509,7 @@ describe("resolveEffectiveUsageCredentials", () => {
     expect(result.credentialVersionByUser.get(42)).toBe(5);
   });
 
-  it("keeps the assigned manager's Key as a legacy fallback", () => {
+  it("does not use the assigned manager's Key as a customer fallback", () => {
     const result = resolveEffectiveUsageCredentials({
       userIds: [7, 42],
       credentialRows: [
@@ -428,12 +523,12 @@ describe("resolveEffectiveUsageCredentials", () => {
       ownerRows: [{ userId: 42, deliveryAdminId: 7 }],
     });
 
-    expect(result.byUser.get(42)).toBe("fp_manager");
-    expect(result.credentialOwnerByUser.get(42)).toBe(7);
-    expect(result.credentialIdByUser.get(42)).toBe("cred-manager");
+    expect(result.byUser.has(42)).toBe(false);
+    expect(result.credentialOwnerByUser.has(42)).toBe(false);
+    expect(result.credentialIdByUser.has(42)).toBe(false);
   });
 
-  it("leaves an account unconfigured when neither direct nor fallback Key exists", () => {
+  it("leaves an account unconfigured when it has no direct Key", () => {
     const result = resolveEffectiveUsageCredentials({
       userIds: [42],
       credentialRows: [],
@@ -487,13 +582,86 @@ describe("resolveEffectiveUsageCredentials", () => {
 });
 
 describe("rolling usage snapshot identity", () => {
+  it("exposes a pool total only after a successful observation for the current Key", () => {
+    const fingerprint = "same-fingerprint";
+    expect(
+      lastSuccessfulUsageSnapshotValue({
+        fingerprint,
+        snapshot: {
+          credentialFingerprint: fingerprint,
+          fetchedAt: null,
+          used: 0,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      lastSuccessfulUsageSnapshotValue({
+        fingerprint,
+        snapshot: {
+          credentialFingerprint: fingerprint,
+          fetchedAt: new Date("2026-08-02T08:00:00.000Z"),
+          used: 321,
+        },
+      }),
+    ).toBe(321);
+    expect(
+      lastSuccessfulUsageSnapshotValue({
+        fingerprint: "replacement-fingerprint",
+        snapshot: {
+          credentialFingerprint: fingerprint,
+          fetchedAt: new Date("2026-08-02T08:00:00.000Z"),
+          used: 321,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("marks every configured pool stale until it has a current successful observation", () => {
+    const fingerprint = "same-fingerprint";
+    expect(
+      usageKeyPoolStale({
+        fingerprint,
+        snapshot: undefined,
+        snapshotCurrent: false,
+      }),
+    ).toBe(true);
+    expect(
+      usageKeyPoolStale({
+        fingerprint,
+        snapshot: { fetchedAt: null },
+        snapshotCurrent: false,
+      }),
+    ).toBe(true);
+    expect(
+      usageKeyPoolStale({
+        fingerprint,
+        snapshot: { fetchedAt: new Date("2026-08-02T08:00:00.000Z") },
+        snapshotCurrent: true,
+      }),
+    ).toBe(false);
+    expect(
+      usageKeyPoolStale({
+        fingerprint,
+        snapshot: { fetchedAt: new Date("2026-08-02T08:00:00.000Z") },
+        snapshotCurrent: false,
+      }),
+    ).toBe(true);
+    expect(
+      usageKeyPoolStale({
+        fingerprint: null,
+        snapshot: undefined,
+        snapshotCurrent: false,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps last-good values when a retired credential makes a refresh partial", () => {
     expect(
       usageSnapshotUsageValues({
         status: "error",
         credentialFingerprint: "current-C",
-        used: 20,
-        accountUsed: 20,
+        used: 99,
+        accountUsed: 88,
         existing: {
           credentialFingerprint: "current-C",
           used: 20,
@@ -534,7 +702,7 @@ describe("rolling usage snapshot identity", () => {
     ).toBe(false);
   });
 
-  it("keeps a failed refresh current by updatedAt without treating partial data as ok", () => {
+  it("does not treat a failed attempt timestamp as a successful fresh pool observation", () => {
     const updatedAt = new Date("2026-08-02T08:00:00.000Z");
     expect(
       isRollingUsageSnapshotCurrent({
@@ -548,10 +716,10 @@ describe("rolling usage snapshot identity", () => {
         windowDays: 30,
         now: updatedAt.getTime(),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("rejects an otherwise matching snapshot after the freshness TTL", () => {
+  it("rejects an otherwise matching snapshot after the 26-hour freshness TTL", () => {
     const fetchedAt = new Date("2026-08-02T08:00:00.000Z");
     expect(
       isRollingUsageSnapshotCurrent({
@@ -562,7 +730,7 @@ describe("rolling usage snapshot identity", () => {
         },
         fingerprint: "same-fingerprint",
         windowDays: 30,
-        now: fetchedAt.getTime() + 31 * 60_000,
+        now: fetchedAt.getTime() + 26 * 60 * 60_000 + 1,
       }),
     ).toBe(false);
   });
@@ -585,16 +753,23 @@ describe("rolling usage snapshot identity", () => {
 });
 
 describe("unified managed API Key target CAS", () => {
-  it("post-scans the previous fingerprint after rotation", () => {
+  it("does not gate a rotation on an old-Key history scan", () => {
     const source = readFileSync(
       path.resolve(process.cwd(), "server/api-usage-snapshot-service.ts"),
       "utf8",
     );
-    expect(source).toContain(
-      "poolFingerprint: replacement.previousFingerprint",
+    const start = source.indexOf(
+      "export async function replaceManagedApiKeyTarget",
     );
-    expect(source).toContain(
-      "previousFingerprint: currentCredential?.fingerprint ?? null",
+    const end = source.indexOf(
+      "export async function revokeManagedApiKeyTarget",
+      start,
+    );
+    const replacementPath = source.slice(start, end);
+    expect(replacementPath).not.toContain("usageCoverageSupportsReplacement");
+    expect(replacementPath).not.toContain("allowIncompleteHistory");
+    expect(replacementPath).not.toContain(
+      "getSharedKeyMonthlyCreditUsageForAccounts",
     );
   });
   it.each([
@@ -603,10 +778,6 @@ describe("unified managed API Key target CAS", () => {
     [
       "delivery_admin",
       { id: 3, role: "admin", adminAccessLevel: "delivery_admin" },
-    ],
-    [
-      "system_admin",
-      { id: 4, role: "admin", adminAccessLevel: "system_admin" },
     ],
   ] as const)("accepts a matching %s target", (kind, target) => {
     expect(() =>
@@ -638,16 +809,31 @@ describe("unified managed API Key target CAS", () => {
     ).toThrow(/类型不匹配/);
     expect(() =>
       assertManagedApiKeyTarget({
-        kind: "system_admin",
+        kind: "system_admin" as any,
         target: {
           id: 3,
           role: "admin",
-          adminAccessLevel: "delivery_admin",
+          adminAccessLevel: "system_admin",
         },
         actualVersion: 4,
         expectedVersion: 4,
       }),
     ).toThrow(/类型不匹配/);
+  });
+});
+
+describe("daily API usage schedule", () => {
+  it("targets the next 03:00 in Asia/Shanghai", () => {
+    expect(
+      millisecondsUntilNextShanghaiUsageSync(
+        Date.parse("2026-08-14T18:30:00+08:00"),
+      ),
+    ).toBe(8.5 * 60 * 60_000);
+    expect(
+      millisecondsUntilNextShanghaiUsageSync(
+        Date.parse("2026-08-14T02:30:00+08:00"),
+      ),
+    ).toBe(30 * 60_000);
   });
 });
 
@@ -676,7 +862,7 @@ describe("bulk managed API Key scopes", () => {
     { userId: 5, deliveryAdminId: 2 },
   ];
 
-  it("resolves every active supported account while excluding disabled and legacy admin rows", () => {
+  it("resolves active configurable accounts while excluding system administrators", () => {
     expect(
       resolveBulkManagedApiKeyTargets({
         scope: { kind: "all" },
@@ -686,7 +872,6 @@ describe("bulk managed API Key scopes", () => {
     ).toEqual([
       { userId: 1, kind: "customer" },
       { userId: 2, kind: "delivery_admin" },
-      { userId: 3, kind: "system_admin" },
       { userId: 4, kind: "engineer" },
       { userId: 7, kind: "engineer" },
     ]);
@@ -813,21 +998,195 @@ describe("bulk managed API Key scopes", () => {
     ).toEqual([201]);
   });
 
-  it("deduplicates shared old fingerprints and ignores same-Key or deleted credentials", () => {
-    const groups = bulkPreviousCredentialGroups({
-      targets: [{ userId: 1 }, { userId: 2 }, { userId: 3 }, { userId: 4 }],
-      latestCredentials: new Map([
-        [1, { userId: 1, status: "active", fingerprint: "fp_old_shared" }],
-        [2, { userId: 2, status: "active", fingerprint: "fp_old_shared" }],
-        [3, { userId: 3, status: "deleted", fingerprint: "fp_tombstone" }],
-        [4, { userId: 4, status: "active", fingerprint: "fp_next" }],
-      ]),
-      nextFingerprint: "fp_next",
-    });
+  it("creates a new credential version when only the selected model changes", () => {
+    const targets = [{ userId: 1, kind: "customer" as const }];
+    const latestCredentials = new Map([
+      [
+        1,
+        {
+          status: "active",
+          fingerprint: "fp_same",
+          agentProfile: "frontmind-pro",
+        },
+      ],
+    ]);
+    expect(
+      bulkManagedApiKeyActionTargets({
+        resolvedTargets: targets,
+        latestCredentials,
+        applyMode: "replace_all",
+        nextFingerprint: "fp_same",
+        nextAgentProfile: "frontmind-base",
+      }),
+    ).toEqual(targets);
+  });
 
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.fingerprint).toBe("fp_old_shared");
-    expect([...groups[0]!.accountIds]).toEqual([1, 2]);
+  it("does not bind an internal account Key to a customer service model", () => {
+    const targets = [{ userId: 4, kind: "engineer" as const }];
+    expect(
+      bulkManagedApiKeyActionTargets({
+        resolvedTargets: targets,
+        latestCredentials: new Map([
+          [
+            4,
+            {
+              status: "active",
+              fingerprint: "fp_same",
+              agentProfile: "frontmind-pro",
+            },
+          ],
+        ]),
+        applyMode: "replace_all",
+        nextFingerprint: "fp_same",
+        nextAgentProfile: "frontmind-base",
+      }),
+    ).toEqual([]);
+  });
+
+  it("atomically replaces all 15 revoked-Key targets, preserves old snapshots, and queues one refresh", async () => {
+    const accounts = Array.from({ length: 15 }, (_, index) => ({
+      id: index + 1,
+      role: "user",
+      adminAccessLevel: null,
+      isActive: true,
+    }));
+    const credentials = accounts.map((account) => ({
+      userId: account.id,
+      version: 1,
+      status: "active",
+      fingerprint: "fp_revoked_shared",
+    }));
+    const oldSnapshots = accounts.map((account) => ({
+      policyId: `policy-${account.id}`,
+      credentialFingerprint: "fp_revoked_shared",
+      used: account.id * 101,
+      accountUsed: account.id * 17,
+      syncStatus: "error",
+      errorCode: "INVALID_CREDENTIAL",
+    }));
+    const oldSnapshotsBefore = structuredClone(oldSnapshots);
+    const selectedTables: unknown[] = [];
+    const transaction = vi.fn();
+
+    const rowsFor = (table: unknown) => {
+      selectedTables.push(table);
+      if (table === users) return accounts;
+      if (table === apiCredentials) return credentials;
+      if (table === apiUsageCredentialCoverage) return [];
+      if (table === apiUsageSnapshots) return oldSnapshots;
+      throw new Error(`unexpected table: ${String(table)}`);
+    };
+    const database: any = {
+      select: () => ({
+        from: (table: unknown) => {
+          const query: any = {
+            where: () => query,
+            orderBy: () => query,
+            for: async () => rowsFor(table),
+            then: (
+              resolve: (rows: unknown[]) => unknown,
+              reject: (error: unknown) => unknown,
+            ) => Promise.resolve(rowsFor(table)).then(resolve, reject),
+          };
+          return query;
+        },
+      }),
+      transaction: async (operation: (tx: unknown) => Promise<unknown>) => {
+        transaction();
+        return operation(database);
+      },
+    };
+    const validateApiKey = vi.fn().mockResolvedValue(undefined);
+    const replaceCredential = vi.fn(async ({ userId }: { userId: number }) => ({
+      configured: true,
+      version: 2,
+      userId,
+    }));
+    const auditEvents: Array<Record<string, any>> = [];
+    const writeAuditEvent = vi.fn(async (event: Record<string, any>) => {
+      auditEvents.push(event);
+      return event;
+    });
+    const queueRefresh = vi.fn();
+    const replacedAt = new Date("2026-08-14T00:00:00.000Z");
+
+    const result = await bulkReplaceManagedApiKeyTargets(
+      {
+        actor: {
+          id: 900,
+          role: "admin",
+          username: "system-admin",
+          adminAccessLevel: "system_admin",
+        } as any,
+        scope: { kind: "all" },
+        targets: accounts.map((account) => ({
+          userId: account.id,
+          expectedVersion: 1,
+        })),
+        applyMode: "replace_all",
+        apiKey: "new-valid-key-never-audited",
+        reason: "rotate revoked shared key",
+      },
+      {
+        requireDatabase: async () => database,
+        validateApiKey,
+        fingerprintApiKey: () => "fp_new_shared",
+        replaceCredential: replaceCredential as any,
+        writeAuditEvent: writeAuditEvent as any,
+        queueRefresh,
+        now: () => replacedAt,
+      },
+    );
+
+    expect(validateApiKey).toHaveBeenCalledTimes(1);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(replaceCredential).toHaveBeenCalledTimes(15);
+    expect(replaceCredential.mock.calls.map(([call]) => call.userId)).toEqual(
+      accounts.map((account) => account.id),
+    );
+    expect(result).toMatchObject({
+      scopeTargetCount: 15,
+      targetCount: 15,
+      updatedCount: 15,
+      unchangedCount: 0,
+    });
+    expect(oldSnapshots).toEqual(oldSnapshotsBefore);
+    expect(selectedTables).not.toContain(apiUsageSnapshots);
+    expect(queueRefresh).toHaveBeenCalledTimes(1);
+    expect(queueRefresh).toHaveBeenCalledWith({
+      actor: expect.objectContaining({ id: 900 }),
+      fingerprint: "fp_new_shared",
+    });
+    expect(auditEvents).toHaveLength(16);
+    expect(
+      auditEvents.filter(
+        (event) => event.action === "admin.api_credential.bulk_replaced",
+      ),
+    ).toHaveLength(15);
+    for (const event of auditEvents.slice(0, 15)) {
+      expect(event.metadata).not.toHaveProperty("historyIncomplete");
+      expect(event.metadata).not.toHaveProperty("usageHistoryDisposition");
+    }
+    expect(auditEvents.at(-1)?.metadata).toMatchObject({
+      scopeTargetCount: 15,
+      targetCount: 15,
+      updatedCount: 15,
+      unchangedCount: 0,
+      customerAgentProfile: "frontmind-pro",
+      customerUpstreamModel: "manus-1.6-max",
+    });
+    expect(auditEvents.at(-1)?.metadata).not.toHaveProperty(
+      "historyIncompleteCount",
+    );
+    expect(auditEvents.at(-1)?.metadata).not.toHaveProperty(
+      "incompleteHistoryCredentialFingerprints",
+    );
+    expect(auditEvents.at(-1)?.metadata).not.toHaveProperty(
+      "newSnapshotBaseline",
+    );
+    expect(JSON.stringify(auditEvents)).not.toContain(
+      "new-valid-key-never-audited",
+    );
   });
 
   it("preflights every actionable version before a batch writes", () => {
@@ -879,5 +1238,31 @@ describe("bulk managed API Key scopes", () => {
         applyMode: "unconfigured_only",
       }),
     ).toThrow(/迟到请求不会覆盖/);
+  });
+
+  it("does not reintroduce an old-Key scan or history-completeness hard stop in the atomic bulk path", () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), "server/api-usage-snapshot-service.ts"),
+      "utf8",
+    );
+    const start = source.indexOf(
+      "export async function bulkReplaceManagedApiKeyTargets",
+    );
+    const end = source.indexOf(
+      "export async function replaceManagedApiKeyTarget",
+      start,
+    );
+    const bulkPath = source.slice(start, end);
+
+    expect(bulkPath).toContain("validateApiKey: validateUpstreamApiKey");
+    expect(bulkPath).toContain("await runtime.validateApiKey(input.apiKey)");
+    expect(bulkPath).toContain("await db.transaction(async (tx)");
+    expect(bulkPath).not.toContain("bulkManagedApiKeyHistoryDisposition");
+    expect(bulkPath).not.toContain("usageHistoryDisposition");
+    expect(bulkPath).toContain("queueManagedApiUsageFingerprintRefresh");
+    expect(bulkPath).not.toContain("getSharedKeyMonthlyCreditUsageForAccounts");
+    expect(bulkPath).not.toContain("批量操作已全部停止");
+    expect(bulkPath).not.toContain("apiUsageSnapshots");
+    expect(bulkPath).not.toContain(".delete(");
   });
 });

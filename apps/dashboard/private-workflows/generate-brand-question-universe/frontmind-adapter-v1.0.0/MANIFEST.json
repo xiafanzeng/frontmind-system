@@ -1,0 +1,23 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-generate-brand-question-universe",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "hashScope": "all regular files except MANIFEST.json",
+  "upstream": {
+    "filename": "generate-brand-question-universe-final-v2-20260819.zip",
+    "archiveSha256": "25a656870a2786ae265112860424d902f87fb4486ce8007e306eb832795c164f"
+  },
+  "files": [
+    {
+      "path": "runtime-contract.json",
+      "bytes": 604,
+      "sha256": "1d8198763c512a56e48a6e5ffcb360dd9ae94172ca697dfc9c4ebc37c2792132"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 2078,
+      "sha256": "d4bee8ada685239ad956e45966077a1bfaadfd955a1bd0507dabb9ada1273a23"
+    }
+  ]
+}

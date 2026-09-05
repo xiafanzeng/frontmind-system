@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/frontmind-run-envelope-v2.json",
+  "title": "FrontMind SiteOps Run Envelope V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "buildId", "source", "workflow", "visual"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "buildId": { "type": "string", "format": "uuid" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgeSnapshotId", "archiveSha256"],
+      "properties": {
+        "knowledgeSnapshotId": { "type": "string", "format": "uuid" },
+        "archiveSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "manifestSha256", "starterSha256", "materializerSha256"],
+      "properties": {
+        "version": { "const": "1.2.0" },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "starterSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "materializerSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerItemKey", "visualEvidenceSha256", "previewSha256"],
+      "properties": {
+        "providerItemKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "visualEvidenceSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "previewSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

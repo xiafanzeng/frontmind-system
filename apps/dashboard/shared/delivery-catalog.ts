@@ -72,6 +72,7 @@ export const DOMESTIC_CONTENT_ASSET_MEDIA_OPTIONS = Object.freeze([
   "中华网",
   "凤凰网",
   "微博",
+  "知乎",
 ] as const);
 
 export const OVERSEAS_CONTENT_ASSET_MEDIA_OPTIONS = Object.freeze([

@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  decimal,
   foreignKey,
   index,
   int,
@@ -60,6 +61,13 @@ export const users = mysqlTable(
     marketEdition: mysqlEnum("marketEdition", ["domestic", "overseas"])
       .default("domestic")
       .notNull(),
+    /**
+     * @deprecated Legacy Monitor-based brand-tracking quota retained only for
+     * schema compatibility. Jenova spend enforcement never reads this field.
+     */
+    brandTrackingMonthlyLimit: int("brandTrackingMonthlyLimit", {
+      unsigned: true,
+    }),
     isActive: boolean("isActive").default(true).notNull(),
     passwordChangedAt: timestamp("passwordChangedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -96,32 +104,6 @@ export const sessions = mysqlTable(
   (table) => [
     index("sessions_user_expires_idx").on(table.userId, table.expiresAt),
     index("sessions_token_active_idx").on(table.tokenHash, table.revokedAt),
-  ],
-);
-
-/**
- * Maps the Dashboard's canonical integer user id to the UUID retained by the
- * monitoring domain tables. Monitoring never authenticates through this
- * projection; it exists only to preserve domain foreign keys while both
- * products share the Dashboard session.
- */
-export const monitoringAccountLinks = mysqlTable(
-  "monitoring_account_links",
-  {
-    dashboardUserId: int("dashboardUserId")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    monitoringUserId: varchar("monitoringUserId", { length: 36 })
-      .notNull()
-      .unique(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.dashboardUserId] }),
-    uniqueIndex("monitoring_account_links_monitoring_user_uq").on(
-      table.monitoringUserId,
-    ),
   ],
 );
 
@@ -174,6 +156,12 @@ export const apiCredentials = mysqlTable(
     encryptionIv: varchar("encryptionIv", { length: 32 }).notNull(),
     encryptionAuthTag: varchar("encryptionAuthTag", { length: 32 }).notNull(),
     fingerprint: varchar("fingerprint", { length: 32 }).notNull(),
+    /**
+     * Customer credentials freeze Base/Pro here. Delivery-administrator and
+     * engineer Keys intentionally store NULL because their general Agent
+     * freezes Lite/Base/Pro per task instead of per credential version.
+     */
+    agentProfile: varchar("agent_profile", { length: 32 }),
     status: mysqlEnum("status", ["active", "retired", "deleted"])
       .default("active")
       .notNull(),
@@ -243,6 +231,253 @@ export const presalesApiCredentials = mysqlTable(
     index("presales_api_credentials_slot_status_idx").on(
       table.slot,
       table.status,
+    ),
+  ],
+);
+
+/** Durable business operation; provider tasks are replaceable executions. */
+export const agentOperations = mysqlTable(
+  "agent_operations",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    scope: mysqlEnum("scope", ["managed_user", "website_frontend"]).notNull(),
+    accountUserId: int("account_user_id"),
+    presalesProjectId: varchar("presales_project_id", { length: 80 }),
+    operationType: varchar("operation_type", { length: 96 }).notNull(),
+    idempotencyKeyHash: varchar("idempotency_key_hash", {
+      length: 64,
+    }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    contractName: varchar("contract_name", { length: 128 }).notNull(),
+    contractRevision: int("contract_revision", { unsigned: true }).notNull(),
+    schemaHash: varchar("schema_hash", { length: 64 }).notNull(),
+    apiCredentialId: varchar("api_credential_id", { length: 36 }).notNull(),
+    credentialVersion: int("credential_version", { unsigned: true }).notNull(),
+    publicProfile: varchar("public_profile", { length: 32 }).notNull(),
+    upstreamModel: varchar("upstream_model", { length: 64 }).notNull(),
+    status: mysqlEnum("status", [
+      "queued",
+      "running",
+      "result_pending",
+      "succeeded",
+      "failed",
+      "cancelled",
+      "attention_required",
+    ])
+      .default("queued")
+      .notNull(),
+    errorCode: varchar("error_code", { length: 128 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_operations_scope_idempotency_uq").on(
+      table.scope,
+      table.idempotencyKeyHash,
+    ),
+    index("agent_operations_account_status_idx").on(
+      table.accountUserId,
+      table.status,
+    ),
+    index("agent_operations_project_status_idx").on(
+      table.presalesProjectId,
+      table.status,
+    ),
+    check(
+      "agent_operations_owner_ck",
+      sql`(
+        (${table.scope} = 'managed_user' AND ${table.accountUserId} IS NOT NULL AND ${table.presalesProjectId} IS NULL)
+        OR
+        (${table.scope} = 'website_frontend' AND ${table.accountUserId} IS NULL AND ${table.presalesProjectId} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
+/**
+ * Immutable Website project attribution supplied by the trusted Website
+ * invitation flow. It intentionally stays separate from the usage ledger so
+ * task credit facts remain provider-derived and append-only.
+ */
+export const websiteProjectAttributions = mysqlTable(
+  "website_project_attributions",
+  {
+    projectId: varchar("project_id", { length: 80 }).primaryKey(),
+    businessOwnerName: varchar("business_owner_name", {
+      length: 40,
+    }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+);
+
+export const agentTasks = mysqlTable(
+  "agent_tasks",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    operationId: varchar("operation_id", { length: 36 }).notNull(),
+    providerTaskId: varchar("provider_task_id", { length: 255 }),
+    providerRequestId: varchar("provider_request_id", { length: 512 }),
+    createMarker: varchar("create_marker", { length: 128 }).notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    providerState: varchar("provider_state", { length: 32 }).notNull(),
+    lastMessageSyncAt: timestamp("last_message_sync_at"),
+    resultDeadlineAt: timestamp("result_deadline_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_tasks_provider_task_uq").on(table.providerTaskId),
+    uniqueIndex("agent_tasks_operation_marker_uq").on(
+      table.operationId,
+      table.createMarker,
+    ),
+    index("agent_tasks_operation_state_idx").on(
+      table.operationId,
+      table.providerState,
+    ),
+  ],
+);
+
+export const agentEvents = mysqlTable(
+  "agent_events",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    taskId: varchar("task_id", { length: 36 }).notNull(),
+    providerEventId: varchar("provider_event_id", { length: 512 }).notNull(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    providerTimestampMs: bigint("provider_timestamp_ms", {
+      mode: "number",
+      unsigned: true,
+    }).notNull(),
+    normalizedPayload: json("normalized_payload")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_events_task_provider_event_uq").on(
+      table.taskId,
+      table.providerEventId,
+    ),
+    index("agent_events_task_time_idx").on(
+      table.taskId,
+      table.providerTimestampMs,
+    ),
+  ],
+);
+
+export const localAssets = mysqlTable(
+  "local_assets",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    scope: mysqlEnum("scope", ["managed_user", "website_frontend"]).notNull(),
+    accountUserId: int("account_user_id"),
+    presalesProjectId: varchar("presales_project_id", { length: 80 }),
+    filename: varchar("filename", { length: 512 }).notNull(),
+    mimeType: varchar("mime_type", { length: 255 }).notNull(),
+    sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+    contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    storageKeyHash: varchar("storage_key_hash", { length: 64 }).notNull(),
+    siteOpsKnowledgeInputEpochId: varchar("site_ops_knowledge_input_epoch_id", {
+      length: 36,
+    }),
+    refCount: int("ref_count", { unsigned: true }).default(1).notNull(),
+    retainUntil: timestamp("retain_until"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("local_assets_scope_storage_uq").on(
+      table.scope,
+      table.storageKeyHash,
+    ),
+    index("local_assets_account_hash_idx").on(
+      table.accountUserId,
+      table.contentSha256,
+    ),
+    index("local_assets_project_hash_idx").on(
+      table.presalesProjectId,
+      table.contentSha256,
+    ),
+    index("local_assets_siteops_epoch_idx").on(
+      table.accountUserId,
+      table.siteOpsKnowledgeInputEpochId,
+    ),
+  ],
+);
+
+export const providerFileLeases = mysqlTable(
+  "provider_file_leases",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    localAssetId: varchar("local_asset_id", { length: 36 }).notNull(),
+    apiCredentialId: varchar("api_credential_id", { length: 36 }).notNull(),
+    credentialVersion: int("credential_version", { unsigned: true }).notNull(),
+    providerFileId: varchar("provider_file_id", { length: 512 }),
+    providerRequestId: varchar("provider_request_id", { length: 512 }),
+    uploadState: mysqlEnum("upload_state", [
+      "reserved",
+      "uploading",
+      "uploaded",
+      "expired",
+      "failed",
+      "outcome_unknown",
+    ])
+      .default("reserved")
+      .notNull(),
+    uploadedBytes: int("uploaded_bytes", { unsigned: true })
+      .default(0)
+      .notNull(),
+    expiresAt: timestamp("expires_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("provider_file_leases_provider_file_uq").on(
+      table.providerFileId,
+    ),
+    index("provider_file_leases_asset_credential_idx").on(
+      table.localAssetId,
+      table.apiCredentialId,
+      table.uploadState,
+    ),
+  ],
+);
+
+export const artifacts = mysqlTable(
+  "artifacts",
+  {
+    /** Stable public-local identity: `artifact_` + lowercase SHA-256. */
+    id: varchar("id", { length: 96 }).primaryKey(),
+    operationId: varchar("operation_id", { length: 36 }),
+    taskId: varchar("task_id", { length: 36 }),
+    sourceEventId: varchar("source_event_id", { length: 512 }).notNull(),
+    attachmentIndex: int("attachment_index", { unsigned: true }).notNull(),
+    filename: varchar("filename", { length: 512 }).notNull(),
+    mimeType: varchar("mime_type", { length: 255 }).notNull(),
+    sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+    contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    validationState: mysqlEnum("validation_state", [
+      "staged",
+      "valid",
+      "invalid",
+    ])
+      .default("staged")
+      .notNull(),
+    refCount: int("ref_count", { unsigned: true }).default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("artifacts_task_event_attachment_uq").on(
+      table.taskId,
+      table.sourceEventId,
+      table.attachmentIndex,
+    ),
+    index("artifacts_operation_validation_idx").on(
+      table.operationId,
+      table.validationState,
     ),
   ],
 );
@@ -425,6 +660,7 @@ export const presalesUpstreamResources = mysqlTable(
   "presales_upstream_resources",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("projectId", { length: 80 }),
     apiCredentialId: varchar("apiCredentialId", { length: 36 }).notNull(),
     kind: mysqlEnum("kind", ["task", "file"]).notNull(),
     upstreamId: varchar("upstreamId", { length: 255 }).notNull(),
@@ -454,6 +690,7 @@ export const presalesUpstreamResources = mysqlTable(
       table.upstreamId,
     ),
     index("presales_upstream_resources_parent_task_idx").on(table.parentTaskId),
+    index("presales_upstream_resources_project_idx").on(table.projectId),
     index("presales_upstream_resources_content_expiry_idx").on(
       table.kind,
       table.contentSource,
@@ -547,6 +784,7 @@ export const presalesMonitorRuns = mysqlTable(
   "presales_monitor_runs",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("projectId", { length: 80 }),
     idempotencyKeyHash: varchar("idempotencyKeyHash", { length: 64 })
       .notNull()
       .unique(),
@@ -601,6 +839,7 @@ export const presalesMonitorRuns = mysqlTable(
       table.status,
     ),
     index("presales_monitor_poll_idx").on(table.status, table.nextPollAt),
+    index("presales_monitor_project_idx").on(table.projectId),
   ],
 );
 
@@ -652,6 +891,35 @@ export const websitePaymentReceipts = mysqlTable(
     check(
       "website_payment_receipts_authorization_digest_ck",
       sql`${table.authorizationDigest} REGEXP '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+
+/**
+ * Compact permanent barrier for physically deleted Website projects. It keeps
+ * no order, payment, company, question, or account data; the sole projectId
+ * key prevents a delayed checkout callback from recreating deleted rows.
+ */
+export const websiteProjectDeletionTombstones = mysqlTable(
+  "website_project_deletion_tombstones",
+  {
+    projectId: varchar("projectId", { length: 80 }).primaryKey(),
+    schemaVersion: int("schemaVersion", { unsigned: true })
+      .default(1)
+      .notNull(),
+    status: mysqlEnum("status", ["active", "deleting", "deleted"])
+      .default("active")
+      .notNull(),
+    createdAt: timestamp("createdAt", { fsp: 3 })
+      .default(sql`CURRENT_TIMESTAMP(3)`)
+      .notNull(),
+    deletionRequestedAt: timestamp("deletionRequestedAt", { fsp: 3 }),
+    completedAt: timestamp("completedAt", { fsp: 3 }),
+  },
+  (table) => [
+    check(
+      "website_project_deletion_tombstones_schema_version_ck",
+      sql`${table.schemaVersion} = 1`,
     ),
   ],
 );
@@ -758,6 +1026,9 @@ export const websiteUserProvisions = mysqlTable(
     requestHash: varchar("requestHash", { length: 64 }).notNull(),
     projectId: varchar("projectId", { length: 80 }).notNull(),
     companyName: varchar("companyName", { length: 200 }).notNull(),
+    marketEdition: mysqlEnum("marketEdition", ["domestic", "overseas"])
+      .default("domestic")
+      .notNull(),
     orderId: varchar("orderId", { length: 64 }).notNull().unique(),
     tradeNo: varchar("tradeNo", { length: 128 }).notNull().unique(),
     amountFen: int("amountFen", { unsigned: true }).notNull(),
@@ -851,6 +1122,9 @@ export const websiteManualServiceOrders = mysqlTable(
     requestHash: varchar("requestHash", { length: 64 }).notNull(),
     projectId: varchar("projectId", { length: 80 }).notNull(),
     companyName: varchar("companyName", { length: 200 }).notNull(),
+    marketEdition: mysqlEnum("marketEdition", ["domestic", "overseas"])
+      .default("domestic")
+      .notNull(),
     contractProfile: json("contractProfile")
       .$type<ManualServiceContractProfile>()
       .notNull(),
@@ -1029,9 +1303,14 @@ export const serviceContracts = mysqlTable(
 );
 
 /**
- * Immutable quota snapshots generated from the purchased plan terms.
- * Luxury contracts receive three monthly periods for one quarterly prepay;
- * advanced and basic contracts receive one period for their complete term.
+ * Period-bound quota snapshots generated from the purchased plan terms.
+ * Controlled administrator/engineer overrides are revisioned and audited;
+ * later contract revisions never rewrite historical periods.
+ * Legacy Luxury contracts receive three monthly periods for one quarterly
+ * term. Progressive Luxury contracts keep monthly operational periods across
+ * a twelve-month entitlement so publishing/reporting cadence remains monthly
+ * while question limits unlock cumulatively by service quarter. Advanced and
+ * Basic contracts receive one period for their complete term.
  */
 export const serviceQuotaPeriods = mysqlTable(
   "service_quota_periods",
@@ -1110,6 +1389,12 @@ export const deliveryTickets = mysqlTable(
   "delivery_tickets",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    parentTicketId: varchar("parentTicketId", { length: 36 }),
+    rootTicketId: varchar("rootTicketId", { length: 36 }),
+    workflowStageKey: varchar("workflowStageKey", { length: 255 }),
+    isWorkflowContainer: boolean("isWorkflowContainer")
+      .default(false)
+      .notNull(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -1160,6 +1445,14 @@ export const deliveryTickets = mysqlTable(
     assignedMemberId: int("assignedMemberId").references(() => users.id, {
       onDelete: "set null",
     }),
+    credentialTargetUserId: int("credentialTargetUserId").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    credentialRequestKind: mysqlEnum("credentialRequestKind", [
+      "managed_api",
+      "jenova_brand_tracking",
+    ]),
     sourceQuestionId: varchar("sourceQuestionId", { length: 191 }),
     monitoringBatchKey: varchar("monitoringBatchKey", { length: 191 }),
     responseLogicRevision: int("responseLogicRevision"),
@@ -1219,9 +1512,27 @@ export const deliveryTickets = mysqlTable(
       table.userId,
       table.technicalDedupeKey,
     ),
+    uniqueIndex("delivery_tickets_parent_stage_uq").on(
+      table.parentTicketId,
+      table.workflowStageKey,
+    ),
     index("delivery_tickets_user_created_idx").on(
       table.userId,
       table.createdAt,
+    ),
+    index("delivery_tickets_parent_operation_idx").on(
+      table.parentTicketId,
+      table.operation,
+    ),
+    index("delivery_tickets_root_status_idx").on(
+      table.rootTicketId,
+      table.status,
+    ),
+    index("delivery_tickets_user_container_updated_idx").on(
+      table.userId,
+      table.isWorkflowContainer,
+      table.updatedAt,
+      table.id,
     ),
     index("delivery_tickets_period_pool_state_idx").on(
       table.quotaPeriodId,
@@ -1259,6 +1570,11 @@ export const deliveryTickets = mysqlTable(
       table.assignedMemberId,
       table.status,
     ),
+    index("delivery_tickets_credential_target_status_idx").on(
+      table.credentialRequestKind,
+      table.credentialTargetUserId,
+      table.status,
+    ),
     index("delivery_tickets_member_status_resolved_id_idx").on(
       table.assignedMemberId,
       table.status,
@@ -1270,6 +1586,16 @@ export const deliveryTickets = mysqlTable(
       columns: [table.assignedProjectAssignmentId],
       foreignColumns: [deliveryProjectAssignments.id],
     }).onDelete("set null"),
+    foreignKey({
+      name: "delivery_tickets_parent_ticket_fk",
+      columns: [table.parentTicketId],
+      foreignColumns: [table.id],
+    }).onDelete("set null"),
+    foreignKey({
+      name: "delivery_tickets_root_ticket_fk",
+      columns: [table.rootTicketId],
+      foreignColumns: [table.id],
+    }).onDelete("cascade"),
   ],
 );
 
@@ -1335,6 +1661,7 @@ export const deliveryTicketEvents = mysqlTable(
       sourceTicketId?: string;
       assignedProjectAssignmentId?: string;
       assignedMemberId?: number;
+      previewVerified?: boolean;
     }>(),
     kind: mysqlEnum("kind", [
       "created",
@@ -1499,9 +1826,19 @@ export const websiteStyleSampleBatches = mysqlTable(
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    ticketId: varchar("ticketId", { length: 36 })
-      .notNull()
-      .references(() => deliveryTickets.id, { onDelete: "cascade" }),
+    ticketId: varchar("ticketId", { length: 36 }).references(
+      () => deliveryTickets.id,
+      { onDelete: "cascade" },
+    ),
+    /** Legacy keeps an engineer ticket; SiteOps binds the batch to a project. */
+    sourceKind: mysqlEnum("sourceKind", ["legacy_manual_three", "siteops_21st"])
+      .default("legacy_manual_three")
+      .notNull(),
+    siteProjectId: varchar("siteProjectId", { length: 36 }),
+    selectionBundleLocalAssetId: varchar("selectionBundleLocalAssetId", {
+      length: 36,
+    }),
+    selectionBundleHash: varchar("selectionBundleHash", { length: 64 }),
     ordinal: int("ordinal", { unsigned: true }).notNull(),
     status: mysqlEnum("status", [
       "published",
@@ -1528,6 +1865,23 @@ export const websiteStyleSampleBatches = mysqlTable(
       table.ticketId,
       table.status,
     ),
+    index("website_style_batches_site_project_status_idx").on(
+      table.siteProjectId,
+      table.status,
+    ),
+    check(
+      "website_style_batches_source_ck",
+      sql`(
+        (${table.sourceKind} = 'legacy_manual_three' AND ${table.ticketId} IS NOT NULL AND ${table.siteProjectId} IS NULL)
+        OR
+        (${table.sourceKind} = 'siteops_21st' AND ${table.ticketId} IS NULL AND ${table.siteProjectId} IS NOT NULL)
+      )`,
+    ),
+    foreignKey({
+      name: "website_style_batches_bundle_asset_fk",
+      columns: [table.selectionBundleLocalAssetId],
+      foreignColumns: [localAssets.id],
+    }).onDelete("restrict"),
   ],
 );
 
@@ -1541,7 +1895,18 @@ export const websiteStyleSamples = mysqlTable(
       .references(() => websiteStyleSampleBatches.id, {
         onDelete: "cascade",
       }),
-    attachmentId: varchar("attachmentId", { length: 36 }).notNull(),
+    attachmentId: varchar("attachmentId", { length: 36 }),
+    previewLocalAssetId: varchar("previewLocalAssetId", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    sourceMetadata: json("sourceMetadata").$type<{
+      providerItemId: string;
+      promptSha256: string;
+      responseSha256: string;
+      taxonomy: Record<string, unknown>;
+      score: number;
+      rationale: string;
+    }>(),
     label: varchar("label", { length: 160 }).notNull(),
     note: text("note"),
     sortOrder: int("sortOrder", { unsigned: true }).notNull(),
@@ -1561,6 +1926,14 @@ export const websiteStyleSamples = mysqlTable(
       columns: [table.attachmentId],
       foreignColumns: [deliveryTicketAttachments.id],
     }).onDelete("restrict"),
+    check(
+      "website_style_samples_source_ck",
+      sql`(
+        (${table.attachmentId} IS NOT NULL AND ${table.previewLocalAssetId} IS NULL)
+        OR
+        (${table.attachmentId} IS NULL AND ${table.previewLocalAssetId} IS NOT NULL)
+      )`,
+    ),
   ],
 );
 
@@ -1572,6 +1945,15 @@ export const workspaceSiteProfiles = mysqlTable(
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
     domain: varchar("domain", { length: 255 }),
+    normalizedAsciiDomain: varchar("normalizedAsciiDomain", { length: 255 }),
+    unicodeDisplayDomain: varchar("unicodeDisplayDomain", { length: 255 }),
+    domainRevision: int("domainRevision", { unsigned: true })
+      .default(1)
+      .notNull(),
+    providerAccountUid: varchar("providerAccountUid", { length: 128 }),
+    domainOwnershipStatus: varchar("domainOwnershipStatus", { length: 64 }),
+    dnsStatus: varchar("dnsStatus", { length: 64 }),
+    icpDomainRevision: int("icpDomainRevision", { unsigned: true }),
     siteMode: mysqlEnum("siteMode", ["managed", "external", "unknown"])
       .default("unknown")
       .notNull(),
@@ -1605,6 +1987,9 @@ export const workspaceSiteProfiles = mysqlTable(
   },
   (table) => [
     index("workspace_site_profiles_domain_idx").on(table.domain),
+    index("workspace_site_profiles_ascii_domain_idx").on(
+      table.normalizedAsciiDomain,
+    ),
     index("workspace_site_profiles_workflow_idx").on(
       table.domainStatus,
       table.icpStatus,
@@ -1908,6 +2293,10 @@ export const knowledgeImportReceipts = mysqlTable(
       .unique(),
     artifactHash: varchar("artifactHash", { length: 64 }).notNull(),
     sourceFileName: varchar("sourceFileName", { length: 512 }).notNull(),
+    /** SiteOps reset epoch captured when this import receipt is reserved. */
+    siteOpsKnowledgeInputEpochId: varchar("siteOpsKnowledgeInputEpochId", {
+      length: 36,
+    }),
     status: mysqlEnum("status", [
       "pending",
       "processing",
@@ -2471,6 +2860,10 @@ export const knowledgeBaseSnapshots = mysqlTable(
     sourceBuildId: varchar("sourceBuildId", { length: 36 }),
     sourceBuildRevision: int("sourceBuildRevision"),
     sourceTaskId: varchar("sourceTaskId", { length: 255 }),
+    /** Server-derived reset epoch copied from the immutable source reservation. */
+    siteOpsKnowledgeInputEpochId: varchar("siteOpsKnowledgeInputEpochId", {
+      length: 36,
+    }),
     sourceArtifactHash: varchar("sourceArtifactHash", { length: 64 }),
     archiveHash: varchar("archiveHash", { length: 64 }),
     maintenanceTicketId: varchar("maintenanceTicketId", { length: 36 }),
@@ -2521,9 +2914,48 @@ export const knowledgeBaseBuilds = mysqlTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     conversationId: varchar("conversationId", { length: 191 }).notNull(),
+    /**
+     * Server-generated SiteOps reset epoch captured when this immutable build
+     * reservation is created. Historical and non-SiteOps builds remain null.
+     */
+    siteOpsKnowledgeInputEpochId: varchar("site_ops_knowledge_input_epoch_id", {
+      length: 36,
+    }),
     companyName: varchar("companyName", { length: 255 }).notNull(),
     companyWebsite: text("companyWebsite"),
     upstreamTaskId: varchar("upstreamTaskId", { length: 255 }),
+    /**
+     * Legacy rows are deliberately not resumed. A reset creates a new
+     * materialized build whose complete working set is Dashboard-owned.
+     */
+    executionMode: varchar("execution_mode", { length: 32 }),
+    activeWorkingSetId: varchar("active_working_set_id", { length: 36 }),
+    contentVersion: int("content_version", { unsigned: true }),
+    /**
+     * Provider protocol authority. Legacy rows continue to read through
+     * upstreamTaskId; v2 rows bind exactly one canonical writer task for the
+     * lifetime of a build generation.
+     */
+    providerProtocol: varchar("providerProtocol", { length: 32 })
+      .default("legacy_v1")
+      .notNull(),
+    canonicalTaskId: varchar("canonicalTaskId", { length: 255 }),
+    canonicalTaskGeneration: int("canonicalTaskGeneration", {
+      unsigned: true,
+    }),
+    canonicalCredentialId: varchar("canonicalCredentialId", {
+      length: 36,
+    }),
+    canonicalTaskState: varchar("canonicalTaskState", { length: 32 })
+      .default("unbound")
+      .notNull(),
+    canonicalTaskUrl: varchar("canonicalTaskUrl", { length: 1024 }),
+    canonicalTaskCreatedAt: timestamp("canonicalTaskCreatedAt"),
+    /** Content-safe hashes and old task references for a legacy handoff. */
+    handoffProvenance: json("handoffProvenance").$type<Record<
+      string,
+      unknown
+    > | null>(),
     skillName: varchar("skillName", { length: 128 })
       .default("socratic-kb-builder")
       .notNull(),
@@ -2531,6 +2963,19 @@ export const knowledgeBaseBuilds = mysqlTable(
       .default("1")
       .notNull(),
     skillContentHash: varchar("skillContentHash", { length: 64 }),
+    /**
+     * Immutable depth contract pinned when the build is created. Historical
+     * rows default to v1 (8–115); new Dashboard builds explicitly use v2
+     * (30–115).
+     */
+    treePolicyVersion: int("treePolicyVersion", { unsigned: true })
+      .default(1)
+      .notNull(),
+    /** Validated first-turn research ledger; required by tree policy v2. */
+    initialResearchCoverage: json("initialResearchCoverage").$type<Record<
+      string,
+      unknown
+    > | null>(),
     status: mysqlEnum("status", [
       "researching",
       "confirming",
@@ -2581,6 +3026,22 @@ export const knowledgeBaseBuilds = mysqlTable(
     packageFileId: varchar("packageFileId", { length: 255 }),
     packageFilename: varchar("packageFilename", { length: 512 }),
     packageDescriptorHash: varchar("packageDescriptorHash", { length: 64 }),
+    /** Immutable physical Skill archive pinned for this build. */
+    skillArchiveSha256: varchar("skillArchiveSha256", { length: 64 }),
+    skillArchiveBytes: int("skillArchiveBytes", { unsigned: true }),
+    skillArchiveStorageKey: varchar("skillArchiveStorageKey", {
+      length: 1024,
+    }),
+    /** Content completion is independent from asynchronous package readiness. */
+    contentCompletedAt: timestamp("contentCompletedAt"),
+    packageStatus: varchar("packageStatus", { length: 32 })
+      .default("not_started")
+      .notNull(),
+    packageAttemptCount: int("packageAttemptCount", { unsigned: true })
+      .default(0)
+      .notNull(),
+    packageNextRetryAt: timestamp("packageNextRetryAt"),
+    packageLastErrorCode: varchar("packageLastErrorCode", { length: 128 }),
     /** Immutable, Dashboard-owned copy of the first-node official logo. */
     logoStorageKey: varchar("logoStorageKey", { length: 1024 }),
     logoSha256: varchar("logoSha256", { length: 64 }),
@@ -2611,6 +3072,12 @@ export const knowledgeBaseBuilds = mysqlTable(
       table.status,
     ),
     index("knowledge_base_builds_task_idx").on(table.upstreamTaskId),
+    uniqueIndex("knowledge_base_builds_canonical_task_idx").on(
+      table.canonicalTaskId,
+    ),
+    index("knowledge_base_builds_canonical_credential_idx").on(
+      table.canonicalCredentialId,
+    ),
     index("knowledge_base_builds_active_turn_idx").on(table.activeTurnId),
     index("knowledge_base_builds_recovery_lease_idx").on(
       table.status,
@@ -2650,6 +3117,8 @@ export const knowledgeBaseBuildNodes = mysqlTable(
     sourceTurnId: varchar("sourceTurnId", { length: 36 }),
     presentationKey: varchar("presentationKey", { length: 191 }),
     contentSha256: varchar("contentSha256", { length: 64 }),
+    contentVersion: int("content_version", { unsigned: true }),
+    assetRefs: json("asset_refs").$type<string[]>(),
     lastResponseAt: timestamp("lastResponseAt"),
     confirmedAt: timestamp("confirmedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -2669,6 +3138,92 @@ export const knowledgeBaseBuildNodes = mysqlTable(
       table.status,
     ),
     index("knowledge_base_build_nodes_source_turn_idx").on(table.sourceTurnId),
+  ],
+);
+
+/** One immutable provider execution for initial materialization or revision. */
+export const knowledgeBaseExecutions = mysqlTable(
+  "knowledge_base_executions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    buildId: varchar("build_id", { length: 36 }).notNull(),
+    generation: int("generation", { unsigned: true }).notNull(),
+    operationType: mysqlEnum("operation_type", [
+      "initial",
+      "revision",
+    ]).notNull(),
+    targetLeafId: varchar("target_leaf_id", { length: 191 }),
+    baseWorkingSetId: varchar("base_working_set_id", { length: 36 }),
+    operationId: varchar("operation_id", { length: 128 }).notNull(),
+    providerTaskId: varchar("provider_task_id", { length: 255 }),
+    apiCredentialId: varchar("api_credential_id", { length: 36 }).notNull(),
+    credentialVersion: int("credential_version", { unsigned: true }).notNull(),
+    publicProfile: varchar("public_profile", { length: 32 }).notNull(),
+    upstreamModel: varchar("upstream_model", { length: 64 }).notNull(),
+    requestHash: varchar("request_hash", { length: 64 }).notNull(),
+    status: mysqlEnum("status", [
+      "reserved",
+      "submitted",
+      "result_pending",
+      "succeeded",
+      "failed",
+      "attention_required",
+    ])
+      .default("reserved")
+      .notNull(),
+    errorCode: varchar("error_code", { length: 128 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+    completedAt: timestamp("completed_at"),
+  },
+  (table) => [
+    uniqueIndex("knowledge_base_executions_operation_uq").on(
+      table.buildId,
+      table.generation,
+      table.operationId,
+    ),
+    index("knowledge_base_executions_status_idx").on(
+      table.buildId,
+      table.status,
+    ),
+  ],
+);
+
+/** Complete immutable node/evidence/asset bytes for one content version. */
+export const knowledgeBaseWorkingSets = mysqlTable(
+  "knowledge_base_working_sets",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    buildId: varchar("build_id", { length: 36 }).notNull(),
+    generation: int("generation", { unsigned: true }).notNull(),
+    contentVersion: int("content_version", { unsigned: true }).notNull(),
+    sourceExecutionId: varchar("source_execution_id", { length: 36 }),
+    storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+    sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+    packageSha256: varchar("package_sha256", { length: 64 }).notNull(),
+    manifestSha256: varchar("manifest_sha256", { length: 64 }).notNull(),
+    manifest: json("manifest").$type<Record<string, unknown>>().notNull(),
+    status: mysqlEnum("status", ["staged", "active", "superseded", "invalid"])
+      .default("staged")
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    activatedAt: timestamp("activated_at"),
+  },
+  (table) => [
+    uniqueIndex("knowledge_base_working_sets_version_uq").on(
+      table.buildId,
+      table.generation,
+      table.contentVersion,
+    ),
+    uniqueIndex("knowledge_base_working_sets_package_uq").on(
+      table.buildId,
+      table.generation,
+      table.packageSha256,
+    ),
+    index("knowledge_base_working_sets_status_idx").on(
+      table.buildId,
+      table.status,
+    ),
   ],
 );
 
@@ -3187,6 +3742,1029 @@ export const upstreamResources = mysqlTable(
   ],
 );
 
+/**
+ * Physical Jenova API keys are stored once and may be assigned to several
+ * overseas workspaces. The encrypted secret is deliberately independent from
+ * the generic Agent credential hierarchy.
+ */
+export const jenovaBrandTrackingCredentials = mysqlTable(
+  "jenova_brand_tracking_credentials",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    encryptionVersion: int("encryptionVersion").default(1).notNull(),
+    encryptedKey: text("encryptedKey").notNull(),
+    encryptionIv: varchar("encryptionIv", { length: 32 }).notNull(),
+    encryptionAuthTag: varchar("encryptionAuthTag", { length: 32 }).notNull(),
+    fingerprint: varchar("fingerprint", { length: 32 }).notNull(),
+    status: mysqlEnum("status", ["active", "revoked"])
+      .default("active")
+      .notNull(),
+    validationStatus: mysqlEnum("validationStatus", [
+      "unverified",
+      "verified",
+      "invalid",
+    ])
+      .default("unverified")
+      .notNull(),
+    lastBalance: decimal("lastBalance", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    }),
+    validatedAt: timestamp("validatedAt"),
+    balanceSyncedAt: timestamp("balanceSyncedAt"),
+    revokedAt: timestamp("revokedAt"),
+    createdByUserId: int("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_credentials_fingerprint_uq").on(table.fingerprint),
+    index("jenova_bt_credentials_status_idx").on(table.status),
+  ],
+);
+
+/** Exactly one explicit Brand Tracker key assignment per overseas user. */
+export const jenovaBrandTrackingAssignments = mysqlTable(
+  "jenova_brand_tracking_assignments",
+  {
+    userId: int("userId")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    assignedByUserId: int("assignedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("jenova_bt_assignments_credential_idx").on(table.credentialId),
+    foreignKey({
+      name: "jenova_bt_assignments_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** Per-user rolling 30-day spend ceiling. Absence also means the $10 default. */
+export const jenovaBrandTrackingPolicies = mysqlTable(
+  "jenova_brand_tracking_policies",
+  {
+    userId: int("userId")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    rolling30DayLimit: decimal("rolling30DayLimit", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    })
+      .default("10.00000000")
+      .notNull(),
+    updatedByUserId: int("updatedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+);
+
+/** Local ownership and lifecycle record for a persistent Jenova session. */
+export const jenovaBrandTrackingSessions = mysqlTable(
+  "jenova_brand_tracking_sessions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    upstreamSessionId: varchar("upstreamSessionId", { length: 255 }),
+    title: varchar("title", { length: 255 }).default("品牌追踪会话").notNull(),
+    status: mysqlEnum("status", ["active", "archived"])
+      .default("active")
+      .notNull(),
+    archivedReason: varchar("archivedReason", { length: 64 }),
+    archivedAt: timestamp("archivedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_sessions_user_request_uq").on(
+      table.userId,
+      table.clientRequestId,
+    ),
+    index("jenova_bt_sessions_user_status_updated_idx").on(
+      table.userId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("jenova_bt_sessions_upstream_idx").on(table.upstreamSessionId),
+    foreignKey({
+      name: "jenova_bt_sessions_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * One append-only local turn per browser request. Cost fields use fixed-point
+ * strings; a null usageCost with unknown costState must never be treated as 0.
+ */
+export const jenovaBrandTrackingTurns = mysqlTable(
+  "jenova_brand_tracking_turns",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    sessionId: varchar("sessionId", { length: 36 }).notNull(),
+    userId: int("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    credentialId: varchar("credentialId", { length: 36 }).notNull(),
+    clientRequestId: varchar("clientRequestId", { length: 36 }).notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+    upstreamRunId: varchar("upstreamRunId", { length: 255 }),
+    hiddenKickoff: boolean("hiddenKickoff").default(false).notNull(),
+    userContent: longtext("userContent").notNull(),
+    assistantContent: longtext("assistantContent").notNull(),
+    status: mysqlEnum("status", [
+      "pending",
+      "streaming",
+      "completed",
+      "failed",
+      "recovering",
+    ])
+      .default("pending")
+      .notNull(),
+    costState: mysqlEnum("costState", ["pending", "confirmed", "unknown"])
+      .default("pending")
+      .notNull(),
+    usageCost: decimal("usageCost", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    }),
+    sessionFee: decimal("sessionFee", {
+      precision: 20,
+      scale: 8,
+      mode: "string",
+    })
+      .default("0.00000000")
+      .notNull(),
+    progress: json("progress").$type<Record<string, unknown>[]>(),
+    warnings: json("warnings").$type<Record<string, unknown>[]>(),
+    stopReason: varchar("stopReason", { length: 255 }),
+    errorCode: varchar("errorCode", { length: 128 }),
+    errorMessage: text("errorMessage"),
+    startedAt: timestamp("startedAt"),
+    completedAt: timestamp("completedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("jenova_bt_turns_user_request_uq").on(
+      table.userId,
+      table.clientRequestId,
+    ),
+    uniqueIndex("jenova_bt_turns_idempotency_uq").on(table.idempotencyKey),
+    index("jenova_bt_turns_session_created_idx").on(
+      table.sessionId,
+      table.createdAt,
+    ),
+    index("jenova_bt_turns_user_cost_created_idx").on(
+      table.userId,
+      table.costState,
+      table.createdAt,
+    ),
+    index("jenova_bt_turns_credential_cost_idx").on(
+      table.credentialId,
+      table.costState,
+    ),
+    index("jenova_bt_turns_status_updated_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+    foreignKey({
+      name: "jenova_bt_turns_session_fk",
+      columns: [table.sessionId],
+      foreignColumns: [jenovaBrandTrackingSessions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "jenova_bt_turns_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [jenovaBrandTrackingCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** One customer-owned, single-site SiteOps project and conversation. */
+export const siteProjects = mysqlTable(
+  "site_projects",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    conversationId: varchar("conversation_id", { length: 191 })
+      .notNull()
+      .references(() => conversations.id, { onDelete: "restrict" }),
+    currentKnowledgeSnapshotId: varchar("current_knowledge_snapshot_id", {
+      length: 36,
+    }),
+    currentBuildId: varchar("current_build_id", { length: 36 }),
+    globalLiveDeploymentId: varchar("global_live_deployment_id", {
+      length: 36,
+    }),
+    mainlandLiveDeploymentId: varchar("mainland_live_deployment_id", {
+      length: 36,
+    }),
+    primaryLanguage: varchar("primary_language", { length: 32 })
+      .default("zh-CN")
+      .notNull(),
+    canonicalHostname: varchar("canonical_hostname", { length: 255 }),
+    /**
+     * Unforgeable fresh-input boundary rotated by an approved SiteOps reset.
+     * Null preserves the historical pre-2.9 compatibility path.
+     */
+    knowledgeInputEpochId: varchar("knowledge_input_epoch_id", { length: 36 }),
+    currentTaskStartedAt: timestamp("current_task_started_at")
+      .defaultNow()
+      .notNull(),
+    minimumKnowledgeSnapshotVersion: int("minimum_knowledge_snapshot_version", {
+      unsigned: true,
+    }),
+    status: mysqlEnum("status", [
+      "draft",
+      "collecting_brief",
+      "visual_searching",
+      "awaiting_visual_selection",
+      "building",
+      "preview_ready",
+      "approved",
+      "live",
+      "attention_required",
+      "failed",
+      "cancelled",
+    ])
+      .default("draft")
+      .notNull(),
+    brief: json("brief").$type<Record<string, unknown>>(),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_projects_user_uq").on(table.userId),
+    uniqueIndex("site_projects_conversation_uq").on(table.conversationId),
+    index("site_projects_status_updated_idx").on(table.status, table.updatedAt),
+    foreignKey({
+      name: "site_projects_snapshot_fk",
+      columns: [table.currentKnowledgeSnapshotId],
+      foreignColumns: [knowledgeBaseSnapshots.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** Immutable customer website build; artifacts are existing local_assets. */
+export const siteBuilds = mysqlTable(
+  "site_builds",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    knowledgeSnapshotId: varchar("knowledge_snapshot_id", { length: 36 })
+      .notNull()
+      .references(() => knowledgeBaseSnapshots.id, { onDelete: "restrict" }),
+    knowledgeArchiveHash: varchar("knowledge_archive_hash", {
+      length: 64,
+    }).notNull(),
+    parentBuildId: varchar("parent_build_id", { length: 36 }),
+    quotaPeriodId: varchar("quota_period_id", { length: 36 }),
+    quotaState: mysqlEnum("quota_state", ["reserved", "consumed", "released"]),
+    ordinal: int("ordinal", { unsigned: true }).notNull(),
+    workflowUpstreamVersion: varchar("workflow_upstream_version", {
+      length: 32,
+    }).notNull(),
+    workflowUpstreamHash: varchar("workflow_upstream_hash", {
+      length: 64,
+    }).notNull(),
+    workflowVersion: varchar("workflow_version", { length: 32 }).notNull(),
+    workflowPackageHash: varchar("workflow_package_hash", { length: 64 }),
+    starterVersion: varchar("starter_version", { length: 32 }).notNull(),
+    twentyFirstCredentialId: varchar("twenty_first_credential_id", {
+      length: 36,
+    }),
+    twentyFirstCredentialVersion: int("twenty_first_credential_version", {
+      unsigned: true,
+    }),
+    styleSampleId: varchar("style_sample_id", { length: 36 }).references(
+      () => websiteStyleSamples.id,
+      { onDelete: "restrict" },
+    ),
+    styleRevision: int("style_revision", { unsigned: true }),
+    brief: json("brief").$type<Record<string, unknown>>().notNull(),
+    selectionHash: varchar("selection_hash", { length: 64 }),
+    contentPlanLocalAssetId: varchar("content_plan_local_asset_id", {
+      length: 36,
+    }),
+    contentPlanSha256: varchar("content_plan_sha256", { length: 64 }),
+    contractLocalAssetId: varchar("contract_local_asset_id", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    contractHash: varchar("contract_hash", { length: 64 }),
+    sourceLocalAssetId: varchar("source_local_asset_id", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    sourceHash: varchar("source_hash", { length: 64 }),
+    distLocalAssetId: varchar("dist_local_asset_id", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    distHash: varchar("dist_hash", { length: 64 }),
+    qaLocalAssetId: varchar("qa_local_asset_id", { length: 36 }).references(
+      () => localAssets.id,
+      { onDelete: "restrict" },
+    ),
+    provenanceLocalAssetId: varchar("provenance_local_asset_id", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    upstreamManusTaskId: varchar("upstream_manus_task_id", { length: 255 }),
+    repairAttempts: int("repair_attempts", { unsigned: true })
+      .default(0)
+      .notNull(),
+    status: mysqlEnum("status", [
+      "preparing",
+      "visual_searching",
+      "awaiting_visual_selection",
+      "design_compiling",
+      "contract_ready",
+      "building",
+      "qa_running",
+      "preview_ready",
+      "approved",
+      "failed",
+      "attention_required",
+      "cancelled",
+      "superseded",
+    ])
+      .default("preparing")
+      .notNull(),
+    approvedAt: timestamp("approved_at"),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_builds_project_ordinal_uq").on(
+      table.projectId,
+      table.ordinal,
+    ),
+    index("site_builds_project_status_idx").on(table.projectId, table.status),
+    index("site_builds_parent_idx").on(table.parentBuildId),
+    index("site_builds_quota_period_state_idx").on(
+      table.quotaPeriodId,
+      table.quotaState,
+    ),
+    foreignKey({
+      name: "site_builds_21st_credential_fk",
+      columns: [table.twentyFirstCredentialId],
+      foreignColumns: [presalesApiCredentials.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "site_builds_quota_period_fk",
+      columns: [table.quotaPeriodId],
+      foreignColumns: [serviceQuotaPeriods.id],
+    }).onDelete("restrict"),
+    check(
+      "site_builds_credential_version_ck",
+      sql`(
+        (${table.twentyFirstCredentialId} IS NULL AND ${table.twentyFirstCredentialVersion} IS NULL)
+        OR
+        (${table.twentyFirstCredentialId} IS NOT NULL AND ${table.twentyFirstCredentialVersion} IS NOT NULL)
+      )`,
+    ),
+    check(
+      "site_builds_quota_pair_ck",
+      sql`(
+        (${table.quotaPeriodId} IS NULL AND ${table.quotaState} IS NULL)
+        OR
+        (${table.quotaPeriodId} IS NOT NULL AND ${table.quotaState} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
+/** Immutable, tenant-bound user media frozen for one revision build. */
+export const siteBuildInputAssets = mysqlTable(
+  "site_build_input_assets",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    buildId: varchar("build_id", { length: 36 })
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "cascade" }),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sourceAssetId: varchar("source_asset_id", { length: 191 }).notNull(),
+    localAssetId: varchar("local_asset_id", { length: 36 })
+      .notNull()
+      .references(() => localAssets.id, { onDelete: "restrict" }),
+    ordinal: int("ordinal", { unsigned: true }).notNull(),
+    filename: varchar("filename", { length: 512 }).notNull(),
+    mimeType: varchar("mime_type", { length: 255 }).notNull(),
+    sizeBytes: int("size_bytes", { unsigned: true }).notNull(),
+    contentSha256: varchar("content_sha256", { length: 64 }).notNull(),
+    width: int("width", { unsigned: true }).notNull(),
+    height: int("height", { unsigned: true }).notNull(),
+    publicPath: varchar("public_path", { length: 512 }).notNull(),
+    siteOpsKnowledgeInputEpochId: varchar("site_ops_knowledge_input_epoch_id", {
+      length: 36,
+    }),
+    taskStartedAt: timestamp("task_started_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_build_input_assets_build_ordinal_uq").on(
+      table.buildId,
+      table.ordinal,
+    ),
+    uniqueIndex("site_build_input_assets_build_source_uq").on(
+      table.buildId,
+      table.sourceAssetId,
+    ),
+    uniqueIndex("site_build_input_assets_build_public_path_uq").on(
+      table.buildId,
+      table.publicPath,
+    ),
+    index("site_build_input_assets_local_asset_idx").on(table.localAssetId),
+    index("site_build_input_assets_project_task_idx").on(
+      table.projectId,
+      table.taskStartedAt,
+    ),
+    index("site_build_input_assets_project_epoch_idx").on(
+      table.projectId,
+      table.siteOpsKnowledgeInputEpochId,
+    ),
+  ],
+);
+
+/** Leased, idempotent SiteOps side-effect reservation. */
+export const siteOperations = mysqlTable(
+  "site_operations",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    conversationTurnId: varchar("conversation_turn_id", {
+      length: 36,
+    }).references(() => conversationTurns.id, { onDelete: "set null" }),
+    buildId: varchar("build_id", { length: 36 }).references(
+      () => siteBuilds.id,
+      { onDelete: "set null" },
+    ),
+    kind: mysqlEnum("kind", [
+      "brief_message",
+      "visual_search",
+      "site_build",
+      "build_revision",
+      "deploy",
+      "rollback",
+      "social_package",
+      "domain_sync",
+      "dns_apply",
+      "dns_rollback",
+    ]).notNull(),
+    status: mysqlEnum("status", [
+      "queued",
+      "running",
+      "succeeded",
+      "failed",
+      "outcome_unknown",
+      "attention_required",
+      "cancelled",
+    ])
+      .default("queued")
+      .notNull(),
+    clientRequestId: varchar("client_request_id", { length: 128 }).notNull(),
+    inputHash: varchar("input_hash", { length: 64 }).notNull(),
+    input: json("input").$type<Record<string, unknown>>().notNull(),
+    provider: varchar("provider", { length: 64 }),
+    providerOperationId: varchar("provider_operation_id", { length: 512 }),
+    providerTaskId: varchar("provider_task_id", { length: 512 }),
+    leaseOwner: varchar("lease_owner", { length: 128 }),
+    leaseExpiresAt: timestamp("lease_expires_at"),
+    attempt: int("attempt", { unsigned: true }).default(0).notNull(),
+    result: json("result").$type<Record<string, unknown>>(),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_operations_project_request_uq").on(
+      table.projectId,
+      table.clientRequestId,
+    ),
+    index("site_operations_lease_idx").on(
+      table.status,
+      table.leaseExpiresAt,
+      table.createdAt,
+    ),
+    index("site_operations_build_idx").on(table.buildId, table.status),
+  ],
+);
+
+/**
+ * One immutable, task-scoped pool of complete 21st Template candidates.
+ *
+ * Status values deliberately use varchar plus application validation instead
+ * of changing an existing MySQL enum. This keeps the migration additive while
+ * allowing a future lifecycle state to be introduced without rebuilding a
+ * customer-facing table.
+ */
+export const visualCandidatePools = mysqlTable(
+  "visual_candidate_pools",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 }).notNull(),
+    userId: int("user_id").notNull(),
+    knowledgeSnapshotId: varchar("knowledge_snapshot_id", {
+      length: 36,
+    }).notNull(),
+    credentialId: varchar("credential_id", { length: 36 }).notNull(),
+    credentialVersion: int("credential_version", { unsigned: true }).notNull(),
+    initialOperationId: varchar("initial_operation_id", {
+      length: 36,
+    }).notNull(),
+    generationKey: varchar("generation_key", { length: 64 }).notNull(),
+    taskStartedAt: timestamp("task_started_at").notNull(),
+    projectRevision: int("project_revision", { unsigned: true }).notNull(),
+    seed: varchar("seed", { length: 64 }).notNull(),
+    catalogFingerprint: varchar("catalog_fingerprint", {
+      length: 64,
+    }).notNull(),
+    queryPlanHash: varchar("query_plan_hash", { length: 64 }).notNull(),
+    manifestLocalAssetId: varchar("manifest_local_asset_id", {
+      length: 36,
+    }).notNull(),
+    manifestHash: varchar("manifest_hash", { length: 64 }).notNull(),
+    pageCount: int("page_count", { unsigned: true }).notNull(),
+    candidateCount: int("candidate_count", { unsigned: true }).notNull(),
+    status: varchar("status", { length: 32 }).default("active").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "visual_candidate_pools_project_fk",
+      columns: [table.projectId],
+      foreignColumns: [siteProjects.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "visual_candidate_pools_user_fk",
+      columns: [table.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "visual_candidate_pools_snapshot_fk",
+      columns: [table.knowledgeSnapshotId],
+      foreignColumns: [knowledgeBaseSnapshots.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "visual_candidate_pools_credential_fk",
+      columns: [table.credentialId],
+      foreignColumns: [presalesApiCredentials.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "visual_candidate_pools_operation_fk",
+      columns: [table.initialOperationId],
+      foreignColumns: [siteOperations.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "visual_candidate_pools_manifest_fk",
+      columns: [table.manifestLocalAssetId],
+      foreignColumns: [localAssets.id],
+    }).onDelete("restrict"),
+    uniqueIndex("visual_candidate_pools_generation_uq").on(table.generationKey),
+    index("visual_candidate_pools_project_task_idx").on(
+      table.projectId,
+      table.taskStartedAt,
+      table.status,
+    ),
+    index("visual_candidate_pools_snapshot_credential_idx").on(
+      table.knowledgeSnapshotId,
+      table.credentialId,
+      table.credentialVersion,
+    ),
+    check(
+      "visual_candidate_pools_status_ck",
+      sql`${table.status} IN ('active', 'selected', 'superseded')`,
+    ),
+    check(
+      "visual_candidate_pools_capacity_ck",
+      sql`(${table.pageCount} BETWEEN 1 AND 3 AND ${table.candidateCount} = ${table.pageCount} * 9)`,
+    ),
+  ],
+);
+
+/** A locally frozen V6 page. Only `published` pages have a customer batch. */
+export const visualCandidatePoolPages = mysqlTable(
+  "visual_candidate_pool_pages",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    poolId: varchar("pool_id", { length: 36 }).notNull(),
+    pageNumber: int("page_number", { unsigned: true }).notNull(),
+    status: varchar("status", { length: 32 }).default("reserved").notNull(),
+    selectionBundleLocalAssetId: varchar("selection_bundle_local_asset_id", {
+      length: 36,
+    }).notNull(),
+    selectionBundleHash: varchar("selection_bundle_hash", {
+      length: 64,
+    }).notNull(),
+    candidateCount: int("candidate_count", { unsigned: true }).notNull(),
+    bundleSizeBytes: int("bundle_size_bytes", { unsigned: true }).notNull(),
+    batchId: varchar("batch_id", { length: 36 }),
+    publishedOperationId: varchar("published_operation_id", {
+      length: 36,
+    }),
+    publishedAt: timestamp("published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "visual_candidate_pool_pages_pool_fk",
+      columns: [table.poolId],
+      foreignColumns: [visualCandidatePools.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "visual_candidate_pool_pages_bundle_fk",
+      columns: [table.selectionBundleLocalAssetId],
+      foreignColumns: [localAssets.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "visual_candidate_pool_pages_batch_fk",
+      columns: [table.batchId],
+      foreignColumns: [websiteStyleSampleBatches.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "visual_candidate_pool_pages_operation_fk",
+      columns: [table.publishedOperationId],
+      foreignColumns: [siteOperations.id],
+    }).onDelete("restrict"),
+    uniqueIndex("visual_candidate_pool_pages_pool_page_uq").on(
+      table.poolId,
+      table.pageNumber,
+    ),
+    uniqueIndex("visual_candidate_pool_pages_batch_uq").on(table.batchId),
+    index("visual_candidate_pool_pages_status_idx").on(
+      table.poolId,
+      table.status,
+      table.pageNumber,
+    ),
+    check(
+      "visual_candidate_pool_pages_status_ck",
+      sql`${table.status} IN ('reserved', 'published', 'selected', 'superseded')`,
+    ),
+    check(
+      "visual_candidate_pool_pages_capacity_ck",
+      sql`(${table.pageNumber} BETWEEN 1 AND 3 AND ${table.candidateCount} = 9 AND ${table.bundleSizeBytes} > 0 AND ${table.bundleSizeBytes} <= 104857600)`,
+    ),
+    check(
+      "visual_candidate_pool_pages_publish_ck",
+      sql`(
+        (${table.status} = 'reserved' AND ${table.batchId} IS NULL AND ${table.publishedOperationId} IS NULL AND ${table.publishedAt} IS NULL)
+        OR
+        (${table.status} IN ('published', 'selected') AND ${table.batchId} IS NOT NULL AND ${table.publishedOperationId} IS NOT NULL AND ${table.publishedAt} IS NOT NULL)
+        OR
+        ${table.status} = 'superseded'
+      )`,
+    ),
+  ],
+);
+
+/**
+ * Durable preview references for every frozen page, including pages that have
+ * not yet been published as a customer-visible batch. Retention must follow
+ * these rows rather than the age of the underlying local asset.
+ */
+export const visualCandidatePoolItems = mysqlTable(
+  "visual_candidate_pool_items",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    poolPageId: varchar("pool_page_id", { length: 36 }).notNull(),
+    sampleId: varchar("sample_id", { length: 36 }).notNull(),
+    position: int("position", { unsigned: true }).notNull(),
+    previewLocalAssetId: varchar("preview_local_asset_id", {
+      length: 36,
+    }).notNull(),
+    previewSha256: varchar("preview_sha256", { length: 64 }).notNull(),
+    sourceTreeSha256: varchar("source_tree_sha256", { length: 64 }).notNull(),
+    providerTemplateId: varchar("provider_template_id", {
+      length: 191,
+    }).notNull(),
+    providerSlug: varchar("provider_slug", { length: 191 }).notNull(),
+    providerVersion: varchar("provider_version", { length: 191 }),
+    providerItemKey: varchar("provider_item_key", { length: 512 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "visual_candidate_pool_items_page_fk",
+      columns: [table.poolPageId],
+      foreignColumns: [visualCandidatePoolPages.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "visual_candidate_pool_items_preview_fk",
+      columns: [table.previewLocalAssetId],
+      foreignColumns: [localAssets.id],
+    }).onDelete("restrict"),
+    uniqueIndex("visual_candidate_pool_items_page_sample_uq").on(
+      table.poolPageId,
+      table.sampleId,
+    ),
+    uniqueIndex("visual_candidate_pool_items_page_position_uq").on(
+      table.poolPageId,
+      table.position,
+    ),
+    uniqueIndex("visual_candidate_pool_items_preview_uq").on(
+      table.previewLocalAssetId,
+    ),
+    uniqueIndex("visual_candidate_pool_items_page_provider_uq").on(
+      table.poolPageId,
+      table.providerItemKey,
+    ),
+    index("visual_candidate_pool_items_source_tree_idx").on(
+      table.sourceTreeSha256,
+    ),
+    check(
+      "visual_candidate_pool_items_position_ck",
+      sql`${table.position} BETWEEN 0 AND 8`,
+    ),
+  ],
+);
+
+/** Append-only deployment and rollback records. */
+export const siteDeployments = mysqlTable(
+  "site_deployments",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    buildId: varchar("build_id", { length: 36 })
+      .notNull()
+      .references(() => siteBuilds.id, { onDelete: "restrict" }),
+    operationId: varchar("operation_id", { length: 36 }).references(
+      () => siteOperations.id,
+      { onDelete: "set null" },
+    ),
+    target: mysqlEnum("target", [
+      "global_excluding_cn",
+      "mainland_cn",
+    ]).notNull(),
+    intent: mysqlEnum("intent", ["deploy", "rollback"]).notNull(),
+    rollbackOfDeploymentId: varchar("rollback_of_deployment_id", {
+      length: 36,
+    }),
+    expectedHeadDeploymentId: varchar("expected_head_deployment_id", {
+      length: 36,
+    }),
+    distLocalAssetId: varchar("dist_local_asset_id", { length: 36 })
+      .notNull()
+      .references(() => localAssets.id, { onDelete: "restrict" }),
+    distHash: varchar("dist_hash", { length: 64 }).notNull(),
+    domainRevision: int("domain_revision", { unsigned: true }).notNull(),
+    providerDeploymentId: varchar("provider_deployment_id", { length: 512 }),
+    publicUrl: text("public_url"),
+    verification: json("verification").$type<Record<string, unknown>>(),
+    status: mysqlEnum("status", [
+      "reserved",
+      "deploying",
+      "verifying",
+      "active",
+      "superseded",
+      "failed",
+      "attention_required",
+    ])
+      .default("reserved")
+      .notNull(),
+    activatedAt: timestamp("activated_at"),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_deployments_operation_uq").on(table.operationId),
+    index("site_deployments_project_target_status_idx").on(
+      table.projectId,
+      table.target,
+      table.status,
+    ),
+  ],
+);
+
+/** Download-only WeChat and Xiaohongshu packages. */
+export const socialPackages = mysqlTable(
+  "social_packages",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    knowledgeSnapshotId: varchar("knowledge_snapshot_id", {
+      length: 36,
+    }).notNull(),
+    operationId: varchar("operation_id", { length: 36 }).references(
+      () => siteOperations.id,
+      { onDelete: "set null" },
+    ),
+    ticketId: varchar("ticket_id", { length: 36 }).references(
+      () => deliveryTickets.id,
+      { onDelete: "set null" },
+    ),
+    quotaPeriodId: varchar("quota_period_id", { length: 36 }),
+    quotaState: mysqlEnum("quota_state", ["reserved", "consumed", "released"]),
+    channel: mysqlEnum("channel", ["wechat", "xiaohongshu"]).notNull(),
+    manifest: json("manifest").$type<Record<string, unknown>>(),
+    manifestHash: varchar("manifest_hash", { length: 64 }),
+    archiveLocalAssetId: varchar("archive_local_asset_id", {
+      length: 36,
+    }).references(() => localAssets.id, { onDelete: "restrict" }),
+    archiveHash: varchar("archive_hash", { length: 64 }),
+    previewLocalAssetIds: json("preview_local_asset_ids")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    qa: json("qa").$type<Record<string, unknown>>(),
+    downloadCount: int("download_count", { unsigned: true })
+      .default(0)
+      .notNull(),
+    status: mysqlEnum("status", [
+      "queued",
+      "building",
+      "ready",
+      "failed",
+      "attention_required",
+      "cancelled",
+    ])
+      .default("queued")
+      .notNull(),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("social_packages_operation_uq").on(table.operationId),
+    index("social_packages_project_channel_idx").on(
+      table.projectId,
+      table.channel,
+      table.createdAt,
+    ),
+    index("social_packages_quota_period_state_idx").on(
+      table.quotaPeriodId,
+      table.quotaState,
+    ),
+    foreignKey({
+      name: "social_packages_snapshot_fk",
+      columns: [table.knowledgeSnapshotId],
+      foreignColumns: [knowledgeBaseSnapshots.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "social_packages_quota_period_fk",
+      columns: [table.quotaPeriodId],
+      foreignColumns: [serviceQuotaPeriods.id],
+    }).onDelete("restrict"),
+    check(
+      "social_packages_quota_pair_ck",
+      sql`(
+        (${table.quotaPeriodId} IS NULL AND ${table.quotaState} IS NULL)
+        OR
+        (${table.quotaPeriodId} IS NOT NULL AND ${table.quotaState} IS NOT NULL)
+      )`,
+    ),
+  ],
+);
+
+/** Customer-approved AliDNS OAuth grant. Access tokens are never persisted. */
+export const siteProviderConnections = mysqlTable(
+  "site_provider_connections",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: mysqlEnum("provider", ["aliyun_cn"]).notNull(),
+    accountUid: varchar("account_uid", { length: 128 }).notNull(),
+    oauthCredentialId: varchar("oauth_credential_id", {
+      length: 36,
+    }).notNull(),
+    encryptionVersion: int("encryption_version").default(1).notNull(),
+    encryptedRefreshToken: text("encrypted_refresh_token").notNull(),
+    encryptionIv: varchar("encryption_iv", { length: 32 }).notNull(),
+    encryptionAuthTag: varchar("encryption_auth_tag", { length: 32 }).notNull(),
+    capabilities: json("capabilities").$type<string[]>().default([]).notNull(),
+    status: mysqlEnum("status", ["active", "invalid", "revoked"])
+      .default("active")
+      .notNull(),
+    verifiedAt: timestamp("verified_at"),
+    lastErrorCode: varchar("last_error_code", { length: 128 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_provider_connections_project_provider_uq").on(
+      table.projectId,
+      table.provider,
+    ),
+    index("site_provider_connections_account_idx").on(table.accountUid),
+    foreignKey({
+      name: "site_provider_connections_oauth_credential_fk",
+      columns: [table.oauthCredentialId],
+      foreignColumns: [presalesApiCredentials.id],
+    }).onDelete("restrict"),
+  ],
+);
+
+/** Exact AliDNS records owned by FrontMind for one domain revision. */
+export const siteDnsRecords = mysqlTable(
+  "site_dns_records",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    projectId: varchar("project_id", { length: 36 })
+      .notNull()
+      .references(() => siteProjects.id, { onDelete: "cascade" }),
+    userId: int("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    domainAscii: varchar("domain_ascii", { length: 255 }).notNull(),
+    domainRevision: int("domain_revision", { unsigned: true }).notNull(),
+    recordType: varchar("record_type", { length: 16 }).notNull(),
+    rr: varchar("rr", { length: 255 }).notNull(),
+    expectedValue: text("expected_value").notNull(),
+    expectedTtl: int("expected_ttl", { unsigned: true }).notNull(),
+    beforeValue: text("before_value"),
+    beforeTtl: int("before_ttl", { unsigned: true }),
+    observedValue: text("observed_value"),
+    observedTtl: int("observed_ttl", { unsigned: true }),
+    providerRecordId: varchar("provider_record_id", { length: 191 }),
+    remarkMarker: varchar("remark_marker", { length: 255 }).notNull(),
+    status: mysqlEnum("status", [
+      "planned",
+      "applying",
+      "propagating",
+      "active",
+      "conflict",
+      "failed",
+      "outcome_unknown",
+      "rolled_back",
+    ])
+      .default("planned")
+      .notNull(),
+    verifiedAt: timestamp("verified_at"),
+    errorCode: varchar("error_code", { length: 128 }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("site_dns_records_project_revision_tuple_uq").on(
+      table.projectId,
+      table.domainRevision,
+      table.rr,
+      table.recordType,
+    ),
+    index("site_dns_records_status_idx").on(table.status, table.updatedAt),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
@@ -3200,6 +4778,29 @@ export type InsertApiCredential = typeof apiCredentials.$inferInsert;
 export type PresalesApiCredential = typeof presalesApiCredentials.$inferSelect;
 export type InsertPresalesApiCredential =
   typeof presalesApiCredentials.$inferInsert;
+export type VisualCandidatePool = typeof visualCandidatePools.$inferSelect;
+export type InsertVisualCandidatePool =
+  typeof visualCandidatePools.$inferInsert;
+export type VisualCandidatePoolPage =
+  typeof visualCandidatePoolPages.$inferSelect;
+export type InsertVisualCandidatePoolPage =
+  typeof visualCandidatePoolPages.$inferInsert;
+export type VisualCandidatePoolItem =
+  typeof visualCandidatePoolItems.$inferSelect;
+export type InsertVisualCandidatePoolItem =
+  typeof visualCandidatePoolItems.$inferInsert;
+export type AgentOperation = typeof agentOperations.$inferSelect;
+export type InsertAgentOperation = typeof agentOperations.$inferInsert;
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type InsertAgentTask = typeof agentTasks.$inferInsert;
+export type AgentEvent = typeof agentEvents.$inferSelect;
+export type InsertAgentEvent = typeof agentEvents.$inferInsert;
+export type LocalAsset = typeof localAssets.$inferSelect;
+export type InsertLocalAsset = typeof localAssets.$inferInsert;
+export type ProviderFileLease = typeof providerFileLeases.$inferSelect;
+export type InsertProviderFileLease = typeof providerFileLeases.$inferInsert;
+export type Artifact = typeof artifacts.$inferSelect;
+export type InsertArtifact = typeof artifacts.$inferInsert;
 export type ApiUsagePolicy = typeof apiUsagePolicies.$inferSelect;
 export type InsertApiUsagePolicy = typeof apiUsagePolicies.$inferInsert;
 export type ApiUsageSnapshot = typeof apiUsageSnapshots.$inferSelect;
@@ -3295,6 +4896,14 @@ export type KnowledgeBaseBuildNode =
   typeof knowledgeBaseBuildNodes.$inferSelect;
 export type InsertKnowledgeBaseBuildNode =
   typeof knowledgeBaseBuildNodes.$inferInsert;
+export type KnowledgeBaseExecution =
+  typeof knowledgeBaseExecutions.$inferSelect;
+export type InsertKnowledgeBaseExecution =
+  typeof knowledgeBaseExecutions.$inferInsert;
+export type KnowledgeBaseWorkingSet =
+  typeof knowledgeBaseWorkingSets.$inferSelect;
+export type InsertKnowledgeBaseWorkingSet =
+  typeof knowledgeBaseWorkingSets.$inferInsert;
 export type KnowledgeBaseResetRequest =
   typeof knowledgeBaseResetRequests.$inferSelect;
 export type InsertKnowledgeBaseResetRequest =
@@ -3319,3 +4928,66 @@ export type Attachment = typeof attachments.$inferSelect;
 export type InsertAttachment = typeof attachments.$inferInsert;
 export type UpstreamResource = typeof upstreamResources.$inferSelect;
 export type InsertUpstreamResource = typeof upstreamResources.$inferInsert;
+export type JenovaBrandTrackingCredential =
+  typeof jenovaBrandTrackingCredentials.$inferSelect;
+export type InsertJenovaBrandTrackingCredential =
+  typeof jenovaBrandTrackingCredentials.$inferInsert;
+export type JenovaBrandTrackingAssignment =
+  typeof jenovaBrandTrackingAssignments.$inferSelect;
+export type InsertJenovaBrandTrackingAssignment =
+  typeof jenovaBrandTrackingAssignments.$inferInsert;
+export type JenovaBrandTrackingPolicy =
+  typeof jenovaBrandTrackingPolicies.$inferSelect;
+export type InsertJenovaBrandTrackingPolicy =
+  typeof jenovaBrandTrackingPolicies.$inferInsert;
+export type JenovaBrandTrackingSession =
+  typeof jenovaBrandTrackingSessions.$inferSelect;
+export type InsertJenovaBrandTrackingSession =
+  typeof jenovaBrandTrackingSessions.$inferInsert;
+export type JenovaBrandTrackingTurn =
+  typeof jenovaBrandTrackingTurns.$inferSelect;
+export type InsertJenovaBrandTrackingTurn =
+  typeof jenovaBrandTrackingTurns.$inferInsert;
+export type SiteProject = typeof siteProjects.$inferSelect;
+export type InsertSiteProject = typeof siteProjects.$inferInsert;
+export type SiteBuild = typeof siteBuilds.$inferSelect;
+export type InsertSiteBuild = typeof siteBuilds.$inferInsert;
+export type SiteOperation = typeof siteOperations.$inferSelect;
+export type InsertSiteOperation = typeof siteOperations.$inferInsert;
+export type SiteDeployment = typeof siteDeployments.$inferSelect;
+export type InsertSiteDeployment = typeof siteDeployments.$inferInsert;
+export type SocialPackage = typeof socialPackages.$inferSelect;
+export type InsertSocialPackage = typeof socialPackages.$inferInsert;
+export type SiteProviderConnection =
+  typeof siteProviderConnections.$inferSelect;
+export type InsertSiteProviderConnection =
+  typeof siteProviderConnections.$inferInsert;
+export type SiteDnsRecord = typeof siteDnsRecords.$inferSelect;
+export type InsertSiteDnsRecord = typeof siteDnsRecords.$inferInsert;
+
+/**
+ * Maps the Dashboard's canonical integer user id to the UUID retained by the
+ * monitoring domain tables. Monitoring never authenticates through this
+ * projection; it exists only to preserve domain foreign keys while both
+ * products share the Dashboard session.
+ */
+export const monitoringAccountLinks = mysqlTable(
+  "monitoring_account_links",
+  {
+    dashboardUserId: int("dashboardUserId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    monitoringUserId: varchar("monitoringUserId", { length: 36 })
+      .notNull()
+      .unique(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.dashboardUserId] }),
+    uniqueIndex("monitoring_account_links_monitoring_user_uq").on(
+      table.monitoringUserId,
+    ),
+  ],
+);
+

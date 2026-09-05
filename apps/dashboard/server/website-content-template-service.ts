@@ -89,7 +89,7 @@ function assertNoRoleOwnedTemplateCompletion(input: {
   if (roleOwnedCompletion) {
     throw new WebsiteContentTemplateError(
       "WEBSITE_CONTENT_TEMPLATE_ROLE_WORKBENCH_REQUIRED",
-      `工单 ${roleOwnedCompletion.ticketId} 已进入岗位工作流，请在系统管理员完整处理工作台中按岗位规则完成。`,
+      `需求 ${roleOwnedCompletion.ticketId} 已进入岗位工作流，请在系统管理员完整处理工作台中按岗位规则完成。`,
       409,
     );
   }
@@ -221,7 +221,7 @@ export function createWebsiteContentTemplate(input: {
 function invalidScope(record: WebsiteContentTemplateRecord): never {
   throw new WebsiteContentTemplateError(
     "WEBSITE_CONTENT_TEMPLATE_TICKET_SCOPE_INVALID",
-    `工单 ${record.ticketId} 不属于当前企业的五类官网内容工单。`,
+    `需求 ${record.ticketId} 不属于当前企业的五类官网内容需求。`,
     403,
   );
 }
@@ -256,13 +256,13 @@ export function buildWebsiteContentTemplateDiff(input: {
     if (row.revision !== record.revision) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_REVISION_CONFLICT",
-        `工单 ${record.ticketId} 已更新到 R${row.revision}，请重新下载当前内容模板。`,
+        `需求 ${record.ticketId} 已更新到 R${row.revision}，请重新下载当前内容模板。`,
       );
     }
     if (row.category !== record.category || ticketTopic(row) !== record.topic) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_SNAPSHOT_MISMATCH",
-        `工单 ${record.ticketId} 的类别或话题快照被修改，请重新下载当前内容模板。`,
+        `需求 ${record.ticketId} 的类别或话题快照被修改，请重新下载当前内容模板。`,
         400,
       );
     }
@@ -272,7 +272,7 @@ export function buildWebsiteContentTemplateDiff(input: {
     if (currentComplete && !record.complete) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_REOPEN_NOT_ALLOWED",
-        `已结束工单 ${record.ticketId} 不能通过模板重新打开。`,
+        `已结束需求 ${record.ticketId} 不能通过模板重新打开。`,
         400,
       );
     }
@@ -283,7 +283,7 @@ export function buildWebsiteContentTemplateDiff(input: {
     ) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_SUMMARY_REQUIRES_COMPLETION",
-        `工单 ${record.ticketId} 尚未完成；填写内容总结时请同时把 complete 改为 true。`,
+        `需求 ${record.ticketId} 尚未完成；填写内容总结时请同时把 complete 改为 true。`,
         400,
       );
     }
@@ -294,7 +294,7 @@ export function buildWebsiteContentTemplateDiff(input: {
     ) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_SUMMARY_REQUIRED",
-        `完成工单 ${record.ticketId} 前必须填写 publicSummary。`,
+        `完成需求 ${record.ticketId} 前必须填写 publicSummary。`,
         400,
       );
     }
@@ -408,7 +408,7 @@ export async function publishWebsiteContentTemplate(input: {
     if (changed.length === 0) {
       throw new WebsiteContentTemplateError(
         "WEBSITE_CONTENT_TEMPLATE_NO_CHANGES",
-        "模板内容与当前工单一致，无需发布。",
+        "模板内容与当前需求一致，无需发布。",
         400,
       );
     }

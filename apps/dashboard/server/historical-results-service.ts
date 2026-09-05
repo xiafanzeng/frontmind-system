@@ -47,6 +47,7 @@ const DEFAULT_DEPENDENCIES: HistoricalResultsDependencies = {
   loadMonitoringSamples: (userId, questionId) =>
     listMonitoringSamples({
       userId,
+      questionScopeMode: "historical_exact",
       filters: {
         questionId,
         query: "",
@@ -58,6 +59,7 @@ const DEFAULT_DEPENDENCIES: HistoricalResultsDependencies = {
   loadMonitoringCitations: (userId, questionId) =>
     listMonitoringCitations({
       userId,
+      questionScopeMode: "historical_exact",
       filters: {
         questionId,
         query: "",

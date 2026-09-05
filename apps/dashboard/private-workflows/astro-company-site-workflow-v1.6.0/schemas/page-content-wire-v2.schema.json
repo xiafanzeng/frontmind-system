@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operationToken", "schemaVersion", "routes", "sections"],
+  "properties": {
+    "operationToken": { "type": "string" },
+    "schemaVersion": { "type": "number", "enum": [2] },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["routeId", "eyebrow", "heading", "summary"],
+        "properties": {
+          "routeId": { "type": "string" },
+          "eyebrow": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "heading": { "type": "string" },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "routeId",
+          "slotId",
+          "heading",
+          "paragraphs",
+          "sourceDocumentIds"
+        ],
+        "properties": {
+          "routeId": { "type": "string" },
+          "slotId": { "type": "string" },
+          "heading": { "type": "string" },
+          "paragraphs": { "type": "array", "items": { "type": "string" } },
+          "sourceDocumentIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

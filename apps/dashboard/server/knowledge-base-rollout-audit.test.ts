@@ -35,6 +35,8 @@ function buildFixture(
     skillName: "socratic-kb-builder",
     skillVersion: "4",
     skillContentHash: "c".repeat(64),
+    treePolicyVersion: 1,
+    initialResearchCoverage: null,
     status: "confirming",
     generation: 1,
     stateEpoch: 2,
@@ -384,6 +386,204 @@ describe("knowledge-base rollout state audit", () => {
       { now: NOW },
     );
     expect(codes(result)).toContain("PUBLISHED_PACKAGE_NODE_HASH_MISMATCH");
+  });
+
+  it("accepts historical published v4 snapshots that retain the leaf- id prefix", () => {
+    const build = readyBuildFixture({
+      status: "published",
+      publishedSnapshotId: uuid(904),
+      publishedAt: NOW,
+    });
+    const nodes = Array.from({ length: 8 }, (_, ordinal) => {
+      const leafId = `1.${ordinal + 1}`;
+      const content = `## ${leafId} Node ${ordinal + 1}\n\nApproved ${ordinal + 1}.`;
+      return nodeFixture({
+        id: uuid(400 + ordinal),
+        leafId,
+        ordinal,
+        title: `Node ${ordinal + 1}`,
+        status: "confirmed",
+        contentMarkdown: content,
+        contentSha256: knowledgeBaseMarkdownSha256(content),
+        presentationKey: `presentation-${ordinal + 1}`,
+      });
+    });
+    const snapshot = {
+      id: build.publishedSnapshotId,
+      userId: build.userId,
+      version: 1,
+      sourceFileName: "knowledge-base.zip",
+      sourceConversationId: build.conversationId,
+      sourceBuildId: build.id,
+      sourceBuildRevision: build.revision,
+      sourceTaskId: build.upstreamTaskId,
+      sourceArtifactHash: PACKAGE_HASH,
+      archiveHash: PACKAGE_HASH,
+      maintenanceTicketId: null,
+      documents: nodes.map((node) => ({
+        id: `leaf-${node.leafId}`,
+        path: `leaves/${node.leafId}.md`,
+        kind: "leaf" as const,
+        title: node.title,
+        branchId: node.branchId,
+        branchTitle: node.branchTitle,
+        order: node.ordinal,
+        customerVisible: true,
+        content: node.contentMarkdown!,
+      })),
+      assets: [
+        {
+          id: "logo",
+          key: "logo.png",
+          path: "visual_assets/logo.png",
+          mimeType: "image/png",
+          size: 100,
+          sha256: LOGO_HASH,
+          sourceKind: "official_web",
+          sourcePageUrl: "https://example.com/",
+          sourceAssetUrl: "https://example.com/logo.png",
+          ownership: "first_party",
+          assetType: "brand_identity",
+          displayRole: "badge",
+        },
+      ],
+      documentCount: 8,
+      imageCount: 1,
+      characterCount: 100,
+      totalBytes: build.packageSizeBytes,
+      status: "active",
+      createdByUserId: build.userId,
+      createdAt: NOW,
+    } as KnowledgeBaseSnapshot;
+
+    const result = findKnowledgeBaseRolloutViolations(
+      dataset({ builds: [build], nodes, snapshots: [snapshot] }),
+      { now: NOW },
+    );
+
+    expect(codes(result)).not.toContain("PUBLISHED_PACKAGE_NODE_HASH_MISMATCH");
+  });
+
+  it("audits ambiguous historical v4/schema3 snapshots without applying the v4 provenance ledger", () => {
+    const build = readyBuildFixture({
+      status: "published",
+      publishedSnapshotId: uuid(905),
+      publishedAt: NOW,
+    });
+    const nodes = Array.from({ length: 8 }, (_, ordinal) => {
+      const leafId = `1.${ordinal + 1}`;
+      const content = `## ${leafId} Node ${ordinal + 1}\n\nApproved ${ordinal + 1}.`;
+      return nodeFixture({
+        id: uuid(500 + ordinal),
+        leafId,
+        ordinal,
+        title: `Node ${ordinal + 1}`,
+        status: "confirmed",
+        contentMarkdown: content,
+        contentSha256: knowledgeBaseMarkdownSha256(content),
+        presentationKey: `presentation-${ordinal + 1}`,
+      });
+    });
+    const snapshot = {
+      id: build.publishedSnapshotId,
+      userId: build.userId,
+      version: 1,
+      sourceFileName: "historical-schema3.zip",
+      sourceConversationId: build.conversationId,
+      sourceBuildId: build.id,
+      sourceBuildRevision: build.revision,
+      sourceTaskId: build.upstreamTaskId,
+      sourceArtifactHash: PACKAGE_HASH,
+      archiveHash: PACKAGE_HASH,
+      maintenanceTicketId: null,
+      documents: nodes.map((node) => ({
+        id: node.leafId,
+        path: `leaves/${node.leafId}.md`,
+        kind: "leaf" as const,
+        title: node.title,
+        branchId: node.branchId,
+        branchTitle: node.branchTitle,
+        order: node.ordinal,
+        customerVisible: true,
+        content: node.contentMarkdown!,
+      })),
+      assets: [
+        {
+          id: "logo",
+          key: "logo.png",
+          path: "visual_assets/logo.png",
+          mimeType: "image/png",
+          size: 100,
+          sha256: LOGO_HASH,
+          sourceKind: "official_web",
+          sourcePageUrl: "https://archive.example.com/",
+          sourceAssetUrl: "https://archive.example.com/logo.png",
+          ownership: "first_party",
+          assetType: "brand_identity",
+          displayRole: "badge",
+        },
+      ],
+      documentCount: 8,
+      imageCount: 1,
+      characterCount: 100,
+      totalBytes: build.packageSizeBytes,
+      status: "active",
+      createdByUserId: build.userId,
+      createdAt: NOW,
+    } as KnowledgeBaseSnapshot;
+    const provenanceTurn = turnFixture({
+      id: uuid(599),
+      buildId: build.id,
+      buildGeneration: build.generation,
+      status: "completed",
+      completedAt: NOW,
+      metadata: {
+        boundOfficialLogoProvenance: {
+          sourceKind: "official_web",
+          sourcePageUrl: "https://new-ledger.example.com/",
+          sourceAssetUrl: "https://new-ledger.example.com/logo.png",
+        },
+      },
+    });
+
+    const compatible = findKnowledgeBaseRolloutViolations(
+      dataset({
+        builds: [build],
+        turns: [provenanceTurn],
+        nodes,
+        snapshots: [snapshot],
+      }),
+      { now: NOW },
+    );
+    expect(codes(compatible)).not.toContain(
+      "PUBLISHED_PACKAGE_NODE_HASH_MISMATCH",
+    );
+
+    const v4OnlySnapshot = {
+      ...snapshot,
+      assets: [
+        {
+          ...snapshot.assets[0]!,
+          sourceKind: "official_logo_upload",
+          sourceUploadIndex: 0,
+          sourceUploadFileId: "file-logo",
+          sourceUploadSha256: LOGO_HASH,
+          sourceUploadFilename: "logo.png",
+          sourceUploadMimeType: "image/png",
+          sourceUploadSizeBytes: 100,
+        },
+      ],
+    } as KnowledgeBaseSnapshot;
+    const strict = findKnowledgeBaseRolloutViolations(
+      dataset({
+        builds: [build],
+        turns: [provenanceTurn],
+        nodes,
+        snapshots: [v4OnlySnapshot],
+      }),
+      { now: NOW },
+    );
+    expect(codes(strict)).toContain("PUBLISHED_PACKAGE_NODE_HASH_MISMATCH");
   });
 });
 

@@ -32,17 +32,12 @@ export function configuredFrontMindPublicUrl(
     return null;
   }
 
-  const ipv4PhaseHttp =
-    env.NODE_ENV === "production" &&
-    env.FRONTMIND_IPV4_PHASE === "1" &&
-    parsed.protocol === "http:" &&
-    parsed.hostname === "149.88.85.240";
   const localHttp =
     env.NODE_ENV !== "production" &&
     parsed.protocol === "http:" &&
     LOOPBACK_HOSTS.has(parsed.hostname);
   if (
-    (parsed.protocol !== "https:" && !localHttp && !ipv4PhaseHttp) ||
+    (parsed.protocol !== "https:" && !localHttp) ||
     parsed.username ||
     parsed.password ||
     parsed.search ||

@@ -28,15 +28,16 @@ MAX_FILES = 1_500
 REQUIRED_LOGO_IMAGES = 1
 MAX_USER_UPLOAD_IMAGES = 99
 MAX_IMAGES = REQUIRED_LOGO_IMAGES + MAX_USER_UPLOAD_IMAGES
-MIN_LEAVES = 8
+MIN_LEAVES = 30
 MAX_LEAVES = 115
 TARGET_FORMAL_CHARACTERS_MIN = 80_000
 TARGET_FORMAL_CHARACTERS_MAX = 120_000
 MAX_FORMAL_CHARACTERS = 180_000
 MAX_EVIDENCE_CHARACTERS = 3_000_000
-MAX_PARSED_DOCUMENTS = 220
-MAX_PUBLIC_QUERIES = 120
-MAX_OFFICIAL_PAGES = 1_200
+# 30 official documents plus as many as 100 customer uploads.
+MAX_PARSED_DOCUMENTS = 130
+MAX_PUBLIC_QUERIES = 30
+MAX_OFFICIAL_PAGES = 120
 CONTENT_STATUSES = {"complete", "limited_evidence", "needs_verification"}
 IMAGE_SELECTION_STATUSES = {"target_met", "source_limited", "budget_limited"}
 REQUIRED_IMAGE_DISCOVERY_METHODS = {
@@ -621,6 +622,96 @@ def countable_markdown_text(content: str, *, remove_headings: bool) -> str:
     return value
 
 
+SOURCE_INVENTORY_HEADER = re.compile(
+    r"^(?:(?:原始|证据|引用|参考|数据)?来源(?:链接|网址|url)?|"
+    r"出处|证据链接|参考资料|链接|网址|sources?|references?|"
+    r"source(?:url|link|page)?|reference(?:url|link)?|url)$",
+    re.IGNORECASE,
+)
+
+SOURCE_INVENTORY_SECTION_HEADING = re.compile(
+    r"(?:^(?:(?:原始|证据|引用|参考|数据|官方|公开|第一方|第三方)"
+    r"来源(?:清单|索引|链接|网址|url)?|"
+    r"来源(?:清单|索引|链接|网址|url|与证据|和证据)?|出处|证据链接|"
+    r"参考资料|素材清单|展示素材|机器清单|证据状态|状态头|sources?|"
+    r"references?|sources? and references?|references? and sources?|"
+    r"asset inventory)$)|(?:来源(?:清单|索引)|原始来源|素材清单|"
+    r"展示素材|机器清单|source index|reference list|asset inventory)$",
+    re.IGNORECASE,
+)
+
+
+def heading_is_source_inventory(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = normalized.replace("*", "").replace("_", "").replace("`", "")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return bool(SOURCE_INVENTORY_SECTION_HEADING.search(normalized))
+
+
+def contains_source_inventory_heading(content: str) -> bool:
+    for line in content.splitlines():
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+        if heading and heading_is_source_inventory(heading.group(1)):
+            return True
+    return False
+
+
+def table_is_source_inventory(table_lines: list[str]) -> bool:
+    if not table_lines:
+        return False
+    header = table_lines[0].strip()
+    if not header.startswith("|"):
+        return False
+    if header.endswith("|"):
+        header = header[1:-1]
+    else:
+        header = header[1:]
+    cells = [
+        re.sub(r"\s+", "", unicodedata.normalize("NFKC", cell))
+        .replace("*", "")
+        .replace("_", "")
+        .replace("`", "")
+        .strip()
+        for cell in header.split("|")
+    ]
+    return any(cell and SOURCE_INVENTORY_HEADER.fullmatch(cell) for cell in cells)
+
+
+def source_inventory_tables(content: str) -> list[list[str]]:
+    lines = content.splitlines(keepends=True)
+    tables: list[list[str]] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith("|"):
+            index += 1
+            continue
+        table: list[str] = []
+        while index < len(lines) and lines[index].strip().startswith("|"):
+            table.append(lines[index])
+            index += 1
+        if table_is_source_inventory(table):
+            tables.append(table)
+    return tables
+
+
+def strip_source_inventory_tables(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    retained: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith("|"):
+            retained.append(lines[index])
+            index += 1
+            continue
+        table: list[str] = []
+        while index < len(lines) and lines[index].strip().startswith("|"):
+            table.append(lines[index])
+            index += 1
+        if not table_is_source_inventory(table):
+            retained.extend(table)
+    return "".join(retained)
+
+
 def effective_characters(content: str) -> int:
     value = unicodedata.normalize("NFKC", content)
     value = re.sub(r"\s", "", value)
@@ -976,10 +1067,9 @@ def validate_archive(path: Path) -> list[str]:
                         evidence_characters=evidence_characters,
                     )
                     validation.require(
-                        required_formal_characters in {0, expected_required},
+                        required_formal_characters == expected_required,
                         f"{where}.requiredFormalCharacters must be "
-                        f"0 or legacy value {expected_required}, got "
-                        f"{required_formal_characters!r}",
+                        f"{expected_required}, got {required_formal_characters!r}",
                     )
                     validation.require(
                         content_status == expected_status,
@@ -1039,16 +1129,11 @@ def validate_archive(path: Path) -> list[str]:
             if customer_visible:
                 formal = formal_block(content, doc_path, validation)
                 validation.require(
-                    not bool(
-                        re.search(
-                            r"(?im)^#{1,6}\s+.*"
-                            r"(?:(?:原始|证据|引用|参考)?来源|素材清单|"
-                            r"展示素材|机器清单|证据状态|状态头|"
-                            r"sources?|references?|asset inventory)"
-                            r".*$",
-                            formal,
-                        )
-                    ),
+                    not source_inventory_tables(formal),
+                    f"{doc_path} formal block contains a source-inventory table",
+                )
+                validation.require(
+                    not contains_source_inventory_heading(formal),
                     f"{doc_path} formal block contains an evidence, source, "
                     "status, or asset-inventory section",
                 )
@@ -1063,7 +1148,7 @@ def validate_archive(path: Path) -> list[str]:
                     f"{doc_path} formal block contains a status/source header",
                 )
                 countable_formal = countable_markdown_text(
-                    formal, remove_headings=True
+                    strip_source_inventory_tables(formal), remove_headings=True
                 )
                 formal_count = effective_characters(countable_formal)
                 formal_total += formal_count
@@ -2229,13 +2314,410 @@ def validate_archive(path: Path) -> list[str]:
     return validation.errors
 
 
+def canonical_markdown(value: str) -> str:
+    without_bom = value[1:] if value.startswith("\ufeff") else value
+    normalized = unicodedata.normalize("NFC", without_bom)
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip(" \t") for line in normalized.split("\n")).strip()
+
+
+def canonical_packaged_leaf(value: str) -> str:
+    if value.count(FORMAL_START) == 1 and value.count(FORMAL_END) == 1:
+        start = value.index(FORMAL_START) + len(FORMAL_START)
+        end = value.index(FORMAL_END)
+        if end > start:
+            return canonical_markdown(value[start:end])
+    return canonical_markdown(value)
+
+
+def _single_zip_entry_ending(
+    archive: zipfile.ZipFile, suffix: str, validation: Validation, where: str
+) -> str | None:
+    matches = [
+        info.filename
+        for info in archive.infolist()
+        if not info.is_dir()
+        and safe_relative_name(info.filename)
+        and (info.filename == suffix or info.filename.endswith("/" + suffix))
+    ]
+    if not validation.require(
+        len(matches) == 1,
+        f"{where} must contain exactly one {suffix}; found {len(matches)}",
+    ):
+        return None
+    return matches[0]
+
+
+def validate_finalization_binding(
+    archive_path: Path,
+    finalization_input_path: Path,
+    expected_input_sha256: str | None = None,
+    expected_operation_id: str | None = None,
+    expected_turn_id: str | None = None,
+) -> list[str]:
+    """Cross-check a generated archive against its server-authored final input.
+
+    The standalone archive contract proves internal consistency. This second
+    check proves that the model copied the exact approved nodes and provenance
+    supplied for this operation instead of inventing an upload id or source.
+    """
+
+    validation = Validation()
+    if not finalization_input_path.is_file():
+        return [f"finalization input does not exist: {finalization_input_path}"]
+    if expected_input_sha256 is not None:
+        digest = hashlib.sha256()
+        try:
+            with finalization_input_path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError as exc:
+            return [f"cannot hash finalization input: {exc}"]
+        validation.require(
+            re.fullmatch(r"[a-f0-9]{64}", expected_input_sha256) is not None
+            and digest.hexdigest() == expected_input_sha256,
+            "finalization input SHA-256 does not match the current turn prompt",
+        )
+    try:
+        output_zip = zipfile.ZipFile(archive_path)
+        input_zip = zipfile.ZipFile(finalization_input_path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        return [f"invalid finalization binding ZIP: {exc}"]
+
+    with output_zip, input_zip:
+        validation.require(
+            input_zip.testzip() is None,
+            f"finalization input ZIP CRC failed: {input_zip.testzip()}",
+        )
+        input_infos = [info for info in input_zip.infolist() if not info.is_dir()]
+        validation.require(
+            len(input_infos) <= 300,
+            "finalization input contains too many files",
+        )
+        validation.require(
+            sum(info.file_size for info in input_infos) <= 100 * MIB,
+            "finalization input exceeds 100 MiB uncompressed",
+        )
+        validation.require(
+            all(safe_relative_name(info.filename) for info in input_infos),
+            "finalization input contains an unsafe path",
+        )
+        try:
+            ledger_raw = input_zip.read("FINALIZATION_INPUT.json")
+            ledger = json.loads(ledger_raw.decode("utf-8"))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return [f"invalid FINALIZATION_INPUT.json: {exc}"]
+        if not isinstance(ledger, dict):
+            return ["FINALIZATION_INPUT.json must be an object"]
+        validation.require(
+            ledger.get("kind") == "frontmind.knowledge-base.finalization-input"
+            and ledger.get("schemaVersion") == 1,
+            "FINALIZATION_INPUT.json kind/schemaVersion is invalid",
+        )
+        if expected_operation_id is not None:
+            validation.require(
+                ledger.get("operationId") == expected_operation_id,
+                "FINALIZATION_INPUT.operationId does not match the current turn",
+            )
+        if expected_turn_id is not None:
+            validation.require(
+                ledger.get("turnId") == expected_turn_id,
+                "FINALIZATION_INPUT.turnId does not match the current turn",
+            )
+
+        output_manifest_name = _single_zip_entry_ending(
+            output_zip,
+            "00_package_manifest.json",
+            validation,
+            "generated archive",
+        )
+        if output_manifest_name is None:
+            return validation.errors
+        output_root = output_manifest_name[: -len("00_package_manifest.json")]
+        try:
+            manifest = json.loads(output_zip.read(output_manifest_name).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            return [f"invalid generated 00_package_manifest.json: {exc}"]
+        if not isinstance(manifest, dict):
+            return ["generated 00_package_manifest.json must be an object"]
+
+        required_package = ledger.get("requiredPackage")
+        validation.require(
+            isinstance(required_package, dict),
+            "FINALIZATION_INPUT.json.requiredPackage must be an object",
+        )
+        if isinstance(required_package, dict):
+            for key in ("schemaVersion", "profile", "buildRevision"):
+                validation.require(
+                    manifest.get(key) == required_package.get(key),
+                    f"generated manifest.{key} must exactly equal "
+                    f"FINALIZATION_INPUT.requiredPackage.{key}",
+                )
+
+        input_nodes = ledger.get("nodes")
+        output_documents = manifest.get("documents")
+        validation.require(
+            isinstance(input_nodes, list),
+            "FINALIZATION_INPUT.json.nodes must be an array",
+        )
+        validation.require(
+            isinstance(output_documents, list),
+            "generated manifest.documents must be an array",
+        )
+        if not isinstance(input_nodes, list):
+            input_nodes = []
+        if not isinstance(output_documents, list):
+            output_documents = []
+        output_leaves = {
+            item.get("id"): item
+            for item in output_documents
+            if isinstance(item, dict)
+            and item.get("kind") == "leaf"
+            and isinstance(item.get("id"), str)
+        }
+        validation.require(
+            len(output_leaves) == len(input_nodes),
+            "generated leaf count must equal FINALIZATION_INPUT node count",
+        )
+        expected_node_ids: list[str] = []
+        for index, raw_node in enumerate(input_nodes):
+            where = f"FINALIZATION_INPUT.nodes[{index}]"
+            if not isinstance(raw_node, dict):
+                validation.errors.append(f"{where} must be an object")
+                continue
+            node_id = raw_node.get("id")
+            expected_node_ids.append(str(node_id or ""))
+            validation.require(
+                raw_node.get("status") in {"confirmed", "direct_prefilled"},
+                f"{where}.status must be confirmed or direct_prefilled",
+            )
+            output_node = output_leaves.get(node_id)
+            if not validation.require(
+                isinstance(output_node, dict),
+                f"generated archive is missing exact leaf id {node_id!r}",
+            ):
+                continue
+            for input_key, output_key in (
+                ("id", "id"),
+                ("title", "title"),
+                ("branchId", "branchId"),
+                ("branchTitle", "branchTitle"),
+                ("order", "order"),
+            ):
+                validation.require(
+                    output_node.get(output_key) == raw_node.get(input_key),
+                    f"generated leaf {node_id!r}.{output_key} must exactly equal {where}.{input_key}",
+                )
+            approved_path = raw_node.get("approvedContentPath")
+            output_path = output_node.get("path")
+            if not isinstance(approved_path, str) or not safe_relative_name(
+                approved_path
+            ):
+                validation.errors.append(f"{where}.approvedContentPath is invalid")
+                continue
+            if not isinstance(output_path, str) or not safe_relative_name(output_path):
+                validation.errors.append(
+                    f"generated leaf {node_id!r}.path is invalid"
+                )
+                continue
+            try:
+                approved_bytes = input_zip.read(approved_path)
+                packaged_bytes = output_zip.read(output_root + output_path)
+                approved_text = approved_bytes.decode("utf-8")
+                packaged_text = packaged_bytes.decode("utf-8")
+            except (KeyError, UnicodeDecodeError) as exc:
+                validation.errors.append(
+                    f"cannot read exact leaf {node_id!r} content: {exc}"
+                )
+                continue
+            approved = canonical_markdown(approved_text)
+            packaged = canonical_packaged_leaf(packaged_text)
+            approved_hash = hashlib.sha256(approved.encode("utf-8")).hexdigest()
+            packaged_hash = hashlib.sha256(packaged.encode("utf-8")).hexdigest()
+            validation.require(
+                raw_node.get("contentSha256") == approved_hash,
+                f"{where}.contentSha256 does not match approvedContentPath bytes",
+            )
+            validation.require(
+                packaged_hash == approved_hash,
+                f"generated leaf {node_id!r} formal content differs from the approved node",
+            )
+        validation.require(
+            set(output_leaves) == set(expected_node_ids),
+            "generated leaf ids must exactly equal FINALIZATION_INPUT node ids",
+        )
+
+        input_assets = ledger.get("assets")
+        output_assets = manifest.get("assets")
+        validation.require(
+            isinstance(input_assets, list),
+            "FINALIZATION_INPUT.json.assets must be an array",
+        )
+        validation.require(
+            isinstance(output_assets, list),
+            "generated manifest.assets must be an array",
+        )
+        if not isinstance(input_assets, list):
+            input_assets = []
+        if not isinstance(output_assets, list):
+            output_assets = []
+        validation.require(
+            len(output_assets) == len(input_assets),
+            "generated asset count must equal FINALIZATION_INPUT asset count",
+        )
+        unmatched_output = [item for item in output_assets if isinstance(item, dict)]
+        provenance_keys = {
+            "branchId",
+            "documentIds",
+            "sourceKind",
+            "sourceUploadIndex",
+            "sourceUploadFileId",
+            "sourceUploadFilename",
+            "sourceUploadMimeType",
+            "sourceUploadSizeBytes",
+            "sourceUploadSha256",
+            "sourcePageUrl",
+            "sourceAssetUrl",
+            "sourceDocumentPath",
+            "ownership",
+            "assetType",
+            "displayRole",
+        }
+        for index, raw_asset in enumerate(input_assets):
+            where = f"FINALIZATION_INPUT.assets[{index}]"
+            if not isinstance(raw_asset, dict):
+                validation.errors.append(f"{where} must be an object")
+                continue
+            input_descriptor = raw_asset.get("input")
+            required_manifest = raw_asset.get("requiredManifest")
+            if not isinstance(input_descriptor, dict) or not isinstance(
+                required_manifest, dict
+            ):
+                validation.errors.append(
+                    f"{where}.input and requiredManifest must be objects"
+                )
+                continue
+            input_path = input_descriptor.get("path")
+            if not isinstance(input_path, str) or not safe_relative_name(input_path):
+                validation.errors.append(f"{where}.input.path is invalid")
+                continue
+            try:
+                source_bytes = input_zip.read(input_path)
+            except KeyError:
+                validation.errors.append(f"{where}.input.path is missing")
+                continue
+            source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+            validation.require(
+                input_descriptor.get("sha256") == source_sha256,
+                f"{where}.input.sha256 does not match bundled source bytes",
+            )
+            validation.require(
+                input_descriptor.get("sizeBytes") == len(source_bytes),
+                f"{where}.input.sizeBytes does not match bundled source bytes",
+            )
+            kind = raw_asset.get("kind")
+            if kind == "official_logo":
+                matches = [
+                    item
+                    for item in unmatched_output
+                    if item.get("sha256") == source_sha256
+                    and item.get("assetType") == "brand_identity"
+                ]
+            else:
+                matches = [
+                    item
+                    for item in unmatched_output
+                    if item.get("sourceUploadSha256") == source_sha256
+                    and item.get("assetType") == "customer_supplied"
+                ]
+            if not validation.require(
+                len(matches) == 1,
+                f"generated archive must uniquely bind {where} by its server-authored source hash",
+            ):
+                continue
+            output_asset = matches[0]
+            unmatched_output.remove(output_asset)
+            for key, expected in required_manifest.items():
+                validation.require(
+                    output_asset.get(key) == expected,
+                    f"generated asset {output_asset.get('id')!r}.{key} must exactly equal {where}.requiredManifest.{key}",
+                )
+            unexpected_provenance = {
+                key
+                for key in provenance_keys
+                if key in output_asset and key not in required_manifest
+            }
+            validation.require(
+                not unexpected_provenance,
+                f"generated asset {output_asset.get('id')!r} invents provenance fields not present in requiredManifest: {sorted(unexpected_provenance)}",
+            )
+            output_asset_path = output_asset.get("path")
+            if isinstance(output_asset_path, str) and safe_relative_name(
+                output_asset_path
+            ):
+                try:
+                    packaged_asset_bytes = output_zip.read(
+                        output_root + output_asset_path
+                    )
+                except KeyError:
+                    validation.errors.append(
+                        f"generated asset path is missing: {output_asset_path}"
+                    )
+                else:
+                    if kind == "official_logo":
+                        validation.require(
+                            packaged_asset_bytes == source_bytes,
+                            "generated official Logo bytes must exactly equal the Dashboard-bound raster input Logo",
+                        )
+            else:
+                validation.errors.append(
+                    f"generated asset {output_asset.get('id')!r}.path is invalid"
+                )
+        validation.require(
+            not unmatched_output,
+            "generated archive contains assets not authorized by FINALIZATION_INPUT",
+        )
+
+    return validation.errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Validate a dashboard-enterprise-v1 knowledge-base ZIP."
     )
     parser.add_argument("archive", type=Path)
+    parser.add_argument(
+        "--finalization-input",
+        type=Path,
+        help="Cross-check against the exact server-authored finalization input ZIP.",
+    )
+    parser.add_argument("--expected-finalization-sha256")
+    parser.add_argument("--expected-operation-id")
+    parser.add_argument("--expected-turn-id")
     args = parser.parse_args()
     errors = validate_archive(args.archive.resolve())
+    if args.finalization_input is not None:
+        if not all(
+            (
+                args.expected_finalization_sha256,
+                args.expected_operation_id,
+                args.expected_turn_id,
+            )
+        ):
+            errors.append(
+                "--finalization-input requires --expected-finalization-sha256, "
+                "--expected-operation-id and --expected-turn-id"
+            )
+        else:
+            errors.extend(
+                validate_finalization_binding(
+                    args.archive.resolve(),
+                    args.finalization_input.resolve(),
+                    args.expected_finalization_sha256,
+                    args.expected_operation_id,
+                    args.expected_turn_id,
+                )
+            )
     if errors:
         print(f"INVALID: {len(errors)} error(s)", file=sys.stderr)
         for error in errors:

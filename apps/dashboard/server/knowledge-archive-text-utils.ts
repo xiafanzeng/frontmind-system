@@ -1,5 +1,68 @@
 import path from "node:path";
 
+const sourceInventoryHeaderPattern =
+  /^(?:(?:原始|证据|引用|参考|数据)?来源(?:链接|网址|url)?|出处|证据链接|参考资料|链接|网址|sources?|references?|source(?:url|link|page)?|reference(?:url|link)?|url)$/i;
+const sourceInventorySectionHeadingPattern =
+  /(?:^(?:(?:原始|证据|引用|参考|数据|官方|公开|第一方|第三方)来源(?:清单|索引|链接|网址|url)?|来源(?:清单|索引|链接|网址|url|与证据|和证据)?|出处|证据链接|参考资料|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|sources? and references?|references? and sources?|asset inventory)$)|(?:来源(?:清单|索引)|原始来源|素材清单|展示素材|机器清单|source index|reference list|asset inventory)$/i;
+
+function markdownTableHeaderCells(tableLines: readonly string[]) {
+  const header = tableLines[0]?.trim();
+  if (!header?.startsWith("|")) return [];
+  return header
+    .slice(1, header.endsWith("|") ? -1 : undefined)
+    .split("|")
+    .map((cell) =>
+      cell.normalize("NFKC").replace(/[*_`]/g, "").replace(/\s+/g, "").trim(),
+    )
+    .filter(Boolean);
+}
+
+export function knowledgeArchiveTableIsSourceInventory(
+  tableLines: readonly string[],
+) {
+  return markdownTableHeaderCells(tableLines).some((cell) =>
+    sourceInventoryHeaderPattern.test(cell),
+  );
+}
+
+export function knowledgeArchiveHeadingIsSourceInventory(value: string) {
+  const normalized = value
+    .normalize("NFKC")
+    .replace(/[*_`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sourceInventorySectionHeadingPattern.test(normalized);
+}
+
+export function knowledgeArchiveContainsSourceInventoryHeading(
+  content: string,
+) {
+  return content.split(/\r?\n/).some((line) => {
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    return Boolean(
+      heading && knowledgeArchiveHeadingIsSourceInventory(heading[2] || ""),
+    );
+  });
+}
+
+export function knowledgeArchiveContainsSourceInventoryTable(content: string) {
+  const lines = content.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!(lines[index] || "").trim().startsWith("|")) continue;
+    const tableLines: string[] = [];
+    while (
+      index < lines.length &&
+      (lines[index] || "").trim().startsWith("|")
+    ) {
+      tableLines.push(lines[index] || "");
+      index += 1;
+    }
+    index -= 1;
+    if (knowledgeArchiveTableIsSourceInventory(tableLines)) return true;
+  }
+  return false;
+}
+
 export function stripLeadingKnowledgeArchiveFrontmatter(markdown: string) {
   return markdown.replace(
     /^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/,
@@ -19,11 +82,7 @@ export function knowledgeArchiveFormalText(content: string) {
       if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
         excludedSectionDepth = undefined;
       }
-      if (
-        /(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
-          heading[2] || "",
-        )
-      ) {
+      if (knowledgeArchiveHeadingIsSourceInventory(heading[2] || "")) {
         excludedSectionDepth = depth;
       }
       continue;
@@ -50,9 +109,8 @@ export function knowledgeArchiveFormalText(content: string) {
         tableIndex += 1;
       }
       index = tableIndex - 1;
-      const tableText = tableLines.join("\n");
-      if (!/(?:来源|出处|证据链接|source|url)/i.test(tableText)) {
-        retainedLines.push(tableText);
+      if (!knowledgeArchiveTableIsSourceInventory(tableLines)) {
+        retainedLines.push(tableLines.join("\n"));
       }
       continue;
     }
@@ -86,6 +144,7 @@ export function markedKnowledgeArchiveFormalContent(content: string) {
 export function effectiveKnowledgeArchiveCharacterCount(value: string) {
   return Array.from(
     value
+      .normalize("NFKC")
       .replace(/\s/g, "")
       .replace(
         /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~，。！？；：“”‘’（）【】《》…—·]/g,

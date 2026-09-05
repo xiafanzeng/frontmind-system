@@ -9,7 +9,6 @@ import {
   userUsageOwners,
   users,
 } from "../drizzle/schema";
-import { DELIVERY_TICKET_LIMITS } from "../shared/delivery-ticket";
 import {
   SERVICE_PLAN_CATALOG,
   provisionableServicePlanCodeSchema,
@@ -38,6 +37,7 @@ import { getDb } from "./db";
 import {
   createServiceQuotaWindows,
   getServiceContractTermEnd,
+  serviceQuotaWindowDeliveryLimits,
 } from "./service-entitlement";
 
 type ManagedAccount = Awaited<
@@ -260,10 +260,7 @@ export async function createManagedServiceUser(
         startsAt: window.startsAt,
         endsAt: window.endsAt,
         ...window.limits,
-        contentAssetPublishLimit:
-          DELIVERY_TICKET_LIMITS[planCode].content_asset_publish,
-        websiteContentPublishLimit:
-          DELIVERY_TICKET_LIMITS[planCode].website_content_publish,
+        ...serviceQuotaWindowDeliveryLimits(planCode, window),
         revision: 1,
         createdAt: now,
         updatedAt: now,
@@ -493,6 +490,7 @@ export async function completeManagedServiceUserProvisioning(
     const quotaRows = createServiceQuotaWindows(
       contractPlanCode,
       contract.startsAt,
+      { planVersion: contract.planVersion },
     ).map((window) => ({
       id: dependencies.randomId?.() ?? randomUUID(),
       contractId: contract.id,
@@ -501,10 +499,7 @@ export async function completeManagedServiceUserProvisioning(
       startsAt: window.startsAt,
       endsAt: window.endsAt,
       ...window.limits,
-      contentAssetPublishLimit:
-        DELIVERY_TICKET_LIMITS[contractPlanCode].content_asset_publish,
-      websiteContentPublishLimit:
-        DELIVERY_TICKET_LIMITS[contractPlanCode].website_content_publish,
+      ...serviceQuotaWindowDeliveryLimits(contractPlanCode, window),
       revision: 1,
       createdAt: now,
       updatedAt: now,

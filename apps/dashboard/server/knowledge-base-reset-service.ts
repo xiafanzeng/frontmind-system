@@ -16,26 +16,37 @@ import {
   knowledgeBaseResetStates,
   knowledgeBaseSnapshots,
   knowledgeImportReceipts,
-  serviceQuotaPeriods,
   upstreamResources,
   users,
 } from "../drizzle/schema";
 import type { KnowledgeResetReason } from "../shared/delivery-roles";
 import {
   AuthServiceError,
+  discardManagedUploadProviderFileForRetirement,
   getCredentialForUpstreamResource,
   type AuthenticatedUser,
 } from "./auth-service";
 import { getDb } from "./db";
 import { knowledgeBaseWritesAreEmergencyBlocked } from "./knowledge-base-runtime-guard";
 import {
+  optionalKnowledgeBaseUploadEvidenceStorageKey,
+  parseKnowledgeBaseUploadEvidenceStorageKey,
+  removeKnowledgeBaseUploadEvidenceIfOrphaned,
+} from "./knowledge-base-upload-evidence-lifecycle";
+import { markKnowledgeBaseBuildSourcesTerminal } from "./knowledge-base-local-source-lifecycle";
+import { retireManagedUploadIntentsForKnowledgeBaseReset } from "./managed-upload-intent-fence";
+import {
   assertDeliveryProjectContext,
   deliveryExecutionActorRole,
 } from "./delivery-role-service";
 import { writeWorkspaceAuditEvent } from "./admin-control-plane-service";
-import { getServicePortal } from "./service-entitlement";
+import {
+  getServicePortal,
+  resolveCurrentServiceQuotaScope,
+} from "./service-entitlement";
 import { getUpstreamBaseUrl } from "./upstream-config";
 import { knowledgeSnapshotArchiveStorageKey } from "./knowledge-snapshot-archive-store";
+import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
 
 const ACTIVE_TICKET_STATUSES = [
   "submitted",
@@ -66,6 +77,7 @@ function persistedConversationId(userId: number, publicId: string) {
 type KnowledgeCounts = {
   builds: Array<{
     id: string;
+    generation: number;
     conversationId: string;
     upstreamTaskId: string | null;
     logoStorageKey: string | null;
@@ -99,6 +111,11 @@ export function knowledgeSnapshotCleanupStorageKeys(
         ...builds.flatMap((build) => [
           build.logoStorageKey,
           build.packageStorageKey,
+          optionalKnowledgeBaseUploadEvidenceStorageKey({
+            userId,
+            buildId: build.id,
+            generation: build.generation,
+          }),
         ]),
       ].filter((key): key is string => Boolean(key)),
     ),
@@ -128,6 +145,7 @@ async function getKnowledgeCounts(
     executor
       .select({
         id: knowledgeBaseBuilds.id,
+        generation: knowledgeBaseBuilds.generation,
         conversationId: knowledgeBaseBuilds.conversationId,
         upstreamTaskId: knowledgeBaseBuilds.upstreamTaskId,
         logoStorageKey: knowledgeBaseBuilds.logoStorageKey,
@@ -251,7 +269,7 @@ export async function getKnowledgeResetStatus(userId: number) {
       : !owner
         ? "尚未分配 AI 运维工程师，请联系交付管理员"
         : pending
-          ? "已有一张知识库重置工单正在处理"
+          ? "已有一张知识库重置需求正在处理"
           : !counts.hasKnowledge
             ? "当前没有可重置的知识库记录"
             : null,
@@ -300,7 +318,7 @@ export async function assertKnowledgeBaseWritable(userId: number) {
   if (rows[0]) {
     throw new AuthServiceError(
       "CONFLICT",
-      "知识库重置工单正在审批，当前知识库已只读锁定",
+      "知识库重置需求正在审批，当前知识库已只读锁定",
     );
   }
 }
@@ -326,7 +344,7 @@ export async function submitKnowledgeReset(input: {
   const db = await requireDb();
   try {
     return await db.transaction(async (tx) => {
-      const [counts, owner, existing, periodRows] = await Promise.all([
+      const [counts, owner, existing, currentScope] = await Promise.all([
         getKnowledgeCounts(tx, input.actor.id),
         getKnowledgeOwner(tx, input.actor.id, { forUpdate: true }),
         tx
@@ -340,15 +358,10 @@ export async function submitKnowledgeReset(input: {
           )
           .limit(1)
           .for("update"),
-        tx
-          .select({
-            id: serviceQuotaPeriods.id,
-            contractId: serviceQuotaPeriods.contractId,
-          })
-          .from(serviceQuotaPeriods)
-          .where(eq(serviceQuotaPeriods.userId, input.actor.id))
-          .orderBy(desc(serviceQuotaPeriods.endsAt))
-          .limit(1),
+        resolveCurrentServiceQuotaScope({
+          executor: tx,
+          userId: input.actor.id,
+        }),
       ]);
       if (!counts.hasKnowledge) {
         throw new AuthServiceError("CONFLICT", "当前没有可重置的知识库记录");
@@ -360,22 +373,22 @@ export async function submitKnowledgeReset(input: {
         );
       }
       if (existing[0]) {
-        throw new AuthServiceError("CONFLICT", "已有一张重置工单正在处理");
+        throw new AuthServiceError("CONFLICT", "已有一张重置需求正在处理");
       }
-      const period = periodRows[0];
-      if (!period) {
+      if (!currentScope) {
         throw new AuthServiceError(
           "CONFLICT",
           "客户服务周期尚未配置，请联系交付管理员",
         );
       }
+      const { contract, period } = currentScope;
       const requestId = randomUUID();
       const ticketId = randomUUID();
       const now = new Date();
       await tx.insert(deliveryTickets).values({
         id: ticketId,
         userId: input.actor.id,
-        contractId: period.contractId,
+        contractId: contract.id,
         quotaPeriodId: period.id,
         type: "knowledge_base",
         quotaPool: null,
@@ -424,7 +437,7 @@ export async function submitKnowledgeReset(input: {
     });
   } catch (error) {
     if ((error as { code?: string }).code === "ER_DUP_ENTRY") {
-      throw new AuthServiceError("CONFLICT", "已有一张重置工单正在处理");
+      throw new AuthServiceError("CONFLICT", "已有一张重置需求正在处理");
     }
     throw error;
   }
@@ -472,7 +485,7 @@ async function requirePendingRequestForMember(input: {
       (row.request.assignedMemberId !== input.actor.id ||
         row.ticket.assignedMemberId !== input.actor.id))
   ) {
-    throw new AuthServiceError("NOT_FOUND", "待审批重置工单不存在");
+    throw new AuthServiceError("NOT_FOUND", "待审批重置需求不存在");
   }
   const role = await assertDeliveryProjectContext({
     actor: input.actor,
@@ -482,7 +495,7 @@ async function requirePendingRequestForMember(input: {
     executor: input.executor,
   });
   if (role.projectAssignmentId !== row.request.assignedProjectAssignmentId) {
-    throw new AuthServiceError("NOT_FOUND", "工单不属于当前客户项目岗位");
+    throw new AuthServiceError("NOT_FOUND", "需求不属于当前客户项目岗位");
   }
   return {
     ...row,
@@ -571,6 +584,15 @@ export async function decideKnowledgeReset(input: {
     throw new AuthServiceError("CONFLICT", "驳回时必须填写原因");
   }
   const db = await requireDb();
+  // Populated only by the transaction that actually deletes these builds.
+  // Marker failures are fail-closed (retained bytes leak rather than delete).
+  let resetBuildSourceScopes: Array<{
+    userId: number;
+    buildId: string;
+    terminalAt: Date;
+  }> = [];
+  let resetConversationIds: string[] = [];
+  let resetUserId: number | null = null;
   const result = await db.transaction(async (tx) => {
     const row = await requirePendingRequestForMember({
       ...input,
@@ -579,11 +601,12 @@ export async function decideKnowledgeReset(input: {
     if (row.ticketRevision !== input.expectedRevision) {
       throw new AuthServiceError(
         "CONFLICT",
-        "工单已被更新，请刷新清理预览后重试",
+        "需求已被更新，请刷新清理预览后重试",
       );
     }
     const now = new Date();
     if (input.decision === "reject") {
+      const publicSummary = `知识库重置申请未通过：${input.decisionNote!.trim()}`;
       await tx
         .update(knowledgeBaseResetRequests)
         .set({
@@ -599,7 +622,7 @@ export async function decideKnowledgeReset(input: {
         .update(deliveryTickets)
         .set({
           status: "rejected",
-          publicSummary: input.decisionNote!.trim(),
+          publicSummary,
           resolvedAt: now,
           revision: sql`${deliveryTickets.revision} + 1`,
           updatedByUserId: input.actor.id,
@@ -614,7 +637,7 @@ export async function decideKnowledgeReset(input: {
         actorRole: row.eventActorRole,
         kind: "status_change",
         visibility: "customer",
-        message: input.decisionNote!.trim(),
+        message: publicSummary,
         fromStatus: "submitted",
         toStatus: "rejected",
         actorContext: {
@@ -652,7 +675,41 @@ export async function decideKnowledgeReset(input: {
       return { decision: "rejected" as const, cleanup: null };
     }
 
+    // Serialize approval with every new start/upload path before reading or
+    // deleting knowledge-base state. A delayed browser request holding the old
+    // revision either commits before this lock (and is deleted below) or waits
+    // and observes the incremented revision; it cannot recreate the old build
+    // after cleanup.
+    await tx
+      .insert(knowledgeBaseResetStates)
+      .values({
+        userId: row.request.userId,
+        revision: 0,
+        updatedAt: now,
+      })
+      .onDuplicateKeyUpdate({
+        set: { userId: row.request.userId },
+      });
+    const lockedResetState = (
+      await tx
+        .select({ revision: knowledgeBaseResetStates.revision })
+        .from(knowledgeBaseResetStates)
+        .where(eq(knowledgeBaseResetStates.userId, row.request.userId))
+        .limit(1)
+        .for("update")
+    )[0];
+    if (!lockedResetState) {
+      throw new AuthServiceError("CONFLICT", "知识库重置状态不可用，请重试");
+    }
+    const nextResetRevision = lockedResetState.revision + 1;
+    resetUserId = row.request.userId;
+
     const counts = await getKnowledgeCounts(tx, row.request.userId);
+    resetBuildSourceScopes = counts.builds.map((build) => ({
+      userId: row.request.userId,
+      buildId: build.id,
+      terminalAt: now,
+    }));
     const publicConversationIds = Array.from(
       new Set(
         [
@@ -661,6 +718,7 @@ export async function decideKnowledgeReset(input: {
         ].filter((id): id is string => Boolean(id)),
       ),
     );
+    resetConversationIds = publicConversationIds;
     const storedIds = publicConversationIds.map((id) =>
       persistedConversationId(row.request.userId, id),
     );
@@ -826,18 +884,14 @@ export async function decideKnowledgeReset(input: {
         );
     }
     await tx
-      .insert(knowledgeBaseResetStates)
-      .values({
-        userId: row.request.userId,
-        revision: 1,
-        updatedAt: now,
-      })
-      .onDuplicateKeyUpdate({
-        set: {
-          revision: sql`${knowledgeBaseResetStates.revision} + 1`,
-          updatedAt: now,
-        },
-      });
+      .update(knowledgeBaseResetStates)
+      .set({ revision: nextResetRevision, updatedAt: now })
+      .where(
+        and(
+          eq(knowledgeBaseResetStates.userId, row.request.userId),
+          eq(knowledgeBaseResetStates.revision, lockedResetState.revision),
+        ),
+      );
     await tx
       .update(knowledgeBaseResetRequests)
       .set({
@@ -854,7 +908,8 @@ export async function decideKnowledgeReset(input: {
       .update(deliveryTickets)
       .set({
         status: "completed",
-        publicSummary: "知识库已清空，可以重新开始首次构建。",
+        publicSummary:
+          "知识库重置申请已通过，知识库已清空，可以重新开始首次构建。",
         resolvedAt: now,
         revision: sql`${deliveryTickets.revision} + 1`,
         updatedByUserId: input.actor.id,
@@ -907,6 +962,21 @@ export async function decideKnowledgeReset(input: {
     return { decision: "approved" as const, cleanup };
   });
   if (result.decision === "approved") {
+    await Promise.allSettled(
+      resetBuildSourceScopes.map((scope) =>
+        markKnowledgeBaseBuildSourcesTerminal({
+          ...scope,
+          reason: "reset",
+        }),
+      ),
+    );
+    if (resetUserId !== null) {
+      await retireManagedUploadIntentsForKnowledgeBaseReset({
+        userId: resetUserId,
+        conversationIds: resetConversationIds,
+        discardProviderFile: discardManagedUploadProviderFileForRetirement,
+      }).catch(() => undefined);
+    }
     void processKnowledgeResetCleanupJobs();
   }
   return result;
@@ -946,17 +1016,27 @@ export async function processKnowledgeResetCleanupJobs() {
   for (const job of jobs) {
     try {
       if (job.kind === "local_asset") {
-        const assetPath = path.resolve(
-          dashboardAssetRoot,
-          job.localAssetKey || job.upstreamId,
-        );
-        if (!assetPath.startsWith(`${dashboardAssetRoot}${path.sep}`)) {
-          throw new Error("知识库本地资源路径无效");
-        }
-        try {
-          await unlink(assetPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        const localAssetKey = job.localAssetKey || job.upstreamId;
+        if (parseKnowledgeBaseUploadEvidenceStorageKey(localAssetKey)) {
+          const removal = await removeKnowledgeBaseUploadEvidenceIfOrphaned({
+            storageKey: localAssetKey,
+            expectedUserId: job.userId,
+            db,
+            assetRoot: dashboardAssetRoot,
+          });
+          if (removal === "active") {
+            throw new Error("活跃知识库构建仍引用上传证据目录");
+          }
+        } else {
+          const assetPath = path.resolve(dashboardAssetRoot, localAssetKey);
+          if (!assetPath.startsWith(`${dashboardAssetRoot}${path.sep}`)) {
+            throw new Error("知识库本地资源路径无效");
+          }
+          try {
+            await unlink(assetPath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
         }
       } else if (shouldDeleteKnowledgeResetUpstreamResource(job.kind)) {
         const credential = await getCredentialForUpstreamResource(
@@ -965,20 +1045,15 @@ export async function processKnowledgeResetCleanupJobs() {
           job.upstreamId,
         );
         if (!credential) throw new Error("上游资源凭据已不可用");
-        const response = await fetch(
-          `${getUpstreamBaseUrl()}/v1/files/${encodeURIComponent(job.upstreamId)}`,
-          {
-            method: "DELETE",
-            redirect: "error",
-            headers: {
-              API_KEY: credential.apiKey,
-              Authorization: `Bearer ${credential.apiKey}`,
-            },
-            signal: AbortSignal.timeout(30_000),
-          },
-        );
-        if (!response.ok && response.status !== 404) {
-          throw new Error(`上游删除失败（HTTP ${response.status}）`);
+        try {
+          await new ManusV2Client({
+            baseUrl: getUpstreamBaseUrl(),
+            apiKey: credential.apiKey,
+          }).deleteFile(job.upstreamId);
+        } catch (error) {
+          if (!(error instanceof ManusV2ApiError && error.status === 404)) {
+            throw error;
+          }
         }
       }
       await db.transaction(async (tx) => {

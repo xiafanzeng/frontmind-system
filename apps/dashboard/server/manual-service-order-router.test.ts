@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProvisioningRouter } from "./provisioning-router";
+import {
+  createProvisioningRouter,
+  MARKET_EDITION_RESPONSE_HEADER,
+} from "./provisioning-router";
 
 const SERVICE_TOKEN = "manual-order-router-token-with-at-least-32-characters";
 const servers: Server[] = [];
@@ -21,9 +24,10 @@ afterEach(async () => {
   );
 });
 
-function createRequest() {
+function createRequest(marketEdition?: "domestic" | "overseas") {
   return {
     schemaVersion: 1,
+    ...(marketEdition ? { marketEdition } : {}),
     project: {
       id: "project-manual-001",
       companyName: "示例科技有限公司",
@@ -59,6 +63,7 @@ function response(
     | "account_setup_required"
     | "activation_required"
     | "active",
+  marketEdition: "domestic" | "overseas" = "domestic",
 ) {
   return {
     schemaVersion: 1 as const,
@@ -66,6 +71,7 @@ function response(
       reference: "manual-order-reference-001",
       projectId: "project-manual-001",
       status,
+      marketEdition,
       amountFen: 150_000,
       message:
         status === "pending_admin"
@@ -104,7 +110,7 @@ async function startApp(manualOrders: any) {
 describe("manual service order internal routes", () => {
   it("creates and reads an opaque manual order through the service-token boundary", async () => {
     const manualOrders = {
-      create: vi.fn().mockResolvedValue(response("pending_admin")),
+      create: vi.fn().mockResolvedValue(response("pending_admin", "overseas")),
       status: vi.fn().mockResolvedValue(response("pending_admin")),
       recordPayment: vi.fn(),
       setupAccount: vi.fn(),
@@ -116,19 +122,21 @@ describe("manual service order internal routes", () => {
         "content-type": "application/json",
         "idempotency-key": "manual-create-idempotency-001",
         "x-frontmind-provisioning-token": SERVICE_TOKEN,
+        [MARKET_EDITION_RESPONSE_HEADER]: "1",
       },
-      body: JSON.stringify(createRequest()),
+      body: JSON.stringify(createRequest("overseas")),
     });
     expect(created.status).toBe(201);
     expect(await created.json()).toMatchObject({
       order: {
         reference: "manual-order-reference-001",
         status: "pending_admin",
+        marketEdition: "overseas",
       },
     });
     expect(manualOrders.create).toHaveBeenCalledWith({
       idempotencyKey: "manual-create-idempotency-001",
-      request: createRequest(),
+      request: createRequest("overseas"),
       secret: SERVICE_TOKEN,
     });
 
@@ -145,6 +153,7 @@ describe("manual service order internal routes", () => {
       reference: "manual-order-reference-001",
       secret: SERVICE_TOKEN,
     });
+    expect((await status.json()).order.marketEdition).toBeUndefined();
   });
 
   it("accepts only a bounded verified-payment shape and returns 202", async () => {

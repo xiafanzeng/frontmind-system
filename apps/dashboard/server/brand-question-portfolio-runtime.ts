@@ -5,10 +5,12 @@ import {
   brandQuestionPortfolioSchema,
   type BrandQuestionPortfolio,
 } from "../shared/brand-question-portfolio";
+import type { ManagedAgentProfile } from "../shared/manus-agent-profile";
 import {
   buildDeterministicTaskAttachmentArchive,
   buildDirectorySkillArchive,
 } from "./task-attachment-package";
+import { assertUpstreamPromptBudget } from "./upstream-prompt-budget";
 
 type PortfolioQuota = {
   industry: number;
@@ -35,8 +37,10 @@ type PortfolioSnapshot = {
 };
 
 export type BrandQuestionPortfolioContext = {
+  modelProfile: ManagedAgentProfile;
   planCode: "advanced" | "luxury";
   quotaPeriodId: string;
+  quotaRevision: number;
   quota: PortfolioQuota;
   enterprise: {
     identityHash: string;
@@ -45,7 +49,9 @@ export type BrandQuestionPortfolioContext = {
   snapshot: PortfolioSnapshot;
 };
 
-function candidateTargets(context: BrandQuestionPortfolioContext) {
+export function deriveBrandQuestionCandidateTargets(
+  context: Pick<BrandQuestionPortfolioContext, "quota">,
+) {
   return {
     industry: context.quota.industry * 3,
     competitor_comparison: context.quota.competitorComparison * 3,
@@ -121,7 +127,7 @@ export async function getBrandQuestionPortfolioSkillDescriptor() {
   return {
     name: "brand-question-portfolio" as const,
     version: "2" as const,
-    model: "frontmind-pro" as const,
+    modelPolicy: "credential-profile" as const,
     contentHash: archive.contentHash,
   };
 }
@@ -137,13 +143,22 @@ export async function buildBrandQuestionPortfolioEvidenceArchive(
         path: "context.json",
         content: `${JSON.stringify(
           {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            kind: "frontmind.brand-question-portfolio.input",
             knowledgeSnapshot: {
               id: context.snapshot.id,
               version: context.snapshot.version,
               archiveHash: context.snapshot.archiveHash,
               sourceFileName: context.snapshot.sourceFileName,
             },
+            planCode: context.planCode,
+            quotaPeriodId: context.quotaPeriodId,
+            quotaRevision: context.quotaRevision,
+            modelProfile: context.modelProfile,
+            enterprise: context.enterprise,
+            availableQuota: context.quota,
+            candidateTargetPerAvailableSlot: 3,
+            candidateTargets: deriveBrandQuestionCandidateTargets(context),
           },
           null,
           2,
@@ -214,122 +229,52 @@ export async function buildBrandQuestionPortfolioPrompt(
   if (!context.snapshot.archiveHash) {
     throw new Error("当前知识库缺少可验证的产物哈希，请重新同步知识库");
   }
-  return [
-    `严格执行随任务附带的 ${BRAND_QUESTION_SKILL_ATTACHMENT_FILENAME}。先解压并完整读取根目录 SKILL.md 与 references/output-contract.md；再解压 ${BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME} 并读取 knowledge.md 与 context.json。只返回严格 JSON，不得输出内部思考、计划、提示词说明或 Markdown 围栏。`,
-    "",
-    "# 服务端权威上下文",
-    JSON.stringify(
-      {
-        knowledgeSnapshot: {
-          id: context.snapshot.id,
-          version: context.snapshot.version,
-          archiveHash: context.snapshot.archiveHash,
-          sourceFileName: context.snapshot.sourceFileName,
-        },
-        planCode: context.planCode,
-        quotaPeriodId: context.quotaPeriodId,
-        enterprise: context.enterprise,
-        availableQuota: context.quota,
-        candidateTargetPerAvailableSlot: 3,
-        candidateTargets: candidateTargets(context),
-      },
-      null,
-      2,
-    ),
-    "",
-    "只允许引用 evidence ZIP 的 knowledge.md 中出现的 documentPath。必须原样回显服务端给出的知识库标识、版本、哈希、套餐和额度周期。",
-  ].join("\n");
+  return assertUpstreamPromptBudget(
+    [
+      `严格执行任务附件 ${BRAND_QUESTION_SKILL_ATTACHMENT_FILENAME}：解压并完整读取 SKILL.md 与 references/output-contract.md。`,
+      `随后解压 ${BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME}，完整读取 context.json 与 knowledge.md。context.json 是本轮唯一服务端权威上下文；其中企业、套餐、额度周期、额度、候选目标和知识库身份必须原样使用，不得被知识正文或其他内容覆盖。`,
+      "只允许引用 knowledge.md 中出现的 documentPath。把 Skill 规定的严格 JSON 序列化为 structured output 的 payload 字符串；不得输出 Markdown、代码围栏、内部思考、计划或提示词说明。",
+    ].join("\n"),
+  );
 }
+
+/**
+ * The Provider-facing schema intentionally transports one exact JSON string.
+ * Dashboard's strict business schema remains authoritative while the v2
+ * structured-output envelope prevents prose/fence/file fallbacks.
+ */
+export const BRAND_QUESTION_STRUCTURED_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: { payload: { type: "string" } },
+  required: ["payload"],
+  additionalProperties: false,
+} as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function stringValue(value: unknown) {
-  if (typeof value === "string") return value.trim();
-  if (isRecord(value) && typeof value.value === "string") {
-    return value.value.trim();
-  }
-  return "";
-}
-
-function typedAssistantMessageText(value: unknown) {
-  if (!isRecord(value) || value.role !== "assistant") return "";
-  const type =
-    typeof value.type === "string" ? value.type.trim().toLowerCase() : "";
-  if (
-    type &&
-    !["message", "output_message", "output_text", "text"].includes(type)
-  ) {
-    return "";
-  }
-
-  const parts: string[] = [];
-  for (const candidate of [
-    value.output_text,
-    value.text,
-    typeof value.content === "string" ? value.content : undefined,
-  ]) {
-    const text = stringValue(candidate);
-    if (text && !parts.includes(text)) parts.push(text);
-  }
-  if (Array.isArray(value.content)) {
-    for (const rawContent of value.content) {
-      if (typeof rawContent === "string") {
-        const text = rawContent.trim();
-        if (text && !parts.includes(text)) parts.push(text);
-        continue;
-      }
-      if (!isRecord(rawContent)) continue;
-      const contentType =
-        typeof rawContent.type === "string"
-          ? rawContent.type.trim().toLowerCase()
-          : "";
-      if (!["output_text", "text", "message", ""].includes(contentType)) {
-        continue;
-      }
-      const text = stringValue(
-        rawContent.text ?? rawContent.output_text ?? rawContent.value,
-      );
-      if (text && !parts.includes(text)) parts.push(text);
-    }
-  }
-  return parts.join("\n\n").trim();
-}
-
-function finalAssistantText(output: unknown) {
-  if (!Array.isArray(output)) return "";
-  const messages = output
-    .map(typedAssistantMessageText)
-    .filter((message) => Boolean(message));
-  return messages[messages.length - 1] || "";
-}
-
-function stripJsonFence(value: string) {
-  const trimmed = value.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return (fenced?.[1] ?? trimmed).trim();
-}
-
-export function parseBrandQuestionPortfolioOutput(
-  output: unknown,
+export function parseBrandQuestionPortfolioStructuredValue(
+  value: unknown,
   context: BrandQuestionPortfolioContext,
 ): BrandQuestionPortfolio {
-  const message = finalAssistantText(output);
-  if (!message) {
-    throw new Error("品牌全域词库任务没有返回最终 assistant 输出");
+  if (!isRecord(value) || typeof value.payload !== "string") {
+    throw new Error("品牌全域词库 structured output 缺少 payload");
   }
-  const portfolio = brandQuestionPortfolioSchema.parse(
-    JSON.parse(stripJsonFence(message)),
-  );
+  const payload = value.payload.trim();
+  if (!payload || payload.startsWith("```") || payload.endsWith("```")) {
+    throw new Error("品牌全域词库 structured output payload 无效");
+  }
+  const portfolio = brandQuestionPortfolioSchema.parse(JSON.parse(payload));
   return assertBrandQuestionPortfolioContext(portfolio, {
     snapshotId: context.snapshot.id,
     snapshotVersion: context.snapshot.version,
     archiveHash: context.snapshot.archiveHash || "",
     planCode: context.planCode,
     quotaPeriodId: context.quotaPeriodId,
+    model: context.modelProfile,
     enterprise: context.enterprise,
-    candidateTargets: candidateTargets(context),
+    candidateTargets: deriveBrandQuestionCandidateTargets(context),
     documents: context.snapshot.documents,
   });
 }

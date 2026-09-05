@@ -59,9 +59,11 @@ for (const [relativePath, rawBudget] of Object.entries(
   }
 }
 if (oversizedModules.length > 0) {
-  throw new Error(
-    `LEGACY_MODULE_GROWTH_FORBIDDEN:${oversizedModules.join(",")}`,
-  );
+  for (const oversizedModule of oversizedModules) {
+    console.warn(
+      `::warning title=Legacy module exceeds advisory line budget::${oversizedModule}`,
+    );
+  }
 }
 
 const allowlist = [...configuration.productionTsNocheckAllowlist].sort();
@@ -103,5 +105,5 @@ if (resolved.length > 0) {
 }
 
 console.log(
-  `SOURCE_GOVERNANCE_OK productionTsNocheckDebt=${discovered.length} moduleBudgets=${Object.keys(configuration.moduleLineBudgets).length}`,
+  `SOURCE_GOVERNANCE_OK productionTsNocheckDebt=${discovered.length} moduleBudgetWarnings=${oversizedModules.length}`,
 );

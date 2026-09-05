@@ -1,0 +1,69 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-astro-company-site-workflow",
+  "version": "1.6.0",
+  "entrypoint": "SKILL.md",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "hashScope": "all regular files except MANIFEST.json",
+  "host": {
+    "starterSha256": "cdb266816ee05d32f57a697ea4e9f54575d84715af63eb231c0c7516cd653c2d",
+    "componentLibraryVersion": "1.0.0",
+    "materializerVersion": "1.6.0",
+    "materializerSha256": "fc2a878a5880cd1a66a487dff5feccc8188389dc643088f25881340fc157f2c7"
+  },
+  "files": [
+    {
+      "path": "adapters/frontmind-dashboard.md",
+      "bytes": 2963,
+      "sha256": "bae674cdb3f247559974382ef526264130b378ce24f8ba15f947a54be7a54b81"
+    },
+    {
+      "path": "assets/host-starter-contract.json",
+      "bytes": 2061,
+      "sha256": "cdb266816ee05d32f57a697ea4e9f54575d84715af63eb231c0c7516cd653c2d"
+    },
+    {
+      "path": "runtime-contract.json",
+      "bytes": 3807,
+      "sha256": "457e724ae998d79a3c216a55bdb863b24a9ba12f4eef0f564aac8cf31813bbb1"
+    },
+    {
+      "path": "schemas/frontmind-run-envelope.schema.json",
+      "bytes": 3627,
+      "sha256": "0b23c020cf023866515f90eac7a1bd78afe10023b7452a5805f05c8ddb8dad54"
+    },
+    {
+      "path": "schemas/materialization-stage-v1.schema.json",
+      "bytes": 993,
+      "sha256": "868f35f5bd1e1152ca678c9e211530fc89441098d783b811730f69d884200f48"
+    },
+    {
+      "path": "schemas/page-content-wire-v2.schema.json",
+      "bytes": 1334,
+      "sha256": "048d9f01a2a1c6b08456074d1d8aee12edab9d08c96c99f512e258b0828df7ff"
+    },
+    {
+      "path": "schemas/site-design-wire-v2.schema.json",
+      "bytes": 2111,
+      "sha256": "cbc674d254b2c3b33798e292ce0d21d4dde7677a0bb2e2a731b3b9474753bae7"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 4450,
+      "sha256": "8838c4679ded295b44e5c4e0b2fedd8cfd3432c756a6a9a58a0507f11a9c1a5a"
+    },
+    {
+      "path": "UPSTREAM.json",
+      "bytes": 244,
+      "sha256": "bad73d447e991c561832e9c3631555b32119aad07f1f3c00bf5e5ce4dc58a771"
+    },
+    {
+      "path": "VERSION",
+      "bytes": 6,
+      "sha256": "cb1d9a30bc4ab8a397f39b7d786bb82aca0b816077eefc35d7c822017d75f6a5"
+    }
+  ]
+}

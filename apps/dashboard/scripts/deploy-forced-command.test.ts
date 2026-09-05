@@ -10,6 +10,8 @@ const wrapper = path.resolve(
 );
 const digest = `ghcr.io/xiafanzeng/frontmind-dashboard@sha256:${"a".repeat(64)}`;
 const sourceSha = "b".repeat(40);
+const websiteDigest = `ghcr.io/xiafanzeng/frontmind-website@sha256:${"c".repeat(64)}`;
+const websiteSourceSha = "d".repeat(40);
 
 describe("fixed-service deploy SSH command", () => {
   let binDir: string;
@@ -57,6 +59,35 @@ describe("fixed-service deploy SSH command", () => {
     expect(result.stdout.trim()).toBe(
       `-n /usr/local/sbin/frontmind-deploy-controller dashboard ${digest} ${sourceSha}`,
     );
+  });
+
+  it("allows one Dashboard-owned coupled stack command", () => {
+    const result = run(
+      "dashboard",
+      `coupled-stack ${digest} ${sourceSha} ${websiteDigest} ${websiteSourceSha}`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      `-n /usr/local/sbin/frontmind-deploy-controller --coupled-stack ${digest} ${sourceSha} ${websiteDigest} ${websiteSourceSha}`,
+    );
+  });
+
+  it("rejects legacy rollout, coordinate injection, and Website stack ownership", () => {
+    for (const [service, command] of [
+      ["dashboard", `--kb-manus-v2-rollout deploy ${digest} ${sourceSha}`],
+      ["dashboard", `--kb-manus-v2-rollout canary;id ${digest} ${sourceSha}`],
+      [
+        "dashboard",
+        `coupled-stack ${digest} ${sourceSha} ${websiteDigest};id ${websiteSourceSha}`,
+      ],
+      [
+        "website",
+        `coupled-stack ${digest} ${sourceSha} ${websiteDigest} ${websiteSourceSha}`,
+      ],
+    ] as const) {
+      const result = run(service, command);
+      expect(result.status).toBe(64);
+    }
   });
 
   it("passes the registry auth envelope through sudo without logging the token", async () => {

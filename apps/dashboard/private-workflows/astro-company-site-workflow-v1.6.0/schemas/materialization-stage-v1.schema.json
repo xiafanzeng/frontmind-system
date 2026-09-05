@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/materialization-stage-v1.json",
+  "title": "FrontMind SiteOps Materialization Stage V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["phase", "code", "retryClass", "safeDetails"],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "enum": [
+        "input_validation",
+        "asset_projection",
+        "source_generation",
+        "astro_build",
+        "static_qa",
+        "browser_qa",
+        "lighthouse",
+        "qa_packaging",
+        "artifact_persistence"
+      ]
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^SITEOPS_[A-Z0-9_]+$"
+    },
+    "retryClass": {
+      "type": "string",
+      "enum": ["content_repair", "host_transient", "host_deterministic"]
+    },
+    "safeDetails": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  }
+}

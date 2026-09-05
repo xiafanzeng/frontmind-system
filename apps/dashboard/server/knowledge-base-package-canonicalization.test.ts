@@ -44,11 +44,15 @@ function nodes() {
   ];
 }
 
-async function candidateArchive(options?: { secondId?: string }) {
+async function candidateArchive(options?: {
+  firstId?: string;
+  secondId?: string;
+  manifestBom?: boolean;
+}) {
   const zip = new JSZip();
   const documents = [
     {
-      id: "leaf-1.1",
+      id: options?.firstId || "1.1",
       path: leafOnePath,
       kind: "leaf",
       title: "一句话定位",
@@ -59,7 +63,7 @@ async function candidateArchive(options?: { secondId?: string }) {
       customerVisible: true,
     },
     {
-      id: options?.secondId || "leaf-1.2",
+      id: options?.secondId || "1.2",
       path: leafTwoPath,
       kind: "leaf",
       title: "公司主体",
@@ -80,7 +84,7 @@ async function candidateArchive(options?: { secondId?: string }) {
         id: "asset-customer",
         path: assetPath,
         branchId: "identity",
-        documentIds: [options?.secondId || "leaf-1.2"],
+        documentIds: [options?.secondId || "1.2"],
       },
     ],
     counts: {
@@ -92,7 +96,7 @@ async function candidateArchive(options?: { secondId?: string }) {
   };
   zip.file(
     `${root}00_package_manifest.json`,
-    `${JSON.stringify(manifest, null, 2)}\n`,
+    `${options?.manifestBom ? "\uFEFF" : ""}${JSON.stringify(manifest, null, 2).replace(/\n/gu, "\r\n")}\r\n`,
   );
   zip.file(
     `${root}${leafOnePath}`,
@@ -103,7 +107,7 @@ async function candidateArchive(options?: { secondId?: string }) {
     `# 1.2 公司主体\n\n<!-- FRONTMIND_FORMAL_CONTENT_START -->\n\n模型改写的公司主体。\n\n<!-- FRONTMIND_FORMAL_CONTENT_END -->\n\n## 证据与核验\n\n- evidence-two`,
   );
   zip.file(`${root}${assetPath}`, Buffer.from([0, 1, 2, 3, 4, 5]));
-  zip.file(`${root}README.md`, "Archive references leaf-1.2 exactly.\n");
+  zip.file(`${root}README.md`, "Archive references 1.2 exactly.\n");
   return zip.generateAsync({ type: "nodebuffer" });
 }
 
@@ -116,7 +120,20 @@ async function readCanonical(buffer: Buffer) {
 }
 
 describe("knowledge-base final archive canonicalization", () => {
-  it("seals approved bodies deterministically while preserving provider IDs and bytes", async () => {
+  it("canonicalizes a BOM/CRLF manifest while preserving strict schema validation", async () => {
+    const result = await canonicalizeKnowledgeBaseFinalArchive({
+      buffer: await candidateArchive({ manifestBom: true }),
+      nodes: nodes(),
+      buildRevision: 47,
+    });
+
+    expect(result.changed).toBe(true);
+    const { manifest } = await readCanonical(result.buffer);
+    expect(manifest.schemaVersion).toBe(4);
+    expect(manifest.documents).toHaveLength(2);
+  });
+
+  it("seals approved bodies deterministically while preserving raw node IDs and bytes", async () => {
     const candidate = await candidateArchive();
     const first = await canonicalizeKnowledgeBaseFinalArchive({
       buffer: candidate,
@@ -142,8 +159,8 @@ describe("knowledge-base final archive canonicalization", () => {
     const { zip, manifest } = await readCanonical(first.buffer);
     expect(
       manifest.documents.map((document: { id: string }) => document.id),
-    ).toEqual(["leaf-1.1", "leaf-1.2"]);
-    expect(manifest.assets[0].documentIds).toEqual(["leaf-1.2"]);
+    ).toEqual(["1.1", "1.2"]);
+    expect(manifest.assets[0].documentIds).toEqual(["1.2"]);
     expect(manifest.counts.customerVisibleCharacters).toBeGreaterThan(1);
     expect(
       markedKnowledgeArchiveFormalContent(
@@ -151,7 +168,7 @@ describe("knowledge-base final archive canonicalization", () => {
       )?.trim(),
     ).toBe(nodes()[0]!.contentMarkdown);
     expect(await zip.file(`${root}README.md`)!.async("string")).toContain(
-      "leaf-1.2",
+      "1.2",
     );
     expect(
       createHash("sha256")
@@ -172,5 +189,31 @@ describe("knowledge-base final archive canonicalization", () => {
         buildRevision: 47,
       }),
     ).rejects.toThrow(KnowledgeBasePackageCanonicalizationError);
+  });
+
+  it("rejects the historical leaf- prefix on writes but accepts it on reads", async () => {
+    const legacy = await candidateArchive({
+      firstId: "leaf-1.1",
+      secondId: "leaf-1.2",
+    });
+    await expect(
+      canonicalizeKnowledgeBaseFinalArchive({
+        buffer: legacy,
+        nodes: nodes(),
+        buildRevision: 47,
+      }),
+    ).rejects.toThrow(KnowledgeBasePackageCanonicalizationError);
+
+    const recovered = await canonicalizeKnowledgeBaseFinalArchive({
+      buffer: legacy,
+      nodes: nodes(),
+      buildRevision: 47,
+      legacyV4ReadCompatibility: true,
+    });
+    const { manifest } = await readCanonical(recovered.buffer);
+    expect(
+      manifest.documents.map((document: { id: string }) => document.id),
+    ).toEqual(["leaf-1.1", "leaf-1.2"]);
+    expect(manifest.assets[0].documentIds).toEqual(["leaf-1.2"]);
   });
 });

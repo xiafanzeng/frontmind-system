@@ -48,6 +48,7 @@ export function toTrpcError(error: unknown): TRPCError {
         message: error.message,
       });
     case "CONFLICT":
+    case "PROJECT_DELETED":
     case "IDEMPOTENCY_PENDING":
     case "LAST_ADMIN":
       return new TRPCError({ code: "CONFLICT", message: error.message });

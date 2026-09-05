@@ -1,8 +1,15 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
+import {
+  validatedBundlePolicyBuildSourceSha,
+  withoutValidatedBuildSourceSha,
+} from "./bundle-policy-content.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const buildRoot = resolve(projectRoot, process.argv[2] || "dist");
+const buildSourceSha = validatedBundlePolicyBuildSourceSha(
+  process.env.FRONTMIND_BUILD_SHA,
+);
 const immutableMigrationMetadata = new Set([
   join(buildRoot, "migration-manifest.json"),
   join(buildRoot, "drizzle", "meta", "_journal.json"),
@@ -73,7 +80,11 @@ for (const file of await collectTextFiles(buildRoot)) {
     );
     changed = true;
   }
-  if (content.includes(retiredPortDigits)) {
+  if (
+    withoutValidatedBuildSourceSha(content, buildSourceSha).includes(
+      retiredPortDigits,
+    )
+  ) {
     residualFiles.push(file);
   }
   if (changed) {

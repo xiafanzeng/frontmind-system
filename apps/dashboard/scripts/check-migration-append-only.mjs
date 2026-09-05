@@ -150,9 +150,33 @@ export function assertExpandSql(tag, sql) {
   }
   const compatibleLiteralDefault =
     /\bDEFAULT\s+(?:NULL|TRUE|FALSE|[-+]?\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:""|[^"])*")(?=\s*(?:COMMENT\b|,|;|$))/iu;
-  for (const statement of statements) {
+  const identifier = "(?:`([^`]+)`|([A-Za-z0-9_$]+))";
+  const nullableAdditions = new Map();
+  statements.forEach((statement, statementIndex) => {
+    const match = statement.match(
+      new RegExp(
+        `^ALTER\\s+TABLE\\s+${identifier}\\s+ADD\\s+(?:COLUMN\\s+)?${identifier}\\s+([\\s\\S]+)$`,
+        "iu",
+      ),
+    );
+    if (!match) return;
+    const definition = match[5];
     if (
-      /\b(?:INSERT|REPLACE|UPDATE|DELETE|LOAD\s+DATA|CALL|TRUNCATE|DROP|RENAME|GRANT|REVOKE)\b/iu.test(
+      /\b(?:NOT\s+NULL|UNIQUE|PRIMARY\s+KEY|REFERENCES|GENERATED\s+ALWAYS|AUTO_INCREMENT)\b/iu.test(
+        definition,
+      ) ||
+      /\bCHECK\s*\(/iu.test(definition)
+    ) {
+      return;
+    }
+    nullableAdditions.set(
+      `${String(match[1] || match[2]).toLowerCase()}\0${String(match[3] || match[4]).toLowerCase()}`,
+      statementIndex,
+    );
+  });
+  for (const [statementIndex, statement] of statements.entries()) {
+    if (
+      /^(?:INSERT|REPLACE|UPDATE|DELETE|LOAD\s+DATA|CALL|TRUNCATE|DROP|RENAME|GRANT|REVOKE)\b/iu.test(
         statement,
       )
     ) {
@@ -167,6 +191,26 @@ export function assertExpandSql(tag, sql) {
         reject();
       }
       if (/\)\s*(?:AS\s+)?SELECT\b/iu.test(statement)) reject();
+      continue;
+    }
+    if (/^CREATE\s+UNIQUE\s+INDEX\b/iu.test(statement)) {
+      const match = statement.match(
+        new RegExp(
+          `^CREATE\\s+UNIQUE\\s+INDEX\\s+${identifier}\\s+ON\\s+${identifier}\\s*\\(\\s*${identifier}\\s*\\)$`,
+          "iu",
+        ),
+      );
+      const table = match && String(match[3] || match[4]).toLowerCase();
+      const column = match && String(match[5] || match[6]).toLowerCase();
+      const addedAt =
+        table && column ? nullableAdditions.get(`${table}\0${column}`) : null;
+      // A single-column UNIQUE index is expand-safe only when this same
+      // migration already introduced that column as nullable. Historical rows
+      // are therefore all NULL (which MySQL permits repeatedly), while a new
+      // writer can rely on the uniqueness fence as soon as it is enabled.
+      if (!match || !Number.isInteger(addedAt) || addedAt >= statementIndex) {
+        reject();
+      }
       continue;
     }
     if (/^CREATE\s+INDEX\b/iu.test(statement)) {

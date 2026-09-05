@@ -4,6 +4,7 @@ import {
   eq,
   isNotNull,
   isNull,
+  like,
   lte,
   notInArray,
   sql,
@@ -13,6 +14,7 @@ import mysql from "mysql2/promise";
 import {
   attachments,
   conversationTurns,
+  localAssets,
   presalesUpstreamResources,
   upstreamResources,
 } from "../drizzle/schema";
@@ -23,6 +25,7 @@ import {
   removeStoredPresalesFile,
   sweepPresalesFileStorageRetention,
 } from "./presales-file-store";
+import { isSiteOpsArtifactReferenced } from "./siteops/artifact-retention";
 
 export const FILE_CONTENT_RETENTION_DAYS = 30;
 export const FILE_CONTENT_RETENTION_MS =
@@ -571,6 +574,8 @@ export async function prepareFileContentRetentionForServing(input?: {
       maxBatches,
       cursor,
       persistCursor: false,
+      shouldRetainFile: ({ fileId }) =>
+        isSiteOpsArtifactReferenced(database, fileId),
       onRetainedFile: async ({ fileId, uploadedAt }) => {
         await backfillStoredFileLifecycle({
           database,
@@ -836,6 +841,9 @@ export async function cleanupExpiredFileContent(input?: {
     maxBatches,
     cursor: input?.filesystemCursor,
     persistCursor: input?.filesystemCursor === undefined,
+    shouldRetainFile: database
+      ? ({ fileId }) => isSiteOpsArtifactReferenced(database, fileId)
+      : undefined,
     onRetainedFile: database
       ? async ({ fileId, uploadedAt }) => {
           await backfillStoredFileLifecycle({
@@ -853,6 +861,22 @@ export async function cleanupExpiredFileContent(input?: {
         },
     canDeleteUnidentifiedFile: database
       ? async ({ storageKey }) => {
+          const siteOpsRows = await database
+            .select({ id: localAssets.id })
+            .from(localAssets)
+            .where(
+              and(
+                like(localAssets.storageKey, "siteops:%"),
+                sql`LOWER(SHA2(${localAssets.id}, 256)) = ${storageKey}`,
+              ),
+            )
+            .limit(1);
+          if (
+            siteOpsRows[0] &&
+            (await isSiteOpsArtifactReferenced(database, siteOpsRows[0].id))
+          ) {
+            return false;
+          }
           const rows = await database
             .select({
               contentExpiresAt: upstreamResources.contentExpiresAt,

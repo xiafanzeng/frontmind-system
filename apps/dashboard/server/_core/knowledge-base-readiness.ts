@@ -6,7 +6,8 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { knowledgeBaseWritesAreEmergencyBlocked } from "../knowledge-base-runtime-guard";
 
-const KNOWLEDGE_BASE_LEGACY_MIGRATION = "0045_knowledge_base_state_machine";
+const KNOWLEDGE_BASE_FALLBACK_SCHEMA_PROBE =
+  "0061_knowledge_base_resilient_manus_v2";
 const KNOWLEDGE_BASE_SCHEMA_AUTHORITY = "complete_migration_journal";
 export const MIN_DASHBOARD_ASSET_AVAILABLE_BYTES = 512 * 1024 * 1024;
 
@@ -81,6 +82,67 @@ const REQUIRED_COLUMNS = new Map<
     { type: "varchar(191)", nullable: true },
   ],
   [
+    "knowledge_base_builds.providerProtocol",
+    { type: "varchar(32)", nullable: false, defaultValue: "legacy_v1" },
+  ],
+  [
+    "knowledge_base_builds.canonicalTaskId",
+    { type: "varchar(255)", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.canonicalTaskGeneration",
+    { type: "int unsigned", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.canonicalCredentialId",
+    { type: "varchar(36)", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.canonicalTaskState",
+    { type: "varchar(32)", nullable: false, defaultValue: "unbound" },
+  ],
+  [
+    "knowledge_base_builds.canonicalTaskUrl",
+    { type: "varchar(1024)", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.canonicalTaskCreatedAt",
+    { type: "timestamp", nullable: true },
+  ],
+  ["knowledge_base_builds.handoffProvenance", { type: "json", nullable: true }],
+  [
+    "knowledge_base_builds.skillArchiveSha256",
+    { type: "varchar(64)", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.skillArchiveBytes",
+    { type: "int unsigned", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.skillArchiveStorageKey",
+    { type: "varchar(1024)", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.contentCompletedAt",
+    { type: "timestamp", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.packageStatus",
+    { type: "varchar(32)", nullable: false, defaultValue: "not_started" },
+  ],
+  [
+    "knowledge_base_builds.packageAttemptCount",
+    { type: "int unsigned", nullable: false, defaultValue: "0" },
+  ],
+  [
+    "knowledge_base_builds.packageNextRetryAt",
+    { type: "timestamp", nullable: true },
+  ],
+  [
+    "knowledge_base_builds.packageLastErrorCode",
+    { type: "varchar(128)", nullable: true },
+  ],
+  [
     "knowledge_base_builds.logoStorageKey",
     { type: "varchar(1024)", nullable: true },
   ],
@@ -152,6 +214,14 @@ const REQUIRED_INDEXES = new Map<
   [
     "knowledge_base_builds.knowledge_base_builds_recovery_lease_idx",
     { columns: ["status", "recoveryLeaseExpiresAt"], unique: false },
+  ],
+  [
+    "knowledge_base_builds.knowledge_base_builds_canonical_task_idx",
+    { columns: ["canonicalTaskId"], unique: true },
+  ],
+  [
+    "knowledge_base_builds.knowledge_base_builds_canonical_credential_idx",
+    { columns: ["canonicalCredentialId"], unique: false },
   ],
 ]);
 
@@ -240,11 +310,12 @@ export class KnowledgeBaseReadinessError extends Error {
 }
 
 /**
- * Fail closed when the application schema and the exactly-once state machine
- * disagree. Only fixed table/column/index names are queried; missing details
- * never leave this process through the health DTO.
+ * Fallback schema authority used when the complete migration-journal verifier
+ * is unavailable. It covers the 0045 exactly-once state machine together with
+ * every 0061 Manus-v2 resilience column and index. Only fixed metadata names
+ * are queried; missing details never leave this process through the health DTO.
  */
-export async function assertKnowledgeBase0045Schema(db: SchemaDatabase) {
+export async function assertKnowledgeBaseResilientSchema(db: SchemaDatabase) {
   const [columnResult, indexResult, foreignKeyResult] = await Promise.all([
     db.execute(sql`
       SELECT
@@ -398,6 +469,9 @@ export async function assertKnowledgeBase0045Schema(db: SchemaDatabase) {
     }
   }
 }
+
+/** @deprecated Use assertKnowledgeBaseResilientSchema. */
+export const assertKnowledgeBase0045Schema = assertKnowledgeBaseResilientSchema;
 
 type AssetProbeFileSystem = Pick<
   typeof fs,
@@ -601,7 +675,7 @@ export async function runLeasedKnowledgeBaseRecovery<
 export type KnowledgeBaseReadinessDto = {
   schema: {
     migration:
-      | typeof KNOWLEDGE_BASE_LEGACY_MIGRATION
+      | typeof KNOWLEDGE_BASE_FALLBACK_SCHEMA_PROBE
       | typeof KNOWLEDGE_BASE_SCHEMA_AUTHORITY;
     status: "ok" | "unavailable";
   };
@@ -613,6 +687,8 @@ export type KnowledgeBaseReadinessDto = {
   };
   writes: { status: "writable" | "blocked" };
   recovery: KnowledgeBaseRecoveryHealthDto;
+  /** Build-local findings are diagnostic only and never change `ready`. */
+  degradedBuildCount: number;
 };
 
 export async function evaluateKnowledgeBaseReadiness(input: {
@@ -625,11 +701,12 @@ export async function evaluateKnowledgeBaseReadiness(input: {
   minimumAvailableBytes?: number;
   fileSystem?: AssetProbeFileSystem;
   writesBlocked?: () => unknown;
+  degradedBuildCount?: number;
 }) {
   const [schemaResult, assetResult] = await Promise.allSettled([
     input.schemaVerified
       ? Promise.resolve()
-      : assertKnowledgeBase0045Schema(input.db),
+      : assertKnowledgeBaseResilientSchema(input.db),
     probeDashboardAssetStorage({
       rootDir: input.assetRootDir,
       configuredRootRequired: input.assetRootRequired,
@@ -649,7 +726,7 @@ export async function evaluateKnowledgeBaseReadiness(input: {
     schema: {
       migration: input.schemaVerified
         ? KNOWLEDGE_BASE_SCHEMA_AUTHORITY
-        : KNOWLEDGE_BASE_LEGACY_MIGRATION,
+        : KNOWLEDGE_BASE_FALLBACK_SCHEMA_PROBE,
       status: schemaResult.status === "fulfilled" ? "ok" : "unavailable",
     },
     assetStorage: {
@@ -672,6 +749,7 @@ export async function evaluateKnowledgeBaseReadiness(input: {
     },
     writes: { status: writesBlocked ? "blocked" : "writable" },
     recovery,
+    degradedBuildCount: Math.max(0, Math.trunc(input.degradedBuildCount ?? 0)),
   };
   const recoveryReady =
     recovery.status === "ok" || recovery.status === "disabled";

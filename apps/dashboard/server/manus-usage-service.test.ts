@@ -3,9 +3,104 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateManusUsageChangePage,
   getManusRollingCreditUsage,
+  ManusUsageSyncError,
 } from "./manus-usage-service";
 
 describe("Manus v2 usage history", () => {
+  it("treats omitted cost/refund credits as authoritative zero without coercing present values", () => {
+    const startAt = Date.parse("2026-07-01T00:00:00.000Z");
+    const endAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const result = aggregateManusUsageChangePage({
+      startAt,
+      endAt,
+      entries: [
+        {
+          task_id: "zero-cost",
+          type: "cost",
+          created_at: startAt / 1_000,
+        },
+        {
+          task_id: "zero-refund",
+          type: "refund",
+          created_at: startAt / 1_000 + 1,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      netUsed: 0,
+      complete: true,
+      reachedCutoff: false,
+    });
+  });
+
+  it("keeps the observed 8,550 total complete when zero-cost rows omit credits", () => {
+    const startAt = Date.parse("2026-07-01T00:00:00.000Z");
+    const endAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const at = startAt / 1_000;
+    const entries = [
+      ...Array.from({ length: 15 }, (_, index) => ({
+        type: "grant",
+        credits: 1_000,
+        created_at: at + index,
+      })),
+      ...[-2_000, -1_900, -1_800, -1_500, -1_350].map((credits, index) => ({
+        task_id: `charged-${index}`,
+        type: "cost",
+        credits,
+        created_at: at + 20 + index,
+      })),
+      ...Array.from({ length: 17 }, (_, index) => ({
+        task_id: `zero-${index}`,
+        type: "cost",
+        created_at: at + 30 + index,
+      })),
+    ];
+
+    expect(aggregateManusUsageChangePage({ startAt, endAt, entries })).toEqual({
+      netUsed: 8_550,
+      complete: true,
+      reachedCutoff: false,
+    });
+  });
+
+  it.each([null, "0", Number.NaN, Number.POSITIVE_INFINITY])(
+    "marks an explicitly present invalid credits value %s partial",
+    (credits) => {
+      const now = Date.parse("2026-08-01T00:00:00.000Z");
+      expect(
+        aggregateManusUsageChangePage({
+          startAt: now - 1_000,
+          endAt: now,
+          entries: [
+            {
+              task_id: "invalid-credits",
+              type: "cost",
+              credits,
+              created_at: now / 1_000 - 0.5,
+            },
+          ],
+        }),
+      ).toMatchObject({ netUsed: 0, complete: false });
+    },
+  );
+
+  it("requires grants to carry a finite numeric credits value", () => {
+    const now = Date.parse("2026-08-01T00:00:00.000Z");
+    expect(
+      aggregateManusUsageChangePage({
+        startAt: now - 1_000,
+        endAt: now,
+        entries: [
+          {
+            type: "grant",
+            created_at: now / 1_000 - 0.5,
+          },
+        ],
+      }),
+    ).toMatchObject({ netUsed: 0, complete: false });
+  });
+
   it("computes net consumption while excluding account grants without task IDs", () => {
     const startAt = Date.parse("2026-07-01T00:00:00.000Z");
     const endAt = Date.parse("2026-08-01T00:00:00.000Z");
@@ -41,6 +136,36 @@ describe("Manus v2 usage history", () => {
           type: "cost",
           credits: -900,
           created_at: endAt / 1_000,
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      netUsed: 205,
+      complete: true,
+      reachedCutoff: false,
+    });
+  });
+
+  it("counts one cost and one refund for the same task as distinct accounting rows", () => {
+    const startAt = Date.parse("2026-07-01T00:00:00.000Z");
+    const endAt = Date.parse("2026-08-01T00:00:00.000Z");
+    const result = aggregateManusUsageChangePage({
+      startAt,
+      endAt,
+      seenTaskEntries: new Map<string, string>(),
+      entries: [
+        {
+          task_id: "refunded-task",
+          type: "cost",
+          credits: -240,
+          created_at: startAt / 1_000,
+        },
+        {
+          task_id: "refunded-task",
+          type: "refund",
+          credits: 35,
+          created_at: startAt / 1_000 + 1,
         },
       ],
     });
@@ -152,7 +277,11 @@ describe("Manus v2 usage history", () => {
         }),
     });
 
-    expect(result).toEqual({ totalUsed: 40, complete: false });
+    expect(result).toEqual({
+      totalUsed: 40,
+      complete: false,
+      issueCode: "PARTIAL_USAGE_SCAN",
+    });
   });
 
   it("follows more than twenty pages before declaring the rolling total complete", async () => {
@@ -216,7 +345,11 @@ describe("Manus v2 usage history", () => {
       },
     });
 
-    expect(result).toEqual({ totalUsed: 20, complete: false });
+    expect(result).toEqual({
+      totalUsed: 20,
+      complete: false,
+      issueCode: "PAGINATION_INVALID",
+    });
     expect(calls).toBe(2);
   });
 
@@ -271,5 +404,116 @@ describe("Manus v2 usage history", () => {
 
     expect(first).toMatchObject({ netUsed: 20, complete: false });
     expect(second).toMatchObject({ netUsed: 0, complete: false });
+  });
+
+  it("deduplicates byte-identical cross-page rows without degrading completeness", async () => {
+    const now = Date.parse("2026-08-01T00:00:00.000Z");
+    let calls = 0;
+    const row = {
+      task_id: "stable-task",
+      type: "cost",
+      credits: -20,
+      created_at: now / 1_000 - 1,
+    };
+    const result = await getManusRollingCreditUsage({
+      apiKey: "test-key",
+      startAt: now - 30 * 86_400_000,
+      endAt: now,
+      baseUrl: "https://api.example.test",
+      fetchImpl: async () => {
+        calls += 1;
+        return Response.json({
+          ok: true,
+          data: [row],
+          has_more: calls === 1,
+          next_cursor: calls === 1 ? "next" : undefined,
+        });
+      },
+    });
+
+    expect(result).toEqual({ totalUsed: 20, complete: true });
+    expect(calls).toBe(2);
+  });
+
+  it("retries one full scan and reports PAGE_DRIFT for conflicting task rows", async () => {
+    const now = Date.parse("2026-08-01T00:00:00.000Z");
+    let calls = 0;
+    const result = await getManusRollingCreditUsage({
+      apiKey: "test-key",
+      startAt: now - 30 * 86_400_000,
+      endAt: now,
+      baseUrl: "https://api.example.test",
+      fetchImpl: async () => {
+        calls += 1;
+        const page = (calls - 1) % 2;
+        return Response.json({
+          ok: true,
+          data: [
+            {
+              task_id: "moving-task",
+              type: "cost",
+              credits: -20,
+              created_at: now / 1_000 - 1 - page,
+            },
+          ],
+          has_more: page === 0,
+          next_cursor: page === 0 ? "next" : undefined,
+        });
+      },
+    });
+
+    expect(result).toEqual({
+      totalUsed: 20,
+      complete: false,
+      issueCode: "PAGE_DRIFT",
+    });
+    expect(calls).toBe(4);
+  });
+
+  it.each([
+    [401, "CREDENTIAL_REJECTED"],
+    [403, "CREDENTIAL_REJECTED"],
+    [429, "RATE_LIMITED"],
+    [503, "UPSTREAM_UNAVAILABLE"],
+  ] as const)(
+    "classifies HTTP %s without exposing response contents",
+    async (status, code) => {
+      const now = Date.parse("2026-08-01T00:00:00.000Z");
+      await expect(
+        getManusRollingCreditUsage({
+          apiKey: "test-key",
+          startAt: now - 30 * 86_400_000,
+          endAt: now,
+          baseUrl: "https://api.example.test",
+          fetchImpl: async () => new Response("sensitive", { status }),
+        }),
+      ).rejects.toMatchObject({ code } satisfies Partial<ManusUsageSyncError>);
+    },
+  );
+
+  it("classifies timeouts and invalid JSON responses", async () => {
+    const now = Date.parse("2026-08-01T00:00:00.000Z");
+    const baseInput = {
+      apiKey: "test-key",
+      startAt: now - 30 * 86_400_000,
+      endAt: now,
+      baseUrl: "https://api.example.test",
+    };
+    await expect(
+      getManusRollingCreditUsage({
+        ...baseInput,
+        fetchImpl: async () => {
+          const error = new Error("timeout");
+          error.name = "TimeoutError";
+          throw error;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "TIMEOUT" });
+    await expect(
+      getManusRollingCreditUsage({
+        ...baseInput,
+        fetchImpl: async () => new Response("not-json"),
+      }),
+    ).rejects.toMatchObject({ code: "RESPONSE_INVALID" });
   });
 });

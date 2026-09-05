@@ -11,7 +11,17 @@ export interface KnowledgeBaseClientAttachmentManifestItem {
   sizeBytes: number;
   mimeType: string;
   lastModified: number;
-  sha256: string;
+  /**
+   * Legacy clients may declare a browser-computed digest. New reservations
+   * omit it: Dashboard binds the authoritative digest after streaming the
+   * upload into managed storage.
+   */
+  sha256?: string;
+  /** Stable browser row identity used by start-before-upload recovery. */
+  itemId?: string;
+  /** One-based position and total are frozen only for starter batches. */
+  ordinal?: number;
+  total?: number;
 }
 
 export interface KnowledgeBaseAttachment {
@@ -63,6 +73,13 @@ export function normalizeKnowledgeBaseClientAttachmentManifest(
       filename,
       source.mimeType || source.type,
     );
+    const itemId = String(source.itemId || "").trim();
+    const ordinal = Number(source.ordinal);
+    const total = Number(source.total);
+    const hasStarterCoordinate =
+      Boolean(itemId) ||
+      source.ordinal !== undefined ||
+      source.total !== undefined;
     if (
       !filename ||
       !Number.isSafeInteger(sizeBytes) ||
@@ -71,14 +88,28 @@ export function normalizeKnowledgeBaseClientAttachmentManifest(
       !Number.isSafeInteger(lastModified) ||
       lastModified < 0 ||
       !mimeType ||
-      !/^[a-f0-9]{64}$/u.test(sha256)
+      (sha256.length > 0 && !/^[a-f0-9]{64}$/u.test(sha256)) ||
+      (hasStarterCoordinate &&
+        (!itemId ||
+          itemId.length > 191 ||
+          !Number.isSafeInteger(ordinal) ||
+          ordinal !== index + 1 ||
+          !Number.isSafeInteger(total) ||
+          total !== value.length))
     ) {
       throw new KnowledgeBaseTurnReservationError(
         "INVALID_REQUEST",
         `Customer attachment manifest entry ${index + 1} is invalid`,
       );
     }
-    return { filename, sizeBytes, mimeType, lastModified, sha256 };
+    return {
+      filename,
+      sizeBytes,
+      mimeType,
+      lastModified,
+      ...(sha256 ? { sha256 } : {}),
+      ...(hasStarterCoordinate ? { itemId, ordinal, total } : {}),
+    };
   });
 }
 
@@ -90,13 +121,13 @@ export function assertKnowledgeBaseAttachmentManifestPresent(input: {
     | undefined;
 }) {
   if (
-    input.skillVersion === "4" &&
+    (input.skillVersion === "4" || input.skillVersion === "5") &&
     input.attachmentCount > 0 &&
     input.attachmentManifest === undefined
   ) {
     throw new KnowledgeBaseTurnReservationError(
       "INVALID_REQUEST",
-      "当前版本的知识库附件必须完成浏览器原始字节校验，请重新上传",
+      "当前版本的知识库附件必须包含完整预约清单，请重新上传",
     );
   }
 }

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -33,6 +33,10 @@ type PlanStatus =
   | "pending-expand"
   | "pending-expand-changed"
   | "contract"
+  | "contract-0065"
+  | "contract-0065-extra"
+  | "exact-0065"
+  | "exact-0065-wrong-applied"
   | "ahead"
   | "diverged"
   | "error";
@@ -47,16 +51,24 @@ type HarnessOptions = {
   activeReadyImageDigest?: string;
   activeImageReference?: string;
   cosignExit?: number;
-  migrationMode?: "success" | "timeout" | "precondition-changed";
+  migrationMode?: "success" | "timeout" | "precondition-changed" | "slow";
   backupMode?: "success" | "dump-fail";
   restoreMode?:
     | "success"
     | "checksum-fail"
     | "drop-create-fail"
-    | "pipeline-fail"
-    | "temporary-ledger-query-fail";
+    | "pipeline-fail";
   localImageDigests?: string[];
   bootstrapped?: boolean;
+  currentDigest?: string;
+  composeUpFailureAt?: number;
+  catalogSeedExit?: number;
+  foreignContractContainer?: boolean;
+  contractResultMode?:
+    | "exact"
+    | "wrong-applied"
+    | "wrong-release"
+    | "not-migrated";
 };
 
 async function executable(file: string, content: string) {
@@ -73,6 +85,23 @@ const mockLedgerRows = Array.from({ length: 49 }, (_, index) => ({
 }));
 const mockAppliedJournalHash = sha256(`${JSON.stringify(mockLedgerRows)}\n`);
 const mockLedgerOutput = `${mockLedgerRows
+  .map(({ hash, createdAt }) => `${hash}\t${createdAt}`)
+  .join("\n")}\n`;
+const contractJournalHash =
+  "60b3ba7ba8fb92bbb2ecc2a62db1c13f549f26cc375d44eb2ee218459e50bc5f";
+const contractAppliedJournalHash =
+  "00c5395ab580f7dddef1ad743445561943b9fc28c0858a3c72eea5417cb7c52f";
+const contractFinalAppliedJournalHash =
+  "e71230f0691ddd2a7d3d7b1a19d069775720ff999b445e86f60be902137a17db";
+const contractSchemaHash =
+  "e4a5de422fac9b970a82a925a2de36a4e7f133a93ec35e026ea0c0494fe93c74";
+const contractSqlHash =
+  "47053769bdbf83b7b496da7ffc9f10042d746af4cb05baa7c91f1ec85a7a3a6d";
+const contractLedgerRows = Array.from({ length: 65 }, (_, index) => ({
+  hash: "e".repeat(64),
+  createdAt: 1_700_000_000_000 + index,
+}));
+const contractLedgerOutput = `${contractLedgerRows
   .map(({ hash, createdAt }) => `${hash}\t${createdAt}`)
   .join("\n")}\n`;
 
@@ -105,6 +134,35 @@ async function writeVerifiedRecoveryBackup(backupDir: string) {
   return backupFile;
 }
 
+async function writeVerifiedContractBackup(backupDir: string) {
+  const backupFile = path.join(
+    backupDir,
+    `frontmind-dashboard-20260826T120000Z-${sourceSha.slice(0, 12)}.sql.gz`,
+  );
+  const metadataFile = `${backupFile}.meta.json`;
+  const archive = gzipSync(
+    "CREATE TABLE restored_probe (id INT PRIMARY KEY);\n",
+  );
+  const metadata = JSON.stringify({
+    schemaVersion: 1,
+    database: "frontmind_acceptance",
+    charset: "utf8mb4",
+    collation: "utf8mb4_0900_ai_ci",
+    tableCount: 58,
+    migrationCount: 65,
+    migrationJournalHash: contractAppliedJournalHash,
+  });
+  await Promise.all([
+    writeFile(backupFile, archive),
+    writeFile(metadataFile, metadata),
+  ]);
+  await writeFile(
+    `${backupFile}.sha256`,
+    `${sha256(archive)}  ${backupFile}\n${sha256(metadata)}  ${metadataFile}\n`,
+  );
+  return backupFile;
+}
+
 async function harness(options: HarnessOptions = {}) {
   const {
     service = "dashboard",
@@ -121,6 +179,11 @@ async function harness(options: HarnessOptions = {}) {
     restoreMode = "success",
     localImageDigests = [],
     bootstrapped = true,
+    currentDigest = baselineDigest,
+    composeUpFailureAt = 0,
+    catalogSeedExit = 0,
+    foreignContractContainer = false,
+    contractResultMode = "exact",
   } = options;
   const repository = `ghcr.io/xiafanzeng/frontmind-${service}`;
   const candidateImage = `${repository}@${digest}`;
@@ -139,6 +202,11 @@ async function harness(options: HarnessOptions = {}) {
   const log = path.join(root, "commands.log");
   const planCounter = path.join(root, "plan-counter");
   const rolloutCounter = path.join(root, "rollout-counter");
+  const workerState = path.join(root, "siteops-worker-running");
+  const contractContainer = path.join(root, "contract-container.json");
+  const migrationStarted = path.join(root, "migration-started");
+  const migrationTail = path.join(root, "migration-tail");
+  const migrationDescendantPid = path.join(root, "migration-descendant-pid");
   const backupCnf = path.join(root, "backup.cnf");
   const restoreCnf = path.join(root, "restore.cnf");
   await Promise.all([
@@ -206,6 +274,10 @@ async function harness(options: HarnessOptions = {}) {
       "config_is_root_only() { return 0;\n}",
     )
     .replace(
+      'install -o root -g root -m 0600 "$source" "$temporary"',
+      'install -m 0600 "$source" "$temporary"',
+    )
+    .replace(
       'lock_file="/run/lock/frontmind-deploy-${service}.lock"',
       `lock_file="${path.join(root, "deploy.lock")}"`,
     )
@@ -216,6 +288,14 @@ async function harness(options: HarnessOptions = {}) {
     .replace(
       "readonly CANDIDATE_READY_BUDGET_SECONDS=90",
       "readonly CANDIDATE_READY_BUDGET_SECONDS=2",
+    )
+    .replace(
+      "readonly RELEASE_DB_READ_TIMEOUT_SECONDS=90",
+      "readonly RELEASE_DB_READ_TIMEOUT_SECONDS=2",
+    )
+    .replace(
+      "readonly RELEASE_DB_MIGRATE_TIMEOUT_SECONDS=1800",
+      "readonly RELEASE_DB_MIGRATE_TIMEOUT_SECONDS=5",
     );
   const controllerFile = path.join(root, "controller");
   await executable(controllerFile, controller);
@@ -233,6 +313,18 @@ exit "\${TEST_COSIGN_EXIT:-0}"
     '#!/usr/bin/env bash\necho "flock $*" >>"$TEST_LOG"\n',
   );
   await executable(
+    path.join(bin, "setsid"),
+    `#!/usr/bin/env python3
+import os
+import sys
+args = sys.argv[1:]
+while args and args[0] in ("--fork", "--wait"):
+    args.pop(0)
+os.setsid()
+os.execvp(args[0], args)
+`,
+  );
+  await executable(
     path.join(bin, "timeout"),
     `#!/usr/bin/env bash
 set -e
@@ -241,7 +333,7 @@ if [[ " $* " == *" release-db-migrate migrate "* && "\${TEST_MIGRATION_MODE:-suc
   exit 124
 fi
 while [[ \${1:-} == --* ]]; do shift; done
-shift
+if [[ \${1:-} =~ ^[0-9]+s$ ]]; then shift; fi
 exec "$@"
 `,
   );
@@ -256,8 +348,8 @@ if [[ "$TEST_FORCED_INITIAL_TAKEOVER" == 1 && ( $rollout_count -eq 0 || $rollout
   ready_source="$TEST_ACTIVE_SOURCE_SHA"
   ready_digest="$TEST_ACTIVE_READY_IMAGE_DIGEST"
 fi
-if [[ "$TEST_SERVICE" == dashboard ]]; then
-  printf '{"status":"ok","build":{"sha":"%s","imageDigest":"%s"},"migration":{"journalHash":"%s"}}\\n' \
+  if [[ "$TEST_SERVICE" == dashboard ]]; then
+  printf '{"status":"ok","build":{"sha":"%s","imageDigest":"%s"},"migration":{"status":"exact","journalHash":"%s","schema":{"status":"exact"}}}\\n' \
     "$ready_source" "$ready_digest" "${"c".repeat(64)}"
 else
   printf '{"status":"ok","buildSha":"%s","imageDigest":"%s","dependencies":{"status":"ok"}}\\n' \
@@ -271,6 +363,15 @@ fi
 set -e
 echo "docker $*" >>"$TEST_LOG"
 args=" $* "
+if [[ "$args" == *" inspect "*"frontmind-dashboard-release-db-contract-0065"* ]]; then
+  [[ -f "$TEST_CONTRACT_CONTAINER" ]] || exit 1
+  cat "$TEST_CONTRACT_CONTAINER"
+  exit 0
+fi
+if [[ "$args" == *" rm --force frontmind-dashboard-release-db-contract-0065 "* ]]; then
+  rm -f "$TEST_CONTRACT_CONTAINER"
+  exit 0
+fi
 if [[ "\${1:-}" == login ]]; then
   password="$(cat)"
   [[ -n "$password" && -n "\${DOCKER_CONFIG:-}" ]]
@@ -278,7 +379,32 @@ if [[ "\${1:-}" == login ]]; then
   printf '%s\n' '{"auths":{"ghcr.io":{"auth":"redacted-test-value"}}}' >"$DOCKER_CONFIG/config.json"
   exit 0
 fi
+if [[ "$args" == *" /app/dist/seed-static-template-catalog.js "* ]]; then
+  exit "\${TEST_CATALOG_SEED_EXIT:-0}"
+fi
 if [[ "$args" == *" image inspect "*"org.opencontainers.image.revision"* ]]; then echo "$TEST_SOURCE_SHA"; exit 0; fi
+if [[ "$args" == *" image inspect "*"net.frontmind.runtime.roles"* ]]; then
+  if [[ "$args" == *"$TEST_CANDIDATE_IMAGE"* || \
+        "$args" == *"$TEST_ALTERNATE_SPLIT_IMAGE"* ]]; then
+    echo "web,siteops-worker"
+  else
+    echo ""
+  fi
+  exit 0
+fi
+if [[ "$args" == *" inspect "*"$TEST_SITEOPS_WORKER_CONTAINER"* ]]; then
+  [[ -f "$TEST_WORKER_STATE" ]] || exit 1
+  if [[ "$args" == *"{{range .Config.Env}}"* ]]; then
+    printf '%s\n' 'FRONTMIND_RUNTIME_ROLE=siteops-worker'
+  elif [[ "$args" == *"com.docker.compose.project"* ]]; then
+    printf 'true|%s|healthy|frontmind-dashboard|siteops-worker\n' "$TEST_CANDIDATE_IMAGE"
+  elif [[ "$args" == *"{{.State.Running}}"* ]]; then
+    printf '%s\n' 'true'
+  else
+    exit 1
+  fi
+  exit 0
+fi
 if [[ "$args" == *" inspect "*"org.opencontainers.image.revision"* ]]; then echo "$TEST_ACTIVE_SOURCE_SHA"; exit 0; fi
 if [[ "$args" == *" image inspect "*"{{.Id}}"* ]]; then echo "sha256:${"9".repeat(64)}"; exit 0; fi
 if [[ "$args" == *" inspect "*"{{.State.Running}}"* ]]; then echo "true"; exit 0; fi
@@ -296,6 +422,14 @@ if [[ "$args" == *" up -d "* ]]; then
   rollout_count=0
   [[ ! -f "$TEST_ROLLOUT_COUNTER" ]] || read -r rollout_count <"$TEST_ROLLOUT_COUNTER"
   printf '%s\\n' "$((rollout_count + 1))" >"$TEST_ROLLOUT_COUNTER"
+  if [[ "$TEST_COMPOSE_UP_FAILURE_AT" =~ ^[0-9]+$ && "$TEST_COMPOSE_UP_FAILURE_AT" -gt 0 \
+     && "$((rollout_count + 1))" -eq "$TEST_COMPOSE_UP_FAILURE_AT" ]]; then
+    exit 79
+  fi
+  [[ "$args" != *" siteops-worker"* ]] || : >"$TEST_WORKER_STATE"
+fi
+if [[ "$args" == *" stop "*"siteops-worker"* ]]; then
+  rm -f "$TEST_WORKER_STATE"
 fi
 if [[ "$args" == *" release-db-plan plan --json "* ]]; then
   printf '%s\n' "plan-config \${DOCKER_CONFIG:-unset}" >>"$TEST_LOG"
@@ -327,6 +461,18 @@ if [[ "$args" == *" release-db-plan plan --json "* ]]; then
     contract)
       printf '{"status":"pending","journalHash":"%s","applied":{"count":49,"journalHash":"%s"},"pending":[{"idx":49,"tag":"0049_contract","classification":"contract"}],"allPendingExpand":false,"schema":{"status":"not_checked"}}\\n' "${"d".repeat(64)}" "${mockAppliedJournalHash}"
       ;;
+    contract-0065)
+      printf '{"schemaVersion":1,"command":"plan","status":"pending","journalHash":"%s","expected":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"applied":{"count":65,"latestTag":"0064_siteops_v1","journalHash":"%s"},"pending":[{"idx":65,"tag":"0065_siteops_alidns_oauth","when":1787707303563,"sqlSha256":"%s","classification":"contract"}],"mismatchIndex":null,"allPendingExpand":false,"schema":{"status":"not_checked","expectedHash":"%s","expectedTableCount":81}}\\n' "${contractJournalHash}" "${contractJournalHash}" "${contractAppliedJournalHash}" "${contractSqlHash}" "${contractSchemaHash}"
+      ;;
+    contract-0065-extra)
+      printf '{"schemaVersion":1,"command":"plan","status":"pending","journalHash":"%s","expected":{"count":67,"latestTag":"0066_unexpected","journalHash":"%s"},"applied":{"count":65,"latestTag":"0064_siteops_v1","journalHash":"%s"},"pending":[{"idx":65,"tag":"0065_siteops_alidns_oauth","when":1787707303563,"sqlSha256":"%s","classification":"contract"},{"idx":66,"tag":"0066_unexpected","when":1787707303564,"sqlSha256":"%s","classification":"contract"}],"mismatchIndex":null,"allPendingExpand":false,"schema":{"status":"not_checked","expectedHash":"%s","expectedTableCount":81}}\\n' "${contractJournalHash}" "${contractJournalHash}" "${contractAppliedJournalHash}" "${contractSqlHash}" "${"9".repeat(64)}" "${contractSchemaHash}"
+      ;;
+    exact-0065)
+      printf '{"schemaVersion":1,"command":"plan","status":"exact","journalHash":"%s","expected":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"applied":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"pending":[],"allPendingExpand":false,"schema":{"status":"exact","expectedHash":"%s","actualHash":"%s","expectedTableCount":81,"actualTableCount":81}}\\n' "${contractJournalHash}" "${contractJournalHash}" "${contractFinalAppliedJournalHash}" "${contractSchemaHash}" "${contractSchemaHash}"
+      ;;
+    exact-0065-wrong-applied)
+      printf '{"schemaVersion":1,"command":"plan","status":"exact","journalHash":"%s","expected":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"applied":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"pending":[],"allPendingExpand":false,"schema":{"status":"exact","expectedHash":"%s","actualHash":"%s","expectedTableCount":81,"actualTableCount":81}}\\n' "${contractJournalHash}" "${contractJournalHash}" "${"8".repeat(64)}" "${contractSchemaHash}" "${contractSchemaHash}"
+      ;;
     ahead)
       printf '{"status":"ahead","journalHash":"%s","applied":{"count":50,"journalHash":"%s"},"pending":[],"allPendingExpand":false}\\n' "${"d".repeat(64)}" "${mockAppliedJournalHash}"
       ;;
@@ -336,9 +482,45 @@ if [[ "$args" == *" release-db-plan plan --json "* ]]; then
   esac
   exit 0
 fi
+if [[ "$args" == *" --name frontmind-dashboard-release-db-contract-0065 "*" release-db-migrate migrate "* ]]; then
+  release_id=""
+  previous=""
+  for argument in "$@"; do
+    if [[ "$previous" == --release-id ]]; then release_id="$argument"; break; fi
+    previous="$argument"
+  done
+  printf '{"Name":"/frontmind-dashboard-release-db-contract-0065","Config":{"Image":"%s","Entrypoint":["node","/app/dist/release-db.js"],"Cmd":["migrate","--release-id","%s","--expected-applied-count","65","--expected-applied-journal-hash","%s","--allow-contract","--json"],"Labels":{"com.docker.compose.project":"frontmind-dashboard","com.docker.compose.service":"release-db-migrate","net.frontmind.environment":"production","net.frontmind.resource":"siteops-alidns-oauth-contract-0065","net.frontmind.controller":"frontmind-production-controller-v6","net.frontmind.release-id":"%s"}}}\\n' "$TEST_CANDIDATE_IMAGE" "$release_id" "${contractAppliedJournalHash}" "$release_id" >"$TEST_CONTRACT_CONTAINER"
+  trap 'rm -f "$TEST_CONTRACT_CONTAINER"' EXIT TERM INT HUP
+  if [[ "\${TEST_MIGRATION_MODE:-success}" == precondition-changed ]]; then
+    printf '{"schemaVersion":1,"command":"migrate","status":"error","error":{"code":"MIGRATION_APPLIED_FACT_CHANGED"}}\\n'
+    exit 78
+  fi
+  if [[ "\${TEST_MIGRATION_MODE:-success}" == slow ]]; then
+    sleep 30 &
+    descendant_pid=$!
+    printf '%s\\n' "$descendant_pid" >"$TEST_MIGRATION_DESCENDANT_PID"
+    : >"$TEST_MIGRATION_STARTED"
+    wait "$descendant_pid"
+    : >"$TEST_MIGRATION_TAIL"
+  fi
+  result_applied_hash="${contractFinalAppliedJournalHash}"
+  result_release_id="$release_id"
+  result_migrated=true
+  case "$TEST_CONTRACT_RESULT_MODE" in
+    wrong-applied) result_applied_hash="${"8".repeat(64)}" ;;
+    wrong-release) result_release_id="wrong-release-id" ;;
+    not-migrated) result_migrated=false ;;
+  esac
+  printf '{"schemaVersion":1,"command":"migrate","status":"exact","journalHash":"%s","expected":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"applied":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"pending":[],"allPendingExpand":false,"schema":{"status":"exact","expectedHash":"%s","actualHash":"%s","expectedTableCount":81,"actualTableCount":81},"releaseId":"%s","migrated":%s}\\n' "${contractJournalHash}" "${contractJournalHash}" "$result_applied_hash" "${contractSchemaHash}" "${contractSchemaHash}" "$result_release_id" "$result_migrated"
+  exit 0
+fi
 if [[ "$args" == *" release-db-migrate migrate "* && "\${TEST_MIGRATION_MODE:-success}" == precondition-changed ]]; then
   printf '{"schemaVersion":1,"command":"migrate","status":"error","error":{"code":"MIGRATION_APPLIED_FACT_CHANGED"}}\\n'
   exit 78
+fi
+if [[ "$args" == *" release-db-plan postflight --json "* && "$TEST_PLAN_SEQUENCE" == *"0065"* ]]; then
+  printf '{"schemaVersion":1,"command":"postflight","status":"exact","journalHash":"%s","expected":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"applied":{"count":66,"latestTag":"0065_siteops_alidns_oauth","journalHash":"%s"},"pending":[],"allPendingExpand":false,"schema":{"status":"exact","expectedHash":"%s","actualHash":"%s","expectedTableCount":81,"actualTableCount":81}}\\n' "${contractJournalHash}" "${contractJournalHash}" "${contractFinalAppliedJournalHash}" "${contractSchemaHash}" "${contractSchemaHash}"
+  exit 0
 fi
 if [[ "$args" == *" release-db-plan postflight --json "* || "$args" == *" release-db-migrate migrate "* ]]; then
   printf '{"status":"exact","journalHash":"%s","applied":{"count":50,"journalHash":"%s"},"pending":[],"allPendingExpand":false,"schema":{"status":"exact"}}\\n' "${"c".repeat(64)}" "${"1".repeat(64)}"
@@ -363,6 +545,11 @@ echo "sha256sum $*" >>"$TEST_LOG"
 if [[ "\${TEST_RESTORE_MODE:-success}" == checksum-fail && "\${1:-}" == --check ]]; then
   exit 44
 fi
+if [[ "$TEST_PLAN_SEQUENCE" == contract-0065* && $# -eq 0 ]]; then
+  cat >/dev/null
+  printf '%s  -\\n' "${contractAppliedJournalHash}"
+  exit 0
+fi
 exec ${JSON.stringify(systemSha256sum)} "$@"
 `,
   );
@@ -379,29 +566,55 @@ if [[ "\${TEST_RESTORE_MODE:-success}" == pipeline-fail && "$args" == *"--databa
   cat >/dev/null || true
   exit 46
 fi
-if [[ "\${TEST_RESTORE_MODE:-success}" == temporary-ledger-query-fail && "$args" == *"--database=frontmind_restore_"* && "$args" == *"SELECT hash, created_at FROM __drizzle_migrations"* ]]; then
-  exit 47
-fi
 if [[ "$args" == *"default_character_set_name"* ]]; then
   printf '%s\\n' 'utf8mb4 utf8mb4_0900_ai_ci'
 elif [[ "$args" == *"information_schema.tables"* ]]; then
   printf '%s\\n' '58'
 elif [[ "$args" == *"SELECT hash, created_at FROM __drizzle_migrations"* ]]; then
-  printf '%b' ${JSON.stringify(mockLedgerOutput)}
+  if [[ "$TEST_PLAN_SEQUENCE" == contract-0065* ]]; then
+    printf '%b' ${JSON.stringify(contractLedgerOutput)}
+  else
+    printf '%b' ${JSON.stringify(mockLedgerOutput)}
+  fi
 elif [[ "$args" == *"SELECT COUNT(*) FROM __drizzle_migrations"* ]]; then
-  printf '%s\\n' '49'
+  if [[ "$TEST_PLAN_SEQUENCE" == contract-0065* ]]; then printf '%s\\n' '65'; else printf '%s\\n' '49'; fi
 else
   cat >/dev/null || true
 fi
 `,
   );
 
+  if (foreignContractContainer) {
+    await writeFile(
+      contractContainer,
+      JSON.stringify({
+        Name: "/frontmind-dashboard-release-db-contract-0065",
+        Config: {
+          Image: "ghcr.io/foreign/image@sha256:" + "f".repeat(64),
+          Entrypoint: ["sh"],
+          Cmd: ["sleep", "infinity"],
+          Labels: {},
+        },
+      }),
+    );
+  }
+
   if (bootstrapped) {
+    await writeFile(
+      path.join(composeDir, ".env"),
+      [
+        `${imageEnvKey}=${repository}@${currentDigest}`,
+        `FRONTMIND_IMAGE_DIGEST=${currentDigest}`,
+        `FRONTMIND_SOURCE_SHA=${sourceSha}`,
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
     await writeFile(
       path.join(stateDir, "state.json"),
       JSON.stringify({
         schemaVersion: 1,
-        currentDigest: baselineDigest,
+        currentDigest,
         previousDigest: "",
         sourceSha,
         journalHash: "c".repeat(64),
@@ -413,6 +626,40 @@ fi
 
   const registryToken = `ghs_${"t".repeat(40)}`;
   const registryEnvelope = `xiafanzeng\n${registryToken}\n`;
+  const processEnvironment = (forced = false) => ({
+    ...process.env,
+    SUDO_USER: forced ? "frontmind-deploy" : "",
+    PATH: `${bin}:${process.env.PATH}`,
+    TEST_LOG: log,
+    TEST_SERVICE: service,
+    TEST_REPOSITORY: repository,
+    TEST_ALTERNATE_SPLIT_IMAGE: `${repository}@sha256:${"1".repeat(64)}`,
+    TEST_PLAN_SEQUENCE: planSequence.join(","),
+    TEST_PLAN_COUNTER: planCounter,
+    TEST_ROLLOUT_COUNTER: rolloutCounter,
+    TEST_WORKER_STATE: workerState,
+    TEST_SITEOPS_WORKER_CONTAINER: "frontmind-dashboard-siteops-worker",
+    TEST_FORCED_INITIAL_TAKEOVER: forced && !bootstrapped ? "1" : "0",
+    TEST_READY_SOURCE_SHA: readySourceSha,
+    TEST_READY_IMAGE_DIGEST: readyImageDigest,
+    TEST_ACTIVE_SOURCE_SHA: activeSourceSha,
+    TEST_ACTIVE_READY_IMAGE_DIGEST: activeReadyImageDigest,
+    TEST_ACTIVE_IMAGE_REFERENCE: activeImageReference,
+    TEST_SOURCE_SHA: sourceSha,
+    TEST_COSIGN_EXIT: String(cosignExit),
+    TEST_MIGRATION_MODE: migrationMode,
+    TEST_BACKUP_MODE: backupMode,
+    TEST_RESTORE_MODE: restoreMode,
+    TEST_LOCAL_IMAGE_DIGESTS: localImageDigests.join(","),
+    TEST_COMPOSE_UP_FAILURE_AT: String(composeUpFailureAt),
+    TEST_CATALOG_SEED_EXIT: String(catalogSeedExit),
+    TEST_CONTRACT_CONTAINER: contractContainer,
+    TEST_MIGRATION_STARTED: migrationStarted,
+    TEST_MIGRATION_TAIL: migrationTail,
+    TEST_MIGRATION_DESCENDANT_PID: migrationDescendantPid,
+    TEST_CANDIDATE_IMAGE: candidateImage,
+    TEST_CONTRACT_RESULT_MODE: contractResultMode,
+  });
   const runWithArgs = (
     args: string[],
     { forced = false, input }: { forced?: boolean; input?: string } = {},
@@ -420,29 +667,12 @@ fi
     spawnSync("bash", [controllerFile, ...args], {
       encoding: "utf8",
       input,
-      env: {
-        ...process.env,
-        SUDO_USER: forced ? "frontmind-deploy" : "",
-        PATH: `${bin}:${process.env.PATH}`,
-        TEST_LOG: log,
-        TEST_SERVICE: service,
-        TEST_REPOSITORY: repository,
-        TEST_PLAN_SEQUENCE: planSequence.join(","),
-        TEST_PLAN_COUNTER: planCounter,
-        TEST_ROLLOUT_COUNTER: rolloutCounter,
-        TEST_FORCED_INITIAL_TAKEOVER: forced && !bootstrapped ? "1" : "0",
-        TEST_READY_SOURCE_SHA: readySourceSha,
-        TEST_READY_IMAGE_DIGEST: readyImageDigest,
-        TEST_ACTIVE_SOURCE_SHA: activeSourceSha,
-        TEST_ACTIVE_READY_IMAGE_DIGEST: activeReadyImageDigest,
-        TEST_ACTIVE_IMAGE_REFERENCE: activeImageReference,
-        TEST_SOURCE_SHA: sourceSha,
-        TEST_COSIGN_EXIT: String(cosignExit),
-        TEST_MIGRATION_MODE: migrationMode,
-        TEST_BACKUP_MODE: backupMode,
-        TEST_RESTORE_MODE: restoreMode,
-        TEST_LOCAL_IMAGE_DIGESTS: localImageDigests.join(","),
-      },
+      env: processEnvironment(forced),
+    });
+  const spawnRun = () =>
+    spawn("bash", [controllerFile, service, candidateImage, sourceSha], {
+      env: processEnvironment(false),
+      stdio: ["ignore", "pipe", "pipe"],
     });
   const run = (candidate = candidateImage) =>
     runWithArgs([service, candidate, sourceSha]);
@@ -457,6 +687,7 @@ fi
     backupDir,
     registryAuthRoot,
     log,
+    workerState,
     state: path.join(stateDir, "state.json"),
     registryToken,
     image: candidateImage,
@@ -464,6 +695,11 @@ fi
     runForced,
     bootstrap,
     acknowledge,
+    controllerFile,
+    migrationStarted,
+    migrationTail,
+    migrationDescendantPid,
+    spawnRun,
   };
 }
 
@@ -476,6 +712,44 @@ afterEach(async () => {
 });
 
 describe("deploy controller shell contract", () => {
+  it("preloads the immutable Dashboard Template catalog before database planning or rollout", async () => {
+    const test = await harness();
+    const result = test.run();
+    expect(result.status, result.stderr).toBe(0);
+
+    const commands = await readFile(test.log, "utf8");
+    const seed = commands.indexOf(
+      "run --rm --no-deps -T --entrypoint node dashboard /app/dist/seed-static-template-catalog.js",
+    );
+    const plan = commands.indexOf("release-db-plan plan --json");
+    const rollout = commands.indexOf(" up -d ");
+    expect(seed).toBeGreaterThan(-1);
+    expect(plan).toBeGreaterThan(seed);
+    expect(rollout).toBeGreaterThan(seed);
+    expect(result.stderr).toContain("STATIC_TEMPLATE_CATALOG_SEED_OK");
+  });
+
+  it("keeps the previous Dashboard running when catalog preload fails", async () => {
+    const test = await harness({ catalogSeedExit: 51 });
+    const result = test.run();
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain(
+      "PRODUCTION_STATIC_TEMPLATE_CATALOG_SEED_FAILED",
+    );
+
+    const commands = await readFile(test.log, "utf8");
+    expect(commands).toContain(
+      "run --rm --no-deps -T --entrypoint node dashboard /app/dist/seed-static-template-catalog.js",
+    );
+    expect(commands).not.toContain("release-db-plan plan --json");
+    expect(commands).not.toContain(" up -d ");
+    expect(commands).not.toContain(" stop dashboard");
+    expect(JSON.parse(await readFile(test.state, "utf8"))).toMatchObject({
+      currentDigest: baselineDigest,
+      lastResult: { status: "success" },
+    });
+  });
+
   it("uses the forced deploy stdin token only in a temporary registry config", async () => {
     const test = await harness();
     const result = test.runForced();
@@ -543,6 +817,12 @@ describe("deploy controller shell contract", () => {
     expect(commands).toContain("release-db-plan plan --json");
     expect(commands).toContain("plan-config unset");
     expect((commands.match(/^docker .* up -d /gmu) || []).length).toBe(1);
+    expect(commands).toContain(
+      "up -d --no-deps --force-recreate dashboard siteops-worker",
+    );
+    expect(commands).toContain(
+      "inspect --format {{.State.Running}}|{{.Config.Image}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}|{{index .Config.Labels \"com.docker.compose.project\"}}|{{index .Config.Labels \"com.docker.compose.service\"}} frontmind-dashboard-siteops-worker",
+    );
     expect(commands).not.toContain("release-db-migrate migrate");
     expect(commands).not.toContain("mysqldump");
     expect(commands).not.toContain("DROP DATABASE");
@@ -562,6 +842,7 @@ describe("deploy controller shell contract", () => {
     });
     const commands = await readFile(test.log, "utf8");
     expect(commands).toContain(`docker pull ${websiteImage}`);
+    expect(commands).not.toContain("seed-static-template-catalog.js");
     expect(commands).not.toContain("release-db-");
     expect(commands).not.toContain("mysql");
     expect(commands).not.toContain("mysqldump");
@@ -661,6 +942,14 @@ describe("deploy controller shell contract", () => {
     const commands = await readFile(test.log, "utf8");
     expect((commands.match(/^docker .* up -d /gmu) || []).length).toBe(2);
     expect(commands).toContain(" stop dashboard");
+    expect(commands).toContain(" stop dashboard siteops-worker");
+    expect(commands).toContain(" stop siteops-worker");
+    expect(commands).toContain(
+      "up -d --no-deps --force-recreate dashboard siteops-worker",
+    );
+    expect(commands).toContain(
+      "up -d --no-deps --force-recreate dashboard\n",
+    );
     expect(commands).not.toContain("mysqldump");
     expect(commands).not.toContain("release-db-migrate migrate");
     await expect(readFile(test.state, "utf8")).rejects.toMatchObject({
@@ -704,6 +993,7 @@ describe("deploy controller shell contract", () => {
     );
     expect(await readFile(test.log, "utf8")).not.toContain("cosign verify");
 
+    await writeFile(test.workerState, "running\n");
     const first = test.bootstrap();
     expect(first.status, first.stderr).toBe(0);
     expect(first.stderr).toContain("BOOTSTRAP_STATE_SUCCESS");
@@ -895,33 +1185,258 @@ describe("deploy controller shell contract", () => {
     expect(commands).not.toContain(" up -d ");
   });
 
-  it("quarantines a prefix change after the verified backup without migrating, restoring, or resuming writes", async () => {
+  it("runs only the frozen 0065 contract once and commits without a restore", async () => {
+    const test = await harness({ planStatus: "contract-0065" });
+    const result = test.run();
+    expect(result.status, result.stderr).toBe(0);
+    const commands = await readFile(test.log, "utf8");
+    expect(commands).toContain(
+      "--name frontmind-dashboard-release-db-contract-0065",
+    );
+    expect(commands).toContain("--allow-contract --json");
+    expect(commands.match(/mysqldump /gu)).toHaveLength(1);
+    expect(commands).not.toContain("DROP DATABASE IF EXISTS");
+    expect(JSON.parse(await readFile(test.state, "utf8"))).toMatchObject({
+      currentDigest: digest,
+      sourceSha,
+      journalHash: contractJournalHash,
+      lastResult: { status: "success", message: "ready" },
+    });
+  });
+
+  it.each([
+    ["wrong applied journal", "wrong-applied"],
+    ["wrong releaseId", "wrong-release"],
+    ["migrated false", "not-migrated"],
+  ] as const)("rejects an exact-looking 0065 result with %s", async (_label, mode) => {
     const test = await harness({
-      planSequence: ["pending-expand", "pending-expand-changed"],
+      planStatus: "contract-0065",
+      contractResultMode: mode,
+      readyImageDigest: baselineDigest,
     });
     const result = test.run();
-    expect(result.status, result.stderr).toBe(75);
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain("CONTRACT_0065_MIGRATION_RESULT_NOT_EXACT");
+    const commands = await readFile(test.log, "utf8");
+    expect(commands.match(/DROP DATABASE IF EXISTS/gu)).toHaveLength(1);
+    expect(JSON.parse(await readFile(test.state, "utf8"))).toMatchObject({
+      currentDigest: baselineDigest,
+      lastResult: { status: "failed" },
+    });
+  });
+
+  it("rejects an extra contract and never exposes it through the forced path", async () => {
+    const test = await harness({ planStatus: "contract-0065-extra" });
+    const result = test.run();
+    expect(result.status).toBe(78);
+    const commands = await readFile(test.log, "utf8");
+    expect(commands).not.toContain("mysqldump");
+    expect(commands).not.toContain("--allow-contract");
+    expect(
+      await readFile(
+        path.resolve(
+          "deploy/production/controller/frontmind-deploy-forced-command",
+        ),
+        "utf8",
+      ),
+    ).not.toContain("0065");
+  });
+
+  it("rejects a foreign same-name migration container without removing it", async () => {
+    const test = await harness({
+      planStatus: "contract-0065",
+      foreignContractContainer: true,
+    });
+    const result = test.run();
+    expect(result.status).toBe(75);
     expect(result.stderr).toContain(
-      "DATABASE_PREFIX_CHANGED_INCIDENT_QUARANTINED",
+      "PRODUCTION_CONTRACT_0065_FOREIGN_CONTAINER_REJECTED",
     );
     const commands = await readFile(test.log, "utf8");
-    expect(
-      (commands.match(/^docker .*release-db-plan plan --json/gmu) || []).length,
-    ).toBe(2);
-    expect(commands).toContain("mysqldump");
-    expect(commands).not.toContain("release-db-migrate migrate");
     expect(commands).not.toContain(
-      "DROP DATABASE IF EXISTS `frontmind_acceptance`; CREATE DATABASE",
+      "docker rm --force frontmind-dashboard-release-db-contract-0065",
     );
-    expect(commands).not.toContain(" up -d ");
+    expect(commands).not.toContain("release-db-migrate migrate");
+  });
+
+  it.each(["contract-0065-migration-started", "contract-0065-migration-complete"])(
+    "reconciles host restart from %s without a second migrate",
+    async (message) => {
+      const test = await harness({ planStatus: "exact-0065" });
+      const backupFile = await writeVerifiedContractBackup(test.backupDir);
+      await writeFile(
+        test.state,
+        JSON.stringify({
+          schemaVersion: 1,
+          currentDigest: baselineDigest,
+          previousDigest: "",
+          sourceSha,
+          journalHash: contractAppliedJournalHash,
+          deployedAt: "2026-08-26T12:00:00Z",
+          lastResult: {
+            status: "in_progress",
+            message,
+            attemptedDigest: digest,
+            releaseId: `${sourceSha}-20260826T120000Z`,
+            backupFile,
+          },
+        }),
+      );
+      const result = test.run();
+      expect(result.status, result.stderr).toBe(0);
+      const commands = await readFile(test.log, "utf8");
+      expect(commands).toContain("release-db-plan postflight --json");
+      expect(commands).not.toContain("release-db-migrate migrate");
+      expect(commands).not.toContain("DROP DATABASE IF EXISTS");
+    },
+  );
+
+  it("rejects a host-restart exact state with the wrong final applied journal", async () => {
+    const test = await harness({
+      planStatus: "exact-0065-wrong-applied",
+      readyImageDigest: baselineDigest,
+    });
+    const backupFile = await writeVerifiedContractBackup(test.backupDir);
+    await writeFile(
+      test.state,
+      JSON.stringify({
+        schemaVersion: 1,
+        currentDigest: baselineDigest,
+        previousDigest: "",
+        sourceSha,
+        journalHash: contractAppliedJournalHash,
+        deployedAt: "2026-08-26T12:00:00Z",
+        lastResult: {
+          status: "in_progress",
+          message: "contract-0065-migration-complete",
+          attemptedDigest: digest,
+          releaseId: `${sourceSha}-20260826T120000Z`,
+          backupFile,
+        },
+      }),
+    );
+    const result = test.run();
+    expect(result.status).toBe(75);
+    const commands = await readFile(test.log, "utf8");
+    expect(commands.match(/DROP DATABASE IF EXISTS/gu)).toHaveLength(1);
+    expect(commands).not.toContain("release-db-plan postflight --json");
+    expect(commands).not.toContain("release-db-migrate migrate");
+  });
+
+  it("restarts the previous app from a host-interrupted 0065 prewrite without migration", async () => {
+    const test = await harness({
+      planStatus: "contract-0065",
+      readyImageDigest: baselineDigest,
+    });
+    await writeFile(
+      test.state,
+      JSON.stringify({
+        schemaVersion: 1,
+        currentDigest: baselineDigest,
+        previousDigest: "",
+        sourceSha,
+        journalHash: contractAppliedJournalHash,
+        deployedAt: "2026-08-26T12:00:00Z",
+        lastResult: {
+          status: "in_progress",
+          message: "contract-0065-prewrite-stop-started",
+          attemptedDigest: digest,
+          releaseId: `${sourceSha}-20260826T120000Z`,
+          backupFile: "",
+        },
+      }),
+    );
+    const result = test.run();
+    expect(result.status).toBe(75);
+    expect(
+      JSON.parse(await readFile(test.state, "utf8")).lastResult,
+    ).toMatchObject({
+      status: "failed",
+      message:
+        "contract-0065-prewrite-host-recovery-previous-ready",
+    });
+    const commands = await readFile(test.log, "utf8");
+    expect(commands).not.toContain("release-db-migrate migrate");
+    expect(commands).not.toContain("mysqldump");
+    expect(commands).not.toContain("DROP DATABASE IF EXISTS");
+  });
+
+  it("quarantines an interrupted restore without rerunning migration or restore", async () => {
+    const test = await harness({ planStatus: "exact-0065" });
+    const backupFile = await writeVerifiedContractBackup(test.backupDir);
+    await writeFile(
+      test.state,
+      JSON.stringify({
+        schemaVersion: 1,
+        currentDigest: baselineDigest,
+        previousDigest: "",
+        sourceSha,
+        journalHash: contractAppliedJournalHash,
+        deployedAt: "2026-08-26T12:00:00Z",
+        lastResult: {
+          status: "in_progress",
+          message: "contract-0065-restore-started",
+          attemptedDigest: digest,
+          releaseId: `${sourceSha}-20260826T120000Z`,
+          backupFile,
+        },
+      }),
+    );
+    const result = test.run();
+    expect(result.status).toBe(75);
     expect(
       JSON.parse(await readFile(test.state, "utf8")).lastResult,
     ).toMatchObject({
       status: "quarantined",
-      message: "pre-migration-prefix-changed-dashboard-remains-stopped",
-      attemptedDigest: digest,
+      message: "contract-0065-restore-unproven-host-recovery-interrupted",
     });
+    const commands = await readFile(test.log, "utf8");
+    expect(commands).not.toContain("release-db-migrate migrate");
+    expect(commands).not.toContain("DROP DATABASE IF EXISTS");
   });
+
+  it("terminates the 0065 process group on SIGTERM and restores exactly once", async () => {
+    const test = await harness({
+      planStatus: "contract-0065",
+      migrationMode: "slow",
+      readyImageDigest: baselineDigest,
+    });
+    const child = test.spawnRun();
+    let started = false;
+    for (let attempt = 0; attempt < 800; attempt += 1) {
+      try {
+        await readFile(test.migrationStarted);
+        started = true;
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    expect(started).toBe(true);
+    child.kill("SIGTERM");
+    const result = await new Promise<{ code: number | null; stderr: string }>(
+      (resolve) => {
+        let stderr = "";
+        child.stderr?.on("data", (chunk: Buffer | string) => {
+          stderr += chunk.toString();
+        });
+        child.once("close", (code) => resolve({ code, stderr }));
+      },
+    );
+    expect(result.code, result.stderr).toBe(143);
+    const commands = await readFile(test.log, "utf8");
+    expect(commands.match(/DROP DATABASE IF EXISTS/gu)).toHaveLength(1);
+    await expect(readFile(test.migrationTail)).rejects.toThrow();
+    const descendantPid = Number(
+      (await readFile(test.migrationDescendantPid, "utf8")).trim(),
+    );
+    expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
+    expect(spawnSync("kill", ["-0", String(descendantPid)]).status).not.toBe(0);
+    expect(JSON.parse(await readFile(test.state, "utf8"))).toMatchObject({
+      currentDigest: baselineDigest,
+      lastResult: { status: "failed" },
+    });
+  }, 15_000);
 
   it("quarantines an advisory-lock applied-fact change before DDL without overwriting external facts", async () => {
     const test = await harness({
@@ -937,7 +1452,7 @@ describe("deploy controller shell contract", () => {
     const commands = await readFile(test.log, "utf8");
     expect(
       (commands.match(/^docker .*release-db-plan plan --json/gmu) || []).length,
-    ).toBe(2);
+    ).toBe(1);
     expect(commands).toContain(
       `--expected-applied-count 49 --expected-applied-journal-hash ${mockAppliedJournalHash}`,
     );
@@ -998,6 +1513,9 @@ describe("deploy controller shell contract", () => {
   });
 
   it("times out an unknown migration, reconciles read-only and never reruns it", async () => {
+    expect(await readFile(productionController, "utf8")).toContain(
+      "readonly RELEASE_DB_MIGRATE_TIMEOUT_SECONDS=1800",
+    );
     const currentDigest = `sha256:${"e".repeat(64)}`;
     const test = await harness({
       planSequence: ["pending-expand", "pending-expand"],
@@ -1028,9 +1546,9 @@ describe("deploy controller shell contract", () => {
     );
     expect(
       (commands.match(/^docker .*release-db-plan plan --json/gmu) || []).length,
-    ).toBe(3);
+    ).toBe(2);
     expect(commands).toContain(
-      "timeout --foreground --signal=TERM --kill-after=10s 1800s",
+      "timeout --foreground --signal=TERM --kill-after=10s 5s",
     );
     expect(commands).toContain("mysqldump");
     expect(commands).toContain("DROP DATABASE IF EXISTS");
@@ -1132,7 +1650,7 @@ describe("deploy controller shell contract", () => {
     });
     const result = test.run();
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("DATABASE_BACKUP_GATE_FAILED");
+    expect(result.stderr).toContain("DATABASE_BACKUP_FAILED");
     const commands = await readFile(test.log, "utf8");
     expect(commands).toContain("mysqldump");
     expect(commands).not.toContain("release-db-migrate migrate");
@@ -1140,25 +1658,8 @@ describe("deploy controller shell contract", () => {
       JSON.parse(await readFile(test.state, "utf8")).lastResult,
     ).toMatchObject({
       status: "failed",
-      message: "database-backup-or-restore-test-failed",
+      message: "database-backup-failed",
     });
-  });
-
-  it("best-effort drops the temporary restore database when ledger verification fails", async () => {
-    const test = await harness({
-      planStatus: "pending-expand",
-      restoreMode: "temporary-ledger-query-fail",
-      readyImageDigest: baselineDigest,
-    });
-    const result = test.run();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("DATABASE_BACKUP_GATE_FAILED");
-    const commands = await readFile(test.log, "utf8");
-    expect(commands).toMatch(/CREATE DATABASE `frontmind_restore_[^`]+`/u);
-    expect(commands).toMatch(
-      /DROP DATABASE IF EXISTS `frontmind_restore_[^`]+`/u,
-    );
-    expect(commands).not.toContain("release-db-migrate migrate");
   });
 
   it("keeps migration recovery facts and the candidate when restored previous is not ready", async () => {

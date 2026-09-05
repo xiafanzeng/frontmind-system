@@ -1,0 +1,25 @@
+{
+  "schema": "frontmind-siteops-runtime/v1",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "adapterVersion": "1.1.0",
+  "canonicalArtifact": "build-contract.json",
+  "inputSchema": "schemas/frontmind-run-envelope.schema.json",
+  "targets": { "search": 18, "retrieve": 12, "present": 9 },
+  "provider": {
+    "name": "21st",
+    "endpoint": "https://21st.dev/api/mcp",
+    "requiredTools": ["search", "get_component"],
+    "allowedTools": ["search", "get_component", "get_usage", "get_theme"],
+    "generationAllowed": false,
+    "providerCodeReuse": false
+  },
+  "build": {
+    "profile": "native-astro-static",
+    "runtimeInstallAllowed": false,
+    "maxRepairAttempts": 3,
+    "outputRoots": ["src/pages", "src/components", "src/layouts", "src/styles", "public"]
+  }
+}

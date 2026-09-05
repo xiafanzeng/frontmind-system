@@ -63,7 +63,7 @@ async function runValidator(archivePath: string) {
   }
 }
 
-async function validDeepArchiveFiles() {
+async function validDeepArchiveFiles(leafCount = 40) {
   const root = "fixture_knowledge_base";
   const supportingPaths = [
     "README.md",
@@ -140,7 +140,7 @@ ${narrative}
     requiredFormalCharacters: 120,
     contentStatus: "limited_evidence",
   });
-  for (let index = 0; index < 40; index += 1) {
+  for (let index = 0; index < leafCount; index += 1) {
     const leafPath = `branches/products/leaf-${index + 1}.md`;
     const evidencePath = `branches/products/evidence/leaf-${index + 1}.md`;
     const sourceId = `source-official-${index + 1}`;
@@ -224,8 +224,8 @@ ${narrative}
   ];
   files[`${root}/00_completeness.json`] = JSON.stringify({
     counts: {
-      totalLeaves: 40,
-      verifiedFirstParty: 40,
+      totalLeaves: leafCount,
+      verifiedFirstParty: leafCount,
       verifiedAuthoritative: 0,
       supportedThirdParty: 0,
       inferred: 0,
@@ -244,13 +244,13 @@ ${narrative}
   files[`${root}/00_package_manifest.json`] = JSON.stringify({
     schemaVersion: 4,
     profile: "dashboard-enterprise-v1",
-    buildRevision: 40,
+    buildRevision: leafCount,
     documents,
     assets,
     counts: {
       totalFiles: documents.length + 3,
-      customerVisibleCharacters: 3_320,
-      evidenceCharacters: 4_100,
+      customerVisibleCharacters: 120 + leafCount * 80,
+      evidenceCharacters: (leafCount + 1) * 100,
       packagedImages: 1,
     },
     imageSelection: {
@@ -350,8 +350,7 @@ function replaceOfficialLogoWithVerifiedUpload(
       assetId: asset.id,
     },
   ];
-  manifest.imageSelection.stopReason =
-    "客户已上传并确认企业官方主 Logo 原图";
+  manifest.imageSelection.stopReason = "客户已上传并确认企业官方主 Logo 原图";
   files[`${root}/00_package_manifest.json`] = JSON.stringify(manifest);
   return { asset, manifest };
 }
@@ -366,6 +365,111 @@ describe("dashboard enterprise Skill archive validator", () => {
       code: 0,
       stdout: expect.stringContaining("VALID dashboard-enterprise-v1"),
     });
+  });
+
+  it("enforces the 30–115 deep-leaf boundaries", async () => {
+    const accepted = await runValidator(
+      await writeArchive(await validDeepArchiveFiles(30)),
+    );
+    expect(accepted).toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining("VALID dashboard-enterprise-v1"),
+    });
+
+    const rejected = await runValidator(
+      await writeArchive(await validDeepArchiveFiles(29)),
+    );
+    expect(rejected.code).not.toBe(0);
+    expect(rejected.stderr).toContain(
+      "manifest contains 29 leaf documents; expected 30–115",
+    );
+
+    const maximum = await runValidator(
+      await writeArchive(await validDeepArchiveFiles(115)),
+    );
+    expect(maximum).toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining("VALID dashboard-enterprise-v1"),
+    });
+
+    const overMaximum = await runValidator(
+      await writeArchive(await validDeepArchiveFiles(116)),
+    );
+    expect(overMaximum.code).not.toBe(0);
+    expect(overMaximum.stderr).toContain(
+      "manifest contains 116 leaf documents; expected 30–115",
+    );
+  });
+
+  it("rejects zero as a required-formal-character bypass", async () => {
+    const files = await validDeepArchiveFiles();
+    const root = "fixture_knowledge_base";
+    const manifest = JSON.parse(
+      String(files[`${root}/00_package_manifest.json`]),
+    );
+    manifest.documents.find(
+      (document: { id?: string }) => document.id === "leaf-1",
+    ).requiredFormalCharacters = 0;
+    files[`${root}/00_package_manifest.json`] = JSON.stringify(manifest);
+
+    const result = await runValidator(await writeArchive(files));
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(
+      "requiredFormalCharacters must be 80, got 0",
+    );
+  });
+
+  it("keeps business source headings and tables in the formal count across both validators", async () => {
+    const files = await validDeepArchiveFiles();
+    const root = "fixture_knowledge_base";
+    const businessTable = [
+      "| 类型 | 平台价值 |",
+      "| --- | --- |",
+      `| 收入来源 | ${"乙".repeat(593)} |`,
+      "| 社区活力来源 | 不同来源模型 |",
+    ].join("\n");
+    files[`${root}/branches/products/leaf-1.md`] = [
+      "# 知识叶子 1",
+      "",
+      "<!-- FRONTMIND_FORMAL_CONTENT_START -->",
+      "",
+      "## 收入来源",
+      "",
+      businessTable,
+      "",
+      "<!-- FRONTMIND_FORMAL_CONTENT_END -->",
+      "",
+      "## 原始来源",
+      "",
+      "- source-official-1",
+    ].join("\n");
+    const manifest = JSON.parse(
+      String(files[`${root}/00_package_manifest.json`]),
+    );
+    manifest.counts.customerVisibleCharacters = 3_855;
+    files[`${root}/00_package_manifest.json`] = JSON.stringify(manifest);
+    const archivePath = await writeArchive(files);
+
+    await expect(runValidator(archivePath)).resolves.toMatchObject({
+      code: 0,
+      stdout: expect.stringContaining("VALID dashboard-enterprise-v1"),
+    });
+    const parsed = await readKnowledgeArchive(
+      await fs.readFile(archivePath),
+      "business-source-table.zip",
+      "24444444-4444-4444-8444-444444444444",
+      {
+        validationProfile: "dashboard-enterprise-v1",
+        archiveContractVersions: [4],
+      },
+    );
+    try {
+      expect(
+        parsed.documents.find((document) => document.id === "leaf-1")?.content,
+      ).toContain("社区活力来源");
+    } finally {
+      await removeStoredKnowledgeAssets(parsed.storedAssetKeys);
+    }
   });
 
   it("accepts a schema v4 official_logo_upload with the exact upload ledger and strict candidate shape", async () => {

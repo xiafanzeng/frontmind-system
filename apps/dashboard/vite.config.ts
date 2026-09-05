@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { releasePresentation as configuredReleasePresentation } from "./scripts/release-channel.mjs";
+import {
+  normalizeReleasePresentation,
+  type ReleasePresentation,
+} from "./scripts/release-presentation-contract.mjs";
 
 // =============================================================================
 // FrontMind Debug Collector - Vite Plugin
@@ -172,7 +177,9 @@ function vitePluginFrontMindBuildVersion(
   };
 }
 
-function vitePluginProductionPublicAssets(): Plugin {
+function vitePluginReleasePublicAssets(
+  presentation: ReleasePresentation,
+): Plugin {
   const allowedAssets = [
     {
       source: "frontmind-contract-logo-white.svg",
@@ -216,7 +223,30 @@ function vitePluginProductionPublicAssets(): Plugin {
   ];
   const publicDirectory = path.resolve(import.meta.dirname, "client/public");
   return {
-    name: "frontmind-production-public-assets",
+    name: "frontmind-release-public-assets",
+    transformIndexHtml(html) {
+      const titledHtml = html.replace(
+        /<title>[^<]*<\/title>/u,
+        `<title>${presentation.documentTitle}</title>`,
+      );
+      if (titledHtml === html && !html.includes(presentation.documentTitle)) {
+        this.error("Release HTML title placeholder is missing");
+      }
+      if (!presentation.preventIndexing) return titledHtml;
+      return {
+        html: titledHtml,
+        tags: [
+          {
+            tag: "meta",
+            attrs: {
+              name: "robots",
+              content: "noindex,nofollow,noarchive",
+            },
+            injectTo: "head",
+          },
+        ],
+      };
+    },
     generateBundle() {
       for (const asset of allowedAssets) {
         const assetPath = path.join(publicDirectory, asset.source);
@@ -231,12 +261,43 @@ function vitePluginProductionPublicAssets(): Plugin {
           source: fs.readFileSync(assetPath),
         });
       }
+      if (presentation.preventIndexing) {
+        this.emitFile({
+          type: "asset",
+          fileName: "robots.txt",
+          source: "User-agent: *\nDisallow: /\n",
+        });
+      }
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
   const isProduction = mode === "production";
+  const releasePresentation = normalizeReleasePresentation(
+    configuredReleasePresentation,
+  );
+  for (const [name, configured, expected] of [
+    [
+      "FRONTMIND_RELEASE_CHANNEL",
+      process.env.FRONTMIND_RELEASE_CHANNEL,
+      releasePresentation.releaseChannel,
+    ],
+    [
+      "VITE_FRONTMIND_RELEASE_CHANNEL",
+      process.env.VITE_FRONTMIND_RELEASE_CHANNEL,
+      releasePresentation.releaseChannel,
+    ],
+    [
+      "VITE_FRONTMIND_WEBSITE_URL",
+      process.env.VITE_FRONTMIND_WEBSITE_URL,
+      releasePresentation.websiteUrl,
+    ],
+  ] as const) {
+    if (configured?.trim() && configured.trim() !== expected) {
+      throw new Error(`${name}_RELEASE_PROFILE_CONFLICT`);
+    }
+  }
   const repositorySha = (() => {
     try {
       return execFileSync("git", ["rev-parse", "HEAD"], {
@@ -262,7 +323,7 @@ export default defineConfig(({ mode }) => {
     react(),
     tailwindcss(),
     vitePluginFrontMindBuildVersion(buildVersion, gitSha, builtAt),
-    isProduction && vitePluginProductionPublicAssets(),
+    isProduction && vitePluginReleasePublicAssets(releasePresentation),
     !isProduction && jsxLocPlugin(),
     !isProduction && vitePluginFrontMindDebugCollector(),
   ].filter(Boolean) as Plugin[];
@@ -278,6 +339,12 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       __FRONTMIND_BUILD_VERSION__: JSON.stringify(buildVersion),
+      "import.meta.env.VITE_FRONTMIND_RELEASE_CHANNEL": JSON.stringify(
+        releasePresentation.releaseChannel,
+      ),
+      "import.meta.env.VITE_FRONTMIND_WEBSITE_URL": JSON.stringify(
+        releasePresentation.websiteUrl,
+      ),
     },
     envDir: path.resolve(import.meta.dirname),
     root: path.resolve(import.meta.dirname, "client"),

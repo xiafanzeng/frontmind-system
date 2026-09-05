@@ -10,7 +10,7 @@ import {
 } from "./knowledge-snapshot-archive-store";
 import { installImmutableFileAtomically } from "./atomic-immutable-file";
 
-const MAX_LOGO_BYTES = 15 * 1024 * 1024;
+const MAX_LOGO_BYTES = 100 * 1024 * 1024;
 const MAX_LOGO_PIXELS = 40_000_000;
 const BUILD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -71,6 +71,36 @@ export function knowledgeBuildArtifactStorageKey(input: {
     input.buildId,
     `generation-${input.generation}`,
     input.kind === "logo" ? "official-logo.bin" : "knowledge-base.zip",
+  );
+}
+
+/**
+ * A Dashboard-owned package is immutable for a completed revision, not for an
+ * entire build generation.  Legacy generations can legitimately reopen and
+ * complete a later revision; reusing the compatibility package path in that
+ * case would make the immutable-file install reject the new, correct ZIP.
+ */
+export function knowledgeBuildArtifactLocalPackageStorageKey(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+  revision: number;
+}) {
+  assertIdentity(input.userId, input.buildId, input.generation);
+  if (!Number.isSafeInteger(input.revision) || input.revision < 0) {
+    throw new KnowledgeBuildArtifactError(
+      "ARTIFACT_INVALID",
+      "知识库本地成品版本无效",
+    );
+  }
+  return path.join(
+    "knowledge-builds",
+    String(input.userId),
+    input.buildId,
+    `generation-${input.generation}`,
+    "dashboard-local-packages",
+    `revision-${input.revision}`,
+    "knowledge-base.zip",
   );
 }
 
@@ -147,7 +177,25 @@ export function knowledgeBuildArtifactStorageKeyBelongsTo(input: {
     );
     const relative = path.relative(prefix, normalized);
     const segments = relative.split(path.sep);
+    const localPackagePrefix = path.join(
+      "knowledge-builds",
+      String(input.userId),
+      input.buildId,
+      `generation-${input.generation}`,
+      "dashboard-local-packages",
+    );
+    const localPackageRelative = path.relative(localPackagePrefix, normalized);
+    const localPackageSegments = localPackageRelative.split(path.sep);
+    const isDashboardLocalPackage =
+      input.kind === "package" &&
+      localPackageRelative !== "" &&
+      !localPackageRelative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(localPackageRelative) &&
+      localPackageSegments.length === 2 &&
+      /^revision-[0-9]+$/u.test(localPackageSegments[0] || "") &&
+      localPackageSegments[1] === "knowledge-base.zip";
     return (
+      isDashboardLocalPackage ||
       relative !== "" &&
       !relative.startsWith(`..${path.sep}`) &&
       !path.isAbsolute(relative) &&
@@ -226,7 +274,7 @@ async function validateArtifactBytes(
   if (buffer.length === 0 || buffer.length > MAX_LOGO_BYTES) {
     throw new KnowledgeBuildArtifactError(
       "ARTIFACT_INVALID",
-      "企业官方主 Logo 文件为空或超过 15 MB",
+      "企业官方主 Logo 文件为空或超过 100 MB",
     );
   }
   let metadata: Metadata;
@@ -274,6 +322,7 @@ export async function persistKnowledgeBuildArtifact(input: {
   kind: KnowledgeBuildArtifactKind;
   buffer: Buffer;
   expectedSha256?: string;
+  storageKey?: string;
 }) {
   const image = await validateArtifactBytes(input.kind, input.buffer);
   const digest = sha256(input.buffer);
@@ -291,7 +340,7 @@ export async function persistKnowledgeBuildArtifact(input: {
     assertExpectedHash(digest, sha256(existing));
   }
   return {
-    storageKey: knowledgeBuildArtifactStorageKey(input),
+    storageKey: input.storageKey || knowledgeBuildArtifactStorageKey(input),
     sha256: digest,
     bytes: input.buffer.length,
     ...image,

@@ -4,6 +4,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   responseLogicEntries,
   upstreamResources,
+  workspaceQuestions,
 } from "../drizzle/schema";
 import type {
   ConfirmedResponseLogic,
@@ -12,10 +13,7 @@ import type {
   ResponseLogicRecordDto,
   SaveResponseLogicInput,
 } from "../shared/response-logic";
-import {
-  AuthServiceError,
-  credentialMayServeAccount,
-} from "./auth-service";
+import { AuthServiceError, credentialMayServeAccount } from "./auth-service";
 import { getDb } from "./db";
 
 async function requireDb() {
@@ -27,6 +25,97 @@ async function requireDb() {
     );
   }
   return db;
+}
+
+export type ResponseLogicQuestionWriteScope = {
+  revision: number;
+  contractId: string | null;
+  quotaPeriodId: string;
+};
+
+export type ResponseLogicProviderReadiness = {
+  questionScope: ResponseLogicQuestionWriteScope;
+  recordRevision: number;
+};
+
+async function lockResponseLogicQuestionForWrite(input: {
+  executor: any;
+  userId: number;
+  questionId: string;
+  expectedScope?: ResponseLogicQuestionWriteScope;
+}) {
+  const rows = await input.executor
+    .select()
+    .from(workspaceQuestions)
+    .where(
+      and(
+        eq(workspaceQuestions.id, input.questionId),
+        eq(workspaceQuestions.userId, input.userId),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  const question = rows[0];
+  // Managed legacy templates can predate workspace_questions. When a row does
+  // exist, it is the authoritative lifecycle lock for every write path.
+  if (!question) {
+    if (input.expectedScope) {
+      throw new AuthServiceError("CONFLICT", "当前问题已不存在，请刷新后重试");
+    }
+    return;
+  }
+  if (
+    question.status !== "selected" ||
+    question.selectionApprovalStatus !== "approved" ||
+    !question.locked ||
+    (input.expectedScope &&
+      (question.revision !== input.expectedScope.revision ||
+        question.contractId !== input.expectedScope.contractId ||
+        question.quotaPeriodId !== input.expectedScope.quotaPeriodId))
+  ) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "当前问题已变更或不再可编辑，请刷新后重试",
+    );
+  }
+}
+
+async function lockResponseLogicQuestionsForBatch(input: {
+  executor: any;
+  userId: number;
+  questionIds: string[];
+}) {
+  const rows = await input.executor
+    .select()
+    .from(workspaceQuestions)
+    .where(
+      and(
+        eq(workspaceQuestions.userId, input.userId),
+        inArray(workspaceQuestions.id, input.questionIds),
+      ),
+    )
+    .for("update");
+  const foundQuestionIds = new Set(rows.map((question: any) => question.id));
+  if (
+    input.questionIds.some((questionId) => !foundQuestionIds.has(questionId))
+  ) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "应答逻辑模板包含已删除或不属于当前目录的问题",
+    );
+  }
+  for (const question of rows) {
+    if (
+      question.status !== "selected" ||
+      question.selectionApprovalStatus !== "approved" ||
+      !question.locked
+    ) {
+      throw new AuthServiceError(
+        "CONFLICT",
+        "应答逻辑模板包含已变更或不可编辑的问题",
+      );
+    }
+  }
 }
 
 function attachmentsFromDraft(
@@ -95,7 +184,7 @@ function sameDraftContent(
 
 function sameResponseLogicQuestion(
   current: typeof responseLogicEntries.$inferSelect,
-  incoming: SaveResponseLogicInput,
+  incoming: Omit<SaveResponseLogicInput, "expectedRevision">,
 ) {
   return (
     current.groupId === incoming.groupId &&
@@ -112,7 +201,6 @@ export function assertResponseLogicDraftPublishable(draft: ResponseLogicDraft) {
     ["核心结论 / 执行口径", draft.conclusion],
     ["企业材料 / 官方依据", draft.facts],
     ["表达边界", draft.boundaries],
-    ["参考资料", draft.references],
   ];
   const missing = required
     .filter(([, value]) => !value.trim())
@@ -154,15 +242,56 @@ function toDto(
   };
 }
 
-export class ResponseLogicRevisionConflictError extends Error {
-  readonly code = "RESPONSE_LOGIC_REVISION_CONFLICT";
+export class ResponseLogicRevisionConflictError extends AuthServiceError {
+  readonly responseLogicCode = "RESPONSE_LOGIC_REVISION_CONFLICT";
   readonly statusCode = 409;
 
   constructor(questionId: string, expected: number, actual: number) {
     super(
+      "CONFLICT",
       `应答逻辑 ${questionId} 已更新到 R${actual}，当前模板为 R${expected}；请重新下载当前内容模板。`,
     );
     this.name = "ResponseLogicRevisionConflictError";
+  }
+}
+
+export class ResponseLogicProviderReadinessError extends AuthServiceError {
+  readonly responseLogicCode = "RESPONSE_LOGIC_PROVIDER_NOT_READY";
+  readonly statusCode = 409;
+
+  constructor() {
+    super("CONFLICT", "当前问题已变更或不再属于有效服务范围，请刷新后重试");
+    this.name = "ResponseLogicProviderReadinessError";
+  }
+}
+
+export class ResponseLogicTaskSupersededError extends AuthServiceError {
+  readonly responseLogicCode = "RESPONSE_LOGIC_TASK_SUPERSEDED";
+  readonly statusCode = 409;
+
+  constructor(questionId: string) {
+    super(
+      "CONFLICT",
+      `应答逻辑 ${questionId} 的模型任务已被重置或替换，请载入最新任务。`,
+    );
+    this.name = "ResponseLogicTaskSupersededError";
+  }
+}
+
+export function assertResponseLogicExpectedTask(input: {
+  questionId: string;
+  expectedTaskId?: string;
+  expectedOperationRevision?: number;
+  currentTaskId?: string | null;
+  currentRevision?: number | null;
+}) {
+  if (
+    (input.expectedTaskId !== undefined &&
+      input.currentTaskId !== input.expectedTaskId) ||
+    (input.expectedOperationRevision !== undefined &&
+      input.currentRevision !== input.expectedOperationRevision)
+  ) {
+    throw new ResponseLogicTaskSupersededError(input.questionId);
   }
 }
 
@@ -176,21 +305,40 @@ export class ResponseLogicTaskActiveError extends Error {
   }
 }
 
+export class ResponseLogicConfirmedError extends AuthServiceError {
+  readonly responseLogicCode = "RESPONSE_LOGIC_ALREADY_CONFIRMED";
+  readonly statusCode = 409;
+
+  constructor() {
+    super("CONFLICT", "当前应答逻辑已经确认；如需修改，请先提交修改需求");
+    this.name = "ResponseLogicConfirmedError";
+  }
+}
+
+export function assertResponseLogicRecordEditable(
+  record:
+    | Pick<typeof responseLogicEntries.$inferSelect, "confirmed">
+    | Pick<ResponseLogicRecordDto, "confirmed">
+    | null
+    | undefined,
+) {
+  if (record?.confirmed) {
+    throw new ResponseLogicConfirmedError();
+  }
+}
+
 export function assertResponseLogicTaskSlotAvailable(input: {
   currentTaskId?: string | null;
   incomingTaskId: string;
 }) {
-  if (
-    input.currentTaskId &&
-    input.currentTaskId !== input.incomingTaskId
-  ) {
+  if (input.currentTaskId && input.currentTaskId !== input.incomingTaskId) {
     throw new ResponseLogicTaskActiveError();
   }
 }
 
 export type VersionedResponseLogicSave = {
   expectedRevision: number;
-  value: SaveResponseLogicInput;
+  value: Omit<SaveResponseLogicInput, "expectedRevision">;
 };
 
 type ResponseLogicBatchTransactionHook = (
@@ -254,15 +402,112 @@ export async function getResponseLogicEntry(
   return rows[0] ? toDto(rows[0]) : null;
 }
 
+/**
+ * Provider dispatch preflight. This intentionally does not hold a database
+ * lock across network I/O. Instead, the exact record revision returned here is
+ * consumed by recordResponseLogicTaskStart's final transactional CAS.
+ */
+export async function requireResponseLogicProviderReadiness(input: {
+  userId: number;
+  questionId: string;
+  conversationId: string;
+  expectedQuestionScope: ResponseLogicQuestionWriteScope;
+  taskId?: string;
+  expectedOperationRevision: number;
+}): Promise<ResponseLogicProviderReadiness> {
+  const db = await requireDb();
+  const questionRows = await db
+    .select()
+    .from(workspaceQuestions)
+    .where(
+      and(
+        eq(workspaceQuestions.id, input.questionId),
+        eq(workspaceQuestions.userId, input.userId),
+      ),
+    )
+    .limit(1);
+  const question = questionRows[0];
+  if (
+    !question ||
+    question.status !== "selected" ||
+    question.selectionApprovalStatus !== "approved" ||
+    !question.locked ||
+    question.revision !== input.expectedQuestionScope.revision ||
+    question.contractId !== input.expectedQuestionScope.contractId ||
+    question.quotaPeriodId !== input.expectedQuestionScope.quotaPeriodId
+  ) {
+    throw new ResponseLogicProviderReadinessError();
+  }
+
+  const recordRows = await db
+    .select()
+    .from(responseLogicEntries)
+    .where(
+      and(
+        eq(responseLogicEntries.userId, input.userId),
+        eq(responseLogicEntries.questionId, input.questionId),
+      ),
+    )
+    .limit(1);
+  const record = recordRows[0] ?? null;
+  assertResponseLogicRecordEditable(record);
+
+  // Initial dispatch is not allowed to recreate a row from browser state. The
+  // browser must first bind a fresh conversation through the versioned draft
+  // save; after an approved reset this makes every old tab fail closed.
+  if (!record || record.conversationId !== input.conversationId) {
+    throw new ResponseLogicTaskSupersededError(input.questionId);
+  }
+  assertResponseLogicExpectedTask({
+    questionId: input.questionId,
+    expectedTaskId: input.taskId,
+    expectedOperationRevision: input.expectedOperationRevision,
+    currentTaskId: record.lastTaskId,
+    currentRevision: record.revision,
+  });
+  if (!input.taskId && record.lastTaskId) {
+    throw new ResponseLogicTaskActiveError();
+  }
+
+  return {
+    questionScope: {
+      revision: question.revision,
+      contractId: question.contractId,
+      quotaPeriodId: question.quotaPeriodId,
+    },
+    recordRevision: record?.revision ?? 0,
+  };
+}
+
+/**
+ * Old released-task continuation is deliberately disabled. A reset approval
+ * starts a new conversation and a new task; persisted legacy conversation
+ * pointers are never authority for writing into a new response-logic record.
+ */
+export async function responseLogicReleasedContinuationMatches(_input: {
+  userId: number;
+  conversationId: string;
+  taskId: string;
+}) {
+  return false;
+}
+
 export async function saveResponseLogicEntry(input: {
   userId: number;
   value: SaveResponseLogicInput;
+  expectedQuestionScope?: ResponseLogicQuestionWriteScope;
   verifiedAttachments?: ResponseLogicAttachment[];
 }): Promise<ResponseLogicRecordDto> {
   const db = await requireDb();
   const now = new Date();
 
   await db.transaction(async (tx) => {
+    await lockResponseLogicQuestionForWrite({
+      executor: tx,
+      userId: input.userId,
+      questionId: input.value.questionId,
+      expectedScope: input.expectedQuestionScope,
+    });
     const rows = await tx
       .select()
       .from(responseLogicEntries)
@@ -275,6 +520,22 @@ export async function saveResponseLogicEntry(input: {
       .limit(1)
       .for("update");
     const existing = rows[0];
+    const actualRevision = existing?.revision ?? 0;
+    if (input.value.expectedRevision !== actualRevision) {
+      throw new ResponseLogicRevisionConflictError(
+        input.value.questionId,
+        input.value.expectedRevision,
+        actualRevision,
+      );
+    }
+    assertResponseLogicExpectedTask({
+      questionId: input.value.questionId,
+      expectedTaskId: input.value.expectedTaskId,
+      expectedOperationRevision: input.value.expectedOperationRevision,
+      currentTaskId: existing?.lastTaskId,
+      currentRevision: existing?.revision,
+    });
+    assertResponseLogicRecordEditable(existing);
     const draft = withAuthoritativeAttachments({
       draft: input.value.draft,
       existingDraft: existing?.draft,
@@ -318,7 +579,12 @@ export async function saveResponseLogicEntry(input: {
       await tx
         .update(responseLogicEntries)
         .set(values)
-        .where(eq(responseLogicEntries.id, existing.id));
+        .where(
+          and(
+            eq(responseLogicEntries.id, existing.id),
+            eq(responseLogicEntries.revision, input.value.expectedRevision),
+          ),
+        );
       return;
     }
 
@@ -374,6 +640,12 @@ export async function saveResponseLogicEntriesBatch(input: {
   return db.transaction(async (tx) => {
     await input.beforeWrite?.(tx);
 
+    await lockResponseLogicQuestionsForBatch({
+      executor: tx,
+      userId: input.userId,
+      questionIds,
+    });
+
     const currentRows = await tx
       .select()
       .from(responseLogicEntries)
@@ -398,6 +670,14 @@ export async function saveResponseLogicEntriesBatch(input: {
           actualRevision,
         );
       }
+      assertResponseLogicExpectedTask({
+        questionId: entry.value.questionId,
+        expectedTaskId: entry.value.expectedTaskId,
+        expectedOperationRevision: entry.value.expectedOperationRevision,
+        currentTaskId: current?.lastTaskId,
+        currentRevision: current?.revision,
+      });
+      assertResponseLogicRecordEditable(current);
     }
 
     const changedEntries = input.entries.filter((entry) => {
@@ -502,11 +782,14 @@ export async function saveResponseLogicEntriesBatch(input: {
 export async function recordResponseLogicTaskStart(input: {
   userId: number;
   apiCredentialId: string;
-  value: Omit<SaveResponseLogicInput, "publish">;
+  value: Omit<SaveResponseLogicInput, "publish" | "expectedRevision">;
   taskId: string;
   skillName: string;
   skillVersion: string;
   skillContentHash: string;
+  preserveExistingSkillBinding?: boolean;
+  expectedQuestionScope?: ResponseLogicQuestionWriteScope;
+  expectedRecordRevision: number;
   verifiedAttachments: ResponseLogicAttachment[];
 }) {
   const db = await requireDb();
@@ -521,6 +804,13 @@ export async function recordResponseLogicTaskStart(input: {
     ) {
       throw new AuthServiceError("NOT_FOUND", "API credential not found");
     }
+
+    await lockResponseLogicQuestionForWrite({
+      executor: tx,
+      userId: input.userId,
+      questionId: input.value.questionId,
+      expectedScope: input.expectedQuestionScope,
+    });
 
     // Lock the question slot before claiming the upstream task. This makes a
     // second browser tab lose deterministically instead of replacing the
@@ -537,6 +827,18 @@ export async function recordResponseLogicTaskStart(input: {
       .limit(1)
       .for("update");
     const existing = rows[0];
+    if (!existing) {
+      throw new ResponseLogicTaskSupersededError(input.value.questionId);
+    }
+    const actualRevision = existing?.revision ?? 0;
+    if (actualRevision !== input.expectedRecordRevision) {
+      throw new ResponseLogicRevisionConflictError(
+        input.value.questionId,
+        input.expectedRecordRevision,
+        actualRevision,
+      );
+    }
+    assertResponseLogicRecordEditable(existing);
     assertResponseLogicTaskSlotAvailable({
       currentTaskId: existing?.lastTaskId,
       incomingTaskId: input.taskId,
@@ -585,9 +887,18 @@ export async function recordResponseLogicTaskStart(input: {
       conversationId:
         input.value.conversationId ?? existing?.conversationId ?? null,
       lastTaskId: input.taskId,
-      skillName: input.skillName,
-      skillVersion: input.skillVersion,
-      skillContentHash: input.skillContentHash,
+      skillName:
+        input.preserveExistingSkillBinding && existing?.skillName
+          ? existing.skillName
+          : input.skillName,
+      skillVersion:
+        input.preserveExistingSkillBinding && existing?.skillVersion
+          ? existing.skillVersion
+          : input.skillVersion,
+      skillContentHash:
+        input.preserveExistingSkillBinding && existing?.skillContentHash
+          ? existing.skillContentHash
+          : input.skillContentHash,
       draft,
       confirmed: existing?.confirmed ?? null,
       version: existing?.version ?? 0,
@@ -597,19 +908,17 @@ export async function recordResponseLogicTaskStart(input: {
         | "confirmed",
       updatedAt: now,
     };
-    if (existing) {
-      await tx
-        .update(responseLogicEntries)
-        .set(values)
-        .where(eq(responseLogicEntries.id, existing.id));
-    } else {
-      await tx.insert(responseLogicEntries).values({
-        id: randomUUID(),
-        userId: input.userId,
-        questionId: input.value.questionId,
-        ...values,
-        createdAt: now,
-      });
+    const updateResult = await tx
+      .update(responseLogicEntries)
+      .set(values)
+      .where(
+        and(
+          eq(responseLogicEntries.id, existing.id),
+          eq(responseLogicEntries.revision, input.expectedRecordRevision),
+        ),
+      );
+    if (!updateResult?.[0]?.affectedRows) {
+      throw new ResponseLogicTaskSupersededError(input.value.questionId);
     }
   });
   const saved = await getResponseLogicEntry(

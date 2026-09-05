@@ -36,6 +36,10 @@ import {
   setupWebsiteAccountPassword,
   submitWebsitePurchase,
 } from "./provisioning-v2-service";
+import {
+  lockActiveWebsiteProjectLifecycle,
+  WebsiteProjectInactiveError,
+} from "./website-project-lifecycle";
 
 export type ManualServiceOrderRecord =
   typeof websiteManualServiceOrders.$inferSelect;
@@ -50,6 +54,7 @@ export type ManualServiceOrderErrorCode =
   | "MANUAL_ORDER_STATE_CONFLICT"
   | "MANUAL_ORDER_SCOPE_MISMATCH"
   | "MANUAL_ORDER_IDEMPOTENCY_CONFLICT"
+  | "MANUAL_ORDER_PROJECT_DELETED"
   | "MANUAL_ORDER_DATABASE_UNAVAILABLE"
   | "MANUAL_ORDER_PROVISIONING_NOT_CONFIGURED";
 
@@ -73,8 +78,22 @@ export interface ManualServiceOrderRepository {
     reference: string,
     mutation: (
       current: ManualOrderRow,
+      executor?: any,
     ) => Promise<ManualOrderPatch | null> | ManualOrderPatch | null,
   ): Promise<ManualOrderRow>;
+}
+
+async function lockActiveManualOrderProject(tx: any, projectId: string) {
+  try {
+    await lockActiveWebsiteProjectLifecycle(tx, projectId);
+  } catch (error) {
+    if (!(error instanceof WebsiteProjectInactiveError)) throw error;
+    throw new ManualServiceOrderError(
+      "MANUAL_ORDER_PROJECT_DELETED",
+      "The project has been permanently deleted",
+      410,
+    );
+  }
 }
 
 type PurchaseResponse = Awaited<ReturnType<typeof submitWebsitePurchase>>;
@@ -122,6 +141,26 @@ function safeHashEqual(left: string, right: string) {
     leftBuffer.length === rightBuffer.length &&
     timingSafeEqual(leftBuffer, rightBuffer)
   );
+}
+
+function storedManualCreateHashMatches(
+  row: Pick<ManualOrderRow, "requestHash" | "marketEdition">,
+  value: CreateManualServiceOrderRequest,
+  secret: string,
+) {
+  if (safeHashEqual(row.requestHash, hmac(value, secret))) return true;
+  if (
+    row.marketEdition !== "domestic" ||
+    (value.marketEdition !== undefined && value.marketEdition !== "domestic")
+  ) {
+    return false;
+  }
+  const alternateRequest: CreateManualServiceOrderRequest =
+    value.marketEdition === undefined
+      ? { ...value, marketEdition: "domestic" }
+      : (({ marketEdition: _marketEdition, ...legacyRequest }) =>
+          legacyRequest)(value);
+  return safeHashEqual(row.requestHash, hmac(alternateRequest, secret));
 }
 
 function configuredSecret(explicit?: string) {
@@ -298,6 +337,7 @@ function buildResponse(
       reference: row.id,
       projectId: row.projectId,
       status: row.status,
+      marketEdition: row.marketEdition,
       ...(Number.isInteger(row.amountFen) && (row.amountFen ?? 0) > 0
         ? { amountFen: row.amountFen! }
         : {}),
@@ -349,16 +389,23 @@ async function defaultRepository(): Promise<ManualServiceOrderRepository> {
       return rows[0];
     },
     async insert(value) {
-      await db.insert(websiteManualServiceOrders).values(value);
-      const stored = await find(value.id);
-      if (!stored) {
-        throw new ManualServiceOrderError(
-          "MANUAL_ORDER_NOT_FOUND",
-          "Manual service order was not persisted",
-          500,
-        );
-      }
-      return stored;
+      return db.transaction(async (tx) => {
+        await lockActiveManualOrderProject(tx, value.projectId);
+        await tx.insert(websiteManualServiceOrders).values(value);
+        const rows = await tx
+          .select()
+          .from(websiteManualServiceOrders)
+          .where(eq(websiteManualServiceOrders.id, value.id))
+          .limit(1);
+        if (!rows[0]) {
+          throw new ManualServiceOrderError(
+            "MANUAL_ORDER_NOT_FOUND",
+            "Manual service order was not persisted",
+            500,
+          );
+        }
+        return rows[0];
+      });
     },
     async list() {
       return db
@@ -367,7 +414,16 @@ async function defaultRepository(): Promise<ManualServiceOrderRepository> {
         .orderBy(desc(websiteManualServiceOrders.createdAt));
     },
     async mutate(reference, mutation) {
+      const binding = await find(reference);
+      if (!binding) {
+        throw new ManualServiceOrderError(
+          "MANUAL_ORDER_NOT_FOUND",
+          "Manual service order not found",
+          404,
+        );
+      }
       return db.transaction(async (tx) => {
+        await lockActiveManualOrderProject(tx, binding.projectId);
         const rows = await tx
           .select()
           .from(websiteManualServiceOrders)
@@ -382,7 +438,14 @@ async function defaultRepository(): Promise<ManualServiceOrderRepository> {
             404,
           );
         }
-        const patch = await mutation(current);
+        if (binding.projectId !== current.projectId) {
+          throw new ManualServiceOrderError(
+            "MANUAL_ORDER_STATE_CONFLICT",
+            "Manual service order project binding changed; retry the operation",
+            409,
+          );
+        }
+        const patch = await mutation(current, tx);
         if (patch) {
           await tx
             .update(websiteManualServiceOrders)
@@ -456,7 +519,7 @@ export function createManualServiceOrderService(
     let purchase: PurchaseResponse | undefined;
     const row = await (
       await repository()
-    ).mutate(input.reference, async (current) => {
+    ).mutate(input.reference, async (current, executor) => {
       if (current.status === "active") {
         purchase = current.provisioningReference
           ? await readPurchase({
@@ -497,6 +560,7 @@ export function createManualServiceOrderService(
           ? { manualPasswordHash: current.requestedPasswordHash! }
           : {}),
         secret: input.secret,
+        executor,
       });
       if (purchase.purchase.status !== "provisioned") {
         return stateConflict(
@@ -530,7 +594,7 @@ export function createManualServiceOrderService(
       const repo = await repository();
       const existing = await repo.findByCreateKey(keyHash);
       if (existing) {
-        if (!safeHashEqual(existing.requestHash, requestHash)) {
+        if (!storedManualCreateHashMatches(existing, value, secret)) {
           throw new ManualServiceOrderError(
             "MANUAL_ORDER_IDEMPOTENCY_CONFLICT",
             "The idempotency key has already been used for another manual order",
@@ -547,6 +611,7 @@ export function createManualServiceOrderService(
         requestHash,
         projectId: value.project.id,
         companyName: value.project.companyName,
+        marketEdition: value.marketEdition ?? "domestic",
         contractProfile: value.contract.profile,
         serviceCategory: value.service.purchasedQuestion.category,
         planCode: "basic",
@@ -566,7 +631,7 @@ export function createManualServiceOrderService(
         return readResponse(await repo.insert(row), secret);
       } catch (error) {
         const replay = await repo.findByCreateKey(keyHash);
-        if (replay && safeHashEqual(replay.requestHash, requestHash)) {
+        if (replay && storedManualCreateHashMatches(replay, value, secret)) {
           return readResponse(replay, secret);
         }
         throw error;
@@ -595,6 +660,7 @@ export function createManualServiceOrderService(
         category: row.serviceCategory,
         planCode: row.planCode,
         serviceDays: row.serviceDays,
+        marketEdition: row.marketEdition,
         questionId: row.questionId,
         question: row.question,
         contractTemplateVersion: row.contractTemplateVersion,
@@ -929,7 +995,7 @@ export function createManualServiceOrderService(
       let purchase: PurchaseResponse | undefined;
       const row = await (
         await repository()
-      ).mutate(input.reference, async (current) => {
+      ).mutate(input.reference, async (current, executor) => {
         if (
           current.status === "activation_required" ||
           current.status === "active"
@@ -1007,6 +1073,7 @@ export function createManualServiceOrderService(
                 token: setupToken,
                 password: value.account.password,
                 secret,
+                executor,
               });
             }
           }
@@ -1046,8 +1113,10 @@ export function createManualServiceOrderService(
           idempotencyKey: `manual-account:${accountKeyHash}:purchase-v2`,
           manualOrderReference: current.id,
           secret,
+          executor,
           request: {
             schemaVersion: 2,
+            marketEdition: current.marketEdition,
             project: {
               id: current.projectId,
               companyName: current.companyName,
@@ -1167,7 +1236,7 @@ export function createManualServiceOrderService(
       let purchase: PurchaseResponse | undefined;
       const row = await (
         await repository()
-      ).mutate(input.reference, async (current) => {
+      ).mutate(input.reference, async (current, executor) => {
         if (current.status === "rejected") return null;
         if (current.status === "active") {
           return stateConflict(
@@ -1182,6 +1251,7 @@ export function createManualServiceOrderService(
             decision: "reject",
             note: input.note,
             secret,
+            executor,
           });
           if (purchase.purchase.status === "provisioned") {
             return {

@@ -77,6 +77,38 @@ describe("admin service contract input", () => {
     },
   );
 
+  it("keeps Luxury's commercial prepayment at three months while describing its annual progressive entitlement", async () => {
+    const caller = adminRouter.createCaller(systemAdminContext());
+    await expect(
+      caller.workspace.updateService({
+        userId: 7,
+        expectedRevision: 1,
+        planCode: "luxury",
+        status: "active",
+        prepaidMonths: 12,
+        signedAt: Date.now(),
+        signatoryId: "enterprise-legal-entity",
+      }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message:
+        "豪华版为 12 个月权益周期，预付月份按 3 个月记录，并按季度自动解锁额度",
+    });
+
+    await expect(
+      caller.workspace.updateService({
+        userId: 7,
+        expectedRevision: 1,
+        planCode: "luxury",
+        status: "active",
+        prepaidMonths: 3,
+      }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "生效或待生效合同必须包含签署主体与签署时间",
+    });
+  });
+
   it("allows activation without a separate signing or payment evidence field", () => {
     expect(
       adminUpdateServiceSchema.safeParse({

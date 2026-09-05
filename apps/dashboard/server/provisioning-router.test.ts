@@ -158,7 +158,7 @@ describe("provisioning service-token boundary", () => {
     expect(() => assertProvisioningConfigured()).not.toThrow();
   });
 
-  it("imports a project-scoped knowledge artifact without accepting userId", async () => {
+  it("imports the project-scoped v5 local-artifact contract without accepting userId", async () => {
     const importKnowledge = vi.fn().mockResolvedValue({
       status: "completed",
       replayed: false,
@@ -167,14 +167,14 @@ describe("provisioning service-token boundary", () => {
     });
     const url = await startKnowledgeImportApp(importKnowledge);
     const request = {
-      schemaVersion: 2,
+      schemaVersion: 5,
       companyName: "验收企业",
-      taskId: "task-website-kb-1",
-      outputItemId: "output-1",
-      fileId: "file-1",
-      descriptorHash: "a".repeat(64),
-      artifactSha256: "b".repeat(64),
-      filename: "acceptance_knowledge_base.zip",
+      candidateArtifactId: `artifact_${"a".repeat(64)}`,
+      finalArtifactId: `artifact_${"b".repeat(64)}`,
+      candidateSha256: "c".repeat(64),
+      finalSha256: "d".repeat(64),
+      packageManifestSha256: "e".repeat(64),
+      finalizerVersion: "website-kb-finalizer-v1",
     };
     const response = await fetch(url, {
       method: "POST",
@@ -187,7 +187,7 @@ describe("provisioning service-token boundary", () => {
     });
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 5,
       knowledgeImport: {
         id: "receipt-knowledge-1",
         projectId: "project-acceptance-001",
@@ -201,108 +201,7 @@ describe("provisioning service-token boundary", () => {
     });
   });
 
-  it("preserves the v3 schema version and forwards the archive contract unchanged", async () => {
-    const importKnowledge = vi.fn().mockResolvedValue({
-      status: "completed",
-      replayed: false,
-      receiptId: "receipt-knowledge-v3",
-      snapshot: { id: "snapshot-v3", version: 1 },
-    });
-    const url = await startKnowledgeImportApp(importKnowledge);
-    const request = {
-      schemaVersion: 3,
-      archiveContractVersion: 1,
-      validationProfile: "website-lead-v1",
-      packageManifestSha256: "c".repeat(64),
-      companyName: "验收企业",
-      taskId: "task-website-kb-v3",
-      outputItemId: "output-v3",
-      fileId: "file-v3",
-      descriptorHash: "a".repeat(64),
-      artifactSha256: "b".repeat(64),
-      filename: "acceptance_knowledge_base_v3.zip",
-    };
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "idempotency-key": "website-kb-project-acceptance-v3",
-        "x-frontmind-provisioning-token": SERVICE_TOKEN,
-      },
-      body: JSON.stringify(request),
-    });
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
-      schemaVersion: 3,
-      knowledgeImport: {
-        id: "receipt-knowledge-v3",
-        projectId: "project-acceptance-001",
-        status: "ready",
-      },
-    });
-    expect(importKnowledge).toHaveBeenCalledWith({
-      projectId: "project-acceptance-001",
-      idempotencyKey: "website-kb-project-acceptance-v3",
-      value: request,
-    });
-  });
-
-  it("preserves the v4 candidate lineage and finalized artifact", async () => {
-    const importKnowledge = vi.fn().mockResolvedValue({
-      status: "completed",
-      replayed: false,
-      receiptId: "receipt-knowledge-v4",
-      snapshot: { id: "snapshot-v4", version: 1 },
-    });
-    const url = await startKnowledgeImportApp(importKnowledge);
-    const request = {
-      schemaVersion: 4,
-      companyName: "验收企业",
-      candidate: {
-        taskId: "task-website-kb-v4",
-        outputItemId: "output-v4",
-        fileId: "candidate-file-v4",
-        descriptorHash: "a".repeat(64),
-        sha256: "b".repeat(64),
-      },
-      finalArtifact: {
-        fileId: "final-file-v4",
-        filename: "acceptance_knowledge_base_v4.zip",
-        sha256: "c".repeat(64),
-        archiveContractVersion: 3,
-        validationProfile: "website-lead-v1",
-        packageManifestSha256: "d".repeat(64),
-        finalizerVersion: "website-kb-finalizer-v1",
-      },
-    };
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "idempotency-key": "website-kb-project-acceptance-v4",
-        "x-frontmind-provisioning-token": SERVICE_TOKEN,
-      },
-      body: JSON.stringify(request),
-    });
-
-    expect(response.status).toBe(201);
-    await expect(response.json()).resolves.toMatchObject({
-      schemaVersion: 4,
-      knowledgeImport: {
-        id: "receipt-knowledge-v4",
-        projectId: "project-acceptance-001",
-        status: "ready",
-      },
-    });
-    expect(importKnowledge).toHaveBeenCalledWith({
-      projectId: "project-acceptance-001",
-      idempotencyKey: "website-kb-project-acceptance-v4",
-      value: request,
-    });
-  });
-
-  it("rejects an incomplete v3 contract before invoking the importer", async () => {
+  it("rejects every pre-v5 knowledge-import contract before invoking the importer", async () => {
     const importKnowledge = vi.fn();
     const url = await startKnowledgeImportApp(importKnowledge);
     const response = await fetch(url, {
@@ -313,15 +212,10 @@ describe("provisioning service-token boundary", () => {
         "x-frontmind-provisioning-token": SERVICE_TOKEN,
       },
       body: JSON.stringify({
-        schemaVersion: 3,
-        archiveContractVersion: 1,
-        validationProfile: "website-lead-v1",
+        schemaVersion: 4,
         companyName: "验收企业",
-        taskId: "task-website-kb-v3",
-        outputItemId: "output-v3",
-        descriptorHash: "a".repeat(64),
-        artifactSha256: "b".repeat(64),
-        filename: "acceptance_knowledge_base_v3.zip",
+        candidate: {},
+        finalArtifact: {},
       }),
     });
 
@@ -368,6 +262,30 @@ describe("provisioning service-token boundary", () => {
       error: { code: "PROVISIONING_NOT_CONFIGURED" },
     });
     expect(provisionUser).not.toHaveBeenCalled();
+  });
+
+  it("maps lifecycle-guarded project writes to a stable 410 without leaking database details", async () => {
+    const databaseError = Object.assign(new Error("insert rejected"), {
+      sqlMessage: "WEBSITE_PROJECT_DELETED",
+    });
+    const url = await startApp(vi.fn().mockRejectedValue(databaseError));
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "website-order-zpay-000001",
+        "x-frontmind-provisioning-token": SERVICE_TOKEN,
+      },
+      body: JSON.stringify(requestBody()),
+    });
+
+    expect(response.status).toBe(410);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "PROJECT_DELETED",
+        message: "项目已进入永久删除流程，不能再写入履约记录",
+      },
+    });
   });
 
   it("rejects role injection before provisioning", async () => {

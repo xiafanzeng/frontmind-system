@@ -1,0 +1,50 @@
+{
+  "schema": "frontmind-siteops-host-starter/v5",
+  "version": "2.4.0",
+  "runtime": {
+    "node": ">=22.19.0",
+    "profile": "react-static-html-with-trusted-fallback",
+    "react": "19",
+    "renderer": "react-dom/server",
+    "packageManagerAtCustomerBuildTime": false,
+    "hydration": false,
+    "runtimeJavaScript": false
+  },
+  "providerBoundary": {
+    "acceptedOutput": "SiteContentDraftV1-flat-transport",
+    "providerDesignAllowed": false,
+    "providerMarkupAllowed": false,
+    "providerExternalResourcesAllowed": false,
+    "customerAndProviderText": "canonical-json-data-only"
+  },
+  "hostOwned": [
+    "routes-and-paths",
+    "route-order",
+    "slots-and-components",
+    "responsive-layout",
+    "semantic-palette",
+    "source-and-dist",
+    "primary-renderer",
+    "trusted-fallback-renderer",
+    "qa-and-artifact-binding"
+  ],
+  "output": {
+    "routeDocuments": "every-frozen-route-plus-404",
+    "completeHtml": true,
+    "reactRootShellForbidden": true,
+    "runtimeFetchForbidden": true,
+    "externalScriptsForbidden": true,
+    "trustedFallback": "fixed-high-contrast-no-javascript"
+  },
+  "contentInventoryPolicy": {
+    "source": "frozen_knowledge_snapshot",
+    "companyNewsWhenAbsent": "host-owned-empty-state",
+    "externalAcquisition": false,
+    "publicSourceLabels": false
+  },
+  "qualityPolicy": {
+    "artifactSafetyAndBinding": "blocking",
+    "axeAndLighthouse": "warning",
+    "previewRequiredWhenEitherTrustedRendererSucceeds": true
+  }
+}

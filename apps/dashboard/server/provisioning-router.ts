@@ -20,6 +20,7 @@ import {
   PurchaseProvisioningError,
   submitWebsitePurchase,
 } from "./provisioning-v2-service";
+import { WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED } from "./website-project-lifecycle";
 import {
   createPaymentReceiptLedgerService,
   PaymentReceiptLedgerError,
@@ -40,6 +41,7 @@ import {
   createManualServiceOrderRequestSchema,
   manualServiceAccountSetupRequestSchema,
   manualServicePaymentRequestSchema,
+  type ManualServiceOrderResponse,
 } from "../shared/manual-service-order";
 import {
   paymentReceiptReadQuerySchema,
@@ -56,6 +58,8 @@ import type {
 } from "../shared/provisioning-v2";
 
 const PROVISIONING_TOKEN_HEADER = "x-frontmind-provisioning-token";
+export const MARKET_EDITION_RESPONSE_HEADER =
+  "x-frontmind-market-edition-response";
 const PUBLIC_PLACEHOLDER_MARKERS = [
   "replace-with",
   "replace_with",
@@ -136,6 +140,28 @@ export function assertProvisioningConfigured(
 function requestHeader(req: Request, name: string) {
   const value = req.headers[name];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function marketEditionResponseRequested(req: Request) {
+  return requestHeader(req, MARKET_EDITION_RESPONSE_HEADER)?.trim() === "1";
+}
+
+function purchaseResponseForRequest(
+  req: Request,
+  response: WebsitePurchaseResponseV2,
+): WebsitePurchaseResponseV2 {
+  if (marketEditionResponseRequested(req)) return response;
+  const { marketEdition: _marketEdition, ...purchase } = response.purchase;
+  return { ...response, purchase };
+}
+
+function manualOrderResponseForRequest(
+  req: Request,
+  response: ManualServiceOrderResponse,
+): ManualServiceOrderResponse {
+  if (marketEditionResponseRequested(req)) return response;
+  const { marketEdition: _marketEdition, ...order } = response.order;
+  return { ...response, order };
 }
 
 export function createProvisioningRouter(
@@ -285,6 +311,28 @@ export function createProvisioningRouter(
     }
   });
 
+  router.delete("/project-orders/projects/:projectId", async (req, res) => {
+    if (!WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED) {
+      res.status(503).json({
+        error: {
+          code: "PROJECT_DELETE_DISABLED",
+          message: "Website project physical deletion is not enabled",
+        },
+      });
+      return;
+    }
+    try {
+      const projectId = projectOrderProjectIdSchema.parse(req.params.projectId);
+      const result = await projectOrders.deleteProject(projectId);
+      if (result.replayed) {
+        res.setHeader("Idempotent-Replayed", "true");
+      }
+      res.json(result.response);
+    } catch (error) {
+      sendProvisioningError(res, error);
+    }
+  });
+
   router.post(
     "/users",
     express.json({ limit: "32kb", strict: true, type: "application/json" }),
@@ -322,11 +370,14 @@ export function createProvisioningRouter(
           .parse(requestHeader(req, "idempotency-key"));
         const request = createManualServiceOrderRequestSchema.parse(req.body);
         res.status(201).json(
-          await manualOrders.create({
-            idempotencyKey,
-            request,
-            secret: configuredToken,
-          }),
+          manualOrderResponseForRequest(
+            req,
+            await manualOrders.create({
+              idempotencyKey,
+              request,
+              secret: configuredToken,
+            }),
+          ),
         );
       } catch (error) {
         sendProvisioningError(res, error);
@@ -343,10 +394,13 @@ export function createProvisioningRouter(
         .max(128)
         .parse(req.params.reference);
       res.json(
-        await manualOrders.status({
-          reference,
-          secret: configuredToken,
-        }),
+        manualOrderResponseForRequest(
+          req,
+          await manualOrders.status({
+            reference,
+            secret: configuredToken,
+          }),
+        ),
       );
     } catch (error) {
       sendProvisioningError(res, error);
@@ -368,11 +422,14 @@ export function createProvisioningRouter(
           req.body,
         );
         res.json(
-          await manualOrders.authorizeExternal({
-            reference,
-            request,
-            secret: configuredToken,
-          }),
+          manualOrderResponseForRequest(
+            req,
+            await manualOrders.authorizeExternal({
+              reference,
+              request,
+              secret: configuredToken,
+            }),
+          ),
         );
       } catch (error) {
         sendProvisioningError(res, error);
@@ -404,7 +461,9 @@ export function createProvisioningRouter(
           request,
           secret: configuredToken,
         });
-        res.status(result.order.status === "active" ? 200 : 202).json(result);
+        res
+          .status(result.order.status === "active" ? 200 : 202)
+          .json(manualOrderResponseForRequest(req, result));
       } catch (error) {
         sendProvisioningError(res, error);
       }
@@ -435,7 +494,9 @@ export function createProvisioningRouter(
           request,
           secret: configuredToken,
         });
-        res.status(result.order.status === "active" ? 200 : 202).json(result);
+        res
+          .status(result.order.status === "active" ? 200 : 202)
+          .json(manualOrderResponseForRequest(req, result));
       } catch (error) {
         sendProvisioningError(res, error);
       }
@@ -460,7 +521,7 @@ export function createProvisioningRouter(
         });
         res
           .status(result.purchase.status === "pending_confirmation" ? 202 : 200)
-          .json(result);
+          .json(purchaseResponseForRequest(req, result));
       } catch (error) {
         sendProvisioningError(res, error);
       }
@@ -476,10 +537,13 @@ export function createProvisioningRouter(
         .max(128)
         .parse(req.params.reference);
       res.json(
-        await readPurchase({
-          reference,
-          secret: configuredToken,
-        }),
+        purchaseResponseForRequest(
+          req,
+          await readPurchase({
+            reference,
+            secret: configuredToken,
+          }),
+        ),
       );
     } catch (error) {
       sendProvisioningError(res, error);
@@ -537,6 +601,23 @@ export function createProvisioningRouter(
 }
 
 function sendProvisioningError(res: Response, error: unknown) {
+  const databaseError = error as
+    | { message?: unknown; sqlMessage?: unknown }
+    | null
+    | undefined;
+  if (
+    [databaseError?.message, databaseError?.sqlMessage].some((message) =>
+      String(message ?? "").includes("WEBSITE_PROJECT_DELETED"),
+    )
+  ) {
+    res.status(410).json({
+      error: {
+        code: "PROJECT_DELETED",
+        message: "项目已进入永久删除流程，不能再写入履约记录",
+      },
+    });
+    return;
+  }
   if (error instanceof z.ZodError) {
     res.status(400).json({
       error: {

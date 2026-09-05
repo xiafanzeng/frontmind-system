@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTIVE_WEBSITE_OPERATION_CATEGORIES,
+  QUESTION_MANAGEMENT_HISTORY_CATEGORIES,
+  WEBSITE_MANAGEMENT_HISTORY_CATEGORIES,
   adminDeliveryTicketListInputSchema,
   createDeliveryTicketSchema,
+  deleteDeliveryTicketInputSchema,
   deliveryTicketListInputSchema,
   deliveryTicketStatusSchema,
   publicContentAssetTicketDetailSchema,
@@ -16,25 +20,33 @@ import {
 import {
   aggregateDeliveryTicketQuotaCapacity,
   assertManagedTicketCanBeExecutedByAdmin,
+  assertManagedLegacySummaryClose,
   assertExistingDeliveryTicketSettlementScope,
   assertDeliveryTicketServiceEligibility,
   assertDeliveryOperationPolicy,
   assertDeliveryTicketMessagePolicy,
   assertWebsiteTicketWorkflow,
   decodeDeliveryTicketCursor,
+  deleteManagedDeliveryTicket,
   deliveryLinksFromOperationResults,
   deliveryTicketStatusAfterCustomerMessage,
   deriveTicketQuotaTransition,
   encodeDeliveryTicketCursor,
   isDeliveryTicketAttachmentVisible,
+  isCustomerVisibleDeliveryTicket,
   missingIcpCompletionRequirements,
   missingOwnedAttachmentIds,
+  planWorkflowCustomerSupplement,
+  resolveManagedDomainApplicationCompletion,
+  resolveWebsiteBuildStatus,
+  selectWorkflowCustomerSupplementChild,
   selectDeliveryTicketQuotaPeriod,
   technicalTicketDedupeKey,
   toPublicDeliveryTicketCreationResult,
   toPublicDeliveryTicketSummary,
   toPublicDeliveryTicketWorkspaceMetadata,
   withSerializedTicketCreation,
+  workflowCustomerSupplementInternalMessage,
 } from "./delivery-ticket-service";
 
 function settlementExecutor(
@@ -63,7 +75,100 @@ function settlementExecutor(
   };
 }
 
+function websiteProfileExecutor(profile: Record<string, unknown> | null) {
+  return {
+    select() {
+      return {
+        from() {
+          return {
+            where() {
+              return {
+                limit() {
+                  return {
+                    async for() {
+                      return profile ? [profile] : [];
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
 describe("delivery ticket contract", () => {
+  it("shows customer roots and legacy tickets while hiding workflow children", () => {
+    expect(
+      isCustomerVisibleDeliveryTicket({
+        parentTicketId: null,
+        rootTicketId: null,
+        isWorkflowContainer: true,
+      } as any),
+    ).toBe(true);
+    expect(
+      isCustomerVisibleDeliveryTicket({
+        parentTicketId: null,
+        rootTicketId: null,
+        isWorkflowContainer: false,
+      } as any),
+    ).toBe(true);
+    expect(
+      isCustomerVisibleDeliveryTicket({
+        parentTicketId: "parent-1",
+        rootTicketId: "root-1",
+        isWorkflowContainer: false,
+      } as any),
+    ).toBe(false);
+  });
+
+  it("keeps the website-management surface limited to website work", () => {
+    expect(ACTIVE_WEBSITE_OPERATION_CATEGORIES).toEqual([
+      "domain_application",
+      "icp_filing",
+      "company_facts",
+      "product_case_docs",
+      "industry_news",
+      "company_news",
+      "faq_content",
+    ]);
+    expect(ACTIVE_WEBSITE_OPERATION_CATEGORIES).not.toContain(
+      "question_catalog" as any,
+    );
+    expect(ACTIVE_WEBSITE_OPERATION_CATEGORIES).not.toContain(
+      "initial_monitoring" as any,
+    );
+    expect(ACTIVE_WEBSITE_OPERATION_CATEGORIES).not.toContain(
+      "monitoring_retest" as any,
+    );
+    expect(ACTIVE_WEBSITE_OPERATION_CATEGORIES).not.toContain(
+      "knowledge_base_maintenance" as any,
+    );
+    expect(WEBSITE_MANAGEMENT_HISTORY_CATEGORIES).toEqual([
+      ...ACTIVE_WEBSITE_OPERATION_CATEGORIES,
+      "website_style_samples",
+      "website_build",
+      "site_check",
+      "site_rebuild",
+    ]);
+    expect(WEBSITE_MANAGEMENT_HISTORY_CATEGORIES).not.toContain(
+      "question_catalog" as any,
+    );
+    expect(WEBSITE_MANAGEMENT_HISTORY_CATEGORIES).not.toContain(
+      "initial_monitoring" as any,
+    );
+    expect(QUESTION_MANAGEMENT_HISTORY_CATEGORIES).toEqual([
+      "question_review",
+      "question_modify",
+      "question_delete",
+    ]);
+    expect(WEBSITE_MANAGEMENT_HISTORY_CATEGORIES).not.toContain(
+      "question_review" as any,
+    );
+  });
+
   it("routes system administrators through the role workbench while delivery administrators stay coordination-only", () => {
     expect(() =>
       assertManagedTicketCanBeExecutedByAdmin({
@@ -89,6 +194,48 @@ describe("delivery ticket contract", () => {
       assertManagedTicketCanBeExecutedByAdmin({
         actor: {
           role: "admin",
+          username: "system.admin",
+          adminAccessLevel: "system_admin",
+        },
+        ticket: {
+          isWorkflowContainer: true,
+          workflowDomain: null,
+          operation: null,
+        },
+      }),
+    ).toThrow(/客户根需求只能由内部子步骤自动汇总状态/);
+    expect(() =>
+      assertManagedTicketCanBeExecutedByAdmin({
+        actor: {
+          role: "admin",
+          username: "system.admin",
+          adminAccessLevel: "system_admin",
+        },
+        ticket: {
+          isWorkflowContainer: false,
+          workflowDomain: null,
+          operation: "knowledge_delivery",
+        },
+      }),
+    ).toThrow(/知识库交付记录由系统发布流程生成和关闭/);
+    expect(() =>
+      assertManagedTicketCanBeExecutedByAdmin({
+        actor: {
+          role: "admin",
+          username: "system.admin",
+          adminAccessLevel: "system_admin",
+        },
+        ticket: {
+          workflowDomain: null,
+          operation: null,
+          category: "domain_application",
+        },
+      }),
+    ).toThrow(/正式交付需求必须在系统管理员完整处理工作台/);
+    expect(() =>
+      assertManagedTicketCanBeExecutedByAdmin({
+        actor: {
+          role: "admin",
           username: "delivery.admin",
           adminAccessLevel: "delivery_admin",
         },
@@ -107,6 +254,64 @@ describe("delivery ticket contract", () => {
     ).toThrow(/交付管理员仅负责查看、沟通与协调/);
   });
 
+  it("forces explicitly linked credential tickets through unified credential management", () => {
+    expect(() =>
+      assertManagedTicketCanBeExecutedByAdmin({
+        actor: {
+          role: "admin",
+          username: "system.admin",
+          adminAccessLevel: "system_admin",
+        },
+        ticket: {
+          workflowDomain: null,
+          operation: "legacy_jenova_api_setup",
+          category: "credential_exception",
+          credentialTargetUserId: 42,
+        },
+      }),
+    ).toThrow("统一 API Key 管理入口");
+  });
+
+  it("allows historical tickets to close with a non-sensitive summary only", () => {
+    expect(() =>
+      assertManagedLegacySummaryClose({
+        publicSummary: "历史事项已核对并处理。",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertManagedLegacySummaryClose({
+        publicSummary: "历史事项已处理。",
+        deliveryLinks: [
+          { label: "不应接收", url: "https://example.com/result" },
+        ],
+      }),
+    ).toThrow(/只能填写非敏感处理摘要/);
+    expect(() =>
+      assertManagedLegacySummaryClose({
+        publicSummary: "API Key 为 sk_live_12345678901234567890",
+      }),
+    ).toThrow(/疑似包含密钥或令牌/);
+  });
+
+  it("rejects physical deletion from a delivery administrator before database access", async () => {
+    await expect(
+      deleteManagedDeliveryTicket({
+        actor: {
+          id: 7,
+          role: "admin",
+          username: "delivery.admin",
+          adminAccessLevel: "delivery_admin",
+        } as any,
+        userId: 42,
+        ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
+        expectedRevision: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: "DELIVERY_TICKET_DELETE_FORBIDDEN",
+      statusCode: 403,
+    });
+  });
+
   it("publishes six explained content types without the retired media type", () => {
     expect(CONTENT_ASSET_CATALOG).toHaveLength(6);
     expect(
@@ -120,6 +325,9 @@ describe("delivery ticket contract", () => {
   it("isolates domestic and overseas content media options", () => {
     expect(contentAssetMediaOptionsForMarketEdition("domestic")).toContain(
       "搜狐",
+    );
+    expect(contentAssetMediaOptionsForMarketEdition("domestic")).toContain(
+      "知乎",
     );
     expect(contentAssetMediaOptionsForMarketEdition("domestic")).not.toContain(
       "美联社",
@@ -193,7 +401,7 @@ describe("delivery ticket contract", () => {
       }),
     ).not.toThrow();
     expect(() => assertDeliveryOperationPolicy("website_operation")).toThrow(
-      "官网工单不回传",
+      "官网需求不回传",
     );
     expect(() => assertDeliveryOperationPolicy("content_asset")).not.toThrow();
   });
@@ -217,6 +425,133 @@ describe("delivery ticket contract", () => {
         currentStatus: "needs_information",
       }),
     ).toBe("needs_information");
+  });
+
+  it("routes a root supplement only to the unique waiting workflow child", () => {
+    const scheduledChild = {
+      id: "scheduled-child",
+      status: "scheduled",
+      scheduledAt: null,
+      assignedProjectAssignmentId: "project-1",
+      assignedMemberId: 11,
+      workflowDomain: "content_distribution_engineer",
+    } as const;
+    const waitingChild = {
+      id: "waiting-child",
+      status: "needs_information",
+      scheduledAt: new Date("2026-08-09T05:00:00.000Z"),
+      assignedProjectAssignmentId: "project-1",
+      assignedMemberId: 11,
+      workflowDomain: "content_distribution_engineer",
+    } as const;
+
+    expect(
+      selectWorkflowCustomerSupplementChild([scheduledChild, waitingChild]),
+    ).toBe(waitingChild);
+  });
+
+  it("blocks a workflow supplement instead of guessing between waiting children", () => {
+    const waitingChild = {
+      id: "waiting-child-1",
+      status: "needs_information",
+      scheduledAt: null,
+      assignedProjectAssignmentId: "project-1",
+      assignedMemberId: 11,
+      workflowDomain: "content_distribution_engineer",
+    } as const;
+
+    expect(() =>
+      selectWorkflowCustomerSupplementChild([
+        waitingChild,
+        { ...waitingChild, id: "waiting-child-2" },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "WORKFLOW_SUPPLEMENT_TARGET_AMBIGUOUS",
+        statusCode: 409,
+      }),
+    );
+    expect(() =>
+      selectWorkflowCustomerSupplementChild([
+        { ...waitingChild, status: "in_progress" },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "WORKFLOW_SUPPLEMENT_TARGET_NOT_FOUND",
+        statusCode: 409,
+      }),
+    );
+  });
+
+  it("rejects an unassigned workflow supplement target", () => {
+    expect(() =>
+      selectWorkflowCustomerSupplementChild([
+        {
+          id: "waiting-child",
+          status: "needs_information",
+          scheduledAt: null,
+          assignedProjectAssignmentId: null,
+          assignedMemberId: null,
+          workflowDomain: "content_distribution_engineer",
+        },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "WORKFLOW_SUPPLEMENT_TARGET_UNASSIGNED",
+        statusCode: 409,
+      }),
+    );
+  });
+
+  it("resumes the child queue and consumes a root reservation at most once", () => {
+    const child = {
+      id: "waiting-child",
+      status: "needs_information",
+      scheduledAt: null,
+      assignedProjectAssignmentId: "project-1",
+      assignedMemberId: 11,
+      workflowDomain: "content_distribution_engineer",
+    } as const;
+    const first = planWorkflowCustomerSupplement({
+      rootScheduledAt: null,
+      rootQuotaState: "reserved",
+      children: [child],
+      message: "补充了正式产品资料。",
+      attachments: [{ filename: "产品资料.pdf", purpose: "产品事实" }],
+    });
+    const resumed = planWorkflowCustomerSupplement({
+      rootScheduledAt: new Date("2026-08-09T05:00:00.000Z"),
+      rootQuotaState: "consumed",
+      children: [child],
+      message: "补充了正式产品资料。",
+      attachments: [],
+    });
+
+    expect(first).toMatchObject({
+      child,
+      childStatus: "scheduled",
+      rootStatus: "scheduled",
+      rootQuotaState: "consumed",
+    });
+    expect(resumed).toMatchObject({
+      childStatus: "scheduled",
+      rootStatus: "in_progress",
+      rootQuotaState: "consumed",
+    });
+  });
+
+  it("records customer message and attachment names in the internal child event", () => {
+    const message = workflowCustomerSupplementInternalMessage({
+      message: "补充了发布日期和正式口径。",
+      attachments: [
+        { filename: "品牌事实.pdf", purpose: "事实依据" },
+        { filename: "发布时间表.xlsx" },
+      ],
+    });
+
+    expect(message).toContain("补充了发布日期和正式口径");
+    expect(message).toContain("品牌事实.pdf（事实依据）");
+    expect(message).toContain("发布时间表.xlsx");
   });
 
   it("keeps the canonical status set stable", () => {
@@ -313,7 +648,7 @@ describe("delivery ticket contract", () => {
   it("keeps attachment rights metadata in the validated contract", () => {
     const value = createDeliveryTicketSchema.parse({
       clientRequestId: "5f05091b-0e0a-4482-8f11-654c4502b3e1",
-      type: "content_asset",
+      type: "website_operation",
       category: "A1",
       attachments: [
         {
@@ -385,7 +720,7 @@ describe("delivery ticket contract", () => {
     ).toThrow();
   });
 
-  it("accepts one completed domain and ICP result before a site profile exists", async () => {
+  it("requires a completed domain profile before accepting an ICP result", async () => {
     const value = createDeliveryTicketSchema.parse({
       clientRequestId: "5f05091b-0e0a-4482-8f11-654c4502b3e1",
       type: "website_operation",
@@ -395,20 +730,117 @@ describe("delivery ticket contract", () => {
         icpNumber: "浙ICP备12345678号",
       },
     });
-    const executor = {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: () => ({
-              for: async () => [],
-            }),
-          }),
-        }),
-      }),
-    };
 
     await expect(
-      assertWebsiteTicketWorkflow(executor, 42, value),
+      assertWebsiteTicketWorkflow(websiteProfileExecutor(null), 42, value),
+    ).rejects.toMatchObject({
+      code: "DOMAIN_PREREQUISITE_REQUIRED",
+      statusCode: 409,
+    });
+    await expect(
+      assertWebsiteTicketWorkflow(
+        websiteProfileExecutor({
+          domain: "example.com",
+          domainStatus: "pending",
+          icpStatus: "not_submitted",
+        }),
+        42,
+        value,
+      ),
+    ).rejects.toMatchObject({
+      code: "DOMAIN_PREREQUISITE_REQUIRED",
+      statusCode: 409,
+    });
+  });
+
+  it("accepts an ICP result only when its normalized domain matches the verified domain", async () => {
+    const profile = {
+      domain: "EXAMPLE.COM.",
+      domainStatus: "completed",
+      icpStatus: "not_submitted",
+    };
+    const value = createDeliveryTicketSchema.parse({
+      clientRequestId: "47a80679-2d3e-42d5-a625-e30ba61c3488",
+      type: "website_operation",
+      category: "icp_filing",
+      topic: "https://Example.com/path",
+      icpDeclarations: {
+        icpNumber: "浙ICP备12345678号",
+      },
+    });
+
+    await expect(
+      assertWebsiteTicketWorkflow(websiteProfileExecutor(profile), 42, value),
+    ).resolves.toEqual({
+      profile,
+      domain: "example.com",
+    });
+  });
+
+  it("rejects an ICP result for a domain other than the verified domain", async () => {
+    const value = createDeliveryTicketSchema.parse({
+      clientRequestId: "8a91d409-7c58-4e3e-9604-f487527077aa",
+      type: "website_operation",
+      category: "icp_filing",
+      topic: "other.example.com",
+      icpDeclarations: {
+        icpNumber: "浙ICP备12345678号",
+      },
+    });
+
+    await expect(
+      assertWebsiteTicketWorkflow(
+        websiteProfileExecutor({
+          domain: "example.com",
+          domainStatus: "completed",
+          icpStatus: "not_submitted",
+        }),
+        42,
+        value,
+      ),
+    ).rejects.toMatchObject({
+      code: "ICP_DOMAIN_MISMATCH",
+      statusCode: 400,
+    });
+  });
+
+  it("keeps an overseas not-required profile closed to ICP resubmission", async () => {
+    const value = createDeliveryTicketSchema.parse({
+      clientRequestId: "be1021b1-dd58-45f8-a3c5-81b5fab48ef3",
+      type: "website_operation",
+      category: "icp_filing",
+      topic: "other.example.com",
+      icpDeclarations: {
+        icpNumber: "浙ICP备12345678号",
+      },
+    });
+
+    await expect(
+      assertWebsiteTicketWorkflow(
+        websiteProfileExecutor({
+          domain: "example.com",
+          domainStatus: "completed",
+          icpStatus: "not_required",
+        }),
+        42,
+        value,
+      ),
+    ).rejects.toMatchObject({
+      code: "ICP_ALREADY_VERIFIED",
+      statusCode: 409,
+    });
+  });
+
+  it("leaves domain applications unchanged when no site profile exists", async () => {
+    const value = createDeliveryTicketSchema.parse({
+      clientRequestId: "41cf89a4-a77a-456a-b83c-9b7d9f3d8189",
+      type: "website_operation",
+      category: "domain_application",
+      topic: "https://Example.com/path",
+    });
+
+    await expect(
+      assertWebsiteTicketWorkflow(websiteProfileExecutor(null), 42, value),
     ).resolves.toEqual({
       profile: null,
       domain: "example.com",
@@ -418,15 +850,40 @@ describe("delivery ticket contract", () => {
   it("validates bounded user and administrator list filters", () => {
     expect(
       deliveryTicketListInputSchema.parse({
-        type: "content_asset",
+        type: "website_operation",
+        surface: "website_management",
         publicStatus: "pending",
         direction: "forward",
       }),
     ).toMatchObject({
-      type: "content_asset",
+      type: "website_operation",
+      surface: "website_management",
       publicStatus: "pending",
       direction: "forward",
       limit: 20,
+    });
+    expect(
+      deliveryTicketListInputSchema.parse({
+        type: "knowledge_base",
+        surface: "question_management",
+      }),
+    ).toMatchObject({
+      type: "knowledge_base",
+      surface: "question_management",
+    });
+    expect(
+      deliveryTicketListInputSchema.parse({
+        surface: "knowledge_management",
+      }),
+    ).toMatchObject({ surface: "knowledge_management" });
+    expect(
+      deliveryTicketListInputSchema.parse({
+        type: "knowledge_base",
+        surface: "response_logic_management",
+      }),
+    ).toMatchObject({
+      type: "knowledge_base",
+      surface: "response_logic_management",
     });
     expect(
       adminDeliveryTicketListInputSchema.parse({
@@ -446,6 +903,33 @@ describe("delivery ticket contract", () => {
     });
     expect(() => deliveryTicketListInputSchema.parse({ limit: 101 })).toThrow();
     expect(() =>
+      deliveryTicketListInputSchema.parse({ surface: "monitoring" }),
+    ).toThrow();
+    expect(() =>
+      deliveryTicketListInputSchema.parse({
+        type: "content_asset",
+        surface: "website_management",
+      }),
+    ).toThrow("需求记录的页面范围与需求类型不匹配");
+    expect(() =>
+      deliveryTicketListInputSchema.parse({
+        type: "content_asset",
+        surface: "question_management",
+      }),
+    ).toThrow("需求记录的页面范围与需求类型不匹配");
+    expect(() =>
+      deliveryTicketListInputSchema.parse({
+        type: "website_operation",
+        surface: "knowledge_management",
+      }),
+    ).toThrow("需求记录的页面范围与需求类型不匹配");
+    expect(() =>
+      adminDeliveryTicketListInputSchema.parse({
+        type: "website_operation",
+        surface: "website_management",
+      }),
+    ).toThrow();
+    expect(() =>
       deliveryTicketListInputSchema.parse({ status: "in_progress" }),
     ).toThrow();
     expect(() =>
@@ -461,6 +945,28 @@ describe("delivery ticket contract", () => {
     ).toThrow();
   });
 
+  it("requires an exact demand target, revision, and destructive confirmation", () => {
+    const input = {
+      userId: 42,
+      ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
+      expectedRevision: 3,
+      confirmation: "DELETE_TICKET" as const,
+    };
+    expect(deleteDeliveryTicketInputSchema.parse(input)).toEqual(input);
+    expect(() =>
+      deleteDeliveryTicketInputSchema.parse({
+        ...input,
+        confirmation: "DELETE",
+      }),
+    ).toThrow();
+    expect(() =>
+      deleteDeliveryTicketInputSchema.parse({
+        ...input,
+        expectedRevision: 0,
+      }),
+    ).toThrow();
+  });
+
   it("round-trips an opaque keyset cursor and rejects tampering", () => {
     const updatedAt = new Date("2026-07-27T02:03:04.000Z");
     const id = "970b87d8-d4f4-45db-8f11-44c45f52ade9";
@@ -473,7 +979,7 @@ describe("delivery ticket contract", () => {
       id,
     });
     expect(() => decodeDeliveryTicketCursor(`${cursor}!`)).toThrow(
-      "工单列表游标无效",
+      "需求列表游标无效",
     );
     expect(() =>
       decodeDeliveryTicketCursor(
@@ -485,7 +991,7 @@ describe("delivery ticket contract", () => {
           }),
         ).toString("base64url"),
       ),
-    ).toThrow("工单列表游标无效");
+    ).toThrow("需求列表游标无效");
   });
 
   it("binds an oldest-first cursor to the created-time ordering", () => {
@@ -555,7 +1061,7 @@ describe("customer delivery-ticket DTO boundary", () => {
     priority: "urgent",
   } as const;
 
-  it("keeps the compatible two-state filter while exposing a useful customer stage", () => {
+  it("exposes only the two-state public delivery contract", () => {
     const value = toPublicDeliveryTicketSummary(internalTicket as any);
 
     expect(value).toEqual({
@@ -564,10 +1070,9 @@ describe("customer delivery-ticket DTO boundary", () => {
       category: "D1",
       categoryLabel: "知乎问答",
       topic: "如何核验品牌事实",
+      sourceQuestionId: null,
       publicStatus: "completed",
       publicStatusLabel: "已完成",
-      publicStage: "completed",
-      publicStageLabel: "已完成",
       publicSummary: "已完成问答内容整理。",
       deliveryLinks: [
         {
@@ -615,10 +1120,9 @@ describe("customer delivery-ticket DTO boundary", () => {
       category: "company_news",
       categoryLabel: "企业新闻与动态",
       topic: "如何核验品牌事实",
+      sourceQuestionId: null,
       publicStatus: "completed",
       publicStatusLabel: "已完成",
-      publicStage: "completed",
-      publicStageLabel: "已完成",
       publicSummary: "已完成问答内容整理。",
     });
     expect(value).not.toHaveProperty("deliveryLinks");
@@ -636,8 +1140,6 @@ describe("customer delivery-ticket DTO boundary", () => {
 
     expect(value).toMatchObject({
       publicStatus: "completed",
-      publicStage: "closed",
-      publicStageLabel: "已结束",
       publicSummary: "当前资料不足，本次需求未受理。",
     });
   });
@@ -655,8 +1157,8 @@ describe("customer delivery-ticket DTO boundary", () => {
     } as any);
 
     expect(actionRequired).toMatchObject({
-      publicStage: "action_required",
-      publicStageLabel: "待您补充",
+      publicStatus: "pending",
+      publicStatusLabel: "待处理",
       publicSummary: "请补充产品参数生效日期。",
     });
     expect(processing.publicSummary).toBeNull();
@@ -679,7 +1181,22 @@ describe("customer delivery-ticket DTO boundary", () => {
     expect(value).not.toHaveProperty("deliveryLinks");
   });
 
-  it("labels the monitoring engineer's question catalog ticket in Chinese", () => {
+  it("labels a customer-authored question review without exposing the enum", () => {
+    const value = toPublicDeliveryTicketSummary({
+      ...internalTicket,
+      type: "knowledge_base",
+      category: "question_review",
+      operation: "question_maintenance",
+    } as any);
+
+    expect(value).toMatchObject({
+      type: "knowledge_base",
+      category: "question_review",
+      categoryLabel: "问题审核",
+    });
+  });
+
+  it("labels the internal question catalog as keyword configuration only", () => {
     const value = toPublicDeliveryTicketSummary({
       ...internalTicket,
       type: "website_operation",
@@ -691,8 +1208,40 @@ describe("customer delivery-ticket DTO boundary", () => {
     expect(value).toMatchObject({
       type: "website_operation",
       category: "question_catalog",
-      categoryLabel: "品牌词库与问题目录",
+      categoryLabel: "配置品牌词库",
     });
+  });
+
+  it("uses a Chinese category fallback for unknown historical codes", () => {
+    const value = toPublicDeliveryTicketSummary({
+      ...internalTicket,
+      type: "website_operation",
+      category: "legacy_website_job",
+      operation: "legacy_website_job",
+    } as any);
+
+    expect(value.categoryLabel).toBe("官网运营需求");
+    expect(value.categoryLabel).not.toContain("legacy_website_job");
+  });
+
+  it("exposes sourceQuestionId for problem-level customer records", () => {
+    const value = toPublicDeliveryTicketSummary({
+      ...internalTicket,
+      type: "website_operation",
+      category: "question_modify",
+      operation: "question_modify",
+      sourceQuestionId: "question-7",
+      status: "submitted",
+      publicSummary: "申请修改为：品牌的新目标问题",
+    } as any);
+
+    expect(value).toMatchObject({
+      categoryLabel: "问题修改",
+      sourceQuestionId: "question-7",
+      publicStatus: "pending",
+      publicSummary: "申请修改为：品牌的新目标问题",
+    });
+    expect(value).not.toHaveProperty("assignedMemberId");
   });
 
   it("validates public dialogue details for website and content tickets", () => {
@@ -817,7 +1366,7 @@ describe("customer delivery-ticket DTO boundary", () => {
   });
 
   it("removes site identity, ICP verification and internal quota allocation", () => {
-    const metadata = toPublicDeliveryTicketWorkspaceMetadata({
+    const internalMetadata = {
       siteProfile: {
         domain: "private.example.com",
         domainStatus: "completed",
@@ -884,6 +1433,7 @@ describe("customer delivery-ticket DTO boundary", () => {
         styleBatch: null,
         selectedStyleSampleId: null,
         styleConfirmed: true,
+        websiteBuildStatus: "completed",
         canSelectStyle: false,
         canRequestStyleRevision: false,
         canSubmitDomain: false,
@@ -894,7 +1444,8 @@ describe("customer delivery-ticket DTO boundary", () => {
         icpLockReason: null,
         contentLockReason: null,
       },
-    } as any);
+    } as any;
+    const metadata = toPublicDeliveryTicketWorkspaceMetadata(internalMetadata);
 
     expect(metadata).not.toHaveProperty("siteProfile");
     expect(metadata).not.toHaveProperty("pendingCount");
@@ -906,6 +1457,7 @@ describe("customer delivery-ticket DTO boundary", () => {
       styleBatch: null,
       selectedStyleSampleId: null,
       styleConfirmed: true,
+      websiteBuildStatus: "completed",
       canSelectStyle: false,
       canRequestStyleRevision: false,
       canSubmitDomain: false,
@@ -931,6 +1483,186 @@ describe("customer delivery-ticket DTO boundary", () => {
     expect(metadata.quotas.content_asset_publish).not.toHaveProperty(
       "reserved",
     );
+
+    const readyForIcp = toPublicDeliveryTicketWorkspaceMetadata({
+      ...internalMetadata,
+      siteProfile: {
+        ...internalMetadata.siteProfile,
+        icpStatus: "not_submitted",
+      },
+      websiteWorkflow: {
+        ...internalMetadata.websiteWorkflow,
+        icpStatus: "not_submitted",
+        icpCompleted: false,
+      },
+    });
+    expect(readyForIcp.websiteWorkflow.canSubmitIcp).toBe(true);
+    expect(readyForIcp.websiteWorkflow.canSubmitContent).toBe(false);
+    expect(readyForIcp.websiteWorkflow.icpLockReason).toBeNull();
+
+    const overseasReadyForStyle = toPublicDeliveryTicketWorkspaceMetadata({
+      ...internalMetadata,
+      marketEdition: "overseas",
+      siteProfile: {
+        ...internalMetadata.siteProfile,
+        domainStatus: "completed",
+        icpStatus: "not_required",
+      },
+      websiteWorkflow: {
+        ...internalMetadata.websiteWorkflow,
+        domainStatus: "completed",
+        icpStatus: "not_required",
+        domainCompleted: true,
+        icpCompleted: true,
+        styleState: "waiting_samples",
+        styleRevision: 1,
+        styleConfirmed: false,
+        websiteBuildStatus: "locked",
+        canSelectStyle: false,
+        canRequestStyleRevision: false,
+        canSubmitContent: false,
+        contentLockReason: "正在等待工程师提供三张官网图片风格样例。",
+      },
+    });
+    expect(overseasReadyForStyle.marketEdition).toBe("overseas");
+    expect(overseasReadyForStyle.websiteWorkflow).toMatchObject({
+      domainCompleted: true,
+      icpCompleted: true,
+      canSubmitDomain: false,
+      canSubmitIcp: false,
+      canSubmitContent: false,
+      styleState: "waiting_samples",
+      contentLockReason: "正在等待工程师提供三张官网图片风格样例。",
+    });
+
+    const overseasWaitingForDomain = toPublicDeliveryTicketWorkspaceMetadata({
+      ...internalMetadata,
+      marketEdition: "overseas",
+      siteProfile: null,
+      websiteWorkflow: {
+        ...internalMetadata.websiteWorkflow,
+        domainStatus: "not_started",
+        icpStatus: "not_required",
+        domainCompleted: false,
+        icpCompleted: true,
+        styleState: "locked",
+        styleRevision: 0,
+        styleConfirmed: false,
+        websiteBuildStatus: "locked",
+        canSelectStyle: false,
+        canRequestStyleRevision: false,
+        canSubmitContent: false,
+      },
+    });
+    expect(overseasWaitingForDomain.websiteWorkflow).toMatchObject({
+      canSubmitDomain: true,
+      canSubmitIcp: false,
+      icpLockReason: null,
+      contentLockReason: "请先完成企业域名注册与确认。",
+    });
+    expect(
+      overseasWaitingForDomain.websiteWorkflow.contentLockReason,
+    ).not.toContain("ICP");
+
+    const knowledgeLocked = toPublicDeliveryTicketWorkspaceMetadata({
+      ...internalMetadata,
+      quotas: {
+        ...internalMetadata.quotas,
+        website_content_publish: {
+          ...internalMetadata.quotas.website_content_publish,
+          allowed: false,
+          reason:
+            "请先在知识库智能体中完成全部节点并发布当前服务的认证知识库；知识库展示完成后解锁 AI 友好内容资产。",
+        },
+      },
+    });
+    expect(knowledgeLocked.websiteWorkflow).toMatchObject({
+      canSubmitDomain: false,
+      canSubmitIcp: false,
+      canSubmitContent: false,
+      contentLockReason: expect.stringContaining("认证知识库"),
+    });
+  });
+
+  it("requires a canonical public service code only for domestic domain completion", () => {
+    expect(
+      resolveManagedDomainApplicationCompletion({
+        marketEdition: "domestic",
+        publicSummary: "备案服务码：SERVICE-123",
+      }),
+    ).toEqual({
+      overseas: false,
+      icpServiceCode: "SERVICE-123",
+    });
+    expect(() =>
+      resolveManagedDomainApplicationCompletion({
+        marketEdition: "domestic",
+        publicSummary: "域名已经核验完成",
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "ICP_SERVICE_CODE_REQUIRED",
+        statusCode: 400,
+      }),
+    );
+    expect(
+      resolveManagedDomainApplicationCompletion({
+        marketEdition: "overseas",
+        publicSummary: "海外版域名已经核验完成",
+      }),
+    ).toEqual({
+      overseas: true,
+      icpServiceCode: null,
+    });
+  });
+
+  it("keeps website content locked until build completion or strong legacy evidence", () => {
+    expect(
+      resolveWebsiteBuildStatus({
+        styleState: "awaiting_selection",
+        ticketStatuses: [],
+        hasCompletionMilestone: false,
+      }),
+    ).toBe("locked");
+    for (const styleState of ["confirmed", "legacy_confirmed"] as const) {
+      expect(
+        resolveWebsiteBuildStatus({
+          styleState,
+          ticketStatuses: [],
+          hasCompletionMilestone: false,
+        }),
+      ).toBe("pending");
+      expect(
+        resolveWebsiteBuildStatus({
+          styleState,
+          ticketStatuses: ["rejected", "cancelled"],
+          hasCompletionMilestone: false,
+        }),
+      ).toBe("pending");
+    }
+    expect(
+      resolveWebsiteBuildStatus({
+        styleState: "confirmed",
+        ticketStatuses: ["completed"],
+        hasCompletionMilestone: false,
+      }),
+    ).toBe("completed");
+    expect(
+      resolveWebsiteBuildStatus({
+        styleState: "legacy_confirmed",
+        ticketStatuses: [],
+        hasCompletionMilestone: false,
+        hasLegacyCompletionEvidence: true,
+      }),
+    ).toBe("completed");
+    expect(
+      resolveWebsiteBuildStatus({
+        styleState: "legacy_confirmed",
+        ticketStatuses: ["submitted"],
+        hasCompletionMilestone: false,
+        hasLegacyCompletionEvidence: true,
+      }),
+    ).toBe("pending");
   });
 });
 
@@ -955,6 +1687,11 @@ describe("delivery ticket quota lifecycle", () => {
               contractId: "contract-basic-2",
             },
           ],
+          knowledge: {
+            status: "display_ready",
+            authenticatedForCurrentService: false,
+          },
+          workflowSteps: [{ id: "knowledge", status: "complete" }],
         } as any,
         "content_asset",
       ),
@@ -974,7 +1711,7 @@ describe("delivery ticket quota lifecycle", () => {
         } as any,
         "website_operation",
       ),
-    ).toThrow("普通版不包含 AI 友好官网管理");
+    ).toThrow("普通版不包含AI友好官网管理");
     expect(
       assertDeliveryTicketServiceEligibility(
         {
@@ -992,6 +1729,43 @@ describe("delivery ticket quota lifecycle", () => {
     ).toMatchObject({ quotaPeriodId: "period-basic" });
   });
 
+  it("requires the plan-specific knowledge publication before asset tickets", () => {
+    const basic = {
+      service: {
+        status: "active",
+        planCode: "basic",
+        contractId: "contract-basic",
+      },
+      quotas: { periodId: "period-basic" },
+      quotaPeriods: [],
+      knowledge: {
+        status: "missing",
+        authenticatedForCurrentService: false,
+      },
+      workflowSteps: [{ id: "knowledge", status: "ready" }],
+    } as any;
+    expect(() =>
+      assertDeliveryTicketServiceEligibility(basic, "content_asset"),
+    ).toThrow("Website 流程自动同步或服务团队补录知识库");
+
+    const advanced = {
+      ...basic,
+      service: {
+        status: "active",
+        planCode: "advanced",
+        contractId: "contract-advanced",
+      },
+      quotas: { periodId: "period-advanced" },
+      knowledge: {
+        status: "display_ready",
+        authenticatedForCurrentService: false,
+      },
+    } as any;
+    expect(() =>
+      assertDeliveryTicketServiceEligibility(advanced, "website_operation"),
+    ).toThrow("当前服务的认证知识库");
+  });
+
   it("rejects expired services on the server", () => {
     expect(() =>
       assertDeliveryTicketServiceEligibility({
@@ -1002,7 +1776,7 @@ describe("delivery ticket quota lifecycle", () => {
         },
         quotas: { periodId: "period-luxury" },
       } as any),
-    ).toThrow("仅可查看历史工单");
+    ).toThrow("仅可查看历史需求");
   });
 
   it("allocates concurrent Basic purchases to the next real period", () => {

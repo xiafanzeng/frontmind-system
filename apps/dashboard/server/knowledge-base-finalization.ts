@@ -1,6 +1,9 @@
 import type { ConversationTurn, KnowledgeBaseBuild } from "../drizzle/schema";
 import {
+  assertKnowledgeBaseV4FinalOutputResourceContract,
   collectKnowledgeArchiveDescriptors,
+  collectKnowledgeBaseOutputResourceProjections,
+  KnowledgeBaseFinalOutputResourceContractError,
   knowledgeArchivePhysicalDescriptorHash,
   type KnowledgeArchiveDescriptor,
 } from "./knowledge-base-artifact";
@@ -82,11 +85,11 @@ export function deriveKnowledgeBaseAuthoritativeFinalizationPlan(input: {
   transitionTarget?: KnowledgeBaseFinalTransitionTarget;
 }): KnowledgeBaseAuthoritativeFinalizationPlan | null {
   const { build, activeTurn } = input;
-  const leafId = String(build.currentLeafId || "").trim();
-  const operationId = String(activeTurn?.operationKey || "").trim();
+  const leafId = String(build.currentLeafId || "");
+  const operationId = String(activeTurn?.operationKey || "");
   const taskId = String(
     activeTurn?.upstreamTaskId || build.upstreamTaskId || "",
-  ).trim();
+  );
   const ordered = [...input.nodes].sort(
     (left, right) => left.ordinal - right.ordinal,
   );
@@ -102,6 +105,9 @@ export function deriveKnowledgeBaseAuthoritativeFinalizationPlan(input: {
     (activeTurn.status !== "queued" && activeTurn.status !== "running") ||
     !operationId ||
     !taskId ||
+    leafId !== leafId.trim() ||
+    operationId !== operationId.trim() ||
+    taskId !== taskId.trim() ||
     activeTurn.buildGeneration !== build.generation ||
     activeTurn.upstreamTaskId !== build.upstreamTaskId ||
     activeTurn.expectedRevision !== build.revision ||
@@ -160,10 +166,10 @@ function collectIdentityClaims(
   if (typeof value !== "object") return claims;
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     const normalizedKey = key.replace(/_/gu, "").toLowerCase();
-    if (typeof raw === "string" && raw.trim()) {
-      if (normalizedKey === "operationid") claims.operationIds.add(raw.trim());
-      if (normalizedKey === "turnid") claims.turnIds.add(raw.trim());
-      if (normalizedKey === "taskid") claims.taskIds.add(raw.trim());
+    if (typeof raw === "string" && raw.length > 0) {
+      if (normalizedKey === "operationid") claims.operationIds.add(raw);
+      if (normalizedKey === "turnid") claims.turnIds.add(raw);
+      if (normalizedKey === "taskid") claims.taskIds.add(raw);
     } else if (
       (normalizedKey === "generation" || normalizedKey === "buildgeneration") &&
       ((typeof raw === "number" && Number.isInteger(raw)) ||
@@ -246,11 +252,10 @@ export function selectKnowledgeBaseAuthoritativeFinalDescriptor(input: {
   scopedOutput: unknown;
   plan: KnowledgeBaseAuthoritativeFinalizationPlan;
 }) {
-  const scoped = collectKnowledgeArchiveDescriptors(input.scopedOutput);
-  if (scoped.length === 1) return scoped[0]!;
-  if (scoped.length > 1) return null;
+  if (Array.isArray(input.scopedOutput) && input.scopedOutput.length > 0) {
+    return assertKnowledgeBaseV4FinalOutputResourceContract(input.scopedOutput);
+  }
 
-  const candidates = collectKnowledgeArchiveDescriptors(input.output);
   const outputItems = Array.isArray(input.output) ? input.output : null;
   if (!outputItems) return null;
   let latestProgressItemIndex = -1;
@@ -262,30 +267,63 @@ export function selectKnowledgeBaseAuthoritativeFinalDescriptor(input: {
     }
   }
   if (latestProgressItemIndex < 0) return null;
-  const nonConflicting = candidates.filter((descriptor) => {
-    const physicalHash = knowledgeArchivePhysicalDescriptorHash(descriptor);
-    const carryingItemIndexes = outputItems.flatMap((item: unknown, index) =>
-      collectKnowledgeArchiveDescriptors([item]).some(
-        (candidate) =>
-          knowledgeArchivePhysicalDescriptorHash(candidate) === physicalHash,
-      )
-        ? [index]
-        : [],
-    );
+  const latestItem = outputItems[latestProgressItemIndex];
+  if (
+    !claimsDoNotConflict(collectIdentityClaims(latestItem), input.plan) ||
+    collectKnowledgeBaseOutputResourceProjections([latestItem]).length === 0
+  ) {
+    return null;
+  }
+
+  const resourceScope = outputItems.filter((item, index) => {
+    if (index === latestProgressItemIndex) return true;
+    if (collectKnowledgeBaseOutputResourceProjections([item]).length === 0) {
+      return false;
+    }
+    const claims = collectIdentityClaims(item);
     return (
-      carryingItemIndexes.includes(latestProgressItemIndex) &&
-      carryingItemIndexes.every((index) =>
-        claimsDoNotConflict(
+      claims.operationIds.size === 1 &&
+      claims.operationIds.has(input.plan.operationId) &&
+      claims.turnIds.size === 1 &&
+      claims.turnIds.has(input.plan.turnId) &&
+      claimsDoNotConflict(claims, input.plan)
+    );
+  });
+  let descriptor: KnowledgeArchiveDescriptor;
+  try {
+    descriptor =
+      assertKnowledgeBaseV4FinalOutputResourceContract(resourceScope);
+  } catch (error) {
+    if (
+      error instanceof KnowledgeBaseFinalOutputResourceContractError &&
+      error.code === "MISSING"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+  const physicalHash = knowledgeArchivePhysicalDescriptorHash(descriptor);
+  const carryingItemIndexes = outputItems.flatMap((item: unknown, index) =>
+    collectKnowledgeArchiveDescriptors([item]).some(
+      (candidate) =>
+        knowledgeArchivePhysicalDescriptorHash(candidate) === physicalHash,
+    )
+      ? [index]
+      : [],
+  );
+  if (
+    !carryingItemIndexes.includes(latestProgressItemIndex) ||
+    carryingItemIndexes.some(
+      (index) =>
+        !claimsDoNotConflict(
           collectIdentityClaims(outputItems[index]),
           input.plan,
         ),
-      ) &&
-      assistantMessageContainsMalformedFinalProtocolHint(
-        outputItems[latestProgressItemIndex],
-      )
-    );
-  });
-  return nonConflicting.length === 1 ? nonConflicting[0]! : null;
+    )
+  ) {
+    return null;
+  }
+  return descriptor;
 }
 
 export function createKnowledgeBaseAuthoritativeFinalOutput(input: {

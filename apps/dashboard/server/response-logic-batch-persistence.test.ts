@@ -8,12 +8,13 @@ vi.mock("./db", () => ({
   getDb: mocks.getDb,
 }));
 
-import { responseLogicEntries } from "../drizzle/schema";
+import { responseLogicEntries, workspaceQuestions } from "../drizzle/schema";
 import type {
   ResponseLogicDraft,
   SaveResponseLogicInput,
 } from "../shared/response-logic";
 import {
+  ResponseLogicConfirmedError,
   ResponseLogicRevisionConflictError,
   saveResponseLogicEntriesBatch,
 } from "./response-logic-service";
@@ -59,7 +60,10 @@ function row(questionId: string, revision: number) {
   };
 }
 
-function value(questionId: string, publish = true): SaveResponseLogicInput {
+function value(
+  questionId: string,
+  publish = true,
+): Omit<SaveResponseLogicInput, "expectedRevision"> {
   return {
     questionId,
     groupId: "product",
@@ -75,6 +79,7 @@ function value(questionId: string, publish = true): SaveResponseLogicInput {
 function transactionalDatabase(input: {
   rows: Array<Record<string, any>>;
   failOnUpdate?: number;
+  missingWorkspaceQuestionIds?: string[];
 }) {
   let committedRows = input.rows.map((item) => ({ ...item }));
   let preflightConsumed = false;
@@ -105,6 +110,28 @@ function transactionalDatabase(input: {
         select() {
           return {
             from(table: unknown) {
+              if (table === workspaceQuestions) {
+                const missing = new Set(
+                  input.missingWorkspaceQuestionIds ?? [],
+                );
+                return {
+                  where() {
+                    return {
+                      async for() {
+                        return localRows
+                          .filter((row) => !missing.has(row.questionId))
+                          .map((row) => ({
+                            id: row.questionId,
+                            userId: USER_ID,
+                            status: "selected",
+                            selectionApprovalStatus: "approved",
+                            locked: true,
+                          }));
+                      },
+                    };
+                  },
+                };
+              }
               if (table !== responseLogicEntries) {
                 throw new Error("unexpected table");
               }
@@ -231,6 +258,50 @@ describe("response-logic template atomic publication", () => {
     ).rejects.toBeInstanceOf(ResponseLogicRevisionConflictError);
 
     expect(database.rows).toEqual(initialRows);
+    expect(database.preflightConsumed).toBe(false);
+    expect(database.auditWritten).toBe(false);
+  });
+
+  it("fails closed if a catalog question disappears before the batch locks it", async () => {
+    const initialRows = [row("question-1", 3)];
+    const database = transactionalDatabase({
+      rows: initialRows,
+      missingWorkspaceQuestionIds: ["question-1"],
+    });
+    mocks.getDb.mockResolvedValue(database.db);
+
+    await expect(
+      saveResponseLogicEntriesBatch({
+        userId: USER_ID,
+        entries: [{ expectedRevision: 3, value: value("question-1") }],
+        beforeWrite: (tx) => tx.consumePreflight(),
+        afterWrite: (tx) => tx.writeAudit(),
+      }),
+    ).rejects.toThrow("已删除或不属于当前目录");
+    expect(database.rows).toEqual(initialRows);
+    expect(database.auditWritten).toBe(false);
+  });
+
+  it("rejects a batch overwrite of an already confirmed response logic", async () => {
+    const confirmedRow = row("question-1", 3);
+    confirmedRow.confirmed = {
+      ...draft("question-1 已确认"),
+      version: 1,
+      updatedAt: NOW.toISOString(),
+    };
+    const database = transactionalDatabase({ rows: [confirmedRow] });
+    mocks.getDb.mockResolvedValue(database.db);
+
+    await expect(
+      saveResponseLogicEntriesBatch({
+        userId: USER_ID,
+        entries: [{ expectedRevision: 3, value: value("question-1") }],
+        beforeWrite: (tx) => tx.consumePreflight(),
+        afterWrite: (tx) => tx.writeAudit(),
+      }),
+    ).rejects.toBeInstanceOf(ResponseLogicConfirmedError);
+
+    expect(database.rows).toEqual([confirmedRow]);
     expect(database.preflightConsumed).toBe(false);
     expect(database.auditWritten).toBe(false);
   });

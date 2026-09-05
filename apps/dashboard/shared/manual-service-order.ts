@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_PASSWORD_LENGTH } from "./auth-constraints";
+import { accountMarketEditionSchema } from "./account-edition";
 
 const serviceCategorySchema = z.enum([
   "product_scenario",
@@ -74,6 +75,9 @@ export const manualServiceAccountTargetSchema = z.discriminatedUnion("mode", [
 export const createManualServiceOrderRequestSchema = z
   .object({
     schemaVersion: z.literal(1),
+    // Older website clients did not send an edition. Manual orders persist the
+    // resolved domestic default so later signing/payment stages cannot drift.
+    marketEdition: accountMarketEditionSchema.optional(),
     project: z
       .object({
         id: z.string().trim().min(8).max(80),
@@ -213,6 +217,9 @@ export const manualServiceOrderResponseSchema = z
         reference: identifierSchema,
         projectId: z.string().trim().min(8).max(80),
         status: manualServiceOrderStatusSchema,
+        // Optional only for rolling compatibility; current services always
+        // return the durable order edition.
+        marketEdition: accountMarketEditionSchema.optional(),
         amountFen: z.number().int().positive().max(10_000_000).optional(),
         contractId: identifierSchema.optional(),
         signingUrl: z.string().url().max(2048).optional(),

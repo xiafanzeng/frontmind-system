@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { AuthenticatedUser } from "./auth-service";
-import { publishWebsiteStyleSamples } from "./delivery-role-service";
+import {
+  assertGenericDeliveryTicketTransition,
+  publishWebsiteStyleSamples,
+} from "./delivery-role-service";
 
 const actor = {
   id: 31,
@@ -63,5 +66,24 @@ describe("website style sample publishing contract", () => {
       code: "CONFLICT",
       message: "三张图片样例不能重复",
     });
+  });
+});
+
+describe("Jenova enablement ticket transition contract", () => {
+  it("cannot be rejected or cancelled through the generic operation flow", () => {
+    for (const nextStatus of ["rejected", "cancelled"] as const) {
+      expect(() =>
+        assertGenericDeliveryTicketTransition({
+          operation: "brand_tracking_setup",
+          nextStatus,
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CONFLICT" }));
+    }
+    expect(() =>
+      assertGenericDeliveryTicketTransition({
+        operation: "brand_tracking_setup",
+        nextStatus: "completed",
+      }),
+    ).not.toThrow();
   });
 });

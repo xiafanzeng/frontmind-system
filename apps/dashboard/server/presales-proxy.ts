@@ -19,14 +19,17 @@ import {
   getPresalesCredentialForResource,
   hashPresalesTaskPayload,
   hasPresalesOutputUrlGrant,
-  markPresalesFileContentDeleted,
   recordPresalesUpstreamResource,
   releasePresalesTaskReservation,
+  retainPresalesProjectFilePurgeTarget,
+  retainPresalesTaskPurgeTarget,
   reservePresalesFileUploadRetention,
   resolvePresalesTaskCredentialForFiles,
   syncPresalesOutputUrlGrants,
+  withPresalesProjectFileCreateGuard,
   type DecryptedPresalesCredential,
 } from "./presales-service";
+import { projectOrderProjectIdSchema } from "../shared/project-order-registry";
 import {
   assertSafeExternalUrl,
   ExternalUrlRejectedError,
@@ -34,7 +37,7 @@ import {
 } from "./_core/safe-external-url";
 import { getUpstreamBaseUrl, toUpstreamAgentProfile } from "./upstream-config";
 import {
-  isDedicatedMonitorCredentialConfigured,
+  getDedicatedMonitorCredentialReadiness,
   presalesMonitorRouter,
 } from "./presales-monitor";
 import { isFrontMindPublicUrlConfigured } from "./public-url";
@@ -46,7 +49,6 @@ import {
   readStoredPresalesFile,
   recordPresalesFileDescriptor,
   releasePresalesFileCreateReservation,
-  removePresalesFileCreateReservation,
   removeStoredPresalesFile,
   removeStoredPresalesFileContent,
   stagePresalesFileContent,
@@ -56,6 +58,11 @@ import {
   OwnedFileContentError,
   OwnedFileContentResolver,
 } from "./owned-file-content-resolver";
+import {
+  assertUpstreamPromptBudget,
+  FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+  upstreamPromptCharacterCount,
+} from "./upstream-prompt-budget";
 
 const router = Router();
 const SERVICE_TOKEN_HEADER = "x-frontmind-service-token";
@@ -78,17 +85,28 @@ const PUBLIC_PLACEHOLDER_MARKERS = [
   "change-me",
 ];
 
-const fileCreateSchema = z.object({
-  filename: z.string().trim().min(1).max(512),
-  mimeType: z.string().trim().max(255).optional(),
-  sizeBytes: z
-    .number()
-    .int()
-    .nonnegative()
-    .max(MAX_PROXY_UPLOAD_BYTES)
-    .optional(),
-  idempotencyKey: z.string().trim().min(16).max(512).optional(),
-});
+const fileCreateSchema = z
+  .object({
+    filename: z.string().trim().min(1).max(512),
+    projectId: projectOrderProjectIdSchema.optional(),
+    mimeType: z.string().trim().max(255).optional(),
+    sizeBytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(MAX_PROXY_UPLOAD_BYTES)
+      .optional(),
+    idempotencyKey: z.string().trim().min(16).max(512).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.projectId && !value.idempotencyKey) {
+      context.addIssue({
+        code: "custom",
+        path: ["idempotencyKey"],
+        message: "Project-bound files require an idempotency key",
+      });
+    }
+  });
 
 const attachmentSchema = z.object({
   file_id: z.string().trim().min(1).max(255),
@@ -99,7 +117,7 @@ const presalesAgentProfileSchema = z.enum(["frontmind-base", "frontmind-pro"]);
 
 const taskCreateSchema = z
   .object({
-    prompt: z.string().trim().min(1).max(2_000_000),
+    prompt: z.string().trim().min(1),
     attachments: z.array(attachmentSchema).max(20).optional().default([]),
     idempotencyKey: z.string().trim().min(16).max(512).optional(),
     projectId: z.string().trim().min(8).max(80).optional(),
@@ -108,6 +126,16 @@ const taskCreateSchema = z
       .default("frontmind-base"),
   })
   .superRefine((value, context) => {
+    if (
+      upstreamPromptCharacterCount(value.prompt) >
+      FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["prompt"],
+        message: `Task prompt must not exceed ${FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS} Unicode characters`,
+      });
+    }
     if (value.projectId && !value.idempotencyKey) {
       context.addIssue({
         code: "custom",
@@ -122,10 +150,11 @@ export function buildPresalesTaskBody(input: {
   attachments?: Array<{ file_id: string; filename: string }>;
   agentProfile?: z.infer<typeof presalesAgentProfileSchema>;
 }) {
+  const prompt = assertUpstreamPromptBudget(input.prompt);
   const agentProfile =
     input.agentProfile === "frontmind-pro" ? "frontmind-pro" : "frontmind-base";
   return {
-    prompt: input.prompt,
+    prompt,
     attachments: input.attachments ?? [],
     agentProfile: toUpstreamAgentProfile(agentProfile),
     taskMode: "agent" as const,
@@ -544,15 +573,17 @@ function sendKnownError(res: Response, error: unknown) {
     const status =
       error.code === "NOT_FOUND"
         ? 404
-        : error.code === "CONFLICT"
-          ? 409
-          : error.code === "INVALID_CREDENTIAL"
-            ? 428
-            : error.code === "IDEMPOTENCY_PENDING"
-              ? 425
-              : error.code === "UPSTREAM_UNAVAILABLE"
-                ? 502
-                : 503;
+        : error.code === "PROJECT_DELETED"
+          ? 410
+          : error.code === "CONFLICT"
+            ? 409
+            : error.code === "INVALID_CREDENTIAL"
+              ? 428
+              : error.code === "IDEMPOTENCY_PENDING"
+                ? 425
+                : error.code === "UPSTREAM_UNAVAILABLE"
+                  ? 502
+                  : 503;
     res.status(status).json({
       error: { code: error.code, message: error.message },
     });
@@ -751,6 +782,7 @@ async function registerTaskArtifacts(
   taskId: string,
   task: unknown,
   credential: DecryptedPresalesCredential,
+  projectId?: string,
 ) {
   const artifacts = collectTaskArtifacts(task);
   for (const fileId of artifacts.fileIds) {
@@ -758,14 +790,36 @@ async function registerTaskArtifacts(
     // authenticated upstream API must also confirm that the file exists under
     // the exact credential version bound to this task.
     await fetchFileMetadata(fileId, credential);
-    await recordPresalesUpstreamResource({
-      apiCredentialId: credential.id,
-      kind: "file",
-      upstreamId: fileId,
-      parentTaskId: taskId,
-      contentSource: "assistant_output",
-      verifiedAssistantOutput: artifacts.strictOutputFileIds.has(fileId),
-    });
+    try {
+      await recordPresalesUpstreamResource({
+        ...(projectId ? { projectId } : {}),
+        apiCredentialId: credential.id,
+        kind: "file",
+        upstreamId: fileId,
+        parentTaskId: taskId,
+        contentSource: "assistant_output",
+        verifiedAssistantOutput: artifacts.strictOutputFileIds.has(fileId),
+      });
+    } catch (error) {
+      if (
+        !(error instanceof AuthServiceError) ||
+        error.code !== "PROJECT_DELETED" ||
+        !artifacts.strictOutputFileIds.has(fileId)
+      ) {
+        throw error;
+      }
+      if (projectId) {
+        await retainPresalesProjectFilePurgeTarget({
+          projectId,
+          fileId,
+          apiCredentialId: credential.id,
+        });
+      }
+      // Project removal is browser-local. Preserve the Provider output and its
+      // durable evidence so a late result is adoptable instead of compensating
+      // with a destructive Provider DELETE.
+      continue;
+    }
   }
   const normalizedUrls = new Set<string>();
   for (const value of artifacts.urls) {
@@ -811,20 +865,41 @@ async function retrieveTask(
   const task = normalizeTask(
     redactUpstreamPayload(response.data, credential.apiKey),
   );
-  const artifacts = await registerTaskArtifacts(taskId, task, credential);
+  const projectId = (
+    credential as DecryptedPresalesCredential & {
+      resource?: { projectId?: string | null };
+    }
+  ).resource?.projectId;
+  const artifacts = await registerTaskArtifacts(
+    taskId,
+    task,
+    credential,
+    projectId ?? undefined,
+  );
   return { task, artifacts };
 }
 
 router.use(requirePresalesServiceToken);
 router.use("/monitor-runs", presalesMonitorRouter);
 
-router.get("/status", async (_req, res) => {
+router.get("/status", async (req, res) => {
   try {
-    const credential = await getActivePresalesCredential();
+    const forceMonitorCredentialRefresh =
+      req.query.monitorCredentialProbe === "fresh";
+    const [credential, monitorCredential] = await Promise.all([
+      getActivePresalesCredential(),
+      getDedicatedMonitorCredentialReadiness(process.env, {
+        forceRefresh: forceMonitorCredentialRefresh,
+      }),
+    ]);
     res.json({
-      ok: true,
+      // Keep legacy Website builds fail-closed during the rolling upgrade:
+      // they understand `ok` but not the new authenticated field. The
+      // configured boolean below now retains its literal meaning.
+      ok: monitorCredential.authenticated,
       credentialConfigured: Boolean(credential),
-      monitorCredentialConfigured: isDedicatedMonitorCredentialConfigured(),
+      monitorCredentialConfigured: monitorCredential.configured,
+      monitorCredentialAuthenticated: monitorCredential.authenticated,
       publicUrlConfigured: isFrontMindPublicUrlConfigured(),
     });
   } catch (error) {
@@ -841,12 +916,23 @@ router.post("/files", fileJsonParser, async (req, res) => {
       attemptId: string;
     } | null = null;
     if (input.idempotencyKey) {
-      const acquired = await acquirePresalesFileCreateReservation({
+      const reservationInput = {
         idempotencyKey: input.idempotencyKey,
         requestHash: hashPresalesFileCreatePayload(input),
+        compatibleRequestHashes: input.projectId
+          ? [hashPresalesFileCreatePayload({ ...input, projectId: undefined })]
+          : [],
+        projectId: input.projectId,
         apiCredentialId: credential.id,
         credentialVersion: credential.version,
-      });
+      };
+      const acquired = input.projectId
+        ? await withPresalesProjectFileCreateGuard(
+            input.projectId,
+            credential.id,
+            () => acquirePresalesFileCreateReservation(reservationInput),
+          )
+        : await acquirePresalesFileCreateReservation(reservationInput);
       if (acquired.state === "conflict") {
         throw new AuthServiceError(
           "CONFLICT",
@@ -870,6 +956,15 @@ router.post("/files", fileJsonParser, async (req, res) => {
         return;
       }
       if (acquired.state === "completed") {
+        if (input.projectId) {
+          await recordPresalesUpstreamResource({
+            projectId: input.projectId,
+            apiCredentialId: credential.id,
+            kind: "file",
+            upstreamId: acquired.upstreamFileId,
+            contentSource: "user_upload",
+          });
+        }
         const proxyUploadTicket = acquired.uploadUrl
           ? createPresalesUploadTicket({
               fileId: acquired.upstreamFileId,
@@ -928,30 +1023,11 @@ router.post("/files", fileJsonParser, async (req, res) => {
         "File creation response did not include an id",
       );
     }
-    await recordPresalesUpstreamResource({
-      apiCredentialId: credential.id,
-      kind: "file",
-      upstreamId: id,
-      contentSource: "user_upload",
-    });
-    await recordPresalesFileDescriptor({
-      fileId: id,
-      filename: input.filename,
-      mimeType: input.mimeType,
-      sizeBytes: input.sizeBytes,
-    });
     const payload = redactUpstreamPayload(response.data, credential.apiKey) as
       | Record<string, unknown>
       | undefined;
     const uploadUrl =
       typeof payload?.upload_url === "string" ? payload.upload_url : "";
-    const proxyUploadTicket = uploadUrl
-      ? createPresalesUploadTicket({
-          fileId: id,
-          target: uploadUrl,
-          upstreamExpiresAt: payload?.upload_expires_at,
-        })
-      : undefined;
     if (reservation) {
       await completePresalesFileCreateReservation({
         ...reservation,
@@ -969,6 +1045,44 @@ router.post("/files", fileJsonParser, async (req, res) => {
           : {}),
       });
     }
+    try {
+      await recordPresalesUpstreamResource({
+        projectId: input.projectId,
+        apiCredentialId: credential.id,
+        kind: "file",
+        upstreamId: id,
+        contentSource: "user_upload",
+      });
+    } catch (error) {
+      if (
+        !(error instanceof AuthServiceError) ||
+        error.code !== "PROJECT_DELETED" ||
+        !reservation
+      ) {
+        throw error;
+      }
+      if (input.projectId) {
+        await retainPresalesProjectFilePurgeTarget({
+          projectId: input.projectId,
+          fileId: id,
+          apiCredentialId: credential.id,
+        });
+      }
+      throw error;
+    }
+    await recordPresalesFileDescriptor({
+      fileId: id,
+      filename: input.filename,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+    });
+    const proxyUploadTicket = uploadUrl
+      ? createPresalesUploadTicket({
+          fileId: id,
+          target: uploadUrl,
+          upstreamExpiresAt: payload?.upload_expires_at,
+        })
+      : undefined;
     res.status(201).json({
       ...(payload ?? {}),
       id,
@@ -1009,29 +1123,6 @@ async function fetchFileMetadata(
 
 export function buildProxyUploadSuccess(upstreamStatus: number) {
   return { ok: true, status: "uploaded", upstreamStatus } as const;
-}
-
-export function buildPresalesFileDeleteOutcome(
-  upstreamStatus: number,
-  data?: unknown,
-  apiKey?: string,
-) {
-  if (
-    upstreamStatus === 404 ||
-    (upstreamStatus >= 200 && upstreamStatus < 300)
-  ) {
-    return { ok: true as const, status: 204, body: null };
-  }
-  return {
-    ok: false as const,
-    status: forwardedStatus(upstreamStatus),
-    body: {
-      error: {
-        code: "UPSTREAM_FILE_DELETE_FAILED",
-        message: upstreamErrorDetail(data, "File deletion failed", apiKey),
-      },
-    },
-  };
 }
 
 router.put("/files/:fileId/content", async (req, res) => {
@@ -1134,13 +1225,24 @@ router.put("/files/:fileId/content", async (req, res) => {
     let response;
     let reservation;
     try {
-      reservation = await reservePresalesFileUploadRetention({
-        fileId,
-        apiCredentialId: credential.id,
-        // The completed staged copy is the conservative first-attempt clock.
-        // It is persisted before the external PUT and every retry reuses it.
-        now: new Date(),
-      });
+      const reserveUpload = (executor?: any) =>
+        reservePresalesFileUploadRetention(
+          {
+            fileId,
+            apiCredentialId: credential.id,
+            // The completed staged copy is the conservative first-attempt clock.
+            // It is persisted before the external PUT and every retry reuses it.
+            now: new Date(),
+          },
+          executor,
+        );
+      reservation = resource.projectId
+        ? await withPresalesProjectFileCreateGuard(
+            resource.projectId,
+            credential.id,
+            (tx) => reserveUpload(tx),
+          )
+        : await reserveUpload();
       const target =
         ticketTarget ??
         assertSafeExternalUrl(
@@ -1222,42 +1324,10 @@ router.put("/files/:fileId/content", async (req, res) => {
   }
 });
 
-router.delete("/files/:fileId", async (req, res) => {
-  try {
-    const fileId = String(req.params.fileId || "");
-    const credential = await requireResourceCredential("file", fileId);
-    if (credential.resource.contentSource === "user_upload") {
-      await markPresalesFileContentDeleted({
-        fileId,
-        apiCredentialId: credential.id,
-        now: new Date(),
-      });
-    }
-    const response = await axios.delete(
-      `${getUpstreamBaseUrl()}/v1/files/${encodeURIComponent(fileId)}`,
-      {
-        headers: upstreamHeaders(credential.apiKey),
-        timeout: 60_000,
-        validateStatus: () => true,
-      },
-    );
-    const outcome = buildPresalesFileDeleteOutcome(
-      response.status,
-      response.data,
-      credential.apiKey,
-    );
-    if (outcome.ok) {
-      await Promise.all([
-        removeStoredPresalesFile(fileId),
-        removePresalesFileCreateReservation(fileId),
-      ]);
-      res.status(outcome.status).end();
-      return;
-    }
-    res.status(outcome.status).json(outcome.body);
-  } catch (error) {
-    sendKnownError(res, error);
-  }
+router.delete("/files/:fileId", (_req, res) => {
+  // Rolling compatibility: Website project removal is local-only. Preserve
+  // Provider files and Dashboard evidence for retention-based cleanup.
+  res.status(204).end();
 });
 
 async function releaseTaskReservationSafely(reservation: {
@@ -1296,13 +1366,36 @@ router.post("/tasks", taskJsonParser, async (req, res) => {
           projectId: input.projectId ?? null,
           task: taskBody,
         }),
+        compatibleRequestHashes: input.projectId
+          ? [hashPresalesTaskPayload(taskBody)]
+          : [],
         projectId: input.projectId,
         apiCredentialId: credential.id,
         credentialVersion: credential.version,
       });
       if (acquired.state === "completed") {
+        if (input.projectId) {
+          for (const attachment of input.attachments) {
+            await recordPresalesUpstreamResource({
+              projectId: input.projectId,
+              apiCredentialId: credential.id,
+              kind: "file",
+              upstreamId: attachment.file_id,
+              contentSource: "user_upload",
+            });
+          }
+        }
+        // The reservation proves which immutable upstream task belongs to this
+        // operation; it does not know the task's execution state. Refresh the
+        // task before replaying so a finished translation (including typed
+        // assistant output) is not downgraded forever to a synthetic `queued`
+        // response.
+        const { task } = await retrieveTask(
+          acquired.upstreamTaskId,
+          credential,
+        );
         res.setHeader("Idempotent-Replayed", "true");
-        res.status(200).json(acquired.task);
+        res.status(200).json(task);
         return;
       }
       reservation = acquired;
@@ -1348,20 +1441,46 @@ router.post("/tasks", taskJsonParser, async (req, res) => {
       );
     }
     if (reservation) {
-      await completePresalesTaskReservation({
-        reservationId: reservation.reservationId,
-        attemptId: reservation.attemptId,
-        apiCredentialId: credential.id,
-        upstreamTaskId: id,
-      });
+      try {
+        await completePresalesTaskReservation({
+          reservationId: reservation.reservationId,
+          attemptId: reservation.attemptId,
+          apiCredentialId: credential.id,
+          upstreamTaskId: id,
+          attachmentFileIds: input.attachments.map((item) => item.file_id),
+        });
+      } catch {
+        await retainPresalesTaskPurgeTarget({
+          reservationId: reservation.reservationId,
+          attemptId: reservation.attemptId,
+          apiCredentialId: credential.id,
+          upstreamTaskId: id,
+        }).catch(() => undefined);
+        throw new AuthServiceError(
+          "UPSTREAM_UNAVAILABLE",
+          "上游已接收任务，正在等待本地确认",
+        );
+      }
     } else {
       await recordPresalesUpstreamResource({
+        projectId: input.projectId,
         apiCredentialId: credential.id,
         kind: "task",
         upstreamId: id,
       });
+      if (input.projectId) {
+        for (const attachment of input.attachments) {
+          await recordPresalesUpstreamResource({
+            projectId: input.projectId,
+            apiCredentialId: credential.id,
+            kind: "file",
+            upstreamId: attachment.file_id,
+            contentSource: "user_upload",
+          });
+        }
+      }
     }
-    await registerTaskArtifacts(id, task, credential);
+    await registerTaskArtifacts(id, task, credential, input.projectId);
     res.status(201).json(task);
   } catch (error) {
     sendKnownError(res, error);
@@ -1382,14 +1501,32 @@ async function sendTask(req: Request, res: Response) {
 router.get("/tasks/:taskId", sendTask);
 router.get("/tasks/:taskId/result", sendTask);
 
-router.delete("/tasks/:taskId", async (req, res) => {
+router.delete("/tasks/:taskId", (_req, res) => {
+  // Provider task history is immutable from Website cleanup paths.
+  res.status(204).end();
+});
+
+router.delete("/projects/:projectId/monitor-runs/:runId", async (req, res) => {
   try {
-    const taskId = String(req.params.taskId || "");
-    await requireResourceCredential("task", taskId);
-    // Rolling compatibility for older Website releases: acknowledge their
-    // cleanup call, but retain both the upstream task and its local evidence.
-    res.setHeader("X-FrontMind-Task-Retention", "retained");
+    projectOrderProjectIdSchema.parse(req.params.projectId);
+    z.string().uuid().parse(req.params.runId);
     res.status(204).end();
+  } catch (error) {
+    sendKnownError(res, error);
+  }
+});
+
+router.delete("/projects/:projectId/tasks", async (req, res) => {
+  try {
+    const projectId = projectOrderProjectIdSchema.parse(req.params.projectId);
+    res.json({
+      schemaVersion: 1,
+      projectId,
+      status: "deleted",
+      deletedTasks: 0,
+      deletedFiles: 0,
+      pendingReservations: 0,
+    });
   } catch (error) {
     sendKnownError(res, error);
   }

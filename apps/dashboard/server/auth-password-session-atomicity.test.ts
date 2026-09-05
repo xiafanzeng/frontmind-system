@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import { createHash } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const databaseMock = vi.hoisted(() => ({ getDb: vi.fn() }));
 
@@ -14,9 +18,11 @@ import {
   upstreamResources,
   userPasswordSetupTokens,
   users,
+  visualCandidatePools,
   websiteStyleSampleBatches,
   websiteStyleSamples,
   websiteUserProvisions,
+  workspaceAuditEvents,
 } from "../drizzle/schema";
 import { COOKIE_NAME } from "../shared/const";
 import {
@@ -25,10 +31,17 @@ import {
   deleteManagedUser,
   hashPassword,
   loginWithPassword,
+  reconcileManagedUploadAccountDeletionFencesOnStartup,
   resetManagedUserPassword,
   sessionPredatesPasswordChange,
   verifyPassword,
 } from "./auth-service";
+import {
+  acquireManagedUploadDeletionFence,
+  advanceManagedUploadAccountDeletionFence,
+  assertManagedUploadScopesAvailable,
+  retireManagedUploadIntentsForAccountDeletion,
+} from "./managed-upload-intent-fence";
 
 function lockedSelect(rows: unknown[]) {
   return {
@@ -94,8 +107,19 @@ function transactionDatabase(
 }
 
 describe("password/session atomicity", () => {
-  beforeEach(() => {
+  let assetDirectory: string;
+
+  beforeEach(async () => {
     databaseMock.getDb.mockReset();
+    assetDirectory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "auth-atomicity-"),
+    );
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = assetDirectory;
+  });
+
+  afterEach(async () => {
+    delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    await fs.rm(assetDirectory, { recursive: true, force: true });
   });
 
   it("updates the password and revokes every session in one transaction", async () => {
@@ -171,23 +195,36 @@ describe("password/session atomicity", () => {
     ]);
     databaseMock.getDb.mockResolvedValue(fake.db);
 
-    await expect(deleteManagedUser(1, 29)).resolves.toEqual({
+    const auditInTransaction = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      deleteManagedUser(1, 29, {
+        onResultInTransaction: auditInTransaction,
+      }),
+    ).resolves.toEqual({
       disposition: "permanently_deleted",
     });
 
+    expect(auditInTransaction).toHaveBeenCalledWith(
+      { disposition: "permanently_deleted" },
+      expect.anything(),
+    );
+
     expect(fake.updateTables).toEqual([
+      users,
       userPasswordSetupTokens,
       websiteUserProvisions,
       sessions,
     ]);
-    expect(fake.updateValues[0]?.consumedAt).toBeInstanceOf(Date);
-    expect(fake.updateValues[1]?.accountSetupTokenConsumedAt).toBe(
-      fake.updateValues[0]?.consumedAt,
+    expect(fake.updateValues[0]).toMatchObject({ isActive: false });
+    expect(fake.updateValues[1]?.consumedAt).toBeInstanceOf(Date);
+    expect(fake.updateValues[2]?.accountSetupTokenConsumedAt).toBe(
+      fake.updateValues[1]?.consumedAt,
     );
-    expect(fake.updateValues[2]?.revokedAt).toBe(
-      fake.updateValues[0]?.consumedAt,
+    expect(fake.updateValues[3]?.revokedAt).toBe(
+      fake.updateValues[1]?.consumedAt,
     );
     expect(fake.deleteTables).toEqual([
+      visualCandidatePools,
       websiteStyleSamples,
       websiteStyleSampleBatches,
       knowledgeBaseResetRequests,
@@ -199,6 +236,230 @@ describe("password/session atomicity", () => {
       users,
     ]);
   });
+
+  it("reconciles a crash after the user deletion commit without Provider work", async () => {
+    const fake = transactionDatabase([]);
+    databaseMock.getDb.mockResolvedValue(fake.db);
+
+    const root = path.join(assetDirectory, "managed-upload-intents");
+    const intentId = "intent-auth-post-commit-crash";
+    const operationId = "operation-auth-post-commit-crash";
+    const directory = path.join(
+      root,
+      createHash("sha256").update(intentId).digest("hex"),
+    );
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, "upload.content"), "sealed");
+    await fs.writeFile(
+      path.join(directory, "manifest.json"),
+      JSON.stringify({
+        intentId,
+        operationId,
+        requestHash: "e".repeat(64),
+        userId: 29,
+        credentialId: "credential-29",
+        credentialOwnerUserId: 29,
+        credentialVersion: 1,
+        projectAssignmentId: null,
+        resumeScope: null,
+        state: "sealed",
+        phase: "sealed",
+        revision: 2,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        provider: [],
+        receipt: null,
+      }),
+    );
+    await acquireManagedUploadDeletionFence(
+      { kind: "user", userId: 29 },
+      { disposition: "cancel_active_intents" },
+    );
+
+    await expect(
+      reconcileManagedUploadAccountDeletionFencesOnStartup(),
+    ).resolves.toMatchObject({ scanned: 1, deleted: 1, failed: 0 });
+    expect(
+      JSON.parse(
+        await fs.readFile(path.join(directory, "manifest.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      state: "cancelled",
+      safeErrorCode: "UPLOAD_ACCOUNT_DELETED",
+    });
+    await expect(
+      fs.stat(path.join(directory, "upload.content")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      assertManagedUploadScopesAvailable([{ kind: "user", userId: 29 }]),
+    ).rejects.toMatchObject({ code: "DELETION_IN_PROGRESS" });
+  });
+
+  it.each(["prepared", "retired"] as const)(
+    "continues a %s permanent-account deletion fence on startup without Provider I/O",
+    async (crashPhase) => {
+      let user: {
+        id: number;
+        username: string;
+        isActive: boolean;
+      } | null = {
+        id: 31,
+        username: "crash-disabled-customer",
+        isActive: false,
+      };
+      const auditRows: Array<Record<string, unknown>> = [];
+      const tx = {
+        select: () => ({
+          from: (table: unknown) => ({
+            where: () => {
+              const rows =
+                table === users && user
+                  ? [user]
+                  : table === websiteStyleSampleBatches
+                    ? []
+                    : [];
+              const locked = { for: async () => rows };
+              return { ...locked, limit: () => locked };
+            },
+          }),
+        }),
+        delete: (table: unknown) => ({
+          where: async () => {
+            if (table === users) user = null;
+          },
+        }),
+        insert: (table: unknown) => ({
+          values: async (value: Record<string, unknown>) => {
+            expect(table).toBe(workspaceAuditEvents);
+            auditRows.push(value);
+          },
+        }),
+      };
+      databaseMock.getDb.mockResolvedValue({
+        transaction: (operation: (executor: typeof tx) => unknown) =>
+          operation(tx),
+      });
+
+      const root = path.join(assetDirectory, "managed-upload-intents");
+      const intentId = `intent-auth-${crashPhase}-crash`;
+      const directory = path.join(
+        root,
+        createHash("sha256").update(intentId).digest("hex"),
+      );
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "upload.content"), "sealed");
+      await fs.writeFile(
+        path.join(directory, "manifest.json"),
+        JSON.stringify({
+          intentId,
+          operationId: `operation-auth-${crashPhase}-crash`,
+          requestHash: "f".repeat(64),
+          userId: 31,
+          credentialId: "credential-31",
+          credentialOwnerUserId: 31,
+          credentialVersion: 1,
+          projectAssignmentId: null,
+          resumeScope: null,
+          state: "sealed",
+          phase: "sealed",
+          revision: 2,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          provider: [{ fileId: "must-not-contact-provider", state: "waiting" }],
+          receipt: null,
+        }),
+      );
+      const token = await acquireManagedUploadDeletionFence(
+        { kind: "user", userId: 31 },
+        {
+          disposition: "cancel_active_intents",
+          purpose: "account_deletion",
+        },
+      );
+      await advanceManagedUploadAccountDeletionFence(token, "prepared");
+      if (crashPhase === "retired") {
+        await retireManagedUploadIntentsForAccountDeletion({
+          userId: 31,
+          token,
+        });
+        await advanceManagedUploadAccountDeletionFence(token, "retired");
+      }
+
+      await expect(
+        reconcileManagedUploadAccountDeletionFencesOnStartup(),
+      ).resolves.toMatchObject({ scanned: 1, deleted: 1, failed: 0 });
+      expect(user).toBeNull();
+      expect(auditRows).toEqual([
+        expect.objectContaining({
+          actorUserId: null,
+          action: "account.deleted_after_crash_recovery",
+          targetId: "31",
+        }),
+      ]);
+      await expect(
+        fs.stat(path.join(directory, "upload.content")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      const cleanup = JSON.parse(
+        await fs.readFile(path.join(directory, "cleanup-request.json"), "utf8"),
+      );
+      expect(cleanup.providerFiles).toEqual([
+        expect.objectContaining({
+          fileId: "must-not-contact-provider",
+          state: "pending",
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    ["fenced", false],
+    ["prepared", true],
+  ] as const)(
+    "does not startup-finalize a %s account fence when isActive=%s",
+    async (phase, isActive) => {
+      const user = {
+        id: 32,
+        username: "not-yet-safe-to-finalize",
+        isActive,
+      };
+      const tx = {
+        select: () => ({
+          from: () => ({
+            where: () => {
+              const locked = { for: async () => [user] };
+              return { ...locked, limit: () => locked };
+            },
+          }),
+        }),
+      };
+      databaseMock.getDb.mockResolvedValue({
+        transaction: (operation: (executor: typeof tx) => unknown) =>
+          operation(tx),
+      });
+      const token = await acquireManagedUploadDeletionFence(
+        { kind: "user", userId: 32 },
+        {
+          disposition: "cancel_active_intents",
+          purpose: "account_deletion",
+        },
+      );
+      if (phase === "prepared") {
+        await advanceManagedUploadAccountDeletionFence(token, "prepared");
+      }
+
+      await expect(
+        reconcileManagedUploadAccountDeletionFencesOnStartup(),
+      ).resolves.toMatchObject({
+        scanned: 1,
+        deleted: 0,
+        active: 1,
+        failed: 0,
+      });
+      await expect(
+        assertManagedUploadScopesAvailable([{ kind: "user", userId: 32 }]),
+      ).rejects.toMatchObject({ code: "DELETION_IN_PROGRESS" });
+    },
+  );
 
   it("locks password verification and session creation into the same login transaction", async () => {
     const passwordHash = await hashPassword("current-password");

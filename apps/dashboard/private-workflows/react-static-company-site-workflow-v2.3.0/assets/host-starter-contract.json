@@ -1,0 +1,118 @@
+{
+  "schema": "frontmind-siteops-host-starter/v4",
+  "version": "2.3.0",
+  "runtime": {
+    "node": ">=22.19.0",
+    "profile": "react-static-html",
+    "react": "19",
+    "renderer": "react-dom/server",
+    "packageManagerAtCustomerBuildTime": false,
+    "hydration": false,
+    "runtimeJavaScript": false
+  },
+  "hostOwned": [
+    "package.json",
+    "package-lock.json",
+    "frontmind-runtime-lock.json",
+    "build-contract.json",
+    "frontmind-runtime-input.json",
+    "frontmind-component-manifest.json",
+    "src/component-library.mjs",
+    "src/render.mjs",
+    "src/route-manifest.json",
+    "src/data/*.json",
+    "public/*"
+  ],
+  "output": {
+    "routeDocuments": "snapshot-backed-collections-and-entities-plus-news-empty-state-and-404",
+    "completeHtml": true,
+    "reactRootShellForbidden": true,
+    "runtimeFetchForbidden": true,
+    "externalScriptsForbidden": true
+  },
+  "visualReferencePolicy": {
+    "primaryRole": "one-real-provider-reference-per-candidate",
+    "realizationRole": "frontmind-host-candidate",
+    "supportRoles": [],
+    "referencesArePublishableAssets": false,
+    "hostFamilyMappingRequired": true,
+    "selectedFamilyIsFrozen": true,
+    "globalTaxonomyMergeAllowed": false,
+    "uniqueReferenceCount": 9
+  },
+  "heroFamilies": [
+    "floating_orbit",
+    "feature_grid",
+    "bento",
+    "split_media",
+    "editorial",
+    "centered_dual_cta",
+    "immersive_visual",
+    "product_stage",
+    "full_bleed_statement"
+  ],
+  "sectionVariants": [
+    "statement",
+    "split",
+    "cards",
+    "timeline",
+    "faq",
+    "proof",
+    "cta"
+  ],
+  "typedContentBlocks": [
+    "prose",
+    "feature_list",
+    "steps",
+    "metrics",
+    "quote",
+    "entity_grid",
+    "faq_preview",
+    "cta"
+  ],
+  "contentEntities": [
+    "product",
+    "service",
+    "application",
+    "case_study",
+    "blog",
+    "company_news"
+  ],
+  "contentInventoryPolicy": {
+    "source": "frozen_knowledge_snapshot",
+    "conditionalCollections": [
+      "product",
+      "service",
+      "application",
+      "case_study",
+      "blog",
+      "faq"
+    ],
+    "companyNewsWhenAbsent": "host-owned-empty-state",
+    "externalNewsAcquisition": false,
+    "publicSourceLabels": false
+  },
+  "discoveryPolicy": {
+    "preview": "robots-noindex-no-canonical-no-sitemap-no-llms",
+    "production": "only-materialized-non-empty-routes-and-entities",
+    "jsonLd": "type-and-evidence-conditional"
+  },
+  "contentBoundary": {
+    "customerAndProviderText": "canonical-json-data-only",
+    "reactComponents": "host-owned-only",
+    "providerTextInterpolationIntoSource": false,
+    "providerSourceAccepted": false
+  },
+  "assetDecisionPolicy": {
+    "decisionIdentity": "asset-id",
+    "contentIdentity": "sha256",
+    "duplicateSha256Allowed": true,
+    "publishAndOmitSameSha256Allowed": true,
+    "publishedBrandBinding": "exact-asset-id-and-sha256",
+    "quarantineConflictPolicy": "reject-emitted-sha256"
+  },
+  "materializationStages": {
+    "schema": "schemas/materialization-stage-v2.schema.json",
+    "retryOwner": "dashboard"
+  }
+}

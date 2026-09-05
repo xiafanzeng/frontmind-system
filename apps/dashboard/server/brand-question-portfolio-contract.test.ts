@@ -11,7 +11,7 @@ function fixture() {
     skill: {
       name: "brand-question-portfolio" as const,
       version: "2" as const,
-      model: "frontmind-pro" as const,
+      model: "frontmind-base" as const,
     },
     knowledgeSnapshot: {
       id: "snapshot-1",
@@ -57,7 +57,7 @@ function fixture() {
 }
 
 describe("brand question portfolio contract", () => {
-  it("accepts a strict Pro result bound to the current snapshot", () => {
+  it("accepts a strict credential-profile result bound to the current snapshot", () => {
     const value = brandQuestionPortfolioSchema.parse(fixture());
     expect(
       assertBrandQuestionPortfolioContext(value, {
@@ -66,6 +66,7 @@ describe("brand question portfolio contract", () => {
         archiveHash: "a".repeat(64),
         planCode: "advanced",
         quotaPeriodId: "period-1",
+        model: "frontmind-base",
         enterprise: {
           identityHash: "b".repeat(64),
           canonicalName: "精密制造企业",
@@ -95,6 +96,7 @@ describe("brand question portfolio contract", () => {
         archiveHash: "a".repeat(64),
         planCode: "advanced",
         quotaPeriodId: "period-1",
+        model: "frontmind-base",
         enterprise: {
           identityHash: "b".repeat(64),
           canonicalName: "精密制造企业",

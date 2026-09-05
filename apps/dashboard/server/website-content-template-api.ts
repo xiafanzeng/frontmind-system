@@ -53,7 +53,7 @@ function assertWebsiteTemplateExecutionActor(
   if (actor.role === "admin" && actor.adminAccessLevel === "delivery_admin") {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
-      "交付管理员只能调度官网工单，不能上传或发布官网内容",
+      "交付管理员只能调度官网需求，不能上传或发布官网内容",
     );
   }
 }

@@ -451,7 +451,7 @@ export async function confirmRedirectWorkbook(input: {
     if (preview.errorCount > 0) {
       throw new DeliveryTicketError(
         "REDIRECT_PREVIEW_INVALID",
-        "预检仍有错误，未修改当前工单。",
+        "预检仍有错误，未修改当前需求。",
         400,
       );
     }
@@ -468,19 +468,19 @@ export async function confirmRedirectWorkbook(input: {
       .for("update");
     const ticket = tickets[0];
     if (!ticket) {
-      throw new DeliveryTicketError("TICKET_NOT_FOUND", "工单不存在。", 404);
+      throw new DeliveryTicketError("TICKET_NOT_FOUND", "需求不存在。", 404);
     }
     if (ticket.category !== "bulk_redirect" || ticket.quotaPool !== null) {
       throw new DeliveryTicketError(
         "REDIRECT_TICKET_REQUIRED",
-        "批量跳转文件只能应用到 301 跳转工单。",
+        "批量跳转文件只能应用到 301 跳转需求。",
         400,
       );
     }
     if (ticket.revision !== input.expectedRevision) {
       throw new DeliveryTicketError(
         "TICKET_REVISION_CONFLICT",
-        "工单已更新，请刷新后重试。",
+        "需求已更新，请刷新后重试。",
       );
     }
     if (
@@ -489,7 +489,7 @@ export async function confirmRedirectWorkbook(input: {
     ) {
       throw new DeliveryTicketError(
         "TICKET_ALREADY_SCHEDULED",
-        "工单已进入执行，不能重复应用跳转文件。",
+        "需求已进入执行，不能重复应用跳转文件。",
       );
     }
     const now = new Date();

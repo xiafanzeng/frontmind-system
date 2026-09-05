@@ -154,6 +154,47 @@ describe("authoritative final knowledge-base completion", () => {
     expect(collectKnowledgeArchiveDescriptors(authoritative)).toHaveLength(1);
   });
 
+  it("rejects a legacy type=file projection during malformed-protocol recovery", () => {
+    const input = fixture();
+    const plan = deriveKnowledgeBaseAuthoritativeFinalizationPlan({
+      ...input,
+      transitionTarget: "confirmed",
+    })!;
+    const output = malformedLegacyFinalOutput();
+    output[0]!.content[1]!.type = "file";
+
+    expect(() =>
+      selectKnowledgeBaseAuthoritativeFinalDescriptor({
+        output,
+        scopedOutput: [],
+        plan,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "INVALID" }));
+  });
+
+  it("rejects an extra non-text resource before repairing malformed protocol text", () => {
+    const input = fixture();
+    const plan = deriveKnowledgeBaseAuthoritativeFinalizationPlan({
+      ...input,
+      transitionTarget: "confirmed",
+    })!;
+    const output = malformedLegacyFinalOutput();
+    output[0]!.content.push({
+      type: "output_file",
+      file_id: "file-extra",
+      file_name: "extra.pdf",
+      mime_type: "application/pdf",
+    });
+
+    expect(() =>
+      selectKnowledgeBaseAuthoritativeFinalDescriptor({
+        output,
+        scopedOutput: [],
+        plan,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "AMBIGUOUS" }));
+  });
+
   it("does not treat the legacy schema-v4 archive summary as final protocol", () => {
     const input = fixture();
     const plan = deriveKnowledgeBaseAuthoritativeFinalizationPlan({
@@ -182,6 +223,53 @@ describe("authoritative final knowledge-base completion", () => {
         output: malformedLegacyFinalOutput({ operationId: "kbv2-other" }),
         scopedOutput: [],
         plan,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects identity claims with leading or trailing whitespace instead of normalizing them", () => {
+    const input = fixture();
+    const plan = deriveKnowledgeBaseAuthoritativeFinalizationPlan({
+      ...input,
+      transitionTarget: "confirmed",
+    })!;
+
+    for (const claim of [
+      { operationId: " kbv2-final" },
+      { turnId: "turn-final " },
+      { taskId: " task-final " },
+    ]) {
+      expect(
+        selectKnowledgeBaseAuthoritativeFinalDescriptor({
+          output: malformedLegacyFinalOutput(claim),
+          scopedOutput: [],
+          plan,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("does not derive authority from whitespace-normalized durable identities", () => {
+    const input = fixture();
+    expect(
+      deriveKnowledgeBaseAuthoritativeFinalizationPlan({
+        ...input,
+        activeTurn: {
+          ...input.activeTurn,
+          operationKey: " kbv2-final",
+        },
+        transitionTarget: "confirmed",
+      }),
+    ).toBeNull();
+    expect(
+      deriveKnowledgeBaseAuthoritativeFinalizationPlan({
+        ...input,
+        build: { ...input.build, upstreamTaskId: "task-final " },
+        activeTurn: {
+          ...input.activeTurn,
+          upstreamTaskId: "task-final ",
+        },
+        transitionTarget: "confirmed",
       }),
     ).toBeNull();
   });

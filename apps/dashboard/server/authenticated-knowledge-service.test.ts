@@ -6,6 +6,33 @@ const CONTRACT_START = new Date("2026-07-01T00:00:00.000Z");
 const PUBLISHED_AT = new Date("2026-07-02T00:00:00.000Z");
 const ARCHIVE_HASH = "a".repeat(64);
 const DESCRIPTOR_HASH = "d".repeat(64);
+const VALID_DEEP_RESEARCH_COVERAGE = {
+  officialPages: {
+    discovered: 12,
+    attempted: 12,
+    succeeded: 12,
+    failed: 0,
+  },
+  publicQueries: 6,
+  officialDocuments: 2,
+  uploadsRead: 0,
+  sourceCount: 14,
+  productFamilies: [{ id: "primary", name: "核心产品", leafIds: ["leaf-3"] }],
+  dimensions: [
+    "enterprise_identity",
+    "team_and_organization",
+    "products_and_services",
+    "capabilities_and_delivery",
+    "industries_scenarios_and_cases",
+    "differentiation_and_evidence",
+    "cooperation_delivery_and_support",
+  ].map((id, index) => ({
+    id,
+    status: "covered",
+    leafIds: [`leaf-${index + 1}`],
+  })),
+  stopReason: "coverage_complete",
+};
 
 function publication(
   overrides: {
@@ -22,6 +49,7 @@ function publication(
       sourceTaskId: "task-1",
       sourceArtifactHash: ARCHIVE_HASH,
       archiveHash: ARCHIVE_HASH,
+      status: "active" as const,
       createdAt: PUBLISHED_AT,
       ...overrides.snapshot,
     },
@@ -43,6 +71,8 @@ function publication(
       publishedSnapshotId: "snapshot-1",
       publishedAt: PUBLISHED_AT,
       createdAt: new Date("2026-07-01T01:00:00.000Z"),
+      treePolicyVersion: 1,
+      initialResearchCoverage: null,
       ...overrides.build,
     },
     notBefore: CONTRACT_START,
@@ -55,6 +85,23 @@ describe("authenticated advanced knowledge publication", () => {
       true,
     );
   });
+
+  it.each([8, 10])(
+    "keeps historical v1 publication compatible at %s leaves",
+    (count) => {
+      expect(
+        isAuthenticatedAdvancedKnowledgePublication(
+          publication({
+            build: {
+              totalNodeCount: count,
+              confirmedCount: count,
+              directPrefilledCount: 0,
+            },
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("preserves the descriptor-hash path only for packages without durable bytes", () => {
     expect(
@@ -98,6 +145,14 @@ describe("authenticated advanced knowledge publication", () => {
     ).toBe(false);
   });
 
+  it("does not authenticate an archived publication", () => {
+    expect(
+      isAuthenticatedAdvancedKnowledgePublication(
+        publication({ snapshot: { status: "archived" } }),
+      ),
+    ).toBe(false);
+  });
+
   it("rejects old-contract, below-minimum and incomplete publications", () => {
     expect(
       isAuthenticatedAdvancedKnowledgePublication(
@@ -130,5 +185,60 @@ describe("authenticated advanced knowledge publication", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("requires 30 nodes and a research ledger for deep-policy publications", () => {
+    expect(
+      isAuthenticatedAdvancedKnowledgePublication(
+        publication({
+          build: {
+            treePolicyVersion: 2,
+            totalNodeCount: 29,
+            confirmedCount: 29,
+            directPrefilledCount: 0,
+            initialResearchCoverage: VALID_DEEP_RESEARCH_COVERAGE,
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isAuthenticatedAdvancedKnowledgePublication(
+        publication({
+          build: {
+            treePolicyVersion: 2,
+            totalNodeCount: 30,
+            confirmedCount: 30,
+            directPrefilledCount: 0,
+            initialResearchCoverage: null,
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isAuthenticatedAdvancedKnowledgePublication(
+        publication({
+          build: {
+            treePolicyVersion: 2,
+            totalNodeCount: 30,
+            confirmedCount: 30,
+            directPrefilledCount: 0,
+            initialResearchCoverage: { stopReason: "coverage_complete" },
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isAuthenticatedAdvancedKnowledgePublication(
+        publication({
+          build: {
+            treePolicyVersion: 2,
+            totalNodeCount: 30,
+            confirmedCount: 30,
+            directPrefilledCount: 0,
+            initialResearchCoverage: VALID_DEEP_RESEARCH_COVERAGE,
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 });

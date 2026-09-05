@@ -11,7 +11,7 @@ function productionEnvironment() {
     NODE_ENV: "production",
     PORT: "3001",
     DATABASE_URL:
-      "mysql://frontmind_dashboard:strong-password@mysql:3306/frontmind_dashboard",
+      "mysql://frontmind:strong-password@mysql:3306/frontmind_system",
     FRONTMIND_BUILD_SHA: "a".repeat(40),
     FRONTMIND_IMAGE_DIGEST: `sha256:${"b".repeat(64)}`,
     FRONTMIND_PUBLIC_URL: "https://dashboard.frontmind.cn",
@@ -24,13 +24,11 @@ function productionEnvironment() {
     FRONTMIND_CONVERSATION_RETENTION_DAYS: "30",
     FRONTMIND_SERVICE_ENTITLEMENT_ENFORCEMENT: "auto",
     FRONTMIND_KB_SKILL_PATH:
-      "/app/dist/private-workflows/socratic-kb-builder.skill",
+      "/app/apps/dashboard/dist/private-workflows/socratic-kb-builder-v5.skill",
     FRONTMIND_BRAND_QUESTION_SKILL_PATH:
-      "/app/dist/private-workflows/brand-question-portfolio.skill",
+      "/app/apps/dashboard/dist/private-workflows/brand-question-portfolio.skill",
     FRONTMIND_RESPONSE_LOGIC_SKILL_PATH:
-      "/app/dist/private-workflows/response-logic-builder.skill",
-    FRONTMIND_KB_V4_ROLLOUT_PERCENT: "100",
-    FRONTMIND_KB_V4_ALLOW_USER_IDS: "",
+      "/app/apps/dashboard/dist/private-workflows/response-logic-builder.skill",
     FRONTMIND_CREDENTIAL_ENCRYPTION_KEY: `base64:${Buffer.alloc(32, 1).toString("base64")}`,
     FRONTMIND_PRESALES_SERVICE_TOKEN: "p".repeat(32),
     FRONTMIND_PROVISIONING_SERVICE_TOKEN: "q".repeat(32),

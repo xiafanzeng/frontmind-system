@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import axios from "axios";
+import axios, { type AxiosResponse } from "axios";
 import { and, eq, inArray } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import express from "express";
@@ -49,8 +49,10 @@ import {
 import type { FrontMindRequest } from "./_core/express-auth";
 import { requireExpressAuth } from "./_core/express-auth";
 import { safeErrorForLog } from "./_core/sensitive-data";
+import { parseUploadedJsonWithRepair } from "./model-output-repair";
 import {
   assertSafeExternalUrl,
+  ExternalUrlRejectedError,
   safeExternalRequestOptions,
 } from "./_core/safe-external-url";
 import {
@@ -78,8 +80,14 @@ import {
   knowledgeArchiveFileIdFromUrl,
   type KnowledgeArchiveDescriptor,
 } from "./knowledge-base-artifact";
+import { KnowledgeArchiveDownloadError } from "./knowledge-archive-download-error";
 import { assertKnowledgeBasePublishable } from "./knowledge-base-progress-service";
+import { knowledgeBaseTreePolicy } from "./knowledge-base-progress";
 import { assertKnowledgeBaseWritable } from "./knowledge-base-reset-service";
+import {
+  knowledgeBaseArchiveReadContractVersions,
+  knowledgeBaseArchiveRequiresV4UploadEvidence,
+} from "./knowledge-base-archive-contract";
 import {
   assertServiceCapability,
   ServiceEntitlementError,
@@ -97,6 +105,7 @@ import {
 import {
   assertResponseLogicDraftPublishable,
   listResponseLogicEntries,
+  ResponseLogicConfirmedError,
   ResponseLogicRevisionConflictError,
   saveResponseLogicEntriesBatch,
 } from "./response-logic-service";
@@ -126,10 +135,28 @@ import {
 import { readKnowledgeBuildArtifact } from "./knowledge-build-artifact-store";
 import { assertKnowledgeBasePackageMatchesBuild } from "./knowledge-base-package-validation";
 import {
+  importedKeywordCategoryCounts,
+  normalizeImportedKeywordTables,
+} from "./keyword-table-import";
+import {
   assertKnowledgeBaseCustomerUploadVisualBindings,
-  verifiedKnowledgeBaseCustomerUploadsForBuild,
+  verifiedKnowledgeBasePackageUploadEvidenceForBuild,
 } from "./knowledge-base-customer-upload";
-import { knowledgeBasePublicationBindingHash } from "./knowledge-base-publication-binding";
+import {
+  knowledgeBasePackageWriterTaskId,
+  knowledgeBasePublicationBindingHash,
+} from "./knowledge-base-publication-binding";
+import {
+  isDashboardOwnedKnowledgePackageBuild,
+  readDashboardOwnedKnowledgePackage,
+} from "./knowledge-base-local-package";
+import {
+  assertKnowledgeSnapshotArchiveCustomerSafe,
+  KnowledgeSnapshotDownloadBindingError,
+  KnowledgeSnapshotPublicArchiveError,
+  loadKnowledgeSnapshotDownloadValidation,
+  validateDashboardOwnedSnapshotArchiveForDownload,
+} from "./knowledge-snapshot-download-validation";
 import {
   basicRasterImageDimensions,
   decodedRasterImageDimensions,
@@ -140,7 +167,10 @@ import {
 import {
   decodeKnowledgeArchiveHeader as decodeHeader,
   effectiveKnowledgeArchiveCharacterCount as effectiveCharacterCount,
+  knowledgeArchiveContainsSourceInventoryHeading,
+  knowledgeArchiveContainsSourceInventoryTable,
   knowledgeArchiveFormalText as formalKnowledgeText,
+  knowledgeArchiveHeadingIsSourceInventory,
   knowledgeArchiveTitleFromPath as titleFromPath,
   markedKnowledgeArchiveFormalContent as markedFormalContent,
   normalizeKnowledgeArchiveTextDocument as normalizeTextDocument,
@@ -151,6 +181,10 @@ import {
 } from "./knowledge-archive-text-utils";
 
 export { validateProgressReportScreenshot } from "./knowledge-archive-image-validation";
+export {
+  KnowledgeArchiveDownloadError,
+  type KnowledgeArchiveDownloadErrorKind,
+} from "./knowledge-archive-download-error";
 
 const router = express.Router();
 const MAX_ARCHIVE_ENTRIES = 2_000;
@@ -207,10 +241,6 @@ const DELIVERY_IMPORT_MODULE_ACCESS: Partial<
     roleType: "monitoring_optimization_engineer",
     operations: ["question_catalog"],
   },
-  questions: {
-    roleType: "monitoring_optimization_engineer",
-    operations: ["question_catalog"],
-  },
   monitoring: {
     roleType: "monitoring_optimization_engineer",
     operations: [
@@ -248,7 +278,7 @@ async function assertDeliveryModuleImport(input: {
 }) {
   const access = DELIVERY_IMPORT_MODULE_ACCESS[input.importModule];
   if (!access) {
-    throw new Error("当前模块不属于交付成员工作台");
+    throw new Error("当前模块不属于工程师工作台");
   }
   const role = await assertRoleScopedWorkspaceExecution({
     req: input.req,
@@ -260,7 +290,7 @@ async function assertDeliveryModuleImport(input: {
     input.req.header("x-delivery-ticket-id") || "",
   ).trim();
   if (!ticketId || !role) {
-    throw new Error("缺少当前交付工单标识");
+    throw new Error("缺少当前交付需求标识");
   }
   const db = await getDb();
   if (!db) throw new Error("数据库暂时不可用");
@@ -288,7 +318,7 @@ async function assertDeliveryModuleImport(input: {
     )
     .limit(1);
   if (!rows[0]) {
-    throw new Error("当前工单无权发布该业务模块");
+    throw new Error("当前需求无权发布该业务模块");
   }
 }
 const MAX_UNPACKED_BYTES = 220 * 1024 * 1024;
@@ -1612,11 +1642,7 @@ function customerDisplayMarkdown(markdown: string) {
       if (excludedSectionDepth !== undefined && depth <= excludedSectionDepth) {
         excludedSectionDepth = undefined;
       }
-      if (
-        /(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory/i.test(
-          heading[2] || "",
-        )
-      ) {
+      if (knowledgeArchiveHeadingIsSourceInventory(heading[2] || "")) {
         excludedSectionDepth = depth;
         continue;
       }
@@ -1839,7 +1865,7 @@ function parsePackageJson<T>(
     );
   }
   try {
-    return schema.parse(JSON.parse(raw));
+    return schema.parse(JSON.parse(raw.replace(/^\uFEFF/u, "")));
   } catch (error) {
     throw new KnowledgeArchiveValidationError(
       "structure",
@@ -1854,6 +1880,14 @@ function validateProfilePackage(input: {
   profile: Exclude<KnowledgeBaseValidationProfile, "historical">;
   archiveContractVersion?: 1 | 2 | 3 | 4;
   archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+  /**
+   * The v4 final-package binder can repair this one manifest field from the
+   * already validated formal document bytes, then immediately run the full
+   * validator again on the rewritten archive. No other validation is relaxed.
+   */
+  allowV4CustomerVisibleCharacterCountRepair?: boolean;
+  dashboardEnterpriseMinLeaves?: number;
+  requireDashboardAdaptiveFormalGate?: boolean;
   packagePaths: string[];
   unpackedBytes: number;
   rawTextByRelativePath: Map<string, string>;
@@ -1906,20 +1940,36 @@ function validateProfilePackage(input: {
           maxCharacters: manifest.schemaVersion !== 1 ? 40_000 : 18_000,
           maxEvidenceCharacters: 300_000,
           maxOfficialPages: 120,
+          maxOfficialPageAttempts: 120,
           maxDocuments: 22,
           maxWebQueries: 12,
         }
-      : {
-          files: 1_500,
-          images: 480,
-          targetImages: 360,
-          minCharacters: 80_000,
-          maxCharacters: 180_000,
-          maxEvidenceCharacters: 3_000_000,
-          maxOfficialPages: 1_200,
-          maxDocuments: 220,
-          maxWebQueries: 120,
-        };
+      : manifest.schemaVersion === 4
+        ? {
+            files: 1_500,
+            images: 480,
+            targetImages: 360,
+            minCharacters: 80_000,
+            maxCharacters: 180_000,
+            maxEvidenceCharacters: 3_000_000,
+            maxOfficialPages: 120,
+            maxOfficialPageAttempts: 200,
+            // Up to 30 official documents plus 100 customer uploads.
+            maxDocuments: 130,
+            maxWebQueries: 30,
+          }
+        : {
+            files: 1_500,
+            images: 480,
+            targetImages: 360,
+            minCharacters: 80_000,
+            maxCharacters: 180_000,
+            maxEvidenceCharacters: 3_000_000,
+            maxOfficialPages: 1_200,
+            maxOfficialPageAttempts: 1_200,
+            maxDocuments: 220,
+            maxWebQueries: 120,
+          };
   const isSingleLogoDashboardV3 =
     input.profile === "dashboard-enterprise-v1" && manifest.schemaVersion === 3;
   const isCustomerUploadDashboardV4 =
@@ -2170,7 +2220,10 @@ function validateProfilePackage(input: {
       "企业知识库图片总量超过 160 MB",
     );
   }
-  if (input.profile === "dashboard-enterprise-v1") {
+  if (
+    input.profile === "dashboard-enterprise-v1" &&
+    !isCustomerUploadDashboardV4
+  ) {
     const packagedDocumentPaths = new Set(
       input.documents.map((document) => packageRelativePath(document.path)),
     );
@@ -2806,10 +2859,11 @@ function validateProfilePackage(input: {
     const leafDocuments = customerDocuments.filter(
       (document) => document.kind === "leaf",
     );
-    if (leafDocuments.length < 8 || leafDocuments.length > 115) {
+    const minimumLeaves = input.dashboardEnterpriseMinLeaves ?? 8;
+    if (leafDocuments.length < minimumLeaves || leafDocuments.length > 115) {
       throw new KnowledgeArchiveValidationError(
         "content",
-        "企业深度知识库必须包含 8–115 个知识叶子",
+        `企业深度知识库必须包含 ${minimumLeaves}–115 个知识叶子`,
       );
     }
     const leafBranches = new Set(
@@ -3006,9 +3060,8 @@ function validateProfilePackage(input: {
         );
       }
       if (
-        /^(?:#{1,6})\s+.*(?:(?:原始|证据|引用|参考)?来源|素材清单|展示素材|机器清单|证据状态|状态头|sources?|references?|asset inventory).*$/im.test(
-          markedContent,
-        ) ||
+        knowledgeArchiveContainsSourceInventoryHeading(markedContent) ||
+        knowledgeArchiveContainsSourceInventoryTable(markedContent) ||
         /^\s*>\s*.*(?:状态|status)\s*[:：].*(?:来源|source)\s*[:：]/im.test(
           markedContent,
         )
@@ -3095,9 +3148,11 @@ function validateProfilePackage(input: {
       }
       if (
         input.profile === "dashboard-enterprise-v1" &&
-        (!new Set([0, expected.required]).has(
-          document.requiredFormalCharacters!,
-        ) ||
+        ((input.requireDashboardAdaptiveFormalGate
+          ? document.requiredFormalCharacters !== expected.required
+          : !new Set([0, expected.required]).has(
+              document.requiredFormalCharacters!,
+            )) ||
           document.contentStatus !== expected.status)
       ) {
         throw new KnowledgeArchiveValidationError(
@@ -3154,7 +3209,14 @@ function validateProfilePackage(input: {
         : `正式正文不得超过 ${limits.maxCharacters} 个有效字符`,
     );
   }
-  if (manifest.counts.customerVisibleCharacters !== formalCharacters) {
+  if (
+    manifest.counts.customerVisibleCharacters !== formalCharacters &&
+    !(
+      input.allowV4CustomerVisibleCharacterCountRepair === true &&
+      manifest.schemaVersion === 4 &&
+      input.profile === "dashboard-enterprise-v1"
+    )
+  ) {
     throw new KnowledgeArchiveValidationError(
       "content",
       "package manifest 正式正文字数与服务端复算结果不一致",
@@ -3180,6 +3242,15 @@ function validateProfilePackage(input: {
     throw new KnowledgeArchiveValidationError(
       "structure",
       `成功采集官网页面超过 ${limits.maxOfficialPages} 页档位上限`,
+    );
+  }
+  if (
+    (completeness.acquisition.officialPages?.total ?? 0) >
+    limits.maxOfficialPageAttempts
+  ) {
+    throw new KnowledgeArchiveValidationError(
+      "structure",
+      `尝试访问官网链接超过 ${limits.maxOfficialPageAttempts} 条档位上限`,
     );
   }
   if (
@@ -3727,7 +3798,7 @@ function dashboardPayloadFromModuleJson(input: {
   module: Exclude<DashboardImportModule, "section-table" | "response-logic">;
   currentRevision?: number;
 }) {
-  const raw = JSON.parse(input.text);
+  const raw = parseUploadedJsonWithRepair(input.text);
   if (input.module === "full") return dashboardPayloadSchema.parse(raw);
   if (input.currentRevision === undefined) {
     throw new DashboardTemplateRevisionError(
@@ -4038,6 +4109,19 @@ export function buildDashboardModuleImportPreview(input: {
         key: (table) => table.id,
       }),
     );
+    const categoryCounts = importedKeywordCategoryCounts(
+      input.incoming.keywordTables,
+    );
+    if (categoryCounts) {
+      changedFields.push({
+        field: "keywordCategories",
+        label: "四类标签映射",
+        before: "按原词表分类",
+        after: Object.entries(categoryCounts)
+          .map(([label, count]) => `${label} ${count} 条`)
+          .join(" · "),
+      });
+    }
   } else if (input.module === "questions") {
     recordStatsList.push(
       recordStats({
@@ -4181,7 +4265,7 @@ type AuthoritativeServiceQuestion = {
 const DASHBOARD_QUESTION_GROUPS = {
   industry: {
     groupId: "ranking",
-    groupTitle: "行业词",
+    groupTitle: "行业排名词",
     tone: "amber" as const,
   },
   competitor_comparison: {
@@ -4555,9 +4639,67 @@ function csvTextFromRows(rows: string[][]) {
   return rows.map((row) => row.map(cell).join(",")).join("\n");
 }
 
-async function workbookRows(buffer: Buffer) {
+function spreadsheetMlElementPrefix(value: string) {
+  const match = value.match(
+    /xmlns:([A-Za-z_][\w.-]*)=(["'])http:\/\/schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main\2/,
+  );
+  return match?.[1] ?? null;
+}
+
+function withoutSpreadsheetMlElementPrefix(value: string) {
+  const prefix = spreadsheetMlElementPrefix(value);
+  if (!prefix) return value;
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(new RegExp(`<(/?)${escapedPrefix}:`, "g"), "<$1");
+}
+
+async function excelJsCompatibleWorkbookBuffer(buffer: Buffer) {
+  let archive: JSZip;
+  try {
+    archive = await JSZip.loadAsync(buffer);
+  } catch {
+    return null;
+  }
+  const workbookXml = archive.file("xl/workbook.xml");
+  if (!workbookXml) return null;
+  const workbookText = await workbookXml.async("string");
+  if (!spreadsheetMlElementPrefix(workbookText)) return null;
+
+  let changed = false;
+  await Promise.all(
+    Object.values(archive.files).map(async (entry) => {
+      if (entry.dir || !entry.name.toLowerCase().endsWith(".xml")) return;
+      const source = await entry.async("string");
+      const normalized = withoutSpreadsheetMlElementPrefix(source);
+      if (normalized === source) return;
+      archive.file(entry.name, normalized);
+      changed = true;
+    }),
+  );
+  return changed ? archive.generateAsync({ type: "nodebuffer" }) : null;
+}
+
+async function loadTabularWorkbook(buffer: Buffer) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  try {
+    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+    return workbook;
+  } catch (error) {
+    // Some valid spreadsheet generators qualify SpreadsheetML elements as
+    // <x:workbook>, <x:worksheet>, and so on. ExcelJS 4.4 reads element names
+    // literally and misses those roots, so retry with only that prefix removed.
+    const compatibleBuffer = await excelJsCompatibleWorkbookBuffer(buffer);
+    if (!compatibleBuffer) throw error;
+    const compatibleWorkbook = new ExcelJS.Workbook();
+    await compatibleWorkbook.xlsx.load(
+      compatibleBuffer as unknown as ExcelJS.Buffer,
+    );
+    return compatibleWorkbook;
+  }
+}
+
+async function workbookRows(buffer: Buffer) {
+  const workbook = await loadTabularWorkbook(buffer);
   return workbook.worksheets.map((worksheet) => {
     const rows: string[][] = [];
     // ExcelJS derives worksheet.columnCount by scanning rows. Cache it once
@@ -5226,7 +5368,7 @@ async function responseLogicImportsFromFile(input: {
 }) {
   const extension = path.extname(input.sourceFileName).toLowerCase();
   if (extension === ".json") {
-    const raw = JSON.parse(input.buffer.toString("utf8"));
+    const raw = parseUploadedJsonWithRepair(input.buffer.toString("utf8"));
     const source =
       raw && typeof raw === "object" && !Array.isArray(raw)
         ? (raw as Record<string, unknown>)
@@ -5274,7 +5416,7 @@ async function responseLogicImportsFromFile(input: {
   });
 }
 
-async function tabularTablesFromFile(input: {
+export async function tabularTablesFromFile(input: {
   buffer: Buffer;
   sourceFileName: string;
 }) {
@@ -5813,6 +5955,9 @@ export async function readKnowledgeArchive(
     validationProfile?: KnowledgeBaseValidationProfile;
     archiveContractVersion?: 1 | 2 | 3 | 4;
     archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+    allowV4CustomerVisibleCharacterCountRepair?: boolean;
+    dashboardEnterpriseMinLeaves?: number;
+    requireDashboardAdaptiveFormalGate?: boolean;
   } = {},
 ) {
   const validationProfile = options.validationProfile ?? "historical";
@@ -6064,6 +6209,11 @@ export async function readKnowledgeArchive(
             profile: validationProfile,
             archiveContractVersion: options.archiveContractVersion,
             archiveContractVersions: options.archiveContractVersions,
+            allowV4CustomerVisibleCharacterCountRepair:
+              options.allowV4CustomerVisibleCharacterCountRepair,
+            dashboardEnterpriseMinLeaves: options.dashboardEnterpriseMinLeaves,
+            requireDashboardAdaptiveFormalGate:
+              options.requireDashboardAdaptiveFormalGate,
             packagePaths,
             unpackedBytes,
             rawTextByRelativePath,
@@ -6171,6 +6321,8 @@ export async function validateKnowledgeArchiveForDownload(input: {
   expectedBytes: number;
   validationProfile?: KnowledgeBaseValidationProfile;
   archiveContractVersions?: readonly (1 | 2 | 3 | 4)[];
+  dashboardEnterpriseMinLeaves?: number;
+  requireDashboardAdaptiveFormalGate?: boolean;
   validateParsed?: (
     parsed: Awaited<ReturnType<typeof readKnowledgeArchive>>,
   ) => void | Promise<void>;
@@ -6185,6 +6337,9 @@ export async function validateKnowledgeArchiveForDownload(input: {
       {
         validationProfile: input.validationProfile,
         archiveContractVersions: input.archiveContractVersions,
+        dashboardEnterpriseMinLeaves: input.dashboardEnterpriseMinLeaves,
+        requireDashboardAdaptiveFormalGate:
+          input.requireDashboardAdaptiveFormalGate,
       },
     );
   } catch (error) {
@@ -6241,6 +6396,71 @@ export function assertKnowledgeArchiveEnterpriseIdentity(input: {
   }
 }
 
+/**
+ * Dashboard-owned archives bind enterprise identity through two independent
+ * durable facts: the build row frozen before Provider work and the manifest
+ * embedded in the exact locally persisted ZIP. Accepted node prose is not an
+ * identity ledger and may legitimately use a product name or abbreviation.
+ */
+export function assertDashboardOwnedKnowledgePackageEnterpriseIdentity(input: {
+  brandName: string;
+  buildCompanyName: string;
+  manifestCompanyName: string;
+}) {
+  const brandName = normalizedEnterpriseEvidence(input.brandName);
+  const buildCompanyName = normalizedEnterpriseEvidence(input.buildCompanyName);
+  const manifestCompanyName = normalizedEnterpriseEvidence(
+    input.manifestCompanyName,
+  );
+  if (!brandName) {
+    throw new Error("请先由管理员配置当前账号的企业名称");
+  }
+  if (
+    !buildCompanyName ||
+    !manifestCompanyName ||
+    buildCompanyName !== brandName ||
+    manifestCompanyName !== brandName
+  ) {
+    throw new Error(
+      `知识库包绑定企业与当前账号“${input.brandName}”不一致，请核对目标用户后重新生成`,
+    );
+  }
+}
+
+/**
+ * A knowledge snapshot authenticated for the current service is durable proof
+ * of the same enterprise identity: every snapshot passes
+ * assertKnowledgeArchiveEnterpriseIdentity before it becomes active. Older
+ * workspaces did not persist enterpriseIdentityBoundAt during publication, so
+ * the first keyword import accepts the matching snapshot and backfills the
+ * flag in the same dashboard write.
+ */
+export function dashboardImportEnterpriseIdentityBinding(input: {
+  module: DashboardAdminImportModule;
+  enterpriseIdentityBoundAt?: number | null;
+  brandName: string;
+  knowledgeAuthenticatedForCurrentService: boolean;
+  knowledgeSnapshot: { documents: KnowledgeDocument[] } | null;
+}) {
+  if (input.module === "profile") return true;
+  if (input.enterpriseIdentityBoundAt) return false;
+  if (
+    input.module !== "keywords" ||
+    !input.knowledgeAuthenticatedForCurrentService ||
+    !input.knowledgeSnapshot
+  ) {
+    throw new Error(
+      "请先由管理员确认并发布当前账号的企业名称，再上传其他内容板块",
+    );
+  }
+  assertKnowledgeArchiveEnterpriseIdentity({
+    enterpriseIdentityConfirmed: false,
+    brandName: input.brandName,
+    documents: input.knowledgeSnapshot.documents,
+  });
+  return true;
+}
+
 function upstreamHeaders(apiKey: string) {
   return {
     API_KEY: apiKey,
@@ -6255,10 +6475,76 @@ export function dashboardKnowledgePublishErrorForLog(
   return safeErrorForLog(error, { secrets });
 }
 
+function knowledgeArchiveDownloadFailureCode(error: unknown) {
+  const code = String(
+    (error as { code?: unknown } | null)?.code || "",
+  ).toUpperCase();
+  if (code) return code;
+  const message = String(
+    (error as { message?: unknown } | null)?.message || "",
+  ).toUpperCase();
+  return /^[A-Z0-9_]{1,100}$/u.test(message) ? message : "";
+}
+
+function isKnowledgeArchiveUnsafeUrlFailure(error: unknown) {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current instanceof ExternalUrlRejectedError) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+function knowledgeArchiveTransportFailure(
+  error: unknown,
+  abortedForStall = false,
+) {
+  if (isKnowledgeArchiveUnsafeUrlFailure(error)) {
+    return new KnowledgeArchiveDownloadError(
+      "unsafe_url",
+      "知识库 ZIP 下载地址不安全",
+    );
+  }
+  const code = knowledgeArchiveDownloadFailureCode(error);
+  if (
+    abortedForStall ||
+    code === "ECONNABORTED" ||
+    code === "ETIMEDOUT" ||
+    code === "ESOCKETTIMEDOUT"
+  ) {
+    return new KnowledgeArchiveDownloadError("timeout", "知识库 ZIP 下载超时");
+  }
+  return new KnowledgeArchiveDownloadError(
+    "transport",
+    "知识库 ZIP 下载连接失败",
+  );
+}
+
+function knowledgeArchiveLocalReadFailure(error: unknown) {
+  const code = knowledgeArchiveDownloadFailureCode(error);
+  if (code === "LOCAL_FILE_CONTENT_SIZE_MISMATCH") {
+    return new KnowledgeArchiveDownloadError(
+      "local_size_mismatch",
+      "知识库 ZIP 本地持久副本不完整",
+    );
+  }
+  if (
+    code === "LOCAL_FILE_CONTENT_INVALID" ||
+    code === "PRESALES_FILE_RETENTION_INVALID"
+  ) {
+    return new KnowledgeArchiveDownloadError(
+      "local_copy_invalid",
+      "知识库 ZIP 本地持久副本无效",
+    );
+  }
+  return knowledgeArchiveTransportFailure(error);
+}
+
 export async function downloadArchiveBytes(input: {
   descriptor: KnowledgeArchiveDescriptor;
   apiKey: string;
   baseUrl: string;
+  allowProviderFileIdFallback?: boolean;
 }) {
   let filename = input.descriptor.filename;
   let downloadUrl: string | undefined;
@@ -6270,30 +6556,52 @@ export async function downloadArchiveBytes(input: {
       : undefined);
 
   if (fileId) {
-    const stored = await readStoredPresalesFile(fileId);
+    let stored: Awaited<ReturnType<typeof readStoredPresalesFile>>;
+    try {
+      stored = await readStoredPresalesFile(fileId);
+    } catch (error) {
+      throw knowledgeArchiveLocalReadFailure(error);
+    }
     if (stored) {
       if (stored.sizeBytes > MAX_ARCHIVE_BYTES) {
-        throw new Error("知识库 ZIP 超过 250 MB");
+        throw new KnowledgeArchiveDownloadError(
+          "too_large",
+          "知识库 ZIP 超过 250 MB",
+        );
       }
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       const hash = createHash("sha256");
-      for await (const rawChunk of stored.createReadStream()) {
-        const chunk = Buffer.isBuffer(rawChunk)
-          ? rawChunk
-          : Buffer.from(rawChunk);
-        totalBytes += chunk.length;
-        if (totalBytes > MAX_ARCHIVE_BYTES) {
-          throw new Error("知识库 ZIP 超过 250 MB");
+      try {
+        for await (const rawChunk of stored.createReadStream()) {
+          const chunk = Buffer.isBuffer(rawChunk)
+            ? rawChunk
+            : Buffer.from(rawChunk);
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_ARCHIVE_BYTES) {
+            throw new KnowledgeArchiveDownloadError(
+              "too_large",
+              "知识库 ZIP 超过 250 MB",
+            );
+          }
+          chunks.push(chunk);
+          hash.update(chunk);
         }
-        chunks.push(chunk);
-        hash.update(chunk);
+      } catch (error) {
+        if (error instanceof KnowledgeArchiveDownloadError) throw error;
+        throw knowledgeArchiveLocalReadFailure(error);
       }
       if (totalBytes === 0 || totalBytes !== stored.sizeBytes) {
-        throw new Error("知识库 ZIP 本地持久副本不完整");
+        throw new KnowledgeArchiveDownloadError(
+          totalBytes === 0 ? "empty" : "local_size_mismatch",
+          "知识库 ZIP 本地持久副本不完整",
+        );
       }
       if (stored.sha256 && hash.digest("hex") !== stored.sha256) {
-        throw new Error("知识库 ZIP 本地持久副本校验失败");
+        throw new KnowledgeArchiveDownloadError(
+          "local_sha256_mismatch",
+          "知识库 ZIP 本地持久副本校验失败",
+        );
       }
       const buffer = Buffer.concat(chunks, totalBytes);
       filename = stored.filename || filename;
@@ -6302,46 +6610,101 @@ export async function downloadArchiveBytes(input: {
       }
       return { buffer, filename };
     }
-    downloadUrl = `${input.baseUrl}/v1/files/${encodeURIComponent(fileId)}/content`;
-    headers = upstreamHeaders(input.apiKey);
-  } else if (input.descriptor.url) {
-    downloadUrl = assertSafeExternalUrl(input.descriptor.url);
+    if (!input.descriptor.url && input.allowProviderFileIdFallback === true) {
+      try {
+        downloadUrl = assertSafeExternalUrl(
+          new URL(
+            `v1/files/${encodeURIComponent(fileId)}/content`,
+            `${input.baseUrl.replace(/\/+$/u, "")}/`,
+          ).toString(),
+        );
+        headers = upstreamHeaders(input.apiKey);
+      } catch {
+        throw new KnowledgeArchiveDownloadError(
+          "local_copy_missing",
+          "知识库 ZIP 没有可读取的本地副本或 Provider 文件地址",
+        );
+      }
+    }
+    if (!input.descriptor.url && !downloadUrl) {
+      throw new KnowledgeArchiveDownloadError(
+        "local_copy_missing",
+        "知识库 ZIP 没有可读取的本地副本或 Provider 文件地址",
+      );
+    }
+  }
+  if (!downloadUrl && input.descriptor.url) {
+    try {
+      downloadUrl = assertSafeExternalUrl(input.descriptor.url);
+    } catch {
+      throw new KnowledgeArchiveDownloadError(
+        "unsafe_url",
+        "知识库 ZIP 下载地址不安全",
+      );
+    }
   }
 
-  if (!downloadUrl) throw new Error("知识库文件没有可验证的下载地址");
-  const controller = new AbortController();
-  let response = await axios.get(downloadUrl, {
-    ...(headers
-      ? { maxRedirects: 0, proxy: false as const }
-      : safeExternalRequestOptions),
-    headers,
-    responseType: "stream",
-    timeout: 120_000,
-    maxContentLength: MAX_ARCHIVE_BYTES,
-    signal: controller.signal,
-    validateStatus: () => true,
-  });
-  if (
-    headers &&
-    response.status >= 300 &&
-    response.status < 400 &&
-    response.headers.location
-  ) {
-    const redirectUrl = assertSafeExternalUrl(
-      new URL(String(response.headers.location), downloadUrl).toString(),
+  if (!downloadUrl) {
+    throw new KnowledgeArchiveDownloadError(
+      "missing_url",
+      "知识库文件没有可验证的下载地址",
     );
-    response = await axios.get(redirectUrl, {
-      ...safeExternalRequestOptions,
+  }
+  const controller = new AbortController();
+  let response: AxiosResponse;
+  try {
+    response = await axios.get(downloadUrl, {
+      ...(headers
+        ? { maxRedirects: 0, proxy: false as const }
+        : safeExternalRequestOptions),
+      headers,
       responseType: "stream",
       timeout: 120_000,
       maxContentLength: MAX_ARCHIVE_BYTES,
       signal: controller.signal,
       validateStatus: () => true,
     });
+  } catch (error) {
+    throw knowledgeArchiveTransportFailure(error);
+  }
+  if (
+    headers &&
+    response.status >= 300 &&
+    response.status < 400 &&
+    response.headers.location
+  ) {
+    let redirectUrl: string;
+    try {
+      redirectUrl = assertSafeExternalUrl(
+        new URL(String(response.headers.location), downloadUrl).toString(),
+      );
+    } catch {
+      response.data?.destroy?.();
+      throw new KnowledgeArchiveDownloadError(
+        "unsafe_url",
+        "知识库 ZIP 下载地址不安全",
+      );
+    }
+    try {
+      response = await axios.get(redirectUrl, {
+        ...safeExternalRequestOptions,
+        responseType: "stream",
+        timeout: 120_000,
+        maxContentLength: MAX_ARCHIVE_BYTES,
+        signal: controller.signal,
+        validateStatus: () => true,
+      });
+    } catch (error) {
+      throw knowledgeArchiveTransportFailure(error);
+    }
   }
   if (response.status !== 200) {
     response.data?.destroy?.();
-    throw new Error(`下载知识库 ZIP 失败 (${response.status})`);
+    throw new KnowledgeArchiveDownloadError(
+      "http_status",
+      `下载知识库 ZIP 失败 (${response.status})`,
+      response.status,
+    );
   }
   const disposition = String(response.headers["content-disposition"] || "");
   const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
@@ -6357,13 +6720,18 @@ export async function downloadArchiveBytes(input: {
   const declaredLength = Number(response.headers["content-length"] || 0);
   if (Number.isFinite(declaredLength) && declaredLength > MAX_ARCHIVE_BYTES) {
     response.data?.destroy?.();
-    throw new Error("知识库 ZIP 超过 250 MB");
+    throw new KnowledgeArchiveDownloadError(
+      "too_large",
+      "知识库 ZIP 超过 250 MB",
+    );
   }
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   let lastProgressAt = Date.now();
+  let stalled = false;
   const watchdog = setInterval(() => {
     if (Date.now() - lastProgressAt >= 120_000) {
+      stalled = true;
       controller.abort();
     }
   }, 10_000);
@@ -6378,18 +6746,32 @@ export async function downloadArchiveBytes(input: {
       totalBytes += chunk.length;
       if (totalBytes > MAX_ARCHIVE_BYTES) {
         controller.abort();
-        throw new Error("知识库 ZIP 超过 250 MB");
+        throw new KnowledgeArchiveDownloadError(
+          "too_large",
+          "知识库 ZIP 超过 250 MB",
+        );
       }
       chunks.push(chunk);
       lastProgressAt = Date.now();
     }
+  } catch (error) {
+    if (error instanceof KnowledgeArchiveDownloadError) throw error;
+    throw knowledgeArchiveTransportFailure(error, stalled);
   } finally {
     clearInterval(watchdog);
   }
+  if (stalled) {
+    throw new KnowledgeArchiveDownloadError("timeout", "知识库 ZIP 下载超时");
+  }
   const buffer = Buffer.concat(chunks, totalBytes);
-  if (buffer.length === 0) throw new Error("知识库 ZIP 内容为空");
+  if (buffer.length === 0) {
+    throw new KnowledgeArchiveDownloadError("empty", "知识库 ZIP 内容为空");
+  }
   if (buffer.length > MAX_ARCHIVE_BYTES) {
-    throw new Error("知识库 ZIP 超过 250 MB");
+    throw new KnowledgeArchiveDownloadError(
+      "too_large",
+      "知识库 ZIP 超过 250 MB",
+    );
   }
   if (!filename.toLowerCase().endsWith(".zip")) {
     filename = `${path.basename(filename, path.extname(filename)) || "knowledge-base"}.zip`;
@@ -6609,7 +6991,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       res.json({ kind: "knowledge", snapshot, idempotent: true });
       return;
     }
-    const taskId = String(build.packageTaskId || build.upstreamTaskId || "");
+    const taskId = knowledgeBasePackageWriterTaskId(build);
     const hasDurablePackage = Boolean(
       build.packageStorageKey &&
         build.packageArchiveSha256 &&
@@ -6638,92 +7020,76 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       };
       sourceArtifactHash = knowledgeBasePublicationBindingHash(build)!;
     } else {
-      // Only pre-state-machine v1 imports retain the upstream compatibility
-      // path. Builder v3/v4 publication must consume bytes that reconcile
-      // already validated and persisted under the build generation.
-      if (
-        build.skillVersion === "3" ||
-        build.skillVersion === "4" ||
-        !taskId ||
-        taskId !== build.upstreamTaskId ||
-        build.packageRevision !== build.revision ||
-        !build.packageOutputItemId ||
-        !build.packageDescriptorHash
-      ) {
-        throw new Error("最终知识库文件尚未完成不可变持久化与版本绑定");
-      }
-      const credential = await getCredentialForUpstreamResource(
-        targetUserId,
-        "task",
-        taskId,
+      throw new Error(
+        "旧知识库构建不再续跑或回读 Provider；请批准重置后使用 v2 全量物化重新构建",
       );
-      if (!credential)
-        throw new Error("知识库任务不属于当前用户或 API Key 已失效");
-      publishLogSecrets.push(credential.apiKey);
-
-      const baseUrl = getUpstreamBaseUrl(req);
-      const taskResponse = await axios.get(
-        `${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`,
-        {
-          headers: upstreamHeaders(credential.apiKey),
-          proxy: false,
-          timeout: 120_000,
-          maxContentLength: 50 * 1024 * 1024,
-          validateStatus: () => true,
-        },
-      );
-      if (taskResponse.status !== 200) {
-        throw new Error(`读取知识库任务结果失败 (${taskResponse.status})`);
-      }
-      const task = taskResponse.data?.task || taskResponse.data || {};
-      const returnedTaskId = String(task.id || task.task_id || "");
-      if (returnedTaskId !== taskId) {
-        throw new Error("读取到的知识库任务与当前完成版本不匹配");
-      }
-      if (task.status === "failed" || task.status === "error") {
-        throw new Error("知识库任务执行失败，无法发布");
-      }
-      const output = Array.isArray(task.output) ? task.output : [];
-      const matchingDescriptors = collectKnowledgeArchiveDescriptors(
-        output,
-      ).filter(
-        (candidate) =>
-          candidate.outputItemId === build.packageOutputItemId &&
-          knowledgeArchiveDescriptorHash(candidate) ===
-            build.packageDescriptorHash &&
-          (!build.packageFileId || candidate.fileId === build.packageFileId),
-      );
-      if (matchingDescriptors.length !== 1) {
-        throw new Error("任务结果中无法唯一确认当前版本的知识库 ZIP");
-      }
-      downloaded = await downloadArchiveBytes({
-        descriptor: matchingDescriptors[0]!,
-        apiKey: credential.apiKey,
-        baseUrl,
-      });
-      sourceArtifactHash = build.packageDescriptorHash;
     }
     const archiveHash = createHash("sha256")
       .update(downloaded.buffer)
       .digest("hex");
     const snapshotId = randomUUID();
-    const parsed = await readKnowledgeArchive(
-      downloaded.buffer,
-      downloaded.filename,
-      snapshotId,
-      {
-        validationProfile:
-          build.skillVersion === "1" ? "historical" : "dashboard-enterprise-v1",
-        archiveContractVersions:
-          build.skillVersion === "1"
-            ? undefined
-            : build.skillVersion === "4"
-              ? [3, 4]
-              : [2, 3],
-      },
-    );
+    const dashboardOwnedPackage = isDashboardOwnedKnowledgePackageBuild(build);
+    const packageNodes = dashboardOwnedPackage
+      ? await getDb().then(async (db) => {
+          if (!db) throw new Error("数据库暂不可用，无法校验本地知识库包");
+          return db
+            .select()
+            .from(knowledgeBaseBuildNodes)
+            .where(eq(knowledgeBaseBuildNodes.buildId, build.id));
+        })
+      : undefined;
+    const parsed = dashboardOwnedPackage
+      ? await readDashboardOwnedKnowledgePackage({
+          buffer: downloaded.buffer,
+          expected: {
+            buildId: build.id,
+            generation: build.generation,
+            revision: build.revision,
+            companyName: build.companyName,
+          },
+          nodes: packageNodes,
+          storeAsset: async ({ path: assetPath, mimeType, buffer }) => {
+            const declaredExtension = path.extname(assetPath).toLowerCase();
+            const extension =
+              imageMimeByExtension[declaredExtension] === mimeType
+                ? declaredExtension
+                : Object.entries(imageMimeByExtension).find(
+                    ([, candidateMimeType]) => candidateMimeType === mimeType,
+                  )?.[0];
+            if (!extension) {
+              throw new Error("本地知识库包包含不支持的资源格式");
+            }
+            const key = `${randomUUID()}${extension}`;
+            await mkdir(storageRoot, { recursive: true });
+            await writeFile(path.join(storageRoot, key), buffer, {
+              flag: "wx",
+            });
+            return key;
+          },
+        })
+      : await readKnowledgeArchive(
+          downloaded.buffer,
+          downloaded.filename,
+          snapshotId,
+          {
+            validationProfile:
+              build.skillVersion === "1"
+                ? "historical"
+                : "dashboard-enterprise-v1",
+            archiveContractVersions: knowledgeBaseArchiveReadContractVersions(
+              build.skillVersion,
+            ),
+            dashboardEnterpriseMinLeaves: knowledgeBaseTreePolicy(
+              build.treePolicyVersion,
+            ).minLeaves,
+            requireDashboardAdaptiveFormalGate: build.treePolicyVersion === 2,
+          },
+        );
     storedAssetKeys = parsed.storedAssetKeys;
-    if (build.skillVersion === "3" || build.skillVersion === "4") {
+    if (
+      !dashboardOwnedPackage &&
+      (build.skillVersion === "3" || build.skillVersion === "4")
+    ) {
       if (
         build.skillVersion === "4" &&
         parsed.packageBuildRevision !== build.revision
@@ -6738,14 +7104,26 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
         .select()
         .from(knowledgeBaseBuildNodes)
         .where(eq(knowledgeBaseBuildNodes.buildId, build.id));
-      const expectedCustomerUploads =
-        build.skillVersion === "4"
-          ? await verifiedKnowledgeBaseCustomerUploadsForBuild({
-              userId: targetUserId,
-              buildId: build.id,
-              generation: build.generation,
-            })
-          : [];
+      const {
+        expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
+      } = knowledgeBaseArchiveRequiresV4UploadEvidence(
+        build.skillVersion,
+        parsed.packageSchemaVersion,
+      )
+        ? await verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+            userId: targetUserId,
+            buildId: build.id,
+            generation: build.generation,
+            officialLogoSha256: build.logoSha256,
+            packageArchiveSha256: build.packageArchiveSha256,
+          })
+        : {
+            expectedCustomerUploads: [],
+            expectedOfficialLogoUpload: undefined,
+            expectedOfficialLogoProvenance: undefined,
+          };
       assertKnowledgeBasePackageMatchesBuild({
         nodes: nodes.map((node) => ({
           leafId: node.leafId,
@@ -6762,7 +7140,10 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
         expectedLogoSha256: String(build.logoSha256 || ""),
         packageSchemaVersion: parsed.packageSchemaVersion,
         expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
         legacyV3Compatibility: build.skillVersion === "3",
+        legacyV4ReadCompatibility: build.skillVersion === "4",
       });
       if (parsed.packageSchemaVersion === 4) {
         await assertKnowledgeBaseCustomerUploadVisualBindings({
@@ -6773,11 +7154,25 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       }
     }
     const workspace = await getDashboardWorkspace(targetUserId);
-    assertKnowledgeArchiveEnterpriseIdentity({
-      enterpriseIdentityConfirmed: Boolean(workspace.enterpriseIdentityBoundAt),
-      brandName: workspace.payload.brandName,
-      documents: parsed.documents,
-    });
+    if (dashboardOwnedPackage) {
+      assertDashboardOwnedKnowledgePackageEnterpriseIdentity({
+        brandName: workspace.payload.brandName,
+        buildCompanyName: build.companyName,
+        manifestCompanyName: (
+          parsed as Awaited<
+            ReturnType<typeof readDashboardOwnedKnowledgePackage>
+          >
+        ).manifest.companyName,
+      });
+    } else {
+      assertKnowledgeArchiveEnterpriseIdentity({
+        enterpriseIdentityConfirmed: Boolean(
+          workspace.enterpriseIdentityBoundAt,
+        ),
+        brandName: workspace.payload.brandName,
+        documents: parsed.documents,
+      });
+    }
     await persistKnowledgeSnapshotArchive({
       userId: targetUserId,
       snapshotId,
@@ -6895,7 +7290,7 @@ router.put(
         );
         if (actor.role === "delivery_member") {
           if (importModule === "full") {
-            throw new Error("交付成员不能执行整合看板导入");
+            throw new Error("工程师不能执行整合看板导入");
           }
           await assertDeliveryModuleImport({
             req,
@@ -6944,7 +7339,6 @@ router.put(
             "profile",
             "metrics",
             "sections",
-            "keywords",
             "questions",
             "response-logic",
             "content-assets",
@@ -6956,15 +7350,24 @@ router.put(
         if (importModule === "optimization-report" && extension !== ".json") {
           throw new Error("进度报告仅支持带修订号的 JSON 当前内容模板");
         }
-        if (!existing.enterpriseIdentityBoundAt && importModule !== "profile") {
-          throw new Error(
-            "请先由管理员确认并发布当前账号的企业名称，再上传其他内容板块",
-          );
-        }
+        const knowledgeIdentitySnapshot =
+          !existing.enterpriseIdentityBoundAt && importModule === "keywords"
+            ? await getLatestKnowledgeSnapshot(targetUserId)
+            : null;
+        const bindEnterpriseIdentity = dashboardImportEnterpriseIdentityBinding(
+          {
+            module: importModule,
+            enterpriseIdentityBoundAt: existing.enterpriseIdentityBoundAt,
+            brandName: existing.payload.brandName,
+            knowledgeAuthenticatedForCurrentService:
+              servicePortal.knowledge.authenticatedForCurrentService,
+            knowledgeSnapshot: knowledgeIdentitySnapshot,
+          },
+        );
         if (importModule === "response-logic") {
           if (extension === ".json") {
             parseDashboardModuleTemplateMetadata({
-              raw: JSON.parse(buffer.toString("utf8")),
+              raw: parseUploadedJsonWithRepair(buffer.toString("utf8")),
               expectedModule: "response-logic",
               currentRevision: existing.revision,
             });
@@ -7075,7 +7478,7 @@ router.put(
             );
           }
           const template = parseAuthoritativeQuestionsTemplate({
-            raw: JSON.parse(buffer.toString("utf8")),
+            raw: parseUploadedJsonWithRepair(buffer.toString("utf8")),
             currentRevision: existing.revision,
             currentQuestions: servicePortal.purchasedQuestions,
           });
@@ -7174,7 +7577,7 @@ router.put(
           });
           const { template, changedBatchCount } =
             parseMonitoringCurrentTemplate({
-              raw: JSON.parse(buffer.toString("utf8")),
+              raw: parseUploadedJsonWithRepair(buffer.toString("utf8")),
               currentRevision: existing.revision,
               workspaceUserId: targetUserId,
               currentBatches,
@@ -7332,10 +7735,12 @@ router.put(
             importModule === "keywords" && extension !== ".json"
               ? dashboardPayloadSchema.parse({
                   ...existing.payload,
-                  keywordTables: await tabularTablesFromFile({
-                    buffer,
-                    sourceFileName,
-                  }),
+                  keywordTables: normalizeImportedKeywordTables(
+                    await tabularTablesFromFile({
+                      buffer,
+                      sourceFileName,
+                    }),
+                  ),
                 })
               : await dashboardPayloadFromFile({
                   buffer,
@@ -7638,7 +8043,7 @@ router.put(
           targetUserId,
           payload,
           sourceFileName,
-          bindEnterpriseIdentity: importModule === "profile",
+          bindEnterpriseIdentity,
           expectedRevision,
           progressReportPeriods:
             importModule === "optimization-report"
@@ -7679,7 +8084,7 @@ router.put(
       if (existingSnapshot && !maintenanceTicketId) {
         throw new KnowledgeArchiveValidationError(
           "structure",
-          "已发布知识库只能通过开放的维护工单替换",
+          "已发布知识库只能通过开放的维护需求替换",
         );
       }
       if (maintenanceTicketId) {
@@ -7805,6 +8210,8 @@ router.put(
         error instanceof DashboardImportPreflightError;
       const responseLogicRevisionConflict =
         error instanceof ResponseLogicRevisionConflictError;
+      const responseLogicConfirmed =
+        error instanceof ResponseLogicConfirmedError;
       res
         .status(
           error instanceof ServiceEntitlementError
@@ -7819,9 +8226,11 @@ router.put(
                     ? error.statusCode
                     : responseLogicRevisionConflict
                       ? error.statusCode
-                      : enterpriseMismatch || revisionConflict
-                        ? 409
-                        : 400,
+                      : responseLogicConfirmed
+                        ? error.statusCode
+                        : enterpriseMismatch || revisionConflict
+                          ? 409
+                          : 400,
         )
         .json({
           error: {
@@ -7842,9 +8251,11 @@ router.put(
                           : dashboardImportPreflightConflict
                             ? error.code
                             : responseLogicRevisionConflict
-                              ? error.code
-                              : knowledgeArchiveErrorCode(error) ||
-                                "IMPORT_FAILED",
+                              ? error.responseLogicCode
+                              : responseLogicConfirmed
+                                ? error.responseLogicCode
+                                : knowledgeArchiveErrorCode(error) ||
+                                  "IMPORT_FAILED",
           },
         });
     }
@@ -7877,16 +8288,29 @@ router.get(
         expectedSha256: snapshot.archiveHash,
         expectedBytes: snapshot.totalBytes,
       });
-      await validateKnowledgeArchiveForDownload({
+      const validation =
+        await loadKnowledgeSnapshotDownloadValidation(snapshot);
+      if (validation.kind === "dashboard_owned") {
+        await validateDashboardOwnedSnapshotArchiveForDownload({
+          buffer: bytes,
+          validation,
+        });
+      } else {
+        await validateKnowledgeArchiveForDownload({
+          buffer: bytes,
+          sourceFileName: snapshot.sourceFileName,
+          expectedSha256: snapshot.archiveHash,
+          expectedBytes: snapshot.totalBytes,
+          // Historical is the compatibility superset for snapshots created
+          // before profile/version metadata was persisted. It still executes
+          // the shared CRC, path traversal, symlink, entry-count, expansion and
+          // required-root structure checks before any bytes leave the server.
+          validationProfile: "historical",
+        });
+      }
+      await assertKnowledgeSnapshotArchiveCustomerSafe({
         buffer: bytes,
         sourceFileName: snapshot.sourceFileName,
-        expectedSha256: snapshot.archiveHash,
-        expectedBytes: snapshot.totalBytes,
-        // Historical is the compatibility superset for snapshots created
-        // before profile/version metadata was persisted. It still executes
-        // the shared CRC, path traversal, symlink, entry-count, expansion and
-        // required-root structure checks before any bytes leave the server.
-        validationProfile: "historical",
       });
       res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Content-Type", "application/zip");
@@ -7901,9 +8325,15 @@ router.get(
         error instanceof KnowledgeSnapshotArchiveError ? error : null;
       const validationError =
         error instanceof KnowledgeArchiveValidationError ? error : null;
+      const bindingError =
+        error instanceof KnowledgeSnapshotDownloadBindingError ? error : null;
+      const publicArchiveError =
+        error instanceof KnowledgeSnapshotPublicArchiveError ? error : null;
       res
         .status(
           validationError ||
+            bindingError ||
+            publicArchiveError ||
             (archiveError && archiveError.code !== "ARCHIVE_NOT_FOUND")
             ? 409
             : 404,
@@ -7912,10 +8342,16 @@ router.get(
           error: {
             message:
               validationError?.message ||
+              bindingError?.message ||
+              publicArchiveError?.message ||
               archiveError?.message ||
               "知识库 ZIP 不存在",
             code:
               knowledgeArchiveErrorCode(validationError) ||
+              (bindingError ? "KNOWLEDGE_ARCHIVE_BINDING_INVALID" : null) ||
+              (publicArchiveError
+                ? "KNOWLEDGE_ARCHIVE_PUBLIC_CONTENT_UNAVAILABLE"
+                : null) ||
               archiveError?.code ||
               "NOT_FOUND",
           },

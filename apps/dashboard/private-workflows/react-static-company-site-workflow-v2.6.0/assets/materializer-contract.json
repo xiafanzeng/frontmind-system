@@ -1,0 +1,13 @@
+{
+  "schema": "frontmind-siteops-materializer-coordinate/v1",
+  "version": "2.6.0",
+  "designOwner": "dashboard",
+  "contentCanonicalizer": "CanonicalPreviewModelV1",
+  "primaryRenderer": "react_static_v2",
+  "fallbackRenderer": "trusted_static_html_v1",
+  "providerOutput": "SiteContentPatchWireV1",
+  "providerSourceAccepted": false,
+  "providerLayoutAccepted": false,
+  "runtimeJavaScriptAllowed": false,
+  "qaPolicy": "blocking-safety-warning-quality-v1"
+}

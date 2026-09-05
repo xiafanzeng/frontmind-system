@@ -21,6 +21,49 @@ export type KnowledgeBaseExpectedOfficialLogoUpload = {
   sizeBytes: number;
 };
 
+/**
+ * The authoritative provenance persisted when the Logo was first bound. The
+ * final ZIP must repeat this ledger exactly; a valid Logo byte hash alone must
+ * never permit the provider to rewrite where the enterprise identity came
+ * from.
+ */
+export type KnowledgeBaseExpectedOfficialLogoProvenance =
+  | {
+      sourceKind: "official_web";
+      sourcePageUrl: string;
+      sourceAssetUrl: string;
+    }
+  | {
+      sourceKind: "official_document";
+      sourceDocumentPath: string;
+    }
+  | {
+      sourceKind: "official_logo_upload";
+      sourceUploadIndex: 0;
+      sourceUploadFileId: string;
+      sourceUploadFilename: string;
+      sourceUploadMimeType: string;
+      sourceUploadSizeBytes: number;
+      sourceUploadSha256: string;
+    };
+
+export function knowledgeBaseOfficialLogoUploadProvenance(
+  upload: KnowledgeBaseExpectedOfficialLogoUpload,
+): Extract<
+  KnowledgeBaseExpectedOfficialLogoProvenance,
+  { sourceKind: "official_logo_upload" }
+> {
+  return {
+    sourceKind: "official_logo_upload",
+    sourceUploadIndex: 0,
+    sourceUploadFileId: upload.fileId,
+    sourceUploadFilename: upload.filename,
+    sourceUploadMimeType: upload.mimeType,
+    sourceUploadSizeBytes: upload.sizeBytes,
+    sourceUploadSha256: upload.sourceSha256,
+  };
+}
+
 export class KnowledgeBasePackageBindingError extends Error {
   constructor(message: string) {
     super(message);
@@ -169,6 +212,7 @@ export function assertKnowledgeBasePackageMatchesBuild(input: {
     mimeTypes: readonly string[];
   }[];
   expectedOfficialLogoUpload?: KnowledgeBaseExpectedOfficialLogoUpload;
+  expectedOfficialLogoProvenance?: KnowledgeBaseExpectedOfficialLogoProvenance;
   requireExactContent?: boolean;
   /**
    * Builder v3 used sparse document orders (10, 20, ...) and could package
@@ -176,6 +220,11 @@ export function assertKnowledgeBasePackageMatchesBuild(input: {
    * approved Logo/content binding without pretending those archives were v4.
    */
   legacyV3Compatibility?: boolean;
+  /**
+   * Read-only compatibility for schema-v4 archives accepted by an earlier
+   * production release. New v4 output must continue to use the raw leaf ID.
+   */
+  legacyV4ReadCompatibility?: boolean;
 }) {
   const handledNodes = input.nodes
     .filter(
@@ -212,7 +261,9 @@ export function assertKnowledgeBasePackageMatchesBuild(input: {
   for (const node of handledNodes) {
     const leafId = normalizedIdentity(node.leafId);
     const acceptedDocumentIds =
-      input.packageSchemaVersion === 4 ? [leafId, `leaf-${leafId}`] : [leafId];
+      input.legacyV4ReadCompatibility && input.packageSchemaVersion === 4
+        ? [leafId, `leaf-${leafId}`]
+        : [leafId];
     const matches = acceptedDocumentIds.filter((id) => documentsById.has(id));
     if (matches.length === 0) {
       throw new KnowledgeBasePackageBindingError(
@@ -354,6 +405,88 @@ export function assertKnowledgeBasePackageMatchesBuild(input: {
     (asset) => asset.sourceKind === "official_logo_upload",
   );
   const expectedOfficialLogoUpload = input.expectedOfficialLogoUpload;
+  const expectedOfficialLogoProvenance =
+    input.expectedOfficialLogoProvenance ||
+    (expectedOfficialLogoUpload
+      ? knowledgeBaseOfficialLogoUploadProvenance(expectedOfficialLogoUpload)
+      : undefined);
+  if (
+    input.expectedOfficialLogoProvenance &&
+    expectedOfficialLogoUpload &&
+    (input.expectedOfficialLogoProvenance.sourceKind !==
+      "official_logo_upload" ||
+      input.expectedOfficialLogoProvenance.sourceUploadIndex !== 0 ||
+      input.expectedOfficialLogoProvenance.sourceUploadFileId !==
+        expectedOfficialLogoUpload.fileId ||
+      input.expectedOfficialLogoProvenance.sourceUploadFilename !==
+        expectedOfficialLogoUpload.filename ||
+      input.expectedOfficialLogoProvenance.sourceUploadMimeType !==
+        expectedOfficialLogoUpload.mimeType ||
+      input.expectedOfficialLogoProvenance.sourceUploadSizeBytes !==
+        expectedOfficialLogoUpload.sizeBytes ||
+      input.expectedOfficialLogoProvenance.sourceUploadSha256 !==
+        expectedOfficialLogoUpload.sourceSha256)
+  ) {
+    throw new KnowledgeBasePackageBindingError(
+      "服务端官方主 Logo 来源账本相互冲突",
+    );
+  }
+  if (expectedOfficialLogoProvenance) {
+    if (!isCustomerUploadContract) {
+      throw new KnowledgeBasePackageBindingError(
+        "官方主 Logo 精确来源账本必须使用 Dashboard v4 最终 ZIP 合同",
+      );
+    }
+    const officialLogo = officialAssets[0];
+    const noUploadFields =
+      officialLogo?.sourceUploadIndex === undefined &&
+      officialLogo?.sourceUploadFileId === undefined &&
+      officialLogo?.sourceUploadFilename === undefined &&
+      officialLogo?.sourceUploadMimeType === undefined &&
+      officialLogo?.sourceUploadSizeBytes === undefined &&
+      officialLogo?.sourceUploadSha256 === undefined;
+    if (
+      !officialLogo ||
+      (expectedOfficialLogoProvenance.sourceKind === "official_web" &&
+        (officialLogo.sourceKind !== "official_web" ||
+          officialLogo.sourcePageUrl !==
+            expectedOfficialLogoProvenance.sourcePageUrl ||
+          officialLogo.sourceAssetUrl !==
+            expectedOfficialLogoProvenance.sourceAssetUrl ||
+          officialLogo.sourceDocumentPath !== undefined ||
+          !noUploadFields)) ||
+      (expectedOfficialLogoProvenance.sourceKind === "official_document" &&
+        (officialLogo.sourceKind !== "official_document" ||
+          officialLogo.sourceDocumentPath !==
+            expectedOfficialLogoProvenance.sourceDocumentPath ||
+          officialLogo.sourcePageUrl !== undefined ||
+          officialLogo.sourceAssetUrl !== undefined ||
+          !noUploadFields)) ||
+      (expectedOfficialLogoProvenance.sourceKind === "official_logo_upload" &&
+        (officialLogo.sourceKind !== "official_logo_upload" ||
+          officialLogo.sourceUploadIndex !==
+            expectedOfficialLogoProvenance.sourceUploadIndex ||
+          officialLogo.sourceUploadFileId !==
+            expectedOfficialLogoProvenance.sourceUploadFileId ||
+          officialLogo.sourceUploadFilename !==
+            expectedOfficialLogoProvenance.sourceUploadFilename ||
+          officialLogo.sourceUploadMimeType !==
+            expectedOfficialLogoProvenance.sourceUploadMimeType ||
+          officialLogo.sourceUploadSizeBytes !==
+            expectedOfficialLogoProvenance.sourceUploadSizeBytes ||
+          officialLogo.sourceUploadSha256 !==
+            expectedOfficialLogoProvenance.sourceUploadSha256 ||
+          officialLogo.sourcePageUrl !== undefined ||
+          officialLogo.sourceAssetUrl !== undefined ||
+          officialLogo.sourceDocumentPath !== undefined))
+    ) {
+      throw new KnowledgeBasePackageBindingError(
+        expectedOfficialLogoProvenance.sourceKind === "official_logo_upload"
+          ? "最终 ZIP 的客户上传官方主 Logo 与服务端原始上传账本不一致"
+          : "最终 ZIP 的官方主 Logo 来源与首轮持久化账本不一致",
+      );
+    }
+  }
   if (expectedOfficialLogoUpload) {
     if (!isCustomerUploadContract) {
       throw new KnowledgeBasePackageBindingError(
@@ -417,6 +550,7 @@ export function assertKnowledgeBasePackageMatchesBuild(input: {
     (officialLogoUploadAssets.length > 0 ||
       officialAssets.some(
         (asset) =>
+          asset.sourceKind !== undefined &&
           asset.sourceKind !== "official_web" &&
           asset.sourceKind !== "official_document",
       ))

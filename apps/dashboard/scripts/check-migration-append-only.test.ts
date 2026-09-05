@@ -44,6 +44,7 @@ describe("append-only expand SQL policy", () => {
     for (const sql of [
       "CREATE TABLE `fresh` (`id` bigint NOT NULL, PRIMARY KEY (`id`));",
       "CREATE TABLE `notes` (`body` varchar(128) DEFAULT 'safe;value');",
+      "CREATE TABLE `timestamps` (`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP);",
       "ALTER TABLE `users` ADD `nickname` varchar(128);",
       "ALTER TABLE `users` ADD COLUMN `enabled` boolean NOT NULL DEFAULT TRUE;",
       "ALTER TABLE `users` ADD `attempts` int NOT NULL DEFAULT 0;",
@@ -52,6 +53,38 @@ describe("append-only expand SQL policy", () => {
       "ALTER TABLE `users` ADD INDEX `users_name_idx` (`name`);",
     ]) {
       expect(() => assertExpandSql("0049_safe_expand", sql)).not.toThrow();
+    }
+  });
+
+  it("allows a unique writer fence only on a nullable column added earlier in the same expand migration", () => {
+    expect(() =>
+      assertExpandSql(
+        "0061_nullable_writer_fence",
+        [
+          "ALTER TABLE `knowledge_base_builds` ADD `canonicalTaskId` varchar(255);",
+          "CREATE UNIQUE INDEX `knowledge_base_builds_canonical_task_idx` ON `knowledge_base_builds` (`canonicalTaskId`);",
+        ].join("--> statement-breakpoint\n"),
+      ),
+    ).not.toThrow();
+
+    for (const sql of [
+      "CREATE UNIQUE INDEX `uq_name` ON `users` (`name`);",
+      [
+        "CREATE UNIQUE INDEX `uq_token` ON `users` (`token`);",
+        "ALTER TABLE `users` ADD `token` varchar(36);",
+      ].join("--> statement-breakpoint\n"),
+      [
+        "ALTER TABLE `users` ADD `token` varchar(36) NOT NULL DEFAULT 'none';",
+        "CREATE UNIQUE INDEX `uq_token` ON `users` (`token`);",
+      ].join("--> statement-breakpoint\n"),
+      [
+        "ALTER TABLE `users` ADD `token` varchar(36);",
+        "CREATE UNIQUE INDEX `uq_token_pair` ON `users` (`token`, `name`);",
+      ].join("--> statement-breakpoint\n"),
+    ]) {
+      expect(() => assertExpandSql("0061_unsafe_unique", sql)).toThrow(
+        "EXPAND_MIGRATION_HAS_CONTRACT_SQL",
+      );
     }
   });
 
@@ -99,6 +132,7 @@ describe("append-only expand SQL policy", () => {
   it("rejects a second statement hidden behind an allowed statement", () => {
     for (const sql of [
       "CREATE TABLE `fresh` (`id` bigint); ALTER TABLE `users` MODIFY `name` text;",
+      "CREATE TABLE `fresh` (`id` bigint); UPDATE `users` SET `status` = 'active';",
       "ALTER TABLE `users` ADD `nickname` varchar(128); CALL unsafe_backfill();",
     ]) {
       expect(() => assertExpandSql("0049_multi_statement", sql)).toThrow(

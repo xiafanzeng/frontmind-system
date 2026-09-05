@@ -9,21 +9,26 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   acquirePresalesFileCreateReservation,
   completePresalesFileCreateReservation,
+  createIncrementalPresalesFileStage,
   hashPresalesFileCreatePayload,
   hashPresalesFileIdempotencyKey,
   markStoredPresalesFileRetention,
   readPresalesFileLifecycle,
+  readPresalesProjectFileCreateReservations,
   readStoredPresalesFile,
   recordPresalesFileDescriptor,
   removePresalesFileCreateReservation,
+  removeStoredPresalesFileContent,
+  purgePresalesFileCreateReservation,
   stagePresalesFileContent,
   sweepPresalesFileStorageRetention,
+  withStoredPresalesFileMutationLock,
 } from "./presales-file-store";
 
 const originalAssetDir = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
@@ -200,6 +205,41 @@ describe("durable presales file-create reservations", () => {
     expect(Buffer.byteLength(tombstone)).toBeLessThan(1_024);
   });
 
+  it("serializes final-file mutation through the shared filesystem lock", async () => {
+    let releaseFirst!: () => void;
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+    const first = withStoredPresalesFileMutationLock(
+      "asset-shared",
+      async () => {
+        order.push("first-enter");
+        markFirstEntered();
+        await firstGate;
+        order.push("first-leave");
+      },
+    );
+    await firstEntered;
+
+    const second = withStoredPresalesFileMutationLock(
+      "asset-shared",
+      async () => {
+        order.push("second-enter");
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(order).toEqual(["first-enter"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first-enter", "first-leave", "second-enter"]);
+  });
+
   it("reclaims only an expired lease with the same upstream key hash", async () => {
     const idempotencyKey = "geo-custom-file:ambiguous-response:archive:v1";
     const requestHash = hashPresalesFileCreatePayload({
@@ -241,6 +281,88 @@ describe("durable presales file-create reservations", () => {
     if (first.state === "acquired" && recovered.state === "acquired") {
       expect(recovered.attemptId).not.toBe(first.attemptId);
     }
+  });
+
+  it("keeps the default file-create lease beyond the upstream timeout", async () => {
+    const input = {
+      idempotencyKey: "geo-custom-file:timeout-window:archive:v1",
+      requestHash: hashPresalesFileCreatePayload({ filename: "archive.zip" }),
+      apiCredentialId: "credential-1",
+      credentialVersion: 1,
+    };
+    await acquirePresalesFileCreateReservation({
+      ...input,
+      now: new Date("2026-08-02T08:00:00.000Z"),
+    });
+    await expect(
+      acquirePresalesFileCreateReservation({
+        ...input,
+        now: new Date("2026-08-02T08:02:01.000Z"),
+      }),
+    ).resolves.toMatchObject({ state: "pending" });
+  });
+
+  it("binds a legacy reservation to its project and physically clears project cleanup state", async () => {
+    const idempotencyKey = "geo-custom-file:legacy-project:archive:v1";
+    const legacyHash = hashPresalesFileCreatePayload({
+      filename: "archive.zip",
+    });
+    await acquirePresalesFileCreateReservation({
+      idempotencyKey,
+      requestHash: legacyHash,
+      apiCredentialId: "credential-1",
+      credentialVersion: 1,
+      now: new Date("2026-08-02T08:00:00.000Z"),
+      leaseMs: 1_000,
+    });
+    await expect(
+      acquirePresalesFileCreateReservation({
+        idempotencyKey,
+        requestHash: hashPresalesFileCreatePayload({
+          filename: "archive.zip",
+          projectId: "project-20260728-0001",
+        }),
+        compatibleRequestHashes: [legacyHash],
+        projectId: "project-20260728-0001",
+        apiCredentialId: "credential-1",
+        credentialVersion: 1,
+        now: new Date("2026-08-02T08:00:00.500Z"),
+      }),
+    ).resolves.toMatchObject({ state: "pending" });
+    await expect(
+      readPresalesProjectFileCreateReservations(
+        "project-20260728-0001",
+        new Date("2026-08-02T08:00:00.500Z"),
+      ),
+    ).resolves.toMatchObject({ pendingReservations: 1, files: [] });
+    await expect(
+      readPresalesProjectFileCreateReservations(
+        "project-20260728-0001",
+        new Date("2026-08-02T08:00:02.000Z"),
+      ),
+    ).resolves.toMatchObject({ pendingReservations: 0, files: [] });
+
+    const completed = await acquirePresalesFileCreateReservation({
+      idempotencyKey: "geo-custom-file:project-cleanup:archive:v1",
+      requestHash: hashPresalesFileCreatePayload({
+        filename: "result.zip",
+        projectId: "project-20260728-0001",
+      }),
+      projectId: "project-20260728-0001",
+      apiCredentialId: "credential-1",
+      credentialVersion: 1,
+    });
+    if (completed.state !== "acquired") throw new Error("not acquired");
+    await completePresalesFileCreateReservation({
+      ...completed,
+      upstreamFileId: "project-file-1",
+    });
+    await purgePresalesFileCreateReservation("project-file-1");
+    const root = path.join(assetDir, "presales-files", "create-reservations");
+    const entries = await readdir(root);
+    expect(entries).not.toContain(
+      `${hashPresalesFileIdempotencyKey("geo-custom-file:project-cleanup:archive:v1")}.json`,
+    );
   });
 
   it("rejects reusing one operation key for different file metadata", async () => {
@@ -302,6 +424,155 @@ describe("presales file content retention manifest", () => {
     });
   }
 
+  it("reports monotonically received bytes while staging a stream", async () => {
+    const received: number[] = [];
+    const staged = await stagePresalesFileContent({
+      fileId: "progress-upload",
+      stream: Readable.from([
+        Buffer.alloc(2),
+        Buffer.alloc(3),
+        Buffer.alloc(5),
+      ]),
+      maxBytes: 1_024,
+      onProgress: (receivedBytes) => received.push(receivedBytes),
+    });
+
+    expect(received).toEqual([2, 5, 10]);
+    expect(staged.sizeBytes).toBe(10);
+    await staged.discard();
+  });
+
+  it("incrementally stages exact bytes with caller-controlled backpressure", async () => {
+    const stage = await createIncrementalPresalesFileStage({
+      fileId: "incremental-upload",
+      maxBytes: 1_024,
+    });
+    await stage.append(Buffer.from("first-"));
+    await stage.append(new Uint8Array(Buffer.from("second")));
+    const staged = await stage.finalize();
+
+    expect(staged.sizeBytes).toBe(12);
+    expect(staged.sha256).toBe(
+      "79be082f29fd48f6922ef9e7c161190ba1e076790e82e9fa490b58205b5e9a44",
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of staged.createReadStream()) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("first-second");
+    await staged.discard();
+  });
+
+  it("stops awaiting a stalled storage preflight on abort without creating a temporary", async () => {
+    const controller = new AbortController();
+    let finishPreflight!: () => void;
+    const staged = createIncrementalPresalesFileStage({
+      fileId: "incremental-preflight-abort",
+      maxBytes: 1_024,
+      signal: controller.signal,
+      storagePreflight: async () =>
+        new Promise((resolve) => {
+          finishPreflight = () =>
+            resolve({
+              root: path.join(assetDir, "presales-files"),
+              availableBytes: 10_000,
+              requiredBytes: 1_024,
+            });
+        }),
+    });
+    await vi.waitFor(() => expect(finishPreflight).toBeTypeOf("function"));
+    controller.abort(
+      Object.assign(new Error("absolute deadline"), {
+        code: "UPLOAD_SOURCE_DEADLINE_EXCEEDED",
+      }),
+    );
+
+    await expect(staged).rejects.toMatchObject({
+      code: "UPLOAD_SOURCE_DEADLINE_EXCEEDED",
+    });
+    finishPreflight();
+    await Promise.resolve();
+    expect(
+      await readdir(path.join(assetDir, "presales-files")).catch(() => []),
+    ).toEqual([]);
+  });
+
+  it("removes an incremental temporary file when the actual byte cap is crossed", async () => {
+    const stage = await createIncrementalPresalesFileStage({
+      fileId: "incremental-too-large",
+      maxBytes: 5,
+    });
+    await stage.append("12345");
+    await expect(stage.append("6")).rejects.toThrow("FILE_TOO_LARGE");
+    await stage.discard();
+
+    const root = path.join(assetDir, "presales-files");
+    expect(
+      (await readdir(root)).filter((name) => name.endsWith(".upload.tmp")),
+    ).toEqual([]);
+  });
+
+  it("bounds a stalled write, destroys the stream, and leaves no temporary file", async () => {
+    class HangingWriteStream extends Writable {
+      fd = 99;
+      _write(
+        _chunk: Buffer,
+        _encoding: BufferEncoding,
+        _callback: (error?: Error | null) => void,
+      ) {
+        // Deliberately never completes; the stage deadline must wake the call.
+      }
+    }
+    const output = new HangingWriteStream();
+    const stage = await createIncrementalPresalesFileStage({
+      fileId: "incremental-write-stall",
+      maxBytes: 1_024,
+      ioTimeoutMs: 10,
+      writeStreamFactory: (() => output) as never,
+    });
+
+    await expect(stage.append("stalled")).rejects.toMatchObject({
+      code: "PRESALES_FILE_STAGE_WRITE_TIMEOUT",
+    });
+    await stage.discard();
+
+    expect(output.destroyed).toBe(true);
+    expect(
+      (await readdir(path.join(assetDir, "presales-files"))).filter((name) =>
+        name.endsWith(".upload.tmp"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("propagates a stalled close instead of returning a usable stage", async () => {
+    class HangingCloseStream extends Writable {
+      fd = 99;
+      _write(
+        _chunk: Buffer,
+        _encoding: BufferEncoding,
+        callback: (error?: Error | null) => void,
+      ) {
+        callback();
+      }
+      _final(_callback: (error?: Error | null) => void) {
+        // Deliberately never closes; finalize must fail and destroy it.
+      }
+    }
+    const output = new HangingCloseStream();
+    const stage = await createIncrementalPresalesFileStage({
+      fileId: "incremental-close-stall",
+      maxBytes: 1_024,
+      ioTimeoutMs: 10,
+      writeStreamFactory: (() => output) as never,
+    });
+    await stage.append("complete bytes");
+
+    await expect(stage.finalize()).rejects.toMatchObject({
+      code: "PRESALES_FILE_STAGE_CLOSE_TIMEOUT",
+    });
+    expect(output.destroyed).toBe(true);
+  });
+
   it("persists an immutable upload deadline across later commits", async () => {
     const uploadedAt = new Date("2026-01-01T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-01-31T00:00:00.000Z");
@@ -324,6 +595,110 @@ describe("presales file content retention manifest", () => {
       contentExpiresAt.toISOString(),
     );
     expect(stored?.manifestUpdatedAt).toBeInstanceOf(Date);
+  });
+
+  it("re-arms retention only for an explicitly proven missing-body rebuild", async () => {
+    const body = "byte-identical deterministic attachment";
+    await store({
+      fileId: "expired-missing-body",
+      body,
+      uploadedAt: "2026-01-01T00:00:00.000Z",
+      contentExpiresAt: "2026-01-31T00:00:00.000Z",
+    });
+    await removeStoredPresalesFileContent("expired-missing-body");
+    expect(await readStoredPresalesFile("expired-missing-body")).toBeNull();
+
+    const retry = await stagePresalesFileContent({
+      fileId: "expired-missing-body",
+      stream: Readable.from([body]),
+      maxBytes: 1_024,
+    });
+    await retry.commit({
+      filename: "reselected.pdf",
+      mimeType: "application/pdf",
+      uploadedAt: "2026-08-20T00:00:00.000Z",
+      contentExpiresAt: "2026-09-19T00:00:00.000Z",
+      replaceManagedRetention: true,
+    });
+
+    const restored = await readStoredPresalesFile("expired-missing-body");
+    expect(restored?.uploadedAt?.toISOString()).toBe(
+      "2026-08-20T00:00:00.000Z",
+    );
+    expect(restored?.contentExpiresAt?.toISOString()).toBe(
+      "2026-09-19T00:00:00.000Z",
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of restored!.createReadStream()) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks).toString("utf8")).toBe(body);
+  });
+
+  it("does not let a stale expired sweep delete a concurrently re-armed body", async () => {
+    const fileId = "expired-sweep-rearm-race";
+    const originalBody = "original expired bytes";
+    const rearmedBody = originalBody;
+    await store({
+      fileId,
+      body: originalBody,
+      uploadedAt: "2026-01-01T00:00:00.000Z",
+      contentExpiresAt: "2026-01-31T00:00:00.000Z",
+    });
+
+    let releaseSweep!: () => void;
+    const sweepPaused = new Promise<void>((resolve) => {
+      releaseSweep = resolve;
+    });
+    let markExpiredManifestObserved!: () => void;
+    const expiredManifestObserved = new Promise<void>((resolve) => {
+      markExpiredManifestObserved = resolve;
+    });
+    const onExpiredFile = vi.fn();
+    const sweeping = sweepPresalesFileStorageRetention({
+      now: new Date("2026-02-01T00:00:00.000Z"),
+      cursor: null,
+      persistCursor: false,
+      onRetainedFile: async ({ fileId: observedFileId }) => {
+        if (observedFileId !== fileId) return;
+        markExpiredManifestObserved();
+        await sweepPaused;
+      },
+      onExpiredFile,
+    });
+    await expiredManifestObserved;
+
+    const staged = await stagePresalesFileContent({
+      fileId,
+      stream: Readable.from([rearmedBody]),
+      maxBytes: 1_024,
+    });
+    await withStoredPresalesFileMutationLock(fileId, () =>
+      staged.commit({
+        filename: "recovered.pdf",
+        mimeType: "application/pdf",
+        uploadedAt: "2026-02-01T00:00:01.000Z",
+        contentExpiresAt: "2026-03-03T00:00:01.000Z",
+        replaceManagedRetention: true,
+      }),
+    );
+    releaseSweep();
+
+    await expect(sweeping).resolves.toMatchObject({
+      deleted: 0,
+      expiredFilesDeleted: 0,
+      failures: 0,
+    });
+    expect(onExpiredFile).not.toHaveBeenCalled();
+    const restored = await readStoredPresalesFile(fileId);
+    expect(restored?.contentExpiresAt?.toISOString()).toBe(
+      "2026-03-03T00:00:01.000Z",
+    );
+    const restoredChunks: Buffer[] = [];
+    for await (const chunk of restored!.createReadStream()) {
+      restoredChunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(restoredChunks).toString("utf8")).toBe(rearmedBody);
   });
 
   it("stamps a legacy stored manifest without rewriting its bytes", async () => {
@@ -456,6 +831,63 @@ describe("presales file content retention manifest", () => {
       (await readStoredPresalesFile("assistant-output-without-retention"))
         ?.manifestUpdatedAt,
     ).toBeInstanceOf(Date);
+  });
+
+  it("never adds the default TTL to or deletes a domain-referenced artifact", async () => {
+    await store({ fileId: "siteops-unmanaged-reference" });
+    await store({
+      fileId: "siteops-managed-reference",
+      uploadedAt: "2026-01-01T00:00:00.000Z",
+      contentExpiresAt: "2026-01-31T00:00:00.000Z",
+    });
+    const onRetainedFile = vi.fn();
+    const onExpiredFile = vi.fn();
+
+    const result = await sweepPresalesFileStorageRetention({
+      now: new Date("2027-01-01T00:00:00.000Z"),
+      shouldRetainFile: async ({ fileId }) => fileId.startsWith("siteops-"),
+      onRetainedFile,
+      onExpiredFile,
+    });
+
+    expect(result).toMatchObject({
+      scannedStoredManifests: 2,
+      legacyManifestsBackfilled: 0,
+      deleted: 0,
+      failures: 0,
+    });
+    expect(onRetainedFile).not.toHaveBeenCalled();
+    expect(onExpiredFile).not.toHaveBeenCalled();
+    expect(
+      await readStoredPresalesFile("siteops-unmanaged-reference"),
+    ).toMatchObject({
+      uploadedAt: null,
+      contentExpiresAt: null,
+    });
+    expect(
+      await readStoredPresalesFile("siteops-managed-reference"),
+    ).not.toBeNull();
+  });
+
+  it("keeps bytes when the domain-reference authority is unavailable", async () => {
+    await store({
+      fileId: "siteops-reference-check-failed",
+      uploadedAt: "2026-01-01T00:00:00.000Z",
+      contentExpiresAt: "2026-01-31T00:00:00.000Z",
+    });
+
+    const result = await sweepPresalesFileStorageRetention({
+      now: new Date("2027-01-01T00:00:00.000Z"),
+      shouldRetainFile: async () => {
+        throw new Error("DATABASE_UNAVAILABLE");
+      },
+      onRetainedFile: vi.fn(),
+    });
+
+    expect(result).toMatchObject({ deleted: 0, failures: 1 });
+    expect(
+      await readStoredPresalesFile("siteops-reference-check-failed"),
+    ).not.toBeNull();
   });
 
   it("removes stale upload temporaries but leaves a recent upload alone", async () => {

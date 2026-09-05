@@ -426,16 +426,25 @@ export function summarizeMonitoringCitations(
   return { totalCitations, channels, contents };
 }
 
-async function resolveQuestionLineageIdsWithDb(
+export type QuestionMonitoringScopeMode =
+  | "current"
+  | "historical_exact"
+  | "lineage";
+
+export async function resolveQuestionMonitoringScopeWithDb(
   db: Awaited<ReturnType<typeof requireDb>>,
   userId: number,
   requestedQuestionId: string,
+  mode: QuestionMonitoringScopeMode = "current",
 ) {
   const matches = await db
     .select({
       id: workspaceQuestions.id,
       externalQuestionId: workspaceQuestions.externalQuestionId,
       sourceQuestionId: workspaceQuestions.sourceQuestionId,
+      question: workspaceQuestions.question,
+      status: workspaceQuestions.status,
+      selectionApprovalStatus: workspaceQuestions.selectionApprovalStatus,
     })
     .from(workspaceQuestions)
     .where(
@@ -448,6 +457,36 @@ async function resolveQuestionLineageIdsWithDb(
         ),
       ),
     );
+  const exactMatch = matches.find((row) => row.id === requestedQuestionId);
+  if (mode === "historical_exact") {
+    return {
+      questionIds: [requestedQuestionId],
+      currentQuestion: exactMatch?.question,
+    };
+  }
+
+  const activeMatches = matches.filter(
+    (row) =>
+      row.status === "selected" && row.selectionApprovalStatus === "approved",
+  );
+  const directActiveMatch = activeMatches.find(
+    (row) => row.id === requestedQuestionId,
+  );
+  const activeQuestionTexts = new Set(activeMatches.map((row) => row.question));
+  if (mode === "current") {
+    const currentMatch =
+      directActiveMatch ??
+      (activeMatches.length === 1 ? activeMatches[0] : undefined);
+    return {
+      questionIds: currentMatch ? [currentMatch.id] : [requestedQuestionId],
+      currentQuestion:
+        currentMatch?.question ??
+        (activeQuestionTexts.size === 1
+          ? [...activeQuestionTexts][0]!
+          : undefined),
+    };
+  }
+
   const rootIds = new Set(matches.map((row) => row.sourceQuestionId ?? row.id));
   const lineageRows = rootIds.size
     ? await db
@@ -466,19 +505,41 @@ async function resolveQuestionLineageIdsWithDb(
           ),
         )
     : [];
-  return [
-    ...new Set(
-      [
-        requestedQuestionId,
-        ...matches.flatMap((row) => [
-          row.id,
-          row.externalQuestionId,
-          row.sourceQuestionId,
-        ]),
-        ...lineageRows.flatMap((row) => [row.id, row.externalQuestionId]),
-      ].filter((value): value is string => Boolean(value)),
-    ),
-  ];
+  return {
+    questionIds: [
+      ...new Set(
+        [
+          requestedQuestionId,
+          ...matches.flatMap((row) => [
+            row.id,
+            row.externalQuestionId,
+            row.sourceQuestionId,
+          ]),
+          ...lineageRows.flatMap((row) => [row.id, row.externalQuestionId]),
+        ].filter((value): value is string => Boolean(value)),
+      ),
+    ],
+    currentQuestion:
+      directActiveMatch?.question ??
+      (activeQuestionTexts.size === 1
+        ? [...activeQuestionTexts][0]!
+        : undefined),
+  };
+}
+
+async function resolveQuestionLineageIdsWithDb(
+  db: Awaited<ReturnType<typeof requireDb>>,
+  userId: number,
+  requestedQuestionId: string,
+) {
+  return (
+    await resolveQuestionMonitoringScopeWithDb(
+      db,
+      userId,
+      requestedQuestionId,
+      "lineage",
+    )
+  ).questionIds;
 }
 
 export async function resolveQuestionLineageIds(
@@ -504,6 +565,7 @@ export function deriveMonitoringReadQuotaPeriodIds(input: {
   capabilityAllowed: boolean;
   compatibilityMode: boolean;
   currentQuotaPeriodIds: readonly string[];
+  compatibilityQuotaPeriodIds?: readonly string[];
   historicalQuotaPeriodIds?: readonly (string | null)[];
 }): string[] | undefined {
   if (input.serviceStatus === "unconfigured" && input.compatibilityMode) {
@@ -525,7 +587,12 @@ export function deriveMonitoringReadQuotaPeriodIds(input: {
     ];
   }
 
-  return [...new Set(input.currentQuotaPeriodIds)];
+  return [
+    ...new Set([
+      ...input.currentQuotaPeriodIds,
+      ...(input.compatibilityQuotaPeriodIds ?? []),
+    ]),
+  ];
 }
 
 export async function resolveMonitoringReadQuotaPeriodIds(
@@ -552,6 +619,14 @@ export async function resolveMonitoringReadQuotaPeriodIds(
     capabilityAllowed: portal.capabilities.monitoring.allowed,
     compatibilityMode,
     currentQuotaPeriodIds: portal.quotaPeriods.map((period) => period.periodId),
+    // During a rollback, image 6dd200ca binds monitoring imports to the
+    // question's annual ordinal-0 anchor. Keep that persisted output readable
+    // after roll-forward without ever using the anchor for new writes.
+    compatibilityQuotaPeriodIds:
+      portal.service.planCode === "luxury" &&
+      (portal.service.planVersion ?? 1) >= 2
+        ? portal.purchasedQuestions.map((question) => question.quotaPeriodId)
+        : [],
     historicalQuotaPeriodIds,
   });
 }
@@ -849,9 +924,7 @@ async function monitoringCurrentTemplateBatchesFromExecutor(input: {
     rows.push({
       sourceRecordId: citation.sourceRecordId,
       questionId: citation.questionId,
-      ...(sampleSourceRecordId
-        ? { sampleSourceRecordId }
-        : {}),
+      ...(sampleSourceRecordId ? { sampleSourceRecordId } : {}),
       model: citation.model,
       title: citation.title,
       url: citation.url,
@@ -1099,6 +1172,56 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
   });
 }
 
+export function resolveMonitoringBatchQuotaScope(input: {
+  portal: Pick<ServicePortal, "service" | "quotas" | "quotaPeriods">;
+  referencedQuestions: Array<
+    Pick<
+      ServicePortal["purchasedQuestions"][number],
+      "contractId" | "quotaPeriodId"
+    >
+  >;
+}) {
+  const contractIds = new Set(
+    input.referencedQuestions
+      .map((question) => question.contractId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const quotaPeriodIds = new Set(
+    input.referencedQuestions
+      .map((question) => question.quotaPeriodId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const contractId = [...contractIds][0] ?? null;
+  const progressiveLuxury =
+    input.portal.service.planCode === "luxury" &&
+    (input.portal.service.planVersion ?? 1) >= 2 &&
+    contractId === input.portal.service.contractId;
+  const quotaPeriodId = progressiveLuxury
+    ? (input.portal.quotas?.periodId ?? null)
+    : ([...quotaPeriodIds][0] ?? null);
+  const legacyScopeIsActive = Boolean(
+    contractId &&
+      quotaPeriodId &&
+      input.portal.quotaPeriods.some(
+        (period) =>
+          period.contractId === contractId && period.periodId === quotaPeriodId,
+      ),
+  );
+  if (
+    contractIds.size !== 1 ||
+    !quotaPeriodId ||
+    (progressiveLuxury
+      ? contractId !== input.portal.service.contractId
+      : quotaPeriodIds.size !== 1 || !legacyScopeIsActive)
+  ) {
+    throw new AuthServiceError(
+      "INVALID_CREDENTIAL",
+      "一次监控导入只能包含同一合同与有效额度周期内的当前服务问题",
+    );
+  }
+  return { contractId, quotaPeriodId, progressiveLuxury };
+}
+
 export async function replaceMonitoringBatch(input: {
   actor: AuthenticatedUser;
   value: ReplaceMonitoringBatchInput;
@@ -1127,24 +1250,10 @@ export async function replaceMonitoringBatch(input: {
       .filter((id): id is string => Boolean(id))
       .some((id) => referencedQuestionIds.has(id)),
   );
-  const contractIds = new Set(
-    referencedQuestions
-      .map((question) => question.contractId)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const quotaPeriodIds = new Set(
-    referencedQuestions
-      .map((question) => question.quotaPeriodId)
-      .filter((id): id is string => Boolean(id)),
-  );
-  if (contractIds.size !== 1 || quotaPeriodIds.size !== 1) {
-    throw new AuthServiceError(
-      "INVALID_CREDENTIAL",
-      "一次监控导入只能包含同一合同与额度周期内的当前服务问题",
-    );
-  }
-  const contractId = [...contractIds][0]!;
-  const quotaPeriodId = [...quotaPeriodIds][0]!;
+  const { contractId, quotaPeriodId } = resolveMonitoringBatchQuotaScope({
+    portal,
+    referencedQuestions,
+  });
   const questions = [
     ...new Map(
       portal.purchasedQuestions.flatMap((question) =>
@@ -1335,202 +1444,202 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
   }
   const db = await requireDb();
   return db.transaction(async (tx) => {
-  const targetUsers = await tx
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.id, input.targetUserId))
-    .limit(1)
-    .for("update");
-  if (!targetUsers[0]) {
-    throw new AuthServiceError("NOT_FOUND", "User not found");
-  }
-  await input.beforeWrite?.(tx);
-  const batchRows = await tx
-    .select({
-      id: monitoringBatches.id,
-      batchKey: monitoringBatches.batchKey,
-      sourceName: monitoringBatches.sourceName,
-      collectedAt: monitoringBatches.collectedAt,
-      revision: monitoringBatches.revision,
-      sampleCount: monitoringBatches.sampleCount,
-      citationCount: monitoringBatches.citationCount,
-    })
-    .from(monitoringBatches)
-    .where(
-      and(
-        eq(monitoringBatches.userId, input.targetUserId),
-        eq(monitoringBatches.batchKey, input.targetBatchKey),
-        inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds),
-      ),
-    )
-    .orderBy(desc(monitoringBatches.updatedAt))
-    .limit(1)
-    .for("update");
-  const batch = batchRows[0];
-  if (!batch) {
-    throw new AuthServiceError(
-      "NOT_FOUND",
-      "目标监控批次不存在或不属于当前服务周期",
-    );
-  }
-  const [sampleRows, citationRows] = await Promise.all([
-    tx
+    const targetUsers = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, input.targetUserId))
+      .limit(1)
+      .for("update");
+    if (!targetUsers[0]) {
+      throw new AuthServiceError("NOT_FOUND", "User not found");
+    }
+    await input.beforeWrite?.(tx);
+    const batchRows = await tx
       .select({
-        id: monitoringSamples.id,
-        sourceRecordId: monitoringSamples.sourceRecordId,
-        questionId: monitoringSamples.questionId,
-        platform: monitoringSamples.platform,
-        answerNo: monitoringSamples.answerNo,
-        content: monitoringSamples.content,
-        citationCount: monitoringSamples.citationCount,
-        monitorRank: monitoringSamples.monitorRank,
-        screenshotUrl: monitoringSamples.screenshotUrl,
-        collectedAt: monitoringSamples.collectedAt,
+        id: monitoringBatches.id,
+        batchKey: monitoringBatches.batchKey,
+        sourceName: monitoringBatches.sourceName,
+        collectedAt: monitoringBatches.collectedAt,
+        revision: monitoringBatches.revision,
+        sampleCount: monitoringBatches.sampleCount,
+        citationCount: monitoringBatches.citationCount,
       })
-      .from(monitoringSamples)
+      .from(monitoringBatches)
       .where(
         and(
-          eq(monitoringSamples.userId, input.targetUserId),
-          eq(monitoringSamples.batchId, batch.id),
+          eq(monitoringBatches.userId, input.targetUserId),
+          eq(monitoringBatches.batchKey, input.targetBatchKey),
+          inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds),
         ),
-      ),
-    tx
-      .select({
-        sourceRecordId: monitoringCitationRecords.sourceRecordId,
-        sampleId: monitoringCitationRecords.sampleId,
-        questionId: monitoringCitationRecords.questionId,
-        model: monitoringCitationRecords.model,
-        title: monitoringCitationRecords.title,
-        url: monitoringCitationRecords.url,
-        media: monitoringCitationRecords.media,
-        domain: monitoringCitationRecords.domain,
-        publishedAt: monitoringCitationRecords.publishedAt,
-        collectedAt: monitoringCitationRecords.collectedAt,
-      })
-      .from(monitoringCitationRecords)
-      .where(
-        and(
-          eq(monitoringCitationRecords.userId, input.targetUserId),
-          eq(monitoringCitationRecords.batchId, batch.id),
-        ),
-      ),
-  ]);
-  if (sampleRows.length === 0) {
-    throw new AuthServiceError(
-      "INVALID_CREDENTIAL",
-      "目标监控批次没有答案明细，无法承载问题级引用分析",
-    );
-  }
-  assertQuestionOnlyCitationTargetCompatibility({
-    samples: sampleRows,
-    citations: input.value.citations,
-  });
-  const sampleSourceIdById = new Map(
-    sampleRows.map((sample) => [sample.id, sample.sourceRecordId]),
-  );
-  const existingCitations: ReplaceMonitoringBatchInput["citations"] =
-    citationRows.map((citation) => ({
-      sourceRecordId: citation.sourceRecordId,
-      questionId: citation.questionId,
-      sampleSourceRecordId: citation.sampleId
-        ? sampleSourceIdById.get(citation.sampleId)
-        : undefined,
-      model: citation.model,
-      title: citation.title,
-      url: citation.url,
-      media: citation.media,
-      domain: citation.domain,
-      publishedAt: citation.publishedAt?.toISOString(),
-      collectedAt: citation.collectedAt.toISOString(),
-    }));
-  const linkedCitations = existingCitations.filter(
-    (citation) => citation.sampleSourceRecordId,
-  );
-  const unlinkedCitations = existingCitations.filter(
-    (citation) => !citation.sampleSourceRecordId,
-  );
-  const linkedCitationIds = new Set(
-    linkedCitations.map((citation) => citation.sourceRecordId),
-  );
-  for (const citation of input.value.citations) {
-    if (linkedCitationIds.has(citation.sourceRecordId)) {
+      )
+      .orderBy(desc(monitoringBatches.updatedAt))
+      .limit(1)
+      .for("update");
+    const batch = batchRows[0];
+    if (!batch) {
       throw new AuthServiceError(
-        "INVALID_CREDENTIAL",
-        `引用记录 ID 与目标批次中已精确关联的记录冲突：${citation.sourceRecordId}`,
+        "NOT_FOUND",
+        "目标监控批次不存在或不属于当前服务周期",
       );
     }
-  }
-  const comparableCitations = (
-    values: ReplaceMonitoringBatchInput["citations"],
-  ) =>
-    values
-      .map((value) => ({
-        sourceRecordId: value.sourceRecordId,
-        questionId: value.questionId,
-        model: value.model,
-        title: value.title,
-        url: value.url,
-        media: value.media,
-        domain: value.domain || "",
-        publishedAt: value.publishedAt || "",
-        collectedAt: value.collectedAt || "",
-      }))
-      .sort((left, right) =>
-        left.sourceRecordId.localeCompare(right.sourceRecordId),
+    const [sampleRows, citationRows] = await Promise.all([
+      tx
+        .select({
+          id: monitoringSamples.id,
+          sourceRecordId: monitoringSamples.sourceRecordId,
+          questionId: monitoringSamples.questionId,
+          platform: monitoringSamples.platform,
+          answerNo: monitoringSamples.answerNo,
+          content: monitoringSamples.content,
+          citationCount: monitoringSamples.citationCount,
+          monitorRank: monitoringSamples.monitorRank,
+          screenshotUrl: monitoringSamples.screenshotUrl,
+          collectedAt: monitoringSamples.collectedAt,
+        })
+        .from(monitoringSamples)
+        .where(
+          and(
+            eq(monitoringSamples.userId, input.targetUserId),
+            eq(monitoringSamples.batchId, batch.id),
+          ),
+        ),
+      tx
+        .select({
+          sourceRecordId: monitoringCitationRecords.sourceRecordId,
+          sampleId: monitoringCitationRecords.sampleId,
+          questionId: monitoringCitationRecords.questionId,
+          model: monitoringCitationRecords.model,
+          title: monitoringCitationRecords.title,
+          url: monitoringCitationRecords.url,
+          media: monitoringCitationRecords.media,
+          domain: monitoringCitationRecords.domain,
+          publishedAt: monitoringCitationRecords.publishedAt,
+          collectedAt: monitoringCitationRecords.collectedAt,
+        })
+        .from(monitoringCitationRecords)
+        .where(
+          and(
+            eq(monitoringCitationRecords.userId, input.targetUserId),
+            eq(monitoringCitationRecords.batchId, batch.id),
+          ),
+        ),
+    ]);
+    if (sampleRows.length === 0) {
+      throw new AuthServiceError(
+        "INVALID_CREDENTIAL",
+        "目标监控批次没有答案明细，无法承载问题级引用分析",
       );
-  if (
-    JSON.stringify(comparableCitations(unlinkedCitations)) ===
-    JSON.stringify(comparableCitations(input.value.citations))
-  ) {
-    const result = {
-      batchId: batch.id,
-      batchKey: batch.batchKey,
-      revision: batch.revision,
-      sampleCount: batch.sampleCount,
-      citationCount: batch.citationCount,
-      collectedAt: batch.collectedAt.getTime(),
-      addedCitationCount: 0,
-      idempotent: true,
+    }
+    assertQuestionOnlyCitationTargetCompatibility({
+      samples: sampleRows,
+      citations: input.value.citations,
+    });
+    const sampleSourceIdById = new Map(
+      sampleRows.map((sample) => [sample.id, sample.sourceRecordId]),
+    );
+    const existingCitations: ReplaceMonitoringBatchInput["citations"] =
+      citationRows.map((citation) => ({
+        sourceRecordId: citation.sourceRecordId,
+        questionId: citation.questionId,
+        sampleSourceRecordId: citation.sampleId
+          ? sampleSourceIdById.get(citation.sampleId)
+          : undefined,
+        model: citation.model,
+        title: citation.title,
+        url: citation.url,
+        media: citation.media,
+        domain: citation.domain,
+        publishedAt: citation.publishedAt?.toISOString(),
+        collectedAt: citation.collectedAt.toISOString(),
+      }));
+    const linkedCitations = existingCitations.filter(
+      (citation) => citation.sampleSourceRecordId,
+    );
+    const unlinkedCitations = existingCitations.filter(
+      (citation) => !citation.sampleSourceRecordId,
+    );
+    const linkedCitationIds = new Set(
+      linkedCitations.map((citation) => citation.sourceRecordId),
+    );
+    for (const citation of input.value.citations) {
+      if (linkedCitationIds.has(citation.sourceRecordId)) {
+        throw new AuthServiceError(
+          "INVALID_CREDENTIAL",
+          `引用记录 ID 与目标批次中已精确关联的记录冲突：${citation.sourceRecordId}`,
+        );
+      }
+    }
+    const comparableCitations = (
+      values: ReplaceMonitoringBatchInput["citations"],
+    ) =>
+      values
+        .map((value) => ({
+          sourceRecordId: value.sourceRecordId,
+          questionId: value.questionId,
+          model: value.model,
+          title: value.title,
+          url: value.url,
+          media: value.media,
+          domain: value.domain || "",
+          publishedAt: value.publishedAt || "",
+          collectedAt: value.collectedAt || "",
+        }))
+        .sort((left, right) =>
+          left.sourceRecordId.localeCompare(right.sourceRecordId),
+        );
+    if (
+      JSON.stringify(comparableCitations(unlinkedCitations)) ===
+      JSON.stringify(comparableCitations(input.value.citations))
+    ) {
+      const result = {
+        batchId: batch.id,
+        batchKey: batch.batchKey,
+        revision: batch.revision,
+        sampleCount: batch.sampleCount,
+        citationCount: batch.citationCount,
+        collectedAt: batch.collectedAt.getTime(),
+        addedCitationCount: 0,
+        idempotent: true,
+      };
+      await input.afterWrite?.(tx, result);
+      return result;
+    }
+    const samples: ReplaceMonitoringBatchInput["samples"] = sampleRows.map(
+      (sample) => ({
+        sourceRecordId: sample.sourceRecordId,
+        questionId: sample.questionId,
+        platform: sample.platform,
+        answerNo: sample.answerNo,
+        content: sample.content,
+        citationCount: sample.citationCount,
+        monitorRank: sample.monitorRank ?? undefined,
+        screenshotUrl: sample.screenshotUrl || "",
+        collectedAt: sample.collectedAt.toISOString(),
+      }),
+    );
+    const result = await replaceMonitoringBatch({
+      actor: input.actor,
+      forceReplace: true,
+      transaction: tx,
+      afterWrite: input.afterWrite,
+      value: {
+        userId: input.targetUserId,
+        batchKey: batch.batchKey,
+        sourceName: batch.sourceName,
+        collectedAt: batch.collectedAt.toISOString(),
+        samples,
+        // The uploaded legacy workbook is the complete question-level ledger
+        // for this target batch. Keep exact sample links and atomically replace
+        // only the unbound citation rows.
+        citations: [...linkedCitations, ...input.value.citations],
+      },
+    });
+    return {
+      ...result,
+      addedCitationCount: input.value.citations.length,
+      replacedCitationCount: unlinkedCitations.length,
+      idempotent: false,
     };
-    await input.afterWrite?.(tx, result);
-    return result;
-  }
-  const samples: ReplaceMonitoringBatchInput["samples"] = sampleRows.map(
-    (sample) => ({
-      sourceRecordId: sample.sourceRecordId,
-      questionId: sample.questionId,
-      platform: sample.platform,
-      answerNo: sample.answerNo,
-      content: sample.content,
-      citationCount: sample.citationCount,
-      monitorRank: sample.monitorRank ?? undefined,
-      screenshotUrl: sample.screenshotUrl || "",
-      collectedAt: sample.collectedAt.toISOString(),
-    }),
-  );
-  const result = await replaceMonitoringBatch({
-    actor: input.actor,
-    forceReplace: true,
-    transaction: tx,
-    afterWrite: input.afterWrite,
-    value: {
-      userId: input.targetUserId,
-      batchKey: batch.batchKey,
-      sourceName: batch.sourceName,
-      collectedAt: batch.collectedAt.toISOString(),
-      samples,
-      // The uploaded legacy workbook is the complete question-level ledger
-      // for this target batch. Keep exact sample links and atomically replace
-      // only the unbound citation rows.
-      citations: [...linkedCitations, ...input.value.citations],
-    },
-  });
-  return {
-    ...result,
-    addedCitationCount: input.value.citations.length,
-    replacedCitationCount: unlinkedCitations.length,
-    idempotent: false,
-  };
   });
 }
 
@@ -1574,6 +1683,7 @@ export async function listMonitoringSamples(input: {
   userId: number;
   filters: ListMonitoringSamplesInput;
   quotaPeriodIds?: string[];
+  questionScopeMode?: Exclude<QuestionMonitoringScopeMode, "lineage">;
 }) {
   const db = await requireDb();
   const { filters } = input;
@@ -1591,17 +1701,23 @@ export async function listMonitoringSamples(input: {
       inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
     );
   }
-  if (filters.questionId) {
+  const questionScope = filters.questionId
+    ? await resolveQuestionMonitoringScopeWithDb(
+        db,
+        input.userId,
+        filters.questionId,
+        input.questionScopeMode,
+      )
+    : undefined;
+  if (questionScope) {
     conditions.push(
-      inArray(
-        monitoringSamples.questionId,
-        await resolveQuestionLineageIdsWithDb(
-          db,
-          input.userId,
-          filters.questionId,
-        ),
-      ),
+      inArray(monitoringSamples.questionId, questionScope.questionIds),
     );
+    if (questionScope.currentQuestion) {
+      conditions.push(
+        eq(monitoringSamples.question, questionScope.currentQuestion),
+      );
+    }
   }
   if (filters.batchKey) {
     conditions.push(eq(monitoringBatches.batchKey, filters.batchKey));
@@ -1725,6 +1841,7 @@ type ScopedMonitoringSample = {
   userId: number;
   batchId: string;
   questionId: string;
+  question: string;
   batchKey: string;
   quotaPeriodId: string | null;
 };
@@ -1747,6 +1864,7 @@ export function assertMonitoringCitationSampleScope(input: {
   userId: number;
   batchKey?: string;
   questionIds?: readonly string[];
+  currentQuestion?: string;
   quotaPeriodIds?: readonly string[];
 }) {
   const { sample } = input;
@@ -1758,6 +1876,8 @@ export function assertMonitoringCitationSampleScope(input: {
     (input.batchKey !== undefined && sample.batchKey !== input.batchKey) ||
     (input.questionIds !== undefined &&
       !input.questionIds.includes(sample.questionId)) ||
+    (input.currentQuestion !== undefined &&
+      sample.question !== input.currentQuestion) ||
     (input.quotaPeriodIds !== undefined &&
       (!sample.quotaPeriodId ||
         !input.quotaPeriodIds.includes(sample.quotaPeriodId)))
@@ -1773,6 +1893,7 @@ async function requireScopedMonitoringSample(input: {
   sampleId: string;
   batchKey?: string;
   questionIds?: readonly string[];
+  currentQuestion?: string;
   quotaPeriodIds?: readonly string[];
   strictInternalId?: boolean;
 }) {
@@ -1795,6 +1916,9 @@ async function requireScopedMonitoringSample(input: {
   if (input.questionIds) {
     conditions.push(inArray(monitoringSamples.questionId, input.questionIds));
   }
+  if (input.currentQuestion) {
+    conditions.push(eq(monitoringSamples.question, input.currentQuestion));
+  }
   if (input.quotaPeriodIds) {
     conditions.push(
       inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
@@ -1807,6 +1931,7 @@ async function requireScopedMonitoringSample(input: {
       userId: monitoringSamples.userId,
       batchId: monitoringSamples.batchId,
       questionId: monitoringSamples.questionId,
+      question: monitoringSamples.question,
       batchKey: monitoringBatches.batchKey,
       quotaPeriodId: monitoringBatches.quotaPeriodId,
     })
@@ -1826,6 +1951,7 @@ async function requireScopedMonitoringSample(input: {
     userId: input.userId,
     batchKey: input.batchKey,
     questionIds: input.questionIds,
+    currentQuestion: input.currentQuestion,
     quotaPeriodIds: input.quotaPeriodIds,
   });
 }
@@ -1834,6 +1960,7 @@ export async function listMonitoringCitations(input: {
   userId: number;
   filters: ListMonitoringCitationsInput;
   quotaPeriodIds?: string[];
+  questionScopeMode?: Exclude<QuestionMonitoringScopeMode, "lineage">;
 }) {
   const db = await requireDb();
   const { filters } = input;
@@ -1849,13 +1976,15 @@ export async function listMonitoringCitations(input: {
       pageSize: filters.pageSize,
     };
   }
-  const questionIds = filters.questionId
-    ? await resolveQuestionLineageIdsWithDb(
+  const questionScope = filters.questionId
+    ? await resolveQuestionMonitoringScopeWithDb(
         db,
         input.userId,
         filters.questionId,
+        input.questionScopeMode,
       )
     : undefined;
+  const questionIds = questionScope?.questionIds;
   const scopedSample = filters.sampleId
     ? await requireScopedMonitoringSample({
         db,
@@ -1863,6 +1992,7 @@ export async function listMonitoringCitations(input: {
         sampleId: filters.sampleId,
         batchKey: filters.batchKey,
         questionIds,
+        currentQuestion: questionScope?.currentQuestion,
         quotaPeriodIds: input.quotaPeriodIds,
       })
     : undefined;
@@ -1878,8 +2008,18 @@ export async function listMonitoringCitations(input: {
       eq(monitoringCitationRecords.batchId, scopedSample.batchId),
       eq(monitoringCitationRecords.questionId, scopedSample.questionId),
     );
+    if (questionScope?.currentQuestion) {
+      conditions.push(
+        eq(monitoringCitationRecords.question, questionScope.currentQuestion),
+      );
+    }
   } else if (questionIds) {
     conditions.push(inArray(monitoringCitationRecords.questionId, questionIds));
+    if (questionScope?.currentQuestion) {
+      conditions.push(
+        eq(monitoringCitationRecords.question, questionScope.currentQuestion),
+      );
+    }
   }
   if (filters.batchKey) {
     conditions.push(eq(monitoringBatches.batchKey, filters.batchKey));
@@ -2024,7 +2164,7 @@ export async function listMonitoringSampleCitations(input: {
   quotaPeriodIds?: string[];
 }) {
   const db = await requireDb();
-  const questionIds = await resolveQuestionLineageIdsWithDb(
+  const questionScope = await resolveQuestionMonitoringScopeWithDb(
     db,
     input.userId,
     input.value.questionId,
@@ -2034,7 +2174,8 @@ export async function listMonitoringSampleCitations(input: {
     userId: input.userId,
     sampleId: input.value.sampleId,
     batchKey: input.value.batchKey,
-    questionIds,
+    questionIds: questionScope.questionIds,
+    currentQuestion: questionScope.currentQuestion,
     quotaPeriodIds: input.quotaPeriodIds,
     strictInternalId: true,
   });
@@ -2043,6 +2184,9 @@ export async function listMonitoringSampleCitations(input: {
     eq(monitoringCitationRecords.batchId, sample.batchId),
     eq(monitoringCitationRecords.questionId, sample.questionId),
     eq(monitoringCitationRecords.sampleId, sample.id),
+    ...(questionScope.currentQuestion
+      ? [eq(monitoringCitationRecords.question, questionScope.currentQuestion)]
+      : []),
   ];
   const [totalRows, rows] = await Promise.all([
     db
@@ -2107,7 +2251,7 @@ export async function getMonitoringCitationSummary(input: {
   }
 
   const db = await requireDb();
-  const questionIds = await resolveQuestionLineageIdsWithDb(
+  const questionScope = await resolveQuestionMonitoringScopeWithDb(
     db,
     input.userId,
     input.value.questionId,
@@ -2115,7 +2259,10 @@ export async function getMonitoringCitationSummary(input: {
   const citationConditions = [
     eq(monitoringCitationRecords.userId, input.userId),
     eq(monitoringBatches.userId, input.userId),
-    inArray(monitoringCitationRecords.questionId, questionIds),
+    inArray(monitoringCitationRecords.questionId, questionScope.questionIds),
+    ...(questionScope.currentQuestion
+      ? [eq(monitoringCitationRecords.question, questionScope.currentQuestion)]
+      : []),
   ];
   if (input.value.batchKey) {
     citationConditions.push(
@@ -2248,9 +2395,10 @@ export async function getMonitoringFilterOptions(
   if (batches.length === 0) {
     return { ...emptyOptions, batches: publicBatches };
   }
-  const questionIds = filters.questionId
-    ? await resolveQuestionLineageIdsWithDb(db, userId, filters.questionId)
+  const questionScope = filters.questionId
+    ? await resolveQuestionMonitoringScopeWithDb(db, userId, filters.questionId)
     : undefined;
+  const questionIds = questionScope?.questionIds;
   let eligibleBatches = batches;
   if (questionIds) {
     const [sampleBatchRows, citationBatchRows] = await Promise.all([
@@ -2265,6 +2413,9 @@ export async function getMonitoringFilterOptions(
               batches.map((batch) => batch.id),
             ),
             inArray(monitoringSamples.questionId, questionIds),
+            ...(questionScope?.currentQuestion
+              ? [eq(monitoringSamples.question, questionScope.currentQuestion)]
+              : []),
           ),
         )
         .groupBy(monitoringSamples.batchId),
@@ -2279,6 +2430,14 @@ export async function getMonitoringFilterOptions(
               batches.map((batch) => batch.id),
             ),
             inArray(monitoringCitationRecords.questionId, questionIds),
+            ...(questionScope?.currentQuestion
+              ? [
+                  eq(
+                    monitoringCitationRecords.question,
+                    questionScope.currentQuestion,
+                  ),
+                ]
+              : []),
           ),
         )
         .groupBy(monitoringCitationRecords.batchId),
@@ -2317,12 +2476,18 @@ export async function getMonitoringFilterOptions(
     ...(questionIds
       ? [inArray(monitoringSamples.questionId, questionIds)]
       : []),
+    ...(questionScope?.currentQuestion
+      ? [eq(monitoringSamples.question, questionScope.currentQuestion)]
+      : []),
   );
   const citationScope = and(
     eq(monitoringCitationRecords.userId, userId),
     inArray(monitoringCitationRecords.batchId, selectedBatchIds),
     ...(questionIds
       ? [inArray(monitoringCitationRecords.questionId, questionIds)]
+      : []),
+    ...(questionScope?.currentQuestion
+      ? [eq(monitoringCitationRecords.question, questionScope.currentQuestion)]
       : []),
   );
   const [
@@ -2341,12 +2506,7 @@ export async function getMonitoringFilterOptions(
         label: monitoringSamples.question,
       })
       .from(monitoringSamples)
-      .where(
-        and(
-          eq(monitoringSamples.userId, userId),
-          inArray(monitoringSamples.batchId, selectedBatchIds),
-        ),
-      )
+      .where(sampleScope)
       .groupBy(monitoringSamples.questionId, monitoringSamples.question)
       .orderBy(asc(monitoringSamples.question))
       .limit(500),
@@ -2356,12 +2516,7 @@ export async function getMonitoringFilterOptions(
         label: monitoringCitationRecords.question,
       })
       .from(monitoringCitationRecords)
-      .where(
-        and(
-          eq(monitoringCitationRecords.userId, userId),
-          inArray(monitoringCitationRecords.batchId, selectedBatchIds),
-        ),
-      )
+      .where(citationScope)
       .groupBy(
         monitoringCitationRecords.questionId,
         monitoringCitationRecords.question,

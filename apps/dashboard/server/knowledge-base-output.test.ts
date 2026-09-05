@@ -62,6 +62,35 @@ describe("knowledge-base protocol output compatibility", () => {
     );
   });
 
+  it("uses bounded syntax repair before hiding a trusted protocol object", () => {
+    const text = [
+      "客户可见正文。",
+      '{"kind":"frontmind.knowledge-base.progress","schemaVersion":2,"operationId":"operation-1","turnId":"00000000-0000-4000-8000-000000000001","revision":1,"transition":{"leafId":"1.1","from":"current","to":"confirmed","reason":"已核验"孚锐利"资料\t完整",},}',
+      "正文结尾。",
+    ].join("\n");
+
+    expect(extractKnowledgeBaseProtocolObjects(text)).toEqual([
+      expect.objectContaining({
+        kind: "frontmind.knowledge-base.progress",
+        operationId: "operation-1",
+        turnId: "00000000-0000-4000-8000-000000000001",
+        transition: expect.objectContaining({
+          reason: '已核验"孚锐利"资料\t完整',
+        }),
+      }),
+    ]);
+    expect(stripKnowledgeBaseProtocolPayloads(text)).toBe(
+      "客户可见正文。\n\n正文结尾。",
+    );
+  });
+
+  it("does not recover duplicate protocol identity keys", () => {
+    const candidate =
+      '{"kind":"frontmind.knowledge-base.progress","operationId":"first","operationId":"second"}';
+    expect(extractKnowledgeBaseProtocolObjects(candidate)).toEqual([]);
+    expect(stripKnowledgeBaseProtocolPayloads(candidate)).toBe(candidate);
+  });
+
   it("removes the legacy SOCRATIC_KB_STATE comment returned by a real task", () => {
     const text = [
       "## 1.1 企业定位",

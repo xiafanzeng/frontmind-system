@@ -20,6 +20,10 @@ import {
 } from "./auth-service";
 import { getDb } from "./db";
 import { provisionBasicEntitlement } from "./basic-entitlement-service";
+import {
+  lockActiveWebsiteProjectLifecycle,
+  WebsiteProjectInactiveError,
+} from "./website-project-lifecycle";
 
 const usernameSchema = z
   .string()
@@ -208,6 +212,7 @@ export type ProvisioningErrorCode =
   | "IDEMPOTENCY_PENDING"
   | "PROVISIONING_RESOURCE_CONFLICT"
   | "USERNAME_CONFLICT"
+  | "PROJECT_DELETED"
   | "DATABASE_UNAVAILABLE";
 
 export class ProvisioningError extends Error {
@@ -370,6 +375,13 @@ export async function provisionWebsiteUser(
         );
       }
     }
+    if (error instanceof WebsiteProjectInactiveError) {
+      throw new ProvisioningError(
+        "PROJECT_DELETED",
+        "The project has been permanently deleted",
+        410,
+      );
+    }
     throw error;
   }
 }
@@ -386,6 +398,7 @@ class DrizzleWebsiteProvisioningRepository
     const db = await requireProvisioningDb();
     return db.transaction(async (tx) => {
       const request = input.request;
+      await lockActiveWebsiteProjectLifecycle(tx, request.project.id);
       await tx.insert(websiteUserProvisions).values({
         id: input.id,
         idempotencyKeyHash: input.idempotencyKeyHash,

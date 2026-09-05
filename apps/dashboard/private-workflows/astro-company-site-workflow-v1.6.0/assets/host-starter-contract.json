@@ -1,0 +1,79 @@
+{
+  "schema": "frontmind-siteops-host-starter/v2",
+  "version": "1.6.0",
+  "runtime": {
+    "node": ">=22.19.0",
+    "profile": "native-astro-static",
+    "packageManagerAtCustomerBuildTime": false
+  },
+  "visualReferencePolicy": {
+    "primaryRole": "hero",
+    "supportRoles": ["section", "motion"],
+    "referencesArePublishableAssets": false
+  },
+  "hostOwned": [
+    "package.json",
+    "astro.config.mjs",
+    "tsconfig.json",
+    "build-contract.json",
+    "frontmind-runtime-input.json",
+    "frontmind-component-manifest.json",
+    "src/data/site.json",
+    "src/data/route-*.json",
+    "src/data/not-found.json",
+    "src/layouts/SiteLayout.astro",
+    "src/components/SitePage.astro",
+    "src/pages/*.astro",
+    "src/pages/404.astro",
+    "public/styles.css"
+  ],
+  "contentBoundary": {
+    "customerAndProviderText": "canonical-json-data-only",
+    "astroTemplates": "host-owned-only",
+    "textInterpolationIntoAstroSource": false
+  },
+  "assetDecisionPolicy": {
+    "decisionIdentity": "asset-id",
+    "contentIdentity": "sha256",
+    "duplicateSha256Allowed": true,
+    "publishAndOmitSameSha256Allowed": true,
+    "publishedBrandBinding": "exact-asset-id-and-sha256",
+    "quarantineConflictPolicy": "reject-emitted-sha256"
+  },
+  "semanticColorPolicy": {
+    "roles": ["canvas", "ink", "accent", "muted"],
+    "bodyTextMinimumRatio": 7,
+    "accentTextMinimumRatio": 4.5,
+    "reverseTextMinimumRatio": 7,
+    "surfaceTextMinimumRatio": 4.5,
+    "mutedUsage": "decorative-surface-only",
+    "failurePolicy": "deterministic-host-fallback"
+  },
+  "materializationStages": {
+    "schema": "schemas/materialization-stage-v1.schema.json",
+    "retryOwner": "dashboard"
+  },
+  "layoutArchetypes": [
+    "hero_led",
+    "editorial",
+    "modular",
+    "split",
+    "asymmetric"
+  ],
+  "heroVariants": [
+    "split_media",
+    "centered_statement",
+    "editorial_lede",
+    "proof_grid"
+  ],
+  "sectionVariants": [
+    "statement",
+    "split",
+    "cards",
+    "timeline",
+    "faq",
+    "proof",
+    "cta"
+  ],
+  "providerSourceAccepted": false
+}

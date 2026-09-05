@@ -18,6 +18,13 @@ export type WorkspaceQuestionCategory = z.infer<
   typeof workspaceQuestionCategorySchema
 >;
 
+/**
+ * Two-phase rollout gate for customer-authored questions. The compatibility
+ * release kept this false; this follow-up release flips the one shared value
+ * after every automatic rollback target understands the v2 marker.
+ */
+export const QUESTION_CLASSIFICATION_V2_WRITES_ENABLED = true;
+
 export const serviceContractSourceSchema = z.enum([
   "website",
   "offline",
@@ -35,6 +42,7 @@ export const serviceCapabilityKeySchema = z.enum([
   "monitoring",
   "channelDistribution",
   "progressReport",
+  "brandTracking",
   "contentAssets",
 ]);
 export type ServiceCapabilityKey = z.infer<typeof serviceCapabilityKeySchema>;
@@ -56,6 +64,47 @@ export const serviceQuotaUsageSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 export type ServiceQuotaUsage = z.infer<typeof serviceQuotaUsageSchema>;
+
+// The question portfolio generates three candidates per available slot and
+// currently supports at most 200 candidates per category.
+export const QUESTION_QUOTA_CATEGORY_MAX = 66;
+
+/**
+ * A question-quota override is always anchored to the engineer's assigned
+ * customer project and to one concrete service period. The server derives the
+ * customer account from `projectAssignmentId`; callers never choose a userId.
+ */
+export const adjustQuestionQuotaSchema = z
+  .object({
+    projectAssignmentId: z.string().uuid(),
+    quotaPeriodId: z.string().uuid(),
+    expectedRevision: z.number().int().positive(),
+    industryLimit: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(QUESTION_QUOTA_CATEGORY_MAX),
+    competitorComparisonLimit: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(QUESTION_QUOTA_CATEGORY_MAX),
+    reputationLimit: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(QUESTION_QUOTA_CATEGORY_MAX),
+    productScenarioLimit: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(QUESTION_QUOTA_CATEGORY_MAX),
+    reason: z.string().trim().min(2).max(2_000),
+  })
+  .strict();
+export type AdjustQuestionQuotaInput = z.infer<
+  typeof adjustQuestionQuotaSchema
+>;
 
 export const EMPTY_SERVICE_QUOTA_USAGE: ServiceQuotaUsage = Object.freeze({
   industry: 0,
@@ -81,7 +130,7 @@ export type ServicePlanDefinition = {
   code: ServicePlanCode;
   name: string;
   description: string;
-  planVersion: 1;
+  planVersion: 1 | 2;
   contractTerm: { unit: "day" | "month"; count: number };
   quotaCadence: "contract" | "quarter" | "month";
   prepaidMonths: number | null;
@@ -100,6 +149,7 @@ const FULL_SERVICE_CAPABILITIES: IncludedServiceCapabilities = Object.freeze({
   monitoring: true,
   channelDistribution: true,
   progressReport: true,
+  brandTracking: true,
   contentAssets: true,
 });
 
@@ -134,7 +184,8 @@ export const SERVICE_PLAN_CATALOG: Readonly<
       monitoring: true,
       channelDistribution: true,
       progressReport: true,
-      contentAssets: true,
+      brandTracking: false,
+      contentAssets: false,
     },
   },
   advanced: {
@@ -158,9 +209,9 @@ export const SERVICE_PLAN_CATALOG: Readonly<
   luxury: {
     code: "luxury",
     name: "豪华版",
-    description: "提供豪华版完整服务。",
-    planVersion: 1,
-    contractTerm: { unit: "month", count: 3 },
+    description: "提供按服务季度渐进解锁问题额度的豪华版完整服务。",
+    planVersion: 2,
+    contractTerm: { unit: "month", count: 12 },
     quotaCadence: "month",
     prepaidMonths: 3,
     billingLabel: "季度服务",
@@ -198,6 +249,7 @@ export const serviceCapabilityAccessSchema = z.object({
   allowed: z.boolean(),
   effectiveStatus: z.enum([
     "available",
+    "workflow_prerequisite",
     "not_in_plan",
     "service_unconfigured",
     "service_pending_confirmation",
@@ -222,6 +274,7 @@ export const serviceCapabilitiesSchema = z.object({
   monitoring: serviceCapabilityAccessSchema,
   channelDistribution: serviceCapabilityAccessSchema,
   progressReport: serviceCapabilityAccessSchema,
+  brandTracking: serviceCapabilityAccessSchema,
   contentAssets: serviceCapabilityAccessSchema,
 });
 export type ServiceCapabilities = z.infer<typeof serviceCapabilitiesSchema>;
@@ -282,13 +335,17 @@ export const servicePortalQuestionSchema = z.object({
   quotaPeriodId: z.string(),
   externalQuestionId: z.string().nullable(),
   sourceQuestionId: z.string().nullable(),
-  category: workspaceQuestionCategorySchema,
+  // User-authored questions remain unclassified until a delivery engineer
+  // approves them. Selected questions must always have a concrete category;
+  // that invariant is enforced by the selection service.
+  category: workspaceQuestionCategorySchema.nullable(),
   question: z.string(),
   intent: z.string().nullable(),
   intentRevision: z.number().int().positive(),
   intentConfirmedRevision: z.number().int().positive().nullable(),
   intentConfirmedAt: z.number().int().nonnegative().nullable(),
   intentConfirmed: z.boolean(),
+  responseLogicConfirmed: z.boolean().optional(),
   rationale: z.string().nullable(),
   evidence: z.array(
     z.object({
@@ -308,6 +365,14 @@ export const servicePortalQuestionSchema = z.object({
 });
 export type ServicePortalQuestion = z.infer<typeof servicePortalQuestionSchema>;
 
+export const selectedServicePortalQuestionSchema =
+  servicePortalQuestionSchema.extend({
+    category: workspaceQuestionCategorySchema,
+  });
+export type SelectedServicePortalQuestion = z.infer<
+  typeof selectedServicePortalQuestionSchema
+>;
+
 export const servicePortalQuotaPeriodSchema = z.object({
   periodId: z.string(),
   contractId: z.string(),
@@ -315,6 +380,17 @@ export const servicePortalQuotaPeriodSchema = z.object({
   validUntil: z.number().int(),
   revision: z.number().int().positive(),
   limits: serviceQuotaLimitsSchema,
+  entitlementLimits: serviceQuotaLimitsSchema.optional(),
+  unlockStage: z
+    .object({
+      current: z.number().int().positive(),
+      total: z.number().int().positive(),
+    })
+    .optional(),
+  nextUnlockAt: z.number().int().nullable().optional(),
+  capacityState: z
+    .enum(["available", "awaiting_unlock", "exhausted"])
+    .optional(),
   usage: serviceQuotaUsageSchema,
   remaining: serviceQuotaUsageSchema,
 });
@@ -339,6 +415,7 @@ export const servicePortalSchema = z.object({
   service: z.object({
     contractId: z.string().nullable(),
     planCode: servicePlanCodeSchema.nullable(),
+    planVersion: z.number().int().positive().nullable().optional(),
     planName: z.string(),
     status: effectiveServiceStatusSchema,
     validFrom: z.number().int().nullable(),
@@ -385,8 +462,8 @@ export const servicePortalSchema = z.object({
       .enum(["pending", "processing", "completed", "failed"])
       .nullable(),
   }),
-  purchasedQuestions: z.array(servicePortalQuestionSchema),
-  historicalQuestions: z.array(servicePortalQuestionSchema),
+  purchasedQuestions: z.array(selectedServicePortalQuestionSchema),
+  historicalQuestions: z.array(selectedServicePortalQuestionSchema),
   capabilities: serviceCapabilitiesSchema,
   workflowSteps: z.array(serviceWorkflowStepSchema),
   nextAction: serviceNextActionSchema,
@@ -430,6 +507,7 @@ export const publicServicePortalSchema = servicePortalSchema
   .extend({
     service: servicePortalSchema.shape.service.omit({
       contractId: true,
+      planVersion: true,
       source: true,
     }),
     quotas: publicServicePortalQuotaPeriodSchema.nullable(),

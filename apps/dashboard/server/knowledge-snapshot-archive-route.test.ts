@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getKnowledgeSnapshotForWorkspace: vi.fn(),
   readKnowledgeSnapshotArchive: vi.fn(),
+  loadKnowledgeSnapshotDownloadValidation: vi.fn(),
 }));
 
 vi.mock("./_core/express-auth", () => ({
@@ -48,12 +49,76 @@ vi.mock("./knowledge-snapshot-archive-store", async (importOriginal) => {
   };
 });
 
+vi.mock("./knowledge-snapshot-download-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("./knowledge-snapshot-download-validation")
+    >();
+  return {
+    ...actual,
+    loadKnowledgeSnapshotDownloadValidation:
+      mocks.loadKnowledgeSnapshotDownloadValidation,
+  };
+});
+
 import dashboardRouter from "./dashboard-api";
+import type { KnowledgeBaseBuildNode } from "../drizzle/schema";
+import { buildDashboardOwnedKnowledgePackage } from "./knowledge-base-local-package";
+import {
+  KnowledgeSnapshotDownloadBindingError,
+  type KnowledgeSnapshotDownloadValidation,
+} from "./knowledge-snapshot-download-validation";
 
 const servers: Server[] = [];
 const snapshotId = "00000000-0000-4000-8000-000000000123";
+const buildId = "123e4567-e89b-42d3-a456-426614174000";
 let archive: Buffer;
 let archiveHash: string;
+
+function localPackageNodes() {
+  return [
+    {
+      leafId: "1.1",
+      title: "企业定位",
+      branchId: "identity",
+      branchTitle: "企业身份",
+      ordinal: 0,
+      status: "confirmed",
+      contentMarkdown: "## 1.1 企业定位\n\nFrontMind 是企业 AI 工作流平台。",
+      contentSha256: null,
+      sourceUrls: ["https://frontmind.net/"],
+      imageUrls: [],
+    },
+  ] as KnowledgeBaseBuildNode[];
+}
+
+async function dashboardOwnedArchive() {
+  const nodes = localPackageNodes();
+  const built = await buildDashboardOwnedKnowledgePackage({
+    build: {
+      id: buildId,
+      generation: 2,
+      revision: 7,
+      companyName: "FrontMind",
+      logoStorageKey: null,
+    },
+    nodes,
+  });
+  const validation: KnowledgeSnapshotDownloadValidation = {
+    kind: "dashboard_owned",
+    buildId,
+    archiveSha256: built.sha256,
+    archiveBytes: built.buffer.length,
+    expected: {
+      buildId,
+      generation: 2,
+      revision: 7,
+      companyName: "FrontMind",
+    },
+    nodes,
+  };
+  return { ...built, validation };
+}
 
 async function downloadableArchive(extraFiles: Record<string, string> = {}) {
   const zip = new JSZip();
@@ -86,6 +151,9 @@ beforeEach(async () => {
     totalBytes: archive.length,
   });
   mocks.readKnowledgeSnapshotArchive.mockReset().mockResolvedValue(archive);
+  mocks.loadKnowledgeSnapshotDownloadValidation
+    .mockReset()
+    .mockResolvedValue({ kind: "historical" });
 });
 
 afterEach(async () => {
@@ -147,6 +215,75 @@ describe("knowledge snapshot ZIP endpoint", () => {
     });
   });
 
+  it("serves an exactly bound Dashboard-owned local package", async () => {
+    const local = await dashboardOwnedArchive();
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: "FrontMind-knowledge-base.zip",
+      archiveHash: local.sha256,
+      totalBytes: local.buffer.length,
+    });
+    mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(local.buffer);
+    mocks.loadKnowledgeSnapshotDownloadValidation.mockResolvedValueOnce(
+      local.validation,
+    );
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(local.buffer);
+  });
+
+  it("refuses tampered Dashboard-owned bytes before sending the archive", async () => {
+    const local = await dashboardOwnedArchive();
+    const tampered = Buffer.from(local.buffer);
+    tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: "FrontMind-knowledge-base.zip",
+      archiveHash: local.sha256,
+      totalBytes: local.buffer.length,
+    });
+    mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(tampered);
+    mocks.loadKnowledgeSnapshotDownloadValidation.mockResolvedValueOnce(
+      local.validation,
+    );
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("content-type")).not.toContain(
+      "application/zip",
+    );
+    expect(await response.json()).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_BINDING_INVALID" },
+    });
+  });
+
+  it("refuses a Dashboard-owned snapshot whose DB binding no longer matches", async () => {
+    mocks.loadKnowledgeSnapshotDownloadValidation.mockRejectedValueOnce(
+      new KnowledgeSnapshotDownloadBindingError(),
+    );
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("content-type")).not.toContain(
+      "application/zip",
+    );
+    expect(await response.json()).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_BINDING_INVALID" },
+    });
+  });
+
   it("round-trips the persisted ZIP through the authenticated download endpoint", async () => {
     const assetRoot = await mkdtemp(
       path.join(tmpdir(), "frontmind-knowledge-route-roundtrip-"),
@@ -203,6 +340,78 @@ describe("knowledge snapshot ZIP endpoint", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.readKnowledgeSnapshotArchive).not.toHaveBeenCalled();
+  });
+
+  it("makes a legacy archive unavailable when its public filename is polluted", async () => {
+    const privateBrand = ["Ma", "nus"].join("");
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: `${privateBrand}_V2_知识库.zip`,
+      archiveHash,
+      totalBytes: archive.length,
+    });
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_PUBLIC_CONTENT_UNAVAILABLE" },
+    });
+    expect(JSON.stringify(payload)).not.toMatch(/manus/iu);
+  });
+
+  it("makes a legacy archive unavailable when extracted text is polluted", async () => {
+    const privateBrand = ["Ma", "nus"].join("");
+    const polluted = await downloadableArchive({
+      "company_knowledge_base/notes.md": `${privateBrand.toUpperCase()}_V2_TASK`,
+    });
+    const pollutedHash = createHash("sha256").update(polluted).digest("hex");
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: "企业知识库.zip",
+      archiveHash: pollutedHash,
+      totalBytes: polluted.length,
+    });
+    mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(polluted);
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_PUBLIC_CONTENT_UNAVAILABLE" },
+    });
+  });
+
+  it("makes a legacy archive unavailable when ZIP metadata is polluted", async () => {
+    const privateBrand = ["Ma", "nus"].join("");
+    const zip = await JSZip.loadAsync(await downloadableArchive());
+    zip.comment = `${privateBrand} internal archive`;
+    const polluted = await zip.generateAsync({ type: "nodebuffer" });
+    const pollutedHash = createHash("sha256").update(polluted).digest("hex");
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: "企业知识库.zip",
+      archiveHash: pollutedHash,
+      totalBytes: polluted.length,
+    });
+    mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(polluted);
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_PUBLIC_CONTENT_UNAVAILABLE" },
+    });
   });
 
   it("refuses a path-traversal ZIP before sending any archive bytes", async () => {

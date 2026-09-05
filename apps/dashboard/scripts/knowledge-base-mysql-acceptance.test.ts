@@ -38,6 +38,7 @@ import {
   finalizeApiUsageSnapshotClaim,
 } from "../server/api-usage-snapshot-service";
 import { prepareKnowledgeResetCleanupResource } from "../server/knowledge-base-reset-service";
+import { knowledgeBaseNewBuildPolicyBinding } from "../server/knowledge-base-tree-policy-rollout";
 
 const ACCEPTANCE_ENV = "FRONTMIND_KB_MYSQL_ACCEPTANCE_DATABASE_URL";
 const REQUIRED_ENV = "FRONTMIND_KB_MYSQL_ACCEPTANCE_REQUIRED";
@@ -717,15 +718,17 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
     expect(userId).not.toBeNull();
     const ownerId = userId!;
     const publicConversationId = `kb-mysql-${runId}`;
+    const policyBinding = knowledgeBaseNewBuildPolicyBinding();
     const startInput = {
       userId: ownerId,
+      expectedResetRevision: 0,
       conversationId: publicConversationId,
       clientRequestId: `start-${runId}`,
       companyName: "FrontMind MySQL Acceptance",
       companyWebsite: "https://acceptance.invalid",
       skillName: "socratic-kb-builder",
-      skillVersion: "4",
-      skillContentHash: "a".repeat(64),
+      skillVersion: policyBinding.skillVersion,
+      skillContentHash: policyBinding.skillContentHash,
       userText: "开始构建企业知识库",
       expectedAttachmentCount: 0,
       requestPayload: { kind: "acceptance-start", runId },

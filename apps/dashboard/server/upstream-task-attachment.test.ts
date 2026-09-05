@@ -1,35 +1,58 @@
-import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ManusV2Client } from "./manus-v2-client";
 import { uploadUpstreamTaskAttachment } from "./upstream-task-attachment";
 
-describe("durable upstream task attachments", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+const baseInput = {
+  baseUrl: "https://api.example.test",
+  apiKey: "secret-test-key",
+  filename: "socratic-kb-builder.skill.zip",
+  bytes: Buffer.from("immutable-skill-archive"),
+  mimeType: "application/zip",
+};
 
-  it("creates with the stable idempotency key and persists the file id before uploading bytes", async () => {
+function uploaded(fileId: string) {
+  return {
+    fileId,
+    filename: baseInput.filename,
+    uploadUrl: "https://uploads.example.test/signed",
+    uploadExpiresAt: 2_000_000_000,
+    requestId: "request-1",
+    detail: {
+      fileId,
+      filename: baseInput.filename,
+      status: "uploaded" as const,
+      bytes: baseInput.bytes.length,
+      expiresAt: 2_000_000_000,
+      contentType: baseInput.mimeType,
+      requestId: "request-2",
+    },
+  };
+}
+
+describe("durable upstream task attachments v2", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("persists the v2 lease before the signed URL upload begins", async () => {
     const events: string[] = [];
-    const uploadUrl =
-      "https://uploads.example.test/generated.skill?X-Amz-Signature=stable";
-    const post = vi.spyOn(axios, "post").mockImplementation(async () => {
-      events.push("create");
-      return {
-        status: 201,
-        data: { id: "provider-file-1", upload_url: uploadUrl },
-      };
-    });
-    const put = vi.spyOn(axios, "put").mockImplementation(async () => {
-      events.push("upload");
-      return { status: 200, data: "" };
-    });
+    const uploadFile = vi
+      .spyOn(ManusV2Client.prototype, "uploadFile")
+      .mockImplementation(async (input) => {
+        const created = {
+          fileId: "provider-file-1",
+          filename: baseInput.filename,
+          uploadUrl: "https://uploads.example.test/signed",
+          uploadExpiresAt: 2_000_000_000,
+          requestId: "request-1",
+        };
+        events.push("create");
+        await input.observer?.onCandidateCreated?.(created);
+        events.push("upload");
+        return uploaded(created.fileId);
+      });
 
     const result = await uploadUpstreamTaskAttachment({
-      baseUrl: "https://api.example.test",
-      apiKey: "secret-test-key",
-      filename: "socratic-kb-builder-v4.skill",
-      bytes: Buffer.from("immutable-skill"),
-      idempotencyKey: "frontmind-kb-file-v1:stable-operation",
+      ...baseInput,
       onFileResolved: async (fileId) => {
         events.push(`persist:${fileId}`);
       },
@@ -37,103 +60,90 @@ describe("durable upstream task attachments", () => {
 
     expect(events).toEqual(["create", "persist:provider-file-1", "upload"]);
     expect(result.fileId).toBe("provider-file-1");
-    expect(post).toHaveBeenCalledWith(
-      "https://api.example.test/v1/files",
-      { filename: "socratic-kb-builder-v4.skill" },
+    expect(uploadFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        headers: expect.objectContaining({
-          "Idempotency-Key": "frontmind-kb-file-v1:stable-operation",
-        }),
+        filename: baseInput.filename,
+        bytes: baseInput.bytes,
+        contentType: baseInput.mimeType,
+        observer: expect.any(Object),
       }),
     );
-    expect(put.mock.calls[0]?.[0]).toBe(uploadUrl);
-    expect(put.mock.calls[0]?.[2]?.headers).not.toHaveProperty("API_KEY");
-    expect(put.mock.calls[0]?.[2]?.headers).not.toHaveProperty("Authorization");
   });
 
-  it("skips creation on completed replay and refreshes the signed upload URL for the same file", async () => {
-    const post = vi.spyOn(axios, "post");
-    const get = vi.spyOn(axios, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        upload_url:
-          "https://uploads.example.test/replayed.skill?X-Amz-Signature=fresh",
-      },
-    });
-    const put = vi.spyOn(axios, "put").mockResolvedValue({
-      status: 200,
-      data: "",
-    });
-    const onFileResolved = vi.fn().mockResolvedValue(undefined);
+  it("reuses an exact v2 lease without a legacy content download", async () => {
+    const uploadFile = vi
+      .spyOn(ManusV2Client.prototype, "uploadFile")
+      .mockResolvedValue(uploaded("provider-file-existing"));
+    const onFileResolved = vi.fn(async () => undefined);
 
     const result = await uploadUpstreamTaskAttachment({
-      baseUrl: "https://api.example.test",
-      apiKey: "secret-test-key",
-      filename: "socratic-kb-builder-v4.skill",
-      bytes: Buffer.from("immutable-skill"),
-      existingFileId: "provider-file-1",
-      idempotencyKey: "frontmind-kb-file-v1:stable-operation",
+      ...baseInput,
+      existingFileId: "provider-file-existing",
       onFileResolved,
     });
 
-    expect(post).not.toHaveBeenCalled();
-    expect(get).toHaveBeenCalledWith(
-      "https://api.example.test/v1/files/provider-file-1",
-      expect.objectContaining({
-        headers: expect.objectContaining({ API_KEY: "secret-test-key" }),
-      }),
-    );
-    expect(onFileResolved).toHaveBeenCalledWith("provider-file-1");
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(result.attachment.file_id).toBe("provider-file-1");
-  });
-
-  it("does not delete an idempotently recoverable file when binding or upload fails", async () => {
-    vi.spyOn(axios, "post").mockResolvedValue({
-      status: 201,
-      data: {
-        id: "provider-file-uncertain",
-        upload_url:
-          "https://uploads.example.test/uncertain.skill?X-Amz-Signature=one",
+    expect(result).toMatchObject({
+      attachment: {
+        file_id: "provider-file-existing",
+        filename: baseInput.filename,
       },
     });
-    const remove = vi.spyOn(axios, "delete").mockResolvedValue({
-      status: 204,
-      data: "",
-    });
-
-    await expect(
-      uploadUpstreamTaskAttachment({
-        baseUrl: "https://api.example.test",
-        apiKey: "secret-test-key",
-        filename: "socratic-kb-builder-v4.skill",
-        bytes: Buffer.from("immutable-skill"),
-        idempotencyKey: "frontmind-kb-file-v1:stable-operation",
-        onFileResolved: async () => {
-          throw new Error("simulated database interruption");
+    expect(onFileResolved).toHaveBeenCalledWith("provider-file-existing");
+    expect(uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCandidate: {
+          fileId: "provider-file-existing",
+          filename: baseInput.filename,
         },
       }),
-    ).rejects.toThrow("simulated database interruption");
-    expect(remove).not.toHaveBeenCalled();
+    );
+  });
 
-    vi.spyOn(axios, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        upload_url:
-          "https://uploads.example.test/uncertain.skill?X-Amz-Signature=two",
+  it("deletes an unowned v2 candidate when upload fails", async () => {
+    vi.spyOn(ManusV2Client.prototype, "uploadFile").mockImplementation(
+      async (input) => {
+        await input.observer?.onCandidateCreated?.({
+          fileId: "provider-file-orphan",
+          filename: baseInput.filename,
+          uploadUrl: "https://uploads.example.test/signed",
+          uploadExpiresAt: 2_000_000_000,
+          requestId: "request-1",
+        });
+        throw new Error("put failed");
       },
+    );
+    const deleteFile = vi
+      .spyOn(ManusV2Client.prototype, "deleteFile")
+      .mockResolvedValue({ fileId: "provider-file-orphan", requestId: null });
+
+    await expect(uploadUpstreamTaskAttachment(baseInput)).rejects.toThrow(
+      "put failed",
+    );
+    expect(deleteFile).toHaveBeenCalledWith("provider-file-orphan");
+  });
+
+  it("returns a cleanup function backed by v2 file.delete", async () => {
+    vi.spyOn(ManusV2Client.prototype, "uploadFile").mockImplementation(
+      async (input) => {
+        await input.observer?.onCandidateCreated?.({
+          fileId: "provider-file-cleanup",
+          filename: baseInput.filename,
+          uploadUrl: "https://uploads.example.test/signed",
+          uploadExpiresAt: 2_000_000_000,
+          requestId: "request-1",
+        });
+        return uploaded("provider-file-cleanup");
+      },
+    );
+    const deleteFile = vi
+      .spyOn(ManusV2Client.prototype, "deleteFile")
+      .mockResolvedValue({ fileId: "provider-file-cleanup", requestId: null });
+
+    const result = await uploadUpstreamTaskAttachment({
+      ...baseInput,
+      onFileResolved: async () => undefined,
     });
-    vi.spyOn(axios, "put").mockResolvedValue({ status: 503, data: "retry" });
-    await expect(
-      uploadUpstreamTaskAttachment({
-        baseUrl: "https://api.example.test",
-        apiKey: "secret-test-key",
-        filename: "socratic-kb-builder-v4.skill",
-        bytes: Buffer.from("immutable-skill"),
-        existingFileId: "provider-file-uncertain",
-        onFileResolved: async () => undefined,
-      }),
-    ).rejects.toThrow("Task attachment upload failed");
-    expect(remove).not.toHaveBeenCalled();
+    await result.removeOrphan();
+    expect(deleteFile).toHaveBeenCalledWith("provider-file-cleanup");
   });
 });

@@ -1,16 +1,20 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  agentOperations,
   apiCredentials,
   apiKeyOwnership,
+  attachments,
   conversationTurns,
   deliveryRedirectPreviews,
   deliveryTicketAttachments,
   deliveryTickets,
   knowledgeBaseBuilds,
   knowledgeBaseResetRequests,
+  providerFileLeases,
   upstreamResources,
   users,
+  visualCandidatePools,
   websiteStyleSampleBatches,
   websiteStyleSamples,
 } from "../drizzle/schema";
@@ -19,10 +23,12 @@ import {
   assertAdminHasNoHistoricalCredentialResources,
   assertAdminHasNoUsageOwnedUsers,
   credentialsUseSameUpstreamApiKey,
+  discardUnboundUpstreamFileInTransaction,
   deleteActiveApiCredentialInTransaction,
   deleteManagedUser,
   decryptApiKey,
   encryptApiKey,
+  getDecryptedCredentialForManagedUploadIntent,
   getDecryptedCredentialForKnowledgeBaseReservation,
   getApiKeyFingerprint,
   hashPassword,
@@ -47,6 +53,13 @@ function mockLockedRows<T>(rows: T[]) {
     ) {
       return Promise.resolve(rows).then(resolve, reject);
     },
+  };
+}
+
+function credentialFenceToken(userId: number, credentialId: string) {
+  return {
+    scope: { kind: "credential" as const, userId, credentialId },
+    nonce: "test-fence-token",
   };
 }
 
@@ -96,17 +109,18 @@ describe("managed account deletion", () => {
 
     await permanentlyDeleteManagedUserRows({ delete: deleteFrom, select }, 42);
 
-    expect(deleteFrom).toHaveBeenCalledTimes(9);
-    expect(deleteFrom).toHaveBeenNthCalledWith(1, websiteStyleSamples);
-    expect(deleteFrom).toHaveBeenNthCalledWith(2, websiteStyleSampleBatches);
-    expect(deleteFrom).toHaveBeenNthCalledWith(3, knowledgeBaseResetRequests);
-    expect(deleteFrom).toHaveBeenNthCalledWith(4, deliveryRedirectPreviews);
-    expect(deleteFrom).toHaveBeenNthCalledWith(5, deliveryTicketAttachments);
-    expect(deleteFrom).toHaveBeenNthCalledWith(6, deliveryTickets);
-    expect(deleteFrom).toHaveBeenNthCalledWith(7, upstreamResources);
-    expect(deleteFrom).toHaveBeenNthCalledWith(8, apiKeyOwnership);
-    expect(deleteFrom).toHaveBeenNthCalledWith(9, users);
-    expect(where).toHaveBeenCalledTimes(9);
+    expect(deleteFrom).toHaveBeenCalledTimes(10);
+    expect(deleteFrom).toHaveBeenNthCalledWith(1, visualCandidatePools);
+    expect(deleteFrom).toHaveBeenNthCalledWith(2, websiteStyleSamples);
+    expect(deleteFrom).toHaveBeenNthCalledWith(3, websiteStyleSampleBatches);
+    expect(deleteFrom).toHaveBeenNthCalledWith(4, knowledgeBaseResetRequests);
+    expect(deleteFrom).toHaveBeenNthCalledWith(5, deliveryRedirectPreviews);
+    expect(deleteFrom).toHaveBeenNthCalledWith(6, deliveryTicketAttachments);
+    expect(deleteFrom).toHaveBeenNthCalledWith(7, deliveryTickets);
+    expect(deleteFrom).toHaveBeenNthCalledWith(8, upstreamResources);
+    expect(deleteFrom).toHaveBeenNthCalledWith(9, apiKeyOwnership);
+    expect(deleteFrom).toHaveBeenNthCalledWith(10, users);
+    expect(where).toHaveBeenCalledTimes(10);
   });
 
   it("rejects deleting the administrator's current account", async () => {
@@ -351,6 +365,64 @@ describe("API credential encryption", () => {
     ).resolves.toBeNull();
   });
 
+  it("resolves a frozen managed-upload credential after the account usage owner changes", async () => {
+    const credentialId = randomUUID();
+    const apiKey = "sk-frozen-managed-upload-owner-a";
+    const encrypted = encryptApiKey(7, credentialId, apiKey);
+    const credential = {
+      id: credentialId,
+      userId: 7,
+      version: 3,
+      ...encrypted,
+      fingerprint: getApiKeyFingerprint(apiKey),
+      status: "retired",
+      validationStatus: "verified",
+      verifiedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      retiredAt: new Date(),
+      deletedAt: null,
+    };
+    const select = vi.fn(() => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [credential],
+        }),
+      }),
+    }));
+    const executor = { select };
+
+    await expect(
+      getDecryptedCredentialForManagedUploadIntent(
+        {
+          credentialId,
+          credentialOwnerUserId: 7,
+          credentialVersion: 3,
+        },
+        executor,
+      ),
+    ).resolves.toMatchObject({
+      id: credentialId,
+      userId: 7,
+      version: 3,
+      apiKey,
+      status: "retired",
+    });
+    expect(select).toHaveBeenCalledTimes(1);
+
+    credential.userId = 8;
+    await expect(
+      getDecryptedCredentialForManagedUploadIntent(
+        {
+          credentialId,
+          credentialOwnerUserId: 7,
+          credentialVersion: 3,
+        },
+        executor,
+      ),
+    ).resolves.toBeNull();
+  });
+
   it("allows an account credential to independently store the website's raw Key", () => {
     const apiKey = "sk-shared-between-account-and-website";
     const accountCredentialId = randomUUID();
@@ -383,6 +455,7 @@ describe("API credential encryption", () => {
       version: 3,
       status: "active",
       encryptedKey: "encrypted",
+      agentProfile: null,
     };
     const inserted: Array<Record<string, unknown>> = [];
     const executor = {
@@ -402,6 +475,15 @@ describe("API credential encryption", () => {
           }
           if (table === upstreamResources) {
             return { where: vi.fn(() => mockLockedRows([])) };
+          }
+          if (table === agentOperations || table === providerFileLeases) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            };
           }
           if (table === knowledgeBaseBuilds) {
             return {
@@ -444,6 +526,7 @@ describe("API credential encryption", () => {
       deleteActiveApiCredentialInTransaction({
         executor,
         userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
         now: new Date("2026-07-30T12:00:00.000Z"),
       }),
     ).resolves.toEqual({ version: 4, deleted: true });
@@ -452,6 +535,7 @@ describe("API credential encryption", () => {
     expect(inserted[0]).toMatchObject({
       userId: 42,
       version: 4,
+      agentProfile: null,
       status: "deleted",
       validationStatus: "unverified",
     });
@@ -502,12 +586,166 @@ describe("API credential encryption", () => {
       deleteActiveApiCredentialInTransaction({
         executor,
         userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
         now: new Date("2026-07-30T12:00:00.000Z"),
       }),
     ).rejects.toMatchObject({
       code: "CONFLICT",
       message: expect.stringContaining("知识库轮次"),
     });
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("blocks credential revocation while a v2 operation is non-terminal", async () => {
+    const active = {
+      id: randomUUID(),
+      userId: 42,
+      version: 3,
+      status: "active",
+      encryptedKey: "still-decryptable",
+    };
+    const update = vi.fn();
+    const insert = vi.fn();
+    const executor = {
+      select: vi.fn(() => ({
+        from: vi.fn((table) => {
+          if (table === apiCredentials) {
+            return {
+              where: vi.fn(() => ({
+                orderBy: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn().mockResolvedValue([active]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (table === conversationTurns) {
+            return {
+              innerJoin: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn().mockResolvedValue([]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (table === upstreamResources) {
+            return { where: vi.fn(() => mockLockedRows([])) };
+          }
+          if (table === agentOperations) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([{ id: "operation-live" }]),
+                })),
+              })),
+            };
+          }
+          if (table === providerFileLeases) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            };
+          }
+          throw new Error("unexpected table in v2 revocation test");
+        }),
+      })),
+      update,
+      insert,
+    };
+
+    await expect(
+      deleteActiveApiCredentialInTransaction({
+        executor,
+        userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining("v2 任务或文件上传"),
+    });
+    expect(active.encryptedKey).toBe("still-decryptable");
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("blocks credential revocation while a v2 provider upload outcome is unresolved", async () => {
+    const active = {
+      id: randomUUID(),
+      userId: 42,
+      version: 3,
+      status: "active",
+      encryptedKey: "still-decryptable",
+    };
+    const update = vi.fn();
+    const insert = vi.fn();
+    const executor = {
+      select: vi.fn(() => ({
+        from: vi.fn((table) => {
+          if (table === apiCredentials) {
+            return {
+              where: vi.fn(() => ({
+                orderBy: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn().mockResolvedValue([active]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (table === conversationTurns) {
+            return {
+              innerJoin: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn().mockResolvedValue([]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (table === upstreamResources) {
+            return { where: vi.fn(() => mockLockedRows([])) };
+          }
+          if (table === agentOperations) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            };
+          }
+          if (table === providerFileLeases) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([{ id: "lease-unknown" }]),
+                })),
+              })),
+            };
+          }
+          throw new Error("unexpected table in v2 lease revocation test");
+        }),
+      })),
+      update,
+      insert,
+    };
+
+    await expect(
+      deleteActiveApiCredentialInTransaction({
+        executor,
+        userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(active.encryptedKey).toBe("still-decryptable");
     expect(update).not.toHaveBeenCalled();
     expect(insert).not.toHaveBeenCalled();
   });
@@ -598,6 +836,7 @@ describe("API credential encryption", () => {
       deleteActiveApiCredentialInTransaction({
         executor,
         userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
         now: new Date("2026-08-02T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({
@@ -659,6 +898,15 @@ describe("API credential encryption", () => {
           if (table === upstreamResources) {
             return { where: vi.fn(() => mockLockedRows([])) };
           }
+          if (table === agentOperations || table === providerFileLeases) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            };
+          }
           expect(table).toBe(conversationTurns);
           return {
             innerJoin: vi.fn(() => ({
@@ -686,6 +934,7 @@ describe("API credential encryption", () => {
       deleteActiveApiCredentialInTransaction({
         executor,
         userId: 42,
+        fenceToken: credentialFenceToken(42, active.id),
         now: new Date("2026-08-02T00:01:00.000Z"),
       }),
     ).resolves.toEqual({ version: 4, deleted: true });
@@ -750,6 +999,15 @@ describe("API credential encryption", () => {
               ),
             };
           }
+          if (table === agentOperations || table === providerFileLeases) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  for: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            };
+          }
           expect(table).toBe(conversationTurns);
           return {
             innerJoin: vi.fn(() => ({
@@ -777,6 +1035,7 @@ describe("API credential encryption", () => {
       deleteActiveApiCredentialInTransaction({
         executor,
         userId: 42,
+        fenceToken: credentialFenceToken(42, activeReplacement.id),
         now: new Date("2026-08-02T00:02:00.000Z"),
       }),
     ).resolves.toEqual({ version: 5, deleted: true });
@@ -784,6 +1043,193 @@ describe("API credential encryption", () => {
     expect(inserted).toHaveLength(1);
     expect(inserted[0]).toMatchObject({ version: 5, status: "deleted" });
   });
+
+  it("transactionally discards only an owned unbound file and uses its frozen credential", async () => {
+    const credentialId = randomUUID();
+    const apiKey = "sk-bound-file-discard";
+    const encrypted = encryptApiKey(42, credentialId, apiKey);
+    const row = {
+      resource: {
+        id: randomUUID(),
+        userId: 42,
+        apiCredentialId: credentialId,
+        projectAssignmentId: null,
+        kind: "file",
+        upstreamId: "file-unbound",
+        conversationId: null,
+      },
+      credential: {
+        id: credentialId,
+        userId: 42,
+        version: 3,
+        status: "active",
+        ...encrypted,
+      },
+    };
+    const deleteWhere = vi.fn().mockResolvedValue(undefined);
+    const executor = {
+      select: vi.fn(() => ({
+        from: vi.fn((table) => {
+          if (table === upstreamResources) {
+            return {
+              innerJoin: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => ({
+                    for: vi.fn().mockResolvedValue([row]),
+                  })),
+                })),
+              })),
+            };
+          }
+          if (table === attachments || table === conversationTurns) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn().mockResolvedValue([]),
+              })),
+            };
+          }
+          if (
+            table === deliveryTicketAttachments ||
+            table === deliveryRedirectPreviews ||
+            table === knowledgeBaseBuilds
+          ) {
+            return {
+              where: vi.fn(() => ({
+                limit: vi.fn().mockResolvedValue([]),
+              })),
+            };
+          }
+          throw new Error("unexpected table");
+        }),
+      })),
+      delete: vi.fn((table) => {
+        expect(table).toBe(upstreamResources);
+        return { where: deleteWhere };
+      }),
+    };
+    const discard = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      discardUnboundUpstreamFileInTransaction({
+        executor,
+        userId: 42,
+        fileId: "file-unbound",
+        discard,
+      }),
+    ).resolves.toEqual({ discarded: true });
+    expect(discard).toHaveBeenCalledWith({
+      fileId: "file-unbound",
+      userId: 42,
+      projectAssignmentId: null,
+      apiCredentialId: credentialId,
+      apiKey,
+    });
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+    expect(executor.select).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([
+    ["conversation binding", "conversation-1", [], [], []],
+    ["live attachment", null, [{ id: "attachment-1" }], [], []],
+    ["knowledge turn", null, [], [{ id: "turn-1" }], []],
+    ["knowledge package", null, [], [], [{ id: "build-1" }]],
+  ])(
+    "refuses discard when an owned file has a %s",
+    async (
+      _label,
+      conversationId,
+      attachmentRows,
+      turnRows,
+      knowledgeBuildRows,
+    ) => {
+      const credentialId = randomUUID();
+      const encrypted = encryptApiKey(
+        42,
+        credentialId,
+        "sk-bound-file-reference",
+      );
+      const row = {
+        resource: {
+          id: randomUUID(),
+          userId: 42,
+          apiCredentialId: credentialId,
+          projectAssignmentId: null,
+          kind: "file",
+          upstreamId: "file-referenced",
+          conversationId,
+        },
+        credential: {
+          id: credentialId,
+          userId: 42,
+          version: 1,
+          status: "active",
+          ...encrypted,
+        },
+      };
+      const executor = {
+        select: vi.fn(() => ({
+          from: vi.fn((table) => {
+            if (table === upstreamResources) {
+              return {
+                innerJoin: vi.fn(() => ({
+                  where: vi.fn(() => ({
+                    limit: vi.fn(() => ({
+                      for: vi.fn().mockResolvedValue([row]),
+                    })),
+                  })),
+                })),
+              };
+            }
+            if (table === attachments) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue(attachmentRows),
+                })),
+              };
+            }
+            if (table === conversationTurns) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue(turnRows),
+                })),
+              };
+            }
+            if (
+              table === deliveryTicketAttachments ||
+              table === deliveryRedirectPreviews
+            ) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([]),
+                })),
+              };
+            }
+            if (table === knowledgeBaseBuilds) {
+              return {
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue(knowledgeBuildRows),
+                })),
+              };
+            }
+            throw new Error("unexpected table");
+          }),
+        })),
+        delete: vi.fn(),
+      };
+      const discard = vi.fn();
+
+      await expect(
+        discardUnboundUpstreamFileInTransaction({
+          executor,
+          userId: 42,
+          fileId: "file-referenced",
+          discard,
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(discard).not.toHaveBeenCalled();
+      expect(executor.delete).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails closed when the encryption key is missing or malformed", () => {
     delete process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY;

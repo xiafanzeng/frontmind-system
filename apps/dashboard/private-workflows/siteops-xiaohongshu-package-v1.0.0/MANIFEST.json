@@ -1,0 +1,20 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-siteops-xiaohongshu-package",
+  "channel": "xiaohongshu",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "hashScope": "all regular files except MANIFEST.json",
+  "files": [
+    {
+      "path": "runtime-contract.json",
+      "bytes": 743,
+      "sha256": "2263d528019e7c6a60e084ca7dda70b7d17a882a7b9f5d0683bc0306b5465444"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 1717,
+      "sha256": "4fa2de642689850ce9f46bd9f4bf64a53e03bee86ccd5ea4fb2081bee306e6d4"
+    }
+  ]
+}

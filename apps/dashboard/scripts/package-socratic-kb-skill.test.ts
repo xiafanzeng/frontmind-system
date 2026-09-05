@@ -1,18 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 
+import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { canonicalKnowledgeBaseSkillArchiveHash } from "../shared/knowledge-base-skill-archive-hash.js";
 import {
   packageSocraticKnowledgeBaseSkill,
   socraticKnowledgeBaseSkillEntries,
 } from "./package-socratic-kb-skill.mjs";
-import {
-  canonicalKnowledgeBaseSkillArchiveHash,
-  legacyKnowledgeBaseSkillInstructionHash,
-} from "../shared/knowledge-base-skill-archive-hash.js";
 
 const temporaryRoots: string[] = [];
 
@@ -34,24 +31,24 @@ async function fixture() {
     });
     await fs.writeFile(
       path.join(sourceRoot, entryPath),
-      entryPath === "SKILL.md" ? "stable Skill instructions" : `A:${entryPath}`,
+      entryPath === "SKILL.md" ? "stable v5 instructions" : `A:${entryPath}`,
     );
   }
   return {
     root,
     sourceRoot,
-    outputPath: path.join(root, "socratic-kb-builder-v4.skill"),
+    outputPath: path.join(root, "socratic-kb-builder-v5.skill"),
   };
 }
 
-describe("socratic knowledge-base Skill packaging", () => {
-  it("packages the schema-v4 customer-upload archive contract", async () => {
+describe("socratic knowledge-base Skill v5 packaging", () => {
+  it("packages only the full Working Set and leaf-patch contract", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "frontmind-kb-skill-contract-"),
     );
     temporaryRoots.push(root);
-    const outputPath = path.join(root, "socratic-kb-builder-v4.skill");
-    await packageSocraticKnowledgeBaseSkill({
+    const outputPath = path.join(root, "socratic-kb-builder-v5.skill");
+    const result = await packageSocraticKnowledgeBaseSkill({
       sourceRoot: path.resolve(
         process.cwd(),
         "private-workflows/socratic-kb-builder",
@@ -59,99 +56,107 @@ describe("socratic knowledge-base Skill packaging", () => {
       outputPath,
     });
 
-    const archive = await JSZip.loadAsync(await fs.readFile(outputPath));
+    const archiveBytes = await fs.readFile(outputPath);
+    const archive = await JSZip.loadAsync(archiveBytes);
+    const entries = Object.keys(archive.files).sort();
     const skill = await archive.file("SKILL.md")!.async("string");
-    const outputContract = await archive
-      .file("references/output-format.md")!
-      .async("string");
-    const questioningStrategy = await archive
-      .file("references/questioning-strategy.md")!
+    const contract = await archive
+      .file("references/materialized-working-set.md")!
       .async("string");
     const validator = await archive
-      .file("scripts/validate_archive.py")!
+      .file("scripts/validate_working_set.py")!
       .async("string");
+    const policy = JSON.parse(
+      await archive.file("references/working-set-policy.json")!.async("string"),
+    );
 
-    expect(skill).toContain("`schemaVersion: 4`");
-    expect(skill).toContain("sourceUploadSha256");
-    for (const instructions of [
-      skill,
-      outputContract,
-      questioningStrategy,
+    expect(entries).toEqual([...socraticKnowledgeBaseSkillEntries].sort());
+    expect(skill).toContain("materialize_initial_bundle");
+    expect(skill).toContain("revise_leaf_bundle");
+    expect(skill).toContain("Every operation is a new top-level Manus v2 task");
+    expect(skill.replace(/\s+/gu, " ")).toContain(
+      "complete ZIP is the sole business result",
+    );
+    expect(skill).toContain("--expected-skill-content-hash");
+    expect(skill).toContain("--expected-uploads-read");
+    expect(skill).toContain("frozen logical content hash");
+    expect(skill).toContain("customer-visible Markdown only");
+    expect(skill).not.toContain(
+      "place one polished customer-visible block between",
+    );
+    expect(skill).not.toContain("One leaf per turn");
+    expect(skill).not.toContain("task.sendMessage");
+    expect(skill).not.toContain("Pro Agent");
+    expect(contract).toContain('"kind": "frontmind.kb-working-set"');
+    expect(contract).toContain('"kind": "frontmind.kb-node-patch"');
+    expect(contract).not.toContain('"researchCoverage": {}');
+    for (const dimensionId of [
+      "enterprise_identity",
+      "team_and_organization",
+      "products_and_services",
+      "capabilities_and_delivery",
+      "industries_scenarios_and_cases",
+      "differentiation_and_evidence",
+      "cooperation_delivery_and_support",
     ]) {
-      const normalizedInstructions = instructions.replace(/\s+/g, " ");
-      expect(normalizedInstructions).toContain("image-free");
-      expect(normalizedInstructions).toContain(
-        "actually attach exactly one `application/zip` typed `output_file`",
-      );
-      expect(normalizedInstructions).toContain("present in the task `output`");
-      expect(normalizedInstructions).toContain(
-        "will be generated now, soon or later",
-      );
-      expect(normalizedInstructions).not.toContain("text-only");
+      expect(contract).toContain(`"id": "${dimensionId}"`);
     }
-    expect(outputContract).toContain('"schemaVersion": 4');
-    expect(outputContract).toContain('"sourceKind": "user_upload"');
-    expect(validator).toContain("MAX_USER_UPLOAD_IMAGES = 99");
-    expect(validator).toContain("duplicate original customer upload hash");
-    expect(validator).not.toContain("CUSTOMER_FORMAL_LEAKAGE");
-    expect(validator).not.toContain("CUSTOMER_OR_PROCUREMENT_ADVICE");
-    expect(skill).toContain("not a vocabulary-based runtime gate");
-    expect(outputContract).toContain("does not screen formal prose");
+    expect(validator).toContain(
+      'parser.add_argument("--expected-uploads-read"',
+    );
+    expect(validator).toContain("validate_research_coverage(");
+    expect(validator).toContain("customer_markdown_title(");
+    expect(validator).toContain("working-set-policy.json");
+    expect(policy).toMatchObject({
+      archive: { maxCompressionRatio: 200, maxEntryCount: 1500 },
+      evidence: { textExtensions: [".md", ".markdown", ".txt"] },
+    });
+    expect(entries).not.toContain("scripts/validate_archive.py");
+    expect(result.contentHash).toBe(
+      await canonicalKnowledgeBaseSkillArchiveHash(archiveBytes),
+    );
+    await expect(
+      fs.readFile(
+        path.join(root, `socratic-kb-builder-v5-${result.contentHash}.skill`),
+      ),
+    ).resolves.toEqual(archiveBytes);
   });
 
-  it("pins reference-only changes and preserves canonical plus legacy aliases", async () => {
+  it("pins reference changes under a new exact v5 hash", async () => {
     const input = await fixture();
     const first = await packageSocraticKnowledgeBaseSkill(input);
     const firstBytes = await fs.readFile(input.outputPath);
-    const firstLegacyHash =
-      await legacyKnowledgeBaseSkillInstructionHash(firstBytes);
-    // Simulate an archive deployed before canonical aliases were introduced.
-    await fs.rm(
-      path.join(
-        input.root,
-        `socratic-kb-builder-v4-${first.contentHash}.skill`,
-      ),
-    );
-
     await fs.writeFile(
       path.join(input.sourceRoot, "references/output-format.md"),
       "B:reference-only-change",
     );
+
     const second = await packageSocraticKnowledgeBaseSkill(input);
 
     expect(second.contentHash).not.toBe(first.contentHash);
+    await expect(
+      fs.readFile(
+        path.join(
+          input.root,
+          `socratic-kb-builder-v5-${first.contentHash}.skill`,
+        ),
+      ),
+    ).resolves.toEqual(firstBytes);
     expect(second.contentHash).toBe(
       await canonicalKnowledgeBaseSkillArchiveHash(
         await fs.readFile(input.outputPath),
       ),
     );
-    await expect(
-      fs.readFile(
-        path.join(
-          input.root,
-          `socratic-kb-builder-v4-${first.contentHash}.skill`,
-        ),
-      ),
-    ).resolves.toEqual(firstBytes);
-    await expect(
-      fs.readFile(
-        path.join(
-          input.root,
-          `socratic-kb-builder-v4-${firstLegacyHash}.skill`,
-        ),
-      ),
-    ).resolves.toEqual(firstBytes);
   });
 
-  it("never overwrites an existing historical filename with different bytes", async () => {
+  it("never overwrites an immutable exact-hash archive", async () => {
     const input = await fixture();
     const first = await packageSocraticKnowledgeBaseSkill(input);
-    const firstBytes = await fs.readFile(input.outputPath);
     const historicalPath = path.join(
       input.root,
-      `socratic-kb-builder-v4-${first.contentHash}.skill`,
+      `socratic-kb-builder-v5-${first.contentHash}.skill`,
     );
-    await fs.writeFile(historicalPath, "conflicting historical bytes");
+    await fs.writeFile(historicalPath, "conflicting bytes");
     await fs.writeFile(
       path.join(input.sourceRoot, "references/output-format.md"),
       "B:reference-only-change",
@@ -160,9 +165,5 @@ describe("socratic knowledge-base Skill packaging", () => {
     await expect(packageSocraticKnowledgeBaseSkill(input)).rejects.toThrow(
       "conflicting bytes",
     );
-    expect(await fs.readFile(historicalPath, "utf8")).toBe(
-      "conflicting historical bytes",
-    );
-    expect(await fs.readFile(input.outputPath)).toEqual(firstBytes);
   });
 });

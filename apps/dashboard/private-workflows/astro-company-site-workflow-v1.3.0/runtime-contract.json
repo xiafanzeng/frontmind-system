@@ -1,0 +1,33 @@
+{
+  "schema": "frontmind-siteops-runtime/v2",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "adapterVersion": "1.3.0",
+  "canonicalArtifact": "build-contract.json",
+  "inputSchema": "schemas/frontmind-run-envelope.schema.json",
+  "visualProvider": {
+    "owner": "dashboard",
+    "name": "21st",
+    "requiredTools": ["search"],
+    "optionalTools": ["get_component"],
+    "promptRequired": false,
+    "providerCodeReuse": false
+  },
+  "manus": {
+    "taskCount": 1,
+    "phaseOneOutput": "SiteDesignSpecV1",
+    "phaseTwoOutput": "PageContentSpecV1",
+    "sourceOutputAllowed": false,
+    "maxRepairAttempts": 3
+  },
+  "host": {
+    "profile": "native-astro-static",
+    "starterContract": "assets/host-starter-contract.json",
+    "sourceOwner": "dashboard",
+    "runtimeInstallAllowed": false,
+    "buildOwner": "dashboard",
+    "qaOwner": "dashboard"
+  }
+}

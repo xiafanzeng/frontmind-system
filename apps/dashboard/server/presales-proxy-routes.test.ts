@@ -20,17 +20,40 @@ vi.mock("./presales-service", async () => {
   return {
     ...actual,
     acquirePresalesTaskReservation: vi.fn(),
+    completePresalesProjectTaskPurge: vi.fn(),
     completePresalesTaskReservation: vi.fn(),
+    countPresalesProjectPendingFileUploads: vi.fn(),
+    deletePresalesFileEvidence: vi.fn(),
+    deletePresalesTaskEvidence: vi.fn(),
     finalizePresalesFileUploadRetention: vi.fn(),
     getActivePresalesCredential: vi.fn(),
+    getPresalesCredentialById: vi.fn(),
     getPresalesCredentialForResource: vi.fn(),
     hasPresalesOutputUrlGrant: vi.fn(),
     markPresalesFileContentDeleted: vi.fn(),
     recordPresalesUpstreamResource: vi.fn(),
     releasePresalesTaskReservation: vi.fn(),
+    readPresalesProjectFileTargets: vi.fn(),
+    readPresalesProjectTaskPurgeSnapshot: vi.fn(),
+    readPresalesTaskEvidenceFileIds: vi.fn(),
+    retainPresalesProjectFilePurgeTarget: vi.fn(),
+    retainPresalesTaskPurgeTarget: vi.fn(),
     reservePresalesFileUploadRetention: vi.fn(),
     resolvePresalesTaskCredentialForFiles: vi.fn(),
     syncPresalesOutputUrlGrants: vi.fn(),
+    withPresalesProjectFileCreateGuard: vi.fn(),
+  };
+});
+
+vi.mock("./presales-monitor", async () => {
+  const actual =
+    await vi.importActual<typeof import("./presales-monitor")>(
+      "./presales-monitor",
+    );
+  return {
+    ...actual,
+    getDedicatedMonitorCredentialReadiness: vi.fn(),
+    purgePresalesProjectMonitorRuns: vi.fn(),
   };
 });
 
@@ -44,18 +67,33 @@ import {
 } from "./presales-file-store";
 import {
   acquirePresalesTaskReservation,
+  completePresalesProjectTaskPurge,
   completePresalesTaskReservation,
+  countPresalesProjectPendingFileUploads,
+  deletePresalesFileEvidence,
+  deletePresalesTaskEvidence,
   finalizePresalesFileUploadRetention,
   getActivePresalesCredential,
+  getPresalesCredentialById,
   getPresalesCredentialForResource,
   hasPresalesOutputUrlGrant,
   markPresalesFileContentDeleted,
   recordPresalesUpstreamResource,
   releasePresalesTaskReservation,
+  readPresalesProjectFileTargets,
+  readPresalesProjectTaskPurgeSnapshot,
+  readPresalesTaskEvidenceFileIds,
+  retainPresalesProjectFilePurgeTarget,
+  retainPresalesTaskPurgeTarget,
   reservePresalesFileUploadRetention,
   resolvePresalesTaskCredentialForFiles,
   syncPresalesOutputUrlGrants,
+  withPresalesProjectFileCreateGuard,
 } from "./presales-service";
+import {
+  getDedicatedMonitorCredentialReadiness,
+  purgePresalesProjectMonitorRuns,
+} from "./presales-monitor";
 
 const token = "4UT1aQh7tFzS0I8NDkcM8Gv7r5d9ZLr0shF9xXfPjYg";
 const originalServiceToken = process.env.FRONTMIND_PRESALES_SERVICE_TOKEN;
@@ -80,6 +118,26 @@ const websiteBrokerRoundTripTestName =
   "round-trips Website Broker bytes through durable local storage without calling an upstream download endpoint";
 const websiteBrokerRejectedUploadTestName =
   "does not publish a local file when the upstream upload was rejected";
+
+beforeEach(() => {
+  vi.mocked(deletePresalesFileEvidence).mockResolvedValue(undefined);
+  vi.mocked(countPresalesProjectPendingFileUploads).mockResolvedValue(0);
+  vi.mocked(purgePresalesProjectMonitorRuns).mockResolvedValue({
+    deletedRuns: 0,
+    pendingRuns: 0,
+  });
+  vi.mocked(deletePresalesTaskEvidence).mockResolvedValue({
+    deleted: true,
+    fileIds: [],
+  });
+  vi.mocked(readPresalesProjectFileTargets).mockResolvedValue([]);
+  vi.mocked(readPresalesTaskEvidenceFileIds).mockResolvedValue([]);
+  vi.mocked(retainPresalesProjectFilePurgeTarget).mockResolvedValue(undefined);
+  vi.mocked(retainPresalesTaskPurgeTarget).mockResolvedValue(undefined);
+  vi.mocked(withPresalesProjectFileCreateGuard).mockImplementation(
+    async (_projectId, _credentialId, operation) => operation(),
+  );
+});
 
 type WebsiteBrokerClient = {
   createFile(value: {
@@ -174,6 +232,7 @@ describe("presales readiness status", () => {
       process.env.FRONTMIND_PUBLIC_URL = originalPublicUrl;
     }
     vi.mocked(getActivePresalesCredential).mockReset();
+    vi.mocked(getDedicatedMonitorCredentialReadiness).mockReset();
   });
 
   it("returns only non-secret readiness booleans for paid monitoring", async () => {
@@ -189,6 +248,12 @@ describe("presales readiness status", () => {
       status: "active",
       verifiedAt: new Date(),
     });
+    vi.mocked(getDedicatedMonitorCredentialReadiness).mockResolvedValue({
+      configured: true,
+      authenticated: true,
+      ready: true,
+      status: "authenticated",
+    });
 
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/status`, {
@@ -200,10 +265,55 @@ describe("presales readiness status", () => {
         ok: true,
         credentialConfigured: true,
         monitorCredentialConfigured: true,
+        monitorCredentialAuthenticated: true,
         publicUrlConfigured: true,
       });
+      expect(getDedicatedMonitorCredentialReadiness).toHaveBeenCalledWith(
+        process.env,
+        { forceRefresh: false },
+      );
       expect(JSON.stringify(body)).not.toContain(
         process.env.FRONTMIND_MONITOR_API_KEY,
+      );
+    });
+  });
+
+  it("forces a fresh provider probe and distinguishes configured from authenticated", async () => {
+    process.env.FRONTMIND_PRESALES_SERVICE_TOKEN = token;
+    process.env.FRONTMIND_MONITOR_API_KEY =
+      "configured-but-rejected-monitor-credential";
+    process.env.FRONTMIND_PUBLIC_URL = "https://agent.frontmind.test";
+    vi.mocked(getActivePresalesCredential).mockResolvedValue({
+      id: "credential-1",
+      version: 1,
+      apiKey: "ordinary-presales-test-key",
+      fingerprint: "fingerprint",
+      status: "active",
+      verifiedAt: new Date(),
+    });
+    vi.mocked(getDedicatedMonitorCredentialReadiness).mockResolvedValue({
+      configured: true,
+      authenticated: false,
+      ready: false,
+      status: "rejected",
+    });
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(
+        `${baseUrl}/status?monitorCredentialProbe=fresh`,
+        { headers: { "x-frontmind-service-token": token } },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: false,
+        credentialConfigured: true,
+        monitorCredentialConfigured: true,
+        monitorCredentialAuthenticated: false,
+        publicUrlConfigured: true,
+      });
+      expect(getDedicatedMonitorCredentialReadiness).toHaveBeenCalledWith(
+        process.env,
+        { forceRefresh: true },
       );
     });
   });
@@ -381,9 +491,8 @@ describe("presales create-time upload capability", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
-  it("streams JSON only when the assistant output is bound to its parent task", async () => {
+  it("fails closed when a task-bound assistant output was not localized", async () => {
     const fileId = "assessment-json-output";
-    const body = Buffer.from('{"schemaVersion":2,"status":"ok"}');
     vi.mocked(getPresalesCredentialForResource).mockResolvedValue({
       id: "credential-1",
       version: 1,
@@ -405,27 +514,24 @@ describe("presales create-time upload capability", () => {
         createdAt: new Date(),
       },
     });
-    const get = vi.spyOn(axios, "get").mockResolvedValue({
-      status: 200,
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "content-length": String(body.length),
-        "content-disposition": 'attachment; filename="raw-output.json"',
-      },
-      data: Readable.from([body]),
-    });
+    const get = vi.spyOn(axios, "get");
 
     await withServer(async (baseUrl) => {
       const response = await fetch(
         `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
         { headers: { "x-frontmind-service-token": token } },
       );
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toBe("application/json");
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(body);
+      expect(response.status).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "CONTENT_UNAVAILABLE",
+          retryable: false,
+          recoveryAction: "reupload",
+        },
+      });
     });
 
-    expect(get).toHaveBeenCalledOnce();
+    expect(get).not.toHaveBeenCalled();
     expect(await readStoredPresalesFile(fileId)).toBeNull();
   });
 
@@ -662,13 +768,12 @@ describe("presales create-time upload capability", () => {
     });
   });
 
-  it("uses the DB user-upload deadline when the local manifest is missing", async () => {
+  it("uses the DB user-upload deadline but never recovers missing bytes from Provider", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-05T00:00:00.000Z"));
     const fileId = "manifest-missing-user-upload";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
-    const body = Buffer.from("recovered from authoritative content endpoint");
     presalesContentState = {
       contentSource: "user_upload",
       uploadReservedAt: uploadedAt,
@@ -676,32 +781,26 @@ describe("presales create-time upload capability", () => {
       contentExpiresAt,
       contentDeletedAt: null,
     };
-    const get = vi.spyOn(axios, "get").mockResolvedValue({
-      status: 200,
-      headers: {
-        "content-type": "application/pdf",
-        "content-length": String(body.length),
-      },
-      data: Readable.from([body]),
-    });
+    const get = vi.spyOn(axios, "get");
 
     await withServer(async (baseUrl) => {
       const response = await fetch(
         `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
         { headers: { "x-frontmind-service-token": token } },
       );
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(body);
+      expect(response.status).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "CONTENT_UNAVAILABLE",
+          retryable: false,
+          recoveryAction: "reupload",
+          expiresAt: contentExpiresAt.getTime(),
+        },
+      });
     });
 
-    expect(get.mock.calls[0]?.[0]).toContain(
-      `/v1/files/${encodeURIComponent(fileId)}/content`,
-    );
-    expect(await readPresalesFileLifecycle(fileId)).toMatchObject({
-      state: "stored",
-      uploadedAt,
-      contentExpiresAt,
-    });
+    expect(get).not.toHaveBeenCalled();
+    expect(await readPresalesFileLifecycle(fileId)).toBeNull();
   });
 
   it("fails closed for a historical resource with no provenance and no manifest", async () => {
@@ -734,7 +833,7 @@ describe("presales create-time upload capability", () => {
     expect(get).not.toHaveBeenCalled();
   });
 
-  it("isolates a partial local ledger and recovers with the valid DB deadline", async () => {
+  it("isolates a partial local ledger without falling back to Provider bytes", async () => {
     const fileId = "partial-retention-ledger";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
@@ -758,39 +857,33 @@ describe("presales create-time upload capability", () => {
     >;
     delete manifest.contentExpiresAt;
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
-    const recovered = Buffer.from("recovered after ledger isolation");
-    const get = vi.spyOn(axios, "get").mockResolvedValue({
-      status: 200,
-      headers: {
-        "content-type": "application/pdf",
-        "content-length": String(recovered.length),
-      },
-      data: Readable.from([recovered]),
-    });
+    const get = vi.spyOn(axios, "get");
 
     await withServer(async (baseUrl) => {
       const response = await fetch(
         `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
         { headers: { "x-frontmind-service-token": token } },
       );
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(recovered);
+      expect(response.status).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "CONTENT_UNAVAILABLE",
+          retryable: false,
+          recoveryAction: "reupload",
+          expiresAt: contentExpiresAt.getTime(),
+        },
+      });
     });
 
-    expect(get).toHaveBeenCalledOnce();
-    expect(await readPresalesFileLifecycle(fileId)).toMatchObject({
-      state: "stored",
-      uploadedAt,
-      contentExpiresAt,
-    });
+    expect(get).not.toHaveBeenCalled();
+    expect(await readPresalesFileLifecycle(fileId)).toBeNull();
   });
 
-  it("recovers a SHA-damaged local copy only from encoded /content and strips auth on HTTPS redirects", async () => {
+  it("rejects a SHA-damaged local copy without calling a Provider content endpoint", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-05T00:00:00.000Z"));
     const fileId = "file # 中文 📄";
     const original = Buffer.from("original durable bytes");
-    const recovered = Buffer.from("recovered authoritative bytes");
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
     await storePresalesTestFile({
@@ -834,73 +927,29 @@ describe("presales create-time upload capability", () => {
         };
       },
     );
-    const redirectUrl = "https://objects.example.test/recovered.pdf";
-    const get = vi
-      .spyOn(axios, "get")
-      .mockResolvedValueOnce({
-        status: 302,
-        headers: { location: redirectUrl },
-        data: Readable.from([]),
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: {
-          "content-type": "application/pdf",
-          "content-length": String(recovered.length),
-          "content-disposition":
-            "attachment; filename*=UTF-8''recovered%20document.pdf",
-        },
-        data: Readable.from([recovered]),
-      });
+    const get = vi.spyOn(axios, "get");
 
     await withServer(async (baseUrl) => {
       const response = await fetch(
         `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
         { headers: { "x-frontmind-service-token": token } },
       );
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer())).toEqual(recovered);
-      expect(response.headers.get("content-disposition")).toContain(
-        "recovered%20document.pdf",
-      );
+      expect(response.status).toBe(410);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "CONTENT_UNAVAILABLE",
+          retryable: false,
+          recoveryAction: "reupload",
+          expiresAt: contentExpiresAt.getTime(),
+        },
+      });
     });
 
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(get.mock.calls[0]?.[0]).toMatch(
-      new RegExp(
-        `/v1/files/${encodeURIComponent(fileId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/content$`,
-      ),
-    );
-    expect(get.mock.calls[0]?.[1]).toMatchObject({
-      maxRedirects: 0,
-      headers: {
-        API_KEY: "sk-upload-file",
-        Authorization: "Bearer sk-upload-file",
-      },
-    });
-    expect(get.mock.calls[1]?.[0]).toBe(redirectUrl);
-    expect(get.mock.calls[1]?.[1]).toMatchObject({ maxRedirects: 0 });
-    expect(get.mock.calls[1]?.[1]).not.toHaveProperty("headers.API_KEY");
-    expect(get.mock.calls[1]?.[1]).not.toHaveProperty("headers.Authorization");
-    expect(get.mock.calls.map(([url]) => String(url)).join("\n")).not.toContain(
-      "upload_url",
-    );
-
-    const stored = await readStoredPresalesFile(fileId);
-    expect(stored).toMatchObject({
-      filename: "recovered document.pdf",
-      sizeBytes: recovered.length,
-      uploadedAt,
-      contentExpiresAt,
-    });
-    const storedChunks: Buffer[] = [];
-    for await (const chunk of stored!.createReadStream()) {
-      storedChunks.push(Buffer.from(chunk));
-    }
-    expect(Buffer.concat(storedChunks)).toEqual(recovered);
+    expect(get).not.toHaveBeenCalled();
+    expect(await readStoredPresalesFile(fileId)).toBeNull();
   });
 
-  it("keeps a DB deletion tombstone so GET cannot recover a deleted user upload", async () => {
+  it("retains a user upload and its local content when cleanup is requested", async () => {
     const fileId = "deleted-user-upload";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
@@ -917,7 +966,9 @@ describe("presales create-time upload capability", () => {
       contentExpiresAt,
       contentDeletedAt: null,
     };
-    vi.spyOn(axios, "delete").mockResolvedValue({ status: 204, data: "" });
+    const deleteMock = vi
+      .spyOn(axios, "delete")
+      .mockResolvedValue({ status: 204, data: "" });
     const get = vi.spyOn(axios, "get");
 
     await withServer(async (baseUrl) => {
@@ -934,20 +985,17 @@ describe("presales create-time upload capability", () => {
         `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
         { headers: { "x-frontmind-service-token": token } },
       );
-      expect(downloaded.status).toBe(410);
-      await expect(downloaded.json()).resolves.toMatchObject({
-        error: { code: "SOURCE_EXPIRED", retryable: false },
-      });
+      expect(downloaded.status).toBe(200);
+      expect(await downloaded.text()).toBe("delete me");
     });
 
-    expect(markPresalesFileContentDeleted).toHaveBeenCalledWith(
-      expect.objectContaining({ fileId, apiCredentialId: "credential-1" }),
-    );
+    expect(markPresalesFileContentDeleted).not.toHaveBeenCalled();
+    expect(deleteMock).not.toHaveBeenCalled();
     expect(get).not.toHaveBeenCalled();
-    expect(await readPresalesFileLifecycle(fileId)).toBeNull();
+    expect(await readPresalesFileLifecycle(fileId)).not.toBeNull();
   });
 
-  it("keeps GET and PUT blocked when the upstream DELETE fails after the DB tombstone", async () => {
+  it("does not create a DB tombstone or contact Provider during cleanup", async () => {
     const fileId = "delete-upstream-failure";
     const uploadedAt = new Date("2026-08-04T00:00:00.000Z");
     const contentExpiresAt = new Date("2026-09-03T00:00:00.000Z");
@@ -958,12 +1006,10 @@ describe("presales create-time upload capability", () => {
       contentExpiresAt,
       contentDeletedAt: null,
     };
-    vi.spyOn(axios, "delete").mockResolvedValue({
+    const deleteMock = vi.spyOn(axios, "delete").mockResolvedValue({
       status: 503,
       data: { message: "storage unavailable" },
     });
-    const get = vi.spyOn(axios, "get");
-    const put = vi.spyOn(axios, "put");
 
     await withServer(async (baseUrl) => {
       const deleted = await fetch(
@@ -973,36 +1019,15 @@ describe("presales create-time upload capability", () => {
           headers: { "x-frontmind-service-token": token },
         },
       );
-      expect(deleted.status).toBe(503);
-      const deletedAt = presalesContentState.contentDeletedAt;
-      expect(deletedAt).toBeInstanceOf(Date);
-
-      const downloaded = await fetch(
-        `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
-        { headers: { "x-frontmind-service-token": token } },
-      );
-      expect(downloaded.status).toBe(410);
-
-      const uploaded = await fetch(
-        `${baseUrl}/files/${encodeURIComponent(fileId)}/content`,
-        {
-          method: "PUT",
-          headers: {
-            "content-type": "application/pdf",
-            "x-frontmind-service-token": token,
-          },
-          body: Buffer.from("must remain blocked"),
-        },
-      );
-      expect(uploaded.status).toBe(410);
-      expect(presalesContentState.contentDeletedAt).toBe(deletedAt);
+      expect(deleted.status).toBe(204);
+      expect(presalesContentState.contentDeletedAt).toBeNull();
     });
 
-    expect(get).not.toHaveBeenCalled();
-    expect(put).not.toHaveBeenCalled();
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(markPresalesFileContentDeleted).not.toHaveBeenCalled();
   });
 
-  it("replays one durable file id after the create response is lost, then tombstones cleanup", async () => {
+  it("replays one durable file id after the create response is lost and cleanup is retained", async () => {
     const idempotencyKey =
       "geo-custom-question-file:operation-hash:archive:0:v1";
     const signedUrl =
@@ -1068,12 +1093,10 @@ describe("presales create-time upload capability", () => {
       expect(cleaned.status).toBe(204);
 
       const lateReplay = await fetch(`${baseUrl}/files`, request);
-      expect(lateReplay.status).toBe(410);
-      await expect(lateReplay.json()).resolves.toEqual({
-        error: {
-          code: "FILE_OPERATION_RETIRED",
-          message: "该文件创建操作已完成清理，不能再次执行",
-        },
+      expect(lateReplay.status).toBe(200);
+      await expect(lateReplay.json()).resolves.toMatchObject({
+        id: "file-response-lost",
+        filename: "custom.zip",
       });
     });
 
@@ -1250,35 +1273,17 @@ describe("presales create-time upload capability", () => {
   it.each([
     {
       upstreamStatus: 403,
-      responseStatus: 403,
-      code: "SOURCE_FORBIDDEN",
-      retryable: false,
-      recoveryAction: "contact_admin",
     },
     {
       upstreamStatus: 404,
-      responseStatus: 410,
-      code: "SOURCE_UNAVAILABLE",
-      retryable: false,
-      recoveryAction: "reupload",
     },
     {
       upstreamStatus: 503,
-      responseStatus: 503,
-      code: "SOURCE_DOWNLOAD_FAILED",
-      retryable: true,
-      recoveryAction: "retry",
     },
   ])(
-    "returns $code for upstream status $upstreamStatus",
-    async ({
-      upstreamStatus,
-      responseStatus,
-      code,
-      retryable,
-      recoveryAction,
-    }) => {
-      vi.spyOn(axios, "get").mockResolvedValue({
+    "ignores a mocked legacy Provider status $upstreamStatus when local bytes are absent",
+    async ({ upstreamStatus }) => {
+      const get = vi.spyOn(axios, "get").mockResolvedValue({
         status: upstreamStatus,
         headers: {},
         data: { secret: "must-not-leak" },
@@ -1288,18 +1293,23 @@ describe("presales create-time upload capability", () => {
         const response = await fetch(`${baseUrl}/files/file-1/content`, {
           headers: { "x-frontmind-service-token": token },
         });
-        expect(response.status).toBe(responseStatus);
+        expect(response.status).toBe(410);
         const body = await response.json();
         expect(body).toMatchObject({
-          error: { code, retryable, recoveryAction },
+          error: {
+            code: "CONTENT_UNAVAILABLE",
+            retryable: false,
+            recoveryAction: "reupload",
+          },
         });
         expect(JSON.stringify(body)).not.toContain("must-not-leak");
       });
+      expect(get).not.toHaveBeenCalled();
     },
   );
 
-  it("rejects an empty upstream file body", async () => {
-    vi.spyOn(axios, "get").mockResolvedValue({
+  it("does not inspect an empty mocked Provider body when local bytes are absent", async () => {
+    const get = vi.spyOn(axios, "get").mockResolvedValue({
       status: 200,
       headers: { "content-type": "application/zip" },
       data: Readable.from([]),
@@ -1309,19 +1319,20 @@ describe("presales create-time upload capability", () => {
       const response = await fetch(`${baseUrl}/files/file-1/content`, {
         headers: { "x-frontmind-service-token": token },
       });
-      expect(response.status).toBe(422);
+      expect(response.status).toBe(410);
       await expect(response.json()).resolves.toMatchObject({
         error: {
-          code: "SOURCE_CONTENT_INVALID",
+          code: "CONTENT_UNAVAILABLE",
           retryable: false,
           recoveryAction: "reupload",
         },
       });
     });
+    expect(get).not.toHaveBeenCalled();
   });
 
-  it("rejects an upstream file whose declared body exceeds the archive limit", async () => {
-    vi.spyOn(axios, "get").mockResolvedValue({
+  it("does not inspect mocked oversized Provider bytes when local bytes are absent", async () => {
+    const get = vi.spyOn(axios, "get").mockResolvedValue({
       status: 200,
       headers: {
         "content-type": "application/zip",
@@ -1334,15 +1345,16 @@ describe("presales create-time upload capability", () => {
       const response = await fetch(`${baseUrl}/files/file-1/content`, {
         headers: { "x-frontmind-service-token": token },
       });
-      expect(response.status).toBe(413);
+      expect(response.status).toBe(410);
       await expect(response.json()).resolves.toMatchObject({
         error: {
-          code: "SOURCE_CONTENT_TOO_LARGE",
+          code: "CONTENT_UNAVAILABLE",
           retryable: false,
           recoveryAction: "reupload",
         },
       });
     });
+    expect(get).not.toHaveBeenCalled();
   });
 
   it("keeps the trusted URL-only task-output fallback for historical tasks", async () => {
@@ -1452,6 +1464,15 @@ describe("presales deletion routes", () => {
     vi.mocked(markPresalesFileContentDeleted).mockResolvedValue(
       undefined as never,
     );
+    vi.mocked(deletePresalesTaskEvidence).mockResolvedValue({
+      deleted: true,
+      fileIds: [],
+    });
+    vi.mocked(completePresalesProjectTaskPurge).mockResolvedValue({
+      completed: true,
+      pendingReservations: 0,
+      remainingTasks: 0,
+    });
     vi.mocked(resolvePresalesTaskCredentialForFiles).mockResolvedValue({
       id: "credential-1",
       version: 1,
@@ -1473,7 +1494,7 @@ describe("presales deletion routes", () => {
     }
   });
 
-  it("returns 204 when the upstream file is already absent", async () => {
+  it("retains a legacy Provider file when Website requests cleanup", async () => {
     const deleteMock = vi
       .spyOn(axios, "delete")
       .mockResolvedValue({ status: 404, data: { message: "not found" } });
@@ -1487,12 +1508,12 @@ describe("presales deletion routes", () => {
       expect(await response.text()).toBe("");
     });
 
-    expect(deleteMock).toHaveBeenCalledOnce();
-    expect(deleteMock.mock.calls[0][0]).toContain("/v1/files/file-1");
+    expect(deleteMock).not.toHaveBeenCalled();
+    expect(deletePresalesFileEvidence).not.toHaveBeenCalled();
   });
 
-  it("forwards a controlled JSON error for an upstream failure", async () => {
-    vi.spyOn(axios, "delete").mockResolvedValue({
+  it("does not contact Provider when its delete endpoint would fail", async () => {
+    const deleteMock = vi.spyOn(axios, "delete").mockResolvedValue({
       status: 503,
       data: { message: "storage unavailable" },
     });
@@ -1502,14 +1523,9 @@ describe("presales deletion routes", () => {
         method: "DELETE",
         headers: { "x-frontmind-service-token": token },
       });
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toEqual({
-        error: {
-          code: "UPSTREAM_FILE_DELETE_FAILED",
-          message: "storage unavailable",
-        },
-      });
+      expect(response.status).toBe(204);
     });
+    expect(deleteMock).not.toHaveBeenCalled();
   });
 
   it("uploads website attachments to the exact SigV4 URL without redirects", async () => {
@@ -1553,23 +1569,99 @@ describe("presales deletion routes", () => {
     );
   });
 
-  it("retains task evidence without contacting the upstream API", async () => {
-    const deleteMock = vi.spyOn(axios, "delete");
+  it("rejects a new project upload reservation after the deletion fence closes", async () => {
+    vi.mocked(getPresalesCredentialForResource).mockResolvedValue({
+      id: "credential-1",
+      version: 1,
+      apiKey: "sk-upload-file",
+      fingerprint: "fingerprint",
+      status: "active",
+      verifiedAt: new Date(),
+      resource: {
+        id: "resource-1",
+        projectId: "project-20260728-0001",
+        apiCredentialId: "credential-1",
+        kind: "file",
+        upstreamId: "file-1",
+        parentTaskId: null,
+        contentSource: "user_upload",
+        uploadReservedAt: null,
+        uploadedAt: null,
+        contentExpiresAt: null,
+        contentDeletedAt: null,
+        createdAt: new Date(),
+      },
+    });
+    vi.mocked(withPresalesProjectFileCreateGuard).mockRejectedValueOnce(
+      new AuthServiceError("PROJECT_DELETED", "project deleted"),
+    );
+    const put = vi.spyOn(axios, "put");
 
     await withServer(async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/tasks/task-1`, {
-        method: "DELETE",
-        headers: { "x-frontmind-service-token": token },
+      const response = await fetch(`${baseUrl}/files/file-1/content`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-original-content-type": "application/pdf",
+          "x-frontmind-service-token": token,
+        },
+        body: Buffer.from("pdf"),
       });
-      expect(response.status).toBe(204);
-      expect(response.headers.get("x-frontmind-task-retention")).toBe(
-        "retained",
-      );
-      expect(await response.text()).toBe("");
+      expect(response.status).toBe(410);
     });
-
-    expect(deleteMock).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
   });
+
+  it(
+    "keeps the legacy generic task cleanup as a retained acknowledgement",
+    async () => {
+      const deleteMock = vi.spyOn(axios, "delete");
+
+      await withServer(async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/tasks/task-1`, {
+          method: "DELETE",
+          headers: { "x-frontmind-service-token": token },
+        });
+        expect(response.status).toBe(204);
+        expect(response.headers.get("x-frontmind-task-retention")).toBeNull();
+      });
+
+      expect(deleteMock).not.toHaveBeenCalled();
+      expect(deletePresalesTaskEvidence).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "acknowledges project deletion routes without invoking purge providers",
+    async () => {
+      await withServer(async (baseUrl) => {
+        for (const endpoint of [
+          "/projects/project-20260728-0001/monitor-runs/00000000-0000-4000-8000-000000000001",
+          "/projects/project-20260728-0001/tasks",
+        ]) {
+          const response = await fetch(`${baseUrl}${endpoint}`, {
+            method: "DELETE",
+            headers: { "x-frontmind-service-token": token },
+          });
+          if (endpoint.includes("monitor-runs")) {
+            expect(response.status).toBe(204);
+          } else {
+            expect(response.status).toBe(200);
+            await expect(response.json()).resolves.toEqual({
+              schemaVersion: 1,
+              projectId: "project-20260728-0001",
+              status: "deleted",
+              deletedTasks: 0,
+              deletedFiles: 0,
+              pendingReservations: 0,
+            });
+          }
+        }
+      });
+      expect(purgePresalesProjectMonitorRuns).not.toHaveBeenCalled();
+      expect(readPresalesProjectTaskPurgeSnapshot).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("presales idempotent task route", () => {
@@ -1648,6 +1740,98 @@ describe("presales idempotent task route", () => {
         upstreamTaskId: "task-1",
       }),
     );
+  });
+
+  it("adopts a known upstream task when local reservation completion fails", async () => {
+    vi.mocked(acquirePresalesTaskReservation).mockResolvedValue({
+      state: "acquired",
+      reservationId: "reservation-delete-race",
+      attemptId: "attempt-delete-race",
+      keyHash: "b".repeat(64),
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    vi.mocked(completePresalesTaskReservation).mockRejectedValueOnce(
+      new AuthServiceError("NOT_FOUND", "Task reservation not found"),
+    );
+    vi.spyOn(axios, "post").mockResolvedValue({
+      status: 201,
+      data: { id: "task-delete-race", status: "queued" },
+    });
+    const cleanup = vi.spyOn(axios, "delete").mockResolvedValue({
+      status: 204,
+      data: null,
+    });
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-frontmind-service-token": token,
+        },
+        body: JSON.stringify({
+          prompt: "build knowledge base",
+          idempotencyKey: "project-123:delete-race:create",
+          projectId: "project-20260728-0001",
+        }),
+      });
+      expect(response.status).toBe(502);
+    });
+
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(releasePresalesTaskReservation).not.toHaveBeenCalled();
+    expect(retainPresalesTaskPurgeTarget).toHaveBeenCalledWith({
+      reservationId: "reservation-delete-race",
+      attemptId: "attempt-delete-race",
+      apiCredentialId: "credential-1",
+      upstreamTaskId: "task-delete-race",
+    });
+  });
+
+  it("retains a known task ID without attempting Provider compensation", async () => {
+    vi.mocked(acquirePresalesTaskReservation).mockResolvedValue({
+      state: "acquired",
+      reservationId: "reservation-cleanup-retry",
+      attemptId: "attempt-cleanup-retry",
+      keyHash: "e".repeat(64),
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    vi.mocked(completePresalesTaskReservation).mockRejectedValueOnce(
+      new AuthServiceError("NOT_FOUND", "Task attachment is gone"),
+    );
+    vi.spyOn(axios, "post").mockResolvedValue({
+      status: 201,
+      data: { id: "task-cleanup-retry", status: "queued" },
+    });
+    const cleanup = vi.spyOn(axios, "delete").mockResolvedValue({
+      status: 503,
+      data: { message: "provider unavailable" },
+    });
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-frontmind-service-token": token,
+        },
+        body: JSON.stringify({
+          prompt: "build knowledge base",
+          idempotencyKey: "project-123:cleanup-retry:create",
+          projectId: "project-20260728-0001",
+        }),
+      });
+      expect(response.status).toBe(502);
+    });
+
+    expect(retainPresalesTaskPurgeTarget).toHaveBeenCalledWith({
+      reservationId: "reservation-cleanup-retry",
+      attemptId: "attempt-cleanup-retry",
+      apiCredentialId: "credential-1",
+      upstreamTaskId: "task-cleanup-retry",
+    });
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(releasePresalesTaskReservation).not.toHaveBeenCalled();
   });
 
   it("registers a synchronously completed typed output file before returning the created task", async () => {
@@ -1743,13 +1927,161 @@ describe("presales idempotent task route", () => {
     await responsePromise;
   });
 
-  it("returns a completed reservation without calling upstream", async () => {
+  it("retains a known output file without Provider deletion", async () => {
+    vi.mocked(acquirePresalesTaskReservation).mockResolvedValue({
+      state: "acquired",
+      reservationId: "reservation-output-cleanup",
+      attemptId: "attempt-output-cleanup",
+      keyHash: "f".repeat(64),
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    vi.spyOn(axios, "post").mockResolvedValue({
+      status: 201,
+      data: {
+        id: "task-output-cleanup",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_file",
+                file_id: "file-output-cleanup",
+                filename: "output.md",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    vi.spyOn(axios, "get").mockResolvedValue({
+      status: 200,
+      data: { id: "file-output-cleanup", filename: "output.md" },
+    });
+    const cleanup = vi.spyOn(axios, "delete").mockResolvedValue({
+      status: 503,
+      data: { message: "provider unavailable" },
+    });
+    vi.mocked(recordPresalesUpstreamResource).mockRejectedValueOnce(
+      new AuthServiceError("PROJECT_DELETED", "parent task deleted"),
+    );
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-frontmind-service-token": token,
+        },
+        body: JSON.stringify({
+          prompt: "produce output",
+          idempotencyKey: "project-123:output-cleanup:create",
+          projectId: "project-20260728-0001",
+        }),
+      });
+      expect(response.status).toBe(201);
+    });
+
+    expect(retainPresalesProjectFilePurgeTarget).toHaveBeenCalledWith({
+      projectId: "project-20260728-0001",
+      fileId: "file-output-cleanup",
+      apiCredentialId: "credential-1",
+    });
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(deletePresalesFileEvidence).not.toHaveBeenCalledWith({
+      fileId: "file-output-cleanup",
+      apiCredentialId: "credential-1",
+    });
+  });
+
+  it("replays the live completed task and its typed assistant output without creating another task", async () => {
+    const fencedTranslation = [
+      "```json",
+      JSON.stringify({
+        schemaVersion: 1,
+        sourceQuestionSha256:
+          "e7b3f48b10ca7e0feed2605caca8ca4604ffa386561788ddc8c459b9ac88081b",
+        questionEnglish: "Is SiliconFlow reliable?",
+      }),
+      "```",
+    ].join("\n");
     vi.mocked(acquirePresalesTaskReservation).mockResolvedValue({
       state: "completed",
       upstreamTaskId: "task-original",
-      task: { id: "task-original", status: "queued" },
     });
     const createMock = vi.spyOn(axios, "post");
+    const retrieveMock = vi.spyOn(axios, "get").mockResolvedValue({
+      status: 200,
+      data: {
+        id: "task-original",
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: { value: fencedTranslation },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await withServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-frontmind-service-token": token,
+        },
+        body: JSON.stringify({
+          prompt: "build knowledge base",
+          idempotencyKey: "project-123:knowledge-base:create",
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("idempotent-replayed")).toBe("true");
+      await expect(response.json()).resolves.toMatchObject({
+        id: "task-original",
+        status: "completed",
+        output: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: { value: fencedTranslation },
+              },
+            ],
+          },
+        ],
+      });
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(retrieveMock).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/tasks/task-original"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-create-task",
+        }),
+      }),
+    );
+  });
+
+  it("keeps an unfinished replay unfinished while refreshing its live status", async () => {
+    vi.mocked(acquirePresalesTaskReservation).mockResolvedValue({
+      state: "completed",
+      upstreamTaskId: "task-running",
+    });
+    const createMock = vi.spyOn(axios, "post");
+    vi.spyOn(axios, "get").mockResolvedValue({
+      status: 200,
+      data: { id: "task-running", status: "running" },
+    });
 
     await withServer(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/tasks`, {
@@ -1766,8 +2098,8 @@ describe("presales idempotent task route", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("idempotent-replayed")).toBe("true");
       await expect(response.json()).resolves.toEqual({
-        id: "task-original",
-        status: "queued",
+        id: "task-running",
+        status: "running",
       });
     });
     expect(createMock).not.toHaveBeenCalled();

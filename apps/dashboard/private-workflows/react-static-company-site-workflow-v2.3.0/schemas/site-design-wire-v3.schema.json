@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operationToken",
+    "schemaVersion",
+    "layoutArchetype",
+    "density",
+    "surfaceStyle",
+    "typeScale",
+    "imageTreatment",
+    "motionLevel",
+    "backgroundPaletteIndex",
+    "textPaletteIndex",
+    "accentPaletteIndex",
+    "siteTitle",
+    "description",
+    "routeSlots"
+  ],
+  "properties": {
+    "operationToken": { "type": "string" },
+    "schemaVersion": { "type": "number", "enum": [3] },
+    "layoutArchetype": {
+      "type": "string",
+      "enum": ["hero_led", "editorial", "modular", "split", "asymmetric"]
+    },
+    "density": {
+      "type": "string",
+      "enum": ["compact", "balanced", "spacious"]
+    },
+    "surfaceStyle": {
+      "type": "string",
+      "enum": ["flat", "bordered", "soft_depth", "layered"]
+    },
+    "typeScale": {
+      "type": "string",
+      "enum": ["restrained", "editorial", "display"]
+    },
+    "imageTreatment": {
+      "type": "string",
+      "enum": ["contained", "wide", "masked", "none"]
+    },
+    "motionLevel": { "type": "string", "enum": ["none", "subtle"] },
+    "backgroundPaletteIndex": { "type": "number" },
+    "textPaletteIndex": { "type": "number" },
+    "accentPaletteIndex": { "type": "number" },
+    "siteTitle": { "type": "string" },
+    "description": { "type": "string" },
+    "routeSlots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["routeId", "slotId", "variant"],
+        "properties": {
+          "routeId": { "type": "string" },
+          "slotId": { "type": "string" },
+          "variant": {
+            "type": "string",
+            "enum": [
+              "statement",
+              "split",
+              "cards",
+              "timeline",
+              "faq",
+              "proof",
+              "cta"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -62,11 +62,16 @@ export async function attachActiveCredential(
       req.frontmindUser.id,
     );
     if (!credential) {
+      const customerCredentialRequired = req.frontmindUser.role === "user";
       sendAuthError(
         res,
         428,
-        "当前账号尚未由管理员配置 API Key",
-        "API_CREDENTIAL_REQUIRED",
+        customerCredentialRequired
+          ? "当前客户账号尚未配置 API Key"
+          : "当前账号尚未由管理员配置 API Key",
+        customerCredentialRequired
+          ? "CUSTOMER_KEY_REQUIRED"
+          : "API_CREDENTIAL_REQUIRED",
       );
       return;
     }

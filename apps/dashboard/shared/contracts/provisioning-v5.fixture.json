@@ -1,0 +1,13 @@
+{
+  "fixtureVersion": 5,
+  "knowledgeImport": {
+    "schemaVersion": 5,
+    "companyName": "跨仓契约示例企业",
+    "candidateArtifactId": "artifact_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "finalArtifactId": "artifact_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "candidateSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "finalSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "packageManifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "finalizerVersion": "website-kb-finalizer-v1"
+  }
+}

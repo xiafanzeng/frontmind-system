@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/frontmind-run-envelope-v8.json",
+  "title": "FrontMind SiteOps Run Envelope V8",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "buildId",
+    "source",
+    "workflow",
+    "visual",
+    "referenceBlueprint",
+    "content",
+    "sourceDossier"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 8 },
+    "buildId": { "type": "string", "format": "uuid" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgeSnapshotId", "archiveSha256"],
+      "properties": {
+        "knowledgeSnapshotId": { "type": "string", "format": "uuid" },
+        "archiveSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "manifestSha256",
+        "starterVersion",
+        "starterSha256",
+        "componentLibraryVersion",
+        "materializerVersion",
+        "materializerSha256",
+        "qaPolicyVersion"
+      ],
+      "properties": {
+        "version": { "const": "2.3.0" },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "starterVersion": { "const": "2.3.0" },
+        "starterSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "componentLibraryVersion": { "const": "2.3.0" },
+        "materializerVersion": { "const": "2.3.0" },
+        "materializerSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "qaPolicyVersion": { "const": "siteops-qa-v4" }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalogRole",
+        "providerItemKey",
+        "visualEvidenceSha256",
+        "previewSha256"
+      ],
+      "properties": {
+        "catalogRole": { "const": "hero" },
+        "providerItemKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "visualEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "previewSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "supportEvidenceSha256s": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "referenceBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "candidateId",
+        "providerItemKey",
+        "previewSha256",
+        "previewLocalAssetId",
+        "referencePreviewSha256",
+        "referencePreviewLocalAssetId",
+        "inspirationTaxonomySha256",
+        "styleSignature",
+        "heroFamily",
+        "alignment",
+        "contentEmphasis",
+        "mediaRegion",
+        "mediaRatio",
+        "composition",
+        "containerStyle",
+        "backgroundStyle",
+        "gradientStyle",
+        "borderStyle",
+        "radiusStyle",
+        "decorationStyle",
+        "navStyle",
+        "ctaStyle",
+        "cardStyle",
+        "typographyStyle",
+        "density",
+        "responsiveBehavior",
+        "motionLevel",
+        "mediaStrategy",
+        "palette",
+        "typeSystem",
+        "componentManifest",
+        "inspirationEvidenceIds",
+        "blueprintHash"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 4 },
+        "candidateId": { "type": "string" },
+        "providerItemKey": { "type": "string" },
+        "heroFamily": {
+          "type": "string",
+          "enum": [
+            "floating_orbit",
+            "split_media",
+            "editorial",
+            "bento",
+            "feature_grid",
+            "centered_dual_cta",
+            "immersive_visual",
+            "product_stage",
+            "full_bleed_statement"
+          ]
+        },
+        "alignment": { "type": "string", "enum": ["left", "center", "right"] },
+        "contentEmphasis": {
+          "type": "string",
+          "enum": ["statement", "balanced", "product", "proof"]
+        },
+        "mediaRegion": {
+          "type": "string",
+          "enum": ["none", "inline", "split", "surround", "full_bleed"]
+        },
+        "mediaRatio": {
+          "type": "string",
+          "enum": ["none", "square", "portrait", "landscape", "wide"]
+        },
+        "composition": {
+          "type": "string",
+          "enum": ["centered", "split", "editorial", "modular", "immersive"]
+        },
+        "containerStyle": {
+          "type": "string",
+          "enum": ["contained", "wide", "edge_to_edge"]
+        },
+        "backgroundStyle": {
+          "type": "string",
+          "enum": [
+            "warm_light",
+            "cool_light",
+            "dark",
+            "gradient",
+            "image_stage"
+          ]
+        },
+        "gradientStyle": {
+          "type": "string",
+          "enum": ["none", "soft_radial", "mesh", "spotlight"]
+        },
+        "borderStyle": {
+          "type": "string",
+          "enum": ["none", "subtle", "defined"]
+        },
+        "radiusStyle": {
+          "type": "string",
+          "enum": ["none", "soft", "rounded", "pill"]
+        },
+        "decorationStyle": {
+          "type": "string",
+          "enum": ["none", "orbital", "grid", "glow", "editorial_lines"]
+        },
+        "navStyle": {
+          "type": "string",
+          "enum": ["minimal", "floating", "bordered"]
+        },
+        "ctaStyle": {
+          "type": "string",
+          "enum": ["single", "dual", "pill", "text_link"]
+        },
+        "cardStyle": {
+          "type": "string",
+          "enum": ["flat", "bordered", "soft_depth", "layered"]
+        },
+        "typographyStyle": {
+          "type": "string",
+          "enum": ["restrained", "editorial", "display", "technical"]
+        },
+        "density": {
+          "type": "string",
+          "enum": ["compact", "balanced", "spacious"]
+        },
+        "responsiveBehavior": {
+          "type": "string",
+          "enum": ["stack", "reflow", "crop_safe"]
+        },
+        "motionLevel": {
+          "type": "string",
+          "enum": ["none", "subtle", "floating_subtle"]
+        },
+        "mediaStrategy": {
+          "type": "string",
+          "enum": ["customer_asset", "procedural_brand_svg", "none"]
+        },
+        "blueprintHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "previewSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "previewLocalAssetId": { "type": "string", "format": "uuid" },
+        "referencePreviewSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "referencePreviewLocalAssetId": { "type": "string", "format": "uuid" },
+        "inspirationTaxonomySha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "styleSignature": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "palette": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canvas", "ink", "accent", "muted"],
+          "properties": {
+            "canvas": { "type": "string" },
+            "ink": { "type": "string" },
+            "accent": { "type": "string" },
+            "muted": { "type": "string" }
+          }
+        },
+        "typeSystem": {
+          "type": "string",
+          "enum": [
+            "display_sans",
+            "editorial_serif",
+            "technical_sans",
+            "humanist_sans"
+          ]
+        },
+        "componentManifest": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string" }
+        },
+        "inspirationEvidenceIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventoryHash",
+        "routePolicyVersion",
+        "sourcePolicy",
+        "externalAcquisitionAllowed",
+        "publicSourceLabels"
+      ],
+      "properties": {
+        "inventoryHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "routePolicyVersion": { "const": "snapshot-conditional-v1" },
+        "sourcePolicy": { "const": "frozen_snapshot_only" },
+        "externalAcquisitionAllowed": { "const": false },
+        "publicSourceLabels": { "const": "forbidden" }
+      }
+    },
+    "sourceDossier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifestFilename",
+        "manifestSha256",
+        "totalDecodedBytes",
+        "parts"
+      ],
+      "properties": {
+        "manifestFilename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 191
+        },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "totalDecodedBytes": { "type": "integer", "minimum": 1 },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["filename", "decodedBytes", "sha256"],
+            "properties": {
+              "filename": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 191
+              },
+              "decodedBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16777216
+              },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -17,6 +17,7 @@ import {
   userPasswordSetupTokens,
   userUsageOwners,
   users,
+  websiteProjectDeletionTombstones,
   websiteUserProvisions,
 } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
@@ -26,6 +27,7 @@ import {
   provisionWebsiteUser,
   type WebsiteProvisionRequest,
 } from "./provisioning-service";
+import { ManusV2Client } from "./manus-v2-client";
 
 const REQUEST_HASH_KEY = "mZE7Hc8h9KJErqfZ76u21kSx3U95QPJNgLw9b4eE5do";
 
@@ -40,6 +42,7 @@ class SharedUsersTableDb {
   inserts: InsertCall[] = [];
   userRows: Array<Record<string, any>> = [];
   provisionRows: Array<Record<string, any>> = [];
+  projectLifecycleStatus: "active" | "deleting" | "deleted" = "active";
   projectedUserSelectCount = 0;
   pendingInsertedUserLock = false;
 
@@ -72,6 +75,9 @@ class SharedUsersTableDb {
           if (table === websiteUserProvisions) {
             return this.provisionRows.slice(-1);
           }
+          if (table === websiteProjectDeletionTombstones) {
+            return [{ status: this.projectLifecycleStatus }];
+          }
           return [];
         };
         const limit = () => {
@@ -96,8 +102,11 @@ class SharedUsersTableDb {
 
   insert(table: unknown) {
     return {
-      values: async (values: Record<string, unknown>) => {
+      values: (values: Record<string, unknown>) => {
         this.inserts.push({ table, values });
+        if (table === websiteProjectDeletionTombstones) {
+          return { onDuplicateKeyUpdate: async () => undefined };
+        }
         if (table === users) {
           const now = new Date("2026-07-24T08:10:00.000Z");
           this.userRows.push({
@@ -121,6 +130,7 @@ class SharedUsersTableDb {
         } else if (table === websiteUserProvisions) {
           this.provisionRows.push({ ...values });
         }
+        return Promise.resolve(undefined);
       },
     };
   }
@@ -211,9 +221,10 @@ describe("shared Admin and website user creation path", () => {
   beforeEach(() => {
     process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY =
       "base64:MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=";
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("{}", { status: 200 }),
-    );
+    vi.spyOn(ManusV2Client.prototype, "probeCredential").mockResolvedValue({
+      ok: true,
+      requestId: "request-provisioning-key-validation",
+    });
     db = new SharedUsersTableDb();
     dbMock.getDb.mockResolvedValue(db);
   });
@@ -319,6 +330,14 @@ describe("shared Admin and website user creation path", () => {
       status: "completed",
     });
     expect(
+      db.inserts.find(({ table }) => table === websiteProjectDeletionTombstones)
+        ?.values,
+    ).toEqual({
+      projectId: request.project.id,
+      schemaVersion: 1,
+      status: "active",
+    });
+    expect(
       db.inserts.find(({ table }) => table === userDashboardContents)?.values,
     ).toMatchObject({
       userId: websiteResult.user.id,
@@ -341,6 +360,24 @@ describe("shared Admin and website user creation path", () => {
     expect(JSON.stringify(websiteResult)).not.toContain(
       request.account.password,
     );
+  });
+
+  it("rejects a non-active project before provisioning writes any account rows", async () => {
+    db.projectLifecycleStatus = "deleted";
+    await expect(
+      provisionWebsiteUser(
+        {
+          idempotencyKey: "website-order-deleted-project-000001",
+          request: websiteRequest(),
+        },
+        {
+          requestHashKey: REQUEST_HASH_KEY,
+          now: () => new Date("2026-07-24T08:06:00.000Z"),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PROJECT_DELETED", status: 410 });
+    expect(db.provisionRows).toHaveLength(0);
+    expect(db.userRows).toHaveLength(0);
   });
 
   it("allows an active system Admin to be the new customer's primary owner", async () => {

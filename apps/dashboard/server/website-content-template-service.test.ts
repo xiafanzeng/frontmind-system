@@ -91,7 +91,7 @@ describe("website content current-content template", () => {
         ...base,
         records: [base.records[0], base.records[0]],
       }),
-    ).toThrow("同一工单");
+    ).toThrow("同一需求");
   });
 
   it("builds a completion diff only when summary and complete are supplied together", () => {

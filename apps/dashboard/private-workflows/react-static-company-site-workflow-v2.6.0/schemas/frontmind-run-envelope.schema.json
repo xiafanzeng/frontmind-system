@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/frontmind-run-envelope-v9.json",
+  "title": "FrontMind SiteOps Run Envelope V9",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "buildId",
+    "operationToken",
+    "source",
+    "workflow",
+    "visual",
+    "referenceBlueprint",
+    "brief",
+    "sourceDossier"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 9 },
+    "buildId": { "type": "string", "format": "uuid" },
+    "operationToken": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgeSnapshotId", "archiveSha256"],
+      "properties": {
+        "knowledgeSnapshotId": { "type": "string", "format": "uuid" },
+        "archiveSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "manifestSha256"],
+      "properties": {
+        "version": { "const": "2.6.0" },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "description": "Frozen host visual coordinates. Provider must not return or modify this object."
+    },
+    "referenceBlueprint": {
+      "type": "object",
+      "description": "Immutable Dashboard-owned ReferenceBlueprintV4."
+    },
+    "brief": {
+      "type": "object",
+      "description": "Frozen Dashboard-owned SiteBrief with route and source allowlists."
+    },
+    "sourceDossier": {
+      "type": "object",
+      "description": "Manifest-verified source dossier; the only content authority."
+    }
+  }
+}

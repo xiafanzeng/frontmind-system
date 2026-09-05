@@ -4,7 +4,11 @@ import type {
   ResponseLogicAttachment,
   ResponseLogicDraft,
 } from "../shared/response-logic";
-import { withAuthoritativeAttachments } from "./response-logic-service";
+import {
+  ResponseLogicConfirmedError,
+  assertResponseLogicRecordEditable,
+  withAuthoritativeAttachments,
+} from "./response-logic-service";
 
 function attachment(
   fileId: string,
@@ -65,5 +69,22 @@ describe("response logic attachment persistence", () => {
       filename: "renamed.pdf",
       uploadedAt: "2026-07-23T11:00:00.000Z",
     });
+  });
+});
+
+describe("confirmed response logic lock", () => {
+  it("allows drafts and rejects a confirmed record until it is cleared", () => {
+    expect(() =>
+      assertResponseLogicRecordEditable({ confirmed: null }),
+    ).not.toThrow();
+    expect(() =>
+      assertResponseLogicRecordEditable({
+        confirmed: {
+          ...draft([]),
+          version: 1,
+          updatedAt: "2026-08-07T00:00:00.000Z",
+        },
+      }),
+    ).toThrow(ResponseLogicConfirmedError);
   });
 });

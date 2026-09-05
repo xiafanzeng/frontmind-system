@@ -1,18 +1,27 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthServiceError, decryptApiKey, encryptApiKey } from "./auth-service";
+import { WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED } from "./website-project-lifecycle";
 import {
+  agentOperations,
+  presalesApiCredentials,
+  presalesOutputUrls,
+  presalesMonitorRuns,
   presalesTaskRequests,
   presalesUpstreamResources,
+  providerFileLeases,
+  websiteProjectDeletionTombstones,
 } from "../drizzle/schema";
 import {
   PRESALES_REVOKABLE_STATUSES,
   aggregatePresalesCreditUsagePage,
   acquirePresalesTaskReservation,
   completePresalesTaskReservation,
+  completePresalesProjectTaskPurge,
+  deletePresalesTaskEvidence,
   deletePresalesApiCredential,
   decryptPresalesApiKey,
   encryptPresalesApiKey,
@@ -20,9 +29,14 @@ import {
   hashPresalesOutputUrl,
   hashPresalesIdempotencyKey,
   hashPresalesTaskPayload,
+  isPresalesDuplicateEntryError,
   markPresalesFileContentDeleted,
+  projectWebsiteUsageOwnership,
+  projectPresalesTaskBusinessOwners,
   recordPresalesUpstreamResource,
+  readPresalesProjectTaskPurgeSnapshot,
   releasePresalesTaskReservation,
+  retainPresalesTaskPurgeTarget,
   reservePresalesFileUploadRetention,
   resolvePresalesTaskCredentialForFiles,
   syncPresalesOutputUrlGrants,
@@ -87,6 +101,63 @@ describe("presales credential encryption", () => {
 });
 
 describe("presales rolling usage aggregation", () => {
+  it("projects owner names for v2 and monitor tasks without guessing history", () => {
+    const projected = projectPresalesTaskBusinessOwners({
+      taskIds: ["v2-task", "monitor-task", "historical-task"],
+      agentTaskRows: [{ upstreamTaskId: "v2-task", projectId: "project-v2" }],
+      monitorRows: [
+        { upstreamTaskId: "monitor-task", projectId: "project-monitor" },
+      ],
+      attributionRows: [
+        { projectId: "project-v2", businessOwnerName: "应祥" },
+        { projectId: "project-monitor", businessOwnerName: "Alice" },
+      ],
+    });
+    expect(Object.fromEntries(projected)).toEqual({
+      "v2-task": "应祥",
+      "monitor-task": "Alice",
+      "historical-task": null,
+    });
+  });
+
+  it("includes v2 agent tasks in Website ownership and unsettled scans", () => {
+    const createdAt = new Date("2026-08-02T08:00:00.000Z");
+    const projected = projectWebsiteUsageOwnership({
+      resourceRows: [],
+      ownedRows: [],
+      monitorRows: [],
+      agentTaskRows: [
+        {
+          upstreamTaskId: "provider-v2-running",
+          apiCredentialId: "credential-v2-running",
+          createdAt,
+          status: "running",
+        },
+        {
+          upstreamTaskId: "provider-v2-complete",
+          apiCredentialId: "credential-v2-complete",
+          createdAt,
+          status: "succeeded",
+        },
+        {
+          upstreamTaskId: null,
+          apiCredentialId: "credential-v2-unknown",
+          createdAt,
+          status: "attention_required",
+        },
+      ],
+    });
+
+    expect([...projected.websiteTaskIds]).toEqual([
+      "provider-v2-running",
+      "provider-v2-complete",
+    ]);
+    expect([...projected.unsettledCredentialIds]).toEqual([
+      "credential-v2-running",
+      "credential-v2-unknown",
+    ]);
+  });
+
   it("deduplicates the same task returned by multiple credential versions and enforces the 30-day boundary", () => {
     const now = Date.parse("2026-08-02T08:00:00.000Z");
     const cutoff = now - 30 * 86_400_000;
@@ -114,6 +185,9 @@ describe("presales rolling usage aggregation", () => {
     expect(currentVersion).toMatchObject({
       keyTotalUsed: 40,
       websiteUsed: 40,
+      recentWebsiteTasks: [
+        expect.objectContaining({ businessOwnerName: null }),
+      ],
     });
     expect(retiredVersion).toMatchObject({
       keyTotalUsed: 0,
@@ -328,6 +402,70 @@ describe("presales credential revocation", () => {
     expect(updateCalled).toBe(false);
   });
 
+  it("fails closed when a website v2 operation is still non-terminal", async () => {
+    let updateCalled = false;
+    const executor = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => {
+            const rows =
+              table === presalesApiCredentials
+                ? [{ id: "active-credential" }]
+                : table === agentOperations
+                  ? [{ id: "operation-running" }]
+                  : table === providerFileLeases
+                    ? []
+                    : [];
+            return {
+              for: async () => rows,
+              limit: () => ({ for: async () => rows }),
+            };
+          },
+        }),
+      }),
+      update: () => {
+        updateCalled = true;
+        return { set: () => ({ where: async () => undefined }) };
+      },
+    };
+
+    await expect(deletePresalesApiCredential(executor)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(updateCalled).toBe(false);
+  });
+
+  it("fails closed when a website v2 provider upload outcome is unresolved", async () => {
+    let updateCalled = false;
+    const executor = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => {
+            const rows =
+              table === presalesApiCredentials
+                ? [{ id: "active-credential" }]
+                : table === providerFileLeases
+                  ? [{ id: "lease-unknown" }]
+                  : [];
+            return {
+              for: async () => rows,
+              limit: () => ({ for: async () => rows }),
+            };
+          },
+        }),
+      }),
+      update: () => {
+        updateCalled = true;
+        return { set: () => ({ where: async () => undefined }) };
+      },
+    };
+
+    await expect(deletePresalesApiCredential(executor)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(updateCalled).toBe(false);
+  });
+
   it("stores only a deterministic hash for signed task output URLs", () => {
     const url = "https://objects.example.com/result.zip?signature=secret";
     const hash = hashPresalesOutputUrl(url);
@@ -342,7 +480,11 @@ describe("presales credential revocation", () => {
     const transaction = {
       select: () => ({
         from: () => ({
-          where: () => ({ limit: async () => [{ id: "resource-task-1" }] }),
+          where: () => ({
+            limit: () => ({
+              for: async () => [{ id: "resource-task-1" }],
+            }),
+          }),
         }),
       }),
       delete: () => ({
@@ -357,6 +499,11 @@ describe("presales credential revocation", () => {
       }),
     };
     const executor = {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [{ projectId: null }] }),
+        }),
+      }),
       transaction: async (run: (tx: typeof transaction) => Promise<void>) =>
         run(transaction),
     };
@@ -410,6 +557,7 @@ function createPresalesFileRetentionExecutor(input?: {
   let observedNow = new Date("2026-08-04T08:00:00.000Z");
   const resource = {
     id: "presales-file-resource-1",
+    projectId: null as string | null,
     apiCredentialId: "credential-1",
     kind: "file" as const,
     upstreamId: "file-1",
@@ -487,22 +635,38 @@ function createPresalesFileRetentionExecutor(input?: {
         if (typeof values.parentTaskId === "string") {
           resource.parentTaskId = values.parentTaskId;
         }
+        if (typeof values.projectId === "string") {
+          resource.projectId = values.projectId;
+        }
       },
     }),
   });
+  const rows = () => {
+    const promise = Promise.resolve([resource]);
+    return {
+      for: async () => [resource],
+      then: promise.then.bind(promise),
+    };
+  };
   const select = () => ({
     from: () => ({
-      where: () => ({ limit: async () => [resource] }),
+      where: () => ({ limit: () => rows() }),
     }),
   });
-  return {
+  const executor: any = {
     update,
     select,
     resource,
+    transactionCount: 0,
     setNow(now: Date) {
       observedNow = now;
     },
   };
+  executor.transaction = async (run: (tx: any) => Promise<unknown>) => {
+    executor.transactionCount += 1;
+    return run(executor);
+  };
+  return executor;
 }
 
 describe("presales file retention ledger", () => {
@@ -558,6 +722,7 @@ describe("presales file retention ledger", () => {
     expect(retry.contentExpiresAt).toEqual(
       new Date("2026-09-03T08:00:00.000Z"),
     );
+    expect(executor.transactionCount).toBe(0);
   });
 
   it("rejects expired, deleted, and assistant-output rows without renewing them", async () => {
@@ -850,44 +1015,71 @@ describe("presales file retention ledger", () => {
   );
 });
 
-function createIdempotencyExecutor() {
+function createIdempotencyExecutor(options?: {
+  duplicateError?: () => unknown;
+}) {
   let request: any = null;
+  let beforeTransaction: (() => void) | undefined;
   const resources: any[] = [];
+  const lifecycle: { status: "active" | "deleting" | "deleted" } = {
+    status: "active",
+  };
+  const lockOrder: string[] = [];
 
-  const result = (values: any[]) => {
+  const result = (values: any[], lockLabel?: string) => {
     const promise = Promise.resolve(values);
-    return {
-      for: async () => values,
+    const query: any = {
+      for: async () => {
+        if (lockLabel) lockOrder.push(lockLabel);
+        return values;
+      },
       then: promise.then.bind(promise),
     };
+    query.limit = () => query;
+    return query;
   };
 
   const insert = (table: unknown) => ({
-    values: async (value: any) => {
+    values: (value: any) => {
+      if (table === websiteProjectDeletionTombstones) {
+        return { onDuplicateKeyUpdate: async () => undefined };
+      }
       if (table === presalesTaskRequests) {
-        if (request)
-          throw Object.assign(new Error("duplicate"), { code: "ER_DUP_ENTRY" });
+        if (request) {
+          throw (
+            options?.duplicateError?.() ??
+            Object.assign(new Error("duplicate"), { code: "ER_DUP_ENTRY" })
+          );
+        }
         request = { ...value };
-        return;
+        return Promise.resolve();
       }
       if (table === presalesUpstreamResources) {
         resources.push({ ...value });
       }
+      return Promise.resolve();
     },
   });
   const transaction = {
     select: () => ({
       from: (table: unknown) => ({
-        where: () => ({
-          limit: () =>
-            result(
-              table === presalesTaskRequests
+        where: () =>
+          result(
+            table === websiteProjectDeletionTombstones
+              ? [lifecycle]
+              : table === presalesTaskRequests
                 ? request
                   ? [request]
                   : []
-                : resources.slice(0, 1),
-            ),
-        }),
+                : table === presalesMonitorRuns
+                  ? []
+                  : resources.slice(0, 1),
+            table === websiteProjectDeletionTombstones
+              ? "lifecycle"
+              : table === presalesTaskRequests
+                ? "task_request"
+                : undefined,
+          ),
       }),
     }),
     insert,
@@ -897,26 +1089,97 @@ function createIdempotencyExecutor() {
           if (table === presalesTaskRequests && request) {
             request = { ...request, ...value };
           }
+          if (table === presalesUpstreamResources && resources[0]) {
+            resources[0] = { ...resources[0], ...value };
+          }
+          if (table === websiteProjectDeletionTombstones) {
+            Object.assign(lifecycle, value);
+          }
         },
       }),
     }),
     delete: (table: unknown) => ({
       where: async () => {
         if (table === presalesTaskRequests) request = null;
+        if (table === presalesUpstreamResources) resources.splice(0);
       },
     }),
   };
 
   return {
     insert,
-    transaction: async (run: (tx: typeof transaction) => Promise<unknown>) =>
-      run(transaction),
+    select: transaction.select,
+    transaction: async (run: (tx: typeof transaction) => Promise<unknown>) => {
+      const hook = beforeTransaction;
+      beforeTransaction = undefined;
+      hook?.();
+      return run(transaction);
+    },
     get request() {
       return request;
+    },
+    lifecycle,
+    lockOrder,
+    setLifecycle(status: typeof lifecycle.status) {
+      lifecycle.status = status;
+    },
+    beforeNextTransaction(operation: () => void) {
+      beforeTransaction = operation;
+    },
+    replaceRequestProjectId(projectId: string | null) {
+      request = request ? { ...request, projectId } : request;
     },
     resources,
   };
 }
+
+describe("presales task evidence deletion", () => {
+  it("physically deletes task requests, ownership and generated evidence mappings in one transaction", async () => {
+    const deletedTables: unknown[] = [];
+    const transaction = {
+      select: (selection: Record<string, unknown>) => ({
+        from: (_table: unknown) => ({
+          where: () => {
+            const rows =
+              "fileId" in selection
+                ? [{ fileId: "file-output-1" }]
+                : [{ id: "task-resource-1" }];
+            const promise = Promise.resolve(rows);
+            return {
+              limit: () => ({ for: async () => rows }),
+              then: promise.then.bind(promise),
+            };
+          },
+        }),
+      }),
+      delete: (table: unknown) => ({
+        where: async () => {
+          deletedTables.push(table);
+        },
+      }),
+    };
+    const executor = {
+      transaction: vi.fn(
+        async (run: (tx: typeof transaction) => Promise<unknown>) =>
+          run(transaction),
+      ),
+    };
+
+    await expect(
+      deletePresalesTaskEvidence(
+        { taskId: "task-1", apiCredentialId: "credential-1" },
+        executor,
+      ),
+    ).resolves.toEqual({ deleted: true, fileIds: ["file-output-1"] });
+    expect(deletedTables).toEqual([
+      presalesOutputUrls,
+      presalesTaskRequests,
+      presalesUpstreamResources,
+      presalesUpstreamResources,
+    ]);
+    expect(executor.transaction).toHaveBeenCalledOnce();
+  });
+});
 
 describe("presales task idempotency", () => {
   const input = {
@@ -940,6 +1203,99 @@ describe("presales task idempotency", () => {
     expect(hashPresalesTaskPayload({ attachments: ["a", "b"] })).not.toBe(
       hashPresalesTaskPayload({ attachments: ["b", "a"] }),
     );
+  });
+
+  it("recognizes duplicate-key errors wrapped by Drizzle without traversing cycles forever", () => {
+    expect(
+      isPresalesDuplicateEntryError(
+        Object.assign(new Error("Failed query"), {
+          cause: Object.assign(new Error("duplicate"), { errno: 1062 }),
+        }),
+      ),
+    ).toBe(true);
+    const cycle: { cause?: unknown } = {};
+    cycle.cause = cycle;
+    expect(isPresalesDuplicateEntryError(cycle)).toBe(false);
+  });
+
+  it("rejects a new reservation after the project deletion tombstone is locked", async () => {
+    const insert = vi.fn();
+    const transaction = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () => ({
+              for: async () => [{ projectId: "project-20260728-0001" }],
+            }),
+          }),
+        }),
+      }),
+      insert: (table: unknown) => ({
+        values: (value: unknown) =>
+          table === websiteProjectDeletionTombstones
+            ? {
+                onDuplicateKeyUpdate: async () => undefined,
+              }
+            : insert(value),
+      }),
+    };
+    const executor = {
+      insert: () => ({ values: vi.fn() }),
+      transaction: async (run: (tx: typeof transaction) => Promise<unknown>) =>
+        run(transaction),
+    };
+
+    await expect(
+      acquirePresalesTaskReservation(
+        { ...input, projectId: "project-20260728-0001" },
+        executor,
+      ),
+    ).rejects.toMatchObject({
+      code: "PROJECT_DELETED",
+      message: "项目已进入永久删除流程，不能再创建任务",
+    });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it("creates a project-bound reservation while the durable lifecycle is active", async () => {
+    const insertedRequests: unknown[] = [];
+    const transaction = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () => ({
+              for: async () => [{ status: "active" }],
+            }),
+          }),
+        }),
+      }),
+      insert: (table: unknown) => ({
+        values: (value: unknown) => {
+          if (table === websiteProjectDeletionTombstones) {
+            return { onDuplicateKeyUpdate: async () => undefined };
+          }
+          insertedRequests.push(value);
+          return Promise.resolve();
+        },
+      }),
+    };
+    const executor = {
+      insert: () => ({ values: vi.fn() }),
+      transaction: async (run: (tx: typeof transaction) => Promise<unknown>) =>
+        run(transaction),
+    };
+
+    await expect(
+      acquirePresalesTaskReservation(
+        { ...input, projectId: "project-20260728-0001" },
+        executor,
+      ),
+    ).resolves.toMatchObject({ state: "acquired" });
+    expect(insertedRequests).toHaveLength(1);
+    expect(insertedRequests[0]).toMatchObject({
+      projectId: "project-20260728-0001",
+      status: "pending",
+    });
   });
 
   it("stores only hashes and allows only one concurrent owner", async () => {
@@ -987,7 +1343,6 @@ describe("presales task idempotency", () => {
     expect(replay).toEqual({
       state: "completed",
       upstreamTaskId: "task-original",
-      task: { id: "task-original", status: "queued" },
     });
     expect(executor.resources).toHaveLength(1);
     expect(executor.resources[0]).toMatchObject({
@@ -995,6 +1350,205 @@ describe("presales task idempotency", () => {
       upstreamId: "task-original",
       apiCredentialId: "credential-1",
     });
+  });
+
+  it("replays a completed task when Drizzle wraps the duplicate-key error", async () => {
+    const executor = createIdempotencyExecutor({
+      duplicateError: () =>
+        Object.assign(new Error("Failed query"), {
+          cause: Object.assign(new Error("duplicate"), {
+            code: "ER_DUP_ENTRY",
+            errno: 1062,
+          }),
+        }),
+    });
+    const first = await acquirePresalesTaskReservation(input, executor);
+    if (first.state !== "acquired") throw new Error("expected reservation");
+    await completePresalesTaskReservation(
+      {
+        reservationId: first.reservationId,
+        attemptId: first.attemptId,
+        apiCredentialId: input.apiCredentialId,
+        upstreamTaskId: "task-wrapped-duplicate",
+      },
+      executor,
+    );
+
+    await expect(
+      acquirePresalesTaskReservation(input, executor),
+    ).resolves.toEqual({
+      state: "completed",
+      upstreamTaskId: "task-wrapped-duplicate",
+    });
+  });
+
+  it("rolls back completion when an unbound reservation gains a project before its row lock", async () => {
+    const executor = createIdempotencyExecutor();
+    const reservation = await acquirePresalesTaskReservation(input, executor);
+    if (reservation.state !== "acquired")
+      throw new Error("expected reservation");
+    executor.beforeNextTransaction(() => {
+      executor.replaceRequestProjectId("project-lineage-race");
+      executor.setLifecycle("deleted");
+    });
+
+    await expect(
+      completePresalesTaskReservation(
+        {
+          reservationId: reservation.reservationId,
+          attemptId: reservation.attemptId,
+          apiCredentialId: input.apiCredentialId,
+          upstreamTaskId: "task-lineage-race",
+        },
+        executor,
+      ),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_PENDING" });
+    expect(executor.request).toMatchObject({
+      status: "pending",
+      upstreamTaskId: null,
+    });
+    expect(executor.resources).toHaveLength(0);
+  });
+
+  it.runIf(WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED)(
+    "keeps a delete-race task ID discoverable through retry and final tombstone completion",
+    async () => {
+      const executor = createIdempotencyExecutor();
+      const projectInput = {
+        ...input,
+        projectId: "project-20260728-0001",
+      };
+      const reservation = await acquirePresalesTaskReservation(
+        projectInput,
+        executor,
+      );
+      if (reservation.state !== "acquired") {
+        throw new Error("expected reservation");
+      }
+      executor.setLifecycle("deleting");
+
+      await retainPresalesTaskPurgeTarget(
+        {
+          reservationId: reservation.reservationId,
+          attemptId: reservation.attemptId,
+          apiCredentialId: projectInput.apiCredentialId,
+          upstreamTaskId: "task-cleanup-retry",
+        },
+        executor,
+      );
+      expect(executor.lockOrder.slice(-2)).toEqual([
+        "lifecycle",
+        "task_request",
+      ]);
+      await expect(
+        readPresalesProjectTaskPurgeSnapshot(
+          projectInput.projectId,
+          executor,
+          new Date("2030-01-01T00:00:00.000Z"),
+        ),
+      ).resolves.toEqual({
+        projectId: projectInput.projectId,
+        pendingReservations: 0,
+        tasks: [
+          {
+            taskId: "task-cleanup-retry",
+            apiCredentialId: projectInput.apiCredentialId,
+          },
+        ],
+      });
+
+      await deletePresalesTaskEvidence(
+        {
+          taskId: "task-cleanup-retry",
+          apiCredentialId: projectInput.apiCredentialId,
+          deletedFileIds: [],
+        },
+        executor,
+      );
+      expect(executor.request).toBeNull();
+      await expect(
+        completePresalesProjectTaskPurge(projectInput.projectId, executor),
+      ).resolves.toMatchObject({ completed: true });
+      expect(executor.lifecycle.status).toBe("deleted");
+    },
+  );
+
+  it.runIf(!WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED)(
+    "retains a late provider id only behind a pre-existing D1 deletion fence after rollback",
+    async () => {
+      const executor = createIdempotencyExecutor();
+      const projectInput = { ...input, projectId: "project-d0-rollback" };
+      const reservation = await acquirePresalesTaskReservation(
+        projectInput,
+        executor,
+      );
+      if (reservation.state !== "acquired") {
+        throw new Error("expected reservation");
+      }
+
+      await expect(
+        retainPresalesTaskPurgeTarget(
+          {
+            reservationId: reservation.reservationId,
+            attemptId: reservation.attemptId,
+            apiCredentialId: projectInput.apiCredentialId,
+            upstreamTaskId: "task-active-project",
+          },
+          executor,
+        ),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      executor.setLifecycle("deleting");
+      await retainPresalesTaskPurgeTarget(
+        {
+          reservationId: reservation.reservationId,
+          attemptId: reservation.attemptId,
+          apiCredentialId: projectInput.apiCredentialId,
+          upstreamTaskId: "task-d0-rollback",
+        },
+        executor,
+      );
+      expect(executor.lifecycle.status).toBe("deleting");
+      expect(executor.request).toMatchObject({
+        status: "completed",
+        upstreamTaskId: "task-d0-rollback",
+      });
+    },
+  );
+
+  it("upgrades an in-flight legacy reservation and task resource to the project binding", async () => {
+    const executor = createIdempotencyExecutor();
+    const first = await acquirePresalesTaskReservation(input, executor);
+    if (first.state !== "acquired") throw new Error("expected reservation");
+    await completePresalesTaskReservation(
+      {
+        reservationId: first.reservationId,
+        attemptId: first.attemptId,
+        apiCredentialId: input.apiCredentialId,
+        upstreamTaskId: "task-legacy",
+      },
+      executor,
+    );
+
+    await expect(
+      acquirePresalesTaskReservation(
+        {
+          ...input,
+          projectId: "project-20260728-0001",
+          requestHash: hashPresalesTaskPayload({
+            projectId: "project-20260728-0001",
+            task: { prompt: "build" },
+          }),
+          compatibleRequestHashes: [input.requestHash],
+        },
+        executor,
+      ),
+    ).resolves.toMatchObject({
+      state: "completed",
+      upstreamTaskId: "task-legacy",
+    });
+    expect(executor.request.projectId).toBe("project-20260728-0001");
+    expect(executor.resources[0].projectId).toBe("project-20260728-0001");
   });
 
   it("rejects reuse with another payload or credential version", async () => {

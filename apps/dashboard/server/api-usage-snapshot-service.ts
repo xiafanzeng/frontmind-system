@@ -8,18 +8,29 @@ import {
   apiUsageCredentialCoverage,
   apiUsagePolicies,
   apiUsageSnapshots,
+  deliveryTicketEvents,
+  deliveryTickets,
   presalesApiCredentials,
   userAdminAssignments,
   userUsageOwners,
   users,
 } from "../drizzle/schema";
 import { runtimeErrorForLog } from "./_core/runtime-error-log";
-import { usageCoverageSupportsReplacement } from "./api-usage-ledger";
 import {
+  managedAgentProfileModel,
+  normalizeManagedAgentProfile,
+  type ManagedAgentProfile,
+} from "../shared/manus-agent-profile";
+import { readRollingManagedUsageByAccounts } from "./api-usage-ledger";
+import {
+  acquireActiveApiCredentialDeletionFence,
   AuthServiceError,
+  completeActiveApiCredentialDeletionFence,
   deleteActiveApiCredentialInTransaction,
   getApiKeyFingerprint,
   replaceApiCredentialInTransaction,
+  rollbackActiveApiCredentialDeletionFence,
+  startActiveApiCredentialDeletionFenceHeartbeat,
   validateUpstreamApiKey,
   type AuthenticatedUser,
 } from "./auth-service";
@@ -30,12 +41,19 @@ import {
   isSystemAdmin,
 } from "./dashboard-service";
 import { getDb } from "./db";
-import { getPresalesCreditUsage } from "./presales-service";
+import {
+  getPresalesCreditUsage,
+  getPresalesCreditUsageSnapshot,
+} from "./presales-service";
+import {
+  ManusUsageSyncError,
+  type ApiUsageSyncIssueCode,
+} from "./manus-usage-service";
 
 export const DEFAULT_API_USAGE_LIMIT = 230_000;
 export const DEFAULT_API_USAGE_WARNING_RATIO = 0.8;
 export const DEFAULT_API_USAGE_WINDOW_DAYS = 30;
-export const API_USAGE_SNAPSHOT_FRESHNESS_MS = 30 * 60 * 1_000;
+export const API_USAGE_SNAPSHOT_FRESHNESS_MS = 26 * 60 * 60 * 1_000;
 // A current-Key group may also scan credentials from an account's history.
 // Serialize groups until that historical work is deduplicated by physical
 // fingerprint; concurrent groups can otherwise invalidate each other's
@@ -43,6 +61,42 @@ export const API_USAGE_SNAPSHOT_FRESHNESS_MS = 30 * 60 * 1_000;
 export const API_USAGE_SCAN_CONCURRENCY = 1;
 export const API_USAGE_SNAPSHOT_SYNC_LOCK_NAME =
   "frontmind-dashboard:api-usage-snapshot-sync";
+
+export function apiUsageSyncErrorCode(error: unknown): ApiUsageSyncIssueCode {
+  if (error instanceof ManusUsageSyncError) return error.code;
+  if (error instanceof AuthServiceError) {
+    if (error.code === "INVALID_CREDENTIAL") return "CREDENTIAL_REJECTED";
+    if (error.code === "RATE_LIMITED") return "RATE_LIMITED";
+  }
+  if (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  ) {
+    return "TIMEOUT";
+  }
+  return "UPSTREAM_UNAVAILABLE";
+}
+
+const API_USAGE_SYNC_ISSUE_CODES = new Set<ApiUsageSyncIssueCode>([
+  "CREDENTIAL_REJECTED",
+  "RATE_LIMITED",
+  "TIMEOUT",
+  "UPSTREAM_UNAVAILABLE",
+  "RESPONSE_INVALID",
+  "PAGINATION_INVALID",
+  "PAGE_DRIFT",
+  "PARTIAL_USAGE_SCAN",
+]);
+
+export function storedApiUsageSyncIssueCode(
+  value: unknown,
+): ApiUsageSyncIssueCode | null {
+  if (value === "INVALID_CREDENTIAL" || value === "invalid_or_revoked") {
+    return "CREDENTIAL_REJECTED";
+  }
+  const candidate = String(value ?? "") as ApiUsageSyncIssueCode;
+  return API_USAGE_SYNC_ISSUE_CODES.has(candidate) ? candidate : null;
+}
 
 /**
  * Drizzle wraps mysql2 failures in DrizzleQueryError and preserves the native
@@ -149,7 +203,6 @@ type ApiUsageSeverity = "normal" | "warning" | "critical" | "unavailable";
 export type ManagedApiKeyTargetKind =
   | "customer"
   | "delivery_admin"
-  | "system_admin"
   | "engineer";
 
 export type BulkManagedApiKeyScope =
@@ -178,10 +231,9 @@ function managedApiKeyTargetKind(
   if (account.role === "delivery_member") return "engineer";
   if (
     account.role === "admin" &&
-    (account.adminAccessLevel === "delivery_admin" ||
-      account.adminAccessLevel === "system_admin")
+    account.adminAccessLevel === "delivery_admin"
   ) {
-    return account.adminAccessLevel;
+    return "delivery_admin";
   }
   return null;
 }
@@ -276,10 +328,11 @@ export function bulkManagedApiKeyActionTargets<
   resolvedTargets: T[];
   latestCredentials: Map<
     number,
-    { status: string; fingerprint?: string | null }
+    { status: string; fingerprint?: string | null; agentProfile?: unknown }
   >;
   applyMode: BulkManagedApiKeyApplyMode;
   nextFingerprint: string;
+  nextAgentProfile?: ManagedAgentProfile;
 }) {
   return input.resolvedTargets.filter((target) => {
     const credential = input.latestCredentials.get(target.userId);
@@ -288,7 +341,10 @@ export function bulkManagedApiKeyActionTargets<
     }
     return (
       credential?.status !== "active" ||
-      credential.fingerprint !== input.nextFingerprint
+      credential.fingerprint !== input.nextFingerprint ||
+      (target.kind === "customer" &&
+        normalizeManagedAgentProfile(credential.agentProfile) !==
+          normalizeManagedAgentProfile(input.nextAgentProfile))
     );
   });
 }
@@ -355,8 +411,9 @@ export function assertManagedApiKeyTarget(input: {
       ? input.target?.role === "user"
       : input.kind === "engineer"
         ? input.target?.role === "delivery_member"
-        : input.target?.role === "admin" &&
-          input.target?.adminAccessLevel === input.kind;
+        : input.kind === "delivery_admin" &&
+          input.target?.role === "admin" &&
+          input.target?.adminAccessLevel === "delivery_admin";
   if (!matches) {
     throw new AuthServiceError(
       "NOT_FOUND",
@@ -471,36 +528,6 @@ function latestManagedCredentialByUser<
   return latest;
 }
 
-export function bulkPreviousCredentialGroups(input: {
-  targets: Array<{ userId: number }>;
-  latestCredentials: Map<
-    number,
-    { userId: number; status: string; fingerprint: string }
-  >;
-  nextFingerprint: string;
-}) {
-  const groups = new Map<
-    string,
-    { fingerprint: string; accountIds: Set<number> }
-  >();
-  for (const target of input.targets) {
-    const credential = input.latestCredentials.get(target.userId);
-    if (
-      credential?.status !== "active" ||
-      credential.fingerprint === input.nextFingerprint
-    ) {
-      continue;
-    }
-    const group = groups.get(credential.fingerprint) ?? {
-      fingerprint: credential.fingerprint,
-      accountIds: new Set<number>(),
-    };
-    group.accountIds.add(target.userId);
-    groups.set(credential.fingerprint, group);
-  }
-  return [...groups.values()];
-}
-
 export function syncableManagedWorkspaceUserIds(input: {
   workspaceUserIds: number[];
   ownershipRows: Array<{ userId: number; deliveryAdminId: number }>;
@@ -521,85 +548,60 @@ export function syncableManagedWorkspaceUserIds(input: {
 
 export function apiUsageSnapshotCompletionState(input: {
   totalComplete: boolean;
-  attributionComplete: boolean;
-  attributionErrorCode: string;
+  issueCode?: ApiUsageSyncIssueCode;
 }) {
   if (!input.totalComplete) {
     return {
       status: "error" as const,
-      errorCode: "PARTIAL_USAGE_SCAN",
+      errorCode: input.issueCode ?? ("PARTIAL_USAGE_SCAN" as const),
     };
   }
   return {
     status: "ok" as const,
-    errorCode: input.attributionComplete ? null : input.attributionErrorCode,
+    errorCode: null,
   };
 }
 
-async function scanBulkPreviousCredentialGroups(
-  groups: Array<{ fingerprint: string; accountIds: Set<number> }>,
+export type BulkManagedApiKeyRuntime = {
+  requireDatabase: typeof requireDb;
+  validateApiKey: typeof validateUpstreamApiKey;
+  fingerprintApiKey: typeof getApiKeyFingerprint;
+  replaceCredential: typeof replaceApiCredentialInTransaction;
+  writeAuditEvent: typeof writeWorkspaceAuditEvent;
+  queueRefresh: typeof queueManagedApiUsageFingerprintRefresh;
+  now: () => Date;
+};
+
+export async function bulkReplaceManagedApiKeyTargets(
+  input: {
+    actor: AuthenticatedUser;
+    scope: BulkManagedApiKeyScope;
+    targets: BulkManagedApiKeyRequestedTarget[];
+    applyMode: BulkManagedApiKeyApplyMode;
+    apiKey: string;
+    agentProfile?: ManagedAgentProfile;
+    reason?: string;
+  },
+  runtimeOverrides: Partial<BulkManagedApiKeyRuntime> = {},
 ) {
-  for (const group of groups) {
-    const accountIds = [...group.accountIds];
-    try {
-      await getSharedKeyMonthlyCreditUsageForAccounts({
-        credentialOwnerIds: accountIds,
-        accountIds,
-        poolFingerprint: group.fingerprint,
-        windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-      });
-    } catch {
-      // Coverage is checked authoritatively after the best-effort scan. A
-      // prior fresh proof may still permit the atomic batch replacement.
-    }
-  }
-}
-
-function incompleteBulkHistoryTargets(input: {
-  targets: Array<{ userId: number }>;
-  latestCredentials: Map<
-    number,
-    { userId: number; status: string; fingerprint: string }
-  >;
-  coverageByFingerprint: Map<string, any>;
-  nextFingerprint: string;
-  nowMs: number;
-}) {
-  const periodStartMs = getShanghaiRollingUsagePeriod(
-    DEFAULT_API_USAGE_WINDOW_DAYS,
-    input.nowMs,
-  ).startAt;
-  return input.targets.filter((target) => {
-    const credential = input.latestCredentials.get(target.userId);
-    if (
-      credential?.status !== "active" ||
-      credential.fingerprint === input.nextFingerprint
-    ) {
-      return false;
-    }
-    return !usageCoverageSupportsReplacement({
-      coverage: input.coverageByFingerprint.get(credential.fingerprint),
-      periodStartMs,
-      nowMs: input.nowMs,
-    });
-  });
-}
-
-export async function bulkReplaceManagedApiKeyTargets(input: {
-  actor: AuthenticatedUser;
-  scope: BulkManagedApiKeyScope;
-  targets: BulkManagedApiKeyRequestedTarget[];
-  applyMode: BulkManagedApiKeyApplyMode;
-  apiKey: string;
-  reason?: string;
-}) {
+  const runtime: BulkManagedApiKeyRuntime = {
+    requireDatabase: requireDb,
+    validateApiKey: validateUpstreamApiKey,
+    fingerprintApiKey: getApiKeyFingerprint,
+    replaceCredential: replaceApiCredentialInTransaction,
+    writeAuditEvent: writeWorkspaceAuditEvent,
+    queueRefresh: queueManagedApiUsageFingerprintRefresh,
+    now: () => new Date(),
+    ...runtimeOverrides,
+  };
   if (!isSystemAdmin(input.actor)) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "只有系统管理员可以批量配置账号 API Key。",
     );
   }
-  const db = await requireDb();
+  const agentProfile = normalizeManagedAgentProfile(input.agentProfile);
+  const db = await runtime.requireDatabase();
   const initialScope = await loadBulkManagedApiKeyScopeState({
     executor: db,
     scope: input.scope,
@@ -611,12 +613,7 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
     throw new AuthServiceError("CONFLICT", "当前批量范围内没有可配置账号");
   }
   const initialCredentialRows = await db
-    .select({
-      userId: apiCredentials.userId,
-      version: apiCredentials.version,
-      status: apiCredentials.status,
-      fingerprint: apiCredentials.fingerprint,
-    })
+    .select()
     .from(apiCredentials)
     .where(inArray(apiCredentials.userId, scopeTargetIds))
     .orderBy(asc(apiCredentials.userId), desc(apiCredentials.version));
@@ -627,12 +624,13 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
     resolvedTargets: initialScope.resolvedTargets,
     requestedTargets: input.targets,
   });
-  const nextFingerprint = getApiKeyFingerprint(input.apiKey);
+  const nextFingerprint = runtime.fingerprintApiKey(input.apiKey);
   const initialActionTargets = bulkManagedApiKeyActionTargets({
     resolvedTargets: initialScopeTargets,
     latestCredentials: initialLatestCredentials,
     applyMode: input.applyMode,
     nextFingerprint,
+    nextAgentProfile: agentProfile,
   });
   if (initialActionTargets.length > 200) {
     throw new AuthServiceError(
@@ -640,51 +638,10 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
       "单次批量配置最多支持 200 个实际变更账号，请缩小范围后重试",
     );
   }
-  await validateUpstreamApiKey(input.apiKey);
-  const previousGroups = bulkPreviousCredentialGroups({
-    targets: initialActionTargets,
-    latestCredentials: initialLatestCredentials,
-    nextFingerprint,
-  });
-  const initialFingerprints = previousGroups.map((group) => group.fingerprint);
-  const initialCoverageRows = initialFingerprints.length
-    ? await db
-        .select()
-        .from(apiUsageCredentialCoverage)
-        .where(
-          and(
-            eq(apiUsageCredentialCoverage.scope, "managed_user"),
-            inArray(
-              apiUsageCredentialCoverage.credentialFingerprint,
-              initialFingerprints,
-            ),
-          ),
-        )
-    : [];
-  const initialCoverageByFingerprint = new Map(
-    initialCoverageRows.map((coverage: any) => [
-      String(coverage.credentialFingerprint),
-      coverage,
-    ]),
-  );
-  const coverageNowMs = Date.now();
-  const coveragePeriodStartMs = getShanghaiRollingUsagePeriod(
-    DEFAULT_API_USAGE_WINDOW_DAYS,
-    coverageNowMs,
-  ).startAt;
-  await scanBulkPreviousCredentialGroups(
-    previousGroups.filter(
-      (group) =>
-        !usageCoverageSupportsReplacement({
-          coverage: initialCoverageByFingerprint.get(group.fingerprint),
-          periodStartMs: coveragePeriodStartMs,
-          nowMs: coverageNowMs,
-        }),
-    ),
-  );
+  await runtime.validateApiKey(input.apiKey);
 
   const batchId = randomUUID();
-  const replacedAt = new Date();
+  const replacedAt = runtime.now();
   const result = await db.transaction(async (tx) => {
     const lockedScope = await loadBulkManagedApiKeyScopeState({
       executor: tx,
@@ -698,12 +655,7 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
       ]),
     );
     const credentialRows = await tx
-      .select({
-        userId: apiCredentials.userId,
-        version: apiCredentials.version,
-        status: apiCredentials.status,
-        fingerprint: apiCredentials.fingerprint,
-      })
+      .select()
       .from(apiCredentials)
       .where(
         inArray(
@@ -723,6 +675,7 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
       latestCredentials,
       applyMode: input.applyMode,
       nextFingerprint,
+      nextAgentProfile: agentProfile,
     });
     if (lockedActionTargets.length > 200) {
       throw new AuthServiceError(
@@ -737,56 +690,6 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
       applyMode: input.applyMode,
     });
 
-    const fingerprints =
-      input.applyMode === "replace_all"
-        ? [
-            ...new Set(
-              lockedActionTargets
-                .map((target) => latestCredentials.get(target.userId))
-                .filter(
-                  (credential) =>
-                    credential?.status === "active" &&
-                    credential.fingerprint !== nextFingerprint,
-                )
-                .map((credential) => credential!.fingerprint),
-            ),
-          ]
-        : [];
-    const coverageRows = fingerprints.length
-      ? await tx
-          .select()
-          .from(apiUsageCredentialCoverage)
-          .where(
-            and(
-              eq(apiUsageCredentialCoverage.scope, "managed_user"),
-              inArray(
-                apiUsageCredentialCoverage.credentialFingerprint,
-                fingerprints,
-              ),
-            ),
-          )
-          .for("update")
-      : [];
-    const coverageByFingerprint = new Map(
-      coverageRows.map((coverage: any) => [
-        String(coverage.credentialFingerprint),
-        coverage,
-      ]),
-    );
-    const historyIncomplete = incompleteBulkHistoryTargets({
-      targets: input.applyMode === "replace_all" ? lockedActionTargets : [],
-      latestCredentials,
-      coverageByFingerprint,
-      nextFingerprint,
-      nowMs: replacedAt.getTime(),
-    });
-    if (historyIncomplete.length > 0) {
-      throw new AuthServiceError(
-        "CONFLICT",
-        `${historyIncomplete.length} 个账号的旧 API Key 未完成近 30 天扫描，批量操作已全部停止。请重试；失效 Key 请改用单账号应急替换。`,
-      );
-    }
-
     let updatedCount = 0;
     let unchangedCount = lockedScopeTargets.length - lockedActionTargets.length;
     const versions: Array<{ userId: number; version: number }> = [];
@@ -795,7 +698,11 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
       if (
         currentCredential?.status === "active" &&
         (input.applyMode === "unconfigured_only" ||
-          currentCredential.fingerprint === nextFingerprint)
+          (currentCredential.fingerprint === nextFingerprint &&
+            (target.kind !== "customer" ||
+              normalizeManagedAgentProfile(
+                (currentCredential as { agentProfile?: unknown }).agentProfile,
+              ) === agentProfile)))
       ) {
         unchangedCount += 1;
         versions.push({
@@ -804,15 +711,16 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
         });
         continue;
       }
-      const credential = await replaceApiCredentialInTransaction({
+      const credential = await runtime.replaceCredential({
         executor: tx,
         userId: target.userId,
         apiKey: input.apiKey,
+        agentProfile: target.kind === "customer" ? agentProfile : null,
         now: replacedAt,
       });
       updatedCount += 1;
       versions.push({ userId: target.userId, version: credential.version });
-      await writeWorkspaceAuditEvent(
+      await runtime.writeAuditEvent(
         {
           actor: input.actor,
           action: "admin.api_credential.bulk_replaced",
@@ -827,13 +735,18 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
             applyMode: input.applyMode,
             previousVersion: currentCredential?.version ?? 0,
             credentialVersion: credential.version,
-            historyIncomplete: false,
+            ...(target.kind === "customer"
+              ? {
+                  agentProfile: credential.agentProfile,
+                  upstreamModel: credential.upstreamModel,
+                }
+              : {}),
           },
         },
         tx,
       );
     }
-    await writeWorkspaceAuditEvent(
+    await runtime.writeAuditEvent(
       {
         actor: input.actor,
         action: "admin.api_credential.bulk_completed",
@@ -848,6 +761,12 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
           targetCount: lockedActionTargets.length,
           updatedCount,
           unchangedCount,
+          ...(lockedScopeTargets.some((target) => target.kind === "customer")
+            ? {
+                customerAgentProfile: agentProfile,
+                customerUpstreamModel: managedAgentProfileModel(agentProfile),
+              }
+            : {}),
           targetUserIds: lockedActionTargets.map((target) => target.userId),
         },
       },
@@ -868,7 +787,7 @@ export async function bulkReplaceManagedApiKeyTargets(input: {
   // refresh for the new physical-Key pool; the queue shares the global named
   // lock and retries after an overlapping full synchronization finishes.
   if (result.updatedCount > 0) {
-    queueManagedApiUsageFingerprintRefresh({
+    runtime.queueRefresh({
       actor: input.actor,
       fingerprint: nextFingerprint,
     });
@@ -881,9 +800,10 @@ export async function replaceManagedApiKeyTarget(input: {
   kind: ManagedApiKeyTargetKind;
   userId: number;
   apiKey: string;
+  agentProfile?: ManagedAgentProfile;
   expectedVersion: number;
   reason?: string;
-  allowIncompleteHistory?: boolean;
+  relatedTicketId?: string;
 }) {
   if (!isSystemAdmin(input.actor)) {
     throw new AuthServiceError(
@@ -891,78 +811,10 @@ export async function replaceManagedApiKeyTarget(input: {
       "只有系统管理员可以替换账号 API Key。",
     );
   }
-  // One-click replacement performs a targeted old-Key scan itself. It never
-  // blocks this single-account mutation on a global all-account refresh.
   await validateUpstreamApiKey(input.apiKey);
+  const agentProfile = normalizeManagedAgentProfile(input.agentProfile);
   const nextFingerprint = getApiKeyFingerprint(input.apiKey);
   const db = await requireDb();
-  const initialActiveRows = await db
-    .select({ fingerprint: apiCredentials.fingerprint })
-    .from(apiCredentials)
-    .where(
-      and(
-        eq(apiCredentials.userId, input.userId),
-        eq(apiCredentials.status, "active"),
-      ),
-    )
-    .orderBy(desc(apiCredentials.version))
-    .limit(1);
-  if (initialActiveRows[0]) {
-    try {
-      await getSharedKeyMonthlyCreditUsageForAccounts({
-        credentialOwnerIds: [input.userId],
-        accountIds: [input.userId],
-        poolFingerprint: initialActiveRows[0].fingerprint,
-        windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-      });
-    } catch {
-      // The coverage proof below controls normal versus explicit emergency
-      // replacement. Failed scans never become zero-valued facts.
-    }
-  }
-  const existingActiveRows = await db
-    .select({
-      fingerprint: apiCredentials.fingerprint,
-      coverage: apiUsageCredentialCoverage,
-    })
-    .from(apiCredentials)
-    .leftJoin(
-      apiUsageCredentialCoverage,
-      and(
-        eq(apiUsageCredentialCoverage.scope, "managed_user"),
-        eq(
-          apiUsageCredentialCoverage.credentialFingerprint,
-          apiCredentials.fingerprint,
-        ),
-      ),
-    )
-    .where(
-      and(
-        eq(apiCredentials.userId, input.userId),
-        eq(apiCredentials.status, "active"),
-      ),
-    )
-    .orderBy(desc(apiCredentials.version))
-    .limit(1);
-  const nowMs = Date.now();
-  const existingActive = existingActiveRows[0];
-  const historyIncomplete = Boolean(
-    existingActive &&
-      !usageCoverageSupportsReplacement({
-        coverage: existingActive.coverage,
-        periodStartMs: getShanghaiRollingUsagePeriod(
-          DEFAULT_API_USAGE_WINDOW_DAYS,
-          nowMs,
-        ).startAt,
-        nowMs,
-      }),
-  );
-  if (historyIncomplete && !input.allowIncompleteHistory) {
-    throw new AuthServiceError(
-      "CONFLICT",
-      "旧 API Key 无法完成近 30 天扫描或仍有进行中任务。若旧 Key 已失效，可明确选择“允许历史用量暂时不可用”后应急替换；系统不会把缺失历史显示为 0。",
-    );
-  }
   const replacement = await db.transaction(async (tx) => {
     const targetRows = await tx
       .select({
@@ -988,50 +840,68 @@ export async function replaceManagedApiKeyTarget(input: {
       actualVersion,
       expectedVersion: input.expectedVersion,
     });
-    // Deleted credentials are version tombstones for CAS only. They are not
-    // readable old Keys and must never require a coverage proof before the
-    // account can be configured again.
-    const currentCredential =
-      credentialRows[0]?.status === "active" ? credentialRows[0] : undefined;
-    const coverageRows = currentCredential
+    const relatedTicketRows = input.relatedTicketId
       ? await tx
           .select()
-          .from(apiUsageCredentialCoverage)
-          .where(
-            and(
-              eq(apiUsageCredentialCoverage.scope, "managed_user"),
-              eq(
-                apiUsageCredentialCoverage.credentialFingerprint,
-                currentCredential.fingerprint,
-              ),
-            ),
-          )
+          .from(deliveryTickets)
+          .where(eq(deliveryTickets.id, input.relatedTicketId))
           .limit(1)
           .for("update")
       : [];
-    const coverage = coverageRows[0];
-    const transactionHistoryIncomplete = Boolean(
-      currentCredential &&
-        !usageCoverageSupportsReplacement({
-          coverage,
-          periodStartMs: getShanghaiRollingUsagePeriod(
-            DEFAULT_API_USAGE_WINDOW_DAYS,
-            Date.now(),
-          ).startAt,
-          nowMs: Date.now(),
-        }),
-    );
-    if (transactionHistoryIncomplete && !input.allowIncompleteHistory) {
+    const relatedTicket = relatedTicketRows[0];
+    if (
+      input.relatedTicketId &&
+      (!relatedTicket ||
+        relatedTicket.credentialTargetUserId !== input.userId ||
+        relatedTicket.credentialRequestKind !== "managed_api" ||
+        ![
+          "submitted",
+          "needs_information",
+          "scheduled",
+          "in_progress",
+        ].includes(relatedTicket.status))
+    ) {
       throw new AuthServiceError(
         "CONFLICT",
-        "旧 API Key 扫描后出现了新任务或覆盖证明已变化，本次替换已停止；请重试。",
+        "关联凭据需求不存在、目标账号不匹配或已经关闭",
       );
     }
     const credential = await replaceApiCredentialInTransaction({
       executor: tx,
       userId: input.userId,
       apiKey: input.apiKey,
+      agentProfile: input.kind === "customer" ? agentProfile : null,
     });
+    if (relatedTicket) {
+      const completedAt = new Date();
+      const summary = "目标账号 API Key 已由系统管理员完成配置并通过连接验证。";
+      await tx
+        .update(deliveryTickets)
+        .set({
+          status: "completed",
+          quotaState: "consumed",
+          publicSummary: summary,
+          resolvedAt: completedAt,
+          technicalDedupeKey: null,
+          revision: sql`${deliveryTickets.revision} + 1`,
+          updatedByUserId: input.actor.id,
+          updatedAt: completedAt,
+        })
+        .where(eq(deliveryTickets.id, relatedTicket.id));
+      await tx.insert(deliveryTicketEvents).values({
+        id: randomUUID(),
+        ticketId: relatedTicket.id,
+        userId: relatedTicket.userId,
+        actorUserId: input.actor.id,
+        actorRole: "admin",
+        kind: "status_change",
+        visibility: "customer",
+        message: summary,
+        fromStatus: relatedTicket.status,
+        toStatus: "completed",
+        createdAt: completedAt,
+      });
+    }
     await writeWorkspaceAuditEvent(
       {
         actor: input.actor,
@@ -1045,35 +915,19 @@ export async function replaceManagedApiKeyTarget(input: {
           previousVersion: actualVersion,
           credentialVersion: credential.version,
           configured: credential.configured,
-          historyIncomplete: transactionHistoryIncomplete,
-          emergencyReplacement: Boolean(
-            transactionHistoryIncomplete && input.allowIncompleteHistory,
-          ),
+          ...(input.kind === "customer"
+            ? {
+                agentProfile: credential.agentProfile,
+                upstreamModel: credential.upstreamModel,
+              }
+            : {}),
+          relatedTicketId: relatedTicket?.id ?? null,
         },
       },
       tx,
     );
-    return {
-      credential,
-      historyIncomplete: transactionHistoryIncomplete,
-      previousFingerprint: currentCredential?.fingerprint ?? null,
-    };
+    return { credential };
   });
-  // A post-retirement scan binds the final old-Key observation to retiredAt.
-  // Failure is intentionally non-destructive: snapshots become unavailable,
-  // never a misleading zero.
-  if (replacement.previousFingerprint) {
-    try {
-      await getSharedKeyMonthlyCreditUsageForAccounts({
-        credentialOwnerIds: [input.userId],
-        accountIds: [input.userId],
-        poolFingerprint: replacement.previousFingerprint,
-        windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-      });
-    } catch {
-      // The next snapshot sync records the explicit unavailable state.
-    }
-  }
   queueManagedApiUsageFingerprintRefresh({
     actor: input.actor,
     fingerprint: nextFingerprint,
@@ -1094,61 +948,83 @@ export async function revokeManagedApiKeyTarget(input: {
       "只有系统管理员可以撤销账号 API Key。",
     );
   }
+  const fence = await acquireActiveApiCredentialDeletionFence(input.userId);
+  if (!fence) {
+    throw new AuthServiceError("CONFLICT", "API Key 尚未配置或已被撤销");
+  }
   const db = await requireDb();
-  return db.transaction(async (tx) => {
-    const targetRows = await tx
-      .select({
-        id: users.id,
-        role: users.role,
-        adminAccessLevel: users.adminAccessLevel,
-      })
-      .from(users)
-      .where(eq(users.id, input.userId))
-      .limit(1)
-      .for("update");
-    const credentialRows = await tx
-      .select()
-      .from(apiCredentials)
-      .where(eq(apiCredentials.userId, input.userId))
-      .orderBy(desc(apiCredentials.version))
-      .limit(1)
-      .for("update");
-    const latest = credentialRows[0];
-    const actualVersion = latest?.version ?? 0;
-    assertManagedApiKeyTarget({
-      kind: input.kind,
-      target: targetRows[0],
-      actualVersion,
-      expectedVersion: input.expectedVersion,
-    });
-    if (latest?.status !== "active") {
-      throw new AuthServiceError("CONFLICT", "API Key 尚未配置或已被撤销");
-    }
-    // This keeps the credential lock and all in-flight/recovery dependency
-    // checks in the same transaction as the CAS decision.
-    const deletion = await deleteActiveApiCredentialInTransaction({
-      executor: tx,
-      userId: input.userId,
-    });
-    await writeWorkspaceAuditEvent(
-      {
-        actor: input.actor,
-        action: "admin.api_credential.revoked",
-        targetType: input.kind,
-        targetId: input.userId,
-        workspaceUserId: input.kind === "customer" ? input.userId : null,
-        reason: input.reason,
-        metadata: {
-          targetKind: input.kind,
-          previousVersion: actualVersion,
-          credentialVersion: deletion.version,
-          configured: false,
+  const stopFenceHeartbeat =
+    startActiveApiCredentialDeletionFenceHeartbeat(fence);
+  let transactionCommitted = false;
+  try {
+    const result = await db.transaction(async (tx) => {
+      const targetRows = await tx
+        .select({
+          id: users.id,
+          role: users.role,
+          adminAccessLevel: users.adminAccessLevel,
+        })
+        .from(users)
+        .where(eq(users.id, input.userId))
+        .limit(1)
+        .for("update");
+      const credentialRows = await tx
+        .select()
+        .from(apiCredentials)
+        .where(eq(apiCredentials.userId, input.userId))
+        .orderBy(desc(apiCredentials.version))
+        .limit(1)
+        .for("update");
+      const latest = credentialRows[0];
+      const actualVersion = latest?.version ?? 0;
+      assertManagedApiKeyTarget({
+        kind: input.kind,
+        target: targetRows[0],
+        actualVersion,
+        expectedVersion: input.expectedVersion,
+      });
+      if (latest?.status !== "active") {
+        throw new AuthServiceError("CONFLICT", "API Key 尚未配置或已被撤销");
+      }
+      // This keeps the credential lock and all in-flight/recovery dependency
+      // checks in the same transaction as the CAS decision.
+      const deletion = await deleteActiveApiCredentialInTransaction({
+        executor: tx,
+        userId: input.userId,
+        fenceToken: fence,
+      });
+      await writeWorkspaceAuditEvent(
+        {
+          actor: input.actor,
+          action: "admin.api_credential.revoked",
+          targetType: input.kind,
+          targetId: input.userId,
+          workspaceUserId: input.kind === "customer" ? input.userId : null,
+          reason: input.reason,
+          metadata: {
+            targetKind: input.kind,
+            previousVersion: actualVersion,
+            credentialVersion: deletion.version,
+            configured: false,
+          },
         },
-      },
-      tx,
-    );
-    return { success: true as const, version: deletion.version };
-  });
+        tx,
+      );
+      return { success: true as const, version: deletion.version };
+    });
+    transactionCommitted = true;
+    await stopFenceHeartbeat();
+    await completeActiveApiCredentialDeletionFence(fence);
+    return result;
+  } catch (error) {
+    await stopFenceHeartbeat().catch(() => undefined);
+    if (!transactionCommitted) {
+      await rollbackActiveApiCredentialDeletionFence(fence).catch(
+        () => undefined,
+      );
+    }
+    throw error;
+  }
 }
 
 function policyKey(scope: ApiUsageScope, userId?: number | null) {
@@ -1279,12 +1155,6 @@ export function resolveEffectiveUsageCredentials(input: {
   }>;
   ownerRows: Array<{ userId: number; deliveryAdminId: number }>;
 }) {
-  const ownerByUser = new Map<number, number>(
-    input.ownerRows.map((owner) => [
-      Number(owner.userId),
-      Number(owner.deliveryAdminId),
-    ]),
-  );
   const activeByOwner = new Map<
     number,
     (typeof input.credentialRows)[number]
@@ -1300,11 +1170,9 @@ export function resolveEffectiveUsageCredentials(input: {
   const credentialVersionByUser = new Map<number, number>();
   const credentialCreatedAtByUser = new Map<number, number>();
   for (const userId of input.userIds) {
-    // New managed customers own their credential directly. Only legacy
-    // customers without a direct credential inherit their usage owner's Key.
-    const credentialOwnerId = activeByOwner.has(userId)
-      ? userId
-      : (ownerByUser.get(userId) ?? userId);
+    // Delivery ownership remains a reporting relationship. Every account's
+    // runtime and pool status is derived only from its own active Key.
+    const credentialOwnerId = userId;
     const credential = activeByOwner.get(credentialOwnerId);
     if (credential) {
       byUser.set(userId, credential.fingerprint);
@@ -1398,7 +1266,10 @@ export function isRollingUsageSnapshotCurrent(input: {
   if (!snapshot || snapshot.credentialFingerprint !== input.fingerprint) {
     return false;
   }
-  const snapshotAt = (snapshot.fetchedAt ?? snapshot.updatedAt)?.getTime();
+  // Freshness is the age of the last successful upstream observation. A
+  // failed attempt updates `updatedAt` for keyLastAttemptAt, but it must not
+  // manufacture a successful pool reading or clear the stale badge.
+  const snapshotAt = snapshot.fetchedAt?.getTime();
   if (!snapshotAt) return false;
   const now = input.now ?? Date.now();
   const maxAgeMs = input.maxAgeMs ?? API_USAGE_SNAPSHOT_FRESHNESS_MS;
@@ -1459,6 +1330,32 @@ export function latestUsageSnapshotByPolicy<
     }
   }
   return latest;
+}
+
+export function lastSuccessfulUsageSnapshotValue(input: {
+  snapshot?: {
+    credentialFingerprint: string | null;
+    fetchedAt: Date | null;
+    used: number;
+  } | null;
+  fingerprint: string | null;
+}) {
+  return input.snapshot &&
+    input.fingerprint &&
+    input.snapshot.credentialFingerprint === input.fingerprint &&
+    input.snapshot.fetchedAt
+    ? Math.max(0, Number(input.snapshot.used) || 0)
+    : null;
+}
+
+export function usageKeyPoolStale(input: {
+  fingerprint: string | null;
+  snapshot?: { fetchedAt: Date | null } | null;
+  snapshotCurrent: boolean;
+}) {
+  return Boolean(
+    input.fingerprint && (!input.snapshot?.fetchedAt || !input.snapshotCurrent),
+  );
 }
 
 export function usageSnapshotUsageValues(input: {
@@ -1539,6 +1436,19 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
     userIds: workspaceUsers.map((user: any) => user.id),
   });
   const observationNow = Date.now();
+  const rollingPeriod = getShanghaiRollingUsagePeriod(
+    DEFAULT_API_USAGE_WINDOW_DAYS,
+    observationNow,
+  );
+  const [managedRollingUsage, websiteRollingUsage] = await Promise.all([
+    readRollingManagedUsageByAccounts({
+      executor: db,
+      accountIds: workspaceUsers.map((user: any) => Number(user.id)),
+      startAt: rollingPeriod.startAt,
+      endAt: rollingPeriod.endAt,
+    }),
+    getPresalesCreditUsageSnapshot(observationNow),
+  ]);
   const items = policies.map((policy, index) => {
     const scope = scopes[index]!;
     const snapshot = snapshotByPolicy.get(policy.id);
@@ -1552,58 +1462,119 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
         : (fingerprints.credentialCreatedAtByUser.get(
             policy.workspaceUserId!,
           ) ?? null);
-    const currentSnapshot = isRollingUsageSnapshotCurrent({
-      snapshot,
-      fingerprint: credentialFingerprint,
-      credentialCreatedAt,
-      windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-      now: observationNow,
-    })
-      ? snapshot
-      : undefined;
-    const syncStatus = currentSnapshot
-      ? (snapshot?.syncStatus ??
-        (credentialFingerprint ? "pending" : "unconfigured"))
-      : credentialFingerprint
+    // A matching snapshot is the last-known reading for the current physical
+    // Key. Freshness controls only the stale badge; it must never erase the
+    // last successful pool total or turn an old successful read into pending.
+    const snapshotMatchesCredential = Boolean(
+      snapshot &&
+        credentialFingerprint &&
+        snapshot.credentialFingerprint === credentialFingerprint,
+    );
+    const matchingSnapshot = snapshotMatchesCredential ? snapshot : undefined;
+    const snapshotCurrent = snapshotMatchesCredential
+      ? isRollingUsageSnapshotCurrent({
+          snapshot,
+          fingerprint: credentialFingerprint,
+          credentialCreatedAt,
+          windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
+          now: observationNow,
+        })
+      : false;
+    const managedSyncStatus = !credentialFingerprint
+      ? "unconfigured"
+      : !matchingSnapshot
         ? "pending"
-        : "unconfigured";
-    const used = currentSnapshot ? Number(currentSnapshot.used ?? 0) : 0;
-    const accountUsed = currentSnapshot
-      ? Number(currentSnapshot.accountUsed ?? 0)
-      : 0;
-    const attributionComplete =
-      syncStatus === "ok" &&
-      currentSnapshot?.errorCode !== "PARTIAL_ACCOUNT_ATTRIBUTION" &&
-      currentSnapshot?.errorCode !== "PARTIAL_WEBSITE_ATTRIBUTION";
+        : matchingSnapshot.syncStatus;
+    const syncIssueCode = storedApiUsageSyncIssueCode(
+      matchingSnapshot?.errorCode,
+    );
+    const keyHealth =
+      policy.scope === "website_frontend"
+        ? websiteRollingUsage.keyHealth
+        : managedSyncStatus === "ok"
+          ? "connected"
+          : managedSyncStatus === "pending"
+            ? "pending"
+            : managedSyncStatus === "unconfigured"
+              ? "unconfigured"
+              : syncIssueCode === "CREDENTIAL_REJECTED"
+                ? "invalid_or_revoked"
+                : "sync_error";
+    const keyPoolTotalUsed =
+      policy.scope === "website_frontend"
+        ? websiteRollingUsage.keyPoolTotalUsed
+        : lastSuccessfulUsageSnapshotValue({
+            snapshot: matchingSnapshot,
+            fingerprint: credentialFingerprint,
+          });
+    const rollingUsage =
+      policy.scope === "website_frontend"
+        ? {
+            used: websiteRollingUsage.rollingWebsiteUsed,
+            observedAt: websiteRollingUsage.usageObservedAt,
+          }
+        : (managedRollingUsage.get(policy.workspaceUserId!) ?? {
+            used: 0,
+            observedAt: null,
+          });
     const warningRatio = policy.warningRatioBasisPoints / 10_000;
     const percentage =
-      policy.limit > 0 ? Math.min(100, (used / policy.limit) * 100) : 100;
+      keyPoolTotalUsed !== null && policy.limit > 0
+        ? Math.min(100, (keyPoolTotalUsed / policy.limit) * 100)
+        : 0;
     return {
       id: policy.id,
       scope: policy.scope,
       userId: policy.workspaceUserId,
       enterpriseName: scope.enterpriseName,
       credentialFingerprint,
-      used,
-      accountUsed,
-      attributionComplete,
+      keyPoolTotalUsed,
+      rolling30DayUsed: rollingUsage.used,
+      usageObservedAt: rollingUsage.observedAt,
+      keyHealth,
+      syncIssueCode,
+      keyPoolStale:
+        policy.scope === "website_frontend"
+          ? websiteRollingUsage.keyPoolStale
+          : usageKeyPoolStale({
+              fingerprint: credentialFingerprint,
+              snapshot: matchingSnapshot,
+              snapshotCurrent,
+            }),
+      keyLastSuccessfulAt:
+        policy.scope === "website_frontend"
+          ? websiteRollingUsage.keyLastSuccessfulAt
+          : (matchingSnapshot?.fetchedAt?.getTime() ?? null),
+      keyLastAttemptAt:
+        policy.scope === "website_frontend"
+          ? websiteRollingUsage.keyLastAttemptAt
+          : (matchingSnapshot?.updatedAt?.getTime() ?? null),
       limit: policy.limit,
       warningRatio,
       windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
       percentage,
-      fetchedAt: currentSnapshot?.fetchedAt?.getTime() ?? null,
-      periodStartedAt: currentSnapshot?.windowStartedAt?.getTime() ?? null,
-      syncStatus,
+      fetchedAt:
+        policy.scope === "website_frontend"
+          ? websiteRollingUsage.keyLastSuccessfulAt
+          : (matchingSnapshot?.fetchedAt?.getTime() ?? null),
+      periodStartedAt: matchingSnapshot?.windowStartedAt?.getTime() ?? null,
       severity: apiUsageSeverity({
-        used,
+        used: keyPoolTotalUsed ?? 0,
         limit: policy.limit,
         warningRatio,
-        syncStatus,
+        syncStatus:
+          keyHealth === "connected"
+            ? "ok"
+            : keyHealth === "unconfigured"
+              ? "unconfigured"
+              : keyHealth === "pending"
+                ? "pending"
+                : "error",
       }),
       errorMessage:
-        syncStatus === "error"
+        keyHealth === "sync_error" || keyHealth === "invalid_or_revoked"
           ? "用量暂时无法读取"
-          : syncStatus === "unconfigured"
+          : keyHealth === "unconfigured"
             ? "尚未配置 API Key"
             : null,
     };
@@ -1694,11 +1665,7 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
     managedCredentialUserIds.length === 0
       ? []
       : await db
-          .select({
-            userId: apiCredentials.userId,
-            version: apiCredentials.version,
-            status: apiCredentials.status,
-          })
+          .select()
           .from(apiCredentials)
           .where(inArray(apiCredentials.userId, managedCredentialUserIds))
           .orderBy(desc(apiCredentials.version));
@@ -1716,6 +1683,12 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
     DEFAULT_API_USAGE_WINDOW_DAYS,
     now,
   );
+  const rollingUsageByAccount = await readRollingManagedUsageByAccounts({
+    executor: db,
+    accountIds: subjectIds,
+    startAt: period.startAt,
+    endAt: period.endAt,
+  });
 
   const usageFor = (userId: number) => {
     const policy = policyByUser.get(userId);
@@ -1723,25 +1696,35 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
     const snapshot = policy ? snapshotByPolicy.get(policy.id) : undefined;
     const credentialCreatedAt =
       fingerprints.credentialCreatedAtByUser.get(userId) ?? null;
-    const currentSnapshot = isRollingUsageSnapshotCurrent({
+    const snapshotMatchesCredential = Boolean(
+      snapshot && fingerprint && snapshot.credentialFingerprint === fingerprint,
+    );
+    const snapshotCurrent = snapshotMatchesCredential
+      ? isRollingUsageSnapshotCurrent({
+          snapshot,
+          fingerprint,
+          credentialCreatedAt,
+          windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
+          now,
+        })
+      : false;
+    const syncIssueCode = snapshotMatchesCredential
+      ? storedApiUsageSyncIssueCode(snapshot?.errorCode)
+      : null;
+    const keyHealth = !fingerprint
+      ? ("unconfigured" as const)
+      : !snapshotMatchesCredential || snapshot?.syncStatus === "pending"
+        ? ("pending" as const)
+        : snapshot?.syncStatus === "ok"
+          ? ("connected" as const)
+          : syncIssueCode === "CREDENTIAL_REJECTED"
+            ? ("invalid_or_revoked" as const)
+            : ("sync_error" as const);
+    const rolling = rollingUsageByAccount.get(userId);
+    const keyPoolTotalUsed = lastSuccessfulUsageSnapshotValue({
       snapshot,
       fingerprint,
-      credentialCreatedAt,
-      windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-      now,
-    })
-      ? snapshot
-      : undefined;
-    const syncStatus = currentSnapshot
-      ? currentSnapshot.syncStatus
-      : fingerprint
-        ? "pending"
-        : "unconfigured";
-    const used = Number(currentSnapshot?.used ?? 0);
-    const accountUsed = Number(currentSnapshot?.accountUsed ?? 0);
-    const accountUsageComplete =
-      syncStatus === "ok" &&
-      currentSnapshot?.errorCode !== "PARTIAL_ACCOUNT_ATTRIBUTION";
+    });
     const limit = Number(policy?.limit ?? DEFAULT_API_USAGE_LIMIT);
     const warningRatio =
       Number(policy?.warningRatioBasisPoints ?? 8_000) / 10_000;
@@ -1751,18 +1734,39 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       credentialId: fingerprints.credentialIdByUser.get(userId) ?? null,
       credentialVersion:
         fingerprints.credentialVersionByUser.get(userId) ?? null,
-      used,
-      accountUsed,
-      accountUsageComplete,
+      rolling30DayUsed: rolling?.used ?? 0,
+      usageObservedAt: rolling?.observedAt ?? null,
+      keyPoolTotalUsed,
+      keyLastSuccessfulAt: snapshotMatchesCredential
+        ? (snapshot?.fetchedAt?.getTime() ?? null)
+        : null,
+      keyLastAttemptAt: snapshotMatchesCredential
+        ? (snapshot?.updatedAt?.getTime() ?? null)
+        : null,
+      keyHealth,
+      syncIssueCode,
+      keyPoolStale: usageKeyPoolStale({
+        fingerprint,
+        snapshot: snapshotMatchesCredential ? snapshot : undefined,
+        snapshotCurrent,
+      }),
       limit,
       warningRatio,
-      syncStatus,
-      fetchedAt: currentSnapshot?.fetchedAt?.getTime() ?? null,
+      fetchedAt: snapshotMatchesCredential
+        ? (snapshot?.fetchedAt?.getTime() ?? null)
+        : null,
       severity: apiUsageSeverity({
-        used,
+        used: keyPoolTotalUsed ?? 0,
         limit,
         warningRatio,
-        syncStatus,
+        syncStatus:
+          keyHealth === "connected"
+            ? "ok"
+            : keyHealth === "unconfigured"
+              ? "unconfigured"
+              : keyHealth === "pending"
+                ? "pending"
+                : "error",
       }),
     };
   };
@@ -1800,16 +1804,24 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
         owner?.displayName?.trim() || owner?.username?.trim() || null,
       apiKeyConfigured: directApiKeyConfigured,
       apiKeyVersion: latestCredential?.version ?? 0,
-      usesInheritedKey:
-        !directApiKeyConfigured &&
-        usage.credentialOwnerId !== null &&
-        usage.credentialOwnerId !== customerId,
-      keyTotalUsed: usage.used,
-      ownAgentMonthUsed: usage.accountUsed,
-      accountUsageComplete: usage.accountUsageComplete,
-      otherOrUnattributedUsed: Math.max(0, usage.used - usage.accountUsed),
+      agentProfile: normalizeManagedAgentProfile(
+        (latestCredential as { agentProfile?: unknown } | undefined)
+          ?.agentProfile,
+      ),
+      usesInheritedKey: false,
+      rolling30DayUsed: usage.rolling30DayUsed,
+      usageObservedAt: usage.usageObservedAt,
+      keyPoolTotalUsed: usage.keyPoolTotalUsed,
+      keyLastSuccessfulAt: usage.keyLastSuccessfulAt,
+      keyLastAttemptAt: usage.keyLastAttemptAt,
+      keyHealth:
+        latestCredential?.validationStatus === "invalid" ||
+        (!usage.fingerprint && latestCredential)
+          ? "invalid_or_revoked"
+          : usage.keyHealth,
+      syncIssueCode: usage.syncIssueCode,
+      keyPoolStale: usage.keyPoolStale,
       fingerprint: usage.fingerprint,
-      syncStatus: usage.syncStatus,
       fetchedAt: usage.fetchedAt,
     };
   });
@@ -1829,42 +1841,28 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       isActive: engineer.isActive !== false,
       apiKeyConfigured: latestCredential?.status === "active",
       apiKeyVersion: latestCredential?.version ?? 0,
-      keyTotalUsed: usage.used,
-      ownAgentMonthUsed: usage.accountUsed,
-      accountUsageComplete: usage.accountUsageComplete,
-      otherOrUnattributedUsed: Math.max(0, usage.used - usage.accountUsed),
+      rolling30DayUsed: usage.rolling30DayUsed,
+      usageObservedAt: usage.usageObservedAt,
+      keyPoolTotalUsed: usage.keyPoolTotalUsed,
+      keyLastSuccessfulAt: usage.keyLastSuccessfulAt,
+      keyLastAttemptAt: usage.keyLastAttemptAt,
+      keyHealth:
+        latestCredential?.validationStatus === "invalid" ||
+        (!usage.fingerprint && latestCredential)
+          ? "invalid_or_revoked"
+          : usage.keyHealth,
+      syncIssueCode: usage.syncIssueCode,
+      keyPoolStale: usage.keyPoolStale,
       fingerprint: usage.fingerprint,
-      syncStatus: usage.syncStatus,
       fetchedAt: usage.fetchedAt,
     };
   });
 
   return {
     period,
-    systemAdmins: systemAdministrators.map((administrator: any) => {
-      const usage = usageFor(Number(administrator.id));
-      const latestCredential = latestManagedCredentialById.get(
-        Number(administrator.id),
-      );
-      return {
-        adminId: Number(administrator.id),
-        displayName:
-          administrator.displayName?.trim() ||
-          administrator.username?.trim() ||
-          `系统管理员 ${administrator.id}`,
-        username: administrator.username,
-        isActive: administrator.isActive !== false,
-        apiKeyConfigured: latestCredential?.status === "active",
-        apiKeyVersion: latestCredential?.version ?? 0,
-        keyTotalUsed: usage.used,
-        ownAgentMonthUsed: usage.accountUsed,
-        accountUsageComplete: usage.accountUsageComplete,
-        otherOrUnattributedUsed: Math.max(0, usage.used - usage.accountUsed),
-        fingerprint: usage.fingerprint,
-        syncStatus: usage.syncStatus,
-        fetchedAt: usage.fetchedAt,
-      };
-    }),
+    // System-administrator credentials are retained as historical rows only;
+    // they are not a configurable Key target or runtime Agent identity.
+    systemAdmins: [],
     customers: customerUsage,
     engineers: engineerUsage,
     managers: managers.map((manager: any) => {
@@ -1887,7 +1885,6 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
         });
       const managedCustomers = managedCustomerRecords.map(
         ({ customer, usage }) => {
-          const usesManagerKey = usage.credentialOwnerId === Number(manager.id);
           return {
             userId: Number(customer.id),
             enterpriseName:
@@ -1895,16 +1892,15 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
               customer.username?.trim() ||
               `用户 ${customer.id}`,
             username: customer.username,
-            monthUsed: usage.accountUsed,
-            accountUsageComplete: usage.accountUsageComplete,
+            rolling30DayUsed: usage.rolling30DayUsed,
+            usageObservedAt: usage.usageObservedAt,
             fingerprint: usage.fingerprint,
-            usesManagerKey,
+            usesManagerKey: false,
             credentialSource: !usage.fingerprint
               ? ("unconfigured" as const)
-              : usesManagerKey
-                ? ("manager" as const)
-                : ("customer" as const),
-            syncStatus: usage.syncStatus,
+              : ("customer" as const),
+            keyHealth: usage.keyHealth,
+            syncIssueCode: usage.syncIssueCode,
             fetchedAt: usage.fetchedAt,
           };
         },
@@ -1912,17 +1908,9 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       // The manager row represents only the manager's current physical Key.
       // A directly configured customer owns a separate pool and must never be
       // added to the manager's Key total.
-      const keyPoolTotalUsed = managerUsage.used;
+      const keyPoolTotalUsed = managerUsage.keyPoolTotalUsed;
       const keyPoolLimit = managerUsage.limit;
       const keyPoolWarningRatio = managerUsage.warningRatio;
-      const keyPoolSyncStatus = managerUsage.syncStatus;
-      const attributedUsed =
-        managerUsage.accountUsed +
-        managedCustomers.reduce(
-          (sum, customer) =>
-            sum + (customer.usesManagerKey ? customer.monthUsed : 0),
-          0,
-        );
       return {
         adminId: Number(manager.id),
         displayName:
@@ -1939,19 +1927,32 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
           totalUsed: keyPoolTotalUsed,
           limit: keyPoolLimit,
           warningRatio: keyPoolWarningRatio,
-          syncStatus: keyPoolSyncStatus,
+          keyHealth:
+            latestManagerCredential?.validationStatus === "invalid" ||
+            (!managerUsage.fingerprint && latestManagerCredential)
+              ? "invalid_or_revoked"
+              : managerUsage.keyHealth,
+          syncIssueCode: managerUsage.syncIssueCode,
+          keyPoolStale: managerUsage.keyPoolStale,
+          keyLastSuccessfulAt: managerUsage.keyLastSuccessfulAt,
+          keyLastAttemptAt: managerUsage.keyLastAttemptAt,
           fetchedAt: managerUsage.fetchedAt,
           severity: apiUsageSeverity({
-            used: keyPoolTotalUsed,
+            used: keyPoolTotalUsed ?? 0,
             limit: keyPoolLimit,
             warningRatio: keyPoolWarningRatio,
-            syncStatus: keyPoolSyncStatus,
+            syncStatus:
+              managerUsage.keyHealth === "connected"
+                ? "ok"
+                : managerUsage.keyHealth === "unconfigured"
+                  ? "unconfigured"
+                  : managerUsage.keyHealth === "pending"
+                    ? "pending"
+                    : "error",
           }),
         },
-        ownAgentMonthUsed: managerUsage.accountUsed,
-        accountUsageComplete: managerUsage.accountUsageComplete,
-        attributedUsed,
-        otherOrUnattributedUsed: Math.max(0, keyPoolTotalUsed - attributedUsed),
+        rolling30DayUsed: managerUsage.rolling30DayUsed,
+        usageObservedAt: managerUsage.usageObservedAt,
         users: managedCustomers,
       };
     }),
@@ -1992,7 +1993,10 @@ export async function finalizeApiUsageSnapshotClaim(input: {
         input.now.getTime() -
           DEFAULT_API_USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
       ),
-    fetchedAt: input.status === "ok" ? input.now : null,
+    // A failed refresh must not erase the last successful pool observation.
+    // The sync status and updatedAt still expose the failed attempt separately.
+    fetchedAt:
+      input.status === "ok" ? input.now : (existing[0]?.fetchedAt ?? null),
     syncStatus: input.status,
     errorCode: input.errorCode?.slice(0, 64) ?? null,
     updatedAt: input.now,
@@ -2005,27 +2009,17 @@ export async function finalizeApiUsageSnapshotClaim(input: {
     eq(apiUsageSnapshots.policyId, input.policy.id),
     eq(apiUsageSnapshots.syncToken, input.syncToken),
   ];
-  if (existing[0]) {
-    await input.executor
-      .update(apiUsageSnapshots)
-      .set(values)
-      .where(and(...finalizeConditions));
-  } else {
-    try {
-      await input.executor.insert(apiUsageSnapshots).values({
-        id: randomUUID(),
-        policyId: input.policy.id,
-        ...values,
-        createdAt: input.now,
-      });
-    } catch (error) {
-      if (!isDuplicateApiUsageSnapshotError(error)) throw error;
-      await input.executor
-        .update(apiUsageSnapshots)
-        .set(values)
-        .where(and(...finalizeConditions));
-    }
-  }
+  const result = await input.executor
+    .update(apiUsageSnapshots)
+    .set(values)
+    .where(and(...finalizeConditions));
+  const affectedRows = Number(
+    (result as { affectedRows?: unknown } | undefined)?.affectedRows ??
+      (result as Array<{ affectedRows?: unknown }> | undefined)?.[0]
+        ?.affectedRows ??
+      0,
+  );
+  return affectedRows > 0;
 }
 
 export async function claimUsageSnapshotRefresh(input: {
@@ -2242,10 +2236,8 @@ async function syncApiUsageSnapshotsUnlocked(
         );
         const completion = apiUsageSnapshotCompletionState({
           totalComplete: usage.complete,
-          attributionComplete: usage.attributionComplete,
-          attributionErrorCode: "PARTIAL_WEBSITE_ATTRIBUTION",
         });
-        await finalizeApiUsageSnapshotClaim({
+        const finalized = await finalizeApiUsageSnapshotClaim({
           executor: db,
           policy,
           credentialFingerprint: fingerprints.website,
@@ -2262,8 +2254,13 @@ async function syncApiUsageSnapshotsUnlocked(
           now,
           syncToken: websiteSyncToken,
         });
-        synced += 1;
-        if (!usage.complete || !usage.attributionComplete) failed += 1;
+        if (finalized) {
+          synced += 1;
+          if (!usage.complete) failed += 1;
+        } else {
+          failed += 1;
+          retryableFailed += 1;
+        }
       } catch (error) {
         await finalizeApiUsageSnapshotClaim({
           executor: db,
@@ -2271,7 +2268,7 @@ async function syncApiUsageSnapshotsUnlocked(
           credentialFingerprint: fingerprints.website,
           used: 0,
           status: "error",
-          errorCode: error instanceof Error ? error.name : "SYNC_FAILED",
+          errorCode: apiUsageSyncErrorCode(error),
           now,
           syncToken: websiteSyncToken,
         });
@@ -2435,10 +2432,15 @@ async function syncApiUsageSnapshotsUnlocked(
         });
         const completion = apiUsageSnapshotCompletionState({
           totalComplete: usage.complete,
-          attributionComplete: usage.attributionComplete,
-          attributionErrorCode: "PARTIAL_ACCOUNT_ATTRIBUTION",
+          issueCode: usage.issueCode,
         });
-        await Promise.all(
+        if (!usage.complete) {
+          console.warn("[API usage snapshot] Managed usage scan incomplete", {
+            issueCode: completion.errorCode,
+            accountCount: groupedAccountIds.length,
+          });
+        }
+        const finalizedClaims = await Promise.all(
           groupedAccountIds.map((accountId) =>
             finalizeApiUsageSnapshotClaim({
               executor: db,
@@ -2454,9 +2456,19 @@ async function syncApiUsageSnapshotsUnlocked(
             }),
           ),
         );
-        synced += 1;
-        if (!usage.complete || !usage.attributionComplete) failed += 1;
+        if (finalizedClaims.every(Boolean)) {
+          synced += 1;
+          if (!usage.complete) failed += 1;
+        } else {
+          failed += 1;
+          retryableFailed += 1;
+        }
       } catch (error) {
+        const issueCode = apiUsageSyncErrorCode(error);
+        console.warn("[API usage snapshot] Managed usage sync unavailable", {
+          issueCode,
+          accountCount: groupedAccountIds.length,
+        });
         await Promise.all(
           groupedAccountIds.map((accountId) =>
             finalizeApiUsageSnapshotClaim({
@@ -2466,7 +2478,7 @@ async function syncApiUsageSnapshotsUnlocked(
               used: 0,
               accountUsed: 0,
               status: "error",
-              errorCode: error instanceof Error ? error.name : "SYNC_FAILED",
+              errorCode: issueCode,
               windowStartedAt: new Date(
                 getShanghaiRollingUsagePeriod(
                   DEFAULT_API_USAGE_WINDOW_DAYS,
@@ -2592,10 +2604,31 @@ export async function startApiUsageSnapshotScheduler() {
     });
   const initial = setTimeout(run, 10_000);
   initial.unref();
-  const interval = setInterval(run, 15 * 60 * 1_000);
-  interval.unref();
-  return () => {
-    clearTimeout(initial);
-    clearInterval(interval);
+  let stopped = false;
+  let dailyTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleDaily = () => {
+    if (stopped) return;
+    dailyTimer = setTimeout(async () => {
+      await run();
+      scheduleDaily();
+    }, millisecondsUntilNextShanghaiUsageSync());
+    dailyTimer.unref();
   };
+  scheduleDaily();
+  return () => {
+    stopped = true;
+    clearTimeout(initial);
+    if (dailyTimer) clearTimeout(dailyTimer);
+  };
+}
+
+/** Asia/Shanghai has no daylight-saving transition, so UTC+08 is stable. */
+export function millisecondsUntilNextShanghaiUsageSync(nowMs = Date.now()) {
+  const hourMs = 60 * 60 * 1_000;
+  const dayMs = 24 * hourMs;
+  const shanghaiNow = nowMs + 8 * hourMs;
+  const localDayStart = Math.floor(shanghaiNow / dayMs) * dayMs;
+  let nextLocal = localDayStart + 3 * hourMs;
+  if (nextLocal <= shanghaiNow) nextLocal += dayMs;
+  return nextLocal - shanghaiNow;
 }

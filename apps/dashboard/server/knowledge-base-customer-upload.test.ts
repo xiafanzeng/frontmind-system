@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import sharp from "sharp";
 
 const dependencies = vi.hoisted(() => ({
@@ -19,6 +22,9 @@ import {
   knowledgeBaseExpectedCustomerUploadsFromTurns,
   knowledgeBaseCustomerUploadImagesFromTurn,
   knowledgeBaseCustomerUploadResources,
+  knowledgeBaseOfficialLogoUploadFromTurn,
+  persistedKnowledgeBaseCustomerUploadBytesForBuild,
+  verifiedKnowledgeBasePackageUploadEvidenceForBuild,
   verifiedKnowledgeBaseOfficialLogoUploadForBuild,
 } from "./knowledge-base-customer-upload";
 
@@ -67,6 +73,174 @@ function capturedImageTurn(overrides: Record<string, unknown> = {}) {
 }
 
 describe("knowledge-base customer upload provenance", () => {
+  it("seals final upload evidence so source expiry cannot break publish, download or display", async () => {
+    const assetRoot = await mkdtemp(
+      path.join(tmpdir(), "frontmind-kb-upload-evidence-"),
+    );
+    const previousAssetRoot = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = assetRoot;
+    const bytes = Buffer.from("durable-customer-image-bytes");
+    const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+    const packageArchiveSha256 = "b".repeat(64);
+    const retriedPackageArchiveSha256 = "c".repeat(64);
+    const buildId = "10000000-0000-4000-8000-000000000099";
+    const turn = capturedImageTurn({
+      recovery: {
+        capturedClientAttachments: true,
+        attachments: [
+          {
+            file_id: "file-customer-image",
+            filename: "customer-proof.jpg",
+          },
+        ],
+        attachmentManifest: [
+          {
+            filename: "customer-proof.jpg",
+            mimeType: "image/jpeg",
+            sizeBytes: bytes.length,
+            sha256: sourceSha256,
+          },
+        ],
+      },
+    });
+    dependencies.getDb.mockResolvedValue({
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  async orderBy() {
+                    return [turn];
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    });
+    dependencies.readStoredPresalesFile.mockResolvedValue({
+      filename: "customer-proof.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: bytes.length,
+      sha256: sourceSha256,
+      createReadStream: () => Readable.from(bytes),
+    });
+
+    try {
+      const first = await verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+        userId: 7,
+        buildId,
+        generation: 1,
+        packageArchiveSha256,
+      });
+      expect(first.expectedCustomerUploads).toEqual([
+        expect.objectContaining({ sourceSha256, leafIds: ["1.2"] }),
+      ]);
+
+      // Simulate the 30-day presales object expiring after final binding.
+      dependencies.readStoredPresalesFile.mockReset();
+      dependencies.readStoredPresalesFile.mockResolvedValue(null);
+      dependencies.getDb.mockClear();
+
+      await expect(
+        verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+          userId: 7,
+          buildId,
+          generation: 1,
+          packageArchiveSha256,
+        }),
+      ).resolves.toEqual(first);
+      const retried = await verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+        userId: 7,
+        buildId,
+        generation: 1,
+        packageArchiveSha256: retriedPackageArchiveSha256,
+      });
+      expect(retried).toEqual(first);
+      expect(dependencies.getDb).toHaveBeenCalled();
+      dependencies.getDb.mockClear();
+      await expect(
+        persistedKnowledgeBaseCustomerUploadBytesForBuild({
+          userId: 7,
+          buildId,
+          generation: 1,
+          packageArchiveSha256,
+          sourceSha256,
+        }),
+      ).resolves.toEqual(bytes);
+      await expect(
+        persistedKnowledgeBaseCustomerUploadBytesForBuild({
+          userId: 7,
+          buildId,
+          generation: 1,
+          packageArchiveSha256: retriedPackageArchiveSha256,
+          sourceSha256,
+        }),
+      ).resolves.toEqual(bytes);
+      await expect(
+        knowledgeBaseCustomerUploadResources(buildId, turn, {
+          persistedEvidence: {
+            userId: 7,
+            generation: 1,
+            packageArchiveSha256,
+          },
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          kind: "customer_upload",
+          caption: "知识库配图",
+          mimeType: "image/jpeg",
+          sameOriginUrl: expect.stringMatching(
+            /^\/api\/knowledge-base\/artifacts\/resources\//u,
+          ),
+        }),
+      ]);
+      expect(dependencies.getDb).not.toHaveBeenCalled();
+      expect(dependencies.readStoredPresalesFile).not.toHaveBeenCalled();
+
+      await expect(
+        persistedKnowledgeBaseCustomerUploadBytesForBuild({
+          userId: 7,
+          buildId: "10000000-0000-4000-8000-000000000098",
+          generation: 1,
+          packageArchiveSha256: retriedPackageArchiveSha256,
+          sourceSha256,
+        }),
+      ).rejects.toThrow("尚未永久封存");
+
+      await writeFile(
+        path.join(
+          assetRoot,
+          "knowledge-builds",
+          "7",
+          buildId,
+          "generation-1",
+          "upload-evidence",
+          "customer-uploads",
+          `${sourceSha256}.bin`,
+        ),
+        Buffer.alloc(bytes.length, 0x78),
+      );
+      await expect(
+        verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+          userId: 7,
+          buildId,
+          generation: 1,
+          packageArchiveSha256: "d".repeat(64),
+        }),
+      ).rejects.toThrow("永久证据字节完整性不一致");
+    } finally {
+      if (previousAssetRoot === undefined) {
+        delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+      } else {
+        process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previousAssetRoot;
+      }
+      await rm(assetRoot, { recursive: true, force: true });
+    }
+  });
+
   it("projects only a byte-verified captured browser image", async () => {
     const turn = capturedImageTurn();
     dependencies.readStoredPresalesFile.mockResolvedValueOnce({
@@ -85,21 +259,77 @@ describe("knowledge-base customer upload provenance", () => {
         sourceSha256: "a".repeat(64),
       }),
     ]);
+    const resources = await knowledgeBaseCustomerUploadResources(
+      "build-1",
+      turn,
+    );
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({
+      kind: "customer_upload",
+      caption: "知识库配图",
+      mimeType: "image/jpeg",
+      sizeBytes: 1234,
+    });
+    expect(Object.keys(resources[0]!).sort()).toEqual([
+      "caption",
+      "id",
+      "kind",
+      "mimeType",
+      "sameOriginUrl",
+      "sizeBytes",
+    ]);
+    expect(resources[0]!.sameOriginUrl).toMatch(
+      /^\/api\/knowledge-base\/artifacts\/resources\/[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/u,
+    );
+    const serialized = JSON.stringify(resources);
+    expect(serialized).not.toContain("build-1");
+    expect(serialized).not.toContain("turn-customer-image");
+    expect(serialized).not.toContain("customer-proof.jpg");
+    expect(serialized).not.toContain("file-customer-image");
+    expect(serialized).not.toContain("a".repeat(64));
+  });
+
+  it("resolves a captured source id through its finalized Manus v2 mapping", async () => {
+    const sourceSha256 = "a".repeat(64);
+    const turn = capturedImageTurn({
+      providerProtocol: "manus_v2",
+      manusV2SourceAttachmentFileIds: ["file-customer-image"],
+      manusV2AttachmentMappings: {
+        customer: {
+          status: "ready",
+          sourceFileId: "file-customer-image",
+          upstreamFileId: "v2-file-customer-image",
+          filename: "customer-proof.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 1234,
+          contentSha256: sourceSha256,
+        },
+      },
+      manusV2AttachmentMappingsFinalizedAt: "2026-08-16T22:35:50.538Z",
+    });
+    turn.attachmentFileIds = ["v2-file-customer-image"];
+    dependencies.readStoredPresalesFile.mockResolvedValueOnce({
+      filename: "customer-proof.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 1234,
+      sha256: sourceSha256,
+    });
+
+    expect(knowledgeBaseCustomerUploadImagesFromTurn(turn)).toEqual([
+      expect.objectContaining({
+        fileId: "file-customer-image",
+        filename: "customer-proof.jpg",
+        sourceSha256,
+      }),
+    ]);
     await expect(
       knowledgeBaseCustomerUploadResources("build-1", turn),
-    ).resolves.toEqual([
-      {
-        kind: "customer_upload",
-        outputItemId: null,
-        fileId: null,
-        sameOriginUrl:
-          "/api/knowledge-base/artifacts/build-1/customer-uploads/turn-customer-image/0/" +
-          "a".repeat(64),
-        filename: "customer-proof.jpg",
-        mimeType: "image/jpeg",
-        sha256: "a".repeat(64),
-        sizeBytes: 1234,
-      },
+    ).resolves.toHaveLength(1);
+    expect(knowledgeBaseExpectedCustomerUploadsFromTurns([turn])).toEqual([
+      expect.objectContaining({
+        sourceSha256,
+        fileIds: ["file-customer-image"],
+      }),
     ]);
   });
 
@@ -135,6 +365,103 @@ describe("knowledge-base customer upload provenance", () => {
 
     expect(knowledgeBaseCustomerUploadImagesFromTurn(turn)).toEqual([]);
     expect(knowledgeBaseExpectedCustomerUploadsFromTurns([turn])).toEqual([]);
+  });
+
+  it("accepts only an immutable build-bound Logo provenance repair ledger", () => {
+    const turn = {
+      id: "turn-logo-repair",
+      operationType: "logo_provenance_repair",
+      buildId: "build-1",
+      buildGeneration: 7,
+      expectedRevision: 50,
+      expectedLeafId: "7.5",
+      attachmentFileIds: ["file-logo-repair"],
+      status: "completed" as const,
+      metadata: {
+        logoProvenanceRepair: {
+          kind: "frontmind.knowledge-base.logo-provenance-repair",
+          schemaVersion: 1,
+          immutable: true,
+          buildId: "build-1",
+          generation: 7,
+          revision: 50,
+          leafId: "7.5",
+          officialLogoUpload: {
+            verified: true,
+            index: 0,
+            fileId: "file-logo-repair",
+            filename: "siliconflow.png",
+            mimeType: "image/png",
+            sizeBytes: 9556,
+            sourceSha256: "b".repeat(64),
+          },
+        },
+      },
+    };
+    expect(knowledgeBaseOfficialLogoUploadFromTurn(turn)).toMatchObject({
+      turnId: "turn-logo-repair",
+      leafId: "7.5",
+      fileId: "file-logo-repair",
+      sourceSha256: "b".repeat(64),
+    });
+    expect(
+      knowledgeBaseOfficialLogoUploadFromTurn({
+        ...turn,
+        metadata: {
+          logoProvenanceRepair: {
+            ...turn.metadata.logoProvenanceRepair,
+            revision: 49,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts a completed server-authored local materialized Logo ledger", () => {
+    const turn = {
+      id: "turn-local-logo",
+      operationType: "local_logo",
+      buildId: "build-1",
+      buildGeneration: 7,
+      expectedRevision: 50,
+      expectedLeafId: "1.1",
+      attachmentFileIds: ["file-local-logo"],
+      status: "completed" as const,
+      metadata: {
+        execution: "local",
+        providerRequestCount: 0,
+        localLogo: {
+          kind: "frontmind.knowledge-base.local-logo",
+          schemaVersion: 1,
+          immutable: true,
+          buildId: "build-1",
+          generation: 7,
+          revision: 50,
+          leafId: "1.1",
+          officialLogoUpload: {
+            verified: true,
+            index: 0,
+            fileId: "file-local-logo",
+            filename: "brand.png",
+            mimeType: "image/png",
+            sizeBytes: 4096,
+            sourceSha256: "c".repeat(64),
+          },
+        },
+      },
+    };
+    expect(knowledgeBaseOfficialLogoUploadFromTurn(turn)).toMatchObject({
+      turnId: "turn-local-logo",
+      leafId: "1.1",
+      fileId: "file-local-logo",
+      sourceSha256: "c".repeat(64),
+    });
+    expect(
+      knowledgeBaseOfficialLogoUploadFromTurn({
+        ...turn,
+        expectedRevision: 51,
+      }),
+    ).toBeNull();
   });
 
   it("does not exclude an unverified recovery officialLogoUpload declaration", () => {
@@ -219,8 +546,12 @@ describe("knowledge-base customer upload provenance", () => {
         return {
           from() {
             return {
-              async where() {
-                return [turn];
+              where() {
+                return {
+                  async orderBy() {
+                    return [turn];
+                  },
+                };
               },
             };
           },
@@ -239,6 +570,140 @@ describe("knowledge-base customer upload provenance", () => {
       sourceSha256: "a".repeat(64),
     });
     expect(dependencies.readStoredPresalesFile).not.toHaveBeenCalled();
+  });
+
+  it("selects the latest completed replacement ledger matching the current Logo hash", async () => {
+    const logoTurn = (id: string, fileId: string, sourceSha256: string) => ({
+      ...capturedImageTurn({
+        recovery: {
+          capturedClientAttachments: true,
+          attachments: [{ file_id: fileId, filename: `${id}.png` }],
+          attachmentManifest: [
+            {
+              filename: `${id}.png`,
+              mimeType: "image/png",
+              sizeBytes: 1234,
+              sha256: sourceSha256,
+            },
+          ],
+          officialLogoUpload: {
+            verified: true,
+            index: 0,
+            fileId,
+            filename: `${id}.png`,
+            mimeType: "image/png",
+            sizeBytes: 1234,
+            sourceSha256,
+          },
+        },
+        preparedDispatch: {
+          requestBody: {
+            attachments: [{ file_id: fileId, filename: `${id}.png` }],
+          },
+        },
+      }),
+      id,
+      attachmentFileIds: [fileId],
+    });
+    const superseded = logoTurn("logo-old", "file-logo-old", "a".repeat(64));
+    const current = logoTurn("logo-new", "file-logo-new", "b".repeat(64));
+    dependencies.getDb.mockResolvedValue({
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  async orderBy() {
+                    return [superseded, current];
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    });
+
+    await expect(
+      verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+        userId: 7,
+        buildId: "build-1",
+        generation: 1,
+        officialLogoSha256: "b".repeat(64),
+      }),
+    ).resolves.toEqual({
+      expectedCustomerUploads: [],
+      expectedOfficialLogoUpload: expect.objectContaining({
+        fileId: "file-logo-new",
+        sourceSha256: "b".repeat(64),
+      }),
+      expectedOfficialLogoProvenance: undefined,
+    });
+  });
+
+  it("loads one customer-upload Logo ledger for reconcile, publish and download without duplicating it as customer media", async () => {
+    const turn = capturedImageTurn({
+      recovery: {
+        capturedClientAttachments: true,
+        attachments: [
+          {
+            file_id: "file-customer-image",
+            filename: "customer-proof.jpg",
+          },
+        ],
+        attachmentManifest: [
+          {
+            filename: "customer-proof.jpg",
+            mimeType: "image/jpeg",
+            sizeBytes: 1234,
+            sha256: "a".repeat(64),
+          },
+        ],
+        officialLogoUpload: {
+          verified: true,
+          index: 0,
+          fileId: "file-customer-image",
+          filename: "customer-proof.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 1234,
+          sourceSha256: "a".repeat(64),
+        },
+      },
+    });
+    dependencies.getDb.mockResolvedValue({
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  async orderBy() {
+                    return [turn];
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    });
+
+    await expect(
+      verifiedKnowledgeBasePackageUploadEvidenceForBuild({
+        userId: 7,
+        buildId: "build-1",
+        generation: 1,
+        officialLogoSha256: "a".repeat(64),
+      }),
+    ).resolves.toEqual({
+      expectedCustomerUploads: [],
+      expectedOfficialLogoUpload: expect.objectContaining({
+        fileId: "file-customer-image",
+        sourceSha256: "a".repeat(64),
+      }),
+      expectedOfficialLogoProvenance: undefined,
+    });
   });
 
   it("fails closed when a declared customer image no longer matches local bytes", async () => {

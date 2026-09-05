@@ -1,0 +1,21 @@
+{
+  "schema": "frontmind-siteops-social-package/v1",
+  "channel": "wechat",
+  "version": "1.0.0",
+  "hostOwnsArchive": true,
+  "automatedPublishing": false,
+  "accountCredentialsAllowed": false,
+  "brandSource": "customer-company-name",
+  "sourceMappingRequired": true,
+  "files": [
+    "manifest.json",
+    "article.md",
+    "title.txt",
+    "sources.json",
+    "covers/01.png",
+    "covers/02.png",
+    "covers/03.png",
+    "qa-report.json"
+  ],
+  "images": { "count": 3, "width": 1410, "height": 600, "mimeType": "image/png" }
+}

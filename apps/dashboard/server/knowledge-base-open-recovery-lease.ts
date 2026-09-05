@@ -34,15 +34,30 @@ function validLeaseMs(value: number | undefined) {
 export function classifyKnowledgeBaseOpenRecoveryBuild(
   build: Pick<
     KnowledgeBaseBuild,
+    | "executionMode"
+    | "skillVersion"
+    | "providerProtocol"
+    | "contentVersion"
     | "activeTurnId"
     | "upstreamTaskId"
+    | "canonicalTaskId"
     | "status"
     | "awaitingResponseSince"
     | "packageStorageKey"
     | "protocolErrorCode"
   >,
 ): KnowledgeBaseOpenRecoveryKind | null {
-  if (build.activeTurnId || !build.upstreamTaskId) return null;
+  if (
+    build.executionMode !== "materialized_bundle_v1" ||
+    build.skillVersion !== "5" ||
+    build.providerProtocol !== "manus_v2" ||
+    build.contentVersion === null
+  ) {
+    return null;
+  }
+  if (build.activeTurnId || !(build.canonicalTaskId || build.upstreamTaskId)) {
+    return null;
+  }
   if (
     build.status === "researching" ||
     (build.status === "confirming" && build.awaitingResponseSince)
@@ -101,7 +116,8 @@ export async function claimKnowledgeBaseOpenRecoveryBuild(
       !kind ||
       build.generation !== input.expectedGeneration ||
       build.stateEpoch !== input.expectedStateEpoch ||
-      build.upstreamTaskId !== input.expectedTaskId ||
+      (build.canonicalTaskId || build.upstreamTaskId) !==
+        input.expectedTaskId ||
       (build.recoveryLeaseExpiresAt &&
         build.recoveryLeaseExpiresAt.getTime() > now.getTime())
     ) {
@@ -124,7 +140,9 @@ export async function claimKnowledgeBaseOpenRecoveryBuild(
           eq(knowledgeBaseBuilds.userId, build.userId),
           eq(knowledgeBaseBuilds.generation, input.expectedGeneration),
           eq(knowledgeBaseBuilds.stateEpoch, input.expectedStateEpoch),
-          eq(knowledgeBaseBuilds.upstreamTaskId, input.expectedTaskId),
+          build.canonicalTaskId
+            ? eq(knowledgeBaseBuilds.canonicalTaskId, input.expectedTaskId)
+            : eq(knowledgeBaseBuilds.upstreamTaskId, input.expectedTaskId),
           isNull(knowledgeBaseBuilds.activeTurnId),
           or(
             isNull(knowledgeBaseBuilds.recoveryLeaseExpiresAt),

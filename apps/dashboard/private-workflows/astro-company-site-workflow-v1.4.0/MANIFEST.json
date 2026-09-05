@@ -1,0 +1,64 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-astro-company-site-workflow",
+  "version": "1.4.0",
+  "entrypoint": "SKILL.md",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "hashScope": "all regular files except MANIFEST.json",
+  "host": {
+    "starterSha256": "a7b23f68b51c4a4f3b14ed74a625dfda855817e59c865c9424b9ffd45dcacc4d",
+    "componentLibraryVersion": "1.0.0",
+    "materializerVersion": "1.0.0",
+    "materializerSha256": "981a1af2cc6d9030173b9be0a7ec073e60d0303ab4af3c8769b27293221bdce7"
+  },
+  "files": [
+    {
+      "path": "adapters/frontmind-dashboard.md",
+      "bytes": 2272,
+      "sha256": "b2a11afd3d63dde789fb7c6346e016eca5dde5502f250c25028ce8543d1ee9c4"
+    },
+    {
+      "path": "assets/host-starter-contract.json",
+      "bytes": 898,
+      "sha256": "a7b23f68b51c4a4f3b14ed74a625dfda855817e59c865c9424b9ffd45dcacc4d"
+    },
+    {
+      "path": "runtime-contract.json",
+      "bytes": 1761,
+      "sha256": "51481eab6d7221c1b6db2abcc03e0134806e46dcc6bfeec91069b5a330c9fe9e"
+    },
+    {
+      "path": "schemas/frontmind-run-envelope.schema.json",
+      "bytes": 3293,
+      "sha256": "d9cbc27a14121956b3cbd83c59653b7f14644c807e69dbf43f664d9678279cd1"
+    },
+    {
+      "path": "schemas/page-content-wire-v1.schema.json",
+      "bytes": 1357,
+      "sha256": "1541a331e3565d5a557ba0293a715048e457f61c690de45dca92e11f146311cc"
+    },
+    {
+      "path": "schemas/site-design-wire-v1.schema.json",
+      "bytes": 2370,
+      "sha256": "a1be17bba0256dc24e2625cdf7e79b15b4a6e32bba78ba1198307f81f08d308b"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 2717,
+      "sha256": "ccc08345e818994aa79d3fc4598cb6a825e0d1253ddb45c09fa8ce22b8e676c1"
+    },
+    {
+      "path": "UPSTREAM.json",
+      "bytes": 244,
+      "sha256": "bad73d447e991c561832e9c3631555b32119aad07f1f3c00bf5e5ce4dc58a771"
+    },
+    {
+      "path": "VERSION",
+      "bytes": 6,
+      "sha256": "78b591400c56b7b67b8cb3b2b8a8e65e9093897f02ce0878e6b5405c68620fa7"
+    }
+  ]
+}

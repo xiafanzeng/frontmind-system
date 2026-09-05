@@ -53,6 +53,19 @@ describe("website purchase provisioning v2 contract", () => {
     });
     expect(value.account).not.toHaveProperty("password");
     expect(value).not.toHaveProperty("userId");
+    expect(value.marketEdition).toBeUndefined();
+    expect(
+      websitePurchaseRequestV2Schema.parse({
+        ...value,
+        marketEdition: "overseas",
+      }).marketEdition,
+    ).toBe("overseas");
+    expect(
+      websitePurchaseRequestV2Schema.safeParse({
+        ...value,
+        marketEdition: "global",
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts external WeChat evidence only without an electronic contract id", () => {

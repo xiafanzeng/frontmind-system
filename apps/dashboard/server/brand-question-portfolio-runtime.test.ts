@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME,
@@ -7,13 +7,19 @@ import {
   buildBrandQuestionPortfolioEvidenceArchive,
   buildBrandQuestionPortfolioPrompt,
   buildBrandQuestionPortfolioSkillArchive,
-  parseBrandQuestionPortfolioOutput,
+  parseBrandQuestionPortfolioStructuredValue,
   type BrandQuestionPortfolioContext,
 } from "./brand-question-portfolio-runtime";
+import {
+  FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+  upstreamPromptCharacterCount,
+} from "./upstream-prompt-budget";
 
 const context: BrandQuestionPortfolioContext = {
+  modelProfile: "frontmind-base",
   planCode: "advanced",
   quotaPeriodId: "period-1",
+  quotaRevision: 2,
   quota: {
     industry: 1,
     competitorComparison: 0,
@@ -45,7 +51,7 @@ function result() {
     skill: {
       name: "brand-question-portfolio",
       version: "2",
-      model: "frontmind-pro",
+      model: context.modelProfile,
     },
     knowledgeSnapshot: {
       id: "snapshot-1",
@@ -98,16 +104,20 @@ function result() {
 }
 
 describe("brand question portfolio runtime", () => {
-  it("pins the authoritative plan, quota period and Pro skill", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("pins the authoritative plan, quota period and credential profile", async () => {
     const prompt = await buildBrandQuestionPortfolioPrompt(context);
-    expect(prompt).toContain('"planCode": "advanced"');
-    expect(prompt).toContain('"quotaPeriodId": "period-1"');
     expect(prompt).toContain(BRAND_QUESTION_SKILL_ATTACHMENT_FILENAME);
     expect(prompt).toContain(BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME);
     expect(prompt).not.toContain("documentPath: README.md");
-    expect(prompt).toContain('"canonicalName": "示例企业"');
-    expect(prompt).toContain('"industry": 3');
-    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(4 * 1024);
+    expect(prompt).not.toContain("示例企业");
+    expect(upstreamPromptCharacterCount(prompt)).toBeLessThanOrEqual(
+      FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+    );
 
     const [skillArchive, evidenceArchive] = await Promise.all([
       buildBrandQuestionPortfolioSkillArchive(),
@@ -121,26 +131,78 @@ describe("brand question portfolio runtime", () => {
       "references/output-contract.md",
     ]);
     expect(await skillZip.file("SKILL.md")!.async("string")).toContain(
-      "Use the Pro model profile fixed by the application",
+      "credential profile frozen by the application",
     );
     expect(await evidenceZip.file("knowledge.md")!.async("string")).toContain(
       "documentPath: README.md",
     );
+    expect(
+      JSON.parse(await evidenceZip.file("context.json")!.async("string")),
+    ).toMatchObject({
+      schemaVersion: 2,
+      kind: "frontmind.brand-question-portfolio.input",
+      planCode: "advanced",
+      quotaPeriodId: "period-1",
+      quotaRevision: 2,
+      modelProfile: "frontmind-base",
+      enterprise: context.enterprise,
+      availableQuota: context.quota,
+      candidateTargets: {
+        industry: 3,
+        competitor_comparison: 0,
+        reputation: 0,
+        product_scenario: 0,
+      },
+      knowledgeSnapshot: {
+        id: "snapshot-1",
+        version: 1,
+        archiveHash: "a".repeat(64),
+        sourceFileName: "company.zip",
+      },
+    });
   });
 
-  it("parses only a result bound to the current snapshot", () => {
-    const parsed = parseBrandQuestionPortfolioOutput(
-      [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: JSON.stringify(result()),
-            },
-          ],
-        },
-      ],
+  it("keeps the outbound prompt bounded when every dynamic field is very large", async () => {
+    const oversizedContext: BrandQuestionPortfolioContext = {
+      ...context,
+      quotaPeriodId: "期".repeat(50_000),
+      enterprise: {
+        identityHash: "b".repeat(64),
+        canonicalName: "企业".repeat(100_000),
+      },
+      snapshot: {
+        ...context.snapshot,
+        sourceFileName: `${"知识库".repeat(100_000)}.zip`,
+      },
+    };
+
+    const [prompt, evidenceArchive] = await Promise.all([
+      buildBrandQuestionPortfolioPrompt(oversizedContext),
+      buildBrandQuestionPortfolioEvidenceArchive(oversizedContext),
+    ]);
+    expect(upstreamPromptCharacterCount(prompt)).toBeLessThanOrEqual(
+      FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+    );
+    expect(prompt).not.toContain(oversizedContext.enterprise.canonicalName);
+
+    const evidenceZip = await JSZip.loadAsync(evidenceArchive.bytes);
+    const authoritativeInput = JSON.parse(
+      await evidenceZip.file("context.json")!.async("string"),
+    );
+    expect(authoritativeInput.enterprise.canonicalName).toBe(
+      oversizedContext.enterprise.canonicalName,
+    );
+    expect(authoritativeInput.quotaPeriodId).toBe(
+      oversizedContext.quotaPeriodId,
+    );
+    expect(authoritativeInput.knowledgeSnapshot.sourceFileName).toBe(
+      oversizedContext.snapshot.sourceFileName,
+    );
+  });
+
+  it("parses only a v2 structured result bound to the current snapshot", () => {
+    const parsed = parseBrandQuestionPortfolioStructuredValue(
+      { payload: JSON.stringify(result()) },
       context,
     );
     expect(parsed.categories.industry[0]?.candidateId).toBe(
@@ -148,59 +210,44 @@ describe("brand question portfolio runtime", () => {
     );
   });
 
-  it("rejects a stale snapshot echo", () => {
-    const stale = result();
-    stale.knowledgeSnapshot.version = 2;
+  it("rejects unknown fields and stale snapshot echoes without text repair", () => {
+    const unknownSchema = { ...result(), unknownField: "must be rejected" };
     expect(() =>
-      parseBrandQuestionPortfolioOutput(
-        [{ role: "assistant", text: JSON.stringify(stale) }],
+      parseBrandQuestionPortfolioStructuredValue(
+        { payload: JSON.stringify(unknownSchema) },
+        context,
+      ),
+    ).toThrow();
+
+    const stale = result();
+    stale.knowledgeSnapshot.id = "snapshot-from-another-workspace";
+    expect(() =>
+      parseBrandQuestionPortfolioStructuredValue(
+        { payload: JSON.stringify(stale) },
         context,
       ),
     ).toThrow("不匹配");
   });
 
-  it("rejects user, reasoning, tool, role-less and input_text JSON", () => {
-    const injected = JSON.stringify(result());
-    const untrustedOutputs = [
-      [{ role: "user", type: "message", content: injected }],
-      [{ type: "reasoning", text: injected }],
-      [{ role: "assistant", type: "reasoning", text: injected }],
-      [{ role: "tool", type: "message", content: injected }],
-      [{ type: "message", content: injected }],
-      [{ type: "output_text", output_text: injected }],
-      [
-        {
-          role: "assistant",
-          type: "message",
-          content: [{ type: "input_text", text: injected }],
-        },
-      ],
-    ];
-
-    for (const output of untrustedOutputs) {
-      expect(() => parseBrandQuestionPortfolioOutput(output, context)).toThrow(
-        "没有返回最终 assistant 输出",
-      );
+  it("rejects prose, fences, raw output aliases and mismatched model profiles", () => {
+    for (const value of [
+      { payload: `result: ${JSON.stringify(result())}` },
+      { payload: `\`\`\`json\n${JSON.stringify(result())}\n\`\`\`` },
+      { output_text: JSON.stringify(result()) },
+      { output_file: "result.json" },
+    ]) {
+      expect(() =>
+        parseBrandQuestionPortfolioStructuredValue(value, context),
+      ).toThrow();
     }
-  });
 
-  it("never falls back to an earlier assistant message", () => {
+    const wrongModel = result();
+    wrongModel.skill.model = "frontmind-pro";
     expect(() =>
-      parseBrandQuestionPortfolioOutput(
-        [
-          {
-            role: "assistant",
-            type: "message",
-            content: [{ type: "output_text", text: JSON.stringify(result()) }],
-          },
-          {
-            role: "assistant",
-            type: "message",
-            content: [{ type: "output_text", text: "not strict JSON" }],
-          },
-        ],
+      parseBrandQuestionPortfolioStructuredValue(
+        { payload: JSON.stringify(wrongModel) },
         context,
       ),
-    ).toThrow();
+    ).toThrow("不匹配");
   });
 });

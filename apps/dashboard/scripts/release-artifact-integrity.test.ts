@@ -188,6 +188,50 @@ describe("Dashboard single-commit production release identity", () => {
     );
   });
 
+  it("requires the incident repair CLI artifact exactly when its product source exists", async () => {
+    const repositoryRoot = await createRepository();
+    const sourceSha = git(repositoryRoot, ["rev-parse", "HEAD"]);
+    const distRoot = await populateReleaseArtifact(repositoryRoot);
+    await writeFile(
+      path.join(distRoot, "knowledge-base-incident-repair-cli.js"),
+      "orphaned incident repair CLI\n",
+    );
+    await writeBuildArtifactIdentity(distRoot, sourceSha);
+    await expect(
+      writeBuildArtifactManifest(distRoot, sourceSha),
+    ).rejects.toThrow("BUILD_ARTIFACT_REQUIRED_COVERAGE_MISSING");
+
+    await rm(path.join(distRoot, "knowledge-base-incident-repair-cli.js"));
+    await mkdir(path.join(repositoryRoot, "server"));
+    await writeFile(
+      path.join(
+        repositoryRoot,
+        "server",
+        "knowledge-base-incident-repair-cli.ts",
+      ),
+      "export {};\n",
+    );
+    await expect(
+      writeBuildArtifactManifest(distRoot, sourceSha),
+    ).rejects.toThrow("BUILD_ARTIFACT_REQUIRED_COVERAGE_MISSING");
+
+    await writeFile(
+      path.join(distRoot, "knowledge-base-incident-repair-cli.js"),
+      "",
+    );
+    await expect(
+      writeBuildArtifactManifest(distRoot, sourceSha),
+    ).rejects.toThrow("BUILD_ARTIFACT_REQUIRED_COVERAGE_MISSING");
+
+    await writeFile(
+      path.join(distRoot, "knowledge-base-incident-repair-cli.js"),
+      "signed incident repair CLI\n",
+    );
+    await expect(
+      writeBuildArtifactManifest(distRoot, sourceSha),
+    ).resolves.toMatchObject({ buildSourceSha: sourceSha });
+  });
+
   it("rejects a replaced manifest without requiring an external runtime root", async () => {
     const repositoryRoot = await createRepository();
     const sourceSha = git(repositoryRoot, ["rev-parse", "HEAD"]);

@@ -13,6 +13,8 @@ import {
   monitoringModelKey,
   parseMonitoringDateBoundary,
   replaceMonitoringBatch,
+  resolveMonitoringBatchQuotaScope,
+  resolveQuestionMonitoringScopeWithDb,
   summarizeMonitoringCitations,
 } from "./monitoring-service";
 
@@ -63,6 +65,164 @@ function importValue() {
 }
 
 describe("monitoring import normalization", () => {
+  it("binds progressive Luxury cross-period questions to the current operational period", () => {
+    expect(
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-luxury-v2",
+            planCode: "luxury",
+            planVersion: 2,
+          },
+          quotas: { periodId: "period-month-4" },
+          quotaPeriods: [],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-luxury-v2",
+            quotaPeriodId: "period-month-1",
+          },
+          {
+            contractId: "contract-luxury-v2",
+            quotaPeriodId: "period-month-4",
+          },
+        ],
+      }),
+    ).toEqual({
+      contractId: "contract-luxury-v2",
+      quotaPeriodId: "period-month-4",
+      progressiveLuxury: true,
+    });
+  });
+
+  it("keeps legacy monitoring imports restricted to one quota period", () => {
+    expect(() =>
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-luxury-v1",
+            planCode: "luxury",
+            planVersion: 1,
+          },
+          quotas: { periodId: "period-month-2" },
+          quotaPeriods: [
+            {
+              contractId: "contract-luxury-v1",
+              periodId: "period-month-2",
+            },
+          ],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-luxury-v1",
+            quotaPeriodId: "period-month-1",
+          },
+          {
+            contractId: "contract-luxury-v1",
+            quotaPeriodId: "period-month-2",
+          },
+        ],
+      }),
+    ).toThrow("同一合同与有效额度周期");
+  });
+
+  it("accepts a supplemental active Basic contract instead of forcing the primary contract", () => {
+    expect(
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-basic-primary",
+            planCode: "basic",
+            planVersion: 1,
+          },
+          quotas: { periodId: "period-basic-primary" },
+          quotaPeriods: [
+            {
+              contractId: "contract-basic-primary",
+              periodId: "period-basic-primary",
+            },
+            {
+              contractId: "contract-basic-supplemental",
+              periodId: "period-basic-supplemental",
+            },
+          ],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-basic-supplemental",
+            quotaPeriodId: "period-basic-supplemental",
+          },
+        ],
+      }),
+    ).toEqual({
+      contractId: "contract-basic-supplemental",
+      quotaPeriodId: "period-basic-supplemental",
+      progressiveLuxury: false,
+    });
+  });
+
+  it("keeps a supplemental Basic period valid beside a primary progressive Luxury contract", () => {
+    expect(
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-luxury-v2",
+            planCode: "luxury",
+            planVersion: 2,
+          },
+          quotas: { periodId: "period-luxury-current" },
+          quotaPeriods: [
+            {
+              contractId: "contract-luxury-v2",
+              periodId: "period-luxury-current",
+            },
+            {
+              contractId: "contract-basic-supplemental",
+              periodId: "period-basic-supplemental",
+            },
+          ],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-basic-supplemental",
+            quotaPeriodId: "period-basic-supplemental",
+          },
+        ],
+      }),
+    ).toEqual({
+      contractId: "contract-basic-supplemental",
+      quotaPeriodId: "period-basic-supplemental",
+      progressiveLuxury: false,
+    });
+  });
+
+  it("rejects a legacy question scope outside the active portal periods", () => {
+    expect(() =>
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-basic-primary",
+            planCode: "basic",
+            planVersion: 1,
+          },
+          quotas: { periodId: "period-basic-primary" },
+          quotaPeriods: [
+            {
+              contractId: "contract-basic-primary",
+              periodId: "period-basic-primary",
+            },
+          ],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-basic-expired",
+            quotaPeriodId: "period-basic-expired",
+          },
+        ],
+      }),
+    ).toThrow("同一合同与有效额度周期");
+  });
+
   it("binds every row to the authoritative tenant, batch and question catalog", () => {
     let sequence = 0;
     const rows = buildMonitoringBatchRows({
@@ -242,6 +402,7 @@ describe("monitoring citation reads", () => {
     userId: 42,
     batchId: "batch-1",
     questionId: "question-1",
+    question: "当前服务问题",
     batchKey: "weekly-2026-30",
     quotaPeriodId: "period-1",
   };
@@ -275,6 +436,7 @@ describe("monitoring citation reads", () => {
       { requestedSampleId: "another-sample" },
       { batchKey: "another-batch" },
       { questionIds: ["question-2"] },
+      { currentQuestion: "修改后的服务问题" },
       { quotaPeriodIds: ["period-expired"] },
       { sample: undefined },
     ]) {
@@ -285,6 +447,27 @@ describe("monitoring citation reads", () => {
         }),
       ).toThrow("不属于当前批次、问题及有效服务周期");
     }
+  });
+
+  it("accepts monitoring artifacts only when their stored question matches the current question text", () => {
+    expect(
+      assertMonitoringCitationSampleScope({
+        sample,
+        requestedSampleId: sample.id,
+        userId: 42,
+        questionIds: [sample.questionId],
+        currentQuestion: sample.question,
+      }),
+    ).toBe(sample);
+    expect(() =>
+      assertMonitoringCitationSampleScope({
+        sample,
+        requestedSampleId: sample.id,
+        userId: 42,
+        questionIds: [sample.questionId],
+        currentQuestion: "已批准修改后的新问题",
+      }),
+    ).toThrow("不属于当前批次、问题及有效服务周期");
   });
 
   it("normalizes channel domains and content URLs before aggregation", () => {
@@ -369,6 +552,77 @@ describe("monitoring citation reads", () => {
   });
 });
 
+describe("question monitoring lineage scope", () => {
+  function fakeScopeDb(
+    matches: Array<{
+      id: string;
+      externalQuestionId: string | null;
+      sourceQuestionId: string | null;
+      question: string;
+      status: "selected" | "archived";
+      selectionApprovalStatus: "approved";
+    }>,
+    lineageRows: Array<{ id: string; externalQuestionId: string | null }> = [],
+  ) {
+    const queue = [matches, lineageRows];
+    return {
+      select: () => {
+        const rows = queue.shift() ?? [];
+        const chain: any = {
+          from: () => chain,
+          where: () => Promise.resolve(rows),
+        };
+        return chain;
+      },
+    } as any;
+  }
+
+  const oldQuestion = {
+    id: "question-old",
+    externalQuestionId: null,
+    sourceQuestionId: null,
+    question: "原问题？",
+    status: "archived" as const,
+    selectionApprovalStatus: "approved" as const,
+  };
+  const replacement = {
+    id: "question-new",
+    externalQuestionId: null,
+    sourceQuestionId: "question-old",
+    question: "修改后的新问题？",
+    status: "selected" as const,
+    selectionApprovalStatus: "approved" as const,
+  };
+
+  it("uses only the active replacement id for current monitoring", async () => {
+    await expect(
+      resolveQuestionMonitoringScopeWithDb(
+        fakeScopeDb([oldQuestion, replacement]),
+        7,
+        replacement.id,
+        "current",
+      ),
+    ).resolves.toEqual({
+      questionIds: [replacement.id],
+      currentQuestion: replacement.question,
+    });
+  });
+
+  it("keeps an archived historical read pinned to the old id and text", async () => {
+    await expect(
+      resolveQuestionMonitoringScopeWithDb(
+        fakeScopeDb([oldQuestion, replacement]),
+        7,
+        oldQuestion.id,
+        "historical_exact",
+      ),
+    ).resolves.toEqual({
+      questionIds: [oldQuestion.id],
+      currentQuestion: oldQuestion.question,
+    });
+  });
+});
+
 describe("monitoring read entitlement scope", () => {
   it("keeps compatibility users tenant-scoped without requiring classified periods", () => {
     expect(
@@ -391,6 +645,41 @@ describe("monitoring read entitlement scope", () => {
         historicalQuotaPeriodIds: ["expired-1"],
       }),
     ).toEqual(["current-1", "current-2"]);
+  });
+
+  it("keeps previous-image anchor monitoring readable without making it the current write period", () => {
+    expect(
+      deriveMonitoringReadQuotaPeriodIds({
+        serviceStatus: "active",
+        capabilityAllowed: true,
+        compatibilityMode: false,
+        currentQuotaPeriodIds: ["month-4-operational"],
+        compatibilityQuotaPeriodIds: [
+          "annual-question-anchor",
+          "annual-question-anchor",
+        ],
+      }),
+    ).toEqual(["month-4-operational", "annual-question-anchor"]);
+
+    expect(
+      resolveMonitoringBatchQuotaScope({
+        portal: {
+          service: {
+            contractId: "contract-luxury-v2",
+            planCode: "luxury",
+            planVersion: 2,
+          },
+          quotas: { periodId: "month-4-operational" },
+          quotaPeriods: [],
+        } as any,
+        referencedQuestions: [
+          {
+            contractId: "contract-luxury-v2",
+            quotaPeriodId: "annual-question-anchor",
+          },
+        ],
+      }),
+    ).toMatchObject({ quotaPeriodId: "month-4-operational" });
   });
 
   it.each(["expired", "cancelled"] as const)(

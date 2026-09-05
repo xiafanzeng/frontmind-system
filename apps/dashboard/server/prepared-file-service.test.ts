@@ -102,6 +102,33 @@ describe("PreparedFileService shared-volume coordination", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("records managed local asset authority without inventing a Provider credential", async () => {
+    const sharedRoot = await root();
+    const writer = await service(sharedRoot);
+    const localAssetId = `asset_${"a".repeat(30)}`;
+    const registered = await writer.registerFile({
+      ownerUserId: 7,
+      sourceKind: "managed_local_asset",
+      sourceAuthorityId: localAssetId,
+      fileId: localAssetId,
+      filename: "local.pdf",
+      expiresAt: Date.now() + 60_000,
+    });
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(sharedRoot, `${registered.assetId}.json`),
+        "utf8",
+      ),
+    );
+
+    expect(manifest).toMatchObject({
+      sourceKind: "managed_local_asset",
+      sourceAuthorityId: localAssetId,
+      source: { kind: "file", fileId: localAssetId },
+    });
+    expect(manifest).not.toHaveProperty("credentialId");
+  });
+
   it("converges a durable delete marker left by a crashed instance", async () => {
     const sharedRoot = await root();
     const writer = await service(sharedRoot);

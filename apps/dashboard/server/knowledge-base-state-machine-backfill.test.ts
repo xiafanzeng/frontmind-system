@@ -76,16 +76,18 @@ describe("knowledge-base v2 state-machine backfill", () => {
       skillVersion: "4",
       status: "ready_to_publish",
       stateEpoch: 7,
+      packageStatus: "attention_required",
       logoStorageKey: null,
       logoSha256: null,
       logoBytes: null,
-      packageStorageKey: "knowledge/package.zip",
-      packageArchiveSha256: "a".repeat(64),
-      packageSizeBytes: 4096,
+      packageStorageKey: null,
+      packageArchiveSha256: null,
+      packageSizeBytes: null,
       protocolErrorCode: null as string | null,
     };
     const eligibleRows = () =>
       row.status === "ready_to_publish" &&
+      ["not_started", "attention_required"].includes(row.packageStatus) &&
       knowledgeBaseReadyArtifactRecoveryFacts(row).rebindRequired
         ? [row]
         : [];
@@ -119,9 +121,10 @@ describe("knowledge-base v2 state-machine backfill", () => {
     ]);
     expect(concurrent.map((result) => result.rebindRequired)).toEqual([1, 1]);
     expect(row).toMatchObject({
-      status: "protocol_error",
+      status: "ready_to_publish",
       stateEpoch: 8,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
+      packageStatus: "preparing",
+      protocolErrorCode: null,
     });
 
     await expect(
@@ -133,7 +136,7 @@ describe("knowledge-base v2 state-machine backfill", () => {
     expect(row.stateEpoch).toBe(8);
   });
 
-  it("requires v4 artifact rebind for every incomplete ZIP or Logo identity", () => {
+  it("rebuilds an incomplete ZIP without making optional Logo bytes a content gate", () => {
     const durable = {
       skillVersion: "4",
       packageStorageKey: "knowledge/package.zip",
@@ -155,6 +158,15 @@ describe("knowledge-base v2 state-machine backfill", () => {
       { packageArchiveSha256: "invalid" },
       { packageSizeBytes: null },
       { packageSizeBytes: 0 },
+    ]) {
+      expect(
+        knowledgeBaseReadyArtifactRecoveryFacts({
+          ...durable,
+          ...overrides,
+        }),
+      ).toMatchObject({ rebindRequired: true });
+    }
+    for (const overrides of [
       { logoStorageKey: null },
       { logoSha256: null },
       { logoSha256: "invalid" },
@@ -166,7 +178,7 @@ describe("knowledge-base v2 state-machine backfill", () => {
           ...durable,
           ...overrides,
         }),
-      ).toMatchObject({ rebindRequired: true });
+      ).toMatchObject({ rebindRequired: false });
     }
   });
 
@@ -183,7 +195,7 @@ describe("knowledge-base v2 state-machine backfill", () => {
       }),
     ).toEqual({
       packageDurable: true,
-      logoDurable: true,
+      logoDurable: false,
       rebindRequired: false,
     });
   });

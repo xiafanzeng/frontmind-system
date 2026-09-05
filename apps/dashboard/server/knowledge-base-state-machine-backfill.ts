@@ -93,39 +93,28 @@ export function knowledgeBaseReadyArtifactRecoveryFacts(input: {
       /^[a-f0-9]{64}$/u.test(String(input.packageArchiveSha256 || "")) &&
       Number(input.packageSizeBytes) > 0,
   );
-  const logoDurable =
-    input.skillVersion !== "4" ||
-    Boolean(
-      input.logoStorageKey &&
-        /^[a-f0-9]{64}$/u.test(String(input.logoSha256 || "")) &&
-        Number(input.logoBytes) > 0,
-    );
+  const logoDurable = Boolean(
+    input.logoStorageKey &&
+      /^[a-f0-9]{64}$/u.test(String(input.logoSha256 || "")) &&
+      Number(input.logoBytes) > 0,
+  );
   return {
     packageDurable,
     logoDurable,
-    rebindRequired: !packageDurable || !logoDurable,
+    // Logo is an optional package enhancement. Missing Logo bytes must never
+    // revoke an already accepted content-completion receipt.
+    rebindRequired: !packageDurable,
   };
 }
 
 function readyArtifactRebindRequiredCondition() {
   const invalidPackageSha = sql<boolean>`${knowledgeBaseBuilds.packageArchiveSha256} not regexp '^[a-f0-9]{64}$'`;
-  const invalidLogoSha = sql<boolean>`${knowledgeBaseBuilds.logoSha256} not regexp '^[a-f0-9]{64}$'`;
   return or(
     isNull(knowledgeBaseBuilds.packageStorageKey),
     isNull(knowledgeBaseBuilds.packageArchiveSha256),
     invalidPackageSha,
     isNull(knowledgeBaseBuilds.packageSizeBytes),
     lte(knowledgeBaseBuilds.packageSizeBytes, 0),
-    and(
-      eq(knowledgeBaseBuilds.skillVersion, "4"),
-      or(
-        isNull(knowledgeBaseBuilds.logoStorageKey),
-        isNull(knowledgeBaseBuilds.logoSha256),
-        invalidLogoSha,
-        isNull(knowledgeBaseBuilds.logoBytes),
-        lte(knowledgeBaseBuilds.logoBytes, 0),
-      ),
-    ),
   );
 }
 
@@ -725,9 +714,9 @@ export async function prepareKnowledgeBaseStateMachineBackfill(input: {
 }
 
 /**
- * Call only after the one-shot recovery read. Any legacy ready build that
- * still lacks immutable ZIP bytes loses publication eligibility explicitly;
- * no nodes, messages or snapshots are deleted.
+ * Schedule local package reconstruction for legacy content-complete builds.
+ * Package/Logo defects are deliberately post-acceptance concerns: this never
+ * revokes content completion or moves a build into protocol_error.
  */
 export async function finalizeKnowledgeBaseReadyPackageBackfill(input: {
   apply: boolean;
@@ -752,9 +741,24 @@ export async function finalizeKnowledgeBaseReadyPackageBackfill(input: {
     })
     .from(knowledgeBaseBuilds)
     .where(
-      and(
-        eq(knowledgeBaseBuilds.status, "ready_to_publish"),
-        readyArtifactRebindRequiredCondition(),
+      or(
+        and(
+          eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+          readyArtifactRebindRequiredCondition(),
+          inArray(knowledgeBaseBuilds.packageStatus, [
+            "not_started",
+            "attention_required",
+          ]),
+        ),
+        and(
+          eq(knowledgeBaseBuilds.status, "protocol_error"),
+          eq(knowledgeBaseBuilds.protocolErrorCode, "PACKAGE_REBIND_REQUIRED"),
+          isNull(knowledgeBaseBuilds.currentLeafId),
+          inArray(knowledgeBaseBuilds.packageStatus, [
+            "not_started",
+            "attention_required",
+          ]),
+        ),
       ),
     );
   const dispositions = rows.map((row) => ({
@@ -763,32 +767,50 @@ export async function finalizeKnowledgeBaseReadyPackageBackfill(input: {
     skillVersion: row.skillVersion,
     hasLogo: knowledgeBaseReadyArtifactRecoveryFacts(row).logoDurable,
     hasPackage: knowledgeBaseReadyArtifactRecoveryFacts(row).packageDurable,
-    action: "require_artifact_rebind" as const,
+    action: "schedule_local_package_rebuild" as const,
   }));
-  if (input.apply && rows.length > 0 && !input.confirmRebindRequired) {
-    throw new Error(
-      "仍有历史 ready_to_publish 构建缺少完整固化 ZIP/Logo；请审核 disposition 后显式确认重新绑定状态",
-    );
-  }
   if (input.apply && rows.length > 0) {
     for (const row of rows) {
       await db
         .update(knowledgeBaseBuilds)
         .set({
-          status: "protocol_error",
+          status: "ready_to_publish",
           stateEpoch: row.stateEpoch + 1,
-          protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-          protocolError:
-            "历史知识库成品未能固化，请重新绑定通过校验的最终 ZIP 后再发布",
+          contentCompletedAt: sql<Date>`coalesce(${knowledgeBaseBuilds.contentCompletedAt}, ${knowledgeBaseBuilds.completedAt}, ${knowledgeBaseBuilds.updatedAt}, ${now})`,
+          packageStatus: "preparing",
+          packageNextRetryAt: now,
+          packageLastErrorCode: null,
+          protocolErrorCode: null,
+          protocolError: null,
           awaitingResponseSince: null,
           updatedAt: now,
         })
         .where(
           and(
             eq(knowledgeBaseBuilds.id, row.id),
-            eq(knowledgeBaseBuilds.status, "ready_to_publish"),
             eq(knowledgeBaseBuilds.stateEpoch, row.stateEpoch),
-            readyArtifactRebindRequiredCondition(),
+            or(
+              and(
+                eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+                readyArtifactRebindRequiredCondition(),
+                inArray(knowledgeBaseBuilds.packageStatus, [
+                  "not_started",
+                  "attention_required",
+                ]),
+              ),
+              and(
+                eq(knowledgeBaseBuilds.status, "protocol_error"),
+                eq(
+                  knowledgeBaseBuilds.protocolErrorCode,
+                  "PACKAGE_REBIND_REQUIRED",
+                ),
+                isNull(knowledgeBaseBuilds.currentLeafId),
+                inArray(knowledgeBaseBuilds.packageStatus, [
+                  "not_started",
+                  "attention_required",
+                ]),
+              ),
+            ),
           ),
         );
     }

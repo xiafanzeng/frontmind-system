@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { managedAgentProfileSchema } from "../shared/manus-agent-profile";
 import { adminProcedure, router } from "./_core/trpc";
 import {
   createManagedUser,
@@ -11,10 +12,23 @@ import { passwordSchema, toTrpcError } from "./auth-router";
 import {
   deletePresalesApiCredential,
   getPresalesCredentialStatus,
-  getPresalesCreditUsage,
+  getPresalesCreditUsageSnapshot,
   replacePresalesApiCredential,
   testPresalesApiCredential,
 } from "./presales-service";
+import {
+  deleteTwentyFirstApiCredential,
+  getTwentyFirstCredentialStatus,
+  replaceTwentyFirstApiCredential,
+  testTwentyFirstApiCredential,
+} from "./twenty-first-service";
+import {
+  aliyunOAuthCredentialInputSchema,
+  deleteAliyunPlatformCredentials,
+  getAliyunPlatformCredentialStatus,
+  replaceAliyunOAuthCredential,
+  testAliyunPlatformCredentials,
+} from "./siteops/aliyun-platform-service";
 import {
   assertDashboardEnterpriseIdentity,
   getDashboardContentRevision,
@@ -30,6 +44,7 @@ import {
   updateDashboardWorkspace,
 } from "./dashboard-service";
 import { getKnowledgeBaseProgress } from "./knowledge-base-progress-service";
+import { toKnowledgeBasePublicPayload } from "./knowledge-base-public-projection";
 import {
   listMonitoringCitationsSchema,
   listMonitoringSampleCitationsSchema,
@@ -58,6 +73,7 @@ import {
   updateWorkspaceQuestionBySystemAdmin,
   upsertServiceContract,
 } from "./service-entitlement";
+import { completeQuestionReviewRequest } from "./question-maintenance-service";
 import {
   decideWebsitePurchase,
   listPendingWebsitePurchases,
@@ -90,6 +106,7 @@ import {
   adminAddDeliveryTicketMessageSchema,
   adminDeliveryTicketListInputSchema,
   confirmRedirectWorkbookSchema,
+  deleteDeliveryTicketInputSchema,
   deliveryTicketDetailInputSchema,
   previewRedirectWorkbookSchema,
   recordDeliveryOperationSchema,
@@ -99,6 +116,7 @@ import {
 } from "../shared/delivery-ticket";
 import {
   addDeliveryTicketMessage,
+  deleteManagedDeliveryTicket,
   DeliveryTicketError,
   getDeliveryTicketDetail,
   getDeliveryTicketWorkspaceMetadata,
@@ -127,16 +145,30 @@ import {
   servicePlanCodeSchema,
   toPublicServicePortal,
   toPublicServicePortalQuestion,
+  workspaceQuestionCategorySchema,
   type ServicePortal,
   type ServicePortalQuestion,
 } from "../shared/service-portal";
 import { accountMarketEditionSchema } from "../shared/account-edition";
 import { deliveryRoleTypeSchema } from "../shared/delivery-roles";
-import { createDeliveryEngineer } from "./delivery-role-service";
+import {
+  createDeliveryEngineer,
+  reconcileInitialMonitoringAfterQuestionSelection,
+  type InitialMonitoringQuestionSelection,
+} from "./delivery-role-service";
 import {
   completeManagedServiceUserProvisioning,
   createManagedServiceUser,
 } from "./managed-user-onboarding-service";
+import {
+  bulkAssignJenovaBrandTrackingCredential,
+  configureJenovaBrandTrackingCredential,
+  JenovaBrandTrackingError,
+  listJenovaBrandTrackingCredentialAssignments,
+  revokeJenovaBrandTrackingCredentialAssignment,
+  syncJenovaBrandTrackingCredentialBalance,
+  toJenovaBrandTrackingAuthError,
+} from "./jenova-brand-tracking-service";
 
 const manualServiceOrders = createManualServiceOrderService();
 
@@ -206,6 +238,20 @@ function throwServiceAdminError(error: unknown): never {
   throw toTrpcError(error);
 }
 
+function throwJenovaBrandTrackingAdminError(error: unknown): never {
+  if (
+    error instanceof JenovaBrandTrackingError &&
+    ["UNAUTHORIZED", "FORBIDDEN", "INELIGIBLE"].includes(error.code)
+  ) {
+    throw new TRPCError({
+      code: error.code === "UNAUTHORIZED" ? "UNAUTHORIZED" : "FORBIDDEN",
+      message: error.message,
+      cause: error,
+    });
+  }
+  throw toTrpcError(toJenovaBrandTrackingAuthError(error));
+}
+
 const usernameSchema = z
   .string()
   .trim()
@@ -218,6 +264,25 @@ const presalesApiKeySchema = z
   .trim()
   .min(8, "API Key 至少需要 8 个字符")
   .max(4096, "API Key 不能超过 4096 个字符");
+
+const twentyFirstApiKeySchema = z
+  .string()
+  .trim()
+  .min(8, "21st API Key 至少需要 8 个字符")
+  .max(4096, "21st API Key 不能超过 4096 个字符")
+  .refine(
+    (value) => !/[\u0000-\u001f\u007f]/u.test(value),
+    "21st API Key 包含无效控制字符",
+  );
+
+const managedApiKeyReplaceShape = {
+  userId: z.number().int().positive(),
+  apiKey: presalesApiKeySchema,
+  expectedVersion: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(2_000),
+  confirmation: z.literal("REPLACE_API_KEY"),
+  relatedTicketId: z.string().uuid().optional(),
+} as const;
 
 export const adminUpdateServiceSchema = z
   .object({
@@ -270,6 +335,92 @@ export function managedMonitoringCitationSummaryValue(input: {
 }
 
 export const adminRouter = router({
+  brandTrackingCredentials: router({
+    list: adminProcedure.query(async ({ ctx }) => {
+      requireSystemAdmin(ctx.user);
+      try {
+        return await listJenovaBrandTrackingCredentialAssignments({
+          actor: ctx.user,
+        });
+      } catch (error) {
+        throwJenovaBrandTrackingAdminError(error);
+      }
+    }),
+    configure: adminProcedure
+      .input(
+        z
+          .object({
+            userId: z.number().int().positive(),
+            apiKey: presalesApiKeySchema,
+            relatedTicketId: z.string().uuid().optional(),
+          })
+          .strict(),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await configureJenovaBrandTrackingCredential({
+            actor: ctx.user,
+            ...input,
+          });
+        } catch (error) {
+          throwJenovaBrandTrackingAdminError(error);
+        }
+      }),
+    bulkAssign: adminProcedure
+      .input(
+        z
+          .object({
+            userIds: z
+              .array(z.number().int().positive())
+              .min(1)
+              .max(5_000)
+              .refine(
+                (userIds) => new Set(userIds).size === userIds.length,
+                "海外客户账号不能重复",
+              ),
+            apiKey: presalesApiKeySchema,
+          })
+          .strict(),
+      )
+      .mutation(async ({ ctx, input }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await bulkAssignJenovaBrandTrackingCredential({
+            actor: ctx.user,
+            ...input,
+          });
+        } catch (error) {
+          throwJenovaBrandTrackingAdminError(error);
+        }
+      }),
+    revoke: adminProcedure
+      .input(z.object({ userId: z.number().int().positive() }).strict())
+      .mutation(async ({ ctx, input }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await revokeJenovaBrandTrackingCredentialAssignment({
+            actor: ctx.user,
+            userId: input.userId,
+          });
+        } catch (error) {
+          throwJenovaBrandTrackingAdminError(error);
+        }
+      }),
+    refreshBalance: adminProcedure
+      .input(z.object({ credentialId: z.string().uuid() }).strict())
+      .mutation(async ({ ctx, input }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await syncJenovaBrandTrackingCredentialBalance({
+            actor: ctx.user,
+            credentialId: input.credentialId,
+          });
+        } catch (error) {
+          throwJenovaBrandTrackingAdminError(error);
+        }
+      }),
+  }),
   apiKeyUsageAlerts: router({
     hierarchy: adminProcedure.query(async ({ ctx }) => {
       requireSystemAdmin(ctx.user);
@@ -332,6 +483,9 @@ export const adminRouter = router({
               .enum(["unconfigured_only", "replace_all"])
               .default("unconfigured_only"),
             apiKey: presalesApiKeySchema,
+            agentProfile: managedAgentProfileSchema
+              .default("frontmind-pro")
+              .optional(),
             reason: z.string().trim().min(1).max(2_000),
             confirmation: z.literal("BULK_REPLACE_API_KEYS"),
           })
@@ -346,6 +500,7 @@ export const adminRouter = router({
             targets: input.targets,
             applyMode: input.applyMode,
             apiKey: input.apiKey,
+            agentProfile: input.agentProfile,
             reason: input.reason,
           });
         } catch (error) {
@@ -354,22 +509,27 @@ export const adminRouter = router({
       }),
     replaceTargetCredential: adminProcedure
       .input(
-        z
-          .object({
-            kind: z.enum([
-              "customer",
-              "delivery_admin",
-              "system_admin",
-              "engineer",
-            ]),
-            userId: z.number().int().positive(),
-            apiKey: presalesApiKeySchema,
-            expectedVersion: z.number().int().nonnegative(),
-            reason: z.string().trim().min(1).max(2_000),
-            confirmation: z.literal("REPLACE_API_KEY"),
-            allowIncompleteHistory: z.boolean().optional().default(false),
-          })
-          .strict(),
+        z.discriminatedUnion("kind", [
+          z
+            .object({
+              ...managedApiKeyReplaceShape,
+              kind: z.literal("customer"),
+              agentProfile: managedAgentProfileSchema.default("frontmind-pro"),
+            })
+            .strict(),
+          z
+            .object({
+              ...managedApiKeyReplaceShape,
+              kind: z.literal("delivery_admin"),
+            })
+            .strict(),
+          z
+            .object({
+              ...managedApiKeyReplaceShape,
+              kind: z.literal("engineer"),
+            })
+            .strict(),
+        ]),
       )
       .mutation(async ({ ctx, input }) => {
         requireSystemAdmin(ctx.user);
@@ -379,9 +539,11 @@ export const adminRouter = router({
             kind: input.kind,
             userId: input.userId,
             apiKey: input.apiKey,
+            agentProfile:
+              input.kind === "customer" ? input.agentProfile : undefined,
             expectedVersion: input.expectedVersion,
             reason: input.reason,
-            allowIncompleteHistory: input.allowIncompleteHistory,
+            relatedTicketId: input.relatedTicketId,
           });
         } catch (error) {
           throw toTrpcError(error);
@@ -391,12 +553,7 @@ export const adminRouter = router({
       .input(
         z
           .object({
-            kind: z.enum([
-              "customer",
-              "delivery_admin",
-              "system_admin",
-              "engineer",
-            ]),
+            kind: z.enum(["customer", "delivery_admin", "engineer"]),
             userId: z.number().int().positive(),
             expectedVersion: z.number().int().nonnegative(),
             reason: z.string().trim().min(1).max(2_000),
@@ -511,6 +668,21 @@ export const adminRouter = router({
             userId: input.userId,
             ticketId: input.ticketId,
             includeInternal: true,
+          });
+        } catch (error) {
+          throwServiceAdminError(error);
+        }
+      }),
+    delete: adminProcedure
+      .input(deleteDeliveryTicketInputSchema)
+      .mutation(async ({ ctx, input }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await deleteManagedDeliveryTicket({
+            actor: ctx.user,
+            userId: input.userId,
+            ticketId: input.ticketId,
+            expectedRevision: input.expectedRevision,
           });
         } catch (error) {
           throwServiceAdminError(error);
@@ -859,6 +1031,7 @@ export const adminRouter = router({
           userId: z.number().int().positive(),
           questionId: z.string().trim().min(1).max(64),
           expectedRevision: z.number().int().positive(),
+          category: workspaceQuestionCategorySchema.optional(),
           reason: z.string().trim().max(2_000).optional(),
         }),
       )
@@ -867,8 +1040,36 @@ export const adminRouter = router({
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           await assertServiceCapability(input.userId, "questionSelection");
-          const question = await approveWorkspaceQuestionSelection({
-            ...input,
+          const reconcileState: {
+            question: InitialMonitoringQuestionSelection | null;
+          } = { question: null };
+          const question = await approveWorkspaceQuestionSelection(
+            {
+              ...input,
+              actorUserId: ctx.user.id,
+            },
+            {
+              afterWrite: async (executor, approvedQuestion) => {
+                reconcileState.question = approvedQuestion;
+                await completeQuestionReviewRequest({
+                  executor,
+                  userId: input.userId,
+                  questionId: approvedQuestion.id,
+                  actorUserId: ctx.user.id,
+                  actorRole: "admin",
+                  message: "自主填写问题已完成专业审核。",
+                });
+              },
+            },
+          );
+          if (!reconcileState.question) {
+            throw new ServiceEntitlementError(
+              "QUESTION_NOT_CURRENT",
+              "问题审核结果缺少当前服务范围。",
+            );
+          }
+          await reconcileInitialMonitoringAfterQuestionSelection({
+            question: reconcileState.question,
             actorUserId: ctx.user.id,
           });
           await writeWorkspaceAuditEvent({
@@ -906,7 +1107,9 @@ export const adminRouter = router({
             message:
               input.planCode === "basic"
                 ? "普通版为连续 30 天单题服务，不设置预付月份"
-                : "进阶版与豪华版合同均按 3 个月服务周期建立",
+                : input.planCode === "advanced"
+                  ? "进阶版按 3 个月服务周期建立"
+                  : "豪华版为 12 个月权益周期，预付月份按 3 个月记录，并按季度自动解锁额度",
           });
         }
         if (
@@ -1132,10 +1335,12 @@ export const adminRouter = router({
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           return {
-            progress: await getKnowledgeBaseProgress({
-              userId: input.userId,
-              conversationId: input.conversationId,
-            }),
+            progress: toKnowledgeBasePublicPayload(
+              await getKnowledgeBaseProgress({
+                userId: input.userId,
+                conversationId: input.conversationId,
+              }),
+            ),
           };
         } catch (error) {
           throw toTrpcError(error);
@@ -1160,7 +1365,9 @@ export const adminRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
-          return await getManagedKnowledgeActivity(input.userId);
+          return toKnowledgeBasePublicPayload(
+            await getManagedKnowledgeActivity(input.userId),
+          );
         } catch (error) {
           throw toTrpcError(error);
         }
@@ -1478,7 +1685,6 @@ export const adminRouter = router({
         z.object({
           apiKey: presalesApiKeySchema,
           reason: z.string().trim().max(2_000).optional(),
-          allowIncompleteHistory: z.boolean().optional().default(false),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -1487,8 +1693,6 @@ export const adminRouter = router({
           const credential = await replacePresalesApiCredential(
             ctx.user.id,
             input.apiKey,
-            undefined,
-            input.allowIncompleteHistory,
           );
           await writeWorkspaceAuditEvent({
             actor: ctx.user,
@@ -1499,8 +1703,10 @@ export const adminRouter = router({
             metadata: {
               fingerprint: credential.fingerprint,
               status: credential.status,
-              emergencyReplacement: input.allowIncompleteHistory,
             },
+          });
+          void syncApiUsageSnapshots(ctx.user).catch(() => {
+            console.error("[Presales usage] asynchronous refresh failed");
           });
           return credential;
         } catch (error) {
@@ -1513,7 +1719,6 @@ export const adminRouter = router({
         z.object({
           apiKey: presalesApiKeySchema,
           reason: z.string().trim().max(2_000).optional(),
-          allowIncompleteHistory: z.boolean().optional().default(false),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -1522,8 +1727,6 @@ export const adminRouter = router({
           const credential = await replacePresalesApiCredential(
             ctx.user.id,
             input.apiKey,
-            undefined,
-            input.allowIncompleteHistory,
           );
           await writeWorkspaceAuditEvent({
             actor: ctx.user,
@@ -1534,8 +1737,10 @@ export const adminRouter = router({
             metadata: {
               fingerprint: credential.fingerprint,
               status: credential.status,
-              emergencyReplacement: input.allowIncompleteHistory,
             },
+          });
+          void syncApiUsageSnapshots(ctx.user).catch(() => {
+            console.error("[Presales usage] asynchronous refresh failed");
           });
           return credential;
         } catch (error) {
@@ -1588,11 +1793,176 @@ export const adminRouter = router({
       .query(async ({ ctx, input }) => {
         requireSystemAdmin(ctx.user);
         try {
-          return await getPresalesCreditUsage(input?.windowDays);
+          return await getPresalesCreditUsageSnapshot();
         } catch (error) {
           throw toTrpcError(error);
         }
       }),
+
+    twentyFirst: router({
+      status: adminProcedure.query(async ({ ctx }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await getTwentyFirstCredentialStatus();
+        } catch (error) {
+          throw toTrpcError(error);
+        }
+      }),
+
+      test: adminProcedure
+        .input(
+          z.object({ apiKey: twentyFirstApiKeySchema.optional() }).strict(),
+        )
+        .mutation(async ({ ctx, input }) => {
+          requireSystemAdmin(ctx.user);
+          try {
+            return await testTwentyFirstApiCredential(input.apiKey);
+          } catch (error) {
+            throw toTrpcError(error);
+          }
+        }),
+
+      replace: adminProcedure
+        .input(
+          z
+            .object({
+              apiKey: twentyFirstApiKeySchema,
+              reason: z.string().trim().max(2_000).optional(),
+            })
+            .strict(),
+        )
+        .mutation(async ({ ctx, input }) => {
+          requireSystemAdmin(ctx.user);
+          try {
+            const credential = await replaceTwentyFirstApiCredential(
+              ctx.user.id,
+              input.apiKey,
+            );
+            await writeWorkspaceAuditEvent({
+              actor: ctx.user,
+              action: "siteops.twenty_first_credential.replaced",
+              targetType: "presales_api_credential",
+              targetId: "site_builder_21st",
+              reason: input.reason,
+              metadata: {
+                fingerprint: credential.fingerprint,
+                version: credential.version,
+              },
+            });
+            return credential;
+          } catch (error) {
+            throw toTrpcError(error);
+          }
+        }),
+
+      delete: adminProcedure
+        .input(
+          z
+            .object({ reason: z.string().trim().max(2_000).optional() })
+            .strict()
+            .optional(),
+        )
+        .mutation(async ({ ctx, input }) => {
+          requireSystemAdmin(ctx.user);
+          try {
+            const result = await deleteTwentyFirstApiCredential();
+            await writeWorkspaceAuditEvent({
+              actor: ctx.user,
+              action: result.pending
+                ? "siteops.twenty_first_credential.revocation_pending"
+                : "siteops.twenty_first_credential.deleted",
+              targetType: "presales_api_credential",
+              targetId: "site_builder_21st",
+              reason: input?.reason,
+            });
+            return {
+              success: result.deleted || !result.pending,
+              pending: result.pending,
+            };
+          } catch (error) {
+            throw toTrpcError(error);
+          }
+        }),
+    }),
+
+    aliyun: router({
+      status: adminProcedure.query(async ({ ctx }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await getAliyunPlatformCredentialStatus();
+        } catch (error) {
+          throw toTrpcError(error);
+        }
+      }),
+
+      test: adminProcedure.mutation(async ({ ctx }) => {
+        requireSystemAdmin(ctx.user);
+        try {
+          return await testAliyunPlatformCredentials();
+        } catch (error) {
+          throw toTrpcError(error);
+        }
+      }),
+
+      replaceOAuth: adminProcedure
+        .input(
+          aliyunOAuthCredentialInputSchema
+            .extend({
+              reason: z.string().trim().max(2_000).optional(),
+            })
+            .strict(),
+        )
+        .mutation(async ({ ctx, input }) => {
+          requireSystemAdmin(ctx.user);
+          try {
+            const { reason, ...credentialInput } = input;
+            const credential = await replaceAliyunOAuthCredential(
+              ctx.user.id,
+              credentialInput,
+            );
+            await writeWorkspaceAuditEvent({
+              actor: ctx.user,
+              action: "siteops.aliyun_oauth_credential.replaced",
+              targetType: "presales_api_credential",
+              targetId: "siteops_aliyun_oauth",
+              reason,
+              metadata: {
+                fingerprint: credential.fingerprint,
+                version: credential.version,
+              },
+            });
+            return credential;
+          } catch (error) {
+            throw toTrpcError(error);
+          }
+        }),
+
+      delete: adminProcedure
+        .input(
+          z
+            .object({
+              reason: z.string().trim().max(2_000).optional(),
+            })
+            .strict()
+            .optional(),
+        )
+        .mutation(async ({ ctx, input }) => {
+          requireSystemAdmin(ctx.user);
+          try {
+            const result = await deleteAliyunPlatformCredentials();
+            await writeWorkspaceAuditEvent({
+              actor: ctx.user,
+              action: "siteops.aliyun_platform_credential.deleted",
+              targetType: "presales_api_credential",
+              targetId: "siteops_aliyun_oauth",
+              reason: input?.reason,
+            });
+            return { success: result.deleted };
+          } catch (error) {
+            throw toTrpcError(error);
+          }
+        }),
+    }),
   }),
 
   users: router({
@@ -1794,19 +2164,27 @@ export const adminRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireSystemAdmin(ctx.user);
         try {
-          const result = await deleteManagedUser(ctx.user.id, input.userId);
-          const retainedForHistory =
-            result.disposition === "deactivated_for_history";
-          await writeWorkspaceAuditEvent({
-            actor: ctx.user,
-            action: retainedForHistory
-              ? "account.deactivated_for_history"
-              : "account.deleted",
-            targetType: "user",
-            targetId: input.userId,
-            workspaceUserId: input.userId,
-            reason: input.reason,
-            metadata: { disposition: result.disposition },
+          const result = await deleteManagedUser(ctx.user.id, input.userId, {
+            onResultInTransaction: async (transactionResult, tx) => {
+              const retainedForHistory =
+                transactionResult.disposition === "deactivated_for_history";
+              await writeWorkspaceAuditEvent(
+                {
+                  actor: ctx.user,
+                  action: retainedForHistory
+                    ? "account.deactivated_for_history"
+                    : "account.deleted",
+                  targetType: "user",
+                  targetId: input.userId,
+                  workspaceUserId: input.userId,
+                  reason: input.reason,
+                  metadata: {
+                    disposition: transactionResult.disposition,
+                  },
+                },
+                tx,
+              );
+            },
           });
           return {
             success: true,

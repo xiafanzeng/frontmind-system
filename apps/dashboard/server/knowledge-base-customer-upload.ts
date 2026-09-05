@@ -6,12 +6,21 @@ import {
   normalizeKnowledgeBaseAttachmentFilename,
   normalizeKnowledgeBaseAttachmentMimeType,
 } from "../shared/knowledge-base-attachment";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
 import { getDb } from "./db";
 import { KnowledgeBasePackageBindingError } from "./knowledge-base-package-validation";
+import type { KnowledgeBaseOfficialLogoProvenance } from "./knowledge-base-progress";
 import { readStoredPresalesFile } from "./presales-file-store";
+import { knowledgeBasePublicResource } from "./knowledge-base-public-resource";
+import {
+  KnowledgeBaseUploadEvidenceError,
+  persistKnowledgeBaseUploadEvidence,
+  readKnowledgeBasePersistedCustomerUploadBytes,
+  readReusableKnowledgeBaseUploadEvidenceBytes,
+  readKnowledgeBaseUploadEvidence,
+} from "./knowledge-base-upload-evidence-store";
 
 const CUSTOMER_IMAGE_MIME_TYPES = new Set([
   "image/avif",
@@ -36,6 +45,78 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+type KnowledgeBaseCustomerUploadTurn = Pick<
+  ConversationTurn,
+  "id" | "expectedLeafId" | "attachmentFileIds" | "metadata" | "status"
+>;
+
+function knowledgeBaseCustomerUploadHasFinalBinding(
+  turn: KnowledgeBaseCustomerUploadTurn,
+  input: {
+    sourceFileId: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    sourceSha256: string;
+  },
+) {
+  if (turn.attachmentFileIds.includes(input.sourceFileId)) return true;
+  const metadata = record(turn.metadata) || {};
+  const mappings = record(metadata.manusV2AttachmentMappings);
+  if (!mappings) return false;
+  const matches = Object.values(mappings).filter((candidate) => {
+    const mapping = record(candidate);
+    const upstreamFileId = String(mapping?.upstreamFileId || "").trim();
+    return (
+      mapping?.status === "ready" &&
+      mapping?.sourceFileId === input.sourceFileId &&
+      mapping?.filename === input.filename &&
+      Number(mapping?.sizeBytes) === input.sizeBytes &&
+      String(mapping?.contentSha256 || "").toLowerCase() ===
+        input.sourceSha256 &&
+      normalizeKnowledgeBaseAttachmentMimeType(
+        input.filename,
+        mapping?.mimeType,
+      ) === input.mimeType &&
+      upstreamFileId.length > 0 &&
+      turn.attachmentFileIds.includes(upstreamFileId)
+    );
+  });
+  return matches.length === 1;
+}
+
+function knowledgeBaseCustomerUploadEnrichmentErrorCode(error: unknown) {
+  const candidate = record(error)?.code;
+  if (
+    typeof candidate === "string" &&
+    /^[A-Z][A-Z0-9_]{0,127}$/u.test(candidate)
+  ) {
+    return candidate;
+  }
+  return error instanceof Error &&
+    /^[A-Za-z][A-Za-z0-9_]{0,127}$/u.test(error.name)
+    ? error.name
+    : "UNKNOWN_ERROR";
+}
+
+/** Optional UI enrichment must never make an accepted presentation unreadable. */
+export function logKnowledgeBaseCustomerUploadEnrichmentSkipped(input: {
+  surface: "conversation" | "progress";
+  buildId: string;
+  turnId: string;
+  error: unknown;
+}) {
+  console.warn(
+    "[KnowledgeBaseCustomerUpload] enrichment_skipped",
+    JSON.stringify({
+      surface: input.surface,
+      buildId: input.buildId,
+      turnId: input.turnId,
+      errorCode: knowledgeBaseCustomerUploadEnrichmentErrorCode(input.error),
+    }),
+  );
+}
+
 export type KnowledgeBaseCustomerUploadImage = {
   turnId: string;
   leafId: string;
@@ -58,14 +139,155 @@ export type KnowledgeBaseOfficialLogoUpload = {
   sourceSha256: string;
 };
 
+export function knowledgeBaseOfficialLogoProvenanceFromMetadata(
+  metadata: unknown,
+): KnowledgeBaseOfficialLogoProvenance | null {
+  const value = record(record(metadata)?.boundOfficialLogoProvenance);
+  if (!value) return null;
+  if (
+    value.sourceKind === "official_web" &&
+    typeof value.sourcePageUrl === "string" &&
+    value.sourcePageUrl.length > 0 &&
+    typeof value.sourceAssetUrl === "string" &&
+    value.sourceAssetUrl.length > 0
+  ) {
+    return {
+      sourceKind: "official_web",
+      sourcePageUrl: value.sourcePageUrl,
+      sourceAssetUrl: value.sourceAssetUrl,
+    };
+  }
+  if (
+    value.sourceKind === "official_document" &&
+    typeof value.sourceDocumentPath === "string" &&
+    value.sourceDocumentPath.length > 0
+  ) {
+    return {
+      sourceKind: "official_document",
+      sourceDocumentPath: value.sourceDocumentPath,
+    };
+  }
+  return null;
+}
+
 export function knowledgeBaseOfficialLogoUploadFromTurn(
   turn: Pick<
     ConversationTurn,
     "id" | "expectedLeafId" | "attachmentFileIds" | "metadata" | "status"
-  >,
+  > &
+    Partial<
+      Pick<
+        ConversationTurn,
+        "operationType" | "buildId" | "buildGeneration" | "expectedRevision"
+      >
+    >,
 ): KnowledgeBaseOfficialLogoUpload | null {
   if (turn.status !== "completed") return null;
   const metadata = record(turn.metadata) || {};
+  const localLogo = record(metadata.localLogo);
+  const localUpload = record(localLogo?.officialLogoUpload);
+  if (turn.operationType === "local_logo" || localLogo !== null) {
+    const index = Number(localUpload?.index);
+    const fileId = String(localUpload?.fileId || "").trim();
+    const filename = normalizeKnowledgeBaseAttachmentFilename(
+      localUpload?.filename,
+      "official-logo",
+    );
+    const mimeType = normalizeKnowledgeBaseAttachmentMimeType(
+      filename,
+      localUpload?.mimeType,
+    );
+    const sizeBytes = Number(localUpload?.sizeBytes);
+    const sourceSha256 = String(localUpload?.sourceSha256 || "")
+      .trim()
+      .toLowerCase();
+    const leafId = String(turn.expectedLeafId || "").trim();
+    if (
+      turn.operationType !== "local_logo" ||
+      localLogo?.kind !== "frontmind.knowledge-base.local-logo" ||
+      localLogo?.schemaVersion !== 1 ||
+      localLogo?.immutable !== true ||
+      localLogo?.buildId !== turn.buildId ||
+      localLogo?.leafId !== leafId ||
+      localLogo?.generation !== turn.buildGeneration ||
+      localLogo?.revision !== turn.expectedRevision ||
+      localUpload?.verified !== true ||
+      index !== 0 ||
+      !fileId ||
+      !leafId ||
+      !mimeType.startsWith("image/") ||
+      !Number.isSafeInteger(sizeBytes) ||
+      sizeBytes < 1 ||
+      !/^[a-f0-9]{64}$/u.test(sourceSha256) ||
+      !Array.isArray(turn.attachmentFileIds) ||
+      turn.attachmentFileIds.length !== 1 ||
+      turn.attachmentFileIds[0] !== fileId
+    ) {
+      return null;
+    }
+    return {
+      turnId: turn.id,
+      leafId,
+      index,
+      fileId,
+      filename,
+      mimeType,
+      sizeBytes,
+      sourceSha256,
+    };
+  }
+  const repair = record(metadata.logoProvenanceRepair);
+  const repairUpload = record(repair?.officialLogoUpload);
+  if (turn.operationType === "logo_provenance_repair" || repair !== null) {
+    const index = Number(repairUpload?.index);
+    const fileId = String(repairUpload?.fileId || "").trim();
+    const filename = normalizeKnowledgeBaseAttachmentFilename(
+      repairUpload?.filename,
+      "official-logo",
+    );
+    const mimeType = normalizeKnowledgeBaseAttachmentMimeType(
+      filename,
+      repairUpload?.mimeType,
+    );
+    const sizeBytes = Number(repairUpload?.sizeBytes);
+    const sourceSha256 = String(repairUpload?.sourceSha256 || "")
+      .trim()
+      .toLowerCase();
+    const leafId = String(turn.expectedLeafId || "").trim();
+    if (
+      turn.operationType !== "logo_provenance_repair" ||
+      repair?.kind !== "frontmind.knowledge-base.logo-provenance-repair" ||
+      repair?.schemaVersion !== 1 ||
+      repair?.immutable !== true ||
+      repair?.buildId !== turn.buildId ||
+      repair?.leafId !== leafId ||
+      repair?.generation !== turn.buildGeneration ||
+      repair?.revision !== turn.expectedRevision ||
+      repairUpload?.verified !== true ||
+      index !== 0 ||
+      !fileId ||
+      !leafId ||
+      !mimeType.startsWith("image/") ||
+      !Number.isSafeInteger(sizeBytes) ||
+      sizeBytes < 1 ||
+      !/^[a-f0-9]{64}$/u.test(sourceSha256) ||
+      !Array.isArray(turn.attachmentFileIds) ||
+      turn.attachmentFileIds.length !== 1 ||
+      turn.attachmentFileIds[0] !== fileId
+    ) {
+      return null;
+    }
+    return {
+      turnId: turn.id,
+      leafId,
+      index,
+      fileId,
+      filename,
+      mimeType,
+      sizeBytes,
+      sourceSha256,
+    };
+  }
   const recovery = record(metadata.recovery);
   const upload = record(recovery?.officialLogoUpload);
   const manifest = Array.isArray(recovery?.attachmentManifest)
@@ -155,10 +377,7 @@ export function knowledgeBaseOfficialLogoUploadFromTurn(
  * function, so a crawled URL can never become a customer-visible resource.
  */
 export function knowledgeBaseCustomerUploadImagesFromTurn(
-  turn: Pick<
-    ConversationTurn,
-    "id" | "expectedLeafId" | "attachmentFileIds" | "metadata" | "status"
-  >,
+  turn: KnowledgeBaseCustomerUploadTurn,
 ): KnowledgeBaseCustomerUploadImage[] {
   const metadata = record(turn.metadata) || {};
   const recovery = record(metadata.recovery);
@@ -222,7 +441,13 @@ export function knowledgeBaseCustomerUploadImagesFromTurn(
     if (
       !fileId ||
       String(attachment?.filename || "") !== filename ||
-      !turn.attachmentFileIds.includes(fileId) ||
+      !knowledgeBaseCustomerUploadHasFinalBinding(turn, {
+        sourceFileId: fileId,
+        filename,
+        mimeType,
+        sizeBytes,
+        sourceSha256,
+      }) ||
       !dispatchedAttachments.some((candidate) => {
         const dispatched = record(candidate);
         return (
@@ -331,7 +556,13 @@ function assertKnowledgeBaseCustomerUploadLedgerComplete(
     if (
       !fileId ||
       String(attachment.filename || "") !== filename ||
-      !turn.attachmentFileIds.includes(fileId) ||
+      !knowledgeBaseCustomerUploadHasFinalBinding(turn, {
+        sourceFileId: fileId,
+        filename,
+        mimeType,
+        sizeBytes,
+        sourceSha256,
+      }) ||
       !dispatched ||
       !Number.isSafeInteger(sizeBytes) ||
       sizeBytes < 1 ||
@@ -387,28 +618,66 @@ export async function verifiedKnowledgeBaseCustomerUploadImagesFromTurn(
   return complete;
 }
 
+/** Parse the frozen, authenticated turn ledger without touching expiring bytes. */
+export function declaredKnowledgeBaseCustomerUploadImagesFromTurn(
+  turn: Parameters<typeof knowledgeBaseCustomerUploadImagesFromTurn>[0],
+) {
+  assertKnowledgeBaseCustomerUploadLedgerComplete(turn);
+  return knowledgeBaseCustomerUploadImagesFromTurn(turn);
+}
+
 export function knowledgeBaseCustomerUploadResource(
   buildId: string,
   image: KnowledgeBaseCustomerUploadImage,
 ): KnowledgeBaseApprovedResourceDto {
-  return {
+  return knowledgeBasePublicResource({
+    buildId,
     kind: "customer_upload",
-    outputItemId: null,
-    fileId: null,
-    sameOriginUrl: `/api/knowledge-base/artifacts/${encodeURIComponent(buildId)}/customer-uploads/${encodeURIComponent(image.turnId)}/${image.index}/${image.sourceSha256}`,
-    filename: image.filename,
+    internalIdentity: knowledgeBaseCustomerUploadInternalIdentity(image),
+    contentSha256: image.sourceSha256,
     mimeType: image.mimeType,
-    sha256: image.sourceSha256,
     sizeBytes: image.sizeBytes,
-  };
+  });
+}
+
+export function knowledgeBaseCustomerUploadInternalIdentity(
+  image: Pick<
+    KnowledgeBaseCustomerUploadImage,
+    "turnId" | "index" | "sourceSha256"
+  >,
+) {
+  return `${image.turnId}\0${image.index}\0${image.sourceSha256}`;
 }
 
 export async function knowledgeBaseCustomerUploadResources(
   buildId: string,
   turn: Parameters<typeof knowledgeBaseCustomerUploadImagesFromTurn>[0],
+  options: {
+    persistedEvidence?: {
+      userId: number;
+      generation: number;
+      packageArchiveSha256: string;
+    };
+  } = {},
 ) {
-  return (await verifiedKnowledgeBaseCustomerUploadImagesFromTurn(turn)).map(
-    (image) => knowledgeBaseCustomerUploadResource(buildId, image),
+  const images = options.persistedEvidence
+    ? declaredKnowledgeBaseCustomerUploadImagesFromTurn(turn)
+    : await verifiedKnowledgeBaseCustomerUploadImagesFromTurn(turn);
+  if (options.persistedEvidence) {
+    await Promise.all(
+      images.map((image) =>
+        persistedKnowledgeBaseCustomerUploadBytesForBuild({
+          userId: options.persistedEvidence!.userId,
+          buildId,
+          generation: options.persistedEvidence!.generation,
+          packageArchiveSha256: options.persistedEvidence!.packageArchiveSha256,
+          sourceSha256: image.sourceSha256,
+        }),
+      ),
+    );
+  }
+  return images.map((image) =>
+    knowledgeBaseCustomerUploadResource(buildId, image),
   );
 }
 
@@ -418,9 +687,11 @@ export type KnowledgeBaseExpectedCustomerUpload = {
   filenames: string[];
   mimeTypes: string[];
   fileIds: string[];
+  sizeBytes: number[];
 };
 
 export const MAX_KNOWLEDGE_BASE_CUSTOMER_UPLOAD_IMAGES = 99;
+export const MAX_KNOWLEDGE_BASE_CUSTOMER_UPLOAD_BYTES = 80 * 1024 * 1024;
 
 function groupKnowledgeBaseCustomerUploads(
   images: readonly KnowledgeBaseCustomerUploadImage[],
@@ -436,6 +707,11 @@ function groupKnowledgeBaseCustomerUploads(
       filenames: Set<string>;
       mimeTypes: Set<string>;
       fileIds: Set<string>;
+      sizeBytes: Set<number>;
+      firstFilename: string;
+      firstMimeType: string;
+      firstFileId: string;
+      firstSizeBytes: number;
     }
   >();
   for (const image of images) {
@@ -447,11 +723,17 @@ function groupKnowledgeBaseCustomerUploads(
       filenames: new Set<string>(),
       mimeTypes: new Set<string>(),
       fileIds: new Set<string>(),
+      sizeBytes: new Set<number>(),
+      firstFilename: image.filename,
+      firstMimeType: image.mimeType,
+      firstFileId: image.fileId,
+      firstSizeBytes: image.sizeBytes,
     };
     current.leafIds.add(image.leafId);
     current.filenames.add(image.filename);
     current.mimeTypes.add(image.mimeType);
     current.fileIds.add(image.fileId);
+    current.sizeBytes.add(image.sizeBytes);
     grouped.set(image.sourceSha256, current);
   }
   return [...grouped.entries()]
@@ -459,9 +741,15 @@ function groupKnowledgeBaseCustomerUploads(
     .map(([sourceSha256, value]) => ({
       sourceSha256,
       leafIds: [...value.leafIds].sort(),
-      filenames: [...value.filenames].sort(),
-      mimeTypes: [...value.mimeTypes].sort(),
-      fileIds: [...value.fileIds].sort(),
+      filenames: [value.firstFilename],
+      mimeTypes: [value.firstMimeType],
+      fileIds: [
+        value.firstFileId,
+        ...[...value.fileIds]
+          .filter((fileId) => fileId !== value.firstFileId)
+          .sort(),
+      ],
+      sizeBytes: [value.firstSizeBytes],
     }));
 }
 
@@ -514,6 +802,10 @@ export async function verifiedKnowledgeBaseCustomerUploadsForBuild(input: {
       attachmentFileIds: conversationTurns.attachmentFileIds,
       metadata: conversationTurns.metadata,
       status: conversationTurns.status,
+      operationType: conversationTurns.operationType,
+      buildId: conversationTurns.buildId,
+      buildGeneration: conversationTurns.buildGeneration,
+      expectedRevision: conversationTurns.expectedRevision,
     })
     .from(conversationTurns)
     .where(
@@ -523,16 +815,79 @@ export async function verifiedKnowledgeBaseCustomerUploadsForBuild(input: {
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
       ),
-    );
+    )
+    .orderBy(asc(conversationTurns.createdAt), asc(conversationTurns.id));
   return verifiedKnowledgeBaseCustomerUploadsFromTurns(turns, {
     excludedSourceSha256: input.officialLogoSha256,
   });
+}
+
+/**
+ * Return the exact managed bytes needed by the provider's finalization turn.
+ * Package validation still re-reads the customer ZIP independently; this
+ * handoff only makes it possible for the provider to include bytes which were
+ * uploaded on earlier turns and may no longer exist in its implicit workspace.
+ */
+export async function verifiedKnowledgeBaseCustomerUploadBytesForBuild(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+  officialLogoSha256?: string | null;
+}) {
+  const uploads = await verifiedKnowledgeBaseCustomerUploadsForBuild(input);
+  const results = [];
+  let aggregateBytes = 0;
+  for (const upload of uploads) {
+    const fileId = upload.fileIds[0];
+    if (!fileId) {
+      throw new KnowledgeBasePackageBindingError(
+        "客户上传图片缺少受管文件标识",
+      );
+    }
+    const stored = await readStoredPresalesFile(fileId);
+    if (
+      !stored ||
+      stored.sha256?.toLowerCase() !== upload.sourceSha256 ||
+      !upload.filenames.includes(stored.filename)
+    ) {
+      throw new KnowledgeBasePackageBindingError(
+        "客户上传图片的受管原始字节缺失或完整性不一致",
+      );
+    }
+    const bytes = await readStoredCustomerUploadBytes(stored);
+    if (
+      createHash("sha256").update(bytes).digest("hex") !== upload.sourceSha256
+    ) {
+      throw new KnowledgeBasePackageBindingError(
+        "客户上传图片的原始哈希不一致",
+      );
+    }
+    aggregateBytes += bytes.length;
+    if (aggregateBytes > MAX_KNOWLEDGE_BASE_CUSTOMER_UPLOAD_BYTES) {
+      throw new KnowledgeBasePackageBindingError(
+        "客户上传图片原始字节合计超过最终交付输入上限，请先压缩过大的图片",
+      );
+    }
+    results.push({
+      ...upload,
+      fileId,
+      filename: stored.filename,
+      mimeType:
+        (stored.mimeType.startsWith("image/") ? stored.mimeType : "") ||
+        upload.mimeTypes.find((candidate) => candidate.startsWith("image/")) ||
+        "application/octet-stream",
+      sizeBytes: bytes.length,
+      bytes,
+    });
+  }
+  return results;
 }
 
 export async function verifiedKnowledgeBaseOfficialLogoUploadForBuild(input: {
   userId: number;
   buildId: string;
   generation: number;
+  expectedLogoSha256?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("数据库暂不可用，无法核验客户上传 Logo");
@@ -543,6 +898,10 @@ export async function verifiedKnowledgeBaseOfficialLogoUploadForBuild(input: {
       attachmentFileIds: conversationTurns.attachmentFileIds,
       metadata: conversationTurns.metadata,
       status: conversationTurns.status,
+      operationType: conversationTurns.operationType,
+      buildId: conversationTurns.buildId,
+      buildGeneration: conversationTurns.buildGeneration,
+      expectedRevision: conversationTurns.expectedRevision,
     })
     .from(conversationTurns)
     .where(
@@ -552,25 +911,257 @@ export async function verifiedKnowledgeBaseOfficialLogoUploadForBuild(input: {
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
       ),
-    );
+    )
+    .orderBy(asc(conversationTurns.createdAt), asc(conversationTurns.id));
   const declared = turns
     .map(knowledgeBaseOfficialLogoUploadFromTurn)
     .filter(
       (upload): upload is KnowledgeBaseOfficialLogoUpload => upload !== null,
     );
-  if (declared.length === 0) return undefined;
-  if (declared.length !== 1) {
+  const declaredRows = turns.filter((turn) => {
+    const metadata = record(turn.metadata);
+    const recovery = record(metadata?.recovery);
+    return Boolean(
+      (recovery &&
+        Object.prototype.hasOwnProperty.call(recovery, "officialLogoUpload")) ||
+        (metadata &&
+          Object.prototype.hasOwnProperty.call(
+            metadata,
+            "logoProvenanceRepair",
+          )),
+    );
+  });
+  if (declaredRows.length !== declared.length) {
     throw new KnowledgeBasePackageBindingError(
-      "企业官方主 Logo 上传账本不唯一，不能验证最终 ZIP",
+      "企业官方主 Logo 上传账本无效，不能验证最终 ZIP",
     );
   }
-  const upload = declared[0]!;
+  if (declared.length === 0) return undefined;
+  const expectedLogoSha256 = String(input.expectedLogoSha256 || "")
+    .trim()
+    .toLowerCase();
+  if (!expectedLogoSha256 && declared.length !== 1) {
+    throw new KnowledgeBasePackageBindingError(
+      "企业官方主 Logo 上传账本不唯一且缺少当前 Logo 哈希，不能验证最终 ZIP",
+    );
+  }
+  const upload = expectedLogoSha256
+    ? [...declared]
+        .reverse()
+        .find((candidate) => candidate.sourceSha256 === expectedLogoSha256)
+    : declared[0];
+  if (!upload) {
+    throw new KnowledgeBasePackageBindingError(
+      "当前企业官方主 Logo 与已完成的上传账本不匹配，不能验证最终 ZIP",
+    );
+  }
   // Binding copied and hashed the exact upload into the build's immutable
   // Logo artifact in the same transaction that wrote this verified marker.
   // The short-lived presales capture may expire after 30 days; final-package
   // validation therefore binds against the durable build hash and packaged
   // bytes instead of making that temporary copy a permanent dependency.
   return upload;
+}
+
+/**
+ * Load the immutable web/document provenance captured on the successful first
+ * turn. Exactly one completed turn may own this marker. The customer-upload
+ * recovery path deliberately has no marker here; its independent verified
+ * upload ledger is the authority instead.
+ */
+export async function persistedKnowledgeBaseOfficialLogoProvenanceForBuild(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("数据库暂不可用，无法核验官方主 Logo 来源");
+  const rows = await db
+    .select({ metadata: conversationTurns.metadata })
+    .from(conversationTurns)
+    .where(
+      and(
+        eq(conversationTurns.userId, input.userId),
+        eq(conversationTurns.buildId, input.buildId),
+        eq(conversationTurns.buildGeneration, input.generation),
+        eq(conversationTurns.status, "completed"),
+      ),
+    )
+    .orderBy(asc(conversationTurns.createdAt), asc(conversationTurns.id));
+  const declaredRows = rows.filter((row) => {
+    const metadata = record(row.metadata);
+    return Boolean(
+      metadata &&
+        Object.prototype.hasOwnProperty.call(
+          metadata,
+          "boundOfficialLogoProvenance",
+        ),
+    );
+  });
+  const provenances = rows
+    .map((row) => knowledgeBaseOfficialLogoProvenanceFromMetadata(row.metadata))
+    .filter(
+      (value): value is KnowledgeBaseOfficialLogoProvenance => value !== null,
+    );
+  if (declaredRows.length !== provenances.length) {
+    throw new KnowledgeBasePackageBindingError(
+      "企业官方主 Logo 来源账本无效，不能验证最终 ZIP",
+    );
+  }
+  if (provenances.length === 0) return undefined;
+  if (provenances.length !== 1) {
+    throw new KnowledgeBasePackageBindingError(
+      "企业官方主 Logo 来源账本不唯一，不能验证最终 ZIP",
+    );
+  }
+  return provenances[0]!;
+}
+
+/**
+ * One shared evidence load for reconcile, publish and immutable download. This
+ * prevents any path from accidentally counting an uploaded Logo as an ordinary
+ * customer image or validating only its bytes while dropping its provenance.
+ */
+export async function verifiedKnowledgeBasePackageUploadEvidenceForBuild(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+  officialLogoSha256?: string | null;
+  packageArchiveSha256?: string | null;
+}) {
+  const packageArchiveSha256 = String(input.packageArchiveSha256 || "")
+    .trim()
+    .toLowerCase();
+  if (packageArchiveSha256) {
+    try {
+      const persisted = await readKnowledgeBaseUploadEvidence({
+        userId: input.userId,
+        buildId: input.buildId,
+        generation: input.generation,
+        packageArchiveSha256,
+      });
+      return {
+        expectedCustomerUploads: persisted.expectedCustomerUploads,
+        expectedOfficialLogoUpload: persisted.expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance: undefined,
+      };
+    } catch (error) {
+      if (
+        !(error instanceof KnowledgeBaseUploadEvidenceError) ||
+        error.code !== "NOT_FOUND"
+      ) {
+        throw new KnowledgeBasePackageBindingError(
+          error instanceof Error
+            ? error.message
+            : "知识库客户上传永久证据读取失败",
+        );
+      }
+      // Historical v4 builds may predate the durable evidence store. They are
+      // allowed one fail-closed backfill while the captured source still
+      // exists. Once written, all later reads use only build-owned evidence.
+    }
+  }
+  const expectedOfficialLogoUpload =
+    await verifiedKnowledgeBaseOfficialLogoUploadForBuild({
+      userId: input.userId,
+      buildId: input.buildId,
+      generation: input.generation,
+      expectedLogoSha256: input.officialLogoSha256,
+    });
+  const expectedOfficialLogoProvenance = undefined;
+  const expectedCustomerUploads = packageArchiveSha256
+    ? await declaredKnowledgeBaseCustomerUploadsForBuild(input)
+    : await verifiedKnowledgeBaseCustomerUploadsForBuild(input);
+  if (packageArchiveSha256) {
+    let customerUploadBytes: ReadonlyMap<string, Buffer>;
+    try {
+      customerUploadBytes = await readReusableKnowledgeBaseUploadEvidenceBytes({
+        userId: input.userId,
+        buildId: input.buildId,
+        generation: input.generation,
+        packageArchiveSha256,
+        expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof KnowledgeBaseUploadEvidenceError) ||
+        error.code !== "NOT_FOUND"
+      ) {
+        throw new KnowledgeBasePackageBindingError(
+          error instanceof Error
+            ? error.message
+            : "知识库客户上传永久证据复用失败",
+        );
+      }
+      // No committed matching package ledger exists yet. The first binding
+      // must still prove every byte against the short-lived upload capture.
+      const verifiedBytes =
+        await verifiedKnowledgeBaseCustomerUploadBytesForBuild(input);
+      const verifiedUploads = verifiedBytes.map((upload) => ({
+        sourceSha256: upload.sourceSha256,
+        leafIds: upload.leafIds,
+        filenames: upload.filenames,
+        mimeTypes: upload.mimeTypes,
+        fileIds: upload.fileIds,
+        sizeBytes: [upload.sizeBytes],
+      }));
+      if (
+        JSON.stringify(verifiedUploads) !==
+        JSON.stringify(expectedCustomerUploads)
+      ) {
+        throw new KnowledgeBasePackageBindingError(
+          "客户上传图片的受管原始字节与当前权威账本不一致",
+        );
+      }
+      customerUploadBytes = new Map(
+        verifiedBytes.map(
+          (upload) => [upload.sourceSha256, upload.bytes] as const,
+        ),
+      );
+    }
+    try {
+      await persistKnowledgeBaseUploadEvidence({
+        userId: input.userId,
+        buildId: input.buildId,
+        generation: input.generation,
+        packageArchiveSha256,
+        expectedCustomerUploads,
+        expectedOfficialLogoUpload,
+        expectedOfficialLogoProvenance,
+        customerUploadBytes,
+      });
+    } catch (error) {
+      throw new KnowledgeBasePackageBindingError(
+        error instanceof Error
+          ? error.message
+          : "知识库客户上传证据永久封存失败",
+      );
+    }
+  }
+  return {
+    expectedCustomerUploads,
+    expectedOfficialLogoUpload,
+    expectedOfficialLogoProvenance,
+  };
+}
+
+/** Read customer-visible bytes from the immutable build evidence, never TTL storage. */
+export async function persistedKnowledgeBaseCustomerUploadBytesForBuild(input: {
+  userId: number;
+  buildId: string;
+  generation: number;
+  packageArchiveSha256: string;
+  sourceSha256: string;
+}) {
+  try {
+    return await readKnowledgeBasePersistedCustomerUploadBytes(input);
+  } catch (error) {
+    throw new KnowledgeBasePackageBindingError(
+      error instanceof Error ? error.message : "客户上传图片的永久证据读取失败",
+    );
+  }
 }
 
 export async function declaredKnowledgeBaseCustomerUploadsForBuild(input: {
@@ -597,7 +1188,8 @@ export async function declaredKnowledgeBaseCustomerUploadsForBuild(input: {
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
       ),
-    );
+    )
+    .orderBy(asc(conversationTurns.createdAt), asc(conversationTurns.id));
   return knowledgeBaseExpectedCustomerUploadsFromTurns(turns, {
     excludedSourceSha256: input.officialLogoSha256,
   });

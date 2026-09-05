@@ -94,6 +94,11 @@ export async function canonicalizeKnowledgeBaseFinalArchive(input: {
   buffer: Buffer;
   nodes: readonly KnowledgeBasePackageNode[];
   buildRevision: number;
+  /**
+   * Read-only recovery of schema-v4 archives accepted before raw node IDs
+   * became mandatory. The strict final-turn write path must leave this false.
+   */
+  legacyV4ReadCompatibility?: boolean;
 }) {
   const archive = await JSZip.loadAsync(input.buffer, { checkCRC32: true });
   const manifestEntries = Object.values(archive.files).filter(
@@ -114,7 +119,9 @@ export async function canonicalizeKnowledgeBaseFinalArchive(input: {
   );
   let manifest: JsonRecord;
   try {
-    manifest = JSON.parse(await manifestEntry.async("string")) as JsonRecord;
+    manifest = JSON.parse(
+      (await manifestEntry.async("string")).replace(/^\uFEFF/u, ""),
+    ) as JsonRecord;
   } catch {
     throw new KnowledgeBasePackageCanonicalizationError(
       "最终 ZIP package manifest 不是有效 JSON",
@@ -177,6 +184,9 @@ export async function canonicalizeKnowledgeBaseFinalArchive(input: {
     const node = nodes[index]!;
     const oldId = normalized(leaf.id);
     const leafId = normalized(node.leafId);
+    const acceptedLeafIds = input.legacyV4ReadCompatibility
+      ? [leafId, `leaf-${leafId}`]
+      : [leafId];
     const approved = canonicalApprovedKnowledgeBaseLeafMarkdown(
       node.contentMarkdown || "",
     );
@@ -185,7 +195,7 @@ export async function canonicalizeKnowledgeBaseFinalArchive(input: {
       seenDocumentIds.has(oldId) ||
       !leafId ||
       seenLeafIds.has(leafId) ||
-      (oldId !== leafId && oldId !== `leaf-${leafId}`) ||
+      !acceptedLeafIds.includes(oldId) ||
       !approved
     ) {
       throw new KnowledgeBasePackageCanonicalizationError(

@@ -22,7 +22,7 @@ describe("shared manual-service-order response contract", () => {
       "frontmind-manual-service-order-v1-2026-08-02",
     );
     expect(createHash("sha256").update(fixtureText).digest("hex")).toBe(
-      "e3e9f0c4a5a83fc41313b40e72b75da583dbf6c4feb796e133bb1d3144f87513",
+      "0fbe9a0323876a76fd02a32513d20f253d1c06d74c2b75c390c39902acd896a9",
     );
   });
 
@@ -45,6 +45,7 @@ describe("shared manual-service-order response contract", () => {
       Record<string, unknown>
     >;
     expect(created.order).not.toHaveProperty("amountFen");
+    expect(created.order.marketEdition).toBe("overseas");
     expect(authorized.order).toMatchObject({
       status: "payment_required",
       contractAuthorizationMode: "external_wechat",

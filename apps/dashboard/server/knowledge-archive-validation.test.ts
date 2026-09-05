@@ -860,6 +860,31 @@ async function parseWebsiteArchive(buffer: Buffer) {
 }
 
 describe("versioned knowledge archive quality gates", () => {
+  it("accepts a UTF-8 BOM and CRLF in strict ZIP machine manifests without changing archive bytes", async () => {
+    const zip = await JSZip.loadAsync(await websiteArchive());
+    const root = "示例企业_knowledge_base";
+    for (const relativePath of [
+      "00_package_manifest.json",
+      "00_completeness.json",
+    ]) {
+      const entry = zip.file(`${root}/${relativePath}`)!;
+      const text = await entry.async("string");
+      zip.file(
+        `${root}/${relativePath}`,
+        `\uFEFF${JSON.stringify(JSON.parse(text), null, 2).replace(/\n/gu, "\r\n")}\r\n`,
+      );
+    }
+
+    const result = await readKnowledgeArchive(
+      Buffer.from(await zip.generateAsync({ type: "uint8array" })),
+      "带 BOM 的严格知识库.zip",
+      "bom-crlf-machine-manifest-test",
+      { validationProfile: "website-lead-v1" },
+    );
+    storedKeys.push(...result.storedAssetKeys);
+    expect(result.documents.length).toBeGreaterThan(0);
+  });
+
   it("allows audit language in internal completeness metadata", async () => {
     const zip = await JSZip.loadAsync(await dashboardEnterpriseArchive());
     const root = "深度企业_knowledge_base";
@@ -941,6 +966,93 @@ ${narrative}
       contentStatus: "limited_evidence",
       evidenceCharacters: 100,
     });
+  });
+
+  it("requires the exact evidence-adaptive formal gate only for deep policy v2", async () => {
+    const zip = await JSZip.loadAsync(await dashboardEnterpriseArchive());
+    const manifestPath = "深度企业_knowledge_base/00_package_manifest.json";
+    const manifest = JSON.parse(await zip.file(manifestPath)!.async("string"));
+    const leaf = manifest.documents.find(
+      (document: { id?: string }) => document.id === "leaf-1",
+    );
+    leaf.requiredFormalCharacters = 0;
+    zip.file(manifestPath, JSON.stringify(manifest));
+    const archive = await zip.generateAsync({ type: "nodebuffer" });
+
+    const legacyCompatible = await readKnowledgeArchive(
+      archive,
+      "历史v4兼容正文门禁.zip",
+      "legacy-formal-gate-test",
+      {
+        validationProfile: "dashboard-enterprise-v1",
+        dashboardEnterpriseMinLeaves: 8,
+        requireDashboardAdaptiveFormalGate: false,
+      },
+    );
+    storedKeys.push(...legacyCompatible.storedAssetKeys);
+
+    await expect(
+      readKnowledgeArchive(
+        archive,
+        "深度v2严格正文门禁.zip",
+        "deep-formal-gate-test",
+        {
+          validationProfile: "dashboard-enterprise-v1",
+          dashboardEnterpriseMinLeaves: 30,
+          requireDashboardAdaptiveFormalGate: true,
+        },
+      ),
+    ).rejects.toThrow("正文要求或内容状态不正确");
+  });
+
+  it("keeps 29-leaf archives readable for v1 but rejects them for deep policy v2", async () => {
+    const zip = await JSZip.loadAsync(await dashboardEnterpriseArchive());
+    const root = "深度企业_knowledge_base";
+    const manifestPath = `${root}/00_package_manifest.json`;
+    const completenessPath = `${root}/00_completeness.json`;
+    const manifest = JSON.parse(await zip.file(manifestPath)!.async("string"));
+    const removedIds = new Set(
+      Array.from({ length: 11 }, (_, index) => `leaf-${index + 30}`),
+    );
+    for (let index = 30; index <= 40; index += 1) {
+      zip.remove(`${root}/branches/products/leaf-${index}.md`);
+    }
+    manifest.documents = manifest.documents.filter(
+      (document: { id?: string }) => !removedIds.has(document.id || ""),
+    );
+    manifest.counts.totalFiles -= 11;
+    manifest.counts.customerVisibleCharacters = 120 + 29 * 80;
+    zip.file(manifestPath, JSON.stringify(manifest));
+    const completeness = JSON.parse(
+      await zip.file(completenessPath)!.async("string"),
+    );
+    completeness.counts.totalLeaves = 29;
+    completeness.counts.verifiedFirstParty = 29;
+    zip.file(completenessPath, JSON.stringify(completeness));
+    const archive = await zip.generateAsync({ type: "nodebuffer" });
+
+    const legacyCompatible = await readKnowledgeArchive(
+      archive,
+      "历史29节点知识库.zip",
+      "legacy-29-leaf-test",
+      {
+        validationProfile: "dashboard-enterprise-v1",
+        dashboardEnterpriseMinLeaves: 8,
+      },
+    );
+    storedKeys.push(...legacyCompatible.storedAssetKeys);
+
+    await expect(
+      readKnowledgeArchive(
+        archive,
+        "深度29节点知识库.zip",
+        "deep-29-leaf-test",
+        {
+          validationProfile: "dashboard-enterprise-v1",
+          dashboardEnterpriseMinLeaves: 30,
+        },
+      ),
+    ).rejects.toThrow("企业深度知识库必须包含 30–115 个知识叶子");
   });
 
   it("accepts a v3 archive while retaining v2 compatibility", async () => {
@@ -1058,6 +1170,121 @@ ${narrative}
       assetType: "brand_identity",
       displayRole: "badge",
     });
+  });
+
+  it.each([
+    [
+      "officialPages",
+      { completed: 121, total: 121 },
+      "成功采集官网页面超过 120",
+    ],
+    [
+      "officialPages",
+      { completed: 120, total: 201 },
+      "尝试访问官网链接超过 200",
+    ],
+    ["documents", { completed: 131, total: 131 }, "解析文档超过 130"],
+    ["webQueries", { completed: 31, total: 31 }, "公开查询超过 30"],
+  ] as const)(
+    "rejects Dashboard v4 acquisition budget overflow for %s",
+    async (dimension, counts, expectedMessage) => {
+      const archive = await dashboardV4OfficialLogoUploadArchive();
+      const zip = await JSZip.loadAsync(archive.buffer);
+      const completenessPath = "深度企业_knowledge_base/00_completeness.json";
+      const completeness = JSON.parse(
+        await zip.file(completenessPath)!.async("string"),
+      );
+      completeness.acquisition[dimension] = counts;
+      zip.file(completenessPath, JSON.stringify(completeness));
+
+      await expect(
+        readKnowledgeArchive(
+          await zip.generateAsync({ type: "nodebuffer" }),
+          "深度企业知识库-v4-budget-overflow.zip",
+          `deep-v4-budget-${dimension}-${counts.total}`,
+          {
+            validationProfile: "dashboard-enterprise-v1",
+            archiveContractVersion: 4,
+          },
+        ),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
+
+  it("accepts Dashboard v4 acquisition budgets at their exact caps", async () => {
+    const archive = await dashboardV4OfficialLogoUploadArchive();
+    const zip = await JSZip.loadAsync(archive.buffer);
+    const completenessPath = "深度企业_knowledge_base/00_completeness.json";
+    const completeness = JSON.parse(
+      await zip.file(completenessPath)!.async("string"),
+    );
+    completeness.acquisition.officialPages = { completed: 120, total: 200 };
+    completeness.acquisition.documents = { completed: 130, total: 130 };
+    completeness.acquisition.webQueries = { completed: 30, total: 30 };
+    zip.file(completenessPath, JSON.stringify(completeness));
+
+    const result = await readKnowledgeArchive(
+      await zip.generateAsync({ type: "nodebuffer" }),
+      "深度企业知识库-v4-budget-caps.zip",
+      "deep-v4-budget-caps",
+      {
+        validationProfile: "dashboard-enterprise-v1",
+        archiveContractVersion: 4,
+      },
+    );
+    storedKeys.push(...result.storedAssetKeys);
+    expect(result.packageSchemaVersion).toBe(4);
+  });
+
+  it("allows only the v4 binder to repair a derived formal character count", async () => {
+    const archive = await dashboardV4OfficialLogoUploadArchive();
+    const zip = await JSZip.loadAsync(archive.buffer);
+    const manifestPath = "深度企业_knowledge_base/00_package_manifest.json";
+    const manifest = JSON.parse(await zip.file(manifestPath)!.async("string"));
+    manifest.counts.customerVisibleCharacters += 615;
+    zip.file(manifestPath, JSON.stringify(manifest));
+    const mismatched = await zip.generateAsync({ type: "nodebuffer" });
+
+    await expect(
+      readKnowledgeArchive(
+        mismatched,
+        "深度企业知识库-v4-count-mismatch.zip",
+        "deep-v4-count-strict-test",
+        {
+          validationProfile: "dashboard-enterprise-v1",
+          archiveContractVersion: 4,
+        },
+      ),
+    ).rejects.toThrow("package manifest 正式正文字数与服务端复算结果不一致");
+
+    const repairable = await readKnowledgeArchive(
+      mismatched,
+      "深度企业知识库-v4-count-mismatch.zip",
+      "deep-v4-count-repairable-test",
+      {
+        validationProfile: "dashboard-enterprise-v1",
+        archiveContractVersion: 4,
+        allowV4CustomerVisibleCharacterCountRepair: true,
+      },
+    );
+    storedKeys.push(...repairable.storedAssetKeys);
+    expect(repairable.packageSchemaVersion).toBe(4);
+
+    const evidenceMismatchZip = await JSZip.loadAsync(mismatched);
+    manifest.counts.evidenceCharacters += 1;
+    evidenceMismatchZip.file(manifestPath, JSON.stringify(manifest));
+    await expect(
+      readKnowledgeArchive(
+        await evidenceMismatchZip.generateAsync({ type: "nodebuffer" }),
+        "深度企业知识库-v4-other-count-mismatch.zip",
+        "deep-v4-other-count-strict-test",
+        {
+          validationProfile: "dashboard-enterprise-v1",
+          archiveContractVersion: 4,
+          allowV4CustomerVisibleCharacterCountRepair: true,
+        },
+      ),
+    ).rejects.toThrow("package manifest 证据文字数与服务端复算结果不一致");
   });
 
   it("rejects an uploaded official Logo candidate without customer_upload method", async () => {

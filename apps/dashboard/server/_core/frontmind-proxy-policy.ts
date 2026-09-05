@@ -9,9 +9,13 @@ import {
 import { assertDeliveryProjectContext } from "../delivery-role-service";
 
 const ORDINARY_USER_SUPPORT_OPERATIONS = new Set([
+  "POST /v2/assets",
   "POST /download-token",
   "POST /v1/files",
+  "POST /v1/managed-uploads",
+  "POST /v1/managed-uploads/recovery",
   "PUT /proxy-upload",
+  "DELETE /v1/managed-uploads",
 ]);
 
 function proxyPath(req: Pick<FrontMindRequest, "originalUrl">) {
@@ -35,17 +39,35 @@ export function ordinaryUserMayUseFrontMindProxy(
   req: Pick<FrontMindRequest, "method" | "originalUrl">,
 ) {
   const method = req.method.toUpperCase();
+  const pathname = proxyPath(req);
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
     return true;
   }
-  return ORDINARY_USER_SUPPORT_OPERATIONS.has(`${method} ${proxyPath(req)}`);
+  if (method === "DELETE" && /^\/v1\/files\/[^/]+\/discard$/u.test(pathname)) {
+    return true;
+  }
+  if (
+    method === "POST" &&
+    /^\/v1\/files\/[^/]+\/upload-recovery$/u.test(pathname)
+  ) {
+    return true;
+  }
+  return ORDINARY_USER_SUPPORT_OPERATIONS.has(`${method} ${pathname}`);
 }
 
 export function ordinaryUserProxyWriteRequiresActiveService(
   req: Pick<FrontMindRequest, "method" | "originalUrl">,
 ) {
   const operation = `${req.method.toUpperCase()} ${proxyPath(req)}`;
-  return operation === "POST /v1/files" || operation === "PUT /proxy-upload";
+  return (
+    operation === "POST /v2/assets" ||
+    operation === "POST /v1/files" ||
+    operation === "POST /v1/managed-uploads" ||
+    operation === "POST /v1/managed-uploads/recovery" ||
+    operation === "PUT /proxy-upload" ||
+    (req.method.toUpperCase() === "POST" &&
+      /^\/v1\/files\/[^/]+\/upload-recovery$/u.test(proxyPath(req)))
+  );
 }
 
 export function createFrontMindProxyAccessMiddleware(
@@ -166,3 +188,25 @@ export function createDeliveryProjectContextMiddleware(
 
 export const enforceDeliveryProjectContext =
   createDeliveryProjectContextMiddleware();
+
+/**
+ * Knowledge-base persistence is still account-scoped. Validate the selected
+ * delivery project first, then stop before any account credential or KB row
+ * can be read or written under an ambiguous null project scope.
+ */
+export function rejectDeliveryMemberKnowledgeBaseProjectScope(
+  req: FrontMindRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  if (req.frontmindUser?.role !== "delivery_member") {
+    next();
+    return;
+  }
+  res.status(403).json({
+    error: {
+      message: "当前知识库暂不支持工程师项目工作区，请由客户账号操作",
+      code: "KNOWLEDGE_BASE_PROJECT_SCOPE_UNSUPPORTED",
+    },
+  });
+}

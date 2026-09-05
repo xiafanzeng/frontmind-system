@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   assertKnowledgeBaseBackfillCoverage,
+  assertKnowledgeBaseBackfillApplyRetired,
   assertKnowledgeBaseReadyPackageBackfillFinalized,
   assertKnowledgeBaseReservationsRecovered,
   assertRecoverableSkillPins,
@@ -85,7 +86,7 @@ describe("knowledge-base state-machine backfill command", () => {
     expect(prepare.mock.calls[1]![0].after.buildId).toBe("build-00499");
   });
 
-  it("drains turn and open-build pages and preserves exact claimed turn IDs", async () => {
+  it("drains only reservation pages and preserves exact claimed turn IDs", async () => {
     const turnRecovery = vi
       .fn()
       .mockResolvedValueOnce({
@@ -97,6 +98,7 @@ describe("knowledge-base state-machine backfill command", () => {
         ),
         rebound: 0,
         reconciled: 200,
+        credentialPaused: 0,
         skipped: 0,
         failed: 0,
       })
@@ -106,45 +108,21 @@ describe("knowledge-base state-machine backfill command", () => {
         claimedTurnIds: ["turn-200"],
         rebound: 0,
         reconciled: 1,
+        credentialPaused: 0,
         skipped: 0,
         failed: 0,
-      });
-    const buildRecovery = vi
-      .fn()
-      .mockResolvedValueOnce({
-        scanned: 500,
-        reconciled: 500,
-        skipped: 0,
-        failed: 0,
-        nextCursor: "build-00499",
-        hasMore: true,
-        packageRebindRequired: 2,
-      })
-      .mockResolvedValueOnce({
-        scanned: 1,
-        reconciled: 1,
-        skipped: 0,
-        failed: 0,
-        nextCursor: "build-00500",
-        hasMore: false,
-        packageRebindRequired: 1,
       });
 
     const result = await drainKnowledgeBaseRecovery({
       recoverExpiredKnowledgeBaseTurns: turnRecovery as any,
-      recoverOpenKnowledgeBaseTasks: buildRecovery as any,
     });
 
     expect(result.turnPasses).toBe(2);
     expect(result.turns.claimed).toBe(201);
     expect(result.claimedTurnIds).toHaveLength(201);
-    expect(result.buildPasses).toBe(2);
-    expect(result.builds.scanned).toBe(501);
-    expect(result.builds.packageRebindRequired).toBe(3);
-    expect(buildRecovery.mock.calls[1]![0].afterBuildId).toBe("build-00499");
   });
 
-  it("fails closed when either recovery path skips work", async () => {
+  it("fails closed when reservation recovery skips work", async () => {
     await expect(
       drainKnowledgeBaseRecovery({
         recoverExpiredKnowledgeBaseTurns: vi.fn().mockResolvedValue({
@@ -153,65 +131,19 @@ describe("knowledge-base state-machine backfill command", () => {
           claimedTurnIds: [],
           rebound: 0,
           reconciled: 0,
+          credentialPaused: 0,
           skipped: 1,
           failed: 0,
         }) as any,
-        recoverOpenKnowledgeBaseTasks: vi.fn() as any,
       }),
     ).rejects.toThrow("KB_TURN_RECOVERY_SKIPPED");
-
-    await expect(
-      drainKnowledgeBaseRecovery({
-        recoverExpiredKnowledgeBaseTurns: vi.fn().mockResolvedValue({
-          scanned: 0,
-          claimed: 0,
-          claimedTurnIds: [],
-          rebound: 0,
-          reconciled: 0,
-          skipped: 0,
-          failed: 0,
-        }) as any,
-        recoverOpenKnowledgeBaseTasks: vi.fn().mockResolvedValue({
-          scanned: 1,
-          reconciled: 0,
-          skipped: 1,
-          failed: 0,
-          nextCursor: "build-1",
-          hasMore: false,
-          packageRebindRequired: 0,
-        }) as any,
-      }),
-    ).rejects.toThrow("KB_BUILD_RECOVERY_SKIPPED");
   });
 
-  it("keeps package rebind candidates reachable while other recovery failures remain fatal", async () => {
-    const result = await drainKnowledgeBaseRecovery({
-      recoverExpiredKnowledgeBaseTurns: vi.fn().mockResolvedValue({
-        scanned: 0,
-        claimed: 0,
-        claimedTurnIds: [],
-        rebound: 0,
-        reconciled: 0,
-        skipped: 0,
-        failed: 0,
-      }) as any,
-      recoverOpenKnowledgeBaseTasks: vi.fn().mockResolvedValue({
-        scanned: 2,
-        reconciled: 0,
-        skipped: 0,
-        failed: 0,
-        packageRebindRequired: 2,
-        nextCursor: "build-ready-2",
-        hasMore: false,
-      }) as any,
-    });
-
-    expect(result.builds).toMatchObject({
-      scanned: 2,
-      packageRebindRequired: 2,
-      skipped: 0,
-      failed: 0,
-    });
+  it("retires every mutating backfill invocation before recovery setup", () => {
+    expect(() => assertKnowledgeBaseBackfillApplyRetired(false)).not.toThrow();
+    expect(() => assertKnowledgeBaseBackfillApplyRetired(true)).toThrow(
+      "KB_V2_BACKFILL_RETIRED_RESET_REQUIRED",
+    );
   });
 
   it("requires exact preparation coverage and exact reservation claims", () => {

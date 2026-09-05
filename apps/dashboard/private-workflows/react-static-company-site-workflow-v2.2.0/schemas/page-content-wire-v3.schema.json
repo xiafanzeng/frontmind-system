@@ -1,0 +1,95 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operationToken", "schemaVersion", "routes", "blocks", "entities", "faqs", "officialLinks"],
+  "properties": {
+    "operationToken": { "type": "string" },
+    "schemaVersion": { "type": "number", "enum": [3] },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["routeId", "eyebrow", "heading", "summary"],
+        "properties": {
+          "routeId": { "type": "string" },
+          "eyebrow": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "heading": { "type": "string" },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["routeId", "slotId", "blockType", "heading", "paragraphs", "items", "entityIds", "faqIds", "sourceDocumentIds"],
+        "properties": {
+          "routeId": { "type": "string" },
+          "slotId": { "type": "string" },
+          "blockType": { "type": "string", "enum": ["prose", "feature_list", "steps", "metrics", "quote", "entity_grid", "faq_preview", "cta"] },
+          "heading": { "type": "string" },
+          "paragraphs": { "type": "array", "items": { "type": "string" } },
+          "items": { "type": "array", "items": { "type": "string" } },
+          "entityIds": { "type": "array", "items": { "type": "string" } },
+          "faqIds": { "type": "array", "items": { "type": "string" } },
+          "sourceDocumentIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entityId", "entityType", "slug", "title", "summary", "body", "tags", "publishedAt", "modifiedAt", "author", "sourceName", "sourceUrl", "sourceDocumentIds", "relatedEntityIds"],
+        "properties": {
+          "entityId": { "type": "string" },
+          "entityType": { "type": "string", "enum": ["product", "service", "application", "case_study", "blog", "company_news"] },
+          "slug": { "type": "string" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "body": { "type": "array", "items": { "type": "string" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "publishedAt": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "modifiedAt": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "author": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "sourceName": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "sourceUrl": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "sourceDocumentIds": { "type": "array", "items": { "type": "string" } },
+          "relatedEntityIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "faqs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["faqId", "category", "question", "answers", "sourceDocumentIds"],
+        "properties": {
+          "faqId": { "type": "string" },
+          "category": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "question": { "type": "string" },
+          "answers": { "type": "array", "items": { "type": "string" } },
+          "sourceDocumentIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "officialLinks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "label", "url", "sourceDocumentIds"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["same_as", "reference"] },
+          "label": { "type": "string" },
+          "url": { "type": "string" },
+          "sourceDocumentIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

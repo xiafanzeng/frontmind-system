@@ -280,7 +280,68 @@ describe("knowledge-base final package binding", () => {
     ).toMatchObject({ customerUploadCount: 1 });
   });
 
-  it("safely maps the exact legacy leaf- alias without rewriting asset references", () => {
+  it("accepts a schema v4 auto-bound Logo without external provenance", () => {
+    const input = fixture();
+
+    expect(
+      assertKnowledgeBasePackageMatchesBuild({
+        ...input,
+        packageSchemaVersion: 4,
+        expectedCustomerUploads: [],
+      }),
+    ).toMatchObject({
+      logoSha256,
+      customerUploadCount: 0,
+    });
+  });
+
+  it.each([
+    [
+      "official web page",
+      {
+        sourceKind: "official_web" as const,
+        sourcePageUrl: "https://example.com/company",
+        sourceAssetUrl: "https://cdn.example.com/brand/logo.png",
+      },
+      (asset: KnowledgeAsset) => {
+        asset.sourceAssetUrl = "https://cdn.example.com/brand/other.png";
+      },
+    ],
+    [
+      "official document path",
+      {
+        sourceKind: "official_document" as const,
+        sourceDocumentPath: "uploads/企业品牌手册.pdf",
+      },
+      (asset: KnowledgeAsset) => {
+        asset.sourceDocumentPath = "uploads/另一份手册.pdf";
+      },
+    ],
+  ])(
+    "rejects an exact %s provenance tamper even when Logo bytes still match",
+    (_label, expectedProvenance, mutate) => {
+      const input = fixture();
+      Object.assign(input.assets[0]!, expectedProvenance, {
+        ownership: "first_party" as const,
+        assetType: "brand_identity" as const,
+        displayRole: "badge" as const,
+      });
+      const exact = {
+        ...input,
+        packageSchemaVersion: 4 as const,
+        expectedCustomerUploads: [],
+        expectedOfficialLogoProvenance: expectedProvenance,
+      };
+      expect(() => assertKnowledgeBasePackageMatchesBuild(exact)).not.toThrow();
+
+      mutate(input.assets[0]!);
+      expect(() => assertKnowledgeBasePackageMatchesBuild(exact)).toThrow(
+        "官方主 Logo 来源与首轮持久化账本不一致",
+      );
+    },
+  );
+
+  it("rejects the historical leaf- alias on v4 writes but accepts it on reads", () => {
     const input = fixture();
     input.documents[0]!.id = "leaf-1.1";
     input.documents[1]!.id = "leaf-1.2";
@@ -303,7 +364,7 @@ describe("knowledge-base final package binding", () => {
       displayRole: "inline",
     });
 
-    expect(
+    expect(() =>
       assertKnowledgeBasePackageMatchesBuild({
         ...input,
         packageSchemaVersion: 4,
@@ -316,23 +377,47 @@ describe("knowledge-base final package binding", () => {
           },
         ],
       }),
-    ).toMatchObject({ leafCount: 2, customerUploadCount: 1 });
-    expect(input.documents.map((document) => document.id)).toEqual([
-      "leaf-1.1",
-      "leaf-1.2",
-    ]);
-    expect(input.assets[1]!.documentIds).toEqual(["leaf-1.2"]);
+    ).toThrow("最终 ZIP 缺少已确认节点：1.1");
+
+    expect(() =>
+      assertKnowledgeBasePackageMatchesBuild({
+        ...input,
+        packageSchemaVersion: 4,
+        legacyV4ReadCompatibility: true,
+        expectedCustomerUploads: [
+          {
+            sourceSha256: customerSha256,
+            leafIds: ["1.2"],
+            filenames: ["office.png"],
+            mimeTypes: ["image/png"],
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 
-  it("rejects an ambiguous raw-plus-prefixed v4 leaf identity", () => {
+  it("rejects an ambiguous raw-plus-prefixed identity during a legacy v4 read", () => {
     const input = fixture();
     input.documents[1] = { ...input.documents[0]!, id: "leaf-1.1" };
     expect(() =>
       assertKnowledgeBasePackageMatchesBuild({
         ...input,
         packageSchemaVersion: 4,
+        legacyV4ReadCompatibility: true,
       }),
-    ).toThrow("节点标识无法与已确认版本唯一对应：1.1");
+    ).toThrow("最终 ZIP 节点标识无法与已确认版本唯一对应：1.1");
+  });
+
+  it("does not extend the v4 leaf alias to a schema-v3 archive", () => {
+    const input = fixture();
+    input.documents[0]!.id = "leaf-1.1";
+    expect(() =>
+      assertKnowledgeBasePackageMatchesBuild({
+        ...input,
+        packageSchemaVersion: 3,
+        legacyV4ReadCompatibility: true,
+      }),
+    ).toThrow("最终 ZIP 缺少已确认节点：1.1");
   });
 
   it("accepts one formal block already stored in the approved presentation", () => {
@@ -352,6 +437,14 @@ describe("knowledge-base final package binding", () => {
       logoSha256,
       customerUploadCount: 0,
     });
+  });
+
+  it("rejects extra web provenance on an exact customer-upload Logo ledger", () => {
+    const input = officialLogoUploadFixture();
+    input.assets[0]!.sourcePageUrl = "https://example.com/not-the-upload";
+    expect(() => assertKnowledgeBasePackageMatchesBuild(input)).toThrow(
+      "官方主 Logo 与服务端原始上传账本不一致",
+    );
   });
 
   it.each([

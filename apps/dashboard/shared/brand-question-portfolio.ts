@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { managedAgentProfileSchema } from "./manus-agent-profile";
+
 export const brandQuestionCategorySchema = z.enum([
   "industry",
   "competitor_comparison",
@@ -52,7 +54,7 @@ export const brandQuestionPortfolioSchema = z
       .object({
         name: z.literal("brand-question-portfolio"),
         version: z.literal("2"),
-        model: z.literal("frontmind-pro"),
+        model: managedAgentProfileSchema,
       })
       .strict(),
     knowledgeSnapshot: z
@@ -168,6 +170,7 @@ export function assertBrandQuestionPortfolioContext(
     archiveHash: string;
     planCode: "advanced" | "luxury";
     quotaPeriodId: string;
+    model: z.infer<typeof managedAgentProfileSchema>;
     enterprise: { identityHash: string; canonicalName: string };
     candidateTargets: Record<BrandQuestionCategory, number>;
     documents: Iterable<{ path: string; content: string }>;
@@ -180,6 +183,7 @@ export function assertBrandQuestionPortfolioContext(
       expected.archiveHash.toLowerCase() ||
     portfolio.planCode !== expected.planCode ||
     portfolio.quotaPeriodId !== expected.quotaPeriodId ||
+    portfolio.skill.model !== expected.model ||
     portfolio.enterprise.identityHash.toLowerCase() !==
       expected.enterprise.identityHash.toLowerCase() ||
     portfolio.enterprise.canonicalName !== expected.enterprise.canonicalName

@@ -12,6 +12,7 @@ const turnId = "223e4567-e89b-42d3-a456-426614174001";
 const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   readStoredPresalesFile: vi.fn(),
+  declaredImages: vi.fn(),
   verifiedImages: vi.fn(),
 }));
 
@@ -21,11 +22,22 @@ vi.mock("./presales-file-store", () => ({
   readStoredPresalesFile: mocks.readStoredPresalesFile,
 }));
 
-vi.mock("./knowledge-base-customer-upload", () => ({
-  verifiedKnowledgeBaseCustomerUploadImagesFromTurn: mocks.verifiedImages,
-}));
+vi.mock("./knowledge-base-customer-upload", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./knowledge-base-customer-upload")>();
+  return {
+    ...actual,
+    declaredKnowledgeBaseCustomerUploadImagesFromTurn: mocks.declaredImages,
+    verifiedKnowledgeBaseCustomerUploadImagesFromTurn: mocks.verifiedImages,
+  };
+});
 
 import artifactRouter from "./knowledge-base-artifact-api";
+import {
+  knowledgeBaseCustomerUploadInternalIdentity,
+  type KnowledgeBaseCustomerUploadImage,
+} from "./knowledge-base-customer-upload";
+import { knowledgeBasePublicResourceHandle } from "./knowledge-base-public-resource";
 
 const servers: Server[] = [];
 
@@ -72,7 +84,11 @@ function configureDatabase(
                   },
                 ];
         return {
-          where: () => ({ limit: async () => rows }),
+          where: () => ({
+            limit: async () => rows,
+            then: (resolve: (value: typeof rows) => unknown) =>
+              Promise.resolve(rows).then(resolve),
+          }),
         };
       },
     }),
@@ -87,6 +103,18 @@ function configureImage(input: {
 }) {
   const sourceSha256 = sha256(input.bytes);
   mocks.verifiedImages.mockResolvedValue([
+    {
+      turnId,
+      leafId: "1.2",
+      index: 0,
+      fileId: "customer-file-1",
+      filename: input.filename,
+      mimeType: input.mimeType,
+      sizeBytes: input.bytes.length,
+      sourceSha256,
+    },
+  ]);
+  mocks.declaredImages.mockReturnValue([
     {
       turnId,
       leafId: "1.2",
@@ -128,9 +156,28 @@ async function startApp(sourceSha256: string, authenticated = true) {
   return `http://127.0.0.1:${address.port}/api/knowledge-base/artifacts/${buildId}/customer-uploads/${turnId}/0/${sourceSha256}`;
 }
 
+async function startOpaqueApp(handle: string) {
+  const app = express();
+  app.use((req: any, _res, next) => {
+    req.frontmindUser = {
+      id: 42,
+      username: "knowledge-user",
+      role: "user",
+    };
+    next();
+  });
+  app.use("/api/knowledge-base/artifacts", artifactRouter);
+  const server = createServer(app);
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}/api/knowledge-base/artifacts/resources/${handle}`;
+}
+
 beforeEach(() => {
   mocks.getDb.mockReset();
   mocks.readStoredPresalesFile.mockReset();
+  mocks.declaredImages.mockReset();
   mocks.verifiedImages.mockReset();
   configureDatabase();
 });
@@ -206,6 +253,58 @@ describe("knowledge-base customer-upload image preview", () => {
     expect(preview.toString("utf8").toLowerCase()).not.toContain("<svg");
     await expect(sharp(preview).metadata()).resolves.toMatchObject({
       format: "png",
+    });
+  });
+
+  it("serves the current exact customer upload through an opaque URL without reflecting its filename or digest", async () => {
+    const source = await sharp({
+      create: {
+        width: 12,
+        height: 9,
+        channels: 4,
+        background: { r: 50, g: 80, b: 120, alpha: 1 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const sourceSha256 = configureImage({
+      bytes: source,
+      filename: "private-customer-name.png",
+      mimeType: "image/png",
+    });
+    const image: KnowledgeBaseCustomerUploadImage = {
+      turnId,
+      leafId: "1.2",
+      index: 0,
+      fileId: "customer-file-1",
+      filename: "private-customer-name.png",
+      mimeType: "image/png",
+      sizeBytes: source.length,
+      sourceSha256,
+    };
+    const handle = knowledgeBasePublicResourceHandle({
+      buildId,
+      kind: "customer_upload",
+      internalIdentity: knowledgeBaseCustomerUploadInternalIdentity(image),
+    });
+
+    const response = await fetch(await startOpaqueApp(handle));
+    const preview = Buffer.from(await response.arrayBuffer());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("etag")).toBeNull();
+    expect(response.headers.get("content-disposition")).toBe(
+      'inline; filename="knowledge-base-image.png"',
+    );
+    expect(response.url).not.toContain(buildId);
+    expect(response.url).not.toContain(turnId);
+    expect(response.url).not.toContain(sourceSha256);
+    expect(response.url).not.toContain("private-customer-name.png");
+    await expect(sharp(preview).metadata()).resolves.toMatchObject({
+      format: "png",
+      width: 12,
+      height: 9,
     });
   });
 

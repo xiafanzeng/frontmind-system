@@ -1,0 +1,26 @@
+{
+  "schema": "frontmind-siteops-social-package/v1",
+  "channel": "xiaohongshu",
+  "version": "1.0.0",
+  "hostOwnsArchive": true,
+  "automatedPublishing": false,
+  "accountCredentialsAllowed": false,
+  "brandSource": "customer-company-name",
+  "sourceMappingRequired": true,
+  "files": [
+    "manifest.json",
+    "images/01-cover.png",
+    "images/02-section-01.png",
+    "images/03-section-02.png",
+    "images/04-section-03.png",
+    "images/05-section-04.png",
+    "images/06-section-05.png",
+    "images/07-section-06.png",
+    "images/08-section-07.png",
+    "images/09-section-08.png",
+    "post-copy.md",
+    "sources.json",
+    "qa-report.json"
+  ],
+  "images": { "count": 9, "width": 1080, "height": 1440, "mimeType": "image/png" }
+}

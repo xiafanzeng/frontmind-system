@@ -1,0 +1,132 @@
+{
+  "schema": "frontmind-vendored-archive-manifest/v1",
+  "schemaVersion": 1,
+  "name": "generate-brand-question-universe-final-v2-20260819",
+  "sourceFilename": "generate-brand-question-universe-final-v2-20260819.zip",
+  "sha256": "25a656870a2786ae265112860424d902f87fb4486ce8007e306eb832795c164f",
+  "bytes": 38368,
+  "entryCount": 14,
+  "fileCount": 9,
+  "uncompressedBytes": 89753,
+  "immutable": true,
+  "checks": {
+    "crc32": { "passed": true, "failures": [] },
+    "absolutePaths": { "passed": true, "failures": [] },
+    "traversalPaths": { "passed": true, "failures": [] },
+    "symlinks": { "passed": true, "failures": [] }
+  },
+  "entries": [
+    {
+      "path": "generate-brand-question-universe/",
+      "kind": "directory",
+      "mimeType": "inode/directory",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unixMode": 16877
+    },
+    {
+      "path": "generate-brand-question-universe/SKILL.md",
+      "kind": "file",
+      "mimeType": "text/markdown",
+      "bytes": 12146,
+      "sha256": "13ef7f2f5155e4acba2ef85a0859898ebe2cbae82fe20cefa0df793131c7bc08",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/agents/",
+      "kind": "directory",
+      "mimeType": "inode/directory",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unixMode": 16877
+    },
+    {
+      "path": "generate-brand-question-universe/agents/openai.yaml",
+      "kind": "file",
+      "mimeType": "application/yaml",
+      "bytes": 330,
+      "sha256": "4ab33d08daf1e38ccf3948d5d602376904caf98982ef117607bd37352b56a8e4",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/references/",
+      "kind": "directory",
+      "mimeType": "inode/directory",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unixMode": 16877
+    },
+    {
+      "path": "generate-brand-question-universe/references/generation-prompts.md",
+      "kind": "file",
+      "mimeType": "text/markdown",
+      "bytes": 18883,
+      "sha256": "8a29a7d66ca44ec21fe9faeece07447f9e06a2a2c2ecfa91bf2d4ae767e81fe3",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/references/research-and-safety.md",
+      "kind": "file",
+      "mimeType": "text/markdown",
+      "bytes": 11711,
+      "sha256": "fe5fef0d20a6f7b97c29837f4f2ea002194996c3abb913aea51fd04aac4b21db",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/references/taxonomy.md",
+      "kind": "file",
+      "mimeType": "text/markdown",
+      "bytes": 6177,
+      "sha256": "0a46286ce697c7c686036b25ec1583c235f77d2c5e10f010c8fbb9b54ea62b80",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/references/workbook-output.md",
+      "kind": "file",
+      "mimeType": "text/markdown",
+      "bytes": 2960,
+      "sha256": "3a9e7943e1339a2f00f53cf178bb1a8e1ff54ccc9a9b02136ead54f11edae895",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/scripts/",
+      "kind": "directory",
+      "mimeType": "inode/directory",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unixMode": 16877
+    },
+    {
+      "path": "generate-brand-question-universe/scripts/build_workbook.mjs",
+      "kind": "file",
+      "mimeType": "text/javascript",
+      "bytes": 7505,
+      "sha256": "89e92f52fa2bd8fbe7f9f79185e79ee9b074b9062238f90c774b54e5c636b94e",
+      "unixMode": 33261
+    },
+    {
+      "path": "generate-brand-question-universe/scripts/validate_questions.py",
+      "kind": "file",
+      "mimeType": "text/x-python",
+      "bytes": 19216,
+      "sha256": "730990f1d0840c698c7141a19d91c35623fd1124631899e665175e586531a5f8",
+      "unixMode": 33188
+    },
+    {
+      "path": "generate-brand-question-universe/tests/",
+      "kind": "directory",
+      "mimeType": "inode/directory",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "unixMode": 16877
+    },
+    {
+      "path": "generate-brand-question-universe/tests/test_validate_questions.py",
+      "kind": "file",
+      "mimeType": "text/x-python",
+      "bytes": 10825,
+      "sha256": "a7d6b620569e74f6ba228b0584c679a961bb611a9c8e0abbb7d0a1e52534cf6d",
+      "unixMode": 33188
+    }
+  ]
+}

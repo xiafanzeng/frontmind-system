@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import axios from "axios";
+import express from "express";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
+import livePreviewRouter, {
   analyzeKnowledgeBaseLiveTask,
   buildKnowledgeBaseProtocolProbePrompt,
   collectKnowledgeBasePreviewFileIds,
+  createKnowledgeBaseLivePreviewAttachmentCleanup,
+  knowledgeBaseLivePreviewNeedsAuthoritativeFinalization,
   KNOWLEDGE_BASE_PROTOCOL_PROBE_LEAVES,
   KNOWLEDGE_BASE_PROTOCOL_PROBE_OPERATION_ID,
   KNOWLEDGE_BASE_PROTOCOL_PROBE_TURN_ID,
@@ -11,6 +17,34 @@ import {
   selectKnowledgeBasePreviewDownloadUrl,
   selectInitialKnowledgeBaseLiveTask,
 } from "./knowledge-base-live-preview-api";
+import {
+  FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+  upstreamPromptCharacterCount,
+} from "./upstream-prompt-budget";
+
+const originalNodeEnv = process.env.NODE_ENV;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = originalNodeEnv;
+});
+
+async function withLivePreviewServer<T>(run: (baseUrl: string) => Promise<T>) {
+  const app = express();
+  app.use(express.json({ limit: "1mb" }));
+  app.use(livePreviewRouter);
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address() as AddressInfo;
+    return await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+}
 
 function taskWithText(text: string, status = "completed", imageCount = 1) {
   return {
@@ -224,16 +258,14 @@ describe("analyzeKnowledgeBaseLiveTask", () => {
     ]);
   });
 
-  it("reports duplicate canonical manifests after terminal completion", () => {
+  it("deduplicates identical canonical manifests after terminal completion", () => {
     const rawManifest = JSON.stringify(manifest());
     const analysis = analyzeKnowledgeBaseLiveTask(
       taskWithText(`节点正文\n${rawManifest}\n${rawManifest}`),
     );
 
-    expect(analysis.manifest).toBeNull();
-    expect(analysis.issues.join("\n")).toContain(
-      "Model output must contain exactly one FRONTMIND_KB_MANIFEST envelope",
-    );
+    expect(analysis.manifest).toMatchObject({ leafCount: 8, branchCount: 8 });
+    expect(analysis.issues).toEqual([]);
   });
 
   it("reports a malformed documented manifest instead of treating it as absent", () => {
@@ -301,6 +333,9 @@ describe("analyzeKnowledgeBaseLiveTask", () => {
     expect(prompt).toContain("FRONTMIND_KB_PROTOCOL_PROBE_V2");
     expect(prompt).toContain("禁止联网、搜索、浏览、调用工具");
     expect(prompt).toContain("8.1|合作与支持|cooperation|合作与支持");
+    expect(upstreamPromptCharacterCount(prompt)).toBeLessThanOrEqual(
+      FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS,
+    );
     expect(analysis.runMode).toBe("protocol_probe");
     expect(analysis.manifest?.leaves).toEqual(
       KNOWLEDGE_BASE_PROTOCOL_PROBE_LEAVES,
@@ -367,5 +402,285 @@ describe("analyzeKnowledgeBaseLiveTask", () => {
     expect(recovered.imageCount).toBe(1);
     expect(recovered.visibleMarkdown).toBe("## 1.1 企业定位");
     expect(recovered.issues).toEqual([]);
+  });
+});
+
+// The live-preview HTTP surface was intentionally removed from the product
+// router in materialized-bundle v5. Keep the parser fixtures above as offline
+// regression coverage, but do not exercise the retired provider-continuation
+// transport as though it were a supported runtime route.
+describe.skip("retired knowledge-base live preview prompt delivery", () => {
+  it("cleans every generated attachment exactly once", async () => {
+    const cleanup = createKnowledgeBaseLivePreviewAttachmentCleanup();
+    const first = vi.fn().mockResolvedValue(undefined);
+    const second = vi.fn().mockRejectedValue(new Error("already gone"));
+    cleanup.add(first);
+    cleanup.add(second);
+
+    await cleanup.removeAll();
+    await cleanup.removeAll();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(cleanup.cleaned).toBe(true);
+    expect(cleanup.pendingCount).toBe(0);
+  });
+
+  it("uploads full start and continuation instructions while every task prompt stays within 3000 characters", async () => {
+    process.env.NODE_ENV = "development";
+    const taskBodies: Array<Record<string, any>> = [];
+    const uploadedBytes = new Map<string, Buffer>();
+    const filenameByFileId = new Map<string, string>();
+    let fileSequence = 0;
+
+    vi.spyOn(axios, "post").mockImplementation(
+      async (url: string, body: Record<string, any>) => {
+        if (url.endsWith("/v1/files")) {
+          fileSequence += 1;
+          const fileId = `live-file-${fileSequence}`;
+          filenameByFileId.set(fileId, String(body.filename || ""));
+          return {
+            status: 201,
+            data: {
+              id: fileId,
+              upload_url: `https://uploads.example.test/${fileId}`,
+            },
+          } as any;
+        }
+        if (!url.endsWith("/v1/tasks")) {
+          throw new Error(`Unexpected POST ${url}`);
+        }
+        taskBodies.push(body);
+        if (taskBodies.length === 1) {
+          const operationId = String(body.prompt).match(
+            /operationId=([^；\n]+)/u,
+          )?.[1];
+          const turnId = String(body.prompt).match(/turnId=([^。\n]+)/u)?.[1];
+          const initialManifest = {
+            kind: "frontmind.knowledge-base.manifest",
+            schemaVersion: 2,
+            operationId,
+            turnId,
+            leaves: KNOWLEDGE_BASE_PROTOCOL_PROBE_LEAVES,
+          };
+          return {
+            status: 201,
+            data: taskWithText(
+              [
+                "## 企业定位",
+                "企业定位正文。",
+                "<!-- FRONTMIND_KB_MANIFEST",
+                JSON.stringify(initialManifest),
+                "-->",
+              ].join("\n"),
+              "completed",
+              1,
+            ),
+          } as any;
+        }
+        return {
+          status: 201,
+          data: { id: "task-live-preview", status: "running", output: [] },
+        } as any;
+      },
+    );
+    vi.spyOn(axios, "put").mockImplementation(
+      async (url: string, bytes: Buffer) => {
+        const fileId = new URL(url).pathname.split("/").pop()!;
+        uploadedBytes.set(fileId, Buffer.from(bytes));
+        return { status: 200, data: "" } as any;
+      },
+    );
+    const get = vi.spyOn(axios, "get").mockImplementation(async (url) => {
+      const fileId = new URL(String(url)).pathname.split("/").pop()!;
+      return {
+        status: 200,
+        data: {
+          id: fileId,
+          filename: filenameByFileId.get(fileId),
+          status: "uploaded",
+        },
+      } as any;
+    });
+    vi.spyOn(axios, "delete").mockResolvedValue({
+      status: 204,
+      data: "",
+    });
+
+    await withLivePreviewServer(async (baseUrl) => {
+      const start = await fetch(`${baseUrl}/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          companyName: "超长规则仍只进入系统附件的测试企业",
+          companyWebsite: "https://example.test",
+          apiKey: "live-preview-test-key",
+        }),
+      });
+      expect(start.status).toBe(201);
+      const startPayload = (await start.json()) as any;
+      const confirm = await fetch(`${baseUrl}/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId: startPayload.sessionId,
+          apiKey: "live-preview-test-key",
+        }),
+      });
+      expect(confirm.status).toBe(201);
+    });
+
+    expect(taskBodies).toHaveLength(2);
+    for (const body of taskBodies) {
+      expect(
+        upstreamPromptCharacterCount(String(body.prompt)),
+      ).toBeLessThanOrEqual(FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS);
+      expect(body.attachments).toHaveLength(2);
+      expect(body.attachments[1]?.filename).toBe(
+        "frontmind-kb-server-instructions.txt",
+      );
+      expect(String(body.prompt)).toContain(
+        "frontmind-kb-server-instructions.txt",
+      );
+    }
+    const instructionTexts = [...filenameByFileId.entries()]
+      .filter(
+        ([, filename]) => filename === "frontmind-kb-server-instructions.txt",
+      )
+      .map(([fileId]) => uploadedBytes.get(fileId)?.toString("utf8") || "");
+    expect(instructionTexts).toHaveLength(2);
+    expect(instructionTexts[0]).toContain("超长规则仍只进入系统附件的测试企业");
+    expect(instructionTexts[1]).toContain("当前 revision=0");
+    expect(instructionTexts[1]).toContain("FRONTMIND_KB_PROGRESS");
+    expect(get).toHaveBeenCalled();
+    for (const [, config] of get.mock.calls) {
+      expect(config?.headers).toMatchObject({
+        API_KEY: "live-preview-test-key",
+      });
+      expect(config?.headers).not.toHaveProperty("Authorization");
+    }
+  });
+
+  it("deletes both generated files when start task creation is rejected", async () => {
+    process.env.NODE_ENV = "development";
+    let fileSequence = 0;
+    const filenameByFileId = new Map<string, string>();
+    const taskBodies: Array<Record<string, any>> = [];
+    const remove = vi.spyOn(axios, "delete").mockResolvedValue({
+      status: 204,
+      data: "",
+    });
+    vi.spyOn(axios, "post").mockImplementation(
+      async (url: string, body: Record<string, any>) => {
+        if (url.endsWith("/v1/files")) {
+          fileSequence += 1;
+          filenameByFileId.set(
+            `rejected-file-${fileSequence}`,
+            String(body.filename || ""),
+          );
+          return {
+            status: 201,
+            data: {
+              id: `rejected-file-${fileSequence}`,
+              upload_url: `https://uploads.example.test/rejected-file-${fileSequence}`,
+            },
+          } as any;
+        }
+        taskBodies.push(body);
+        return {
+          status: 400,
+          data: { error: { message: "rejected fixture" } },
+        } as any;
+      },
+    );
+    vi.spyOn(axios, "put").mockResolvedValue({ status: 200, data: "" });
+    vi.spyOn(axios, "get").mockImplementation(async (url) => {
+      const fileId = new URL(String(url)).pathname.split("/").pop()!;
+      return {
+        status: 200,
+        data: {
+          id: fileId,
+          filename: filenameByFileId.get(fileId),
+          status: "uploaded",
+        },
+      } as any;
+    });
+
+    await withLivePreviewServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          companyName: "清理测试企业",
+          apiKey: "live-preview-test-key",
+        }),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "UPSTREAM_TASK_CREATE_FAILED" },
+      });
+    });
+
+    expect(taskBodies).toHaveLength(1);
+    expect(taskBodies[0]?.attachments).toHaveLength(2);
+    expect(
+      upstreamPromptCharacterCount(String(taskBodies[0]?.prompt)),
+    ).toBeLessThanOrEqual(FRONTMIND_UPSTREAM_PROMPT_MAX_CHARACTERS);
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+      expect.stringContaining("/v1/files/rejected-file-1"),
+      expect.stringContaining("/v1/files/rejected-file-2"),
+    ]);
+  });
+
+  it("rejects the final live-preview confirmation before any upstream call", async () => {
+    process.env.NODE_ENV = "development";
+    const sourceManifest = {
+      kind: "frontmind.knowledge-base.manifest",
+      schemaVersion: 2,
+      operationId: "live-preview:source:start",
+      turnId: "00000000-0000-4000-8000-000000000004",
+      leaves: KNOWLEDGE_BASE_PROTOCOL_PROBE_LEAVES,
+    };
+    const sourceRawAssistantText = [
+      "首轮正文",
+      "<!-- FRONTMIND_KB_MANIFEST",
+      JSON.stringify(sourceManifest),
+      "-->",
+    ].join("\n");
+    const post = vi.spyOn(axios, "post");
+
+    const state = rehydratedConfirmationProgressState({
+      initialText: sourceRawAssistantText,
+      revision: 7,
+      currentLeafId: "8.1",
+      confirmationCount: 7,
+    });
+    expect(knowledgeBaseLivePreviewNeedsAuthoritativeFinalization(state)).toBe(
+      true,
+    );
+
+    await withLivePreviewServer(async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sourceTaskId: "source-task",
+          sourceRawAssistantText,
+          sourceRevision: 7,
+          sourceCurrentLeafId: "8.1",
+          confirmationCount: 7,
+          apiKey: "live-preview-test-key",
+        }),
+      });
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "LIVE_PREVIEW_FINALIZATION_REQUIRES_AUTHORITATIVE_STATE",
+        },
+      });
+    });
+
+    expect(post).not.toHaveBeenCalled();
   });
 });

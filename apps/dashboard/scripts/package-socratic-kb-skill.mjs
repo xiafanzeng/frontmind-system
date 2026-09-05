@@ -4,10 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 
-import {
-  canonicalKnowledgeBaseSkillArchiveHash,
-  legacyKnowledgeBaseSkillInstructionHash,
-} from "../shared/knowledge-base-skill-archive-hash.js";
+import { canonicalKnowledgeBaseSkillArchiveHash } from "../shared/knowledge-base-skill-archive-hash.js";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -21,7 +18,7 @@ const sourceRoot = path.join(
 const outputPath = path.join(
   projectRoot,
   "private-workflows",
-  "socratic-kb-builder-v4.skill",
+  "socratic-kb-builder-v5.skill",
 );
 const fixedDate = new Date("2000-01-01T00:00:00.000Z");
 
@@ -29,9 +26,11 @@ export const socraticKnowledgeBaseSkillEntries = [
   "SKILL.md",
   "agents/openai.yaml",
   "references/knowledge-tree.md",
+  "references/materialized-working-set.md",
   "references/output-format.md",
   "references/questioning-strategy.md",
-  "scripts/validate_archive.py",
+  "references/working-set-policy.json",
+  "scripts/validate_working_set.py",
 ];
 
 async function readRequiredSource(root, relativePath) {
@@ -79,7 +78,7 @@ async function preserveExistingSkillArchive(
 ) {
   const canonicalPath = path.join(
     path.dirname(selectedOutputPath),
-    `socratic-kb-builder-v4-${contentHash}.skill`,
+    `socratic-kb-builder-v5-${contentHash}.skill`,
   );
   const alreadyCanonical = await historicalArchiveExists(
     canonicalPath,
@@ -87,17 +86,6 @@ async function preserveExistingSkillArchive(
   );
   if (alreadyCanonical) return;
 
-  // A pre-canonical active archive may still be referenced by the historical
-  // SKILL.md-only pin. Write that compatibility alias before the canonical
-  // marker so an interrupted migration can safely retry.
-  const legacyHash = await legacyKnowledgeBaseSkillInstructionHash(archive);
-  await writeHistoricalArchiveNoClobber(
-    path.join(
-      path.dirname(selectedOutputPath),
-      `socratic-kb-builder-v4-${legacyHash}.skill`,
-    ),
-    archive,
-  );
   await writeHistoricalArchiveNoClobber(canonicalPath, archive);
 }
 
@@ -159,7 +147,7 @@ export async function packageSocraticKnowledgeBaseSkill(options = {}) {
   await writeHistoricalArchiveNoClobber(
     path.join(
       path.dirname(selectedOutputPath),
-      `socratic-kb-builder-v4-${contentHash}.skill`,
+      `socratic-kb-builder-v5-${contentHash}.skill`,
     ),
     deployedArchive,
   );

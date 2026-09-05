@@ -1,3 +1,8 @@
+import {
+  parseExactJson,
+  repairStructuredJsonCandidate,
+} from "./model-output-repair";
+
 const KNOWLEDGE_BASE_REFERENCE_APPENDIX_HEADER =
   /(?:^|\r?\n)[\t ]*(?:#{1,6}[\t ]*)?(?:\*\*|__)?(?:参考资料|参考来源|引用来源|references?|sources?)(?:\*\*|__)?[\t ]*(?:(?:[:：])[\t ]*[^\r\n]*)?[\t ]*(?=\r?$)/im;
 
@@ -24,9 +29,28 @@ interface KnowledgeBaseProtocolObjectMatch {
   value: Record<string, unknown>;
 }
 
+const MAX_KNOWLEDGE_BASE_PROTOCOL_OUTPUT_CHARACTERS = 2 * 1024 * 1024;
+const MAX_KNOWLEDGE_BASE_PROTOCOL_OUTPUT_OBJECTS = 16;
+
+function parseKnowledgeBaseProtocolObjectCandidate(raw: string) {
+  let value: unknown;
+  try {
+    value = parseExactJson(raw);
+  } catch {
+    value = repairStructuredJsonCandidate(raw, {
+      fenceLanguages: ["", "json"],
+      identityKeys: ["operationId", "turnId"],
+    }).value;
+  }
+  return isRecord(value) && isKnowledgeBaseProtocolKind(value.kind)
+    ? value
+    : null;
+}
+
 function findKnowledgeBaseProtocolObjectMatches(
   text: string,
 ): KnowledgeBaseProtocolObjectMatch[] {
+  if (text.length > MAX_KNOWLEDGE_BASE_PROTOCOL_OUTPUT_CHARACTERS) return [];
   const matches: KnowledgeBaseProtocolObjectMatch[] = [];
   for (let start = 0; start < text.length; start += 1) {
     if (text[start] !== "{") continue;
@@ -58,9 +82,14 @@ function findKnowledgeBaseProtocolObjectMatches(
       if (depth !== 0) continue;
 
       try {
-        const value = JSON.parse(text.slice(start, index + 1));
-        if (isRecord(value) && isKnowledgeBaseProtocolKind(value.kind)) {
+        const value = parseKnowledgeBaseProtocolObjectCandidate(
+          text.slice(start, index + 1),
+        );
+        if (value) {
           matches.push({ start, end: index + 1, value });
+          if (matches.length > MAX_KNOWLEDGE_BASE_PROTOCOL_OUTPUT_OBJECTS) {
+            return [];
+          }
         }
         // A successfully parsed object cannot contain a separate top-level
         // protocol object, so skip all of its nested braces.

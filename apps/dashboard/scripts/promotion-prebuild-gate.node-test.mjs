@@ -85,8 +85,7 @@ function fixture({ promotion = true } = {}) {
     size_in_bytes: 512,
     digest: digest("3"),
     expired: false,
-    archive_download_url:
-      `https://api.github.com/repos/${config.repository}/actions/artifacts/501/zip`,
+    archive_download_url: `https://api.github.com/repos/${config.repository}/actions/artifacts/501/zip`,
     workflow_run: {
       id: run.id,
       head_sha: run.head_sha,
@@ -275,7 +274,8 @@ test("requires a canonical artifact proof bound to every exact identity", () => 
   const raw = `${JSON.stringify(run.mergeProof)}\n`;
   assert.deepEqual(parseCanonicalMergeProof(raw), run.mergeProof);
   assert.throws(
-    () => parseCanonicalMergeProof(`${JSON.stringify(run.mergeProof, null, 2)}\n`),
+    () =>
+      parseCanonicalMergeProof(`${JSON.stringify(run.mergeProof, null, 2)}\n`),
     (error) =>
       error instanceof PromotionGateError &&
       error.code === "PROMOTION_GATE_MERGE_PROOF_NOT_CANONICAL",
@@ -395,7 +395,9 @@ test("selects only the activation job for the exact push run attempt", () => {
 });
 
 test("proof writer records the actual clean PR test-merge checkout", async () => {
-  const temporary = await mkdtemp(join(tmpdir(), "frontmind-merge-proof-test-"));
+  const temporary = await mkdtemp(
+    join(tmpdir(), "frontmind-merge-proof-test-"),
+  );
   const repository = join(temporary, "repository");
   const eventPath = join(temporary, "event.json");
   const outputPath = join(temporary, "proof.json");
@@ -540,7 +542,9 @@ test("fails closed on wrong, incomplete or moving prior activation evidence", ()
     value.final.priorActivationRun.path = ".github/workflows/wrong.yml";
   }, "PROMOTION_GATE_PRIOR_ACTIVATION_MISSING_OR_AMBIGUOUS");
   expectPriorActivationCode((value) => {
-    value.priorActivationRuns.push(structuredClone(value.priorActivationRuns[0]));
+    value.priorActivationRuns.push(
+      structuredClone(value.priorActivationRuns[0]),
+    );
   }, "PROMOTION_GATE_PRIOR_ACTIVATION_MISSING_OR_AMBIGUOUS");
   expectPriorActivationCode((value) => {
     value.final.priorActivationRun.run_attempt += 1;
@@ -605,7 +609,7 @@ test("does not depend on branch settings or commit-status APIs", async () => {
   );
 });
 
-test("workflow makes the application activation job explicitly depend on the gate", async () => {
+test("workflow binds direct main activation to the exact source without duplicate CI blockers", async () => {
   const workflow = await readFile(
     new URL("../.github/workflows/dashboard-ci.yml", import.meta.url),
     "utf8",
@@ -613,6 +617,8 @@ test("workflow makes the application activation job explicitly depend on the gat
   const activation = workflow.slice(workflow.indexOf("  build-sign-deploy:"));
   assert.match(activation, /needs:\s*[\s\S]*- promotion-gate/u);
   assert.match(activation, /needs\.promotion-gate\.result == 'success'/u);
+  assert.doesNotMatch(activation, /needs:\s*[\s\S]*- quality/u);
+  assert.doesNotMatch(activation, /needs:\s*[\s\S]*- mysql-acceptance/u);
   for (const operation of [
     "docker/build-push-action",
     "cosign sign",
@@ -628,4 +634,10 @@ test("workflow makes the application activation job explicitly depend on the gat
   assert.match(proof, /needs:\s*[\s\S]*- quality[\s\S]*- mysql-acceptance/u);
   assert.ok(proof.includes("write-promotion-merge-proof.mjs"));
   assert.ok(proof.includes("actions/upload-artifact@v4"));
+  const source = workflow.slice(
+    workflow.indexOf("  promotion-gate:"),
+    workflow.indexOf("  changes:"),
+  );
+  assert.ok(source.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'));
+  assert.ok(!source.includes("verify-promotion-main-push.sh"));
 });

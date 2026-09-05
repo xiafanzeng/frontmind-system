@@ -11,9 +11,13 @@ import { websitePurchaseRequestV2Schema } from "../shared/provisioning-v2";
 const SECRET = "manual-order-test-secret-with-at-least-32-characters";
 const NOW = new Date("2026-07-26T10:20:00.000Z");
 
-function createRequest(question = "如何选择适合当前生产场景的解决方案？") {
+function createRequest(
+  question = "如何选择适合当前生产场景的解决方案？",
+  marketEdition?: "domestic" | "overseas",
+) {
   return {
     schemaVersion: 1 as const,
+    ...(marketEdition ? { marketEdition } : {}),
     project: {
       id: "project-manual-001",
       companyName: "示例科技有限公司",
@@ -269,10 +273,13 @@ function serviceHarness() {
   };
 }
 
-async function createAndSign(harness: ReturnType<typeof serviceHarness>) {
+async function createAndSign(
+  harness: ReturnType<typeof serviceHarness>,
+  marketEdition?: "domestic" | "overseas",
+) {
   const created = await harness.service.create({
     idempotencyKey: "manual-create-idempotency-001",
-    request: createRequest(),
+    request: createRequest(undefined, marketEdition),
   });
   const reference = created.order.reference;
   await harness.service.prepare({
@@ -302,6 +309,28 @@ async function createAndSign(harness: ReturnType<typeof serviceHarness>) {
 }
 
 describe("manual service order workflow", () => {
+  it("replays legacy and explicit domestic create requests without changing scope", async () => {
+    const harness = serviceHarness();
+    const legacy = await harness.service.create({
+      idempotencyKey: "manual-domestic-replay-idempotency",
+      request: createRequest(),
+    });
+    const replay = await harness.service.create({
+      idempotencyKey: "manual-domestic-replay-idempotency",
+      request: createRequest(undefined, "domestic"),
+    });
+    expect(replay).toEqual(legacy);
+    await expect(
+      harness.service.create({
+        idempotencyKey: "manual-domestic-replay-idempotency",
+        request: createRequest(undefined, "overseas"),
+      }),
+    ).rejects.toMatchObject({
+      code: "MANUAL_ORDER_IDEMPOTENCY_CONFLICT",
+      status: 409,
+    });
+  });
+
   it("accepts an external WeChat contract confirmation without forging signing evidence", async () => {
     const harness = serviceHarness();
     const created = await harness.service.create({
@@ -309,9 +338,13 @@ describe("manual service order workflow", () => {
       request: createRequest(),
     });
     expect(created.order).not.toHaveProperty("amountFen");
+    expect(created.order.marketEdition).toBe("domestic");
     expect(
       harness.repository.rows.get(created.order.reference)?.amountFen,
     ).toBeNull();
+    expect(
+      harness.repository.rows.get(created.order.reference)?.marketEdition,
+    ).toBe("domestic");
     const request = {
       schemaVersion: 1 as const,
       authorization: {
@@ -387,6 +420,33 @@ describe("manual service order workflow", () => {
         signedAt: expect.anything(),
         signatoryId: expect.anything(),
       }),
+    );
+  });
+
+  it("persists an overseas manual order through the v2 purchase handoff", async () => {
+    const harness = serviceHarness();
+    const reference = await createAndSign(harness, "overseas");
+    expect(harness.repository.rows.get(reference)?.marketEdition).toBe(
+      "overseas",
+    );
+    await harness.service.recordPayment({
+      reference,
+      idempotencyKey: "manual-payment-idempotency-overseas",
+      request: paymentRequest(),
+    });
+    const active = await harness.service.setupAccount({
+      reference,
+      idempotencyKey: "manual-account-idempotency-overseas",
+      request: accountRequest(),
+    });
+    expect(active.order.marketEdition).toBe("overseas");
+    expect(harness.submitPurchase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ marketEdition: "overseas" }),
+      }),
+    );
+    await expect(harness.service.list()).resolves.toContainEqual(
+      expect.objectContaining({ reference, marketEdition: "overseas" }),
     );
   });
 

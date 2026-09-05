@@ -1,0 +1,17 @@
+{
+  "name": "frontmind-siteops-astro-static-starter",
+  "private": true,
+  "version": "1.1.0",
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "check": "astro check",
+    "build": "astro build"
+  },
+  "dependencies": {
+    "@astrojs/check": "0.9.10",
+    "@astrojs/sitemap": "3.7.3",
+    "astro": "7.2.4",
+    "typescript": "6.0.3"
+  }
+}

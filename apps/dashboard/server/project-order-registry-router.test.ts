@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createProvisioningRouter } from "./provisioning-router";
 import { ProjectOrderRegistryError } from "./project-order-registry-service";
+import { WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED } from "./website-project-lifecycle";
 
 const SERVICE_TOKEN = "project-order-router-token-at-least-32-characters";
 const servers: Server[] = [];
@@ -56,6 +57,7 @@ function service(overrides: Record<string, unknown> = {}) {
     record: vi.fn(),
     commitIntent: vi.fn(),
     readProject: vi.fn(),
+    deleteProject: vi.fn(),
     ready: vi.fn().mockResolvedValue({ schemaVersion: 1, ready: true }),
     ...overrides,
   };
@@ -129,6 +131,83 @@ describe("project-order registry internal routes", () => {
     await expect(response.json()).resolves.toEqual(responseBody);
     expect(projectOrders.readProject).toHaveBeenCalledWith(order.projectId);
   });
+
+  it.runIf(WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED)(
+    "physically deletes project orders behind the service-token boundary",
+    async () => {
+      const projectOrders = service({
+        deleteProject: vi
+          .fn()
+          .mockResolvedValueOnce({
+            response: {
+              schemaVersion: 1,
+              projectId: order.projectId,
+              deletedOrders: 2,
+            },
+            replayed: false,
+          })
+          .mockResolvedValueOnce({
+            response: {
+              schemaVersion: 1,
+              projectId: order.projectId,
+              deletedOrders: 0,
+            },
+            replayed: true,
+          }),
+      });
+      const url = await startApp(projectOrders);
+      const endpoint = `${url}/projects/${order.projectId}`;
+
+      const unauthorized = await fetch(endpoint, { method: "DELETE" });
+      expect(unauthorized.status).toBe(401);
+      expect(projectOrders.deleteProject).not.toHaveBeenCalled();
+
+      const deleted = await fetch(endpoint, {
+        method: "DELETE",
+        headers: { "x-frontmind-provisioning-token": SERVICE_TOKEN },
+      });
+      expect(deleted.status).toBe(200);
+      await expect(deleted.json()).resolves.toEqual({
+        schemaVersion: 1,
+        projectId: order.projectId,
+        deletedOrders: 2,
+      });
+      expect(deleted.headers.get("idempotent-replayed")).toBeNull();
+
+      const replay = await fetch(endpoint, {
+        method: "DELETE",
+        headers: { "x-frontmind-provisioning-token": SERVICE_TOKEN },
+      });
+      expect(replay.status).toBe(200);
+      await expect(replay.json()).resolves.toEqual({
+        schemaVersion: 1,
+        projectId: order.projectId,
+        deletedOrders: 0,
+      });
+      expect(replay.headers.get("idempotent-replayed")).toBe("true");
+      expect(projectOrders.deleteProject).toHaveBeenNthCalledWith(
+        1,
+        order.projectId,
+      );
+    },
+  );
+
+  it.runIf(!WEBSITE_PROJECT_PHYSICAL_DELETE_ENABLED)(
+    "rejects project deletion before invoking the registry in D0",
+    async () => {
+      const projectOrders = service();
+      const url = await startApp(projectOrders);
+      const response = await fetch(`${url}/projects/${order.projectId}`, {
+        method: "DELETE",
+        headers: { "x-frontmind-provisioning-token": SERVICE_TOKEN },
+      });
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: "PROJECT_DELETE_DISABLED" },
+      });
+      expect(projectOrders.deleteProject).not.toHaveBeenCalled();
+    },
+  );
 
   it("commits a durable checkout intent before returning the real order", async () => {
     const intent = {

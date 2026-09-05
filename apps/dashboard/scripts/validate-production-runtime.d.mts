@@ -1,11 +1,5 @@
-export type RuntimePreflightEnvironment = Record<
-  string,
-  string | undefined
->;
-
-export function validateProductionRuntimeEnvironment(
-  env?: RuntimePreflightEnvironment,
-): {
-  buildSourceSha: string | null;
-  imageDigest: string | null;
-};
+export {
+  deriveDownloadTokenSecretFromCredentialMasterKey,
+  validateProductionRuntimeEnvironment,
+} from "./production-runtime-validator.mjs";
+export type { RuntimePreflightEnvironment } from "./production-runtime-validator.mjs";

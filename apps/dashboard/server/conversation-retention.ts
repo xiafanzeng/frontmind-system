@@ -4,6 +4,8 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 
+import { optionalKnowledgeBaseUploadEvidenceStorageKey } from "./knowledge-base-upload-evidence-lifecycle";
+
 export const DEFAULT_CONVERSATION_RETENTION_DAYS = 30;
 export const DEFAULT_CONVERSATION_RETENTION_BATCH_SIZE = 100;
 export const DEFAULT_CONVERSATION_RETENTION_MAX_BATCHES = 20;
@@ -29,6 +31,7 @@ type ConversationRow = RowDataPacket & { id: string; userId: number };
 type KnowledgeBuildRow = RowDataPacket & {
   id: string;
   userId: number;
+  generation: number;
   conversationId: string;
   logoStorageKey: string | null;
   packageStorageKey: string | null;
@@ -106,7 +109,7 @@ async function lockKnowledgeBaseBuilds(
       [row.userId, publicId],
     );
     const [matches] = await connection.execute<KnowledgeBuildRow[]>(
-      `SELECT id, userId, conversationId, logoStorageKey, packageStorageKey
+      `SELECT id, userId, generation, conversationId, logoStorageKey, packageStorageKey
          FROM knowledge_base_builds
         WHERE userId = ?
           AND conversationId = ?
@@ -135,6 +138,11 @@ async function prepareKnowledgeBuildCleanup(
     for (const localAssetKey of [
       build.logoStorageKey,
       build.packageStorageKey,
+      optionalKnowledgeBaseUploadEvidenceStorageKey({
+        userId: build.userId,
+        buildId: build.id,
+        generation: build.generation,
+      }),
     ]) {
       if (!localAssetKey) continue;
       await connection.execute(

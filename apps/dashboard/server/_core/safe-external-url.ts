@@ -6,11 +6,11 @@ import net from "node:net";
 export class ExternalUrlRejectedError extends Error {}
 
 function isBlockedIpv4(address: string) {
-  const parts = address.split(".").map(part => Number(part));
+  const parts = address.split(".").map((part) => Number(part));
   const [a, b, c] = parts;
   return (
     parts.length !== 4 ||
-    parts.some(part => !Number.isInteger(part) || part < 0 || part > 255) ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255) ||
     a === 0 ||
     a === 10 ||
     a === 127 ||
@@ -72,7 +72,9 @@ export function assertSafeExternalUrl(value: string): string {
     throw new ExternalUrlRejectedError("Unsupported external URL protocol");
   }
   if (parsed.username || parsed.password) {
-    throw new ExternalUrlRejectedError("Credentials are not allowed in external URLs");
+    throw new ExternalUrlRejectedError(
+      "Credentials are not allowed in external URLs",
+    );
   }
   assertSafeHostname(parsed.hostname);
   return parsed.toString();
@@ -99,16 +101,22 @@ const safeLookup = ((
     }
     if (
       addresses.length === 0 ||
-      addresses.some(result => isBlockedNetworkAddress(result.address))
+      addresses.some((result) => isBlockedNetworkAddress(result.address))
     ) {
-      callback(new ExternalUrlRejectedError("External hostname resolved to a blocked address"));
+      callback(
+        new ExternalUrlRejectedError(
+          "External hostname resolved to a blocked address",
+        ),
+      );
       return;
     }
     const matching = requestedFamily
-      ? addresses.filter(result => result.family === requestedFamily)
+      ? addresses.filter((result) => result.family === requestedFamily)
       : addresses;
     if (matching.length === 0) {
-      callback(new ExternalUrlRejectedError("External hostname has no usable address"));
+      callback(
+        new ExternalUrlRejectedError("External hostname has no usable address"),
+      );
       return;
     }
     if (returnAll) callback(null, matching);
@@ -118,6 +126,12 @@ const safeLookup = ((
 
 const httpAgent = new http.Agent({ keepAlive: true, lookup: safeLookup });
 const httpsAgent = new https.Agent({ keepAlive: true, lookup: safeLookup });
+
+/** Selects the same DNS-revalidating agent for native ClientRequest callers. */
+export function safeExternalAgentForUrl(value: string) {
+  const parsed = new URL(assertSafeExternalUrl(value));
+  return parsed.protocol === "https:" ? httpsAgent : httpAgent;
+}
 
 function beforeRedirect(options: Record<string, unknown>) {
   const protocol = String(options.protocol ?? "");

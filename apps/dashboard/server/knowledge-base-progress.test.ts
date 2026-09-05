@@ -4,6 +4,8 @@ import {
   KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES,
   KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES,
   KNOWLEDGE_BASE_MANIFEST_KIND,
+  KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+  KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY,
   KNOWLEDGE_BASE_PROGRESS_KIND,
   KnowledgeBaseProgressError,
   applyKnowledgeBaseProgressEnvelope,
@@ -23,6 +25,9 @@ import {
   parseKnowledgeBaseManifestEnvelope,
   shouldShowKnowledgeBaseCheckmark,
   validateProductionKnowledgeBaseLeafManifest,
+  validateKnowledgeBaseManifestForTreePolicy,
+  validateStoredKnowledgeBaseResearchCoverage,
+  knowledgeBaseTreePolicy,
 } from "./knowledge-base-progress";
 import type {
   KnowledgeBaseLeafManifestEntry,
@@ -127,6 +132,111 @@ ${JSON.stringify({
       "INVALID_ENVELOPE",
     );
   });
+
+  it("repairs an unescaped quoted name before strict protocol validation", () => {
+    const leaves = Array.from({ length: 8 }, (_, index) => ({
+      id: `${index + 1}.1`,
+      title: index === 0 ? '企业"深度"定位' : `节点 ${index + 1}`,
+      branchId: `branch-${index + 1}`,
+      branchTitle: `业务分支 ${index + 1}`,
+    }));
+    const malformed = JSON.stringify({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves,
+    }).replace('企业\\"深度\\"定位', '企业"深度"定位');
+
+    expect(
+      parseKnowledgeBaseManifestEnvelope(
+        `节点正文\n<!-- FRONTMIND_KB_MANIFEST\n${malformed}\n-->`,
+      ).leaves[0]?.title,
+    ).toBe('企业"深度"定位');
+  });
+
+  it("deduplicates identical canonical protocol candidates but rejects conflicts", () => {
+    const leaves = Array.from({ length: 8 }, (_, index) => ({
+      id: `${index + 1}.1`,
+      title: `节点 ${index + 1}`,
+      branchId: `branch-${index + 1}`,
+      branchTitle: `业务分支 ${index + 1}`,
+    }));
+    const first = formatKnowledgeBaseManifestEnvelope({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves,
+    });
+    expect(
+      parseKnowledgeBaseManifestEnvelope(`${first}\n${first}`).leaves,
+    ).toHaveLength(8);
+
+    const conflicting = formatKnowledgeBaseManifestEnvelope({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves: leaves.map((leaf, index) =>
+        index === 0 ? { ...leaf, title: "冲突标题" } : leaf,
+      ),
+    });
+    expectProgressError(
+      () => parseKnowledgeBaseManifestEnvelope(`${first}\n${conflicting}`),
+      "INVALID_MANIFEST",
+    );
+  });
+
+  it("skips malformed trusted bare fragments when one unique final object is valid", () => {
+    const leaves = Array.from({ length: 8 }, (_, index) => ({
+      id: `${index + 1}.1`,
+      title: `节点 ${index + 1}`,
+      branchId: `branch-${index + 1}`,
+      branchTitle: `业务分支 ${index + 1}`,
+    }));
+    const staleFragment = JSON.stringify({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves: [{ id: "partial" }],
+    });
+    const finalObject = JSON.stringify({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves,
+    });
+
+    expect(
+      parseKnowledgeBaseManifestEnvelope(
+        `旧片段\n${staleFragment}\n${finalObject}`,
+      ).leaves,
+    ).toEqual(leaves);
+  });
+
+  it("fails closed when an official marked envelope is malformed", () => {
+    const leaves = Array.from({ length: 8 }, (_, index) => ({
+      id: `${index + 1}.1`,
+      title: `节点 ${index + 1}`,
+      branchId: `branch-${index + 1}`,
+      branchTitle: `业务分支 ${index + 1}`,
+    }));
+    const validBare = JSON.stringify({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 1,
+      leaves,
+    });
+    expectProgressError(
+      () =>
+        parseKnowledgeBaseManifestEnvelope(
+          `<!-- FRONTMIND_KB_MANIFEST\n{"kind":"${KNOWLEDGE_BASE_MANIFEST_KIND}","schemaVersion":1,"leaves":[}\n-->\n${validBare}`,
+        ),
+      "INVALID_MANIFEST",
+    );
+  });
+
+  it("rejects duplicate protocol keys after transport repair", () => {
+    expectProgressError(
+      () =>
+        parseKnowledgeBaseProgressEnvelope(
+          '<!-- FRONTMIND_KB_PROGRESS\n{"kind":"frontmind.knowledge-base.progress","kind":"frontmind.knowledge-base.progress","schemaVersion":1,"revision":0,"transition":{"leafId":"1.1","from":"current","to":"confirmed"}}\n-->',
+        ),
+      "INVALID_ENVELOPE",
+    );
+  });
 });
 
 function envelope(
@@ -157,6 +267,47 @@ function expectProgressError(
 }
 
 describe("knowledge base leaf manifest validation", () => {
+  const createManifest = (count: number, branchCount = 7) =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `leaf-${index + 1}`,
+      title: `Leaf ${index + 1}`,
+      branchId: `branch-${(index % branchCount) + 1}`,
+      branchTitle: `Branch ${(index % branchCount) + 1}`,
+    }));
+
+  const researchCoverage = (
+    leaves: readonly KnowledgeBaseLeafManifestEntry[],
+    uploadsRead = 0,
+  ) => ({
+    officialPages: {
+      discovered: 12,
+      attempted: 12,
+      succeeded: 12,
+      failed: 0,
+    },
+    publicQueries: 6,
+    officialDocuments: 1,
+    uploadsRead,
+    sourceCount: 12,
+    productFamilies: [
+      { id: "primary", name: "Primary offer", leafIds: [leaves[2]!.id] },
+    ],
+    dimensions: [
+      "enterprise_identity",
+      "team_and_organization",
+      "products_and_services",
+      "capabilities_and_delivery",
+      "industries_scenarios_and_cases",
+      "differentiation_and_evidence",
+      "cooperation_delivery_and_support",
+    ].map((id, index) => ({
+      id,
+      status: "covered" as const,
+      leafIds: [leaves[index]!.id],
+    })),
+    stopReason: "coverage_complete" as const,
+  });
+
   it("keeps small manifests available for the pure state machine", () => {
     const state = createKnowledgeBaseProgressState(manifest);
 
@@ -170,14 +321,6 @@ describe("knowledge base leaf manifest validation", () => {
   });
 
   it("enforces 8–115 leaves without fixing the top-level branch count", () => {
-    const createManifest = (count: number, branchCount: number) =>
-      Array.from({ length: count }, (_, index) => ({
-        id: `leaf-${index + 1}`,
-        title: `Leaf ${index + 1}`,
-        branchId: `branch-${(index % branchCount) + 1}`,
-        branchTitle: `Branch ${(index % branchCount) + 1}`,
-      }));
-
     expect(
       validateProductionKnowledgeBaseLeafManifest(
         createManifest(KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES, 4),
@@ -202,6 +345,344 @@ describe("knowledge base leaf manifest validation", () => {
         ),
       "INVALID_MANIFEST",
     );
+  });
+
+  it("pins legacy builds to 8–115 and deep builds to 30–115", () => {
+    const legacyLeaves = createManifest(8);
+    const deepLeaves = createManifest(30);
+    const maximumDeepLeaves = createManifest(115);
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        {
+          kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+          schemaVersion: 1,
+          leaves: legacyLeaves,
+        },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY,
+      ).leaves,
+    ).toHaveLength(8);
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        {
+          kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+          schemaVersion: 2,
+          operationId: "deep-start",
+          turnId: "00000000-0000-4000-8000-000000000002",
+          leaves: deepLeaves,
+          researchCoverage: researchCoverage(deepLeaves),
+        },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        { expectedUploadsRead: 0 },
+      ).leaves,
+    ).toHaveLength(30);
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        {
+          kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+          schemaVersion: 2,
+          operationId: "deep-start-max",
+          turnId: "00000000-0000-4000-8000-000000000002",
+          leaves: maximumDeepLeaves,
+          researchCoverage: researchCoverage(maximumDeepLeaves),
+        },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+      ).leaves,
+    ).toHaveLength(115);
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+            schemaVersion: 2,
+            operationId: "deep-start",
+            turnId: "00000000-0000-4000-8000-000000000002",
+            leaves: createManifest(29),
+            researchCoverage: researchCoverage(createManifest(29)),
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_LEAF_COUNT_BELOW_MIN",
+    );
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+            schemaVersion: 2,
+            operationId: "deep-start",
+            turnId: "00000000-0000-4000-8000-000000000002",
+            leaves: createManifest(116),
+            researchCoverage: researchCoverage(createManifest(116)),
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "INVALID_MANIFEST",
+    );
+  });
+
+  it("does not let a Website-sized prefill lower a new Dashboard build policy", () => {
+    const websiteSizedLeaves = createManifest(20);
+    const parsed = parseKnowledgeBaseManifestEnvelope({
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 2,
+      operationId: "dashboard-from-website-prefill",
+      turnId: "00000000-0000-4000-8000-000000000002",
+      leaves: websiteSizedLeaves,
+      researchCoverage: researchCoverage(websiteSizedLeaves),
+    });
+    expect(parsed.leaves).toHaveLength(20);
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          parsed,
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_LEAF_COUNT_BELOW_MIN",
+    );
+  });
+
+  it("requires a normalized and internally consistent research ledger for v2", () => {
+    const leaves = createManifest(30);
+    const base = {
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 2 as const,
+      operationId: "deep-start",
+      turnId: "00000000-0000-4000-8000-000000000002",
+      leaves,
+    };
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          base,
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            ...base,
+            researchCoverage: {
+              ...researchCoverage(leaves),
+              officialPages: {
+                discovered: 12,
+                attempted: 12,
+                succeeded: 12,
+                failed: 1,
+              },
+            },
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          { ...base, researchCoverage: researchCoverage(leaves, 2) },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+          { expectedUploadsRead: 1 },
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+  });
+
+  it("accepts source-limited coverage only after exhausting the discovered queue", () => {
+    const leaves = createManifest(30);
+    const base = {
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 2 as const,
+      operationId: "source-limited-start",
+      turnId: "00000000-0000-4000-8000-000000000002",
+      leaves,
+    };
+    const sourceLimited = {
+      ...researchCoverage(leaves),
+      officialPages: {
+        discovered: 5,
+        attempted: 5,
+        succeeded: 3,
+        failed: 2,
+      },
+      stopReason: "source_limited" as const,
+      limitationReason: "官网公开队列已经全部尝试，只有三个页面可以正常读取。",
+    };
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        { ...base, researchCoverage: sourceLimited },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+      ).researchCoverage,
+    ).toMatchObject({ stopReason: "source_limited" });
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            ...base,
+            researchCoverage: {
+              ...sourceLimited,
+              officialPages: {
+                discovered: 6,
+                attempted: 5,
+                succeeded: 3,
+                failed: 2,
+              },
+            },
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            ...base,
+            researchCoverage: {
+              ...sourceLimited,
+              limitationReason: undefined,
+            },
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+  });
+
+  it("accepts budget-reached coverage only when a declared cap was reached", () => {
+    const leaves = createManifest(30);
+    const base = {
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 2 as const,
+      operationId: "budget-start",
+      turnId: "00000000-0000-4000-8000-000000000002",
+      leaves,
+    };
+    const budgetReached = {
+      ...researchCoverage(leaves),
+      publicQueries: 30,
+      stopReason: "budget_reached" as const,
+      limitationReason:
+        "已达到公开检索预算，七个业务维度均已形成事实或明确缺口。",
+    };
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        { ...base, researchCoverage: budgetReached },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+      ).researchCoverage,
+    ).toMatchObject({ stopReason: "budget_reached", publicQueries: 30 });
+    expectProgressError(
+      () =>
+        validateKnowledgeBaseManifestForTreePolicy(
+          {
+            ...base,
+            researchCoverage: { ...budgetReached, publicQueries: 29 },
+          },
+          KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+  });
+
+  it("accepts the exact research caps and rejects every counter above them", () => {
+    const leaves = createManifest(30);
+    const base = {
+      kind: KNOWLEDGE_BASE_MANIFEST_KIND,
+      schemaVersion: 2 as const,
+      operationId: "research-cap-start",
+      turnId: "00000000-0000-4000-8000-000000000002",
+      leaves,
+    };
+    const atCaps = {
+      ...researchCoverage(leaves, 100),
+      officialPages: {
+        discovered: 200,
+        attempted: 200,
+        succeeded: 120,
+        failed: 80,
+      },
+      publicQueries: 30,
+      officialDocuments: 30,
+    };
+    expect(
+      validateKnowledgeBaseManifestForTreePolicy(
+        { ...base, researchCoverage: atCaps },
+        KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+        { expectedUploadsRead: 100 },
+      ).researchCoverage,
+    ).toMatchObject({
+      officialPages: { attempted: 200, succeeded: 120 },
+      publicQueries: 30,
+      officialDocuments: 30,
+      uploadsRead: 100,
+    });
+
+    for (const researchCoverageAboveCap of [
+      {
+        ...atCaps,
+        officialPages: {
+          discovered: 201,
+          attempted: 201,
+          succeeded: 120,
+          failed: 81,
+        },
+      },
+      {
+        ...atCaps,
+        officialPages: {
+          discovered: 121,
+          attempted: 121,
+          succeeded: 121,
+          failed: 0,
+        },
+      },
+      { ...atCaps, publicQueries: 31 },
+      { ...atCaps, officialDocuments: 31 },
+      { ...atCaps, uploadsRead: 101 },
+    ]) {
+      expectProgressError(
+        () =>
+          validateKnowledgeBaseManifestForTreePolicy(
+            { ...base, researchCoverage: researchCoverageAboveCap },
+            KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+          ),
+        "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+      );
+    }
+  });
+
+  it("revalidates persisted research relationships before publication", () => {
+    const leaves = createManifest(30);
+    expect(
+      validateStoredKnowledgeBaseResearchCoverage(researchCoverage(leaves), {
+        knownLeafIds: leaves.map((leaf) => leaf.id),
+        totalLeafCount: leaves.length,
+      }),
+    ).toMatchObject({ stopReason: "coverage_complete" });
+
+    expectProgressError(
+      () =>
+        validateStoredKnowledgeBaseResearchCoverage(
+          {
+            ...researchCoverage(leaves),
+            dimensions: researchCoverage(leaves).dimensions.map(
+              (dimension, index) =>
+                index === 0
+                  ? { ...dimension, leafIds: ["unknown-leaf"] }
+                  : dimension,
+            ),
+          },
+          {
+            knownLeafIds: leaves.map((leaf) => leaf.id),
+            totalLeafCount: leaves.length,
+          },
+        ),
+      "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE",
+    );
+  });
+
+  it("rejects an unknown persisted policy instead of silently downgrading it", () => {
+    expectProgressError(() => knowledgeBaseTreePolicy(99), "INVALID_STATE");
   });
 
   it("requires every branch id to keep one stable title", () => {

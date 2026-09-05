@@ -2,6 +2,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { toTrpcError } from "./auth-router";
+import { runtimeErrorForLog } from "./_core/runtime-error-log";
 import {
   getDashboardQuestion,
   getDashboardWorkspace,
@@ -9,6 +10,7 @@ import {
   toPublicDashboardPayload,
 } from "./dashboard-service";
 import { getKnowledgeBaseProgress } from "./knowledge-base-progress-service";
+import { toKnowledgeBasePublicPayload } from "./knowledge-base-public-projection";
 import {
   listResponseLogicEntries,
   saveResponseLogicEntry,
@@ -32,13 +34,17 @@ import {
 } from "./monitoring-service";
 import {
   assertServiceCapability,
+  confirmWorkspaceBrandKeywordSelection,
   confirmWorkspaceQuestionIntent,
   getServicePortal,
   listWorkspaceQuestions,
   requestWorkspaceQuestionSelection,
+  servicePortalHasRequiredKnowledge,
   ServiceEntitlementError,
 } from "./service-entitlement";
+import { resolveBrandKeywordSelection } from "./brand-keyword-selection";
 import {
+  QUESTION_CLASSIFICATION_V2_WRITES_ENABLED,
   toPublicServicePortal,
   toPublicServicePortalQuestion,
 } from "../shared/service-portal";
@@ -71,6 +77,46 @@ import {
   getKnowledgeResetStatus,
   submitKnowledgeReset,
 } from "./knowledge-base-reset-service";
+import {
+  submitQuestionMaintenance,
+  submitQuestionMaintenanceSchema,
+  completeQuestionReviewRequest,
+  ensureQuestionReviewRequest,
+} from "./question-maintenance-service";
+import {
+  reconcileInitialMonitoringAfterQuestionSelection,
+  type InitialMonitoringQuestionSelection,
+} from "./delivery-role-service";
+import {
+  getJenovaBrandTrackingOverview,
+  getJenovaBrandTrackingSession,
+  listJenovaBrandTrackingSessions,
+} from "./jenova-brand-tracking-service";
+import {
+  siteOpsActInputSchema,
+  siteOpsAliyunConnectionInputSchema,
+  siteOpsObserveInputSchema,
+  siteOpsOpenInputSchema,
+  siteOpsSendMessageInputSchema,
+} from "../shared/siteops";
+import {
+  actOnSiteOps,
+  actOnSiteOpsFast,
+  beginSiteOpsAliyunOAuth,
+  disconnectSiteOpsAliyunConnection,
+  getSiteOpsAliyunConnection,
+  listSiteOpsAliyunDomains,
+  observeSiteOps,
+  openSiteOps,
+  sendSiteOpsMessage,
+  SiteOpsServiceError,
+} from "./siteops/service";
+import { brandQuestionUniverseStartInputSchema } from "../shared/brand-question-universe";
+import {
+  BrandQuestionUniverseServiceError,
+  observeBrandQuestionUniverse,
+  startBrandQuestionUniverse,
+} from "./brand-question-universe-service";
 
 export function projectUserDashboardPayload(input: {
   payload: DashboardPayload;
@@ -95,6 +141,25 @@ export function projectUserDashboardPayload(input: {
 }
 
 function toServiceError(error: unknown): never {
+  if (error instanceof BrandQuestionUniverseServiceError) {
+    const code =
+      error.statusCode === 404
+        ? "NOT_FOUND"
+        : error.statusCode === 403
+          ? "FORBIDDEN"
+          : error.statusCode === 400
+            ? "BAD_REQUEST"
+            : error.statusCode === 412
+              ? "PRECONDITION_FAILED"
+              : error.statusCode === 503
+                ? "SERVICE_UNAVAILABLE"
+                : error.statusCode === 500
+                  ? "INTERNAL_SERVER_ERROR"
+                  : error.statusCode === 502
+                    ? "BAD_GATEWAY"
+                    : "CONFLICT";
+    throw new TRPCError({ code, message: error.message, cause: error });
+  }
   if (error instanceof DeliveryTicketError) {
     throw new TRPCError({
       code:
@@ -146,7 +211,206 @@ function toServiceError(error: unknown): never {
   throw toTrpcError(error);
 }
 
+function toBrandTrackingServiceError(error: unknown): never {
+  const serviceError = error as { code?: unknown; message?: unknown };
+  const code = typeof serviceError?.code === "string" ? serviceError.code : "";
+  const message =
+    typeof serviceError?.message === "string"
+      ? serviceError.message
+      : "品牌追踪请求暂时无法完成，请稍后重试";
+  const trpcCode =
+    code === "UNAUTHORIZED"
+      ? "UNAUTHORIZED"
+      : code === "FORBIDDEN" || code === "INELIGIBLE"
+        ? "FORBIDDEN"
+        : code === "NOT_FOUND"
+          ? "NOT_FOUND"
+          : code === "LIMIT_EXCEEDED"
+            ? "TOO_MANY_REQUESTS"
+            : code === "IDEMPOTENCY_PENDING" || code === "IDEMPOTENCY_CONFLICT"
+              ? "CONFLICT"
+              : code === "KEY_REQUIRED"
+                ? "PRECONDITION_FAILED"
+                : code === "INVALID_INPUT"
+                  ? "BAD_REQUEST"
+                  : code === "UPSTREAM_UNAVAILABLE"
+                    ? "BAD_GATEWAY"
+                    : "INTERNAL_SERVER_ERROR";
+  throw new TRPCError({ code: trpcCode, message, cause: error });
+}
+
+export function toSiteOpsServiceError(error: unknown): never {
+  if (!(error instanceof SiteOpsServiceError)) {
+    console.error("[SiteOps] unexpected_error", runtimeErrorForLog(error));
+    throw toTrpcError(error);
+  }
+  const code =
+    error.statusCode === 404
+      ? "NOT_FOUND"
+      : error.statusCode === 403
+        ? "FORBIDDEN"
+        : error.statusCode === 400
+          ? "BAD_REQUEST"
+          : error.statusCode === 412
+            ? "PRECONDITION_FAILED"
+            : error.statusCode === 503
+              ? "SERVICE_UNAVAILABLE"
+              : "CONFLICT";
+  throw new TRPCError({ code, message: error.message, cause: error });
+}
+
 export const workspaceRouter = router({
+  brandQuestionUniverse: router({
+    observe: protectedProcedure.query(async ({ ctx }) => {
+      try {
+        return await observeBrandQuestionUniverse(ctx.user);
+      } catch (error) {
+        toServiceError(error);
+      }
+    }),
+    start: protectedProcedure
+      .input(brandQuestionUniverseStartInputSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await startBrandQuestionUniverse({
+            actor: ctx.user,
+            value: input,
+          });
+        } catch (error) {
+          toServiceError(error);
+        }
+      }),
+  }),
+  siteOps: router({
+    open: protectedProcedure
+      .input(siteOpsOpenInputSchema)
+      .mutation(async ({ ctx }) => {
+        try {
+          return await openSiteOps(ctx.user);
+        } catch (error) {
+          toSiteOpsServiceError(error);
+        }
+      }),
+    observe: protectedProcedure
+      .input(siteOpsObserveInputSchema)
+      .query(async ({ ctx, input }) => {
+        try {
+          return await observeSiteOps(ctx.user, input);
+        } catch (error) {
+          toSiteOpsServiceError(error);
+        }
+      }),
+    sendMessage: protectedProcedure
+      .input(siteOpsSendMessageInputSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await sendSiteOpsMessage(ctx.user, input);
+        } catch (error) {
+          toSiteOpsServiceError(error);
+        }
+      }),
+    act: protectedProcedure
+      .input(siteOpsActInputSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await actOnSiteOps(ctx.user, input);
+        } catch (error) {
+          toSiteOpsServiceError(error);
+        }
+      }),
+    actFast: protectedProcedure
+      .input(siteOpsActInputSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await actOnSiteOpsFast(ctx.user, input);
+        } catch (error) {
+          toSiteOpsServiceError(error);
+        }
+      }),
+    aliyunConnection: router({
+      get: protectedProcedure
+        .input(siteOpsAliyunConnectionInputSchema)
+        .query(async ({ ctx, input }) => {
+          try {
+            return await getSiteOpsAliyunConnection(ctx.user, input);
+          } catch (error) {
+            toSiteOpsServiceError(error);
+          }
+        }),
+      beginOAuth: protectedProcedure
+        .input(siteOpsAliyunConnectionInputSchema)
+        .mutation(async ({ ctx, input }) => {
+          try {
+            return await beginSiteOpsAliyunOAuth(ctx.user, input);
+          } catch (error) {
+            toSiteOpsServiceError(error);
+          }
+        }),
+      listDomains: protectedProcedure
+        .input(siteOpsAliyunConnectionInputSchema)
+        .query(async ({ ctx, input }) => {
+          try {
+            return await listSiteOpsAliyunDomains(ctx.user, input);
+          } catch (error) {
+            toSiteOpsServiceError(error);
+          }
+        }),
+      disconnect: protectedProcedure
+        .input(siteOpsAliyunConnectionInputSchema)
+        .mutation(async ({ ctx, input }) => {
+          try {
+            return await disconnectSiteOpsAliyunConnection(ctx.user, input);
+          } catch (error) {
+            toSiteOpsServiceError(error);
+          }
+        }),
+    }),
+  }),
+  brandTracking: router({
+    overview: protectedProcedure.query(async ({ ctx }) => {
+      try {
+        await assertServiceCapability(ctx.user.id, "brandTracking");
+        return await getJenovaBrandTrackingOverview(ctx.user);
+      } catch (error) {
+        if (error instanceof ServiceEntitlementError) toServiceError(error);
+        toBrandTrackingServiceError(error);
+      }
+    }),
+    listSessions: protectedProcedure.query(async ({ ctx }) => {
+      try {
+        await assertServiceCapability(ctx.user.id, "brandTracking");
+        return await listJenovaBrandTrackingSessions(ctx.user);
+      } catch (error) {
+        if (error instanceof ServiceEntitlementError) toServiceError(error);
+        toBrandTrackingServiceError(error);
+      }
+    }),
+    getSession: protectedProcedure
+      .input(z.object({ sessionId: z.string().uuid() }).strict())
+      .query(async ({ ctx, input }) => {
+        try {
+          await assertServiceCapability(ctx.user.id, "brandTracking");
+          return await getJenovaBrandTrackingSession(ctx.user, input.sessionId);
+        } catch (error) {
+          if (error instanceof ServiceEntitlementError) toServiceError(error);
+          toBrandTrackingServiceError(error);
+        }
+      }),
+  }),
+  questionMaintenance: router({
+    submit: protectedProcedure
+      .input(submitQuestionMaintenanceSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await submitQuestionMaintenance({
+            actor: ctx.user,
+            value: input,
+          });
+        } catch (error) {
+          toServiceError(error);
+        }
+      }),
+  }),
   knowledgeReset: router({
     status: protectedProcedure.query(async ({ ctx }) => {
       try {
@@ -233,7 +497,7 @@ export const workspaceRouter = router({
         if (ctx.user.role !== "user") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "只有当前用户可以提交交付工单。",
+            message: "只有当前用户可以提交交付需求。",
           });
         }
         try {
@@ -287,7 +551,7 @@ export const workspaceRouter = router({
         if (ctx.user.role !== "user") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "只有当前用户可以补充工单资料。",
+            message: "只有当前用户可以补充需求资料。",
           });
         }
         try {
@@ -377,26 +641,49 @@ export const workspaceRouter = router({
 
   requestQuestionSelection: protectedProcedure
     .input(
-      z.discriminatedUnion("mode", [
-        z.object({
-          mode: z.literal("candidate"),
-          questionId: z.string().trim().min(1).max(64),
-          expectedRevision: z.number().int().positive(),
-        }),
-        z.object({
-          mode: z.literal("direct"),
-          question: z
-            .string()
-            .trim()
-            .min(2, "目标问题至少需要 2 个字符")
-            .max(4_000, "目标问题不能超过 4000 个字符"),
-          category: z.enum([
-            "industry",
-            "competitor_comparison",
-            "reputation",
-            "product_scenario",
-          ]),
-        }),
+      z.union([
+        z
+          .object({
+            mode: z.literal("candidate"),
+            questionId: z.string().trim().min(1).max(64),
+            expectedRevision: z.number().int().positive(),
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("direct"),
+            question: z
+              .string()
+              .trim()
+              .min(2, "目标问题至少需要 2 个字符")
+              .max(4_000, "目标问题不能超过 4000 个字符"),
+            category: z.enum([
+              "industry",
+              "competitor_comparison",
+              "reputation",
+              "product_scenario",
+            ]),
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("direct"),
+            question: z
+              .string()
+              .trim()
+              .min(2, "目标问题至少需要 2 个字符")
+              .max(4_000, "目标问题不能超过 4000 个字符"),
+            classificationVersion: z.literal(2),
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("brand_keyword_library"),
+            dashboardRevision: z.number().int().positive(),
+            tableId: z.string().trim().min(1).max(80),
+            rowIndex: z.number().int().nonnegative().max(9_999),
+          })
+          .strict(),
       ]),
     )
     .mutation(async ({ ctx, input }) => {
@@ -406,22 +693,98 @@ export const workspaceRouter = router({
           message: "只有当前用户可以提交目标问题。",
         });
       }
+      if (
+        input.mode === "direct" &&
+        "classificationVersion" in input &&
+        !QUESTION_CLASSIFICATION_V2_WRITES_ENABLED
+      ) {
+        throw new TRPCError({
+          code: "SERVICE_UNAVAILABLE",
+          message: "问题分类能力正在升级，请稍后重试。",
+        });
+      }
       try {
         await assertServiceCapability(ctx.user.id, "questionSelection");
-        const question =
-          input.mode === "candidate"
-            ? await requestWorkspaceQuestionSelection({
-                userId: ctx.user.id,
-                actorUserId: ctx.user.id,
-                questionId: input.questionId,
-                expectedRevision: input.expectedRevision,
-              })
-            : await requestWorkspaceQuestionSelection({
-                userId: ctx.user.id,
-                actorUserId: ctx.user.id,
-                question: input.question,
-                category: input.category,
-              });
+        let question;
+        if (input.mode === "candidate") {
+          question = await requestWorkspaceQuestionSelection({
+            userId: ctx.user.id,
+            actorUserId: ctx.user.id,
+            questionId: input.questionId,
+            expectedRevision: input.expectedRevision,
+          });
+        } else if (input.mode === "direct") {
+          question = await requestWorkspaceQuestionSelection(
+            {
+              userId: ctx.user.id,
+              actorUserId: ctx.user.id,
+              question: input.question,
+              ...("category" in input
+                ? { category: input.category }
+                : { classificationVersion: 2 as const }),
+            },
+            {
+              afterWrite: (executor, pendingQuestion) =>
+                ensureQuestionReviewRequest({
+                  executor,
+                  question: pendingQuestion,
+                  actorUserId: ctx.user.id,
+                }),
+            },
+          );
+        } else {
+          const dashboard = await getDashboardWorkspace(ctx.user.id);
+          const reference = {
+            dashboardRevision: input.dashboardRevision,
+            tableId: input.tableId,
+            rowIndex: input.rowIndex,
+          };
+          const resolved = resolveBrandKeywordSelection({
+            workspace: dashboard,
+            reference,
+          });
+          if (!resolved.ok) {
+            throw new ServiceEntitlementError(
+              "QUESTION_NOT_CURRENT",
+              resolved.message,
+            );
+          }
+          const reconcileState: {
+            question: InitialMonitoringQuestionSelection | null;
+          } = { question: null };
+          question = await confirmWorkspaceBrandKeywordSelection(
+            {
+              userId: ctx.user.id,
+              actorUserId: ctx.user.id,
+              ...reference,
+              expectedQuestion: resolved.selection.question,
+              expectedCategory: resolved.selection.category,
+            },
+            {
+              afterWrite: async (executor, selectedQuestion) => {
+                reconcileState.question = selectedQuestion;
+                await completeQuestionReviewRequest({
+                  executor,
+                  userId: selectedQuestion.userId,
+                  questionId: selectedQuestion.id,
+                  actorUserId: ctx.user.id,
+                  actorRole: "user",
+                  message: "该自主填写问题已从正式品牌词库确认并进入当前服务。",
+                });
+              },
+            },
+          );
+          if (!reconcileState.question) {
+            throw new ServiceEntitlementError(
+              "QUESTION_NOT_CURRENT",
+              "品牌词库选题结果缺少当前服务范围。",
+            );
+          }
+          await reconcileInitialMonitoringAfterQuestionSelection({
+            question: reconcileState.question,
+            actorUserId: ctx.user.id,
+          });
+        }
         return {
           question: toPublicServicePortalQuestion(question),
         };
@@ -472,7 +835,9 @@ export const workspaceRouter = router({
         payload: projectUserDashboardPayload({
           payload: workspace.payload,
           configured,
-          contentAssetsAllowed: portal.capabilities.contentAssets.allowed,
+          contentAssetsAllowed:
+            portal.capabilities.contentAssets.allowed &&
+            servicePortalHasRequiredKnowledge(portal),
         }),
       };
     } catch (error) {
@@ -499,10 +864,12 @@ export const workspaceRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         return {
-          progress: await getKnowledgeBaseProgress({
-            userId: ctx.user.id,
-            conversationId: input?.conversationId,
-          }),
+          progress: toKnowledgeBasePublicPayload(
+            await getKnowledgeBaseProgress({
+              userId: ctx.user.id,
+              conversationId: input?.conversationId,
+            }),
+          ),
         };
       } catch (error) {
         throw toTrpcError(error);
@@ -552,6 +919,7 @@ export const workspaceRouter = router({
         return {
           record: await saveResponseLogicEntry({
             userId: ctx.user.id,
+            expectedQuestionScope: question.writeScope,
             value: {
               ...input,
               ...question,

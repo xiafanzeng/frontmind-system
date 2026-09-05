@@ -3,14 +3,10 @@ import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  OwnedFileContentError,
   OwnedFileContentResolver,
   type OwnedFileContentResolverDependencies,
 } from "./owned-file-content-resolver";
-import type {
-  StagedPresalesFile,
-  StoredPresalesFile,
-} from "./presales-file-store";
+import type { StoredPresalesFile } from "./presales-file-store";
 
 async function readAll(stream: NodeJS.ReadableStream) {
   const chunks: Buffer[] = [];
@@ -39,50 +35,22 @@ function storedFile(
   };
 }
 
-function createDependencies(input?: {
-  initialStored?: StoredPresalesFile | null;
-  request?: OwnedFileContentResolverDependencies["request"];
-  createdAt?: Date;
-  uploadedAt?: Date | null;
-  expiresAt?: Date | null;
+function dependencies(input?: {
+  stored?: StoredPresalesFile | null;
+  contentSource?: "user_upload" | "assistant_output";
   parentTaskId?: string | null;
-  contentSource?: "user_upload" | "assistant_output" | null;
+  expiresAt?: Date | null;
 }) {
-  let currentStored = input?.initialStored ?? null;
-  const removeStoredFile = vi.fn(async () => {
-    currentStored = null;
-  });
-  const stageStoredFile = vi.fn(async ({ stream, maxBytes }) => {
-    const bytes = await readAll(stream);
-    if (bytes.length > maxBytes) throw new Error("FILE_TOO_LARGE");
-    let consumed = false;
-    const staged: StagedPresalesFile = {
-      sizeBytes: bytes.length,
-      sha256: createHash("sha256").update(bytes).digest("hex"),
-      createReadStream: () => Readable.from([bytes]),
-      discard: async () => {
-        consumed = true;
-      },
-      commit: async ({ filename, mimeType }) => {
-        if (consumed) throw new Error("STAGED_FILE_ALREADY_CONSUMED");
-        consumed = true;
-        currentStored = storedFile(bytes, {
-          filename: filename || "file-1",
-          mimeType: mimeType || "application/octet-stream",
-        });
-      },
-    };
-    return staged;
-  });
-  const dependencies: OwnedFileContentResolverDependencies = {
+  const request = vi.fn();
+  const removeStoredFile = vi.fn(async () => undefined);
+  const deps: OwnedFileContentResolverDependencies = {
     getCredential: vi.fn(async () => ({
       id: "credential-1",
       apiKey: "secret-api-key",
       resource: {
-        parentTaskId: input?.parentTaskId,
-        contentSource: input?.contentSource,
-        createdAt: input?.createdAt ?? new Date("2026-08-01T00:00:00Z"),
-        uploadedAt: input?.uploadedAt ?? null,
+        parentTaskId: input?.parentTaskId ?? null,
+        contentSource: input?.contentSource ?? "user_upload",
+        uploadedAt: new Date("2026-08-01T00:00:00Z"),
         contentExpiresAt:
           input && "expiresAt" in input
             ? input.expiresAt
@@ -90,32 +58,100 @@ function createDependencies(input?: {
         contentDeletedAt: null,
       },
     })),
-    readStoredFile: vi.fn(async () => currentStored),
+    readStoredFile: vi.fn(async () => input?.stored ?? null),
     removeStoredFile,
-    stageStoredFile,
+    stageStoredFile: vi.fn(async () => {
+      throw new Error("v2 resolver must not recapture provider content");
+    }),
     getBaseUrl: () => "https://api.frontmind.example",
-    request:
-      input?.request ??
-      vi.fn(async () => ({
-        status: 404,
-        data: Readable.from([]),
-        headers: {},
-      })),
+    request,
   };
-  return { dependencies, removeStoredFile, stageStoredFile };
+  return { deps, request, removeStoredFile };
 }
 
-describe("OwnedFileContentResolver", () => {
-  it("serves a size/SHA verified local copy without touching upstream", async () => {
-    const bytes = Buffer.from("durable local copy");
-    const request = vi.fn();
-    const { dependencies } = createDependencies({
-      initialStored: storedFile(bytes),
-      request,
-    });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
+describe("OwnedFileContentResolver v2 local authority", () => {
+  it("authorizes a managed local asset by owner and retainUntil without a Provider credential", async () => {
+    const bytes = Buffer.from("managed local asset");
+    const { deps } = dependencies({ stored: storedFile(bytes) });
+    deps.getManagedLocalAsset = vi.fn(async () => ({
+      id: `asset_${"a".repeat(30)}`,
+      retainUntil: new Date("2026-09-14T00:00:00Z"),
+    }));
+    const resolver = new OwnedFileContentResolver(deps);
     const resolved = await resolver.resolve({
+      ownerUserId: 7,
+      fileId: `asset_${"a".repeat(30)}`,
+      expectedSourceKind: "managed_local_asset",
+      expectedSourceAuthorityId: `asset_${"a".repeat(30)}`,
+      now: Date.parse("2026-08-15T00:00:00Z"),
+    });
+
+    expect(resolved).toMatchObject({
+      sourceKind: "managed_local_asset",
+      sourceAuthorityId: `asset_${"a".repeat(30)}`,
+      credentialId: undefined,
+      expiresAt: Date.parse("2026-09-14T00:00:00Z"),
+    });
+    expect(deps.getCredential).not.toHaveBeenCalled();
+    expect(await readAll(resolved.stream)).toEqual(bytes);
+  });
+
+  it("rejects a managed local asset after its immutable retainUntil", async () => {
+    const localAssetId = `asset_${"b".repeat(30)}`;
+    const { deps } = dependencies({
+      stored: storedFile(Buffer.from("expired managed asset")),
+    });
+    deps.getManagedLocalAsset = vi.fn(async () => ({
+      id: localAssetId,
+      retainUntil: new Date("2026-08-14T00:00:00Z"),
+    }));
+
+    await expect(
+      new OwnedFileContentResolver(deps).resolve({
+        ownerUserId: 7,
+        fileId: localAssetId,
+        now: Date.parse("2026-08-15T00:00:00Z"),
+      }),
+    ).rejects.toMatchObject({
+      code: "SOURCE_EXPIRED",
+      statusCode: 410,
+      retryable: false,
+      recoveryAction: "reupload",
+      expiresAt: Date.parse("2026-08-14T00:00:00Z"),
+    });
+    expect(deps.getCredential).not.toHaveBeenCalled();
+    expect(deps.readStoredFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["belongs to another owner", `asset_${"c".repeat(30)}`],
+    ["is absent from local_assets", `asset_${"d".repeat(30)}`],
+  ])("fails closed when a managed local asset %s", async (_label, fileId) => {
+    const { deps } = dependencies({
+      stored: storedFile(Buffer.from("unreachable bytes")),
+    });
+    deps.getManagedLocalAsset = vi.fn(async () => null);
+
+    await expect(
+      new OwnedFileContentResolver(deps).resolve({
+        ownerUserId: 7,
+        fileId,
+        now: Date.parse("2026-08-15T00:00:00Z"),
+      }),
+    ).rejects.toMatchObject({
+      code: "SOURCE_FORBIDDEN",
+      statusCode: 403,
+      retryable: false,
+      recoveryAction: "contact_admin",
+    });
+    expect(deps.getCredential).not.toHaveBeenCalled();
+    expect(deps.readStoredFile).not.toHaveBeenCalled();
+  });
+
+  it("serves a size/SHA verified local copy without Provider access", async () => {
+    const bytes = Buffer.from("durable local copy");
+    const { deps, request } = dependencies({ stored: storedFile(bytes) });
+    const resolved = await new OwnedFileContentResolver(deps).resolve({
       ownerUserId: 7,
       fileId: "file-1",
       projectAssignmentId: "project-a",
@@ -123,338 +159,82 @@ describe("OwnedFileContentResolver", () => {
       now: Date.parse("2026-08-04T00:00:00Z"),
     });
 
-    expect(resolved.source).toBe("local");
+    expect(resolved).toMatchObject({
+      source: "local",
+      sourceKind: "provider_file",
+      sourceAuthorityId: "credential-1",
+      credentialId: "credential-1",
+    });
     expect(await readAll(resolved.stream)).toEqual(bytes);
     expect(request).not.toHaveBeenCalled();
-    expect(dependencies.getCredential).toHaveBeenCalledWith(
-      7,
-      "file",
-      "file-1",
-      "project-a",
-    );
   });
 
-  it("isolates a corrupt local copy, follows safe redirects without auth, and recaptures /content", async () => {
-    const recovered = Buffer.from("recovered upstream bytes");
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        status: 302,
-        data: Readable.from([]),
-        headers: { location: "https://objects.example/step-1" },
-      })
-      .mockResolvedValueOnce({
-        status: 307,
-        data: Readable.from([]),
-        headers: { location: "/final" },
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        data: Readable.from([recovered]),
-        headers: {
-          "content-type": "text/plain",
-          "content-length": String(recovered.length),
-          "content-disposition": "attachment; filename*=UTF-8''recovered.txt",
-        },
-      });
-    const { dependencies, removeStoredFile, stageStoredFile } =
-      createDependencies({
-        initialStored: storedFile(Buffer.from("corrupt"), {
-          sha256: "0".repeat(64),
-        }),
-        request,
-      });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
-    const resolved = await resolver.resolve({
-      ownerUserId: 7,
-      fileId: "file with spaces",
-      expectedCredentialId: "credential-1",
-      now: Date.parse("2026-08-04T00:00:00Z"),
-    });
-
-    expect(request.mock.calls[0]?.[0]).toBe(
-      "https://api.frontmind.example/v1/files/file%20with%20spaces/content",
-    );
-    expect(request.mock.calls[0]?.[1]).toMatchObject({
-      maxRedirects: 0,
-      headers: {
-        API_KEY: "secret-api-key",
-        Authorization: "Bearer secret-api-key",
-      },
-    });
-    for (const [, options] of request.mock.calls.slice(1)) {
-      expect(options).not.toHaveProperty("headers.API_KEY");
-      expect(options).not.toHaveProperty("headers.Authorization");
-      expect(options).toMatchObject({ maxRedirects: 0 });
-    }
-    expect(request.mock.calls.map(([url]) => url)).not.toContain(
-      expect.stringContaining("upload_url"),
-    );
-    expect(removeStoredFile).toHaveBeenCalledWith("file with spaces");
-    expect(stageStoredFile).toHaveBeenCalledTimes(1);
-    expect(resolved).toMatchObject({
-      source: "upstream",
-      filename: "recovered.txt",
-      mimeType: "text/plain",
-      sizeBytes: recovered.length,
-    });
-    expect(await readAll(resolved.stream)).toEqual(recovered);
-  });
-
-  it.each([
-    { name: "missing SHA-256", overrides: { sha256: null } },
-    {
-      name: "missing recorded size",
-      overrides: { recordedSizeBytes: null },
-    },
-  ])(
-    "isolates local content with $name and recovers it from /content",
-    async ({ overrides }) => {
-      const recovered = Buffer.from("authoritative upstream bytes");
-      const request = vi.fn(async () => ({
-        status: 200,
-        data: Readable.from([recovered]),
-        headers: {
-          "content-type": "text/plain",
-          "content-length": String(recovered.length),
-        },
-      }));
-      const { dependencies, removeStoredFile, stageStoredFile } =
-        createDependencies({
-          initialStored: storedFile(
-            Buffer.from("untrusted local bytes"),
-            overrides,
-          ),
-          request,
-        });
-      const resolver = new OwnedFileContentResolver(dependencies);
-
-      const resolved = await resolver.resolve({
-        ownerUserId: 7,
-        fileId: "legacy-local-file",
-        now: Date.parse("2026-08-04T00:00:00Z"),
-      });
-
-      expect(removeStoredFile).toHaveBeenCalledWith("legacy-local-file");
-      expect(request).toHaveBeenCalledWith(
-        "https://api.frontmind.example/v1/files/legacy-local-file/content",
-        expect.any(Object),
-      );
-      expect(stageStoredFile).toHaveBeenCalledTimes(1);
-      expect(await readAll(resolved.stream)).toEqual(recovered);
-    },
-  );
-
-  it("does not retry a redirect rejected by the HTTPS/SSRF policy", async () => {
-    const request = vi.fn(async () => ({
-      status: 302,
-      data: Readable.from([]),
-      headers: { location: "http://127.0.0.1/private" },
-    }));
-    const { dependencies } = createDependencies({ request });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
+  it("rejects a missing local copy without calling legacy /content", async () => {
+    const { deps, request } = dependencies({ stored: null });
     await expect(
-      resolver.resolve({
+      new OwnedFileContentResolver(deps).resolve({
         ownerUserId: 7,
-        fileId: "unsafe-redirect",
+        fileId: "file-missing",
         now: Date.parse("2026-08-04T00:00:00Z"),
       }),
     ).rejects.toMatchObject({
-      code: "SOURCE_REDIRECT_REJECTED",
+      code: "CONTENT_UNAVAILABLE",
+      statusCode: 410,
       retryable: false,
-      recoveryAction: "contact_admin",
+      recoveryAction: "reupload",
     });
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it("stops after three redirect hops", async () => {
-    const request = vi.fn(async (_url: string, _options: object) => ({
-      status: 302,
-      data: Readable.from([]),
-      headers: { location: "https://objects.example/another-hop" },
-    }));
-    const { dependencies, stageStoredFile } = createDependencies({ request });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
+  it("isolates a corrupt local copy and fails closed", async () => {
+    const { deps, request, removeStoredFile } = dependencies({
+      stored: storedFile(Buffer.from("corrupt"), { sha256: "0".repeat(64) }),
+    });
     await expect(
-      resolver.resolve({
+      new OwnedFileContentResolver(deps).resolve({
         ownerUserId: 7,
-        fileId: "file-1",
+        fileId: "file-corrupt",
         now: Date.parse("2026-08-04T00:00:00Z"),
       }),
-    ).rejects.toMatchObject({
-      code: "SOURCE_REDIRECT_LIMIT_EXCEEDED",
-      retryable: false,
-      recoveryAction: "contact_admin",
-    });
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(stageStoredFile).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: "CONTENT_UNAVAILABLE" });
+    expect(removeStoredFile).toHaveBeenCalledWith("file-corrupt");
+    expect(request).not.toHaveBeenCalled();
   });
 
-  it("uses uploadedAt + 30 days when an explicit expiry is absent", async () => {
-    const uploadedAt = new Date("2026-07-01T00:00:00Z");
-    const { dependencies } = createDependencies({
-      initialStored: storedFile(Buffer.from("must not be read")),
-      uploadedAt,
+  it("requires a newly materialized artifact when assistant output is absent", async () => {
+    const { deps, request } = dependencies({
+      stored: null,
+      contentSource: "assistant_output",
+      parentTaskId: "provider-task-1",
       expiresAt: null,
     });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
     await expect(
-      resolver.resolve({
+      new OwnedFileContentResolver(deps).resolve({
         ownerUserId: 7,
-        fileId: "legacy-file",
-        now: Date.parse("2026-08-01T00:00:00Z"),
+        fileId: "assistant-artifact-missing",
+        now: Date.parse("2026-08-04T00:00:00Z"),
+      }),
+    ).rejects.toMatchObject({
+      code: "CONTENT_UNAVAILABLE",
+      message: "本地成品文件不可用，请重新生成",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing local retention fence", async () => {
+    const { deps } = dependencies({
+      stored: storedFile(Buffer.from("expired")),
+      expiresAt: new Date("2026-08-02T00:00:00Z"),
+    });
+    await expect(
+      new OwnedFileContentResolver(deps).resolve({
+        ownerUserId: 7,
+        fileId: "expired-file",
+        now: Date.parse("2026-08-04T00:00:00Z"),
       }),
     ).rejects.toMatchObject({
       code: "SOURCE_EXPIRED",
       statusCode: 410,
-      retryable: false,
-      recoveryAction: "reupload",
-      expiresAt: Date.parse("2026-07-31T00:00:00Z"),
-    } satisfies Partial<OwnedFileContentError>);
-    expect(dependencies.readStoredFile).not.toHaveBeenCalled();
-    expect(dependencies.request).not.toHaveBeenCalled();
-  });
-
-  it("does not expire or persist an upstream output without an upload clock", async () => {
-    const generated = Buffer.from("generated output bytes");
-    const request = vi.fn(async () => ({
-      status: 200,
-      data: Readable.from([generated]),
-      headers: {
-        "content-type": "application/pdf",
-        "content-length": String(generated.length),
-        "content-disposition": 'inline; filename="generated.pdf"',
-      },
-    }));
-    const { dependencies, stageStoredFile } = createDependencies({
-      createdAt: new Date("2020-01-01T00:00:00Z"),
-      uploadedAt: null,
-      expiresAt: null,
-      parentTaskId: "task-generated",
-      contentSource: "assistant_output",
-      request,
-    });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
-    const resolved = await resolver.resolve({
-      ownerUserId: 7,
-      fileId: "generated-file",
-      now: Date.parse("2026-08-04T00:00:00Z"),
-    });
-
-    expect(resolved).toMatchObject({
-      source: "upstream",
-      filename: "generated.pdf",
-      mimeType: "application/pdf",
-      expiresAt: undefined,
-    });
-    expect(await readAll(resolved.stream)).toEqual(generated);
-    expect(stageStoredFile).not.toHaveBeenCalled();
-  });
-
-  it("streams JSON for a task-bound assistant output without persisting it", async () => {
-    const generated = Buffer.from('{"schemaVersion":2,"status":"ok"}');
-    const request = vi.fn(async () => ({
-      status: 200,
-      data: Readable.from([generated]),
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "content-length": String(generated.length),
-        "content-disposition": 'attachment; filename="raw-output.json"',
-      },
-    }));
-    const { dependencies, stageStoredFile } = createDependencies({
-      uploadedAt: null,
-      expiresAt: null,
-      parentTaskId: "task-assessment",
-      contentSource: "assistant_output",
-      request,
-    });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
-    const resolved = await resolver.resolve({
-      ownerUserId: 7,
-      fileId: "assessment-output",
-      now: Date.parse("2026-08-04T00:00:00Z"),
-    });
-
-    expect(resolved).toMatchObject({
-      source: "upstream",
-      filename: "raw-output.json",
-      mimeType: "application/json",
-      expiresAt: undefined,
-    });
-    expect(await readAll(resolved.stream)).toEqual(generated);
-    expect(stageStoredFile).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "an unbound assistant output",
-      contentSource: "assistant_output" as const,
-      parentTaskId: null,
-    },
-    {
-      name: "a user upload even when it carries a task id",
-      contentSource: "user_upload" as const,
-      parentTaskId: "task-assessment",
-    },
-    {
-      name: "a legacy resource without provenance",
-      contentSource: null,
-      parentTaskId: "task-assessment",
-    },
-  ])("rejects JSON for $name", async ({ contentSource, parentTaskId }) => {
-    const upstream = Readable.from(['{"error":"not a trusted output"}']);
-    const request = vi.fn(async () => ({
-      status: 200,
-      data: upstream,
-      headers: { "content-type": "application/json" },
-    }));
-    const { dependencies, stageStoredFile } = createDependencies({
-      uploadedAt: null,
-      expiresAt: null,
-      contentSource,
-      parentTaskId,
-      request,
-    });
-    const resolver = new OwnedFileContentResolver(dependencies);
-
-    await expect(
-      resolver.resolve({
-        ownerUserId: 7,
-        fileId: "untrusted-json",
-        now: Date.parse("2026-08-04T00:00:00Z"),
-      }),
-    ).rejects.toMatchObject({
-      code: "SOURCE_CONTENT_INVALID",
-      statusCode: 422,
-      retryable: false,
-      recoveryAction: "reupload",
-    });
-    expect(upstream.destroyed).toBe(true);
-    expect(stageStoredFile).not.toHaveBeenCalled();
-  });
-
-  it("maps an upstream 404 to an unavailable terminal reupload action", async () => {
-    const { dependencies } = createDependencies();
-    const resolver = new OwnedFileContentResolver(dependencies);
-
-    await expect(
-      resolver.resolve({
-        ownerUserId: 7,
-        fileId: "missing-file",
-        now: Date.parse("2026-08-04T00:00:00Z"),
-      }),
-    ).rejects.toMatchObject({
-      code: "SOURCE_UNAVAILABLE",
-      statusCode: 410,
-      retryable: false,
-      recoveryAction: "reupload",
     });
   });
 });

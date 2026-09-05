@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/frontmind-run-envelope/v1",
+  "title": "FrontMind SiteOps build run envelope v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "projectRevision",
+    "buildId",
+    "knowledgeSnapshot",
+    "workflow",
+    "brief",
+    "visualSelection"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "projectId": { "type": "string", "format": "uuid" },
+    "projectRevision": { "type": "integer", "minimum": 1 },
+    "buildId": { "type": "string", "format": "uuid" },
+    "parentBuildId": { "type": ["string", "null"], "format": "uuid" },
+    "knowledgeSnapshot": {
+      "type": "object",
+      "required": ["id", "archiveSha256"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "archiveSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "sourceBuildId": { "type": ["string", "null"], "maxLength": 191 },
+        "sourceBuildRevision": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["upstreamVersion", "upstreamSha256", "version", "packageSha256", "starterVersion"],
+      "properties": {
+        "upstreamVersion": { "const": "1.0.0" },
+        "upstreamSha256": { "const": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a" },
+        "version": { "const": "1.1.0" },
+        "packageSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "starterVersion": { "const": "1.1.0" }
+      },
+      "additionalProperties": false
+    },
+    "brief": { "type": "object" },
+    "visualSelection": {
+      "type": "object",
+      "required": ["queryHash", "candidateId", "providerItemId", "promptSha256", "previewAssetId", "previewSha256", "taxonomy", "selectionEvidence"],
+      "properties": {
+        "queryHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "candidateId": { "type": "string", "minLength": 1, "maxLength": 191 },
+        "providerItemId": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "promptSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "previewAssetId": { "type": "string", "format": "uuid" },
+        "previewSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "taxonomy": { "type": "object" },
+        "selectionEvidence": { "enum": ["user_choice", "explicit_delegation"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

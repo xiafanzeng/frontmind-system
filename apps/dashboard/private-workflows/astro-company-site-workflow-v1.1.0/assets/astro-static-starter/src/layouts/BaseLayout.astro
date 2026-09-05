@@ -1,0 +1,37 @@
+---
+interface Props {
+  lang: string;
+  title: string;
+  description: string;
+  robots?: string;
+  canonicalOrigin?: string;
+  path?: string;
+}
+
+const {
+  lang,
+  title,
+  description,
+  robots = "noindex,nofollow",
+  canonicalOrigin,
+  path = "/",
+} = Astro.props;
+const canonical = canonicalOrigin
+  ? new URL(path, canonicalOrigin).toString()
+  : null;
+---
+
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <title>{title}</title>
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>

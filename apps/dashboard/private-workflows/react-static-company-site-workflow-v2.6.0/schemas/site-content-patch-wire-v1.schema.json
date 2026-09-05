@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/site-content-patch-wire-v1.schema.json",
+  "title": "SiteContentPatchWireV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "wireSchemaVersion",
+    "operationToken",
+    "baseSourceSha256",
+    "slots"
+  ],
+  "properties": {
+    "wireSchemaVersion": { "const": 1 },
+    "operationToken": { "type": "string", "minLength": 1, "maxLength": 191 },
+    "baseSourceSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "slots": {
+      "type": "array",
+      "maxItems": 480,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "routeId",
+          "slotId",
+          "kind",
+          "valueText",
+          "valueList",
+          "sourceIds"
+        ],
+        "properties": {
+          "routeId": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "slotId": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          },
+          "kind": { "enum": ["richText", "list"] },
+          "valueText": {
+            "oneOf": [
+              { "type": "string", "minLength": 1, "maxLength": 2000 },
+              { "type": "null" }
+            ]
+          },
+          "valueList": {
+            "type": "array",
+            "maxItems": 24,
+            "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+          },
+          "sourceIds": {
+            "type": "array",
+            "maxItems": 50,
+            "items": { "type": "string", "minLength": 1, "maxLength": 191 }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "richText" } } },
+            "then": {
+              "properties": {
+                "valueText": { "type": "string", "minLength": 1 },
+                "valueList": { "maxItems": 0 }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "list" } } },
+            "then": {
+              "properties": {
+                "valueText": { "type": "null" },
+                "valueList": { "minItems": 1 }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -14,7 +14,7 @@ const serviceToken =
   process.env.FRONTMIND_PRESALES_SERVICE_TOKEN?.trim() || "";
 const baseUrl =
   process.env.FRONTMIND_PRESALES_PROBE_BASE_URL?.trim() ||
-  `http://127.0.0.1:${process.env.PORT || "3001"}/api/internal/presales`;
+  `http://127.0.0.1:${process.env.PORT || "3001"}/api/internal/presales/v2`;
 const headers = {
   "x-frontmind-service-token": serviceToken,
 };

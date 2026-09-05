@@ -34,6 +34,10 @@ import {
 } from "./auth-service";
 import { getDb } from "./db";
 import { provisionBasicEntitlement } from "./basic-entitlement-service";
+import {
+  lockActiveWebsiteProjectLifecycle,
+  WebsiteProjectInactiveError,
+} from "./website-project-lifecycle";
 
 const ACCOUNT_SETUP_TTL_MS = 48 * 60 * 60 * 1000;
 const PURCHASE_INTENT_TTL_MS = 30 * 60 * 1000;
@@ -47,7 +51,9 @@ export type PurchaseProvisioningErrorCode =
   | "PURCHASE_ALREADY_DECIDED"
   | "PURCHASE_MANUAL_WORKFLOW_REQUIRED"
   | "ENTERPRISE_IDENTITY_MISMATCH"
+  | "ACCOUNT_EDITION_MISMATCH"
   | "USERNAME_CONFLICT"
+  | "PROJECT_DELETED"
   | "ACCOUNT_SETUP_INVALID"
   | "DATABASE_UNAVAILABLE";
 
@@ -59,6 +65,19 @@ export class PurchaseProvisioningError extends Error {
   ) {
     super(message);
     this.name = "PurchaseProvisioningError";
+  }
+}
+
+async function lockActivePurchaseProject(tx: any, projectId: string) {
+  try {
+    await lockActiveWebsiteProjectLifecycle(tx, projectId);
+  } catch (error) {
+    if (!(error instanceof WebsiteProjectInactiveError)) throw error;
+    throw new PurchaseProvisioningError(
+      "PROJECT_DELETED",
+      "The project has been permanently deleted",
+      410,
+    );
   }
 }
 
@@ -85,6 +104,35 @@ function requestHash(value: WebsitePurchaseRequestV2, secret: string) {
   return createHmac("sha256", secret)
     .update(canonicalJson(value), "utf8")
     .digest("hex");
+}
+
+function storedRequestHashMatches(
+  value: WebsitePurchaseRequestV2,
+  stored: Pick<
+    typeof websiteUserProvisions.$inferSelect,
+    "requestHash" | "marketEdition"
+  >,
+  secret: string,
+) {
+  if (stored.requestHash === requestHash(value, secret)) return true;
+  if (
+    value.marketEdition !== undefined &&
+    value.marketEdition !== stored.marketEdition
+  ) {
+    return false;
+  }
+  if (
+    stored.marketEdition !== "domestic" &&
+    value.account.mode !== "bind_existing"
+  ) {
+    return false;
+  }
+  const alternateRequest: WebsitePurchaseRequestV2 =
+    value.marketEdition === undefined
+      ? { ...value, marketEdition: stored.marketEdition }
+      : (({ marketEdition: _marketEdition, ...legacyRequest }) =>
+          legacyRequest)(value);
+  return stored.requestHash === requestHash(alternateRequest, secret);
 }
 
 function requireProvisioningSecret(secret?: string) {
@@ -230,6 +278,7 @@ function purchaseResponse(
       projectId: row.projectId,
       orderId: row.orderId,
       status,
+      marketEdition: row.marketEdition,
       updatedAt: row.updatedAt.toISOString(),
       ...(status === "failed"
         ? {
@@ -263,6 +312,7 @@ export async function submitWebsitePurchase(input: {
   manualOrderReference?: string;
   secret?: string;
   now?: Date;
+  executor?: any;
 }) {
   const value = websitePurchaseRequestV2Schema.parse(input.request);
   const manualOrderReference = input.manualOrderReference?.trim();
@@ -281,10 +331,11 @@ export async function submitWebsitePurchase(input: {
   const secret = requireProvisioningSecret(input.secret);
   const keyHash = sha256(input.idempotencyKey.trim());
   const hash = requestHash(value, secret);
-  const db = await requireProvisioningDb();
+  const db = input.executor ?? (await requireProvisioningDb());
   const now = input.now ?? new Date();
 
-  const stored = await db.transaction(async (tx) => {
+  const write = async (tx: any) => {
+    await lockActivePurchaseProject(tx, value.project.id);
     const existingRows = await tx
       .select()
       .from(websiteUserProvisions)
@@ -294,7 +345,7 @@ export async function submitWebsitePurchase(input: {
     const existing = existingRows[0];
     if (existing) {
       if (
-        existing.requestHash !== hash ||
+        !storedRequestHashMatches(value, existing, secret) ||
         existing.schemaVersion !== 2 ||
         manualOrderReferenceFromEvidence(existing.contractEvidence) !==
           manualOrderReference
@@ -312,6 +363,7 @@ export async function submitWebsitePurchase(input: {
     let purchaseIntentId: string | null = null;
     let requestedUsername: string;
     let requestedDisplayName: string;
+    let marketEdition = value.marketEdition ?? "domestic";
     if (value.account.mode === "bind_existing") {
       const intentHash = sha256(value.account.purchaseIntent);
       const intents = await tx
@@ -346,6 +398,7 @@ export async function submitWebsitePurchase(input: {
           id: users.id,
           username: users.username,
           displayName: users.displayName,
+          marketEdition: users.marketEdition,
         })
         .from(users)
         .where(eq(users.id, intent.userId))
@@ -358,6 +411,17 @@ export async function submitWebsitePurchase(input: {
           404,
         );
       }
+      if (
+        value.marketEdition !== undefined &&
+        value.marketEdition !== account.marketEdition
+      ) {
+        throw new PurchaseProvisioningError(
+          "ACCOUNT_EDITION_MISMATCH",
+          "购买版本与绑定账号版本不一致",
+          409,
+        );
+      }
+      marketEdition = account.marketEdition;
       const dashboards = await tx
         .select({ payload: userDashboardContents.payload })
         .from(userDashboardContents)
@@ -421,6 +485,7 @@ export async function submitWebsitePurchase(input: {
       requestHash: hash,
       projectId: value.project.id,
       companyName: value.project.companyName,
+      marketEdition,
       orderId: value.order.id,
       tradeNo: value.order.tradeNo,
       amountFen: value.order.amountFen,
@@ -457,7 +522,8 @@ export async function submitWebsitePurchase(input: {
       .where(eq(websiteUserProvisions.id, id))
       .limit(1);
     return rows[0]!;
-  });
+  };
+  const stored = input.executor ? await write(db) : await db.transaction(write);
   return purchaseResponse(stored, secret);
 }
 
@@ -512,6 +578,7 @@ export async function listPendingWebsitePurchases() {
       requestedUsername: row.requestedUsername,
       requestedDisplayName: row.requestedDisplayName,
       accountMode: row.accountMode,
+      marketEdition: row.marketEdition,
       contractId: row.contractId,
       contractTemplateVersion: row.contractTemplateVersion,
       contractEvidence: row.contractEvidence,
@@ -531,11 +598,30 @@ export async function decideWebsitePurchase(input: {
   manualPasswordHash?: string;
   secret?: string;
   now?: Date;
+  executor?: any;
 }) {
   const secret = requireProvisioningSecret(input.secret);
-  const db = await requireProvisioningDb();
+  const db = input.executor ?? (await requireProvisioningDb());
   const now = input.now ?? new Date();
-  const stored = await db.transaction(async (tx) => {
+  const projectBindings = await db
+    .select({ projectId: websiteUserProvisions.projectId })
+    .from(websiteUserProvisions)
+    .where(
+      and(
+        eq(websiteUserProvisions.id, input.reference),
+        eq(websiteUserProvisions.schemaVersion, 2),
+      ),
+    )
+    .limit(1);
+  if (!projectBindings[0]) {
+    throw new PurchaseProvisioningError(
+      "PURCHASE_NOT_FOUND",
+      "Purchase reference not found",
+      404,
+    );
+  }
+  const write = async (tx: any) => {
+    await lockActivePurchaseProject(tx, projectBindings[0].projectId);
     const rows = await tx
       .select()
       .from(websiteUserProvisions)
@@ -725,6 +811,7 @@ export async function decideWebsitePurchase(input: {
               passwordHash: input.manualPasswordHash,
               displayName: row.requestedDisplayName,
               role: "user",
+              marketEdition: row.marketEdition,
               now,
             },
             tx,
@@ -735,6 +822,7 @@ export async function decideWebsitePurchase(input: {
               password: randomBytes(48).toString("base64url"),
               displayName: row.requestedDisplayName,
               role: "user",
+              marketEdition: row.marketEdition,
             },
             tx,
           );
@@ -854,7 +942,8 @@ export async function decideWebsitePurchase(input: {
       .where(eq(websiteUserProvisions.id, row.id))
       .limit(1);
     return completed[0]!;
-  });
+  };
+  const stored = input.executor ? await write(db) : await db.transaction(write);
   return purchaseResponse(stored, secret);
 }
 
@@ -863,6 +952,7 @@ export async function setupWebsiteAccountPassword(input: {
   password: string;
   secret?: string;
   now?: Date;
+  executor?: any;
 }) {
   const secret = requireProvisioningSecret(input.secret);
   const parsed = verifySetupToken(input.token, secret);
@@ -874,9 +964,22 @@ export async function setupWebsiteAccountPassword(input: {
       400,
     );
   }
-  const db = await requireProvisioningDb();
+  const db = input.executor ?? (await requireProvisioningDb());
   const passwordHash = await hashPassword(input.password);
-  return db.transaction(async (tx) => {
+  const projectBindings = await db
+    .select({ projectId: websiteUserProvisions.projectId })
+    .from(websiteUserProvisions)
+    .where(eq(websiteUserProvisions.id, parsed.provisionId))
+    .limit(1);
+  if (!projectBindings[0]) {
+    throw new PurchaseProvisioningError(
+      "ACCOUNT_SETUP_INVALID",
+      "账号设置链接无效或已过期",
+      400,
+    );
+  }
+  const write = async (tx: any) => {
+    await lockActivePurchaseProject(tx, projectBindings[0].projectId);
     const rows = await tx
       .select()
       .from(websiteUserProvisions)
@@ -934,7 +1037,8 @@ export async function setupWebsiteAccountPassword(input: {
       username: row.requestedUsername,
       workspaceUrl: publicBaseUrl() ? `${publicBaseUrl()}/login` : "/login",
     };
-  });
+  };
+  return input.executor ? write(db) : db.transaction(write);
 }
 
 export async function validateWebsiteAccountSetupToken(input: {
@@ -1040,7 +1144,7 @@ export async function createServicePurchaseIntent(input: {
   });
   const websiteUrl =
     process.env.FRONTMIND_WEBSITE_URL?.trim().replace(/\/$/, "") ||
-    "https://www.frontmind.cn";
+    "https://www.frontmind.net";
   const purchaseUrl =
     input.kind === "repeat_basic"
       ? `${websiteUrl}/?purchaseIntent=${encodeURIComponent(token)}#geo-builder`

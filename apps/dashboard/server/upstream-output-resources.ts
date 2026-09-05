@@ -1,55 +1,39 @@
-function normalizedUpstreamFileId(value: string) {
-  const normalized = value.trim();
-  return normalized.length > 0 &&
-    normalized.length <= 255 &&
-    !/[\s/?#\u0000-\u001f\u007f]/u.test(normalized)
-    ? normalized
-    : "";
+import {
+  collectKnowledgeBaseOutputResourceProjections,
+  KnowledgeBaseArtifactIdentityError,
+} from "./knowledge-base-artifact";
+
+function assertLedgerFileId(fileId: string) {
+  if (/[\s/?#\u0000-\u001f\u007f]/u.test(fileId)) {
+    throw new KnowledgeBaseArtifactIdentityError(
+      "上游文件标识包含不允许的空白或路径字符",
+    );
+  }
+  return fileId;
 }
 
+/**
+ * Collect only file identities carried by provider-owned typed resources.
+ *
+ * The resource projection collector is also the ZIP/image trust boundary: it
+ * accepts direct provider output resources and direct children of assistant
+ * messages, rejects conflicting or oversized identities, and ignores user,
+ * tool, reasoning, input, and arbitrary deeply nested objects. Keeping this
+ * ledger collector on that same boundary prevents untrusted model-shaped JSON
+ * from claiming or pinning an upstream file resource.
+ */
 export function collectUpstreamOutputFileIds(
   value: unknown,
-  ids = new Set<string>(),
-  currentKey?: string,
-  depth = 0,
+  options: { ignoreInvalidImageResources?: boolean } = {},
 ) {
-  if (value === null || value === undefined || depth > 50) return ids;
-  if (typeof value === "string") {
-    if ((currentKey === "file_id" || currentKey === "fileId") && value) {
-      const fileId = normalizedUpstreamFileId(value);
-      if (fileId) ids.add(fileId);
-    }
-    if (
-      currentKey === "url" ||
-      currentKey === "file_url" ||
-      currentKey === "fileUrl" ||
-      currentKey === "image_url" ||
-      currentKey === "imageUrl"
-    ) {
-      const match = value.match(/\/v1\/files\/([^/?#]+)/);
-      if (match?.[1]) {
-        try {
-          const fileId = normalizedUpstreamFileId(decodeURIComponent(match[1]));
-          if (fileId) ids.add(fileId);
-        } catch {
-          // Ignore malformed upstream URLs; they cannot be downloaded safely.
-        }
-      }
-    }
-    return ids;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectUpstreamOutputFileIds(item, ids, undefined, depth + 1);
-    }
-    return ids;
-  }
-  if (typeof value === "object") {
-    for (const [key, item] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
-      collectUpstreamOutputFileIds(item, ids, key, depth + 1);
-    }
+  const ids = new Set<string>();
+  for (const projection of collectKnowledgeBaseOutputResourceProjections(
+    value,
+    {
+      ignoreInvalidImageProjections: options.ignoreInvalidImageResources,
+    },
+  )) {
+    if (projection.fileId) ids.add(assertLedgerFileId(projection.fileId));
   }
   return ids;
 }

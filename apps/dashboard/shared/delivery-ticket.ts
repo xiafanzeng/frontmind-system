@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { accountMarketEditionSchema } from "./account-edition";
+import { ALL_CONTENT_ASSET_MEDIA_OPTIONS } from "./delivery-catalog";
 
 export const deliveryTicketTypeSchema = z.enum([
   "content_asset",
@@ -90,22 +91,9 @@ export type DeliveryTicketQuotaState = z.infer<
   typeof deliveryTicketQuotaStateSchema
 >;
 
-export const preferredContentMediaSchema = z.enum([
-  "今日头条",
-  "搜狐",
-  "网易",
-  "腾讯",
-  "新浪",
-  "百度",
-  "中华网",
-  "凤凰网",
-  "微博",
-  "美联社",
-  "今日美国",
-  "雅虎",
-  "Business Insider",
-  "Barchart",
-]);
+export const preferredContentMediaSchema = z.enum(
+  ALL_CONTENT_ASSET_MEDIA_OPTIONS,
+);
 export type PreferredContentMedia = z.infer<typeof preferredContentMediaSchema>;
 
 export const deliveryTicketAttachmentInputSchema = z
@@ -223,7 +211,7 @@ export const createDeliveryTicketSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["knowledgeSnapshotId"],
-        message: "维护工单必须关联当前已发布知识库",
+        message: "维护需求必须关联当前已发布知识库",
       });
     }
   });
@@ -235,12 +223,24 @@ export const deliveryTicketDetailInputSchema = z.object({
   ticketId: z.string().uuid(),
 });
 
+export const deleteDeliveryTicketInputSchema = z
+  .object({
+    userId: z.number().int().positive(),
+    ticketId: z.string().uuid(),
+    expectedRevision: z.number().int().positive(),
+    confirmation: z.literal("DELETE_TICKET"),
+  })
+  .strict();
+export type DeleteDeliveryTicketInput = z.infer<
+  typeof deleteDeliveryTicketInputSchema
+>;
+
 /**
  * Delivery-ticket lists use an opaque, server-issued keyset cursor. The
  * client can retain or discard the cursor, but must never need to interpret
  * the sort key embedded in it.
  */
-export const deliveryTicketListInputSchema = z
+const deliveryTicketListBaseSchema = z
   .object({
     type: deliveryTicketTypeSchema.optional(),
     publicStatus: z.enum(["pending", "completed"]).optional(),
@@ -252,12 +252,39 @@ export const deliveryTicketListInputSchema = z
     direction: z.enum(["forward", "backward"]).optional(),
   })
   .strict();
+
+export const deliveryTicketListInputSchema = deliveryTicketListBaseSchema
+  .extend({
+    surface: z
+      .enum([
+        "website_management",
+        "question_management",
+        "knowledge_management",
+        "response_logic_management",
+      ])
+      .optional(),
+  })
+  .refine(
+    (value) =>
+      !value.surface ||
+      (value.surface === "website_management" &&
+        value.type === "website_operation") ||
+      (value.surface === "question_management" &&
+        value.type === "knowledge_base") ||
+      (value.surface === "knowledge_management" && !value.type) ||
+      (value.surface === "response_logic_management" &&
+        value.type === "knowledge_base"),
+    {
+      path: ["surface"],
+      message: "需求记录的页面范围与需求类型不匹配，请刷新页面后重试。",
+    },
+  );
 export type DeliveryTicketListInput = z.infer<
   typeof deliveryTicketListInputSchema
 >;
 
 export const adminDeliveryTicketListInputSchema =
-  deliveryTicketListInputSchema.extend({
+  deliveryTicketListBaseSchema.extend({
     userId: z.number().int().positive().optional(),
     assignedAdminId: z.number().int().positive().optional(),
     query: z.string().trim().max(100).optional(),
@@ -352,7 +379,7 @@ export const websiteContentTemplateSchema = z
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["records", index, "ticketId"],
-          message: "同一工单在模板中只能出现一次",
+          message: "同一需求在模板中只能出现一次",
         });
       }
       seen.add(record.ticketId);
@@ -462,6 +489,25 @@ export const ACTIVE_WEBSITE_OPERATION_CATEGORIES = Object.freeze([
 ] as const);
 
 /**
+ * Website-management history includes the internal website handoffs in
+ * addition to customer-created prerequisite/content work. Monitoring and
+ * knowledge operations deliberately remain outside this surface.
+ */
+export const WEBSITE_MANAGEMENT_HISTORY_CATEGORIES = Object.freeze([
+  ...ACTIVE_WEBSITE_OPERATION_CATEGORIES,
+  "website_style_samples",
+  "website_build",
+  "site_check",
+  "site_rebuild",
+] as const);
+
+export const QUESTION_MANAGEMENT_HISTORY_CATEGORIES = Object.freeze([
+  "question_review",
+  "question_modify",
+  "question_delete",
+] as const);
+
+/**
  * The client never chooses a quota pool directly. Known website categories
  * are authoritative; all other categories must agree with the submitted type.
  */
@@ -471,7 +517,7 @@ export function resolveDeliveryTicketQuotaPool(input: {
 }): DeliveryTicketQuotaPool | null {
   const category = input.category?.trim() || "";
   if (input.type === "knowledge_base") {
-    throw new Error("知识库内部工单只能由专用流程创建");
+    throw new Error("知识库内部需求只能由专用流程创建");
   }
   if (input.type === "website_operation") {
     if (!WEBSITE_OPERATION_CATEGORIES.has(category)) {
@@ -482,7 +528,7 @@ export function resolveDeliveryTicketQuotaPool(input: {
       !WEBSITE_PREREQUISITE_CATEGORIES.has(category) &&
       category !== "knowledge_base_maintenance"
     ) {
-      throw new Error("该旧版官网技术类别已停止接受新工单");
+      throw new Error("该旧版官网技术类别已停止接受新需求");
     }
     if (category === "knowledge_base_maintenance") return null;
     if (WEBSITE_CONTENT_PUBLISH_CATEGORIES.has(category)) {
@@ -543,36 +589,8 @@ export const DELIVERY_TICKET_PUBLIC_STATUS_LABELS: Record<
   DeliveryTicketPublicStatus,
   string
 > = Object.freeze({
-  pending: "待受理",
+  pending: "待处理",
   completed: "已完成",
-});
-
-export type DeliveryTicketPublicStage =
-  | "awaiting_service"
-  | "processing"
-  | "action_required"
-  | "completed"
-  | "closed";
-
-export function deliveryTicketPublicStage(
-  status: DeliveryTicketStatus,
-): DeliveryTicketPublicStage {
-  if (status === "in_progress") return "processing";
-  if (status === "needs_information") return "action_required";
-  if (status === "completed") return "completed";
-  if (status === "rejected" || status === "cancelled") return "closed";
-  return "awaiting_service";
-}
-
-export const DELIVERY_TICKET_PUBLIC_STAGE_LABELS: Record<
-  DeliveryTicketPublicStage,
-  string
-> = Object.freeze({
-  awaiting_service: "已提交",
-  processing: "处理中",
-  action_required: "待您补充",
-  completed: "已完成",
-  closed: "已结束",
 });
 
 export const publicDeliveryLinkSchema = z
@@ -589,22 +607,9 @@ const publicDeliveryTicketSummaryBaseSchema = z.object({
   category: z.string().trim().max(64).nullable(),
   categoryLabel: z.string().trim().max(160).nullable(),
   topic: z.string().trim().max(512).nullable(),
+  sourceQuestionId: z.string().trim().max(191).nullable(),
   publicStatus: z.enum(["pending", "completed"]),
-  publicStatusLabel: z.enum(["待受理", "已完成"]),
-  publicStage: z.enum([
-    "awaiting_service",
-    "processing",
-    "action_required",
-    "completed",
-    "closed",
-  ]),
-  publicStageLabel: z.enum([
-    "已提交",
-    "处理中",
-    "待您补充",
-    "已完成",
-    "已结束",
-  ]),
+  publicStatusLabel: z.enum(["待处理", "已完成"]),
   publicSummary: z.string().max(50_000).nullable(),
   knowledgeSnapshotId: z.string().uuid().nullable().optional(),
 });
@@ -770,6 +775,7 @@ export const publicDeliveryTicketWorkspaceMetadataSchema = z
     websiteContentCatalog: z.array(publicWebsiteContentCatalogItemSchema),
     marketEdition: accountMarketEditionSchema,
     preferredMediaOptions: z.array(preferredContentMediaSchema),
+    siteOpsProjectActive: z.boolean().default(false),
     deliveryOwners: z
       .object({
         aiOperations: z.boolean(),
@@ -823,6 +829,7 @@ export const publicDeliveryTicketWorkspaceMetadataSchema = z
           .nullable(),
         selectedStyleSampleId: z.string().uuid().nullable(),
         styleConfirmed: z.boolean(),
+        websiteBuildStatus: z.enum(["locked", "pending", "completed"]),
         canSelectStyle: z.boolean(),
         canRequestStyleRevision: z.boolean(),
         canSubmitDomain: z.boolean(),

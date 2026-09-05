@@ -11,6 +11,7 @@ import {
   sessions,
   userPasswordSetupTokens,
   users,
+  websiteProjectDeletionTombstones,
   websiteUserProvisions,
 } from "../drizzle/schema";
 import { setupWebsiteAccountPassword } from "./provisioning-v2-service";
@@ -47,18 +48,14 @@ class AccountSetupDb {
 
   select() {
     let selectedTable: unknown;
-    const query: any = {
-      from: (table: unknown) => {
-        selectedTable = table;
-        return query;
-      },
-      where: () => query,
-      limit: () => query,
-      for: async () =>
-        selectedTable === websiteUserProvisions
+    const selectedRows = () =>
+      selectedTable === websiteProjectDeletionTombstones
+        ? [{ status: "active" }]
+        : selectedTable === websiteUserProvisions
           ? [
               {
                 id: "provision-account-setup-001",
+                projectId: "project-account-setup-001",
                 userId: 42,
                 status: "completed",
                 accountMode: "create",
@@ -79,9 +76,28 @@ class AccountSetupDb {
                   isActive: this.accountActive,
                 },
               ]
-            : [],
+            : [];
+    const query: any = {
+      from: (table: unknown) => {
+        selectedTable = table;
+        return query;
+      },
+      where: () => query,
+      limit: () => query,
+      for: async () => selectedRows(),
+      then: (resolve: (rows: unknown[]) => unknown) =>
+        Promise.resolve(selectedRows()).then(resolve),
     };
     return query;
+  }
+
+  insert(table: unknown) {
+    return {
+      values: () =>
+        table === websiteProjectDeletionTombstones
+          ? { onDuplicateKeyUpdate: async () => undefined }
+          : Promise.resolve(undefined),
+    };
   }
 
   update(table: unknown) {

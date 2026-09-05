@@ -18,6 +18,10 @@ function openBuild(
     id: "00000000-0000-4000-8000-000000000100",
     userId: 1,
     conversationId: "conversation-1",
+    executionMode: "materialized_bundle_v1",
+    skillVersion: "5",
+    providerProtocol: "manus_v2",
+    contentVersion: 1,
     status: "researching",
     generation: 3,
     stateEpoch: 7,
@@ -167,6 +171,23 @@ describe("knowledge-base open-build recovery lease", () => {
       ),
     ).resolves.toBeNull();
   });
+
+  it.each([
+    { executionMode: "legacy_conversational" },
+    { skillVersion: "4" },
+    { providerProtocol: "legacy_v1" },
+  ] as const)(
+    "never leases a pre-v5 or legacy Provider build: %o",
+    async (override) => {
+      const { executor } = createLeaseExecutor(openBuild(override as any));
+      await expect(
+        claimKnowledgeBaseOpenRecoveryBuild(
+          claimInput(new Date("2026-08-01T00:00:00.000Z")),
+          executor,
+        ),
+      ).resolves.toBeNull();
+    },
+  );
 
   it("renews only for the owner and loses renewal when a turn takes authority", async () => {
     const { executor, store } = createLeaseExecutor(openBuild());

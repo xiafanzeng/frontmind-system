@@ -182,6 +182,26 @@ describe("managed user onboarding", () => {
         }),
       ]);
       expect(state.quotaPeriods).toHaveLength(expectedQuotaPeriodCount);
+      if (planCode === "luxury") {
+        expect(state.quotaPeriods.map((period: any) => period.ordinal)).toEqual(
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        );
+        expect(state.quotaPeriods[0]).toMatchObject({
+          ordinal: 0,
+          totalQuestionLimit: 8,
+          contentAssetPublishLimit: 0,
+          websiteContentPublishLimit: 0,
+        });
+        expect(state.quotaPeriods.slice(1)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              ordinal: 1,
+              contentAssetPublishLimit: 20,
+              websiteContentPublishLimit: 100,
+            }),
+          ]),
+        );
+      }
       expect(state.credentials).toEqual([
         {
           userId: 501,
@@ -549,6 +569,12 @@ describe("pending managed user provisioning repair", () => {
       idempotent: true,
     });
     expect(contract.status).toBe("active");
+    expect(quotaCountAfterFirst).toBe(
+      createServiceQuotaWindows("luxury", contract.startsAt, {
+        planVersion: 1,
+      }).length,
+    );
+    expect(quotaCountAfterFirst).toBe(3);
     expect(quotaRows).toHaveLength(quotaCountAfterFirst);
     expect(credentialRows).toHaveLength(1);
     expect(assignmentRows).toEqual([

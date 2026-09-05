@@ -17,7 +17,11 @@ import {
   canonicalKnowledgeBaseMarkdown,
   knowledgeBaseMarkdownSha256,
 } from "./knowledge-base-package-validation";
-import { knowledgeBaseExpectedCustomerUploadsFromTurns } from "./knowledge-base-customer-upload";
+import {
+  knowledgeBaseExpectedCustomerUploadsFromTurns,
+  knowledgeBaseOfficialLogoProvenanceFromMetadata,
+  knowledgeBaseOfficialLogoUploadFromTurn,
+} from "./knowledge-base-customer-upload";
 import {
   knowledgeBuildArtifactStorageKeyBelongsTo,
   readKnowledgeBuildArtifact,
@@ -75,6 +79,39 @@ function normalizedSha256(value: unknown) {
 
 function validSha256(value: unknown) {
   return SHA256_PATTERN.test(normalizedSha256(value));
+}
+
+function snapshotUsesV4OnlyUploadContract(input: {
+  assets: readonly unknown[];
+  expectedCustomerUploadCount: number;
+  expectedOfficialLogoUploadCount: number;
+}) {
+  if (
+    input.expectedCustomerUploadCount > 0 ||
+    input.expectedOfficialLogoUploadCount > 0
+  ) {
+    return true;
+  }
+  return input.assets.some((asset) => {
+    if (!asset || typeof asset !== "object" || Array.isArray(asset)) {
+      return false;
+    }
+    const value = asset as Record<string, unknown>;
+    if (
+      value.sourceKind === "user_upload" ||
+      value.sourceKind === "official_logo_upload"
+    ) {
+      return true;
+    }
+    return [
+      "sourceUploadIndex",
+      "sourceUploadFileId",
+      "sourceUploadSha256",
+      "sourceUploadFilename",
+      "sourceUploadMimeType",
+      "sourceUploadSizeBytes",
+    ].some((key) => value[key] !== undefined);
+  });
 }
 
 function completeLogoBinding(build: KnowledgeBaseBuild) {
@@ -540,11 +577,24 @@ export function findKnowledgeBaseRolloutViolations(
       } else {
         try {
           const expectedCustomerUploads =
-            knowledgeBaseExpectedCustomerUploadsFromTurns(generationTurns);
-          const customerUploadContract =
-            expectedCustomerUploads.length > 0 ||
-            snapshotAssets.some((asset) => asset.sourceKind === "user_upload");
-          assertKnowledgeBasePackageMatchesBuild({
+            knowledgeBaseExpectedCustomerUploadsFromTurns(generationTurns, {
+              excludedSourceSha256: build.logoSha256,
+            });
+          const officialLogoUploads = generationTurns
+            .map(knowledgeBaseOfficialLogoUploadFromTurn)
+            .filter((value) => value !== null);
+          const officialLogoProvenances = generationTurns
+            .map((turn) =>
+              knowledgeBaseOfficialLogoProvenanceFromMetadata(turn.metadata),
+            )
+            .filter((value) => value !== null);
+          if (
+            officialLogoUploads.length > 1 ||
+            officialLogoProvenances.length > 1
+          ) {
+            throw new Error("官方主 Logo 来源账本不唯一");
+          }
+          const binding = {
             nodes: nodes.map((node) => ({
               leafId: node.leafId,
               title: node.title,
@@ -562,10 +612,53 @@ export function findKnowledgeBaseRolloutViolations(
               typeof assertKnowledgeBasePackageMatchesBuild
             >[0]["assets"],
             expectedLogoSha256: String(build.logoSha256 || ""),
-            packageSchemaVersion: customerUploadContract ? 4 : 3,
-            expectedCustomerUploads,
             legacyV3Compatibility: false,
-          });
+          } satisfies Omit<
+            Parameters<typeof assertKnowledgeBasePackageMatchesBuild>[0],
+            | "packageSchemaVersion"
+            | "expectedCustomerUploads"
+            | "expectedOfficialLogoUpload"
+            | "expectedOfficialLogoProvenance"
+            | "legacyV4ReadCompatibility"
+          >;
+          if (build.skillVersion !== "4") {
+            assertKnowledgeBasePackageMatchesBuild({
+              ...binding,
+              packageSchemaVersion: 3,
+              expectedCustomerUploads: [],
+            });
+          } else {
+            try {
+              assertKnowledgeBasePackageMatchesBuild({
+                ...binding,
+                packageSchemaVersion: 4,
+                expectedCustomerUploads,
+                expectedOfficialLogoUpload: officialLogoUploads[0],
+                expectedOfficialLogoProvenance: officialLogoProvenances[0],
+                legacyV4ReadCompatibility: true,
+              });
+            } catch (error) {
+              // Snapshots created before schemaVersion was persisted cannot
+              // distinguish v4/schema3 from v4/schema4 by build metadata.
+              // Never fall back when any customer-upload-only marker exists;
+              // otherwise retry exactly the old schema3 constraints (raw IDs,
+              // exact order/content and one byte-bound Logo, no v4 ledger).
+              if (
+                snapshotUsesV4OnlyUploadContract({
+                  assets: snapshotAssets,
+                  expectedCustomerUploadCount: expectedCustomerUploads.length,
+                  expectedOfficialLogoUploadCount: officialLogoUploads.length,
+                })
+              ) {
+                throw error;
+              }
+              assertKnowledgeBasePackageMatchesBuild({
+                ...binding,
+                packageSchemaVersion: 3,
+                expectedCustomerUploads: [],
+              });
+            }
+          }
         } catch {
           appendViolation(violations, seen, {
             code: "PUBLISHED_PACKAGE_NODE_HASH_MISMATCH",

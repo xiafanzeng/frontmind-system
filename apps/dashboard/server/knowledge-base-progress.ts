@@ -1,7 +1,31 @@
-import { extractKnowledgeBaseProtocolObjects } from "../shared/knowledge-base-output";
+import { createHash } from "node:crypto";
+
+import {
+  parseExactJson,
+  repairStructuredJsonCandidate,
+  type ModelOutputRepairRuleCode,
+} from "./model-output-repair";
 
 export const KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES = 8;
 export const KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES = 115;
+export const KNOWLEDGE_BASE_DEEP_MANIFEST_MIN_LEAVES = 30;
+export const KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY = 1;
+export const KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP = 2;
+export type KnowledgeBaseTreePolicyVersion =
+  | typeof KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY
+  | typeof KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP;
+
+export const KNOWLEDGE_BASE_RESEARCH_DIMENSION_IDS = [
+  "enterprise_identity",
+  "team_and_organization",
+  "products_and_services",
+  "capabilities_and_delivery",
+  "industries_scenarios_and_cases",
+  "differentiation_and_evidence",
+  "cooperation_delivery_and_support",
+] as const;
+export type KnowledgeBaseResearchDimensionId =
+  (typeof KNOWLEDGE_BASE_RESEARCH_DIMENSION_IDS)[number];
 export const KNOWLEDGE_BASE_PROGRESS_KIND = "frontmind.knowledge-base.progress";
 export const KNOWLEDGE_BASE_MANIFEST_KIND = "frontmind.knowledge-base.manifest";
 export const KNOWLEDGE_BASE_REOPEN_KIND = "frontmind.knowledge-base.reopen";
@@ -54,6 +78,9 @@ export function classifyKnowledgeBaseUpstreamTaskStatus(
       "success",
       "done",
       "finished",
+      // Manus v2 emits `stopped` after a normal finish; failures arrive as
+      // the separate `error` status and error_message event.
+      "stopped",
     ]).has(normalized)
   ) {
     return {
@@ -188,7 +215,45 @@ export interface KnowledgeBaseManifestEnvelope {
   operationId?: string;
   turnId?: string;
   leaves: KnowledgeBaseLeafManifestEntry[];
+  officialLogo?: KnowledgeBaseOfficialLogoProvenance;
+  researchCoverage?: KnowledgeBaseInitialResearchCoverage;
 }
+
+export interface KnowledgeBaseInitialResearchCoverage {
+  officialPages: {
+    discovered: number;
+    attempted: number;
+    succeeded: number;
+    failed: number;
+  };
+  publicQueries: number;
+  officialDocuments: number;
+  uploadsRead: number;
+  sourceCount: number;
+  productFamilies: Array<{
+    id: string;
+    name: string;
+    leafIds: string[];
+  }>;
+  dimensions: Array<{
+    id: KnowledgeBaseResearchDimensionId;
+    status: "covered" | "gap";
+    leafIds: string[];
+  }>;
+  stopReason: "coverage_complete" | "source_limited" | "budget_reached";
+  limitationReason?: string;
+}
+
+export type KnowledgeBaseOfficialLogoProvenance =
+  | {
+      sourceKind: "official_web";
+      sourcePageUrl: string;
+      sourceAssetUrl: string;
+    }
+  | {
+      sourceKind: "official_document";
+      sourceDocumentPath: string;
+    };
 
 export interface KnowledgeBaseReopenEnvelope {
   kind: typeof KNOWLEDGE_BASE_REOPEN_KIND;
@@ -231,6 +296,8 @@ export interface KnowledgeBaseProgressSummary {
 
 export type KnowledgeBaseProgressErrorCode =
   | "INVALID_MANIFEST"
+  | "MANIFEST_LEAF_COUNT_BELOW_MIN"
+  | "MANIFEST_RESEARCH_COVERAGE_INCOMPLETE"
   | "INVALID_STATE"
   | "INVALID_ENVELOPE"
   | "STALE_OPERATION"
@@ -434,23 +501,10 @@ export function validateKnowledgeBaseLeafManifest(
   return normalized;
 }
 
-/**
- * Applies the production contract separately from state creation: a real
- * knowledge-base run must contain 8–115 unique leaves.
- */
-export function validateProductionKnowledgeBaseLeafManifest(
+function validateProductionManifestStructure(
   manifest: readonly KnowledgeBaseLeafManifestEntry[],
-): KnowledgeBaseLeafManifestEntry[] {
+) {
   const normalized = validateKnowledgeBaseLeafManifest(manifest);
-  if (
-    normalized.length < KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES ||
-    normalized.length > KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES
-  ) {
-    fail(
-      "INVALID_MANIFEST",
-      `A production leaf manifest must contain ${KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES}–${KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES} leaves; received ${normalized.length}`,
-    );
-  }
   const missingBranch = normalized.find(
     (leaf) => !leaf.branchId || !leaf.branchTitle,
   );
@@ -478,6 +532,443 @@ export function validateProductionKnowledgeBaseLeafManifest(
   return normalized;
 }
 
+export function knowledgeBaseTreePolicy(version: unknown) {
+  if (version === KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP) {
+    return {
+      version: KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP,
+      minLeaves: KNOWLEDGE_BASE_DEEP_MANIFEST_MIN_LEAVES,
+      maxLeaves: KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES,
+      targetMinLeaves: 40,
+      targetMaxLeaves: 55,
+    } as const;
+  }
+  if (version === KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY) {
+    return {
+      version: KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY,
+      minLeaves: KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES,
+      maxLeaves: KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES,
+      targetMinLeaves: KNOWLEDGE_BASE_MANIFEST_MIN_LEAVES,
+      targetMaxLeaves: KNOWLEDGE_BASE_MANIFEST_MAX_LEAVES,
+    } as const;
+  }
+  fail("INVALID_STATE", "Knowledge-base tree policy version is invalid");
+}
+
+/** Applies the leaf-count contract pinned to one durable build. */
+export function validateKnowledgeBaseLeafManifestForTreePolicy(
+  manifest: readonly KnowledgeBaseLeafManifestEntry[],
+  treePolicyVersion: unknown,
+): KnowledgeBaseLeafManifestEntry[] {
+  const normalized = validateProductionManifestStructure(manifest);
+  const policy = knowledgeBaseTreePolicy(treePolicyVersion);
+  if (normalized.length < policy.minLeaves) {
+    fail(
+      policy.version === KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP
+        ? "MANIFEST_LEAF_COUNT_BELOW_MIN"
+        : "INVALID_MANIFEST",
+      `A production leaf manifest for tree policy v${policy.version} must contain at least ${policy.minLeaves} leaves; received ${normalized.length}`,
+    );
+  }
+  if (normalized.length > policy.maxLeaves) {
+    fail(
+      "INVALID_MANIFEST",
+      `A production leaf manifest for tree policy v${policy.version} must contain at most ${policy.maxLeaves} leaves; received ${normalized.length}`,
+    );
+  }
+  return normalized;
+}
+
+/** Legacy compatibility validator for archives and persisted v1 builds. */
+export function validateProductionKnowledgeBaseLeafManifest(
+  manifest: readonly KnowledgeBaseLeafManifestEntry[],
+): KnowledgeBaseLeafManifestEntry[] {
+  return validateKnowledgeBaseLeafManifestForTreePolicy(
+    manifest,
+    KNOWLEDGE_BASE_TREE_POLICY_VERSION_LEGACY,
+  );
+}
+
+function researchCoverageFail(message: string): never {
+  fail("MANIFEST_RESEARCH_COVERAGE_INCOMPLETE", message);
+}
+
+function assertResearchCoverageKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  label: string,
+) {
+  const unexpected = Object.keys(value).filter((key) => !keys.includes(key));
+  if (unexpected.length > 0) {
+    researchCoverageFail(
+      `${label} contains unsupported fields: ${unexpected.join(", ")}`,
+    );
+  }
+}
+
+function researchInteger(value: unknown, label: string, maximum: number) {
+  if (
+    !Number.isSafeInteger(value) ||
+    Number(value) < 0 ||
+    Number(value) > maximum
+  ) {
+    researchCoverageFail(
+      `${label} must be an integer between 0 and ${maximum}`,
+    );
+  }
+  return Number(value);
+}
+
+function parseResearchLeafIds(
+  value: unknown,
+  leafIds: ReadonlySet<string>,
+  label: string,
+) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 115) {
+    researchCoverageFail(`${label} must contain 1–115 leaf ids`);
+  }
+  const normalized = value.map((candidate) =>
+    typeof candidate === "string" ? candidate.trim() : "",
+  );
+  if (
+    normalized.some((leafId) => !leafId || !leafIds.has(leafId)) ||
+    new Set(normalized).size !== normalized.length
+  ) {
+    researchCoverageFail(`${label} contains an unknown or duplicate leaf id`);
+  }
+  return normalized;
+}
+
+function parseInitialResearchCoverage(
+  input: unknown,
+  leafIds: ReadonlySet<string>,
+): KnowledgeBaseInitialResearchCoverage {
+  if (!isPlainObject(input)) {
+    researchCoverageFail("Manifest researchCoverage must be an object");
+  }
+  assertResearchCoverageKeys(
+    input,
+    [
+      "officialPages",
+      "publicQueries",
+      "officialDocuments",
+      "uploadsRead",
+      "sourceCount",
+      "productFamilies",
+      "dimensions",
+      "stopReason",
+      "limitationReason",
+    ],
+    "Manifest researchCoverage",
+  );
+  if (!isPlainObject(input.officialPages)) {
+    researchCoverageFail("researchCoverage.officialPages must be an object");
+  }
+  assertResearchCoverageKeys(
+    input.officialPages,
+    ["discovered", "attempted", "succeeded", "failed"],
+    "researchCoverage.officialPages",
+  );
+  const officialPages = {
+    discovered: researchInteger(
+      input.officialPages.discovered,
+      "researchCoverage.officialPages.discovered",
+      10_000,
+    ),
+    attempted: researchInteger(
+      input.officialPages.attempted,
+      "researchCoverage.officialPages.attempted",
+      200,
+    ),
+    succeeded: researchInteger(
+      input.officialPages.succeeded,
+      "researchCoverage.officialPages.succeeded",
+      120,
+    ),
+    failed: researchInteger(
+      input.officialPages.failed,
+      "researchCoverage.officialPages.failed",
+      200,
+    ),
+  };
+  if (
+    officialPages.attempted > officialPages.discovered ||
+    officialPages.succeeded + officialPages.failed !== officialPages.attempted
+  ) {
+    researchCoverageFail(
+      "researchCoverage official-page arithmetic is inconsistent",
+    );
+  }
+  const publicQueries = researchInteger(
+    input.publicQueries,
+    "researchCoverage.publicQueries",
+    30,
+  );
+  const officialDocuments = researchInteger(
+    input.officialDocuments,
+    "researchCoverage.officialDocuments",
+    30,
+  );
+  const uploadsRead = researchInteger(
+    input.uploadsRead,
+    "researchCoverage.uploadsRead",
+    100,
+  );
+  const sourceCount = researchInteger(
+    input.sourceCount,
+    "researchCoverage.sourceCount",
+    2_000,
+  );
+  if (publicQueries < 6) {
+    researchCoverageFail("researchCoverage.publicQueries must be at least 6");
+  }
+  if (sourceCount < 1) {
+    researchCoverageFail("researchCoverage.sourceCount must be at least 1");
+  }
+
+  if (
+    !Array.isArray(input.productFamilies) ||
+    input.productFamilies.length === 0 ||
+    input.productFamilies.length > 115
+  ) {
+    researchCoverageFail(
+      "researchCoverage.productFamilies must contain 1–115 families",
+    );
+  }
+  const productFamilies = input.productFamilies.map((candidate, index) => {
+    if (!isPlainObject(candidate)) {
+      researchCoverageFail(
+        `researchCoverage.productFamilies[${index}] must be an object`,
+      );
+    }
+    assertResearchCoverageKeys(
+      candidate,
+      ["id", "name", "leafIds"],
+      `researchCoverage.productFamilies[${index}]`,
+    );
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+    const name =
+      typeof candidate.name === "string" ? candidate.name.trim() : "";
+    if (!id || id.length > 191 || !name || name.length > 255) {
+      researchCoverageFail(
+        `researchCoverage.productFamilies[${index}] has an invalid id or name`,
+      );
+    }
+    return {
+      id,
+      name,
+      leafIds: parseResearchLeafIds(
+        candidate.leafIds,
+        leafIds,
+        `researchCoverage.productFamilies[${index}].leafIds`,
+      ),
+    };
+  });
+  if (
+    new Set(productFamilies.map((family) => family.id)).size !==
+    productFamilies.length
+  ) {
+    researchCoverageFail(
+      "researchCoverage.productFamilies contains duplicate ids",
+    );
+  }
+
+  if (
+    !Array.isArray(input.dimensions) ||
+    input.dimensions.length !== KNOWLEDGE_BASE_RESEARCH_DIMENSION_IDS.length
+  ) {
+    researchCoverageFail(
+      "researchCoverage.dimensions must contain the seven business dimensions",
+    );
+  }
+  const dimensions = input.dimensions.map((candidate, index) => {
+    if (!isPlainObject(candidate)) {
+      researchCoverageFail(
+        `researchCoverage.dimensions[${index}] must be an object`,
+      );
+    }
+    assertResearchCoverageKeys(
+      candidate,
+      ["id", "status", "leafIds"],
+      `researchCoverage.dimensions[${index}]`,
+    );
+    const id = candidate.id as KnowledgeBaseResearchDimensionId;
+    if (!KNOWLEDGE_BASE_RESEARCH_DIMENSION_IDS.includes(id)) {
+      researchCoverageFail(
+        `researchCoverage.dimensions[${index}].id is invalid`,
+      );
+    }
+    if (candidate.status !== "covered" && candidate.status !== "gap") {
+      researchCoverageFail(
+        `researchCoverage.dimensions[${index}].status is invalid`,
+      );
+    }
+    return {
+      id,
+      status: candidate.status as "covered" | "gap",
+      leafIds: parseResearchLeafIds(
+        candidate.leafIds,
+        leafIds,
+        `researchCoverage.dimensions[${index}].leafIds`,
+      ),
+    };
+  });
+  if (
+    new Set(dimensions.map((dimension) => dimension.id)).size !==
+    KNOWLEDGE_BASE_RESEARCH_DIMENSION_IDS.length
+  ) {
+    researchCoverageFail(
+      "researchCoverage.dimensions must cover each business dimension exactly once",
+    );
+  }
+
+  const stopReason = input.stopReason;
+  if (
+    stopReason !== "coverage_complete" &&
+    stopReason !== "source_limited" &&
+    stopReason !== "budget_reached"
+  ) {
+    researchCoverageFail("researchCoverage.stopReason is invalid");
+  }
+  const limitationReason =
+    typeof input.limitationReason === "string"
+      ? input.limitationReason.trim()
+      : undefined;
+  if (input.limitationReason !== undefined && !limitationReason) {
+    researchCoverageFail("researchCoverage.limitationReason cannot be empty");
+  }
+  if (limitationReason && limitationReason.length > 2_000) {
+    researchCoverageFail("researchCoverage.limitationReason is too long");
+  }
+  if (stopReason === "coverage_complete") {
+    if (officialPages.succeeded < 12 || limitationReason) {
+      researchCoverageFail(
+        "coverage_complete requires at least 12 successful official pages and no limitationReason",
+      );
+    }
+  } else if (stopReason === "source_limited") {
+    if (
+      officialPages.attempted !== officialPages.discovered ||
+      !limitationReason ||
+      limitationReason.length < 8
+    ) {
+      researchCoverageFail(
+        "source_limited requires an exhausted official-page queue and a specific limitationReason",
+      );
+    }
+  } else if (
+    officialPages.succeeded < 12 ||
+    !limitationReason ||
+    limitationReason.length < 8 ||
+    !(
+      officialPages.succeeded === 120 ||
+      officialPages.attempted === 200 ||
+      publicQueries === 30 ||
+      officialDocuments === 30
+    )
+  ) {
+    researchCoverageFail(
+      "budget_reached requires sufficient official coverage, a reached budget cap and a specific limitationReason",
+    );
+  }
+
+  return {
+    officialPages,
+    publicQueries,
+    officialDocuments,
+    uploadsRead,
+    sourceCount,
+    productFamilies,
+    dimensions,
+    stopReason,
+    ...(limitationReason ? { limitationReason } : {}),
+  };
+}
+
+function referencedResearchCoverageLeafIds(input: unknown) {
+  if (!isPlainObject(input)) return [];
+  const containers = [input.productFamilies, input.dimensions];
+  return containers.flatMap((container) =>
+    Array.isArray(container)
+      ? container.flatMap((candidate) =>
+          isPlainObject(candidate) && Array.isArray(candidate.leafIds)
+            ? candidate.leafIds.filter(
+                (leafId): leafId is string => typeof leafId === "string",
+              )
+            : [],
+        )
+      : [],
+  );
+}
+
+/**
+ * Revalidates the durable first-turn research ledger before progress display or
+ * authenticated publication. When node IDs are available every relationship
+ * is checked against them; the pure publication predicate can still enforce
+ * the complete ledger shape and gates without trusting a truthy JSON object.
+ */
+export function validateStoredKnowledgeBaseResearchCoverage(
+  input: unknown,
+  options: {
+    knownLeafIds?: readonly string[];
+    totalLeafCount?: number;
+    expectedUploadsRead?: number;
+  } = {},
+) {
+  const referencedLeafIds = referencedResearchCoverageLeafIds(input);
+  const leafIds = new Set(options.knownLeafIds ?? referencedLeafIds);
+  if (leafIds.size === 0) {
+    researchCoverageFail("Stored researchCoverage has no referenced leaves");
+  }
+  if (
+    options.totalLeafCount !== undefined &&
+    (!Number.isSafeInteger(options.totalLeafCount) ||
+      options.totalLeafCount < 1 ||
+      leafIds.size > options.totalLeafCount)
+  ) {
+    researchCoverageFail(
+      "Stored researchCoverage leaf references are inconsistent",
+    );
+  }
+  const coverage = parseInitialResearchCoverage(input, leafIds);
+  if (
+    options.expectedUploadsRead !== undefined &&
+    coverage.uploadsRead !== options.expectedUploadsRead
+  ) {
+    researchCoverageFail(
+      `researchCoverage.uploadsRead must equal the ${options.expectedUploadsRead} customer uploads admitted for the initial turn`,
+    );
+  }
+  return coverage;
+}
+
+export function validateKnowledgeBaseManifestForTreePolicy(
+  manifest: KnowledgeBaseManifestEnvelope,
+  treePolicyVersion: unknown,
+  options: { expectedUploadsRead?: number } = {},
+): KnowledgeBaseManifestEnvelope {
+  const normalizedManifest = parseManifestEnvelopeObject(manifest);
+  const policy = knowledgeBaseTreePolicy(treePolicyVersion);
+  const leaves = validateKnowledgeBaseLeafManifestForTreePolicy(
+    normalizedManifest.leaves,
+    policy.version,
+  );
+  if (policy.version === KNOWLEDGE_BASE_TREE_POLICY_VERSION_DEEP) {
+    if (!normalizedManifest.researchCoverage) {
+      researchCoverageFail("Tree policy v2 requires researchCoverage");
+    }
+    if (
+      options.expectedUploadsRead !== undefined &&
+      normalizedManifest.researchCoverage.uploadsRead !==
+        options.expectedUploadsRead
+    ) {
+      researchCoverageFail(
+        `researchCoverage.uploadsRead must equal the ${options.expectedUploadsRead} customer uploads admitted for the initial turn`,
+      );
+    }
+  }
+  return { ...normalizedManifest, leaves };
+}
+
 function parseManifestEnvelopeObject(
   input: unknown,
 ): KnowledgeBaseManifestEnvelope {
@@ -486,9 +977,15 @@ function parseManifestEnvelopeObject(
   }
   const unexpectedKeys = Object.keys(input).filter(
     (key) =>
-      !["kind", "schemaVersion", "operationId", "turnId", "leaves"].includes(
-        key,
-      ),
+      ![
+        "kind",
+        "schemaVersion",
+        "operationId",
+        "turnId",
+        "leaves",
+        "officialLogo",
+        "researchCoverage",
+      ].includes(key),
   );
   if (unexpectedKeys.length > 0) {
     fail(
@@ -511,12 +1008,86 @@ function parseManifestEnvelopeObject(
   if (!Array.isArray(input.leaves)) {
     fail("INVALID_MANIFEST", "Manifest envelope leaves must be an array");
   }
+  let officialLogo: KnowledgeBaseOfficialLogoProvenance | undefined;
+  if (input.officialLogo !== undefined) {
+    if (
+      identity.schemaVersion !== KNOWLEDGE_BASE_PROTOCOL_V4_SCHEMA_VERSION ||
+      !isPlainObject(input.officialLogo)
+    ) {
+      fail("INVALID_MANIFEST", "Manifest officialLogo is invalid");
+    }
+    const value = input.officialLogo as Record<string, unknown>;
+    const sourceKind = value.sourceKind;
+    const validHttpUrl = (candidate: unknown) => {
+      try {
+        const parsed = new URL(String(candidate || ""));
+        return (
+          (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+          !parsed.username &&
+          !parsed.password
+        );
+      } catch {
+        return false;
+      }
+    };
+    if (sourceKind === "official_web") {
+      assertOnlyKeys(
+        value,
+        ["sourceKind", "sourcePageUrl", "sourceAssetUrl"],
+        "Manifest officialLogo",
+      );
+      if (
+        !validHttpUrl(value.sourcePageUrl) ||
+        !validHttpUrl(value.sourceAssetUrl)
+      ) {
+        fail(
+          "INVALID_MANIFEST",
+          "Manifest official-web Logo requires exact page and asset URLs",
+        );
+      }
+      officialLogo = {
+        sourceKind,
+        sourcePageUrl: String(value.sourcePageUrl),
+        sourceAssetUrl: String(value.sourceAssetUrl),
+      };
+    } else if (sourceKind === "official_document") {
+      assertOnlyKeys(
+        value,
+        ["sourceKind", "sourceDocumentPath"],
+        "Manifest officialLogo",
+      );
+      const sourceDocumentPath = String(value.sourceDocumentPath || "").trim();
+      if (
+        !sourceDocumentPath ||
+        sourceDocumentPath.length > 1_024 ||
+        /[\0\r\n]/u.test(sourceDocumentPath)
+      ) {
+        fail(
+          "INVALID_MANIFEST",
+          "Manifest official-document Logo requires one exact document path",
+        );
+      }
+      officialLogo = { sourceKind, sourceDocumentPath };
+    } else {
+      fail("INVALID_MANIFEST", "Manifest officialLogo sourceKind is invalid");
+    }
+  }
+  const leaves = validateProductionManifestStructure(
+    input.leaves as KnowledgeBaseLeafManifestEntry[],
+  );
+  const researchCoverage =
+    input.researchCoverage === undefined
+      ? undefined
+      : parseInitialResearchCoverage(
+          input.researchCoverage,
+          new Set(leaves.map((leaf) => leaf.id)),
+        );
   return {
     kind: KNOWLEDGE_BASE_MANIFEST_KIND,
     ...identity,
-    leaves: validateProductionKnowledgeBaseLeafManifest(
-      input.leaves as KnowledgeBaseLeafManifestEntry[],
-    ),
+    leaves,
+    ...(officialLogo ? { officialLogo } : {}),
+    ...(researchCoverage ? { researchCoverage } : {}),
   };
 }
 
@@ -530,51 +1101,175 @@ function parseProtocolEnvelopeText<T>(
     parseObject: (value: unknown) => T;
   },
 ): T {
+  const maxProtocolTextCharacters = 2 * 1024 * 1024;
+  const maxProtocolCandidateCharacters = 1024 * 1024;
+  const maxProtocolCandidates = 16;
+  if (input.length > maxProtocolTextCharacters) {
+    fail(options.code, `${options.label} envelope exceeds the parser limit`);
+  }
   const markerPattern = new RegExp(
     `<!--\\s*${options.marker}\\s*([\\s\\S]*?)-->`,
-    "g",
+    "gi",
   );
   const markerMatches = [...input.matchAll(markerPattern)];
-  const markerOpeningPattern = new RegExp(`<!--\\s*${options.marker}\\b`, "i");
-  const rawMatches = extractKnowledgeBaseProtocolObjects(input).filter(
-    (value) => value.kind === options.kind,
-  );
-  if (markerMatches.length > 1) {
-    fail(
-      options.code,
-      `Model output must contain exactly one ${options.marker} envelope`,
-    );
-  }
-  if (markerMatches.length === 1) {
-    if (rawMatches.length > 1) {
-      fail(
-        options.code,
-        `Model output must contain exactly one ${options.marker} envelope`,
-      );
-    }
-    try {
-      return options.parseObject(JSON.parse(markerMatches[0]![1]!.trim()));
-    } catch (error) {
-      if (error instanceof KnowledgeBaseProgressError) throw error;
-      fail(options.code, `${options.label} envelope contains invalid JSON`);
-    }
-  }
+  const markerOpenings = [
+    ...input.matchAll(new RegExp(`<!--\\s*${options.marker}\\b`, "gi")),
+  ];
 
   // Do not recover JSON from an unfinished HTML comment. During streaming the
   // JSON object can become syntactically complete several chunks before the
   // provider appends `-->`; accepting it here advances the state without the
   // companion presentation/resources that belong to the same turn.
-  if (markerOpeningPattern.test(input)) {
+  if (markerOpenings.length !== markerMatches.length) {
     fail(options.code, `${options.label} envelope is not closed`);
   }
 
-  if (rawMatches.length !== 1) {
+  const outsideDocumentedMarkers = input.replace(markerPattern, "\n");
+  const kindPattern = /"kind"\s*:\s*"([^"\r\n]{1,128})"/gu;
+  const occurrences = [...outsideDocumentedMarkers.matchAll(kindPattern)]
+    .map((match) => ({
+      kind: match[1]!,
+      start: outsideDocumentedMarkers.lastIndexOf("{", match.index),
+    }))
+    .filter(
+      (match) =>
+        match.start >= 0 &&
+        (match.kind.startsWith("frontmind.knowledge-base.") ||
+          match.kind === "frontmind.workflow-state"),
+    );
+  const bareCandidates = occurrences.flatMap((occurrence, index) => {
+    if (occurrence.kind !== options.kind) return [];
+    const nextStart = occurrences
+      .slice(index + 1)
+      .map((candidate) => candidate.start)
+      .find((candidateStart) => candidateStart > occurrence.start);
+    return [
+      outsideDocumentedMarkers.slice(
+        occurrence.start,
+        nextStart ?? outsideDocumentedMarkers.length,
+      ),
+    ];
+  });
+  const candidateByText = new Map<
+    string,
+    { raw: string; documentedMarker: boolean }
+  >();
+  for (const match of markerMatches) {
+    const raw = match[1]!.trim();
+    if (raw) candidateByText.set(raw, { raw, documentedMarker: true });
+  }
+  for (const candidate of bareCandidates) {
+    const raw = candidate.trim();
+    if (!raw || candidateByText.has(raw)) continue;
+    candidateByText.set(raw, { raw, documentedMarker: false });
+  }
+  const rawCandidates = [...candidateByText.values()];
+  if (
+    rawCandidates.length === 0 ||
+    rawCandidates.length > maxProtocolCandidates
+  ) {
     fail(
       options.code,
       `Model output must contain exactly one ${options.marker} envelope`,
     );
   }
-  return options.parseObject(rawMatches[0]);
+
+  const validCandidates = new Map<
+    string,
+    { value: T; ruleCodes: ModelOutputRepairRuleCode[] }
+  >();
+  let invalidBareCandidateCount = 0;
+  for (const candidate of rawCandidates) {
+    const rawCandidate = candidate.raw;
+    if (rawCandidate.length > maxProtocolCandidateCharacters) {
+      if (candidate.documentedMarker) {
+        fail(
+          options.code,
+          `${options.label} envelope exceeds the parser limit`,
+        );
+      }
+      invalidBareCandidateCount += 1;
+      continue;
+    }
+    let value: unknown;
+    let ruleCodes: ModelOutputRepairRuleCode[] = [];
+    try {
+      value = parseExactJson(rawCandidate);
+    } catch {
+      try {
+        const repaired = repairStructuredJsonCandidate(rawCandidate, {
+          fenceLanguages: ["", "json"],
+          identityKeys: ["operationId", "turnId"],
+        });
+        value = repaired.value;
+        ruleCodes = repaired.ruleCodes;
+      } catch {
+        if (candidate.documentedMarker) {
+          fail(options.code, `${options.label} envelope contains invalid JSON`);
+        }
+        invalidBareCandidateCount += 1;
+        continue;
+      }
+    }
+    let parsed: T;
+    try {
+      parsed = options.parseObject(value);
+    } catch (error) {
+      if (candidate.documentedMarker) {
+        if (error instanceof KnowledgeBaseProgressError) throw error;
+        fail(options.code, `${options.label} envelope contains invalid JSON`);
+      }
+      invalidBareCandidateCount += 1;
+      continue;
+    }
+    const canonical = JSON.stringify(parsed);
+    const existing = validCandidates.get(canonical);
+    validCandidates.set(canonical, {
+      value: existing?.value ?? parsed,
+      ruleCodes: Array.from(
+        new Set([...(existing?.ruleCodes ?? []), ...ruleCodes]),
+      ),
+    });
+  }
+
+  if (validCandidates.size === 0) {
+    fail(options.code, `${options.label} envelope contains invalid JSON`);
+  }
+  if (validCandidates.size !== 1) {
+    fail(
+      options.code,
+      `Model output must contain exactly one ${options.marker} envelope`,
+    );
+  }
+  const accepted = [...validCandidates.entries()][0]!;
+  const repairKinds = Array.from(
+    new Set(
+      [...validCandidates.values()].flatMap((candidate) => candidate.ruleCodes),
+    ),
+  );
+  if (
+    repairKinds.length > 0 ||
+    rawCandidates.length > 1 ||
+    invalidBareCandidateCount > 0
+  ) {
+    console.info(
+      "[KnowledgeBaseProtocolParser]",
+      JSON.stringify({
+        parserVersion: 3,
+        label: options.label,
+        candidateCount: rawCandidates.length,
+        invalidCandidateCount: invalidBareCandidateCount,
+        documentedMarkerCandidateCount: rawCandidates.filter(
+          (candidate) => candidate.documentedMarker,
+        ).length,
+        repairKinds,
+        canonicalSha256: createHash("sha256")
+          .update(accepted[0], "utf8")
+          .digest("hex"),
+      }),
+    );
+  }
+  return accepted[1].value;
 }
 
 /** Parses the one production manifest emitted after the research phase. */

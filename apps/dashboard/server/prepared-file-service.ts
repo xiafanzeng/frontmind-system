@@ -38,7 +38,10 @@ export interface PreparedFileManifest {
   sourceResolverVersion?: number;
   id: string;
   ownerUserId: number;
-  credentialId: string;
+  /** Legacy Provider authority; absent for Dashboard-managed local assets. */
+  credentialId?: string;
+  sourceKind?: "managed_local_asset" | "provider_file" | "external";
+  sourceAuthorityId?: string;
   projectAssignmentId?: string | null;
   source: PreparedFileSource;
   filename: string;
@@ -96,7 +99,9 @@ export interface PreparedFileOrphanSweepResult {
 
 interface RegisterFileInput {
   ownerUserId: number;
-  credentialId: string;
+  credentialId?: string;
+  sourceKind?: "managed_local_asset" | "provider_file";
+  sourceAuthorityId?: string;
   projectAssignmentId?: string | null;
   fileId: string;
   filename: string;
@@ -1132,15 +1137,25 @@ export class PreparedFileService {
   async registerFile(input: RegisterFileInput) {
     await this.initialize();
     const source: PreparedFileSource = { kind: "file", fileId: input.fileId };
+    const sourceKind = input.sourceKind ?? "provider_file";
+    const sourceAuthorityId = input.sourceAuthorityId ?? input.credentialId;
+    if (!sourceAuthorityId) {
+      throw new PreparedFileError(
+        "SOURCE_FORBIDDEN",
+        "文件缺少可信的所有权来源",
+      );
+    }
     return this.register({
       id: createPreparedAssetId(
         input.ownerUserId,
-        input.credentialId,
+        sourceAuthorityId,
         source,
         input.projectAssignmentId,
       ),
       ownerUserId: input.ownerUserId,
       credentialId: input.credentialId,
+      sourceKind,
+      sourceAuthorityId,
       projectAssignmentId: input.projectAssignmentId ?? null,
       source,
       filename: normalizeFilename(input.filename),
@@ -1163,6 +1178,8 @@ export class PreparedFileService {
       ),
       ownerUserId: input.ownerUserId,
       credentialId: input.credentialId,
+      sourceKind: "external",
+      sourceAuthorityId: input.credentialId,
       projectAssignmentId: input.projectAssignmentId ?? null,
       source,
       filename: normalizeFilename(input.filename),
@@ -1172,7 +1189,9 @@ export class PreparedFileService {
   private async register(input: {
     id: string;
     ownerUserId: number;
-    credentialId: string;
+    credentialId?: string;
+    sourceKind: "managed_local_asset" | "provider_file" | "external";
+    sourceAuthorityId: string;
     projectAssignmentId: string | null;
     source: PreparedFileSource;
     filename: string;
@@ -1202,6 +1221,9 @@ export class PreparedFileService {
       }
       const expectedUpdatedAt = existing.updatedAt;
       existing.filename = input.filename;
+      existing.credentialId = input.credentialId;
+      existing.sourceKind = input.sourceKind;
+      existing.sourceAuthorityId = input.sourceAuthorityId;
       existing.lastAccessedAt = now;
       existing.sourceExpiresAt = input.sourceExpiresAt;
       existing.updatedAt = now;
@@ -1238,6 +1260,8 @@ export class PreparedFileService {
       id: input.id,
       ownerUserId: input.ownerUserId,
       credentialId: input.credentialId,
+      sourceKind: input.sourceKind,
+      sourceAuthorityId: input.sourceAuthorityId,
       projectAssignmentId: input.projectAssignmentId,
       source: input.source,
       filename: input.filename,
@@ -1443,7 +1467,14 @@ export class PreparedFileService {
           ownerUserId,
           fileId: manifest.source.fileId,
           projectAssignmentId,
-          expectedCredentialId: manifest.credentialId,
+          expectedCredentialId: manifest.sourceKind
+            ? undefined
+            : manifest.credentialId,
+          expectedSourceKind:
+            manifest.sourceKind === "external"
+              ? undefined
+              : manifest.sourceKind,
+          expectedSourceAuthorityId: manifest.sourceAuthorityId,
         });
         manifest.sourceExpiresAt = authorization.expiresAt;
         this.refreshExpiry(manifest, manifest.lastAccessedAt);
@@ -1535,7 +1566,14 @@ export class PreparedFileService {
           ownerUserId: manifest.ownerUserId,
           fileId: manifest.source.fileId,
           projectAssignmentId: manifest.projectAssignmentId,
-          expectedCredentialId: manifest.credentialId,
+          expectedCredentialId: manifest.sourceKind
+            ? undefined
+            : manifest.credentialId,
+          expectedSourceKind:
+            manifest.sourceKind === "external"
+              ? undefined
+              : manifest.sourceKind,
+          expectedSourceAuthorityId: manifest.sourceAuthorityId,
         });
         manifest.sourceExpiresAt = authorization.expiresAt;
         this.refreshExpiry(manifest, manifest.lastAccessedAt);
@@ -1740,7 +1778,14 @@ export class PreparedFileService {
           ownerUserId: manifest.ownerUserId,
           fileId: manifest.source.fileId,
           projectAssignmentId: manifest.projectAssignmentId,
-          expectedCredentialId: manifest.credentialId,
+          expectedCredentialId: manifest.sourceKind
+            ? undefined
+            : manifest.credentialId,
+          expectedSourceKind:
+            manifest.sourceKind === "external"
+              ? undefined
+              : manifest.sourceKind,
+          expectedSourceAuthorityId: manifest.sourceAuthorityId,
         });
         manifest.filename = normalizeFilename(resolved.filename);
         manifest.sourceExpiresAt = resolved.expiresAt;

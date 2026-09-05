@@ -1,0 +1,8 @@
+{
+  "name": "astro-company-site-workflow",
+  "version": "1.0.0",
+  "archive": "../astro-company-site-workflow-v1.0.0.zip",
+  "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a",
+  "integration": "frontmind-dashboard",
+  "integrationVersion": "1.1.0"
+}

@@ -1,40 +1,57 @@
 import { describe, expect, it, vi } from "vitest";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { getTableConfig, MySqlDialect } from "drizzle-orm/mysql-core";
 import { createHash } from "node:crypto";
 import {
+  agentEvents,
+  agentOperations,
+  agentTasks,
   apiCredentials,
   attachments,
   conversations,
   conversationTurns,
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
+  localAssets,
   messages,
+  siteProjects,
   upstreamResources,
   userUsageOwners,
   users,
 } from "../drizzle/schema";
 import {
+  assignBrowserOwnedSnapshotMessageSequences,
+  authoritativeGeneralChatTurnIdForBrowserMessage,
+  assertLocalImportHasNoProviderResources,
   buildMessageMetadata,
   collectSnapshotResourceRefs,
   conversationSyncMysqlErrorCode,
   conversationSnapshotSchema,
   discardClientClaimedServerOwnedKnowledgeBaseMessages,
+  generalChatDispatchSettlementIsSafe,
+  generalChatDispatchSettlementKind,
   getActiveCredentialId,
   listSnapshots,
+  loadSnapshotResourceBindings,
   loadPersistedMessages,
   matchesAuthoritativeKnowledgeBaseMessageTuple,
   mergeConversationMessages,
   mergeConversationTaskPointers,
   permanentlyDeleteConversation,
+  persistSnapshot,
+  protectUnsettledGeneralChatBoundUserMessageTombstones,
   reconstructKnowledgeBaseUserMessageAttachments,
   reconstructKnowledgeBasePresentationInlineImages,
   repairSnapshotMessageIds,
+  removeAcknowledgedGeneralChatDispatchMetadata,
   retryConversationSyncTransaction,
   resolveSnapshotCredentialId,
   sanitizeKnowledgeBaseDeletionTombstones,
-  validateUpstreamResourceAccess,
   type ConversationSnapshot,
 } from "./conversation-router";
+import {
+  KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
+  knowledgeBaseCompletionMessagePublicId,
+} from "../shared/knowledge-base-message";
 
 type SnapshotMessage = ConversationSnapshot["messages"][number];
 
@@ -89,6 +106,57 @@ describe("conversation snapshot transaction retry", () => {
   });
 });
 
+describe("server-owned SiteOps conversation boundary", () => {
+  const snapshot: ConversationSnapshot = {
+    id: "siteops:7",
+    title: "官网任务与AI建站",
+    messages: [],
+    status: "awaiting_input",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  it("rejects an ordinary browser snapshot for a SiteOps conversation", async () => {
+    const { executor } = createSelectExecutor((table) =>
+      table === siteProjects
+        ? [{ id: "site-project-1", conversationId: snapshot.id }]
+        : [],
+    );
+
+    await expect(persistSnapshot(executor, 7, snapshot)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("does not expose a SiteOps conversation in the ordinary chat list", async () => {
+    const row = {
+      id: snapshot.id,
+      userId: 7,
+      projectAssignmentId: null,
+      title: snapshot.title,
+      status: snapshot.status,
+      upstreamTaskId: null,
+      previousResponseId: null,
+      taskUrl: null,
+      createdAt: new Date(snapshot.createdAt),
+      updatedAt: new Date(snapshot.updatedAt),
+      startedAt: null,
+      completedAt: null,
+      lastKnownOutputLength: 0,
+      deletedMessageIds: [],
+    };
+    const { executor } = createSelectExecutor((table) => {
+      if (table === conversations) return [row];
+      if (table === siteProjects) return [{ conversationId: snapshot.id }];
+      return [];
+    });
+
+    await expect(
+      listSnapshots(7, null, executor as Parameters<typeof listSnapshots>[2]),
+    ).resolves.toEqual([]);
+  });
+});
+
 function message(
   id: string,
   role: SnapshotMessage["role"],
@@ -125,27 +193,48 @@ function serverOwnedMessage(
   };
 }
 
+function serverOwnedGeneralChatMessage(
+  id: string,
+  timestamp: number,
+): SnapshotMessage {
+  return {
+    ...message(id, "assistant", timestamp),
+    generalChat: {
+      schemaVersion: 1,
+      kind: "assistant_projection",
+      turnId: "88888888-8888-4888-8888-888888888888",
+      agentTaskId: "99999999-9999-4999-8999-999999999999",
+      providerEventId: "provider-event-1",
+      serverOwned: true,
+    },
+  };
+}
+
 function createSelectExecutor(rowsForTable: (table: unknown) => unknown[]) {
   const selectedTables: unknown[] = [];
-  const select = vi.fn(() => ({
-    from: (table: unknown) => {
-      selectedTables.push(table);
-      const rows = rowsForTable(table);
-      const query: {
-        where: () => typeof query;
-        orderBy: () => typeof query;
-        limit: () => Promise<unknown[]>;
-        then: Promise<unknown[]>["then"];
-      } = {
-        where: () => query,
-        orderBy: () => query,
-        limit: async () => rows,
-        then: Promise.resolve(rows).then.bind(Promise.resolve(rows)),
-      };
-      return query;
-    },
-  }));
-  return { executor: { select }, selectedTables };
+  const selectedFields: unknown[] = [];
+  const select = vi.fn((fields?: unknown) => {
+    selectedFields.push(fields);
+    return {
+      from: (table: unknown) => {
+        selectedTables.push(table);
+        const rows = rowsForTable(table);
+        const query: {
+          where: () => typeof query;
+          orderBy: () => typeof query;
+          limit: () => Promise<unknown[]>;
+          then: Promise<unknown[]>["then"];
+        } = {
+          where: () => query,
+          orderBy: () => query,
+          limit: async () => rows,
+          then: Promise.resolve(rows).then.bind(Promise.resolve(rows)),
+        };
+        return query;
+      },
+    };
+  });
+  return { executor: { select }, selectedFields, selectedTables };
 }
 
 describe("conversation multi-device merge", () => {
@@ -428,6 +517,58 @@ describe("conversation multi-device merge", () => {
     expect(snapshots[0]?.messages[0]?.attachments).toEqual([
       expectedAttachment,
     ]);
+
+    const localAssetId = `asset_${"a".repeat(30)}`;
+    const localRetainUntil = new Date("2026-09-14T00:00:00.000Z");
+    const localTurn = {
+      ...turn,
+      attachmentFileIds: ["generated-skill-file", localAssetId],
+      metadata: {
+        ...turn.metadata,
+        recovery: {
+          ...turn.metadata.recovery,
+          attachments: [
+            {
+              file_id: localAssetId,
+              filename: "企业事实确认表.pdf",
+            },
+          ],
+        },
+      },
+    };
+    const localRowsForTable = (table: unknown) => {
+      if (table === conversationTurns) return [localTurn];
+      if (table === localAssets) {
+        return [{ id: localAssetId, retainUntil: localRetainUntil }];
+      }
+      if (table === upstreamResources) return [];
+      return rowsForTable(table);
+    };
+    const expectedLocalAttachment = {
+      ...expectedAttachment,
+      fileId: localAssetId,
+      expiresAt: localRetainUntil.getTime(),
+    };
+    const { executor: localHistoryExecutor } =
+      createSelectExecutor(localRowsForTable);
+    const localHistory = await loadPersistedMessages(
+      localHistoryExecutor,
+      7,
+      "u7:conversation-1",
+      null,
+    );
+    expect(localHistory[0]?.attachments).toEqual([expectedLocalAttachment]);
+
+    const { executor: localListExecutor } =
+      createSelectExecutor(localRowsForTable);
+    const localSnapshots = await listSnapshots(
+      7,
+      null,
+      localListExecutor as Parameters<typeof listSnapshots>[2],
+    );
+    expect(localSnapshots[0]?.messages[0]?.attachments).toEqual([
+      expectedLocalAttachment,
+    ]);
   });
 
   it("reconstructs durable customer images only for their authoritative presentation leaf", async () => {
@@ -485,7 +626,7 @@ describe("conversation multi-device merge", () => {
         src:
           "/api/knowledge-base/artifacts/build-1/customer-uploads/turn-1/0/" +
           "a".repeat(64),
-        alt: "customer-proof.jpg",
+        alt: "知识库配图",
       },
     ]);
     expect(loadResources).toHaveBeenCalledWith("build-1", turn);
@@ -503,6 +644,51 @@ describe("conversation multi-device merge", () => {
       ),
     ).resolves.toBeUndefined();
     expect(loadResources).not.toHaveBeenCalled();
+  });
+
+  it("keeps conversation enrichment readable when optional customer images fail", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const loadResources = vi
+      .fn()
+      .mockRejectedValue(new Error("historical upload ledger unavailable"));
+    const turn = {
+      id: "turn-optional-upload",
+      operationType: "revise",
+      expectedLeafId: "1.2",
+      attachmentFileIds: ["file-optional-upload"],
+      metadata: {},
+      status: "completed" as const,
+    };
+
+    await expect(
+      reconstructKnowledgeBasePresentationInlineImages(
+        {
+          build: {
+            id: "build-1",
+            userId: 7,
+            conversationId: "conversation-1",
+            logoStorageKey: null,
+            logoSha256: null,
+            logoBytes: null,
+            logoFilename: null,
+            logoMimeType: null,
+          },
+          node: {
+            buildId: "build-1",
+            leafId: "1.2",
+            ordinal: 1,
+            sourceTurnId: turn.id,
+          },
+          knowledgeBase: { kind: "presentation", leafId: "1.2" },
+          turn,
+        },
+        loadResources,
+      ),
+    ).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledWith(
+      "[KnowledgeBaseCustomerUpload] enrichment_skipped",
+      expect.stringContaining('"surface":"conversation"'),
+    );
   });
 
   it("keeps an earlier customer image visible after the same leaf is revised again", async () => {
@@ -560,7 +746,7 @@ describe("conversation multi-device merge", () => {
         src:
           "/api/knowledge-base/artifacts/build-1/customer-uploads/turn-earlier/0/" +
           "b".repeat(64),
-        alt: "earlier-proof.png",
+        alt: "知识库配图",
       },
     ]);
     expect(loadResources).toHaveBeenCalledWith("build-1", turn);
@@ -606,8 +792,10 @@ describe("conversation multi-device merge", () => {
       ),
     ).resolves.toEqual([
       {
-        src: "/api/knowledge-base/artifacts/build-1/logo",
-        alt: "official-logo.png",
+        src: expect.stringMatching(
+          /^\/api\/knowledge-base\/artifacts\/resources\//u,
+        ),
+        alt: "企业官方主 Logo",
       },
     ]);
     expect(loadResources).not.toHaveBeenCalled();
@@ -687,8 +875,10 @@ describe("conversation multi-device merge", () => {
       ),
     ).resolves.toEqual([
       {
-        src: "/api/knowledge-base/artifacts/build-1/logo",
-        alt: "official-logo.png",
+        src: expect.stringMatching(
+          /^\/api\/knowledge-base\/artifacts\/resources\//u,
+        ),
+        alt: "企业官方主 Logo",
       },
     ]);
   });
@@ -699,7 +889,7 @@ describe("conversation multi-device merge", () => {
       .update(content, "utf8")
       .digest("hex");
     const presentationKey = createHash("sha256")
-      .update(["build-1", 1, 0, "1.1", contentSha256].join(":"))
+      .update(["build-1", 7, 0, "1.1", contentSha256].join(":"))
       .digest("hex");
     const presentationMessage: typeof messages.$inferSelect = {
       id: `u7:msg-kb-presentation-${presentationKey}`,
@@ -718,7 +908,7 @@ describe("conversation multi-device merge", () => {
           serverOwned: true,
           kind: "presentation",
           buildId: "build-1",
-          generation: 1,
+          generation: 7,
           operationKey: "operation-initial",
           turnId: "turn-initial",
           presentationKey,
@@ -737,7 +927,7 @@ describe("conversation multi-device merge", () => {
       userId: 7,
       clientRequestId: "request-initial",
       buildId: "build-1",
-      buildGeneration: 1,
+      buildGeneration: 7,
       operationKey: "operation-initial",
       operationType: "start",
       expectedRevision: 0,
@@ -750,6 +940,7 @@ describe("conversation multi-device merge", () => {
       id: "build-1",
       userId: 7,
       conversationId: "conversation-1",
+      generation: 7,
       logoStorageKey: "knowledge-base/build-1/logo.png",
       logoSha256: "a".repeat(64),
       logoBytes: 321,
@@ -789,17 +980,25 @@ describe("conversation multi-device merge", () => {
       return [];
     };
 
-    const { executor: historyExecutor } = createSelectExecutor(rowsForTable);
+    const { executor: historyExecutor, selectedFields: historySelectedFields } =
+      createSelectExecutor(rowsForTable);
     const history = await loadPersistedMessages(
       historyExecutor,
       7,
       "u7:conversation-1",
       null,
     );
+    expect(historySelectedFields).toContainEqual(
+      expect.objectContaining({
+        generation: knowledgeBaseBuilds.generation,
+      }),
+    );
     expect(history[0]?.inlineImages).toEqual([
       {
-        src: "/api/knowledge-base/artifacts/build-1/logo",
-        alt: "official-logo.png",
+        src: expect.stringMatching(
+          /^\/api\/knowledge-base\/artifacts\/resources\//u,
+        ),
+        alt: "企业官方主 Logo",
       },
     ]);
 
@@ -811,10 +1010,15 @@ describe("conversation multi-device merge", () => {
     );
     expect(snapshots[0]?.messages[0]?.inlineImages).toEqual([
       {
-        src: "/api/knowledge-base/artifacts/build-1/logo",
-        alt: "official-logo.png",
+        src: expect.stringMatching(
+          /^\/api\/knowledge-base\/artifacts\/resources\//u,
+        ),
+        alt: "企业官方主 Logo",
       },
     ]);
+    expect(snapshots[0]?.messages[0]?.inlineImages).toEqual(
+      history[0]?.inlineImages,
+    );
   });
 
   it("repairs a provider assistant ID reused across two confirmed turns", () => {
@@ -1038,6 +1242,7 @@ describe("conversation multi-device merge", () => {
       operationKey: "operation-1",
       expectedRevision: 0,
       expectedLeafId: "1.1",
+      status: "completed",
     };
     const build = {
       id: "build-1",
@@ -1071,7 +1276,6 @@ describe("conversation multi-device merge", () => {
     expect(
       matchesAuthoritativeKnowledgeBaseMessageTuple({
         message: authoritativeMessage,
-        publicMessageId: `msg-kb-presentation-${presentationKey}`,
         knowledgeBase: authoritativeKnowledgeBase,
         turn,
         build,
@@ -1081,7 +1285,18 @@ describe("conversation multi-device merge", () => {
     expect(
       matchesAuthoritativeKnowledgeBaseMessageTuple({
         message: { ...authoritativeMessage, content: "伪造覆盖正文" },
-        publicMessageId: `msg-kb-presentation-${presentationKey}`,
+        knowledgeBase: authoritativeKnowledgeBase,
+        turn,
+        build,
+        publicConversationId: "conversation-1",
+      }),
+    ).toBe(false);
+    expect(
+      matchesAuthoritativeKnowledgeBaseMessageTuple({
+        message: {
+          ...authoritativeMessage,
+          id: `u8:msg-kb-presentation-${presentationKey}`,
+        },
         knowledgeBase: authoritativeKnowledgeBase,
         turn,
         build,
@@ -1111,6 +1326,69 @@ describe("conversation multi-device merge", () => {
     const merged = mergeConversationMessages(persisted, stale, []);
     expect(merged.map((item) => item.id)).toEqual(["turn-1", "presentation-1"]);
     expect(merged[1]?.content).toBe("已批准正文");
+  });
+
+  it("verifies an immutable completion receipt and rejects changed content", () => {
+    const turn = {
+      id: "turn-final",
+      conversationId: "u7:conversation-1",
+      userId: 7,
+      clientRequestId: "request-final",
+      buildId: "build-1",
+      buildGeneration: 1,
+      operationKey: "operation-final",
+      expectedRevision: 8,
+      expectedLeafId: "8.5",
+      status: "completed",
+    };
+    const build = {
+      id: "build-1",
+      userId: 7,
+      conversationId: "conversation-1",
+    };
+    const knowledgeBase = {
+      schemaVersion: 1 as const,
+      serverOwned: true,
+      kind: "completion" as const,
+      buildId: build.id,
+      generation: 1,
+      operationKey: turn.operationKey,
+      turnId: turn.id,
+      revision: 9,
+      leafId: null,
+    };
+    const publicMessageId = knowledgeBaseCompletionMessagePublicId({
+      buildId: build.id,
+      generation: 1,
+      revision: 9,
+    });
+    const message = {
+      id: `u7:${publicMessageId}`,
+      conversationId: turn.conversationId,
+      turnId: turn.id,
+      userId: 7,
+      role: "assistant",
+      content: KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
+    };
+
+    expect(
+      matchesAuthoritativeKnowledgeBaseMessageTuple({
+        message,
+        knowledgeBase,
+        turn,
+        build,
+        publicConversationId: "conversation-1",
+      }),
+    ).toBe(true);
+    expect(
+      matchesAuthoritativeKnowledgeBaseMessageTuple({
+        message: { ...message, content: "伪造完成" },
+        knowledgeBase,
+        turn,
+        build,
+        publicConversationId: "conversation-1",
+      }),
+    ).toBe(false);
   });
 
   it("converges an optimistic KB user id to the server turn id by clientRequestId", () => {
@@ -1158,6 +1436,74 @@ describe("conversation multi-device merge", () => {
     expect(buildMessageMetadata(parsed.messages[0]!).knowledgeBase).toEqual(
       protectedMessage.knowledgeBase,
     );
+  });
+
+  it("round-trips a strict browser-owned ordinary dispatch envelope through message metadata", () => {
+    const generalChatDispatch = {
+      schemaVersion: 1 as const,
+      kind: "pending_user" as const,
+      clientRequestId: "msg-pending-general-chat",
+      providerPrompt: "正文\nZIP reference",
+      localAssetIds: ["asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      localTaskId: null,
+      modelProfile: "frontmind-pro" as const,
+    };
+    const parsed = conversationSnapshotSchema.parse({
+      id: "conversation-pending-general-chat",
+      title: "普通聊天",
+      status: "idle",
+      executionKind: "general_chat_v2",
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        {
+          id: generalChatDispatch.clientRequestId,
+          role: "user",
+          content: "界面正文",
+          timestamp: 1,
+          generalChatDispatch,
+        },
+      ],
+    });
+
+    expect(parsed.messages[0]?.generalChatDispatch).toEqual(
+      generalChatDispatch,
+    );
+    expect(
+      buildMessageMetadata(parsed.messages[0]!).generalChatDispatch,
+    ).toEqual(generalChatDispatch);
+    expect(() =>
+      conversationSnapshotSchema.parse({
+        ...parsed,
+        messages: [
+          {
+            ...parsed.messages[0],
+            generalChatDispatch: {
+              ...generalChatDispatch,
+              localAssetIds: [
+                "asset_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              ],
+            },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("preserves the derived response-logic execution boundary in snapshots", () => {
+    const parsed = conversationSnapshotSchema.parse({
+      id: "response-conversation-1",
+      title: "应答-示例问题",
+      status: "running",
+      executionKind: "response_logic",
+      taskId: "provider-task-1",
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+    });
+
+    expect(parsed.executionKind).toBe("response_logic");
   });
 
   it("does not let a stale device roll the task pointer from T2 back to T1", () => {
@@ -1211,6 +1557,358 @@ describe("conversation multi-device merge", () => {
         incomingUpdatedAt: 2_001,
       }),
     ).toEqual({ taskId: "T2", previousResponseId: "T2" });
+  });
+});
+
+describe("server-owned general chat projection", () => {
+  const taskId = "99999999-9999-4999-8999-999999999999";
+  const turnId = "88888888-8888-4888-8888-888888888888";
+  const pendingUser = {
+    ...message("msg-general-pending", "user", 100, "界面正文"),
+    generalChatDispatch: {
+      schemaVersion: 1 as const,
+      kind: "pending_user" as const,
+      clientRequestId: "msg-general-pending",
+      providerPrompt: "精确 Provider 正文",
+      localAssetIds: [] as string[],
+      localTaskId: null,
+      modelProfile: "frontmind-pro" as const,
+    },
+  };
+  const settledUser = message("msg-general-pending", "user", 100, "界面正文");
+  const turnAuthority = new Map([
+    [
+      "msg-general-pending",
+      {
+        id: turnId,
+        clientRequestId: "msg-general-pending",
+        upstreamTaskId: taskId,
+        operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        settlementKind: "acknowledged" as const,
+        safeToSettle: true,
+      },
+    ],
+  ]);
+
+  it("settles a pending marker only from the exact acknowledged turn and does not revive it during merge", () => {
+    const persistedForMerge = removeAcknowledgedGeneralChatDispatchMetadata({
+      persistedMessages: [pendingUser],
+      incomingMessages: [settledUser],
+      executionKind: "general_chat_v2",
+      taskId,
+      previousResponseId: taskId,
+      authority: {
+        turnByClientRequestId: turnAuthority,
+        persistedTurnIdByPublicMessageId: new Map([
+          ["msg-general-pending", turnId],
+        ]),
+      },
+    });
+    const reloaded = mergeConversationMessages(
+      persistedForMerge,
+      [settledUser],
+      [],
+    );
+
+    expect(reloaded[0]?.generalChatDispatch).toBeUndefined();
+    expect(
+      authoritativeGeneralChatTurnIdForBrowserMessage(
+        reloaded[0]!,
+        turnAuthority,
+      ),
+    ).toBe(turnId);
+  });
+
+  it("derives settlement only from an exact acknowledged or proven-rejected reservation", () => {
+    expect(
+      generalChatDispatchSettlementKind({
+        reservationStatus: "acknowledged",
+        rejectionProven: false,
+      }),
+    ).toBe("acknowledged");
+    expect(
+      generalChatDispatchSettlementKind({
+        reservationStatus: "rejected",
+        rejectionProven: true,
+      }),
+    ).toBe("rejected");
+    for (const reservationStatus of [
+      undefined,
+      "preparation_failed",
+      "preparing",
+      "sending",
+      "outcome_unknown",
+      "ambiguous",
+      "rejected",
+    ]) {
+      expect(
+        generalChatDispatchSettlementIsSafe({
+          reservationStatus,
+          rejectionProven: false,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("allows a proven create rejection to clear without task pointers but keeps acknowledged markers until both pointers match", () => {
+    const rejectedAuthority = new Map([
+      [
+        "msg-general-pending",
+        {
+          ...turnAuthority.get("msg-general-pending")!,
+          settlementKind: "rejected" as const,
+        },
+      ],
+    ]);
+    expect(
+      removeAcknowledgedGeneralChatDispatchMetadata({
+        persistedMessages: [pendingUser],
+        incomingMessages: [settledUser],
+        executionKind: "general_chat_v2",
+        authority: {
+          turnByClientRequestId: rejectedAuthority,
+          persistedTurnIdByPublicMessageId: new Map([
+            ["msg-general-pending", turnId],
+          ]),
+        },
+      })[0]?.generalChatDispatch,
+    ).toBeUndefined();
+
+    expect(
+      removeAcknowledgedGeneralChatDispatchMetadata({
+        persistedMessages: [pendingUser],
+        incomingMessages: [settledUser],
+        executionKind: "general_chat_v2",
+        taskId,
+        authority: {
+          turnByClientRequestId: turnAuthority,
+          persistedTurnIdByPublicMessageId: new Map([
+            ["msg-general-pending", turnId],
+          ]),
+        },
+      })[0]?.generalChatDispatch,
+    ).toEqual(pendingUser.generalChatDispatch);
+  });
+
+  it("filters tombstones for an unsettled exact bound user while allowing settled users to be deleted", () => {
+    const persistedBinding = new Map([["msg-general-pending", turnId]]);
+    const unsettledAuthority = new Map([
+      [
+        "msg-general-pending",
+        {
+          ...turnAuthority.get("msg-general-pending")!,
+          settlementKind: null,
+          safeToSettle: false,
+        },
+      ],
+    ]);
+    expect(
+      protectUnsettledGeneralChatBoundUserMessageTombstones(
+        ["msg-general-pending", "other", "msg-general-pending"],
+        {
+          turnByClientRequestId: unsettledAuthority,
+          persistedTurnIdByPublicMessageId: persistedBinding,
+        },
+      ),
+    ).toEqual(["other"]);
+    expect(
+      protectUnsettledGeneralChatBoundUserMessageTombstones(
+        ["msg-general-pending"],
+        {
+          turnByClientRequestId: turnAuthority,
+          persistedTurnIdByPublicMessageId: persistedBinding,
+        },
+      ),
+    ).toEqual(["msg-general-pending"]);
+  });
+
+  it("keeps pending when the database user message has no authoritative turn binding", () => {
+    const result = removeAcknowledgedGeneralChatDispatchMetadata({
+      persistedMessages: [pendingUser],
+      incomingMessages: [settledUser],
+      executionKind: "general_chat_v2",
+      taskId,
+      previousResponseId: taskId,
+      authority: {
+        turnByClientRequestId: turnAuthority,
+        persistedTurnIdByPublicMessageId: new Map(),
+      },
+    });
+
+    expect(result[0]?.generalChatDispatch).toEqual(
+      pendingUser.generalChatDispatch,
+    );
+  });
+
+  it("keeps pending for a different bound turn or a mismatched snapshot pointer", () => {
+    const authority = {
+      turnByClientRequestId: turnAuthority,
+      persistedTurnIdByPublicMessageId: new Map([
+        ["msg-general-pending", "77777777-7777-4777-8777-777777777777"],
+      ]),
+    };
+    expect(
+      removeAcknowledgedGeneralChatDispatchMetadata({
+        persistedMessages: [pendingUser],
+        incomingMessages: [settledUser],
+        executionKind: "general_chat_v2",
+        taskId,
+        previousResponseId: taskId,
+        authority,
+      })[0]?.generalChatDispatch,
+    ).toEqual(pendingUser.generalChatDispatch);
+    expect(
+      removeAcknowledgedGeneralChatDispatchMetadata({
+        persistedMessages: [pendingUser],
+        incomingMessages: [settledUser],
+        executionKind: "general_chat_v2",
+        taskId: "66666666-6666-4666-8666-666666666666",
+        previousResponseId: "66666666-6666-4666-8666-666666666666",
+        authority: {
+          turnByClientRequestId: turnAuthority,
+          persistedTurnIdByPublicMessageId: new Map([
+            ["msg-general-pending", turnId],
+          ]),
+        },
+      })[0]?.generalChatDispatch,
+    ).toEqual(pendingUser.generalChatDispatch);
+  });
+
+  it("keeps an authoritative assistant projection when a stale browser omits or forges it", () => {
+    const user = message("general-user", "user", 100, "你好");
+    const authoritative = serverOwnedGeneralChatMessage(
+      "general-assistant",
+      110,
+    );
+    const forged = {
+      ...serverOwnedGeneralChatMessage("forged-assistant", 120),
+      content: "forged",
+    };
+
+    expect(
+      mergeConversationMessages(
+        [user, authoritative],
+        [user, forged],
+        [authoritative.id],
+      ),
+    ).toEqual([user, authoritative]);
+    expect(
+      assignBrowserOwnedSnapshotMessageSequences(
+        [user, authoritative],
+        new Map([
+          [user.id, 0],
+          [authoritative.id, 1],
+        ]),
+      ).map(({ message: item }) => item.id),
+    ).toEqual([user.id]);
+  });
+
+  it("verifies and rebuilds general-chat metadata and execution kind from durable rows", async () => {
+    const operationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const generalChat = serverOwnedGeneralChatMessage(
+      "general-assistant",
+      2_000,
+    ).generalChat!;
+    const conversation = {
+      id: "u7:conversation-general",
+      userId: 7,
+      projectAssignmentId: null,
+      title: "通用聊天",
+      status: "completed",
+      upstreamTaskId: taskId,
+      previousResponseId: taskId,
+      taskUrl: null,
+      createdAt: new Date(1_000),
+      updatedAt: new Date(2_000),
+      startedAt: new Date(1_100),
+      completedAt: new Date(2_000),
+      deletedAt: null,
+      lastKnownOutputLength: 2,
+      deletedMessageIds: [],
+    };
+    const messageRows = [
+      {
+        id: "u7:general-user",
+        conversationId: conversation.id,
+        turnId,
+        userId: 7,
+        role: "user",
+        content: "你好",
+        sequence: 0,
+        metadata: null,
+        sentAt: new Date(1_000),
+        createdAt: new Date(1_000),
+        updatedAt: new Date(1_000),
+        deletedAt: null,
+      },
+      {
+        id: "u7:general-assistant",
+        conversationId: conversation.id,
+        turnId,
+        userId: 7,
+        role: "assistant",
+        content: "你好！",
+        sequence: 1,
+        metadata: { generalChat },
+        sentAt: new Date(2_000),
+        createdAt: new Date(2_000),
+        updatedAt: new Date(2_000),
+        deletedAt: null,
+      },
+    ];
+    const { executor } = createSelectExecutor((table) => {
+      if (table === conversations) return [conversation];
+      if (table === messages) return messageRows;
+      if (table === attachments) return [];
+      if (table === conversationTurns) {
+        return [
+          {
+            id: turnId,
+            conversationId: conversation.id,
+            userId: 7,
+            apiCredentialId: "credential-general",
+            operationType: "general_chat_v2",
+            upstreamTaskId: taskId,
+            metadata: { agentTaskId: taskId },
+          },
+        ];
+      }
+      if (table === agentTasks) {
+        return [{ id: taskId, operationId, createdAt: new Date(1_100) }];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: operationId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-general",
+          },
+        ];
+      }
+      if (table === agentEvents) {
+        return [{ taskId, providerEventId: "provider-event-1" }];
+      }
+      return [];
+    });
+
+    const snapshots = await listSnapshots(
+      7,
+      null,
+      executor as Parameters<typeof listSnapshots>[2],
+    );
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({ executionKind: "general_chat_v2" });
+    expect(snapshots[0]?.messages[1]).toMatchObject({
+      id: "general-assistant",
+      content: "你好！",
+      generalChat,
+    });
   });
 });
 
@@ -1294,6 +1992,136 @@ describe("conversation server sequence projection", () => {
     expect(projected).toHaveLength(1);
     expect(projected[0]?.messages.map((item) => item.serverSequence)).toEqual([
       4, 5,
+    ]);
+  });
+});
+
+describe("conversation snapshot sequence allocation", () => {
+  it("preserves ordinary and KB slots while appending new browser messages above the full maximum", () => {
+    const ordinary = message("ordinary-existing", "user", 100);
+    const knowledgeUser = {
+      ...serverOwnedMessage("kb-user", "user", 110, "pending_user"),
+      serverSequence: 1,
+    };
+    const knowledgePresentation = {
+      ...serverOwnedMessage(
+        "kb-presentation",
+        "assistant",
+        120,
+        "presentation",
+      ),
+      serverSequence: 2,
+    };
+    const appended = message("ordinary-new", "user", 130);
+    const persistedSequences = new Map([
+      [ordinary.id, 0],
+      [knowledgeUser.id, 1],
+      [knowledgePresentation.id, 2],
+    ]);
+
+    expect(
+      assignBrowserOwnedSnapshotMessageSequences(
+        [ordinary, knowledgeUser, knowledgePresentation, appended],
+        persistedSequences,
+      ).map(({ message: item, sequence }) => [item.id, sequence]),
+    ).toEqual([
+      ["ordinary-existing", 0],
+      ["ordinary-new", 3],
+    ]);
+
+    expect(
+      assignBrowserOwnedSnapshotMessageSequences(
+        [appended],
+        persistedSequences,
+      ).map(({ message: item, sequence }) => [item.id, sequence]),
+    ).toEqual([["ordinary-new", 3]]);
+  });
+
+  it("commits without colliding with the real conversation-sequence unique index", async () => {
+    const index = getTableConfig(messages).indexes.find(
+      (candidate) =>
+        candidate.config.name === "messages_conversation_sequence_uq",
+    );
+    expect(index?.config.unique).toBe(true);
+
+    const conversationId = "u7:conversation-1";
+    const initialRows = [
+      {
+        id: "ordinary-existing",
+        sequence: 0,
+        turnId: null as string | null,
+        serverOwned: false,
+      },
+      {
+        id: "kb-user",
+        sequence: 1,
+        turnId: "turn-1",
+        serverOwned: true,
+      },
+      {
+        id: "kb-presentation",
+        sequence: 2,
+        turnId: "turn-1",
+        serverOwned: true,
+      },
+    ];
+    let rows = structuredClone(initialRows);
+    const transact = async (incoming: SnapshotMessage[]) => {
+      const before = structuredClone(rows);
+      try {
+        const persisted = new Map(
+          rows.map((row) => [row.id, row.sequence] as const),
+        );
+        rows = rows.filter((row) => row.serverOwned);
+        for (const assigned of assignBrowserOwnedSnapshotMessageSequences(
+          incoming,
+          persisted,
+        )) {
+          if (
+            rows.some(
+              (row) =>
+                row.sequence === assigned.sequence &&
+                conversationId === "u7:conversation-1",
+            )
+          ) {
+            throw Object.assign(new Error("duplicate sequence"), {
+              code: "ER_DUP_ENTRY",
+            });
+          }
+          rows.push({
+            id: assigned.message.id,
+            sequence: assigned.sequence,
+            turnId: assigned.message.knowledgeBase?.turnId ?? null,
+            serverOwned: false,
+          });
+        }
+      } catch (error) {
+        rows = before;
+        throw error;
+      }
+    };
+
+    await expect(
+      transact([
+        message("ordinary-existing", "user", 100),
+        message("ordinary-new", "user", 130),
+      ]),
+    ).resolves.toBeUndefined();
+    expect(rows).toEqual([
+      initialRows[1],
+      initialRows[2],
+      expect.objectContaining({ id: "ordinary-existing", sequence: 0 }),
+      expect.objectContaining({ id: "ordinary-new", sequence: 3 }),
+    ]);
+    expect(rows.filter((row) => row.serverOwned)).toEqual(initialRows.slice(1));
+
+    await expect(
+      transact([message("ordinary-new", "user", 140)]),
+    ).resolves.toBeUndefined();
+    expect(rows.map((row) => [row.id, row.sequence])).toEqual([
+      ["kb-user", 1],
+      ["kb-presentation", 2],
+      ["ordinary-new", 3],
     ]);
   });
 });
@@ -1393,29 +2221,17 @@ describe("conversation credential binding", () => {
     expect(selectedTables).not.toContain(userUsageOwners);
   });
 
-  it("falls back to the assigned delivery admin only when the customer has no key", async () => {
-    let credentialQueryCount = 0;
+  it("does not inherit the assigned delivery admin key when the customer has no key", async () => {
     const { executor, selectedTables } = createSelectExecutor((table) => {
       if (table === users) return [{ role: "user" }];
       if (table === userUsageOwners) return [{ deliveryAdminId: 42 }];
-      if (table === apiCredentials) {
-        credentialQueryCount += 1;
-        return credentialQueryCount === 1
-          ? []
-          : [{ id: "credential-delivery-admin" }];
-      }
+      if (table === apiCredentials) return [];
       return [];
     });
 
-    await expect(getActiveCredentialId(executor, 7)).resolves.toBe(
-      "credential-delivery-admin",
-    );
-    expect(selectedTables).toEqual([
-      users,
-      apiCredentials,
-      userUsageOwners,
-      apiCredentials,
-    ]);
+    await expect(getActiveCredentialId(executor, 7)).resolves.toBeUndefined();
+    expect(selectedTables).toEqual([users, apiCredentials]);
+    expect(selectedTables).not.toContain(userUsageOwners);
   });
 
   it("keeps an old task bound to its original credential after manager reassignment", async () => {
@@ -1453,12 +2269,445 @@ describe("conversation credential binding", () => {
     ).resolves.toMatchObject({
       credentialId: "credential-former-manager",
     });
-    expect(selectedTables).toEqual([upstreamResources, apiCredentials]);
+    expect(selectedTables).toContain(agentTasks);
+    expect(selectedTables).toContain(upstreamResources);
+    expect(selectedTables).toContain(apiCredentials);
     expect(selectedTables).not.toContain(userUsageOwners);
   });
 });
 
 describe("legacy upstream resource ownership validation", () => {
+  const projectTaskId = "10101010-1010-4010-8010-101010101010";
+  const projectOperationId = "20202020-2020-4020-8020-202020202020";
+  const projectA = "30303030-3030-4030-8030-303030303030";
+  const projectB = "40404040-4040-4040-8040-404040404040";
+  const projectSnapshot: ConversationSnapshot = {
+    id: "project-general-chat",
+    title: "工程师通用聊天",
+    executionKind: "general_chat_v2",
+    status: "running",
+    taskId: projectTaskId,
+    previousResponseId: projectTaskId,
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [],
+  };
+
+  function projectGeneralChatRows(input: {
+    persistedConversationId: string;
+    projectAssignmentId: string;
+    includeTurn?: boolean;
+  }) {
+    return (table: unknown) => {
+      if (table === agentTasks) {
+        return [
+          {
+            id: projectTaskId,
+            operationId: projectOperationId,
+            createdAt: new Date(10),
+          },
+        ];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: projectOperationId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-project-general",
+          },
+        ];
+      }
+      if (table === conversationTurns) {
+        return input.includeTurn === false
+          ? []
+          : [
+              {
+                conversationId: input.persistedConversationId,
+                userId: 7,
+                operationType: "general_chat_v2",
+                upstreamTaskId: projectTaskId,
+              },
+            ];
+      }
+      if (table === conversations) {
+        return [
+          {
+            id: input.persistedConversationId,
+            userId: 7,
+            projectAssignmentId: input.projectAssignmentId,
+            deletedAt: null,
+          },
+        ];
+      }
+      return [];
+    };
+  }
+
+  it("accepts an exact project-bound general-chat task and previous response", async () => {
+    const persistedConversationId = `p${projectA}:${projectSnapshot.id}`;
+    const { executor, selectedTables } = createSelectExecutor(
+      projectGeneralChatRows({
+        persistedConversationId,
+        projectAssignmentId: projectA,
+      }),
+    );
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, projectA, projectSnapshot),
+    ).resolves.toEqual(
+      new Map([
+        [
+          JSON.stringify(["task", projectTaskId]),
+          expect.objectContaining({ domain: "general_chat_v2" }),
+        ],
+      ]),
+    );
+    expect(selectedTables).toContain(conversationTurns);
+    expect(selectedTables).toContain(conversations);
+  });
+
+  it("rejects reuse of a project-A general-chat task in project B", async () => {
+    const persistedConversationId = `p${projectA}:${projectSnapshot.id}`;
+    const { executor } = createSelectExecutor(
+      projectGeneralChatRows({
+        persistedConversationId,
+        projectAssignmentId: projectA,
+      }),
+    );
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, projectB, projectSnapshot),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("rejects an unbound general-chat task in a project snapshot", async () => {
+    const persistedConversationId = `p${projectA}:${projectSnapshot.id}`;
+    const { executor } = createSelectExecutor(
+      projectGeneralChatRows({
+        persistedConversationId,
+        projectAssignmentId: projectA,
+        includeTurn: false,
+      }),
+    );
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, projectA, projectSnapshot),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("project-binds an untagged task after legacy dual-domain classification", async () => {
+    const untaggedSnapshot: ConversationSnapshot = { ...projectSnapshot };
+    delete untaggedSnapshot.executionKind;
+    const persistedConversationId = `p${projectA}:${projectSnapshot.id}`;
+    const { executor: exactExecutor, selectedTables } = createSelectExecutor(
+      projectGeneralChatRows({
+        persistedConversationId,
+        projectAssignmentId: projectA,
+      }),
+    );
+
+    await expect(
+      loadSnapshotResourceBindings(
+        exactExecutor,
+        7,
+        projectA,
+        untaggedSnapshot,
+      ),
+    ).resolves.toEqual(
+      new Map([
+        [
+          JSON.stringify(["task", projectTaskId]),
+          expect.objectContaining({ domain: "general_chat_v2" }),
+        ],
+      ]),
+    );
+    expect(selectedTables).toContain(upstreamResources);
+
+    const { executor: crossProjectExecutor } = createSelectExecutor(
+      projectGeneralChatRows({
+        persistedConversationId,
+        projectAssignmentId: projectA,
+      }),
+    );
+    await expect(
+      loadSnapshotResourceBindings(
+        crossProjectExecutor,
+        7,
+        projectB,
+        untaggedSnapshot,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("validates explicit general-chat task and asset references without reading the legacy ledger", async () => {
+    const taskId = "11111111-1111-4111-8111-111111111111";
+    const operationId = "22222222-2222-4222-8222-222222222222";
+    const assetId = "33333333-3333-4333-8333-333333333333";
+    const snapshot: ConversationSnapshot = {
+      id: "conversation-general-v2",
+      title: "通用聊天",
+      executionKind: "general_chat_v2",
+      status: "running",
+      taskId,
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        {
+          ...message("user-general", "user", 1),
+          attachments: [
+            { id: "image", type: "image", name: "input.png", fileId: assetId },
+          ],
+        },
+      ],
+    };
+    const { executor, selectedTables } = createSelectExecutor((table) => {
+      if (table === agentTasks) {
+        return [{ id: taskId, operationId, createdAt: new Date(10) }];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: operationId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-general",
+          },
+        ];
+      }
+      if (table === localAssets) {
+        return [
+          {
+            id: assetId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            createdAt: new Date(5),
+          },
+        ];
+      }
+      if (table === upstreamResources) {
+        throw new Error("general-chat references must not touch legacy ledger");
+      }
+      return [];
+    });
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, null, snapshot),
+    ).resolves.toEqual(
+      new Map([
+        [
+          JSON.stringify(["task", taskId]),
+          expect.objectContaining({
+            domain: "general_chat_v2",
+            apiCredentialId: "credential-general",
+          }),
+        ],
+        [
+          JSON.stringify(["file", assetId]),
+          expect.objectContaining({ domain: "general_chat_v2" }),
+        ],
+      ]),
+    );
+    expect(selectedTables).not.toContain(upstreamResources);
+  });
+
+  it("rejects a general-chat task owned by another managed account", async () => {
+    const taskId = "44444444-4444-4444-8444-444444444444";
+    const operationId = "55555555-5555-4555-8555-555555555555";
+    const snapshot: ConversationSnapshot = {
+      id: "conversation-foreign-general-v2",
+      title: "通用聊天",
+      executionKind: "general_chat_v2",
+      status: "running",
+      taskId,
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+    };
+    const { executor } = createSelectExecutor((table) => {
+      if (table === agentTasks) {
+        return [{ id: taskId, operationId, createdAt: new Date(10) }];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: operationId,
+            scope: "managed_user",
+            accountUserId: 8,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-foreign",
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, null, snapshot),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects an expired local asset in the explicit general-chat domain", async () => {
+    const assetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const snapshot: ConversationSnapshot = {
+      id: "conversation-expired-general-asset",
+      title: "通用聊天",
+      executionKind: "general_chat_v2",
+      status: "idle",
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        {
+          ...message("user-expired-asset", "user", 1),
+          attachments: [
+            { id: "image", type: "image", name: "old.png", fileId: assetId },
+          ],
+        },
+      ],
+    };
+    const { executor } = createSelectExecutor((table) => {
+      if (table === localAssets) {
+        return [
+          {
+            id: assetId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            retainUntil: new Date(0),
+            createdAt: new Date(0),
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, null, snapshot),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("accepts an untagged reference only when exactly one identity domain owns it", async () => {
+    const taskId = "66666666-6666-4666-8666-666666666666";
+    const operationId = "77777777-7777-4777-8777-777777777777";
+    const snapshot: ConversationSnapshot = {
+      id: "conversation-ambiguous",
+      title: "旧客户端",
+      status: "running",
+      taskId,
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+    };
+    const { executor } = createSelectExecutor((table) => {
+      if (table === agentTasks) {
+        return [{ id: taskId, operationId, createdAt: new Date(10) }];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: operationId,
+            scope: "managed_user",
+            accountUserId: 7,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-general",
+          },
+        ];
+      }
+      if (table === upstreamResources) {
+        return [
+          {
+            userId: 7,
+            projectAssignmentId: null,
+            kind: "task",
+            upstreamId: taskId,
+            apiCredentialId: "credential-legacy",
+            createdAt: new Date(9),
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, null, snapshot),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("ignores a foreign collision when an untagged reference has exactly one owned domain", async () => {
+    const taskId = "88888888-8888-4888-8888-888888888888";
+    const operationId = "99999999-9999-4999-8999-999999999999";
+    const snapshot: ConversationSnapshot = {
+      id: "conversation-owned-legacy-collision",
+      title: "旧客户端",
+      status: "running",
+      taskId,
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [],
+    };
+    const { executor } = createSelectExecutor((table) => {
+      if (table === agentTasks) {
+        return [{ id: taskId, operationId, createdAt: new Date(10) }];
+      }
+      if (table === agentOperations) {
+        return [
+          {
+            id: operationId,
+            scope: "managed_user",
+            accountUserId: 8,
+            presalesProjectId: null,
+            operationType: "dashboard.general-chat",
+            contractName: "dashboard.general-chat",
+            contractRevision: 2,
+            apiCredentialId: "credential-foreign-general",
+          },
+        ];
+      }
+      if (table === upstreamResources) {
+        return [
+          {
+            userId: 7,
+            projectAssignmentId: null,
+            kind: "task",
+            upstreamId: taskId,
+            apiCredentialId: "credential-owned-legacy",
+            createdAt: new Date(9),
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      loadSnapshotResourceBindings(executor, 7, null, snapshot),
+    ).resolves.toEqual(
+      new Map([
+        [
+          JSON.stringify(["task", taskId]),
+          expect.objectContaining({
+            domain: "legacy_upstream",
+            apiCredentialId: "credential-owned-legacy",
+          }),
+        ],
+      ]),
+    );
+  });
+
   it("deduplicates task and file IDs before upstream validation", () => {
     const snapshot: ConversationSnapshot = {
       id: "conversation-1",
@@ -1509,46 +2758,13 @@ describe("legacy upstream resource ownership validation", () => {
     );
   });
 
-  it("uses the selected credential against the exact encoded resource URL", async () => {
-    let requestedUrl = "";
-    let requestedHeaders: HeadersInit | undefined;
-    await validateUpstreamResourceAccess(
-      "sk-owner",
-      "file",
-      "file/with spaces",
-      async (input, init) => {
-        requestedUrl = String(input);
-        requestedHeaders = init?.headers;
-        return new Response(null, { status: 200 });
-      },
-    );
-
-    expect(requestedUrl).toContain("/v1/files/file%2Fwith%20spaces");
-    expect(requestedHeaders).toMatchObject({
-      API_KEY: "sk-owner",
-      Authorization: "Bearer sk-owner",
-    });
-  });
-
-  it.each([401, 403, 404])(
-    "rejects an unprovable resource when upstream returns %s",
-    async (status) => {
-      await expect(
-        validateUpstreamResourceAccess(
-          "sk-wrong",
-          "task",
-          "task-victim",
-          async () => new Response(null, { status }),
-        ),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    },
-  );
-
-  it("does not bind resources when upstream validation is unavailable", async () => {
-    await expect(
-      validateUpstreamResourceAccess("sk-owner", "task", "task-1", async () => {
-        throw new Error("timeout");
-      }),
-    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  it("rejects every Provider-backed legacy import without a network probe", () => {
+    expect(() =>
+      assertLocalImportHasNoProviderResources([
+        { kind: "task", id: "task-v1" },
+        { kind: "file", id: "file-v1" },
+      ]),
+    ).toThrow("旧任务或文件会话不再导入");
+    expect(() => assertLocalImportHasNoProviderResources([])).not.toThrow();
   });
 });

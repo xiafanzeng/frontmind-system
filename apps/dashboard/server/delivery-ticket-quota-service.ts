@@ -1,7 +1,6 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import {
-  deliveryTickets,
   serviceContracts,
   serviceQuotaPeriods,
 } from "../drizzle/schema";
@@ -13,6 +12,7 @@ import type { AuthenticatedUser } from "./auth-service";
 import { writeWorkspaceAuditEvent } from "./admin-control-plane-service";
 import { isSystemAdmin } from "./dashboard-service";
 import { getDb } from "./db";
+import { loadUnifiedDeliveryQuotaUsageRows } from "./delivery-quota-usage";
 import { DeliveryTicketError } from "./delivery-ticket-service";
 import { getServicePortal } from "./service-entitlement";
 
@@ -65,7 +65,7 @@ function usageByPool(
   rows: Array<{
     quotaPool: DeliveryTicketQuotaPool | null;
     quotaState: "reserved" | "consumed" | "released";
-    value: number | bigint;
+    value: number | string | bigint;
   }>,
   pool: DeliveryTicketQuotaPool,
   archivedConsumed = 0,
@@ -203,28 +203,10 @@ export async function adjustDeliveryTicketQuota(input: {
       );
     }
 
-    const activeRows = (await tx
-      .select({
-        quotaPool: deliveryTickets.quotaPool,
-        quotaState: deliveryTickets.quotaState,
-        value: count(),
-      })
-      .from(deliveryTickets)
-      .where(
-        and(
-          eq(deliveryTickets.userId, input.value.userId),
-          eq(deliveryTickets.quotaPeriodId, period.id),
-          inArray(deliveryTickets.quotaState, ["reserved", "consumed"]),
-        ),
-      )
-      .groupBy(
-        deliveryTickets.quotaPool,
-        deliveryTickets.quotaState,
-      )) as Array<{
-      quotaPool: DeliveryTicketQuotaPool | null;
-      quotaState: "reserved" | "consumed" | "released";
-      value: number | bigint;
-    }>;
+    const activeRows = await loadUnifiedDeliveryQuotaUsageRows(tx, {
+      userId: input.value.userId,
+      quotaPeriodIds: [period.id],
+    });
     const contentAssetUsage = usageByPool(
       activeRows,
       "content_asset_publish",

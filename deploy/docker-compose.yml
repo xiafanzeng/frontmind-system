@@ -55,6 +55,7 @@ services:
     volumes:
       - ${FRONTMIND_PREPARED_FILE_DIR_HOST:-/srv/frontmind-system/runtime/prepared-files}:/var/lib/frontmind/prepared-files
       - ${FRONTMIND_DASHBOARD_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/dashboard-assets}:/var/lib/frontmind/dashboard-assets
+      - ${FRONTMIND_MONITORING_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/monitoring-assets}:/var/lib/frontmind/monitoring-assets
     depends_on:
       mysql: {condition: service_healthy}
     healthcheck:
@@ -63,7 +64,41 @@ services:
       timeout: 3s
       retries: 6
       start_period: 30s
+    networks:
+      applications:
+        aliases: [frontmind-dashboard]
+      database: {}
+
+  siteops-worker:
+    <<: *app-security
+    image: ${FRONTMIND_DASHBOARD_IMAGE:?set FRONTMIND_DASHBOARD_IMAGE to an immutable image@sha256 digest}
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/dashboard.env
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_DASHBOARD_DIGEST:?set FRONTMIND_DASHBOARD_DIGEST to sha256 digest}
+      FRONTMIND_RUNTIME_ROLE: siteops-worker
+    volumes:
+      - ${FRONTMIND_PREPARED_FILE_DIR_HOST:-/srv/frontmind-system/runtime/prepared-files}:/var/lib/frontmind/prepared-files
+      - ${FRONTMIND_DASHBOARD_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/dashboard-assets}:/var/lib/frontmind/dashboard-assets
+      - ${FRONTMIND_MONITORING_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/monitoring-assets}:/var/lib/frontmind/monitoring-assets
+    depends_on:
+      mysql: {condition: service_healthy}
     networks: [applications, database]
+    mem_limit: 2048m
+    stop_grace_period: 60s
+
+  website:
+    <<: *app-security
+    image: ${FRONTMIND_WEBSITE_IMAGE:?set FRONTMIND_WEBSITE_IMAGE to the exact CN website image}
+    env_file:
+      - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/website.env
+    environment:
+      FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_WEBSITE_DIGEST:?set FRONTMIND_WEBSITE_DIGEST}
+    ports:
+      - 127.0.0.1:8888:8888
+    volumes:
+      - ${FRONTMIND_WEBSITE_DATA_DIR_HOST:-/srv/frontmind-system/runtime/website-data}:/var/lib/frontmind-website
+    networks: [applications]
 
   monitoring-worker:
     <<: *app-security
@@ -72,6 +107,8 @@ services:
       - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/worker.env
     environment:
       FRONTMIND_IMAGE_DIGEST: ${FRONTMIND_MONITORING_WORKER_DIGEST:?set FRONTMIND_MONITORING_WORKER_DIGEST to sha256 digest}
+    volumes:
+      - ${FRONTMIND_MONITORING_ASSET_DIR_HOST:-/srv/frontmind-system/runtime/monitoring-assets}:/var/lib/frontmind/monitoring-assets
     depends_on:
       mysql: {condition: service_healthy}
     networks: [database, egress]

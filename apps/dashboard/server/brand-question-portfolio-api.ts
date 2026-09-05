@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 
-import axios from "axios";
 import { Router } from "express";
 import { z } from "zod";
 
@@ -15,7 +14,9 @@ import {
   buildBrandQuestionPortfolioEvidenceArchive,
   buildBrandQuestionPortfolioPrompt,
   buildBrandQuestionPortfolioSkillArchive,
-  parseBrandQuestionPortfolioOutput,
+  BRAND_QUESTION_STRUCTURED_OUTPUT_SCHEMA,
+  deriveBrandQuestionCandidateTargets,
+  parseBrandQuestionPortfolioStructuredValue,
   type BrandQuestionPortfolioContext,
 } from "./brand-question-portfolio-runtime";
 import {
@@ -36,7 +37,13 @@ import {
   safeErrorForLog,
 } from "./_core/sensitive-data";
 import { getUpstreamBaseUrl, toUpstreamAgentProfile } from "./upstream-config";
-import { uploadUpstreamTaskAttachment } from "./upstream-task-attachment";
+import { assertUpstreamPromptBudget } from "./upstream-prompt-budget";
+import {
+  classifyManusV2StructuredResultEnvelope,
+  latestManusV2TaskState,
+  ManusV2ApiError,
+  ManusV2Client,
+} from "./manus-v2-client";
 
 const router = Router();
 
@@ -80,7 +87,21 @@ export function publicBrandQuestionTask(
   };
 }
 
-async function currentContext(userId: number) {
+export function brandQuestionTaskContextErrorResponse(
+  error: BrandQuestionTaskContextError,
+) {
+  return {
+    status: error.code === "BRAND_QUESTION_TASK_CONTEXT_EXPIRED" ? 410 : 409,
+    body: {
+      error: { code: error.code, message: error.message },
+    },
+  } as const;
+}
+
+async function currentContext(
+  userId: number,
+  modelProfile: BrandQuestionPortfolioContext["modelProfile"],
+) {
   const portal = await assertServiceCapability(userId, "globalKeywords");
   if (
     (portal.service.planCode !== "advanced" &&
@@ -115,8 +136,10 @@ async function currentContext(userId: number) {
     );
   }
   const context: BrandQuestionPortfolioContext = {
+    modelProfile,
     planCode: portal.service.planCode,
     quotaPeriodId: portal.quotas.periodId,
+    quotaRevision: portal.quotas.revision,
     enterprise: {
       identityHash: createHash("sha256")
         .update(
@@ -154,6 +177,87 @@ function snapshotContextHash(
   );
 }
 
+function hashedBrandQuestionDispatchKey(
+  namespace: string,
+  values: ReadonlyArray<string | number>,
+) {
+  return createHash("sha256")
+    .update(JSON.stringify([namespace, ...values]), "utf8")
+    .digest("hex");
+}
+
+export function createBrandQuestionTaskIdempotencyKey(input: {
+  userId: number;
+  prompt: string;
+  skillContentHash: string;
+  evidenceContentHash: string;
+}) {
+  return hashedBrandQuestionDispatchKey("frontmind-brand-question-task-v1", [
+    input.userId,
+    createHash("sha256").update(input.prompt, "utf8").digest("hex"),
+    input.skillContentHash,
+    input.evidenceContentHash,
+  ]);
+}
+
+export function createBrandQuestionFileIdempotencyKey(input: {
+  taskIdempotencyKey: string;
+  role: "skill" | "evidence";
+  contentHash: string;
+}) {
+  return hashedBrandQuestionDispatchKey("frontmind-brand-question-file-v1", [
+    input.taskIdempotencyKey,
+    input.role,
+    input.contentHash,
+  ]);
+}
+
+export async function createBrandQuestionUpstreamTask(input: {
+  baseUrl: string;
+  apiKey: string;
+  prompt: string;
+  attachments: Array<{ file_id: string; filename: string }>;
+  idempotencyKey: string;
+  agentProfile?: string;
+  rateLimitScope?: string;
+}) {
+  const client = new ManusV2Client({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    rateLimitScope: input.rateLimitScope,
+  });
+  const operationToken = input.idempotencyKey;
+  const title = `FrontMind brand questions ${operationToken.slice(0, 24)}`;
+  const prompt = assertUpstreamPromptBudget(
+    `${input.prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken })}`,
+  );
+  try {
+    return await client.createTask({
+      prompt,
+      attachments: input.attachments,
+      title,
+      agentProfile: input.agentProfile,
+      locale: "zh-CN",
+      interactiveMode: false,
+      structuredOutputSchema: BRAND_QUESTION_STRUCTURED_OUTPUT_SCHEMA,
+    });
+  } catch (error) {
+    if (!(error instanceof ManusV2ApiError) || !error.outcomeUnknown) {
+      throw error;
+    }
+    const reconciled = await client.findCreatedTask({
+      title,
+      operationToken,
+    });
+    if (!reconciled.unique) throw error;
+    return {
+      taskId: reconciled.unique.id,
+      requestId: error.providerRequestId,
+      raw: { ok: true, task_id: reconciled.unique.id, reconciled: true },
+    };
+  }
+}
+
 router.post("/start", async (req, res) => {
   try {
     const user = req.frontmindUser;
@@ -163,109 +267,96 @@ router.post("/start", async (req, res) => {
       });
       return;
     }
-    const { context } = await currentContext(user.id);
     if (!req.frontmindCredential) {
       res.status(428).json({
         error: {
-          code: "API_CREDENTIAL_REQUIRED",
-          message: "当前账号尚未由管理员配置 API Key",
+          code: "CUSTOMER_KEY_REQUIRED",
+          message: "当前客户账号尚未配置 API Key",
         },
       });
       return;
     }
+    const { context } = await currentContext(
+      user.id,
+      req.frontmindCredential.agentProfile,
+    );
     const baseUrl = getUpstreamBaseUrl(req);
     const apiKey = req.frontmindCredential.apiKey;
-    const generatedAttachments: Array<
-      Awaited<ReturnType<typeof uploadUpstreamTaskAttachment>>
-    > = [];
-    try {
-      const [skillArchive, evidenceArchive] = await Promise.all([
-        buildBrandQuestionPortfolioSkillArchive(),
-        buildBrandQuestionPortfolioEvidenceArchive(context),
-      ]);
-      for (const attachment of [
-        {
-          filename: BRAND_QUESTION_SKILL_ATTACHMENT_FILENAME,
-          bytes: skillArchive.bytes,
-        },
-        {
-          filename: BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME,
-          bytes: evidenceArchive.bytes,
-        },
-      ]) {
-        generatedAttachments.push(
-          await uploadUpstreamTaskAttachment({
-            baseUrl,
-            apiKey,
-            ...attachment,
-          }),
-        );
-      }
-    } catch (error) {
-      await Promise.allSettled(
-        generatedAttachments.map((attachment) => attachment.removeOrphan()),
-      );
-      throw error;
-    }
-    const response = await axios.post(
-      `${baseUrl}/v1/tasks`,
+    const client = new ManusV2Client({
+      baseUrl,
+      apiKey,
+      rateLimitScope: `managed-user:${user.id}`,
+    });
+    const [skillArchive, evidenceArchive, builtPrompt] = await Promise.all([
+      buildBrandQuestionPortfolioSkillArchive(),
+      buildBrandQuestionPortfolioEvidenceArchive(context),
+      buildBrandQuestionPortfolioPrompt(context),
+    ]);
+    const prompt = assertUpstreamPromptBudget(builtPrompt);
+    const taskIdempotencyKey = createBrandQuestionTaskIdempotencyKey({
+      userId: user.id,
+      prompt,
+      skillContentHash: skillArchive.contentHash,
+      evidenceContentHash: evidenceArchive.contentHash,
+    });
+    const generatedAttachments: Array<{
+      attachment: { file_id: string; filename: string };
+    }> = [];
+    for (const attachment of [
       {
-        prompt: await buildBrandQuestionPortfolioPrompt(context),
-        agentProfile: toUpstreamAgentProfile("frontmind-pro"),
-        taskMode: "agent",
-        attachments: generatedAttachments.map((item) => item.attachment),
+        role: "skill" as const,
+        filename: BRAND_QUESTION_SKILL_ATTACHMENT_FILENAME,
+        bytes: skillArchive.bytes,
+        contentHash: skillArchive.contentHash,
       },
       {
-        headers: {
-          "Content-Type": "application/json",
-          API_KEY: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-        },
-        timeout: 120_000,
-        validateStatus: () => true,
+        role: "evidence" as const,
+        filename: BRAND_QUESTION_EVIDENCE_ATTACHMENT_FILENAME,
+        bytes: evidenceArchive.bytes,
+        contentHash: evidenceArchive.contentHash,
       },
-    );
-    if (response.status < 200 || response.status >= 300) {
-      await Promise.allSettled(
-        generatedAttachments.map((attachment) => attachment.removeOrphan()),
+    ]) {
+      generatedAttachments.push(
+        await client
+          .uploadFile({
+            filename: attachment.filename,
+            bytes: attachment.bytes,
+            contentType: "application/zip",
+            observer: {
+              onCandidateCreated: async ({ fileId }) => {
+                await recordUpstreamResource({
+                  userId: user.id,
+                  apiCredentialId: req.frontmindCredential!.id,
+                  kind: "file",
+                  upstreamId: fileId,
+                });
+              },
+            },
+          })
+          .then((uploaded) => ({
+            attachment: {
+              file_id: uploaded.fileId,
+              filename: attachment.filename,
+            },
+          })),
       );
-      res.status(response.status).json({
-        error: {
-          code: "BRAND_QUESTION_TASK_FAILED",
-          message: "品牌全域候选词任务创建失败，请稍后重试",
-        },
-      });
-      return;
     }
-    const task = response.data || {};
-    const taskId = String(task.id || task.task_id || "");
+    const created = await createBrandQuestionUpstreamTask({
+      baseUrl,
+      apiKey,
+      prompt,
+      attachments: generatedAttachments.map((item) => item.attachment),
+      idempotencyKey: taskIdempotencyKey,
+      agentProfile: toUpstreamAgentProfile(
+        req.frontmindCredential.agentProfile,
+      ),
+      rateLimitScope: `managed-user:${user.id}`,
+    });
+    const taskId = created.taskId;
     if (!taskId) {
-      await Promise.allSettled(
-        generatedAttachments.map((attachment) => attachment.removeOrphan()),
-      );
       throw new Error("候选词任务未返回任务标识");
     }
-    if (classifyBrandQuestionTaskStatus(task.status) === "failed") {
-      await Promise.allSettled(
-        generatedAttachments.map((attachment) => attachment.removeOrphan()),
-      );
-      res.status(502).json({
-        error: {
-          code: "BRAND_QUESTION_TASK_FAILED",
-          message: "品牌全域候选词任务未能启动，请重新生成",
-        },
-      });
-      return;
-    }
     try {
-      for (const attachment of generatedAttachments) {
-        await recordUpstreamResource({
-          userId: user.id,
-          apiCredentialId: req.frontmindCredential.id,
-          kind: "file",
-          upstreamId: attachment.fileId,
-        });
-      }
       await recordUpstreamResource({
         userId: user.id,
         apiCredentialId: req.frontmindCredential.id,
@@ -273,11 +364,8 @@ router.post("/start", async (req, res) => {
         upstreamId: taskId,
       });
     } catch (error) {
-      // Preserve the task as a permanent usage fact even when local ownership
-      // persistence fails. Generated temporary files may still be reclaimed.
-      await Promise.allSettled(
-        generatedAttachments.map((attachment) => attachment.removeOrphan()),
-      );
+      // The task is already an irreversible usage fact. Generated inputs were
+      // owned before upload and must remain available for idempotent recovery.
       throw error;
     }
     const contextToken = createBrandQuestionTaskContextToken({
@@ -287,11 +375,13 @@ router.post("/start", async (req, res) => {
       snapshotHash: snapshotContextHash(context.snapshot),
       quotaPeriodId: context.quotaPeriodId,
       planCode: context.planCode,
+      quotaRevision: context.quotaRevision,
+      candidateTargets: deriveBrandQuestionCandidateTargets(context),
       secret: req.frontmindCredential.apiKey,
     });
     res.json({
       task: publicBrandQuestionTask(
-        task,
+        { status: "running" },
         taskId,
         req.frontmindCredential.apiKey,
       ),
@@ -300,7 +390,7 @@ router.post("/start", async (req, res) => {
       knowledgeVersion: context.snapshot.version,
       knowledgeSnapshotId: context.snapshot.id,
       quotaPeriodId: context.quotaPeriodId,
-      model: "frontmind-pro",
+      model: req.frontmindCredential.agentProfile,
     });
   } catch (error) {
     sendServiceError(res, error, req.frontmindCredential?.apiKey);
@@ -326,7 +416,6 @@ router.post("/sync", async (req, res) => {
       .strict()
       .parse(req.body || {});
     requestValidated = true;
-    const { context } = await currentContext(user.id);
     const credential = await getCredentialForUpstreamResource(
       user.id,
       "task",
@@ -341,6 +430,7 @@ router.post("/sync", async (req, res) => {
       });
       return;
     }
+    const { context } = await currentContext(user.id, credential.agentProfile);
     logSecret = credential.apiKey;
     verifyBrandQuestionTaskContextToken({
       token: contextToken,
@@ -352,41 +442,18 @@ router.post("/sync", async (req, res) => {
         snapshotHash: snapshotContextHash(context.snapshot),
         quotaPeriodId: context.quotaPeriodId,
         planCode: context.planCode,
+        quotaRevision: context.quotaRevision,
+        candidateTargets: deriveBrandQuestionCandidateTargets(context),
       },
     });
-    const response = await axios.get(
-      `${getUpstreamBaseUrl(req)}/v1/tasks/${encodeURIComponent(taskId)}`,
-      {
-        headers: {
-          API_KEY: credential.apiKey,
-          Authorization: `Bearer ${credential.apiKey}`,
-        },
-        timeout: 120_000,
-        validateStatus: () => true,
-      },
-    );
-    if (response.status !== 200) {
-      res.status(response.status).json({
-        error: {
-          code: "BRAND_QUESTION_TASK_READ_FAILED",
-          message: "读取品牌全域候选词任务失败",
-        },
-      });
-      return;
-    }
-    const task = response.data?.task || response.data || {};
-    const returnedTaskId = String(task.id || task.task_id || "");
-    if (returnedTaskId !== taskId) {
-      res.status(409).json({
-        error: {
-          code: "BRAND_QUESTION_TASK_MISMATCH",
-          message: "读取到的候选词任务与当前任务不匹配",
-        },
-      });
-      return;
-    }
-    const taskStatus = classifyBrandQuestionTaskStatus(task.status);
-    if (taskStatus === "failed") {
+    const client = new ManusV2Client({
+      baseUrl: getUpstreamBaseUrl(req),
+      apiKey: credential.apiKey,
+      rateLimitScope: `managed-user:${user.id}`,
+    });
+    const events = await client.listAllMessages({ taskId, order: "desc" });
+    const taskStatus = latestManusV2TaskState(events);
+    if (taskStatus === "error") {
       res.status(422).json({
         error: {
           code: "BRAND_QUESTION_TASK_FAILED",
@@ -395,16 +462,53 @@ router.post("/sync", async (req, res) => {
       });
       return;
     }
-    if (taskStatus === "running") {
+    if (
+      taskStatus === null ||
+      taskStatus === "running" ||
+      taskStatus === "waiting"
+    ) {
       res.status(202).json({
         status: "running",
         task: { id: taskId, status: "running" },
       });
       return;
     }
+    if (taskStatus !== "stopped") {
+      res.status(502).json({
+        error: {
+          code: "BRAND_QUESTION_TASK_STATUS_INVALID",
+          message: "候选词任务返回了无法识别的 v2 状态",
+        },
+      });
+      return;
+    }
     let portfolio;
     try {
-      portfolio = parseBrandQuestionPortfolioOutput(task.output, context);
+      const structuredEvent = [...events]
+        .filter((event) => event.type === "structured_output_result")
+        .sort(
+          (left, right) =>
+            right.timestamp - left.timestamp || right.id.localeCompare(left.id),
+        )
+        .find(
+          (event) =>
+            classifyManusV2StructuredResultEnvelope(
+              event.structured_output_result,
+            ).kind === "accepted",
+        );
+      if (!structuredEvent) {
+        throw new Error("候选词任务没有有效 structured output");
+      }
+      const classified = classifyManusV2StructuredResultEnvelope(
+        structuredEvent.structured_output_result,
+      );
+      if (classified.kind !== "accepted") {
+        throw new Error("候选词 structured output 被 Provider 拒绝");
+      }
+      portfolio = parseBrandQuestionPortfolioStructuredValue(
+        classified.value,
+        context,
+      );
     } catch (error) {
       console.error(
         "[Brand Question Portfolio] completed task returned invalid output",
@@ -423,6 +527,10 @@ router.post("/sync", async (req, res) => {
       quotaPeriodId: context.quotaPeriodId,
       sourceTaskId: taskId,
       knowledgeSnapshotId: context.snapshot.id,
+      expectedQuotaContext: {
+        revision: context.quotaRevision,
+        remaining: context.quota,
+      },
       candidates: portfolioCandidates(portfolio).map((candidate) => ({
         candidateKey: candidate.candidateId,
         category: candidate.category,
@@ -435,7 +543,7 @@ router.post("/sync", async (req, res) => {
     });
     res.json({
       status: "ready",
-      model: "frontmind-pro",
+      model: credential.agentProfile,
       knowledgeVersion: context.snapshot.version,
       quotaPeriodId: context.quotaPeriodId,
       records,
@@ -456,13 +564,8 @@ router.post("/sync", async (req, res) => {
       return;
     }
     if (error instanceof BrandQuestionTaskContextError) {
-      res
-        .status(
-          error.code === "BRAND_QUESTION_TASK_CONTEXT_EXPIRED" ? 410 : 409,
-        )
-        .json({
-          error: { code: error.code, message: error.message },
-        });
+      const response = brandQuestionTaskContextErrorResponse(error);
+      res.status(response.status).json(response.body);
       return;
     }
     sendServiceError(res, error, logSecret);

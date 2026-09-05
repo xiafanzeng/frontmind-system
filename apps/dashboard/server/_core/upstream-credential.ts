@@ -81,6 +81,35 @@ export async function resolveUpstreamCredential(
     // user, so requiring a currently active key here would break downloads for
     // historical conversations after key rotation.
     const requestPath = pathWithoutQuery(req);
+    // Existing managed-upload intents and knowledge-base scoped replacement
+    // intents freeze the exact credential version in the durable reservation.
+    // their durable manifest. Requiring a *currently active* credential here
+    // would strand a sealed local copy after A -> B rotation followed by
+    // deletion of B. These three operations authenticate the actor/project and
+    // the mi1 ticket at the intent service, which then resolves frozen A. Only
+    // Generic creation still requires the active credential. The scoped POST
+    // is deliberately deferred to the route, which re-proves the exact owner,
+    // project, turn, item and pinned active/retired credential before writing.
+    const isKnowledgeBaseScopedManagedUploadCreation =
+      req.method === "POST" &&
+      requestPath === "/v1/managed-uploads" &&
+      req.body?.resumeScope?.kind === "knowledge_base";
+    const isExistingManagedUploadIntentOperation =
+      (req.method === "PUT" &&
+        requestPath === "/proxy-upload" &&
+        typeof req.query.upload_intent_id === "string" &&
+        req.query.upload_intent_id.length > 0) ||
+      (req.method === "POST" &&
+        requestPath === "/v1/managed-uploads/recovery") ||
+      (req.method === "GET" && requestPath === "/v1/managed-uploads") ||
+      (req.method === "DELETE" && requestPath === "/v1/managed-uploads");
+    if (
+      isExistingManagedUploadIntentOperation ||
+      isKnowledgeBaseScopedManagedUploadCreation
+    ) {
+      next();
+      return;
+    }
     if (
       requestPath === "/proxy-download" ||
       /^\/download\/[^/]+$/.test(requestPath)

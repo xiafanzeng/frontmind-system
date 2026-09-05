@@ -1,0 +1,60 @@
+{
+  "schema": "frontmind-siteops-runtime/v4",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "adapterVersion": "1.5.0",
+  "canonicalArtifact": "build-contract.json",
+  "inputSchema": "schemas/frontmind-run-envelope.schema.json",
+  "visualProvider": {
+    "owner": "dashboard",
+    "name": "21st",
+    "requiredTools": ["search"],
+    "optionalTools": ["get_component"],
+    "normalPathTools": ["search"],
+    "primaryReferenceRole": "hero",
+    "supportReferenceRoles": ["section", "motion"],
+    "promptRequired": false,
+    "providerCodeReuse": false
+  },
+  "knowledgeInput": {
+    "owner": "dashboard",
+    "transport": "manifest-verified-json-attachments",
+    "dossierSchema": "SiteOpsSourceDossierV1",
+    "inlineKnowledgeAllowed": false,
+    "messageCharacterLimit": 3000,
+    "singleAttachmentDecodedByteLimit": 16777216,
+    "oversizePolicy": "deterministic-document-boundary-parts"
+  },
+  "providerWire": {
+    "phaseOneSchema": "schemas/site-design-wire-v2.schema.json",
+    "phaseOneCanonical": "SiteDesignSpecV1",
+    "phaseOneOutputFilename": "frontmind-site-design-wire-v2.json",
+    "phaseTwoSchema": "schemas/page-content-wire-v2.schema.json",
+    "phaseTwoCanonical": "PageContentSpecV1",
+    "phaseTwoOutputFilename": "frontmind-page-content-wire-v2.json",
+    "canonicalizerOwner": "dashboard",
+    "routeSlotOrder": "canonical-array-order",
+    "seoOrganizationType": "Organization",
+    "maximumSchemaDepth": 5
+  },
+  "aiTask": {
+    "taskCount": 1,
+    "sameTaskForBothPhases": true,
+    "phaseOneOutput": "SiteDesignWireV2",
+    "phaseOneOutputFilename": "frontmind-site-design-wire-v2.json",
+    "phaseTwoOutput": "PageContentWireV2",
+    "phaseTwoOutputFilename": "frontmind-page-content-wire-v2.json",
+    "sourceOutputAllowed": false,
+    "maxRepairAttempts": 3
+  },
+  "host": {
+    "profile": "native-astro-static",
+    "starterContract": "assets/host-starter-contract.json",
+    "sourceOwner": "dashboard",
+    "runtimeInstallAllowed": false,
+    "buildOwner": "dashboard",
+    "qaOwner": "dashboard"
+  }
+}

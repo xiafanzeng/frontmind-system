@@ -1,25 +1,36 @@
 import { and, eq, sql } from "drizzle-orm";
 
 import {
+  knowledgeImportReceipts,
+  websiteManualServiceOrders,
+  websiteProjectDeletionTombstones,
   websiteProjectOrders,
+  websiteUserProvisions,
   type InsertWebsiteProjectOrder,
   type WebsiteProjectOrder,
 } from "../drizzle/schema";
 import {
   projectOrderIntentCommitRequestSchema,
   projectOrderIntentCommitResponseSchema,
+  projectOrderProjectDeleteResponseSchema,
   projectOrderProjectResponseSchema,
   projectOrderResponseSchema,
   projectOrderWriteRequestSchema,
   type ProjectOrder,
   type ProjectOrderIntentCommitRequest,
   type ProjectOrderIntentCommitResponse,
+  type ProjectOrderProjectDeleteResponse,
   type ProjectOrderProjectResponse,
   type ProjectOrderResponse,
   type ProjectOrderState,
   type ProjectOrderWriteRequest,
 } from "../shared/project-order-registry";
 import { getDb } from "./db";
+import {
+  assertWebsiteProjectPhysicalDeleteEnabled,
+  lockActiveWebsiteProjectLifecycle,
+  WebsiteProjectInactiveError,
+} from "./website-project-lifecycle";
 
 const EARLIEST_SUPPORTED_ORDER_MS = Date.parse("2020-01-01T00:00:00.000Z");
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -27,6 +38,7 @@ const MAX_PROJECT_ORDERS = 100;
 
 export type ProjectOrderRegistryErrorCode =
   | "PROJECT_ORDER_CONFLICT"
+  | "PROJECT_ORDER_PROJECT_DELETED"
   | "PROJECT_ORDER_TIMESTAMP_INVALID"
   | "PROJECT_ORDER_LIMIT_EXCEEDED"
   | "PROJECT_ORDER_DATABASE_UNAVAILABLE";
@@ -48,6 +60,7 @@ export interface ProjectOrderRepository {
     digest: string,
   ): Promise<WebsiteProjectOrder | undefined>;
   listByProjectId(projectId: string): Promise<WebsiteProjectOrder[]>;
+  isProjectDeleted(projectId: string): Promise<boolean>;
   insert(value: InsertWebsiteProjectOrder): Promise<WebsiteProjectOrder>;
   update(
     orderId: string,
@@ -67,6 +80,10 @@ export interface ProjectOrderRepository {
   ): Promise<
     { intent: WebsiteProjectOrder; order: WebsiteProjectOrder } | undefined
   >;
+  deleteByProjectId(projectId: string): Promise<{
+    deletedOrders: number;
+    replayed: boolean;
+  }>;
   ready(): Promise<void>;
 }
 
@@ -76,6 +93,10 @@ export type ProjectOrderRegistryService = {
     replayed: boolean;
   }>;
   readProject(projectId: string): Promise<ProjectOrderProjectResponse>;
+  deleteProject(projectId: string): Promise<{
+    response: ProjectOrderProjectDeleteResponse;
+    replayed: boolean;
+  }>;
   commitIntent(
     intentOrderId: string,
     input: ProjectOrderIntentCommitRequest,
@@ -101,6 +122,19 @@ function databaseUnavailable(_error?: unknown): never {
 
 function conflict(message: string): never {
   throw new ProjectOrderRegistryError("PROJECT_ORDER_CONFLICT", message, 409);
+}
+
+function projectDeleted(): never {
+  throw new ProjectOrderRegistryError(
+    "PROJECT_ORDER_PROJECT_DELETED",
+    "The project has been permanently deleted",
+    410,
+  );
+}
+
+function mapInactiveProject(error: unknown): never {
+  if (error instanceof WebsiteProjectInactiveError) projectDeleted();
+  throw error;
 }
 
 function isDuplicateEntry(error: unknown) {
@@ -210,6 +244,31 @@ function assertEventTimestamp(value: string, now: Date) {
   return eventAt;
 }
 
+/**
+ * Deletes project-scoped Website fulfillment registries after the lifecycle
+ * row is locked in deleting state. Independent users, signed contract files,
+ * service contracts and immutable payment receipts intentionally live in
+ * other tables and are not removed here.
+ */
+export async function deleteWebsiteProjectBusinessRows(
+  tx: any,
+  projectId: string,
+) {
+  assertWebsiteProjectPhysicalDeleteEnabled();
+  await tx
+    .delete(knowledgeImportReceipts)
+    .where(eq(knowledgeImportReceipts.projectId, projectId));
+  await tx
+    .delete(websiteManualServiceOrders)
+    .where(eq(websiteManualServiceOrders.projectId, projectId));
+  await tx
+    .delete(websiteUserProvisions)
+    .where(eq(websiteUserProvisions.projectId, projectId));
+  return tx
+    .delete(websiteProjectOrders)
+    .where(eq(websiteProjectOrders.projectId, projectId));
+}
+
 async function defaultRepository(): Promise<ProjectOrderRepository> {
   const db = await getDb();
   if (!db) databaseUnavailable();
@@ -240,30 +299,60 @@ async function defaultRepository(): Promise<ProjectOrderRepository> {
         .where(eq(websiteProjectOrders.projectId, projectId))
         .limit(MAX_PROJECT_ORDERS + 1);
     },
+    async isProjectDeleted(projectId) {
+      const rows = await db
+        .select({ status: websiteProjectDeletionTombstones.status })
+        .from(websiteProjectDeletionTombstones)
+        .where(eq(websiteProjectDeletionTombstones.projectId, projectId))
+        .limit(1);
+      return Boolean(rows[0] && rows[0].status !== "active");
+    },
     async insert(value) {
-      await db.insert(websiteProjectOrders).values(value);
-      const stored = await findByOrderId(value.orderId);
-      if (!stored) databaseUnavailable();
-      return stored;
+      return db.transaction(async (tx) => {
+        await lockActiveWebsiteProjectLifecycle(tx, value.projectId);
+        await tx.insert(websiteProjectOrders).values(value);
+        const rows = await tx
+          .select()
+          .from(websiteProjectOrders)
+          .where(eq(websiteProjectOrders.orderId, value.orderId))
+          .limit(1);
+        if (!rows[0]) databaseUnavailable();
+        return rows[0];
+      });
     },
     async update(orderId, expectedRevision, value) {
-      const result = await db
-        .update(websiteProjectOrders)
-        .set({
-          ...value,
-          revision: sql`${websiteProjectOrders.revision} + 1`,
-        })
-        .where(
-          and(
-            eq(websiteProjectOrders.orderId, orderId),
-            eq(websiteProjectOrders.revision, expectedRevision),
-          ),
-        );
-      if (!result[0]?.affectedRows) return undefined;
-      return findByOrderId(orderId);
+      return db.transaction(async (tx) => {
+        const current = await tx
+          .select({ projectId: websiteProjectOrders.projectId })
+          .from(websiteProjectOrders)
+          .where(eq(websiteProjectOrders.orderId, orderId))
+          .limit(1);
+        if (!current[0]) return undefined;
+        await lockActiveWebsiteProjectLifecycle(tx, current[0].projectId);
+        const result = await tx
+          .update(websiteProjectOrders)
+          .set({
+            ...value,
+            revision: sql`${websiteProjectOrders.revision} + 1`,
+          })
+          .where(
+            and(
+              eq(websiteProjectOrders.orderId, orderId),
+              eq(websiteProjectOrders.revision, expectedRevision),
+            ),
+          );
+        if (!result[0]?.affectedRows) return undefined;
+        const rows = await tx
+          .select()
+          .from(websiteProjectOrders)
+          .where(eq(websiteProjectOrders.orderId, orderId))
+          .limit(1);
+        return rows[0];
+      });
     },
     async commitIntent(intentOrderId, expectedRevision, order, closedAt) {
       return db.transaction(async (tx) => {
+        await lockActiveWebsiteProjectLifecycle(tx, order.projectId);
         await tx.insert(websiteProjectOrders).values(order);
         const result = await tx
           .update(websiteProjectOrders)
@@ -300,11 +389,58 @@ async function defaultRepository(): Promise<ProjectOrderRepository> {
         return { intent: intents[0], order: orders[0] };
       });
     },
+    async deleteByProjectId(projectId) {
+      assertWebsiteProjectPhysicalDeleteEnabled();
+      return db.transaction(async (tx) => {
+        await tx
+          .insert(websiteProjectDeletionTombstones)
+          .values({
+            projectId,
+            schemaVersion: 1,
+            status: "deleting",
+            deletionRequestedAt: new Date(),
+          })
+          .onDuplicateKeyUpdate({
+            set: { projectId },
+          });
+        const tombstones = await tx
+          .select({ status: websiteProjectDeletionTombstones.status })
+          .from(websiteProjectDeletionTombstones)
+          .where(eq(websiteProjectDeletionTombstones.projectId, projectId))
+          .limit(1)
+          .for("update");
+        if (!tombstones[0]) databaseUnavailable();
+        if (tombstones[0].status === "active") {
+          await tx
+            .update(websiteProjectDeletionTombstones)
+            .set({
+              status: "deleting",
+              deletionRequestedAt: new Date(),
+              completedAt: null,
+            })
+            .where(eq(websiteProjectDeletionTombstones.projectId, projectId));
+        }
+        const result = await deleteWebsiteProjectBusinessRows(tx, projectId);
+        const deletedOrders = Number(result[0]?.affectedRows ?? 0);
+        return {
+          deletedOrders,
+          replayed: tombstones[0].status !== "active" && deletedOrders === 0,
+        };
+      });
+    },
     async ready() {
-      await db
-        .select({ schemaVersion: websiteProjectOrders.schemaVersion })
-        .from(websiteProjectOrders)
-        .limit(1);
+      await Promise.all([
+        db
+          .select({ schemaVersion: websiteProjectOrders.schemaVersion })
+          .from(websiteProjectOrders)
+          .limit(1),
+        db
+          .select({
+            schemaVersion: websiteProjectDeletionTombstones.schemaVersion,
+          })
+          .from(websiteProjectDeletionTombstones)
+          .limit(1),
+      ]);
     },
   };
 }
@@ -322,6 +458,7 @@ export function createProjectOrderRegistryService(
 
       try {
         const store = await repository();
+        if (await store.isProjectDeleted(order.projectId)) projectDeleted();
         let existing = await store.findByOrderId(order.orderId);
         if (!existing) {
           const existingAuthorization = await store.findByAuthorizationDigest(
@@ -408,7 +545,12 @@ export function createProjectOrderRegistryService(
             return { response: orderResponse(updated), replayed: false };
           }
           const raced = await store.findByOrderId(existing.orderId);
-          if (!raced) databaseUnavailable();
+          if (!raced) {
+            if (await store.isProjectDeleted(order.projectId)) {
+              projectDeleted();
+            }
+            databaseUnavailable();
+          }
           existing = raced;
           if (!sameImmutableOrder(existing, order)) {
             conflict("The order changed to a different project scope");
@@ -424,6 +566,7 @@ export function createProjectOrderRegistryService(
         }
         databaseUnavailable();
       } catch (error) {
+        mapInactiveProject(error);
         if (error instanceof ProjectOrderRegistryError) throw error;
         databaseUnavailable(error);
       }
@@ -431,7 +574,9 @@ export function createProjectOrderRegistryService(
 
     async readProject(projectId) {
       try {
-        const rows = await (await repository()).listByProjectId(projectId);
+        const store = await repository();
+        if (await store.isProjectDeleted(projectId)) projectDeleted();
+        const rows = await store.listByProjectId(projectId);
         if (rows.length > MAX_PROJECT_ORDERS) {
           throw new ProjectOrderRegistryError(
             "PROJECT_ORDER_LIMIT_EXCEEDED",
@@ -454,6 +599,25 @@ export function createProjectOrderRegistryService(
       }
     },
 
+    async deleteProject(projectId) {
+      assertWebsiteProjectPhysicalDeleteEnabled();
+      try {
+        const result = await (await repository()).deleteByProjectId(projectId);
+        return {
+          response: projectOrderProjectDeleteResponseSchema.parse({
+            schemaVersion: 1,
+            projectId,
+            deletedOrders: result.deletedOrders,
+          }),
+          replayed: result.replayed,
+        };
+      } catch (error) {
+        mapInactiveProject(error);
+        if (error instanceof ProjectOrderRegistryError) throw error;
+        databaseUnavailable(error);
+      }
+    },
+
     async commitIntent(intentOrderId, input) {
       const { order } = projectOrderIntentCommitRequestSchema.parse(input);
       assertEventTimestamp(order.eventAt, now());
@@ -463,8 +627,10 @@ export function createProjectOrderRegistryService(
 
       try {
         const store = await repository();
+        if (await store.isProjectDeleted(order.projectId)) projectDeleted();
         let intent = await store.findByOrderId(intentOrderId);
         if (!intent) {
+          if (await store.isProjectDeleted(order.projectId)) projectDeleted();
           conflict("The checkout reservation intent does not exist");
         }
         if (
@@ -499,6 +665,9 @@ export function createProjectOrderRegistryService(
             }
           }
           if (intent.state !== "closed") {
+            if (await store.isProjectDeleted(order.projectId)) {
+              projectDeleted();
+            }
             conflict("The checkout reservation could not be closed");
           }
           return {
@@ -566,8 +735,10 @@ export function createProjectOrderRegistryService(
             replayed: true,
           };
         }
+        if (await store.isProjectDeleted(order.projectId)) projectDeleted();
         conflict("The checkout reservation commit conflicted");
       } catch (error) {
+        mapInactiveProject(error);
         if (error instanceof ProjectOrderRegistryError) throw error;
         databaseUnavailable(error);
       }

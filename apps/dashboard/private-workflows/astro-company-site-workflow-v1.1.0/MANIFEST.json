@@ -1,0 +1,68 @@
+{
+  "schema": "frontmind-runtime-workflow-manifest/v1",
+  "name": "frontmind-astro-company-site-workflow",
+  "version": "1.1.0",
+  "entrypoint": "SKILL.md",
+  "upstream": {
+    "version": "1.0.0",
+    "archiveSha256": "ca9387c9f0c7915a443e0a11449adf36f35037825d40643d12b9958d2e32856a"
+  },
+  "hashScope": "all regular files except MANIFEST.json",
+  "files": [
+    {
+      "path": "adapters/frontmind-dashboard.md",
+      "bytes": 2410,
+      "sha256": "ee75f0eb42c46f43efbc8a4338401b336fe274a9f4b92b74c9d0aa478de19c49"
+    },
+    {
+      "path": "assets/astro-static-starter/astro.config.mjs",
+      "bytes": 156,
+      "sha256": "c14a21780857da932acf1ff27c900e9f3eef81dd296c19eb215a270167011701"
+    },
+    {
+      "path": "assets/astro-static-starter/package.json",
+      "bytes": 367,
+      "sha256": "e6b5251331488df4ce03334f75ed0ab4f010b6a81008c7dfdc5fa7db074ad267"
+    },
+    {
+      "path": "assets/astro-static-starter/src/layouts/BaseLayout.astro",
+      "bytes": 728,
+      "sha256": "a2e1de651b340411b04e03d2fd107c9979ba49bd82dea3eb9a00f3b939361957"
+    },
+    {
+      "path": "assets/astro-static-starter/src/pages/404.astro",
+      "bytes": 264,
+      "sha256": "a425cb938dbd57fe4aaad6460752f75fe3af4ae14289468a3c27354e02652c7b"
+    },
+    {
+      "path": "assets/astro-static-starter/tsconfig.json",
+      "bytes": 123,
+      "sha256": "27d6c4c9c7e603efea160d70012d5fd8216ab5829220a3ebf6f851440acae1df"
+    },
+    {
+      "path": "runtime-contract.json",
+      "bytes": 862,
+      "sha256": "3106ef44eefe47972da4cfea0c978c084c671a9c56a9e3a82000c6bb566ec572"
+    },
+    {
+      "path": "schemas/frontmind-run-envelope.schema.json",
+      "bytes": 2591,
+      "sha256": "b996e7d60bdde160df3f0db1838d0e2449d092b7edfb79c40515e2b66f366603"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 3949,
+      "sha256": "f3f83fd250abf92d5d6aa410431342f2d46aba03f8348c21f4eba1d2f8696869"
+    },
+    {
+      "path": "UPSTREAM.json",
+      "bytes": 284,
+      "sha256": "a650b78db27ed96d323a086ec814959aec17e314e809ee8e727aed5a5984d97b"
+    },
+    {
+      "path": "VERSION",
+      "bytes": 6,
+      "sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
+    }
+  ]
+}

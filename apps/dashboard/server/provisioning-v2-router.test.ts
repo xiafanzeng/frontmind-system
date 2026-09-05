@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProvisioningRouter } from "./provisioning-router";
+import {
+  createProvisioningRouter,
+  MARKET_EDITION_RESPONSE_HEADER,
+} from "./provisioning-router";
 
 const SERVICE_TOKEN = "Z2B2cHVyY2hhc2VzY3Jvc3NyZXBvc2l0b3J5dGVzdA";
 const servers: Server[] = [];
@@ -21,9 +24,10 @@ afterEach(async () => {
   );
 });
 
-function purchaseRequest() {
+function purchaseRequest(marketEdition?: "domestic" | "overseas") {
   return {
     schemaVersion: 2 as const,
+    ...(marketEdition ? { marketEdition } : {}),
     project: { id: "project-basic-001", companyName: "示例企业" },
     order: {
       id: "order-basic-001",
@@ -68,10 +72,7 @@ function purchaseRequest() {
   };
 }
 
-async function startApp(input: {
-  submitPurchase: any;
-  readPurchase: any;
-}) {
+async function startApp(input: { submitPurchase: any; readPurchase: any }) {
   const app = express();
   app.use(
     "/api/internal/provisioning",
@@ -99,6 +100,7 @@ describe("provisioning v2 purchase routes", () => {
         projectId: "project-basic-001",
         orderId: "order-basic-001",
         status: "pending_confirmation" as const,
+        marketEdition: "overseas" as const,
         updatedAt: "2026-07-26T00:01:00.000Z",
       },
       account: {
@@ -117,16 +119,19 @@ describe("provisioning v2 purchase routes", () => {
         "content-type": "application/json",
         "idempotency-key": "geo-basic-order-basic-001",
         "x-frontmind-provisioning-token": SERVICE_TOKEN,
+        [MARKET_EDITION_RESPONSE_HEADER]: "1",
       },
-      body: JSON.stringify(purchaseRequest()),
+      body: JSON.stringify(purchaseRequest("overseas")),
     });
     expect(response.status).toBe(202);
     expect(submitPurchase).toHaveBeenCalledWith({
       idempotencyKey: "geo-basic-order-basic-001",
-      request: purchaseRequest(),
+      request: purchaseRequest("overseas"),
       secret: SERVICE_TOKEN,
     });
-    expect(JSON.stringify(await response.json())).not.toContain("password");
+    const body = await response.json();
+    expect(body.purchase.marketEdition).toBe("overseas");
+    expect(JSON.stringify(body)).not.toContain("password");
   });
 
   it("reads the opaque purchase reference without exposing userId", async () => {
@@ -137,6 +142,7 @@ describe("provisioning v2 purchase routes", () => {
         projectId: "project-basic-001",
         orderId: "order-basic-001",
         status: "provisioned" as const,
+        marketEdition: "domestic" as const,
         updatedAt: "2026-07-26T00:02:00.000Z",
       },
       account: {
@@ -164,6 +170,8 @@ describe("provisioning v2 purchase routes", () => {
       reference: "purchase-reference-1",
       secret: SERVICE_TOKEN,
     });
-    expect(JSON.stringify(await response.json())).not.toContain("userId");
+    const body = await response.json();
+    expect(body.purchase.marketEdition).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("userId");
   });
 });

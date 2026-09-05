@@ -24,3 +24,29 @@ export function knowledgeBasePresentationMessagePublicId(
   }
   return `msg-kb-presentation-${normalized}`;
 }
+
+/**
+ * Final content completion is an immutable server receipt just like an
+ * accepted presentation.  Keep the public identity deterministic so browser
+ * snapshots can only echo (never mint or replace) the persisted row.
+ */
+export function knowledgeBaseCompletionMessagePublicId(input: {
+  buildId: string;
+  generation: number;
+  revision: number;
+}) {
+  const buildId = String(input.buildId || "").trim();
+  if (!KNOWLEDGE_BASE_TURN_ID.test(buildId)) {
+    throw new TypeError("Invalid knowledge-base build id");
+  }
+  if (!Number.isSafeInteger(input.generation) || input.generation < 1) {
+    throw new TypeError("Invalid knowledge-base generation");
+  }
+  if (!Number.isSafeInteger(input.revision) || input.revision < 0) {
+    throw new TypeError("Invalid knowledge-base revision");
+  }
+  return `msg-kb-completion-${buildId}-${input.generation}-${input.revision}`;
+}
+
+export const KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT =
+  "知识库内容已完成。下载包正在准备中。";

@@ -15,7 +15,7 @@ function promptLine(question: string): Promise<string> {
     process.stdout.write(question);
     process.stdin.setEncoding("utf8");
     process.stdin.resume();
-    process.stdin.once("data", chunk => {
+    process.stdin.once("data", (chunk) => {
       process.stdin.pause();
       resolve(String(chunk).replace(/[\r\n]+$/, ""));
     });
@@ -25,7 +25,7 @@ function promptLine(question: string): Promise<string> {
 
 function promptHidden(question: string): Promise<string> {
   if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== "function") {
-    return promptLine(question);
+    throw new Error("管理员密码必须通过交互式 TTY 隐藏输入");
   }
 
   return new Promise((resolve, reject) => {
@@ -72,7 +72,7 @@ function promptHidden(question: string): Promise<string> {
     input.setRawMode(true);
     input.resume();
     input.on("data", onData);
-    input.once("error", error => {
+    input.once("error", (error) => {
       cleanup();
       reject(error);
     });
@@ -81,7 +81,9 @@ function promptHidden(question: string): Promise<string> {
 
 async function main() {
   if (!process.env.DATABASE_URL) {
-    throw new Error("请先设置 DATABASE_URL，并完成 pnpm db:migrate");
+    throw new Error(
+      "请先设置 DATABASE_URL，并通过当前环境的受控迁移流程完成数据库初始化",
+    );
   }
 
   const usernameInput =
@@ -119,7 +121,7 @@ async function main() {
 
 main().then(
   () => process.exit(0),
-  error => {
+  (error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);
   },

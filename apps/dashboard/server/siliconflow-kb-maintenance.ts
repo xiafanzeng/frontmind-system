@@ -23,6 +23,7 @@ import { getCredentialForUpstreamResource } from "./auth-service";
 import { getDb } from "./db";
 import { knowledgeSnapshotArchiveStorageKey } from "./knowledge-snapshot-archive-store";
 import { getUpstreamBaseUrl } from "./upstream-config";
+import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
 
 export const SILICONFLOW_MAINTENANCE_BRAND = "硅基流动";
 
@@ -56,9 +57,7 @@ export function siliconFlowKnowledgeSnapshotCleanupStorageKeys(
   ) as string[];
 }
 
-export function shouldDeleteSiliconFlowUpstreamResource(
-  kind: "task" | "file",
-) {
+export function shouldDeleteSiliconFlowUpstreamResource(kind: "task" | "file") {
   return kind === "file";
 }
 
@@ -314,10 +313,7 @@ async function collectInventory(
         eq(upstreamResources.userId, userId),
         or(
           existingConversationIds.length
-            ? inArray(
-                upstreamResources.conversationId,
-                existingConversationIds,
-              )
+            ? inArray(upstreamResources.conversationId, existingConversationIds)
             : sql`false`,
           taskIds.length
             ? and(
@@ -532,20 +528,15 @@ export async function executeSiliconFlowKnowledgeBaseReset(input: {
       continue;
     }
     try {
-      const response = await fetch(
-        `${getUpstreamBaseUrl()}/v1/files/${encodeURIComponent(resource.upstreamId)}`,
-        {
-          method: "DELETE",
-          redirect: "error",
-          headers: {
-            API_KEY: credential.apiKey,
-            Authorization: `Bearer ${credential.apiKey}`,
-          },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-      if (!response.ok && response.status !== 404) {
-        throw new Error(`HTTP ${response.status}`);
+      try {
+        await new ManusV2Client({
+          baseUrl: getUpstreamBaseUrl(),
+          apiKey: credential.apiKey,
+        }).deleteFile(resource.upstreamId);
+      } catch (error) {
+        if (!(error instanceof ManusV2ApiError && error.status === 404)) {
+          throw error;
+        }
       }
       completedResources.push(resource);
     } catch (error) {

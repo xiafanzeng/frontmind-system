@@ -1,4 +1,3 @@
-import axios from "axios";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -8,29 +7,18 @@ import {
   websiteUserProvisions,
 } from "../drizzle/schema";
 import {
-  collectKnowledgeArchiveDescriptors,
-  knowledgeArchiveDescriptorHash,
-  type KnowledgeArchiveDescriptor,
-} from "./knowledge-base-artifact";
-import {
   assertKnowledgeArchiveEnterpriseIdentity,
-  downloadArchiveBytes,
   readKnowledgeArchive,
   removeStoredKnowledgeAssets,
 } from "./dashboard-api";
 import {
   createKnowledgeSnapshot,
   getDashboardWorkspace,
-  getLatestKnowledgeSnapshot,
+  getKnowledgeSnapshotById,
 } from "./dashboard-service";
 import { createKnowledgeMonitoringHandoff } from "./delivery-role-service";
 import { assertKnowledgeBaseWritable } from "./knowledge-base-reset-service";
-import {
-  getPresalesCredentialForResource,
-  getPresalesTaskProjectBinding,
-} from "./presales-service";
 import { getDb } from "./db";
-import { getUpstreamBaseUrl } from "./upstream-config";
 import {
   assertServiceCapability,
   ServiceEntitlementError,
@@ -39,70 +27,41 @@ import {
   persistKnowledgeSnapshotArchive,
   removeKnowledgeSnapshotArchive,
 } from "./knowledge-snapshot-archive-store";
+import { readPresalesV2Artifact } from "./presales-v2-store";
+import { readStoredPresalesFile } from "./presales-file-store";
+import {
+  canonicalizeWebsiteKnowledgeImportArchive,
+  projectWebsiteKnowledgeImportArchiveV4,
+} from "./website-knowledge-import-archive-adapter";
+import {
+  lockActiveWebsiteProjectLifecycle,
+  WebsiteProjectInactiveError,
+} from "./website-project-lifecycle";
 
 const sha256Schema = z
   .string()
   .trim()
   .regex(/^[a-f0-9]{64}$/i);
 
-const websiteKnowledgeImportBaseSchema = z.object({
-  companyName: z.string().trim().min(1).max(200),
-  taskId: z.string().trim().min(1).max(255),
-  outputItemId: z.string().trim().min(1).max(255),
-  fileId: z.string().trim().min(1).max(255).optional(),
-  descriptorHash: sha256Schema,
-  artifactSha256: sha256Schema,
-  filename: z.string().trim().min(1).max(512),
-});
+const localArtifactIdentitySchema = z
+  .string()
+  .regex(/^artifact_[a-f0-9]{64}$/u)
+  .refine((value) => value === value.trim(), {
+    message: "opaque identity must not contain leading or trailing whitespace",
+  });
 
-const websiteKnowledgeImportCandidateSchema = z
+export const websiteKnowledgeImportSchema = z
   .object({
-    taskId: z.string().trim().min(1).max(255),
-    outputItemId: z.string().trim().min(1).max(255),
-    fileId: z.string().trim().min(1).max(255).optional(),
-    descriptorHash: sha256Schema,
-    sha256: sha256Schema,
-  })
-  .strict();
-
-const websiteKnowledgeImportFinalArtifactSchema = z
-  .object({
-    fileId: z.string().trim().min(1).max(255),
-    filename: z.string().trim().min(1).max(512),
-    sha256: sha256Schema,
-    archiveContractVersion: z.literal(3),
-    validationProfile: z.literal("website-lead-v1"),
+    schemaVersion: z.literal(5),
+    companyName: z.string().trim().min(1).max(200),
+    candidateArtifactId: localArtifactIdentitySchema,
+    finalArtifactId: localArtifactIdentitySchema,
+    candidateSha256: sha256Schema,
+    finalSha256: sha256Schema,
     packageManifestSha256: sha256Schema,
     finalizerVersion: z.literal("website-kb-finalizer-v1"),
   })
   .strict();
-
-export const websiteKnowledgeImportSchema = z.discriminatedUnion(
-  "schemaVersion",
-  [
-    websiteKnowledgeImportBaseSchema
-      .extend({
-        schemaVersion: z.literal(2),
-      })
-      .strict(),
-    websiteKnowledgeImportBaseSchema
-      .extend({
-        schemaVersion: z.literal(3),
-        archiveContractVersion: z.union([z.literal(1), z.literal(2)]),
-        validationProfile: z.literal("website-lead-v1"),
-        packageManifestSha256: sha256Schema,
-      })
-      .strict(),
-    z
-      .object({
-        schemaVersion: z.literal(4),
-        companyName: z.string().trim().min(1).max(200),
-        candidate: websiteKnowledgeImportCandidateSchema,
-        finalArtifact: websiteKnowledgeImportFinalArtifactSchema,
-      })
-      .strict(),
-  ],
-);
 
 export type WebsiteKnowledgeImport = z.infer<
   typeof websiteKnowledgeImportSchema
@@ -119,7 +78,9 @@ export type KnowledgeImportErrorCode =
   | "ARTIFACT_HASH_MISMATCH"
   | "IDEMPOTENCY_CONFLICT"
   | "IDEMPOTENCY_PENDING"
+  | "RECEIPT_DATA_INCOMPLETE"
   | "SERVICE_NOT_WRITABLE"
+  | "PROJECT_DELETED"
   | "DATABASE_UNAVAILABLE"
   | "KNOWLEDGE_IMPORT_FAILED";
 
@@ -135,60 +96,53 @@ export class KnowledgeImportError extends Error {
   }
 }
 
+async function lockActiveKnowledgeImportProject(tx: any, projectId: string) {
+  try {
+    await lockActiveWebsiteProjectLifecycle(tx, projectId);
+  } catch (error) {
+    if (!(error instanceof WebsiteProjectInactiveError)) throw error;
+    throw new KnowledgeImportError(
+      "PROJECT_DELETED",
+      "项目已被永久删除，不能再写入知识库导入回执",
+      410,
+    );
+  }
+}
+
 function normalizedEnterpriseName(value: string) {
   return value.normalize("NFKC").trim().replace(/\s+/g, "").toLowerCase();
 }
 
 function knowledgeImportTaskId(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4 ? value.candidate.taskId : value.taskId;
+  return value.candidateArtifactId;
 }
 
 function knowledgeImportOutputItemId(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.candidate.outputItemId
-    : value.outputItemId;
-}
-
-function knowledgeImportCandidateFileId(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4 ? value.candidate.fileId : value.fileId;
+  return value.finalizerVersion;
 }
 
 function knowledgeImportReceiptFileId(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4 ? value.finalArtifact.fileId : value.fileId;
+  return value.finalArtifactId;
 }
 
 function knowledgeImportDescriptorHash(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.candidate.descriptorHash
-    : value.descriptorHash;
+  return value.candidateSha256;
 }
 
 function knowledgeImportArtifactSha256(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.finalArtifact.sha256
-    : value.artifactSha256;
+  return value.finalSha256;
 }
 
 function knowledgeImportFilename(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.finalArtifact.filename
-    : value.filename;
+  return "frontmind-website-knowledge-base.zip";
 }
 
 function knowledgeImportPackageManifestSha256(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.finalArtifact.packageManifestSha256
-    : value.schemaVersion === 3
-      ? value.packageManifestSha256
-      : undefined;
+  return value.packageManifestSha256;
 }
 
 function knowledgeImportArchiveContractVersion(value: WebsiteKnowledgeImport) {
-  return value.schemaVersion === 4
-    ? value.finalArtifact.archiveContractVersion
-    : value.schemaVersion === 3
-      ? value.archiveContractVersion
-      : undefined;
+  return undefined;
 }
 
 export function resolveKnowledgeImportProjectOwner(
@@ -254,35 +208,26 @@ function idempotencyHash(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-const websiteKnowledgeImportV3ReferencePrefix = "website-kb:v3";
-const websiteKnowledgeImportV4ReferencePrefix = "website-kb:v4";
+const websiteKnowledgeImportV5ReferencePrefix = "website-kb:v5";
 
 export function knowledgeImportReceiptSourceReference(input: {
   projectId: string;
   value: WebsiteKnowledgeImport;
 }) {
-  if (input.value.schemaVersion === 4) {
-    return [
-      websiteKnowledgeImportV4ReferencePrefix,
-      input.value.finalArtifact.finalizerVersion,
-      idempotencyHash(
-        [
-          input.value.candidate.sha256.toLowerCase(),
-          input.value.finalArtifact.sha256.toLowerCase(),
-          input.value.finalArtifact.packageManifestSha256.toLowerCase(),
-        ].join(":"),
-      ),
-    ].join(":");
-  }
-  if (input.value.schemaVersion === 3) {
-    return [
-      websiteKnowledgeImportV3ReferencePrefix,
-      input.value.archiveContractVersion,
-      input.value.validationProfile,
-      input.value.packageManifestSha256.toLowerCase(),
-    ].join(":");
-  }
-  return `${input.projectId}:${input.value.taskId}`.slice(0, 191);
+  return [
+    websiteKnowledgeImportV5ReferencePrefix,
+    input.value.finalizerVersion,
+    idempotencyHash(
+      [
+        input.projectId,
+        input.value.candidateArtifactId,
+        input.value.finalArtifactId,
+        input.value.candidateSha256.toLowerCase(),
+        input.value.finalSha256.toLowerCase(),
+        input.value.packageManifestSha256.toLowerCase(),
+      ].join(":"),
+    ),
+  ].join(":");
 }
 
 function knowledgeArtifactReceiptDescriptorMatchesRequest(
@@ -327,7 +272,6 @@ export function knowledgeArtifactReceiptMatchesRequest(
     return false;
   }
   return (
-    input.value.schemaVersion === 2 ||
     receipt.sourceReference === knowledgeImportReceiptSourceReference(input)
   );
 }
@@ -348,9 +292,24 @@ type ReceiptReservation =
   | {
       state: "completed";
       receiptId: string;
-      snapshot: Awaited<ReturnType<typeof getLatestKnowledgeSnapshot>>;
+      snapshotId: string;
     }
-  | { state: "acquired"; receiptId: string };
+  | { state: "acquired"; receiptId: string; claimRevision: number };
+
+function importAffectedRows(result: unknown) {
+  const direct = result as { affectedRows?: unknown } | undefined;
+  const tuple = result as Array<{ affectedRows?: unknown }> | undefined;
+  const value = direct?.affectedRows ?? tuple?.[0]?.affectedRows;
+  return value === undefined ? undefined : Number(value);
+}
+
+function incompleteReceiptError() {
+  return new KnowledgeImportError(
+    "RECEIPT_DATA_INCOMPLETE",
+    "知识库导入回执已完成，但缺少精确快照绑定",
+    409,
+  );
+}
 
 async function reserveReceipt(input: {
   userId: number;
@@ -362,6 +321,7 @@ async function reserveReceipt(input: {
   const db = await requireImportDb();
   const keyHash = idempotencyHash(input.idempotencyKey);
   return db.transaction(async (tx) => {
+    await lockActiveKnowledgeImportProject(tx, input.projectId);
     const rows = await tx
       .select()
       .from(knowledgeImportReceipts)
@@ -386,15 +346,19 @@ async function reserveReceipt(input: {
         existing,
         input,
       );
-      if (
-        sameRequest &&
-        existing.status === "completed" &&
-        existing.snapshotId
-      ) {
+      if (!sameRequest) {
+        throw new KnowledgeImportError(
+          "IDEMPOTENCY_CONFLICT",
+          "该幂等键已用于不同的知识库导入请求",
+          409,
+        );
+      }
+      if (existing.status === "completed") {
+        if (!existing.snapshotId) throw incompleteReceiptError();
         return {
           state: "completed",
           receiptId: existing.id,
-          snapshot: await getLatestKnowledgeSnapshot(input.userId),
+          snapshotId: existing.snapshotId,
         };
       }
       const ageMs = input.now.getTime() - existing.updatedAt.getTime();
@@ -409,18 +373,33 @@ async function reserveReceipt(input: {
           2_000,
         );
       }
-      await tx
+      const claimRevision = existing.revision + 1;
+      const result = await tx
         .update(knowledgeImportReceipts)
         .set({
           status: "processing",
           attemptCount: existing.attemptCount + 1,
+          revision: claimRevision,
           errorCode: null,
           errorMessage: null,
           sourceReference: knowledgeImportReceiptSourceReference(input),
           updatedAt: input.now,
         })
-        .where(eq(knowledgeImportReceipts.id, existing.id));
-      return { state: "acquired", receiptId: existing.id };
+        .where(
+          and(
+            eq(knowledgeImportReceipts.id, existing.id),
+            eq(knowledgeImportReceipts.revision, existing.revision),
+          ),
+        );
+      if (importAffectedRows(result) === 0) {
+        throw new KnowledgeImportError(
+          "IDEMPOTENCY_PENDING",
+          "相同知识库已由其他请求接管",
+          425,
+          2_000,
+        );
+      }
+      return { state: "acquired", receiptId: existing.id, claimRevision };
     }
 
     const artifactRows = await tx
@@ -455,35 +434,20 @@ async function reserveReceipt(input: {
         existingArtifact,
         input,
       );
-      if (
-        sameArtifactRequest &&
-        existingArtifact.status === "completed" &&
-        existingArtifact.snapshotId
-      ) {
+      if (!sameArtifactRequest) {
+        throw new KnowledgeImportError(
+          "IDEMPOTENCY_CONFLICT",
+          "相同知识库产物已由另一份来源合同导入，不能重新绑定",
+          409,
+        );
+      }
+      if (existingArtifact.status === "completed") {
+        if (!existingArtifact.snapshotId) throw incompleteReceiptError();
         return {
           state: "completed",
           receiptId: existingArtifact.id,
-          snapshot: await getLatestKnowledgeSnapshot(input.userId),
+          snapshotId: existingArtifact.snapshotId,
         };
-      }
-      if (
-        input.value.schemaVersion >= 3 &&
-        !sameArtifactRequest &&
-        existingArtifact.status === "completed" &&
-        existingArtifact.snapshotId
-      ) {
-        await tx
-          .update(knowledgeImportReceipts)
-          .set({
-            status: "processing",
-            attemptCount: existingArtifact.attemptCount + 1,
-            errorCode: null,
-            errorMessage: null,
-            sourceReference: knowledgeImportReceiptSourceReference(input),
-            updatedAt: input.now,
-          })
-          .where(eq(knowledgeImportReceipts.id, existingArtifact.id));
-        return { state: "acquired", receiptId: existingArtifact.id };
       }
       if (
         existingArtifact.status === "pending" ||
@@ -521,6 +485,7 @@ async function reserveReceipt(input: {
         idempotencyKeyHash: keyHash,
         artifactHash: knowledgeImportArtifactSha256(input.value).toLowerCase(),
         sourceFileName: knowledgeImportFilename(input.value),
+        siteOpsKnowledgeInputEpochId: null,
         status: "processing",
         attemptCount: 1,
         revision: 1,
@@ -538,27 +503,105 @@ async function reserveReceipt(input: {
       }
       throw error;
     }
-    return { state: "acquired", receiptId };
+    return { state: "acquired", receiptId, claimRevision: 1 };
   });
 }
 
-async function markReceiptFailed(receiptId: string, error: unknown) {
+async function markReceiptFailed(
+  receiptId: string,
+  claimRevision: number,
+  error: unknown,
+) {
   const db = await requireImportDb();
-  await db
-    .update(knowledgeImportReceipts)
-    .set({
-      status: "failed",
-      errorCode:
-        error instanceof KnowledgeImportError
-          ? error.code
-          : "KNOWLEDGE_IMPORT_FAILED",
-      errorMessage: (error instanceof Error
-        ? error.message
-        : "知识库同步失败"
-      ).slice(0, 2000),
-      updatedAt: new Date(),
+  const bindings = await db
+    .select({ projectId: knowledgeImportReceipts.projectId })
+    .from(knowledgeImportReceipts)
+    .where(eq(knowledgeImportReceipts.id, receiptId))
+    .limit(1);
+  await db.transaction(async (tx) => {
+    if (bindings[0]?.projectId) {
+      await lockActiveKnowledgeImportProject(tx, bindings[0].projectId);
+    }
+    await tx
+      .update(knowledgeImportReceipts)
+      .set({
+        status: "failed",
+        errorCode:
+          error instanceof KnowledgeImportError
+            ? error.code
+            : "KNOWLEDGE_IMPORT_FAILED",
+        errorMessage: (error instanceof Error
+          ? error.message
+          : "知识库同步失败"
+        ).slice(0, 2000),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(knowledgeImportReceipts.id, receiptId),
+          eq(knowledgeImportReceipts.status, "processing"),
+          eq(knowledgeImportReceipts.revision, claimRevision),
+        ),
+      );
+  });
+}
+
+async function readImportReceiptState(receiptId: string) {
+  const db = await requireImportDb();
+  const rows = await db
+    .select({
+      userId: knowledgeImportReceipts.userId,
+      status: knowledgeImportReceipts.status,
+      revision: knowledgeImportReceipts.revision,
+      snapshotId: knowledgeImportReceipts.snapshotId,
     })
-    .where(eq(knowledgeImportReceipts.id, receiptId));
+    .from(knowledgeImportReceipts)
+    .where(eq(knowledgeImportReceipts.id, receiptId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+async function readKnowledgeImportArtifactBytes(artifactId: string) {
+  const [artifact, stored] = await Promise.all([
+    readPresalesV2Artifact(artifactId),
+    readStoredPresalesFile(artifactId),
+  ]);
+  if (!artifact || !stored) {
+    throw new KnowledgeImportError(
+      "ARTIFACT_DESCRIPTOR_MISMATCH",
+      "本地知识库产物不存在或已过期",
+      409,
+    );
+  }
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const raw of stored.createReadStream()) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    bytes += chunk.length;
+    if (bytes > 100 * 1024 * 1024) {
+      throw new KnowledgeImportError(
+        "ARTIFACT_DESCRIPTOR_MISMATCH",
+        "本地知识库产物超过允许大小",
+        413,
+      );
+    }
+    chunks.push(chunk);
+  }
+  const buffer = Buffer.concat(chunks);
+  const sha256 = createHash("sha256").update(buffer).digest("hex");
+  if (
+    artifact.bytes !== buffer.length ||
+    stored.sizeBytes !== buffer.length ||
+    artifact.sha256 !== sha256 ||
+    (stored.sha256 !== null && stored.sha256 !== sha256)
+  ) {
+    throw new KnowledgeImportError(
+      "ARTIFACT_HASH_MISMATCH",
+      "本地知识库产物字节或哈希不一致",
+      409,
+    );
+  }
+  return { artifact, buffer, filename: artifact.filename, sha256 };
 }
 
 export async function importWebsiteKnowledgeArtifact(input: {
@@ -581,15 +624,31 @@ export async function importWebsiteKnowledgeArtifact(input: {
     provisions,
     value.companyName,
   );
-  const taskId = knowledgeImportTaskId(value);
-  const binding = await getPresalesTaskProjectBinding(taskId);
-  if (!binding || binding.projectId !== input.projectId) {
+  const [candidateArtifact, finalArtifact] = await Promise.all([
+    readKnowledgeImportArtifactBytes(value.candidateArtifactId),
+    readKnowledgeImportArtifactBytes(value.finalArtifactId),
+  ]);
+  if (
+    candidateArtifact.artifact.projectId !== input.projectId ||
+    finalArtifact.artifact.projectId !== input.projectId
+  ) {
     throw new KnowledgeImportError(
       "TASK_PROJECT_MISMATCH",
-      "知识库任务不属于当前官网项目",
+      "知识库本地产物不属于当前官网项目",
       403,
     );
   }
+  if (
+    candidateArtifact.sha256 !== value.candidateSha256.toLowerCase() ||
+    finalArtifact.sha256 !== value.finalSha256.toLowerCase()
+  ) {
+    throw new KnowledgeImportError(
+      "ARTIFACT_HASH_MISMATCH",
+      "知识库本地产物哈希与官网声明不一致",
+      409,
+    );
+  }
+  const taskId = value.candidateArtifactId;
 
   const reservation = await reserveReceipt({
     userId: provision.userId,
@@ -599,51 +658,42 @@ export async function importWebsiteKnowledgeArtifact(input: {
     now: input.now ?? new Date(),
   });
   if (reservation.state === "completed") {
+    const snapshot = await getKnowledgeSnapshotById({
+      userId: provision.userId,
+      snapshotId: reservation.snapshotId,
+    });
+    if (!snapshot) throw incompleteReceiptError();
+    // Snapshot + receipt commit atomically, while the monitoring handoff is a
+    // post-commit side effect. A worker can exit in that narrow interval, so
+    // every completed-receipt replay must also repair the handoff. The handoff
+    // service is snapshot-keyed/idempotent; failure remains non-fatal because
+    // the knowledge snapshot is already durable and a later replay can retry.
+    await createKnowledgeMonitoringHandoff({
+      userId: provision.userId,
+      actorUserId: provision.userId,
+      knowledgeSnapshotId: reservation.snapshotId,
+    }).catch((handoffError) => {
+      console.error(
+        "[KnowledgeImport] Completed receipt replay could not ensure monitoring handoff",
+        handoffError,
+      );
+    });
     return {
       status: "completed" as const,
       replayed: true,
       receiptId: reservation.receiptId,
-      snapshot: reservation.snapshot,
+      snapshot,
     };
   }
 
   let storedAssetKeys: string[] = [];
   let snapshotCommitted = false;
+  let snapshotCommitAttempted = false;
   let storedArchive: { userId: number; snapshotId: string } | undefined;
   let committedSnapshot: Awaited<
     ReturnType<typeof createKnowledgeSnapshot>
   > | null = null;
   let committedSnapshotId = "";
-  let committedSourceFileName = "";
-  let receiptCompleted = false;
-  const completeReceipt = async () => {
-    const result = await db
-      .update(knowledgeImportReceipts)
-      .set({
-        status: "completed",
-        snapshotId: committedSnapshotId,
-        sourceFileName: committedSourceFileName,
-        completedAt: new Date(),
-        errorCode: null,
-        errorMessage: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(knowledgeImportReceipts.id, reservation.receiptId),
-          eq(knowledgeImportReceipts.status, "processing"),
-        ),
-      );
-    const affectedRows = Number(
-      (result as { affectedRows?: unknown } | undefined)?.affectedRows ??
-        (result as Array<{ affectedRows?: unknown }> | undefined)?.[0]
-          ?.affectedRows,
-    );
-    if (affectedRows === 0) {
-      throw new Error("知识库导入回执状态已变化，无法写入完成状态");
-    }
-    receiptCompleted = true;
-  };
   try {
     await assertKnowledgeBaseWritable(provision.userId);
     try {
@@ -658,102 +708,41 @@ export async function importWebsiteKnowledgeArtifact(input: {
       }
       throw error;
     }
-    const credential = await getPresalesCredentialForResource("task", taskId);
-    if (
-      !credential ||
-      credential.id !== binding.apiCredentialId ||
-      credential.version !== binding.credentialVersion
-    ) {
-      throw new KnowledgeImportError(
-        "TASK_PROJECT_MISMATCH",
-        "知识库任务的凭据归属无法验证",
-        403,
-      );
-    }
-    const taskResponse = await axios.get(
-      `${getUpstreamBaseUrl()}/v1/tasks/${encodeURIComponent(taskId)}`,
-      {
-        headers: {
-          API_KEY: credential.apiKey,
-          Authorization: `Bearer ${credential.apiKey}`,
-        },
-        timeout: 120_000,
-        validateStatus: () => true,
-      },
-    );
-    if (taskResponse.status !== 200) {
-      throw new KnowledgeImportError(
-        "KNOWLEDGE_IMPORT_FAILED",
-        `读取知识库任务失败 (${taskResponse.status})`,
-        502,
-      );
-    }
-    const task = taskResponse.data?.task || taskResponse.data || {};
-    const returnedTaskId = String(task.id || task.task_id || "");
-    if (returnedTaskId !== taskId) {
-      throw new KnowledgeImportError(
-        "TASK_PROJECT_MISMATCH",
-        "读取到的知识库任务标识不匹配",
-        409,
-      );
-    }
-    if (task.status !== "completed") {
-      throw new KnowledgeImportError(
-        "TASK_NOT_COMPLETED",
-        "知识库任务尚未完成",
-        409,
-      );
-    }
-    const matches = collectKnowledgeArchiveDescriptors(task.output).filter(
-      (descriptor) =>
-        descriptor.outputItemId === knowledgeImportOutputItemId(value) &&
-        (!knowledgeImportCandidateFileId(value) ||
-          descriptor.fileId === knowledgeImportCandidateFileId(value)) &&
-        knowledgeArchiveDescriptorHash(descriptor) ===
-          knowledgeImportDescriptorHash(value).toLowerCase(),
-    );
-    if (matches.length !== 1) {
-      throw new KnowledgeImportError(
-        "ARTIFACT_DESCRIPTOR_MISMATCH",
-        "无法在知识库任务中唯一确认所声明的 ZIP 产物",
-        409,
-      );
-    }
-    const finalDescriptor: KnowledgeArchiveDescriptor =
-      value.schemaVersion === 4
-        ? {
-            outputItemId: value.candidate.outputItemId,
-            fileId: value.finalArtifact.fileId,
-            filename: value.finalArtifact.filename,
-            mimeType: "application/zip",
-          }
-        : matches[0]!;
-    const downloaded = await downloadArchiveBytes({
-      descriptor: finalDescriptor,
-      apiKey: credential.apiKey,
-      baseUrl: getUpstreamBaseUrl(),
-    });
-    const archiveHash = createHash("sha256")
+    const downloaded = {
+      buffer: finalArtifact.buffer,
+      filename: finalArtifact.filename,
+    };
+    const rawArchiveHash = createHash("sha256")
       .update(downloaded.buffer)
       .digest("hex");
-    if (archiveHash !== knowledgeImportArtifactSha256(value).toLowerCase()) {
+    if (rawArchiveHash !== knowledgeImportArtifactSha256(value).toLowerCase()) {
       throw new KnowledgeImportError(
         "ARTIFACT_HASH_MISMATCH",
         "知识库 ZIP 哈希与官网声明不一致",
         409,
       );
     }
-    const snapshotId = randomUUID();
-    const parsed = await readKnowledgeArchive(
+    const canonicalArchive = await canonicalizeWebsiteKnowledgeImportArchive(
       downloaded.buffer,
-      downloaded.filename,
-      snapshotId,
-      {
-        validationProfile:
-          value.schemaVersion >= 3 ? "website-lead-v1" : "historical",
-        archiveContractVersion: knowledgeImportArchiveContractVersion(value),
-      },
     );
+    const snapshotId = randomUUID();
+    const parsed =
+      canonicalArchive.schemaVersion === 4
+        ? await projectWebsiteKnowledgeImportArchiveV4({
+            buffer: canonicalArchive.buffer,
+            snapshotId,
+          })
+        : await readKnowledgeArchive(
+            canonicalArchive.buffer,
+            downloaded.filename,
+            snapshotId,
+            {
+              validationProfile: "website-lead-v1",
+              archiveContractVersion:
+                knowledgeImportArchiveContractVersion(value),
+            },
+          );
+    storedAssetKeys = parsed.storedAssetKeys;
     const packageManifestSha256 = knowledgeImportPackageManifestSha256(value);
     if (
       packageManifestSha256 &&
@@ -766,7 +755,6 @@ export async function importWebsiteKnowledgeArtifact(input: {
         409,
       );
     }
-    storedAssetKeys = parsed.storedAssetKeys;
     const workspace = await getDashboardWorkspace(provision.userId);
     if (
       normalizedEnterpriseName(workspace.payload.brandName) !==
@@ -778,18 +766,21 @@ export async function importWebsiteKnowledgeArtifact(input: {
         409,
       );
     }
-    assertKnowledgeArchiveEnterpriseIdentity({
-      enterpriseIdentityConfirmed: true,
-      brandName: workspace.payload.brandName,
-      documents: parsed.documents,
-    });
+    if (canonicalArchive.schemaVersion !== 4) {
+      assertKnowledgeArchiveEnterpriseIdentity({
+        enterpriseIdentityConfirmed: true,
+        brandName: workspace.payload.brandName,
+        documents: parsed.documents,
+      });
+    }
     await persistKnowledgeSnapshotArchive({
       userId: provision.userId,
       snapshotId,
-      buffer: downloaded.buffer,
-      expectedSha256: archiveHash,
+      buffer: canonicalArchive.buffer,
+      expectedSha256: canonicalArchive.sha256,
     });
     storedArchive = { userId: provision.userId, snapshotId };
+    snapshotCommitAttempted = true;
     const snapshot = await createKnowledgeSnapshot({
       snapshotId,
       userId: provision.userId,
@@ -797,16 +788,18 @@ export async function importWebsiteKnowledgeArtifact(input: {
       sourceFileName: downloaded.filename,
       sourceTaskId: taskId,
       sourceArtifactHash: knowledgeImportDescriptorHash(value).toLowerCase(),
-      archiveHash,
+      archiveHash: canonicalArchive.sha256,
       documents: parsed.documents,
       assets: parsed.assets,
-      totalBytes: downloaded.buffer.length,
+      totalBytes: canonicalArchive.buffer.length,
+      importReceiptClaim: {
+        receiptId: reservation.receiptId,
+        claimRevision: reservation.claimRevision,
+      },
     });
     committedSnapshot = snapshot;
     committedSnapshotId = snapshot?.id ?? snapshotId;
-    committedSourceFileName = downloaded.filename;
     snapshotCommitted = true;
-    await completeReceipt();
     await createKnowledgeMonitoringHandoff({
       userId: provision.userId,
       actorUserId: provision.userId,
@@ -819,15 +812,60 @@ export async function importWebsiteKnowledgeArtifact(input: {
       snapshot,
     };
   } catch (error) {
-    if (snapshotCommitted) {
-      if (!receiptCompleted) {
-        await completeReceipt().catch((receiptError) => {
+    if (!snapshotCommitted && snapshotCommitAttempted) {
+      let receiptState:
+        | Awaited<ReturnType<typeof readImportReceiptState>>
+        | undefined;
+      try {
+        receiptState = await readImportReceiptState(reservation.receiptId);
+      } catch (receiptReadError) {
+        console.error(
+          "[KnowledgeImport] Snapshot commit outcome is unknown; preserving claimant files for replay",
+          receiptReadError,
+        );
+      }
+      if (receiptState?.status === "completed" && receiptState.snapshotId) {
+        const durableSnapshot = await getKnowledgeSnapshotById({
+          userId: provision.userId,
+          snapshotId: receiptState.snapshotId,
+        });
+        if (!durableSnapshot) throw incompleteReceiptError();
+        if (storedArchive?.snapshotId !== receiptState.snapshotId) {
+          await removeStoredKnowledgeAssets(storedAssetKeys);
+          if (storedArchive) {
+            await removeKnowledgeSnapshotArchive(storedArchive).catch(
+              () => undefined,
+            );
+          }
+        }
+        await createKnowledgeMonitoringHandoff({
+          userId: provision.userId,
+          actorUserId: provision.userId,
+          knowledgeSnapshotId: receiptState.snapshotId,
+        }).catch((handoffError) => {
           console.error(
-            "[KnowledgeImport] Snapshot committed but receipt completion retry failed",
-            receiptError,
+            "[KnowledgeImport] Replayed committed snapshot but monitoring handoff failed",
+            handoffError,
           );
         });
+        return {
+          status: "completed" as const,
+          replayed: true,
+          receiptId: reservation.receiptId,
+          snapshot: durableSnapshot,
+        };
       }
+      if (receiptState === undefined) {
+        throw error instanceof KnowledgeImportError
+          ? error
+          : new KnowledgeImportError(
+              "KNOWLEDGE_IMPORT_FAILED",
+              "知识库快照提交结果暂时无法确认，请使用原幂等键重试",
+              503,
+            );
+      }
+    }
+    if (snapshotCommitted) {
       await createKnowledgeMonitoringHandoff({
         userId: provision.userId,
         actorUserId: provision.userId,
@@ -857,7 +895,11 @@ export async function importWebsiteKnowledgeArtifact(input: {
         );
       }
     }
-    await markReceiptFailed(reservation.receiptId, error);
+    await markReceiptFailed(
+      reservation.receiptId,
+      reservation.claimRevision,
+      error,
+    );
     throw error instanceof KnowledgeImportError
       ? error
       : new KnowledgeImportError(

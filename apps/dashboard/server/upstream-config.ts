@@ -1,7 +1,7 @@
 import type { Request } from "express";
 
 const UPSTREAM_VENDOR = ["ma", "nus"].join("");
-const DEFAULT_UPSTREAM_BASE_URL = `https://api.${UPSTREAM_VENDOR}.im`;
+const DEFAULT_UPSTREAM_BASE_URL = `https://api.${UPSTREAM_VENDOR}.ai`;
 
 export function configuredUpstreamBaseUrl(
   env: NodeJS.ProcessEnv = process.env,
@@ -27,6 +27,13 @@ export function configuredUpstreamBaseUrl(
     return null;
   }
 
+  if (
+    env.NODE_ENV === "production" &&
+    (parsed.origin !== DEFAULT_UPSTREAM_BASE_URL || parsed.pathname !== "/")
+  ) {
+    return null;
+  }
+
   return parsed.toString().replace(/\/+$/, "");
 }
 
@@ -42,7 +49,7 @@ export function assertUpstreamBaseUrlConfigured(
   const configured = configuredUpstreamBaseUrl(env);
   if (!configured) {
     throw new Error(
-      "FRONTMIND_UPSTREAM_BASE_URL must be an HTTPS URL without credentials, query, or fragment",
+      "FRONTMIND_UPSTREAM_BASE_URL must be an allowed HTTPS Manus origin without credentials, path, query, or fragment in production",
     );
   }
   return configured;

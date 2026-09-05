@@ -10,10 +10,6 @@ import {
 } from "../server/knowledge-base-state-machine-backfill";
 
 const apply = process.argv.includes("--apply");
-const inventoryReviewed = process.argv.includes("--inventory-reviewed");
-const finalizeReadyRebind = process.argv.includes("--finalize-ready-rebind");
-const prepareOnly = process.argv.includes("--prepare-only");
-const finalizeOnly = process.argv.includes("--finalize-only");
 const limitArgument = process.argv.find((value) =>
   value.startsWith("--limit="),
 );
@@ -181,7 +177,6 @@ export async function prepareAllKnowledgeBaseStateMachineBackfill(input: {
 
 export async function drainKnowledgeBaseRecovery(input: {
   recoverExpiredKnowledgeBaseTurns: typeof import("../server/knowledge-base-api").recoverExpiredKnowledgeBaseTurns;
-  recoverOpenKnowledgeBaseTasks: typeof import("../server/knowledge-base-api").recoverOpenKnowledgeBaseTasks;
 }) {
   const aggregate = {
     turnPasses: 0,
@@ -190,18 +185,11 @@ export async function drainKnowledgeBaseRecovery(input: {
       claimed: 0,
       rebound: 0,
       reconciled: 0,
+      credentialPaused: 0,
       skipped: 0,
       failed: 0,
     },
     claimedTurnIds: [] as string[],
-    buildPasses: 0,
-    builds: {
-      scanned: 0,
-      reconciled: 0,
-      skipped: 0,
-      failed: 0,
-      packageRebindRequired: 0,
-    },
   };
   for (let pass = 0; pass < 100; pass += 1) {
     const result = await input.recoverExpiredKnowledgeBaseTurns({
@@ -221,128 +209,41 @@ export async function drainKnowledgeBaseRecovery(input: {
     if (result.scanned < 200) break;
     if (pass === 99) throw new Error("KB_TURN_RECOVERY_DRAIN_LIMIT");
   }
-  let afterBuildId: string | undefined;
-  for (let pass = 0; pass < 10_000; pass += 1) {
-    const result = await input.recoverOpenKnowledgeBaseTasks({
-      limit: 500,
-      concurrency: 3,
-      afterBuildId,
-    });
-    aggregate.buildPasses += 1;
-    aggregate.builds.scanned += result.scanned;
-    aggregate.builds.reconciled += result.reconciled;
-    aggregate.builds.skipped += result.skipped;
-    aggregate.builds.failed += result.failed;
-    aggregate.builds.packageRebindRequired += result.packageRebindRequired ?? 0;
-    if (result.failed > 0) throw new Error("KB_BUILD_RECOVERY_FAILED");
-    if (result.skipped > 0) throw new Error("KB_BUILD_RECOVERY_SKIPPED");
-    if (!result.hasMore) break;
-    if (!result.nextCursor) throw new Error("KB_BUILD_RECOVERY_CURSOR_MISSING");
-    afterBuildId = result.nextCursor;
-    if (pass === 9_999) throw new Error("KB_BUILD_RECOVERY_DRAIN_LIMIT");
-  }
   return aggregate;
 }
 
-async function main() {
-  const before = await inspectWithSkillPins();
-  if (!apply) {
-    const prepared = await prepareAllKnowledgeBaseStateMachineBackfill({
-      apply: false,
-      pageSize: limit,
-    });
-    assertKnowledgeBaseBackfillCoverage({ inventory: before, prepared });
-    const finalized = await finalizeKnowledgeBaseReadyPackageBackfill({
-      apply: false,
-    });
-    console.log(
-      JSON.stringify(
-        { mode: "dry-run", inventory: before, prepared, finalized },
-        null,
-        2,
-      ),
-    );
-    console.log(
-      "知识库状态机回填预检完成；未修改数据库。确认备份后使用 --apply。",
-    );
-    return;
+export function assertKnowledgeBaseBackfillApplyRetired(
+  applyRequested: boolean,
+) {
+  if (applyRequested) {
+    throw new Error("KB_V2_BACKFILL_RETIRED_RESET_REQUIRED");
   }
-  if (!inventoryReviewed) {
-    throw new Error(
-      "apply 前必须先保存并审核 dry-run 清单，再携带 --inventory-reviewed",
-    );
-  }
-  assertRecoverableSkillPins(before);
-  if (prepareOnly === finalizeOnly) {
-    throw new Error(
-      "apply 必须且只能选择 --prepare-only 或 --finalize-only 一个阶段",
-    );
-  }
-  if (finalizeOnly) {
-    if (!finalizeReadyRebind) {
-      throw new Error("finalize-only 必须显式携带 --finalize-ready-rebind");
-    }
-    const finalized = await finalizeKnowledgeBaseReadyPackageBackfill({
-      apply: true,
-      confirmRebindRequired: true,
-    });
-    const after = await inspectWithSkillPins();
-    assertKnowledgeBaseReadyPackageBackfillFinalized(after);
-    console.log(
-      JSON.stringify(
-        {
-          mode: "finalize-only",
-          inventoryBefore: before,
-          finalized,
-          inventoryAfter: after,
-        },
-        null,
-        2,
-      ),
-    );
-    console.log("KB_V2_REBIND_FINALIZATION_COMPLETE");
-    return;
-  }
+}
 
+async function main() {
+  // The historical migration command is inventory-only after the reset-only
+  // cutover. It must fail before Skill resolution, reservation creation,
+  // upload, credential access or Provider recovery.
+  assertKnowledgeBaseBackfillApplyRetired(apply);
+  const before = await inspectWithSkillPins();
   const prepared = await prepareAllKnowledgeBaseStateMachineBackfill({
-    apply: true,
+    apply: false,
     pageSize: limit,
   });
   assertKnowledgeBaseBackfillCoverage({ inventory: before, prepared });
-
-  // Import lazily so dry-run cannot accidentally initialize any upstream
-  // recovery path. These calls reuse stored encrypted credential bindings;
-  // API keys and response bodies are never printed.
-  const { recoverExpiredKnowledgeBaseTurns, recoverOpenKnowledgeBaseTasks } =
-    await import("../server/knowledge-base-api");
-  const recovery = await drainKnowledgeBaseRecovery({
-    recoverExpiredKnowledgeBaseTurns,
-    recoverOpenKnowledgeBaseTasks,
-  });
-  assertKnowledgeBaseReservationsRecovered({
-    prepared,
-    claimedTurnIds: recovery.claimedTurnIds,
-  });
-  const pendingFinalization = await finalizeKnowledgeBaseReadyPackageBackfill({
+  const finalized = await finalizeKnowledgeBaseReadyPackageBackfill({
     apply: false,
   });
-  const after = await inspectWithSkillPins();
-  const { claimedTurnIds: _claimedTurnIds, ...recoverySummary } = recovery;
   console.log(
     JSON.stringify(
-      {
-        mode: "apply",
-        inventoryBefore: before,
-        prepared,
-        recovery: recoverySummary,
-        pendingFinalization,
-        inventoryAfter: after,
-      },
+      { mode: "dry-run", inventory: before, prepared, finalized },
       null,
       2,
     ),
   );
-  console.log("KB_V2_BACKFILL_RECOVERY_COMPLETE");
+  console.log(
+    "知识库旧状态机回填仅保留只读预检；如需继续业务，请批准重置后重新上传资料。",
+  );
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";

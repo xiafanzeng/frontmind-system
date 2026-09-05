@@ -5,13 +5,14 @@ import type { FrontMindRequest } from "./express-auth";
 
 const authMocks = vi.hoisted(() => ({
   getCredentialForUpstreamResource: vi.fn(),
-  getDecryptedCredentialForUser: vi.fn(),
+  getEffectiveDecryptedCredentialForAccount: vi.fn(),
 }));
 
 vi.mock("../auth-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../auth-service")>()),
   getCredentialForUpstreamResource: authMocks.getCredentialForUpstreamResource,
-  getDecryptedCredentialForUser: authMocks.getDecryptedCredentialForUser,
+  getEffectiveDecryptedCredentialForAccount:
+    authMocks.getEffectiveDecryptedCredentialForAccount,
 }));
 
 import { resolveUpstreamCredential } from "./upstream-credential";
@@ -82,6 +83,48 @@ function response() {
 }
 
 describe("resolveUpstreamCredential attachment API Key policy", () => {
+  it("defers only knowledge-base scoped managed-upload creation to its frozen reservation", async () => {
+    const req = {
+      method: "POST",
+      originalUrl: "/api/frontmind/v1/managed-uploads",
+      body: {
+        resumeScope: {
+          kind: "knowledge_base",
+          conversationId: "conversation-1",
+          turnId: "turn-1",
+          clientRequestId: "request-1",
+        },
+      },
+      frontmindUser: { id: 42, role: "user" },
+      query: {},
+    } as never;
+    const res = response();
+    const next = vi.fn();
+
+    await resolveUpstreamCredential(req, res as never, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it("still requires an active credential for unscoped managed-upload creation", async () => {
+    authMocks.getEffectiveDecryptedCredentialForAccount.mockResolvedValue(null);
+    const req = {
+      method: "POST",
+      originalUrl: "/api/frontmind/v1/managed-uploads",
+      body: {},
+      frontmindUser: { id: 42, role: "user" },
+      query: {},
+    } as never;
+    const res = response();
+    const next = vi.fn();
+
+    await resolveUpstreamCredential(req, res as never, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(428);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -271,5 +314,53 @@ describe("resolveUpstreamCredential attachment API Key policy", () => {
       undefined,
       { allowExpiredFileContent: true },
     );
+  });
+
+  it.each([
+    ["PUT", "/api/frontmind/proxy-upload?upload_intent_id=mui_1"],
+    ["POST", "/api/frontmind/v1/managed-uploads/recovery"],
+    ["DELETE", "/api/frontmind/v1/managed-uploads"],
+  ])(
+    "lets an existing intent %s operation resolve its frozen credential in the intent service",
+    async (method, originalUrl) => {
+      authMocks.getEffectiveDecryptedCredentialForAccount.mockResolvedValue(
+        null,
+      );
+      const req = {
+        method,
+        originalUrl,
+        query: method === "PUT" ? { upload_intent_id: "mui_1" } : undefined,
+        body: {},
+        frontmindUser: user(7),
+      } as FrontMindRequest;
+      const res = response();
+      const next = vi.fn();
+
+      await resolveUpstreamCredential(req, res as never, next);
+
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+      expect(
+        authMocks.getEffectiveDecryptedCredentialForAccount,
+      ).not.toHaveBeenCalled();
+      expect(req.frontmindCredential).toBeUndefined();
+    },
+  );
+
+  it("still requires the active credential when allocating a new intent", async () => {
+    authMocks.getEffectiveDecryptedCredentialForAccount.mockResolvedValue(null);
+    const req = {
+      method: "POST",
+      originalUrl: "/api/frontmind/v1/managed-uploads",
+      body: {},
+      frontmindUser: user(7),
+    } as FrontMindRequest;
+    const res = response();
+    const next = vi.fn();
+
+    await resolveUpstreamCredential(req, res as never, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(428);
   });
 });

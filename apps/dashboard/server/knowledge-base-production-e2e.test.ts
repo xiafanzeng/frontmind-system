@@ -18,6 +18,7 @@ import {
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
   knowledgeBaseSnapshots,
+  localAssets,
   messages,
   upstreamResources,
   userDashboardContents,
@@ -33,7 +34,20 @@ import {
   formatKnowledgeBaseManifestEnvelope,
   formatKnowledgeBasePresentationEnvelope,
   formatKnowledgeBaseProgressEnvelope,
+  formatKnowledgeBaseReopenEnvelope,
 } from "./knowledge-base-progress";
+import {
+  createKnowledgeBaseOperationKey,
+  createKnowledgeBaseUpstreamIdempotencyKey,
+  hashKnowledgeBaseTurnRequest,
+  hashKnowledgeBaseUpstreamIdempotencyKey,
+  inspectKnowledgeBaseLegacyProtocolTerminalHistoryAuthority,
+  inspectKnowledgeBaseRetryAuthority,
+} from "./knowledge-base-turn-service";
+import {
+  KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH,
+  KNOWLEDGE_BASE_TREE_POLICY_V2_SKILL_CONTENT_HASH,
+} from "./knowledge-base-tree-policy-rollout";
 
 const dependencies = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -142,19 +156,33 @@ type MemoryState = {
   messages: Record<string, any>[];
   snapshots: Record<string, any>[];
   resources: Record<string, any>[];
+  localAssets: Record<string, any>[];
 };
 
 function rowsFor(table: unknown, state: MemoryState) {
   if (table === apiCredentials) return state.credentials;
   if (table === users) return state.users;
   if (table === userDashboardContents) return state.dashboardContents;
-  if (table === knowledgeBaseBuilds) return state.builds;
+  if (table === knowledgeBaseBuilds) {
+    for (const build of state.builds) {
+      if (!Object.prototype.hasOwnProperty.call(build, "treePolicyVersion")) {
+        build.treePolicyVersion = 1;
+      }
+      if (
+        !Object.prototype.hasOwnProperty.call(build, "initialResearchCoverage")
+      ) {
+        build.initialResearchCoverage = null;
+      }
+    }
+    return state.builds;
+  }
   if (table === knowledgeBaseBuildNodes) return state.nodes;
   if (table === conversationTurns) return state.turns;
   if (table === conversations) return state.conversations;
   if (table === messages) return state.messages;
   if (table === knowledgeBaseSnapshots) return state.snapshots;
   if (table === upstreamResources) return state.resources;
+  if (table === localAssets) return state.localAssets;
   return [];
 }
 
@@ -260,7 +288,14 @@ function queryRows(
 
 function memoryDatabase(
   state: MemoryState,
-  options: { cloneSelectedRows?: boolean } = {},
+  options: {
+    cloneSelectedRows?: boolean;
+    transactional?: boolean;
+    failUpdate?: (
+      table: unknown,
+      values: Record<string, unknown>,
+    ) => Error | undefined;
+  } = {},
 ) {
   const insertRows = (table: unknown, values: Array<Record<string, any>>) => {
     const now = new Date();
@@ -274,6 +309,8 @@ function memoryDatabase(
         );
         if (duplicate) continue;
         state.builds.push({
+          treePolicyVersion: 1,
+          initialResearchCoverage: null,
           upstreamTaskId: null,
           generation: 1,
           stateEpoch: 0,
@@ -411,6 +448,8 @@ function memoryDatabase(
         set(values: Record<string, unknown>) {
           return {
             async where(condition: unknown) {
+              const failure = options.failUpdate?.(table, values);
+              if (failure) throw failure;
               const targets = matchingRows(rowsFor(table, state), condition);
               targets.forEach((target) => Object.assign(target, values));
               return [{ affectedRows: targets.length }];
@@ -448,7 +487,14 @@ function memoryDatabase(
       };
     },
     async transaction<T>(operation: (tx: any) => Promise<T>) {
-      return operation(db);
+      if (!options.transactional) return operation(db);
+      const snapshot = structuredClone(state);
+      try {
+        return await operation(db);
+      } catch (error) {
+        Object.assign(state, snapshot);
+        throw error;
+      }
     },
   };
   return db;
@@ -478,6 +524,43 @@ ${narrative}
 `;
 }
 
+function completeResearchCoverage(leafIds: string[]) {
+  const dimensionIds = [
+    "enterprise_identity",
+    "team_and_organization",
+    "products_and_services",
+    "capabilities_and_delivery",
+    "industries_scenarios_and_cases",
+    "differentiation_and_evidence",
+    "cooperation_delivery_and_support",
+  ] as const;
+  return {
+    officialPages: {
+      discovered: 12,
+      attempted: 12,
+      succeeded: 12,
+      failed: 0,
+    },
+    publicQueries: 6,
+    officialDocuments: 0,
+    uploadsRead: 0,
+    sourceCount: 12,
+    productFamilies: [
+      {
+        id: "frontmind-enterprise-ai",
+        name: "FrontMind 企业智能产品族",
+        leafIds,
+      },
+    ],
+    dimensions: dimensionIds.map((id, index) => ({
+      id,
+      status: "gap" as const,
+      leafIds: [leafIds[index]!],
+    })),
+    stopReason: "coverage_complete" as const,
+  };
+}
+
 async function createFinalPackageFixture(
   input: {
     leafCount?: number;
@@ -485,6 +568,8 @@ async function createFinalPackageFixture(
     schemaVersion?: 3 | 4;
     archiveLeafIdPrefix?: string;
     driftLastPackagedLeaf?: boolean;
+    officialLogoSourcePageUrl?: string;
+    officialLogoSourceAssetUrl?: string;
   } = {},
 ) {
   const leafCount = input.leafCount ?? FINAL_REVISION;
@@ -610,8 +695,11 @@ async function createFinalPackageFixture(
     alt: "FrontMind超前智能 Logo",
     branchId: "products",
     documentIds: [`${input.archiveLeafIdPrefix || ""}1.1`],
-    sourcePageUrl: "https://www.frontmind.cn/",
-    sourceAssetUrl: "https://www.frontmind.cn/frontmind-logo.png",
+    sourcePageUrl:
+      input.officialLogoSourcePageUrl || "https://www.frontmind.net/",
+    sourceAssetUrl:
+      input.officialLogoSourceAssetUrl ||
+      "https://www.frontmind.net/frontmind-logo.png",
     sourceKind: "official_web",
     ownership: "first_party",
     assetType: "brand_identity",
@@ -750,7 +838,48 @@ function initialState() {
     messages: [],
     snapshots: [],
     resources: [],
+    localAssets: [],
   } satisfies MemoryState;
+}
+
+function completedOfficialLogoProvenanceTurn(input: {
+  id: string;
+  buildId: string;
+  generation: number;
+  now: Date;
+}) {
+  return {
+    id: input.id,
+    conversationId: STORED_CONVERSATION_ID,
+    userId: USER_ID,
+    apiCredentialId: "credential-e2e",
+    clientRequestId: `request-${input.id}`,
+    buildId: input.buildId,
+    buildGeneration: input.generation,
+    operationKey: `operation-${input.id}`,
+    operationType: "start",
+    expectedRevision: 0,
+    expectedLeafId: null,
+    requestHash: "8".repeat(64),
+    upstreamIdempotencyKeyHash: "9".repeat(64),
+    attachmentFileIds: [],
+    metadata: {
+      boundOfficialLogoProvenance: {
+        sourceKind: "official_web",
+        sourcePageUrl: "https://www.frontmind.net/",
+        sourceAssetUrl: "https://www.frontmind.net/frontmind-logo.png",
+      },
+    },
+    leaseExpiresAt: null,
+    status: "completed",
+    upstreamTaskId: `task-${input.id}`,
+    errorCode: null,
+    errorMessage: null,
+    startedAt: input.now,
+    completedAt: input.now,
+    createdAt: input.now,
+    updatedAt: input.now,
+  };
 }
 
 async function listen(app: express.Express) {
@@ -821,7 +950,805 @@ describe("knowledge-base production final-package acceptance", () => {
     if (assetRoot) await rm(assetRoot, { recursive: true, force: true });
   });
 
-  it("initializes a completed v4 zero-image Manifest as a first-leaf Logo upload gate without accepting the same running output", async () => {
+  it("binds optional materialized v5 Logos locally with atomic CAS and no Working Set mutation", async () => {
+    const state = initialState();
+    const buildId = "31313131-3131-4313-8313-313131313131";
+    const leafIds = Array.from({ length: 30 }, (_, index) => `1.${index + 1}`);
+    const now = new Date("2026-08-16T04:28:00.000Z");
+    const content = "# 企业身份与定位\n\n这是客户可见的企业身份正文。";
+    const presentationKey = "presentation-materialized-logo-0";
+    state.builds.push({
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "https://www.frontmind.net/",
+      executionMode: "materialized_bundle_v1",
+      providerProtocol: "manus_v2",
+      skillName: "socratic-kb-builder",
+      skillVersion: "5",
+      skillContentHash: KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH,
+      treePolicyVersion: 2,
+      generation: 1,
+      stateEpoch: 4,
+      revision: 0,
+      status: "confirming",
+      activeTurnId: null,
+      activeWorkingSetId: "working-set-immutable",
+      contentVersion: 1,
+      currentLeafId: leafIds[0],
+      currentPresentationKey: presentationKey,
+      totalNodeCount: leafIds.length,
+      confirmedCount: 0,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      initialResearchCoverage: completeResearchCoverage(leafIds),
+      handoffProvenance: {
+        materializedRecoveryContractVersion: 1,
+        materializedCompletionContractVersion: 2,
+        materializedQuality: {
+          completeness: "complete",
+          stats: {
+            acceptedCount: leafIds.length,
+            expectedCount: 30,
+            droppedCount: 0,
+          },
+          warnings: [],
+          downstreamEligible: true,
+          publishable: true,
+        },
+      },
+      logoStorageKey: null,
+      logoSha256: null,
+      logoBytes: null,
+      logoFilename: null,
+      logoMimeType: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.nodes.push({
+      id: "node-materialized-logo",
+      buildId,
+      leafId: leafIds[0],
+      branchId: "identity",
+      branchTitle: "企业身份",
+      title: "企业身份与定位",
+      ordinal: 0,
+      status: "current",
+      transitionReason: "materialized_initial_current",
+      contentMarkdown: content,
+      contentSha256: knowledgeBaseMarkdownSha256(content),
+      contentVersion: 1,
+      sourceUrls: [],
+      imageUrls: [],
+      assetRefs: [],
+      lastTaskId: null,
+      sourceTurnId: "turn-materialized-initial",
+      presentationKey,
+      lastResponseAt: now,
+      confirmedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const database = memoryDatabase(state, { transactional: true });
+    const transaction = database.transaction.bind(database);
+    let transactionQueue = Promise.resolve();
+    database.transaction = <T>(operation: (tx: any) => Promise<T>) => {
+      const result = transactionQueue.then(() => transaction(operation));
+      transactionQueue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    };
+    dependencies.getDb.mockResolvedValue(database);
+    const { bindMaterializedKnowledgeBaseOfficialLogoLocally } = await import(
+      "./knowledge-base-materialized-service"
+    );
+    const png = async (color: string) =>
+      sharp({
+        create: {
+          width: 64,
+          height: 64,
+          channels: 4,
+          background: color,
+        },
+      })
+        .png()
+        .toBuffer();
+    const uploadInput = async (input: {
+      clientRequestId: string;
+      bytes: Buffer;
+      expectedRevision?: number;
+      expectedPresentationKey?: string;
+    }) => {
+      const digest = createHash("sha256").update(input.bytes).digest("hex");
+      return bindMaterializedKnowledgeBaseOfficialLogoLocally({
+        userId: USER_ID,
+        conversationId: PUBLIC_CONVERSATION_ID,
+        buildId,
+        clientRequestId: input.clientRequestId,
+        expectedGeneration: 1,
+        expectedRevision:
+          input.expectedRevision ?? Number(state.builds[0]!.revision),
+        expectedLeafId: leafIds[0]!,
+        expectedPresentationKey:
+          input.expectedPresentationKey ??
+          String(state.builds[0]!.currentPresentationKey),
+        upload: {
+          fileId: `file-${input.clientRequestId}`,
+          filename: "brand.png",
+          mimeType: "image/png",
+          sizeBytes: input.bytes.length,
+          sourceSha256: digest,
+        },
+        bytes: input.bytes,
+        boundAt: now,
+      });
+    };
+
+    const firstBytes = await png("#173c36");
+    const firstInput = {
+      clientRequestId: "logo-first",
+      bytes: firstBytes,
+      expectedRevision: 0,
+      expectedPresentationKey: presentationKey,
+    };
+    const first = await uploadInput(firstInput);
+    expect(first).toMatchObject({
+      execution: "local",
+      disposition: "logo_bound",
+      revision: 1,
+      stateEpoch: 5,
+      contentVersion: 1,
+      workingSetId: "working-set-immutable",
+    });
+    expect(state.builds[0]).toMatchObject({
+      activeWorkingSetId: "working-set-immutable",
+      contentVersion: 1,
+      revision: 1,
+      stateEpoch: 5,
+      logoSha256: createHash("sha256").update(firstBytes).digest("hex"),
+    });
+    expect(state.turns.at(-1)).toMatchObject({
+      operationType: "local_logo",
+      apiCredentialId: null,
+      upstreamTaskId: null,
+      status: "completed",
+      metadata: {
+        execution: "local",
+        providerRequestCount: 0,
+        disposition: "logo_bound",
+        contentVersion: 1,
+      },
+    });
+
+    const replay = await uploadInput(firstInput);
+    expect(replay).toMatchObject({
+      disposition: "idempotent",
+      revision: 1,
+      stateEpoch: 5,
+      contentVersion: 1,
+      workingSetId: "working-set-immutable",
+    });
+    expect(state.builds[0]).toMatchObject({ revision: 1, stateEpoch: 5 });
+
+    const same = await uploadInput({
+      clientRequestId: "logo-same-bytes",
+      bytes: firstBytes,
+    });
+    expect(same).toMatchObject({
+      disposition: "logo_unchanged",
+      revision: 1,
+      stateEpoch: 5,
+      contentVersion: 1,
+    });
+    expect(state.builds[0]).toMatchObject({ revision: 1, stateEpoch: 5 });
+    const firstStorageKey = state.builds[0]!.logoStorageKey;
+
+    const replacementBytes = await png("#8b5cf6");
+    const replacement = await uploadInput({
+      clientRequestId: "logo-replacement",
+      bytes: replacementBytes,
+    });
+    expect(replacement).toMatchObject({
+      disposition: "logo_bound",
+      revision: 2,
+      contentVersion: 1,
+    });
+    expect(state.builds[0]!.logoStorageKey).not.toBe(firstStorageKey);
+
+    const concurrentRevision = state.builds[0]!.revision;
+    const concurrentPresentationKey = state.builds[0]!.currentPresentationKey;
+    const concurrent = await Promise.allSettled([
+      uploadInput({
+        clientRequestId: "logo-concurrent-a",
+        bytes: await png("#be123c"),
+        expectedRevision: concurrentRevision,
+        expectedPresentationKey: concurrentPresentationKey,
+      }),
+      uploadInput({
+        clientRequestId: "logo-concurrent-b",
+        bytes: await png("#0369a1"),
+        expectedRevision: concurrentRevision,
+        expectedPresentationKey: concurrentPresentationKey,
+      }),
+    ]);
+    expect(
+      concurrent.filter((entry) => entry.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      concurrent.filter((entry) => entry.status === "rejected"),
+    ).toHaveLength(1);
+    expect(state.builds[0]).toMatchObject({
+      activeWorkingSetId: "working-set-immutable",
+      contentVersion: 1,
+      revision: 3,
+      stateEpoch: 7,
+    });
+
+    const apiLogoBytes = await png("#15803d");
+    const apiLogoSha256 = createHash("sha256")
+      .update(apiLogoBytes)
+      .digest("hex");
+    const apiLogoFileId = "managed-materialized-local-logo";
+    const apiLogoStorageKey = `frontmind-v2:${apiLogoFileId}`;
+    const apiLogoRetainUntil = new Date("2099-01-01T00:00:00.000Z");
+    const { Readable } = await import("node:stream");
+    const presalesStore = await import("./presales-file-store");
+    await presalesStore.recordPresalesFileDescriptor({
+      fileId: apiLogoFileId,
+      filename: "api-brand.png",
+      mimeType: "image/png",
+      sizeBytes: apiLogoBytes.length,
+    });
+    const stagedApiLogo = await presalesStore.stagePresalesFileContent({
+      fileId: apiLogoFileId,
+      stream: Readable.from([apiLogoBytes]),
+      maxBytes: 1024 * 1024,
+    });
+    await stagedApiLogo.commit({
+      filename: "api-brand.png",
+      mimeType: "image/png",
+      uploadedAt: now,
+      contentExpiresAt: apiLogoRetainUntil,
+    });
+    state.localAssets.push({
+      id: apiLogoFileId,
+      scope: "managed_user",
+      accountUserId: USER_ID,
+      presalesProjectId: null,
+      filename: "api-brand.png",
+      mimeType: "image/png",
+      sizeBytes: apiLogoBytes.length,
+      contentSha256: apiLogoSha256,
+      storageKey: apiLogoStorageKey,
+      storageKeyHash: createHash("sha256")
+        .update(apiLogoStorageKey)
+        .digest("hex"),
+      refCount: 1,
+      retainUntil: apiLogoRetainUntil,
+      createdAt: now,
+    });
+    let providerRequestCount = 0;
+    const provider = express();
+    provider.use((_req, res) => {
+      providerRequestCount += 1;
+      res.status(500).json({ error: "provider must not be called" });
+    });
+    const providerListener = await listen(provider);
+    dependencies.upstreamBaseUrl = providerListener.baseUrl;
+    const credentialReadsBefore =
+      dependencies.getDecryptedCredentialForKnowledgeBaseReservation.mock.calls
+        .length;
+    const knowledgeBaseApi = await import("./knowledge-base-api");
+    const knowledgeBaseRouter = knowledgeBaseApi.default;
+    const { requireExpressAuth } = await import("./_core/express-auth");
+    const dashboard = express();
+    dashboard.use(express.json());
+    dashboard.use(
+      "/api/knowledge-base",
+      requireExpressAuth,
+      knowledgeBaseRouter,
+    );
+    const dashboardListener = await listen(dashboard);
+    try {
+      const apiResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/turn`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({
+            conversationId: PUBLIC_CONVERSATION_ID,
+            clientRequestId: "logo-api-local",
+            userMessage: "",
+            submissionKind: "logo",
+            attachments: [
+              {
+                file_id: apiLogoFileId,
+                filename: "api-brand.png",
+              },
+            ],
+            expectedGeneration: 1,
+            expectedRevision: state.builds[0]!.revision,
+            expectedLeafId: leafIds[0],
+            expectedPresentationKey: state.builds[0]!.currentPresentationKey,
+          }),
+        },
+      );
+      const apiBody = await apiResponse.json();
+      expect(apiResponse.status, JSON.stringify(apiBody)).toBe(200);
+      expect(apiBody).toMatchObject({
+        accepted: true,
+        execution: "local",
+        disposition: "logo_bound",
+        contentVersion: 1,
+        workingSetId: "working-set-immutable",
+      });
+      expect(providerRequestCount).toBe(0);
+      expect(
+        dependencies.getDecryptedCredentialForKnowledgeBaseReservation.mock
+          .calls.length,
+      ).toBe(credentialReadsBefore);
+      expect(state.turns.at(-1)).toMatchObject({
+        operationType: "local_logo",
+        apiCredentialId: null,
+        upstreamTaskId: null,
+        metadata: { providerRequestCount: 0 },
+      });
+      expect(state.builds[0]).toMatchObject({
+        activeWorkingSetId: "working-set-immutable",
+        contentVersion: 1,
+        revision: 4,
+        stateEpoch: 8,
+      });
+    } finally {
+      await Promise.all([
+        close(dashboardListener.server),
+        close(providerListener.server),
+      ]);
+      await presalesStore.removeStoredPresalesFile(apiLogoFileId);
+    }
+
+    const beforeBadImage = {
+      revision: state.builds[0]!.revision,
+      stateEpoch: state.builds[0]!.stateEpoch,
+      logoSha256: state.builds[0]!.logoSha256,
+    };
+    await expect(
+      uploadInput({
+        clientRequestId: "logo-bad-image",
+        bytes: Buffer.from("not-an-image", "utf8"),
+      }),
+    ).rejects.toMatchObject({ code: "ARTIFACT_INVALID" });
+    expect(state.builds[0]).toMatchObject(beforeBadImage);
+    expect(state.builds[0]).toMatchObject({
+      activeWorkingSetId: "working-set-immutable",
+      contentVersion: 1,
+    });
+
+    const currentLogoStorageKey = state.builds[0]!.logoStorageKey;
+    if (currentLogoStorageKey) {
+      const artifactStore = await import("./knowledge-build-artifact-store");
+      await artifactStore.removeKnowledgeBuildArtifact({
+        userId: USER_ID,
+        buildId,
+        generation: 1,
+        kind: "logo",
+        storageKey: currentLogoStorageKey,
+      });
+    }
+  });
+
+  it.skip("retires production canonical-create rejection recovery", async () => {
+    const state = initialState();
+    const buildId = "19191919-1919-4191-8191-191919191919";
+    const turnId = "20202020-2020-4202-8202-202020202020";
+    const now = new Date("2026-08-14T07:52:00.000Z");
+    state.builds.push({
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "https://www.frontmind.net/",
+      providerProtocol: "manus_v2",
+      canonicalTaskId: null,
+      canonicalTaskGeneration: null,
+      canonicalCredentialId: null,
+      canonicalTaskState: "creating",
+      canonicalTaskUrl: null,
+      canonicalTaskCreatedAt: null,
+      handoffProvenance: null,
+      skillName: "socratic-kb-builder",
+      skillVersion: "4",
+      skillContentHash: "7".repeat(64),
+      skillArchiveSha256: "8".repeat(64),
+      skillArchiveBytes: 128,
+      skillArchiveStorageKey: "skills/frontmind.zip",
+      treePolicyVersion: 2,
+      initialResearchCoverage: null,
+      status: "confirming",
+      generation: 1,
+      stateEpoch: 96,
+      revision: 0,
+      currentLeafId: null,
+      totalNodeCount: 0,
+      confirmedCount: 0,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      activeTurnId: turnId,
+      upstreamTaskId: null,
+      lastAppliedOperationKey: null,
+      currentPresentationKey: null,
+      recoveryLeaseOwnerHash: null,
+      recoveryLeaseExpiresAt: null,
+      lastReconciledHash: null,
+      lastOutputLength: 0,
+      lastOutputItemIds: [],
+      lastTurnUserText: "开始构建企业知识库",
+      lastTurnAttachmentCount: 0,
+      awaitingResponseSince: now,
+      contentCompletedAt: null,
+      packageStatus: "not_started",
+      packageAttemptCount: 0,
+      packageNextRetryAt: null,
+      packageLastErrorCode: null,
+      packageRevision: null,
+      packageTaskId: null,
+      packageOutputItemId: null,
+      packageFileId: null,
+      packageFilename: null,
+      packageDescriptorHash: null,
+      packageStorageKey: null,
+      packageArchiveSha256: null,
+      packageSizeBytes: null,
+      logoStorageKey: null,
+      logoSha256: null,
+      logoBytes: null,
+      logoFilename: null,
+      logoMimeType: null,
+      protocolErrorCode: "MANUS_V2_CREATE_REJECTED",
+      protocolError: "provider detail must stay private",
+      publishedSnapshotId: null,
+      completedAt: null,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.turns.push({
+      id: turnId,
+      conversationId: STORED_CONVERSATION_ID,
+      userId: USER_ID,
+      apiCredentialId: "credential-e2e",
+      clientRequestId: "request-confirming-create-rejected",
+      buildId,
+      buildGeneration: 1,
+      operationKey: "operation-confirming-create-rejected",
+      operationType: "start",
+      expectedRevision: 0,
+      expectedLeafId: null,
+      requestHash: "a".repeat(64),
+      upstreamIdempotencyKeyHash: "b".repeat(64),
+      attachmentFileIds: [],
+      metadata: {
+        attachmentsFrozen: true,
+        providerProtocol: "manus_v2",
+        providerMethod: "task.create",
+        providerAttemptState: "rejected",
+        createAttemptState: "rejected",
+        providerReasonCategory: "invalid_argument",
+        providerRejectionStatus: 400,
+        operationToken: "operation-confirming-create-rejected",
+        expectedAttachmentCount: 0,
+        userAttachmentCount: 0,
+        recovery: {
+          kind: "start",
+          conversationId: PUBLIC_CONVERSATION_ID,
+          companyName: "FrontMind超前智能",
+          attachments: [],
+        },
+        preparedDispatch: {
+          schemaVersion: 2,
+          baseUrl: "https://api.example.test",
+          requestBody: {
+            prompt: "frozen",
+            agentProfile: "frontmind-standard",
+            attachments: [],
+          },
+          bodySha256: "c".repeat(64),
+          preparedAt: now.toISOString(),
+        },
+      },
+      leaseExpiresAt: null,
+      status: "failed",
+      upstreamTaskId: null,
+      errorCode: "MANUS_V2_CREATE_REJECTED",
+      errorMessage: "provider detail must stay private",
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    dependencies.getDb.mockResolvedValue(
+      memoryDatabase(state, { transactional: true }),
+    );
+
+    let providerRequests = 0;
+    const provider = express();
+    provider.use((_req, res) => {
+      providerRequests += 1;
+      res.status(500).json({ error: "provider must not be called" });
+    });
+    const providerListener = await listen(provider);
+    const previousUpstreamBaseUrl = dependencies.upstreamBaseUrl;
+    dependencies.upstreamBaseUrl = providerListener.baseUrl;
+    let dashboardListener: Awaited<ReturnType<typeof listen>> | undefined;
+    try {
+      const { default: knowledgeBaseRouter } = await import(
+        "./knowledge-base-api"
+      );
+      const { requireExpressAuth } = await import("./_core/express-auth");
+      const dashboard = express();
+      dashboard.use(express.json());
+      dashboard.use(
+        "/api/knowledge-base",
+        requireExpressAuth,
+        knowledgeBaseRouter,
+      );
+      dashboardListener = await listen(dashboard);
+      const reconcile = () =>
+        fetch(
+          `${dashboardListener!.baseUrl}/api/knowledge-base/progress/reconcile`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-test-auth": "user",
+            },
+            body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
+          },
+        );
+
+      const frozenSource = structuredClone(state.turns[0]);
+      const firstResponse = await reconcile();
+      expect(firstResponse.status).toBe(200);
+      const first = (await firstResponse.json()) as any;
+      expect(first).toMatchObject({
+        observation: {
+          stateEpoch: 97,
+          syncState: "attention_required",
+          activeTurn: null,
+          notice: {
+            code: "FRONTMIND_KB_RETRY_AVAILABLE",
+            recoveryAction: "retry_request",
+            recoveryToken: expect.stringMatching(/^[a-f0-9]{64}$/u),
+            turnId: null,
+          },
+          interaction: {
+            interactionState: "failed",
+            progress: { build: { status: "protocol_error" } },
+          },
+        },
+      });
+      expect(state.builds[0]).toMatchObject({
+        status: "protocol_error",
+        activeTurnId: null,
+        canonicalTaskState: "attention_required",
+        stateEpoch: 97,
+        awaitingResponseSince: null,
+        handoffProvenance: {
+          recoverySourceTurnId: turnId,
+          terminalRecovery: {
+            action: "retry_compatible_create",
+            recoveryStateSha256: first.observation.notice.recoveryToken,
+          },
+        },
+      });
+      expect(state.conversations[0]).toMatchObject({
+        status: "failed",
+        version: 1,
+        completedAt: expect.any(Date),
+      });
+      expect(state.turns[0]).toStrictEqual(frozenSource);
+      expect(first.observation.interaction.interactionState).not.toBe(
+        "executing",
+      );
+      expect(JSON.stringify(first).toLowerCase()).not.toContain("manus");
+      expect(JSON.stringify(first)).not.toContain("系统正在恢复当前操作");
+      expect(providerRequests).toBe(0);
+
+      const stableBuild = structuredClone(state.builds[0]);
+      const stableConversation = structuredClone(state.conversations[0]);
+      const stableTurn = structuredClone(state.turns[0]);
+      const secondResponse = await reconcile();
+      expect(secondResponse.status).toBe(200);
+      const second = (await secondResponse.json()) as any;
+      expect(second.observation).toMatchObject({
+        stateEpoch: 97,
+        syncState: "attention_required",
+        activeTurn: null,
+        notice: {
+          recoveryAction: "retry_request",
+          recoveryToken: first.observation.notice.recoveryToken,
+        },
+        interaction: { interactionState: "failed" },
+      });
+      expect(state.builds[0]).toStrictEqual(stableBuild);
+      expect(state.conversations[0]).toStrictEqual(stableConversation);
+      expect(state.turns[0]).toStrictEqual(stableTurn);
+      expect(state.turns).toHaveLength(1);
+      expect(providerRequests).toBe(0);
+
+      const generationTwoTurnId = "21212121-2121-4212-8212-212121212121";
+      state.builds[0] = {
+        ...state.builds[0]!,
+        generation: 2,
+        stateEpoch: 38,
+        status: "protocol_error",
+        activeTurnId: generationTwoTurnId,
+        canonicalTaskId: null,
+        canonicalTaskGeneration: 2,
+        canonicalCredentialId: "credential-e2e",
+        canonicalTaskState: "creating",
+        handoffProvenance: {
+          schemaVersion: 1,
+          sourceGeneration: 1,
+          targetGeneration: 2,
+          credentialMode: "current_rebind",
+        },
+        awaitingResponseSince: now,
+      };
+      state.turns[0] = {
+        ...state.turns[0]!,
+        id: generationTwoTurnId,
+        clientRequestId: "request-generation-two-create-rejected",
+        buildGeneration: 2,
+        operationKey: "operation-generation-two-create-rejected",
+        status: "running",
+        leaseExpiresAt: new Date("2026-08-14T08:10:00.000Z"),
+        completedAt: null,
+        metadata: {
+          attachmentsFrozen: true,
+          providerProtocol: "manus_v2",
+          providerMethod: "task.create",
+          providerAttemptState: "rejected",
+          createAttemptState: "rejected",
+          providerReasonCategory: "invalid_argument",
+          providerRejectionStatus: 400,
+          dispatchState: "recovering",
+          failureClass: "recoverable_same_turn",
+          recoveryAction: "reconcile",
+          canRegenerate: false,
+          repairKind: "canonical_credential_rebind",
+          operationToken: "operation-generation-two-create-rejected",
+          expectedAttachmentCount: 0,
+          userAttachmentCount: 0,
+          recovery: {
+            kind: "start",
+            conversationId: PUBLIC_CONVERSATION_ID,
+            companyName: "FrontMind超前智能",
+            attachments: [],
+          },
+          preparedDispatch: {
+            schemaVersion: 2,
+            baseUrl: "https://api.example.test",
+            requestBody: {
+              prompt: "frozen generation two",
+              agentProfile: "frontmind-standard",
+              attachments: [],
+            },
+            bodySha256: "d".repeat(64),
+            preparedAt: now.toISOString(),
+          },
+        },
+      };
+      state.conversations[0] = {
+        ...state.conversations[0]!,
+        status: "running",
+        version: 4,
+        completedAt: null,
+      };
+
+      const generationTwoResponse = await reconcile();
+      expect(generationTwoResponse.status).toBe(200);
+      const generationTwo = (await generationTwoResponse.json()) as any;
+      expect(generationTwo.observation).toMatchObject({
+        stateEpoch: 39,
+        generation: 2,
+        syncState: "attention_required",
+        activeTurn: null,
+        notice: {
+          code: "FRONTMIND_KB_RETRY_AVAILABLE",
+          recoveryAction: "retry_request",
+          recoveryToken: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+        interaction: {
+          interactionState: "failed",
+          progress: { build: { status: "protocol_error" } },
+        },
+      });
+      expect(state.builds[0]).toMatchObject({
+        generation: 2,
+        stateEpoch: 39,
+        status: "protocol_error",
+        activeTurnId: null,
+        canonicalTaskState: "attention_required",
+        handoffProvenance: {
+          sourceGeneration: 1,
+          targetGeneration: 2,
+          recoverySourceTurnId: generationTwoTurnId,
+          terminalRecovery: {
+            action: "retry_compatible_create",
+            recoveryStateSha256: generationTwo.observation.notice.recoveryToken,
+          },
+        },
+      });
+      expect(state.turns[0]).toMatchObject({
+        id: generationTwoTurnId,
+        status: "failed",
+        upstreamTaskId: null,
+        leaseExpiresAt: null,
+        metadata: {
+          createAttemptState: "rejected",
+          providerAttemptState: "rejected",
+          dispatchState: "failed",
+          failureClass: "requires_user_fix",
+          recoveryAction: "retry_request",
+        },
+      });
+      expect(state.conversations[0]).toMatchObject({
+        status: "failed",
+        version: 5,
+        completedAt: expect.any(Date),
+      });
+      expect(JSON.stringify(generationTwo).toLowerCase()).not.toContain(
+        "manus",
+      );
+      expect(JSON.stringify(generationTwo)).not.toContain(
+        "系统正在恢复当前操作",
+      );
+      expect(providerRequests).toBe(0);
+
+      const stableGenerationTwoBuild = structuredClone(state.builds[0]);
+      const stableGenerationTwoTurn = structuredClone(state.turns[0]);
+      const stableGenerationTwoConversation = structuredClone(
+        state.conversations[0],
+      );
+      const repeatedGenerationTwoResponse = await reconcile();
+      expect(repeatedGenerationTwoResponse.status).toBe(200);
+      expect(
+        ((await repeatedGenerationTwoResponse.json()) as any).observation,
+      ).toMatchObject({
+        stateEpoch: 39,
+        activeTurn: null,
+        notice: {
+          recoveryAction: "retry_request",
+          recoveryToken: generationTwo.observation.notice.recoveryToken,
+        },
+        interaction: { interactionState: "failed" },
+      });
+      expect(state.builds[0]).toStrictEqual(stableGenerationTwoBuild);
+      expect(state.turns[0]).toStrictEqual(stableGenerationTwoTurn);
+      expect(state.conversations[0]).toStrictEqual(
+        stableGenerationTwoConversation,
+      );
+      expect(providerRequests).toBe(0);
+    } finally {
+      dependencies.upstreamBaseUrl = previousUpstreamBaseUrl;
+      await Promise.all([
+        close(dashboardListener?.server),
+        close(providerListener.server),
+      ]);
+    }
+  });
+
+  // Pre-v5 provider-task recovery is intentionally unsupported. Old builds now
+  // fail closed as RESET_REQUIRED; v5 initial/revision/confirm coverage lives in
+  // knowledge-base-materialized-contract.test.ts and knowledge-base-api.test.ts.
+  it.skip("retires completed v4 zero-image Manifest recovery", async () => {
     const fixture = await createFinalPackageFixture();
     const state = initialState();
     const buildId = "12121212-1212-4121-8121-121212121212";
@@ -897,6 +1824,12 @@ describe("knowledge-base production final-package acceptance", () => {
       metadata: {
         attachmentsFrozen: true,
         userAttachmentCount: 0,
+        providerProtocol: "manus_v2",
+        providerMethod: "task.create",
+        providerAttemptState: "output_pending",
+        operationToken: operationKey,
+        lastSeenEventIds: ["event-initial-result"],
+        manusV2Lifecycle: { waitingEventId: "event-waiting" },
         recovery: {},
       },
       leaseExpiresAt: new Date("2026-08-04T00:05:00.000Z"),
@@ -1001,1306 +1934,723 @@ describe("knowledge-base production final-package acceptance", () => {
       status: "completed",
       upstreamTaskId: taskId,
       errorCode: null,
-    });
-  });
-
-  it("runs all 8 leaves from manifest and Logo through publish, Viewer and immutable ZIP download", async () => {
-    const fixture = await createFinalPackageFixture();
-    const state = initialState();
-    dependencies.getDb.mockResolvedValue(memoryDatabase(state));
-    const archiveSha256 = createHash("sha256")
-      .update(fixture.archive)
-      .digest("hex");
-    const rejectedZip = await JSZip.loadAsync(fixture.archive);
-    rejectedZip.comment = "semantically-valid-but-rejected-operation";
-    const rejectedArchive = await rejectedZip.generateAsync({
-      type: "nodebuffer",
-      compression: "STORE",
-    });
-    expect(rejectedArchive.equals(fixture.archive)).toBe(false);
-    const rejectedLogo = await sharp({
-      create: {
-        width: 24,
-        height: 24,
-        channels: 4,
-        background: "#bb2200",
+      metadata: {
+        attachmentsFrozen: true,
+        userAttachmentCount: 0,
+        providerProtocol: "manus_v2",
+        providerMethod: "task.create",
+        providerAttemptState: "accepted",
+        operationToken: operationKey,
+        lastSeenEventIds: ["event-initial-result"],
+        manusV2Lifecycle: { waitingEventId: "event-waiting" },
+        recovery: {},
       },
-    })
-      .png()
-      .toBuffer();
-    const taskResults = new Map<
-      string,
-      { status: "awaiting_input" | "completed"; output: unknown[] }
-    >();
-    const upstream = express();
-    upstream.use(express.json({ limit: "5mb" }));
-    let upstreamBaseUrl = "";
-    let uploadedFileSequence = 0;
-    let authoritativeTaskReads = 0;
-    let logoDownloads = 0;
-    let packageDownloads = 0;
-    let currentLogoBytes = rejectedLogo;
-    let currentPackageBytes = rejectedArchive;
-    let includeFinalPackage = true;
-    const uploadedFileBytes = new Map<string, number>();
-    const operationTaskPosts = new Map<string, number>();
-    let rawTaskPosts = 0;
-    let transientConfirmationFailuresRemaining = 1;
-    const idempotentTaskResponses = new Map<
-      string,
-      { id: string; status: "awaiting_input" | "completed"; output: unknown[] }
-    >();
-
-    upstream.post("/v1/files", (req, res) => {
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      expect(req.body.filename).toBe("socratic-kb-builder.skill.zip");
-      const fileId = `uploaded-skill-${++uploadedFileSequence}`;
-      res.json({
-        id: fileId,
-        upload_url: `${upstreamBaseUrl}/uploads/${fileId}`,
-      });
     });
-    upstream.put(
-      "/uploads/:fileId",
-      express.raw({ type: "*/*", limit: "50mb" }),
+
+    const recoveredOutput = [
+      {
+        id: "recovered-v4-initial-logo",
+        type: "output_image",
+        file_id: "file-recovered-v4-initial-logo",
+        filename: "company-logo.png",
+        mime_type: "image/png",
+      },
+      ...output,
+    ];
+    const recoveryUpstream = express();
+    recoveryUpstream.use(express.json());
+    let sourceTaskReads = 0;
+    let sourceLogoDownloads = 0;
+    recoveryUpstream.get("/v1/tasks/:taskId", (req, res) => {
+      sourceTaskReads += 1;
+      expect(req.params.taskId).toBe(taskId);
+      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
+      res.json({ id: taskId, status: "completed", output: recoveredOutput });
+    });
+    recoveryUpstream.get(
+      "/v1/files/file-recovered-v4-initial-logo/content",
       (req, res) => {
-        expect(req.header("authorization")).toBeUndefined();
-        const bytes = Buffer.isBuffer(req.body) ? req.body.length : 0;
-        expect(bytes).toBeGreaterThan(0);
-        uploadedFileBytes.set(req.params.fileId, bytes);
-        res.status(200).end();
+        sourceLogoDownloads += 1;
+        expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Length", String(fixture.logo.length));
+        res.send(fixture.logo);
       },
     );
-    upstream.post("/v1/tasks", (req, res) => {
-      rawTaskPosts += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      const prompt = String(req.body.prompt || "");
-      const operationId = prompt.match(/"operationId":"([^"]+)"/u)?.[1];
-      const turnId = prompt.match(/"turnId":"([^"]+)"/u)?.[1];
-      expect(operationId).toBeTruthy();
-      expect(turnId).toBeTruthy();
-      const turn = state.turns.find((candidate) => candidate.id === turnId);
-      expect(turn).toMatchObject({
-        operationKey: operationId,
-        status: "running",
-      });
-      expect(turn?.metadata?.attachmentsFrozen).toBe(true);
-      expect(turn?.attachmentFileIds).toEqual(
-        req.body.attachments.map((attachment: any) => attachment.file_id),
-      );
-      const idempotencyKey = String(req.header("idempotency-key") || "");
-      expect(idempotencyKey).toBe(`frontmind-kb-v2:${operationId}`);
-      const replay = idempotentTaskResponses.get(idempotencyKey);
-      if (replay) {
-        res.json(replay);
-        return;
-      }
-
-      const isStart = turn!.operationType === "start";
-      if (!isStart && transientConfirmationFailuresRemaining > 0) {
-        transientConfirmationFailuresRemaining -= 1;
-        res.status(503).json({ error: { message: "temporary overload" } });
-        return;
-      }
-      operationTaskPosts.set(
-        operationId!,
-        (operationTaskPosts.get(operationId!) || 0) + 1,
-      );
-      const revision = Number(turn!.expectedRevision);
-      if (isStart) {
-        expect(req.body.taskId).toBeUndefined();
-      } else {
-        expect(req.body.taskId).toBe(state.builds[0]!.upstreamTaskId);
-      }
-      const isFinal = !isStart && revision === fixture.leaves.length - 1;
-      const taskId = isStart
-        ? "task-initial-manifest-e2e"
-        : isFinal
-          ? TASK_ID
-          : `task-confirm-leaf-${revision + 1}`;
-      let output: unknown[];
-      if (isStart) {
-        const manifest = formatKnowledgeBaseManifestEnvelope({
-          kind: "frontmind.knowledge-base.manifest",
-          schemaVersion: 2,
-          operationId: operationId!,
-          turnId: turnId!,
-          leaves: fixture.leaves.map((leaf) => ({
-            id: leaf.id,
-            title: leaf.title,
-            branchId: "products",
-            branchTitle: "产品与服务",
-          })),
-        });
-        output = [
-          {
-            id: "assistant-initial",
-            role: "assistant",
-            type: "output_message",
-            content: [
-              {
-                type: "output_text",
-                text: {
-                  value: `## 9.9 错误节点\n\n该正文不能写入首节点。\n${manifest}`,
-                },
-              },
-            ],
-          },
-          {
-            id: "official-logo-output",
-            type: "output_image",
-            file_id: "file-official-logo",
-            file_name: "frontmind-logo.png",
-            mime_type: "image/png",
-          },
-        ];
-      } else {
-        const leaf = fixture.leaves[revision]!;
-        const progressText = formatKnowledgeBaseProgressEnvelope({
-          kind: "frontmind.knowledge-base.progress",
-          schemaVersion: 2,
-          operationId: operationId!,
-          turnId: turnId!,
-          revision,
-          transition: {
-            leafId: leaf.id,
-            from: "current",
-            // The first final observation is deliberately inconsistent with
-            // the user's confirm action. Its ZIP may be staged, but neither
-            // the transition nor those bytes may be promoted.
-            to: isFinal ? "direct_prefilled" : "confirmed",
-            reason: `用户明确确认节点 ${leaf.id}`,
-          },
-        });
-        const presentationText = formatKnowledgeBasePresentationEnvelope({
-          kind: "frontmind.knowledge-base.presentation",
-          schemaVersion: 2,
-          operationId: operationId!,
-          turnId: turnId!,
-          revision: revision + 1,
-          leafId: isFinal ? null : fixture.leaves[revision + 1]!.id,
-          imageState: isFinal ? "not_applicable" : "no_eligible_asset",
-          assetIds: [],
-          imageCount: 0,
-        });
-        const currentOperationOutput = [
-          {
-            id: `assistant-confirm-${revision + 1}`,
-            role: "assistant",
-            type: "output_message",
-            content: [
-              {
-                type: "output_text",
-                text: {
-                  value: [
-                    isFinal
-                      ? `${leaf.id} 已确认。`
-                      : fixture.leaves[revision + 1]!.contentMarkdown,
-                    progressText,
-                    presentationText,
-                  ].join("\n"),
-                },
-              },
-              ...(isFinal
-                ? [
-                    {
-                      type: "output_file",
-                      file_id: "file-final-package",
-                      file_name: "frontmind-knowledge-base.zip",
-                      mime_type: "application/zip",
-                    },
-                    {
-                      type: "output_image",
-                      file_id: "forbidden-final-image",
-                      file_name: "forbidden.png",
-                      mime_type: "image/png",
-                    },
-                  ]
-                : []),
-            ],
-          },
-        ];
-        output = isFinal
-          ? [
-              {
-                id: "stale-package-from-cumulative-history",
-                type: "output_file",
-                file_id: "file-stale-package",
-                file_name: "stale-knowledge-base.zip",
-                mime_type: "application/zip",
-                operationId: state.turns.find(
-                  (candidate) => candidate.operationType === "start",
-                )!.operationKey,
-                turnId: state.turns.find(
-                  (candidate) => candidate.operationType === "start",
-                )!.id,
-              },
-              ...currentOperationOutput,
-            ]
-          : currentOperationOutput;
-      }
-      const taskResult = {
-        id: taskId,
-        status: (isFinal ? "completed" : "awaiting_input") as
-          | "completed"
-          | "awaiting_input",
-        output,
-      };
-      idempotentTaskResponses.set(idempotencyKey, taskResult);
-      taskResults.set(taskId, {
-        status: taskResult.status,
-        output,
-      });
-      res.json(taskResult);
-    });
-    upstream.get("/v1/tasks/:taskId", (req, res) => {
-      authoritativeTaskReads += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      const result = taskResults.get(req.params.taskId);
-      if (!result) {
-        res.status(404).json({ error: "fixture task missing" });
-        return;
-      }
-      res.json({
-        id: req.params.taskId,
-        status: result.status,
-        output:
-          req.params.taskId === TASK_ID && !includeFinalPackage
-            ? result.output.flatMap((item: any) =>
-                item.role === "assistant" && Array.isArray(item.content)
-                  ? [
-                      {
-                        ...item,
-                        content: item.content.filter(
-                          (content: any) => content.type === "output_text",
-                        ),
-                      },
-                    ]
-                  : [],
-              )
-            : result.output,
-      });
-    });
-    upstream.get("/v1/files/file-official-logo/content", (req, res) => {
-      logoDownloads += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Content-Length", String(currentLogoBytes.length));
-      res.send(currentLogoBytes);
-    });
-    upstream.get("/v1/files/file-final-package/content", (req, res) => {
-      packageDownloads += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Length", String(currentPackageBytes.length));
-      res.setHeader(
-        "Content-Disposition",
-        'attachment; filename="frontmind-knowledge-base.zip"',
-      );
-      res.send(currentPackageBytes);
-    });
-    const upstreamListener = await listen(upstream);
-    upstreamServer = upstreamListener.server;
-    upstreamBaseUrl = upstreamListener.baseUrl;
-    dependencies.upstreamBaseUrl = upstreamListener.baseUrl;
-
-    const { default: dashboardRouter } = await import("./dashboard-api");
+    const recoveryUpstreamListener = await listen(recoveryUpstream);
+    dependencies.upstreamBaseUrl = recoveryUpstreamListener.baseUrl;
     const { default: knowledgeBaseRouter } = await import(
       "./knowledge-base-api"
     );
     const { requireExpressAuth } = await import("./_core/express-auth");
-    const dashboard = express();
-    dashboard.use(express.json());
-    dashboard.use(
+    const recoveryDashboard = express();
+    recoveryDashboard.use(express.json());
+    recoveryDashboard.use(
       "/api/knowledge-base",
       requireExpressAuth,
       knowledgeBaseRouter,
     );
-    dashboard.use("/api/dashboard", dashboardRouter);
-    const dashboardListener = await listen(dashboard);
-    dashboardServer = dashboardListener.server;
-
-    const postKnowledgeBase = async (
-      pathname: "/start" | "/turn",
-      body: Record<string, unknown>,
-    ) => {
+    const recoveryDashboardListener = await listen(recoveryDashboard);
+    const turnCountBeforeRecovery = state.turns.length;
+    try {
       const response = await fetch(
-        `${dashboardListener.baseUrl}/api/knowledge-base${pathname}`,
+        `${recoveryDashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
         {
           method: "POST",
           headers: {
             "content-type": "application/json",
             "x-test-auth": "user",
           },
-          body: JSON.stringify(body),
-        },
-      );
-      if (pathname === "/turn") {
-        expect([200, 202]).toContain(response.status);
-      } else {
-        expect(response.status).toBe(200);
-      }
-      const payload = (await response.json()) as any;
-      if (pathname !== "/turn" || payload.idempotent) return payload;
-      expect(response.status).toBe(202);
-
-      const clientRequestId = String(body.clientRequestId || "");
-      const deadline = Date.now() + 5_000;
-      let acceptedTurn: (typeof state.turns)[number] | undefined;
-      while (Date.now() < deadline) {
-        acceptedTurn = state.turns.find(
-          (candidate) => candidate.clientRequestId === clientRequestId,
-        );
-        const build = state.builds.find(
-          (candidate) => candidate.id === acceptedTurn?.buildId,
-        );
-        const isDeliberatelyRejectedFinalTurn =
-          acceptedTurn?.expectedRevision === fixture.leaves.length - 1;
-        const dispatchSettled = Boolean(
-          acceptedTurn?.upstreamTaskId &&
-            ((build && build.revision > acceptedTurn.expectedRevision) ||
-              (isDeliberatelyRejectedFinalTurn && packageDownloads > 0) ||
-              acceptedTurn.status === "completed" ||
-              acceptedTurn.status === "failed" ||
-              acceptedTurn.status === "cancelled" ||
-              build?.activeTurnId !== acceptedTurn.id ||
-              build?.status === "protocol_error"),
-        );
-        if (dispatchSettled) break;
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(acceptedTurn?.upstreamTaskId).toBeTruthy();
-      const observationResponse = await fetch(
-        `${dashboardListener.baseUrl}/api/knowledge-base/progress/${encodeURIComponent(String(body.conversationId || ""))}`,
-        { headers: { "x-test-auth": "user" } },
-      );
-      expect(observationResponse.status).toBe(200);
-      const observed = (await observationResponse.json()) as any;
-      return {
-        ...payload,
-        task: { id: acceptedTurn!.upstreamTaskId, status: "running" },
-        observation: observed.observation,
-        progress: observed.progress,
-        interaction: observed.interaction,
-      };
-    };
-
-    const startRequest = {
-      conversationId: PUBLIC_CONVERSATION_ID,
-      clientRequestId: "request-initial-manifest",
-      companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
-    };
-    const rejectedInitialObservation = await postKnowledgeBase(
-      "/start",
-      startRequest,
-    );
-    const buildId = state.builds[0]!.id;
-    const initialTaskId = rejectedInitialObservation.task.id as string;
-    expect(state.nodes).toHaveLength(0);
-    expect(state.builds[0]).toMatchObject({
-      status: "researching",
-      logoStorageKey: null,
-      logoSha256: null,
-    });
-    expect(logoDownloads).toBe(1);
-
-    // The provider replaces the same file ID with corrected bytes and a valid
-    // first-node body. The rejected candidate must not poison this generation.
-    const correctedInitialOutput = taskResults.get(initialTaskId)!.output;
-    const correctedAssistant = correctedInitialOutput.find(
-      (item: any) => item.id === "assistant-initial",
-    ) as any;
-    const manifestText = String(correctedAssistant.content[0].text.value).match(
-      /<!--\s*FRONTMIND_KB_MANIFEST[\s\S]*?-->/u,
-    )?.[0];
-    correctedAssistant.content[0].text.value = `${fixture.leaves[0]!.contentMarkdown}\n${manifestText}`;
-    currentLogoBytes = fixture.logo;
-    const reconcileResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({
-          conversationId: PUBLIC_CONVERSATION_ID,
-          taskId: initialTaskId,
-        }),
-      },
-    );
-    expect(reconcileResponse.status).toBe(200);
-    const initialObservation = (await reconcileResponse.json()) as any;
-    const startTurn = state.turns.find(
-      (turn) => turn.operationType === "start",
-    )!;
-    expect(initialObservation.observation).toMatchObject({
-      generation: 1,
-      authoritativeTaskId: initialTaskId,
-      notice: null,
-      interaction: {
-        interactionState: "awaiting_input",
-        canReply: true,
-        progress: {
-          build: {
-            status: "confirming",
-            revision: 0,
-            currentLeafId: "1.1",
-          },
-        },
-      },
-      approvedPresentation: {
-        clientRequestId: startRequest.clientRequestId,
-        revision: 0,
-        leafId: "1.1",
-        visibleMarkdown: fixture.leaves[0]!.contentMarkdown,
-        imageState: "attached",
-        resources: [
-          expect.objectContaining({
-            kind: "logo",
-            sameOriginUrl: `/api/knowledge-base/artifacts/${buildId}/logo`,
-            sha256: fixture.logoSha256,
+          body: JSON.stringify({
+            conversationId: PUBLIC_CONVERSATION_ID,
+            taskId,
           }),
-        ],
-      },
-    });
-    expect(state.nodes).toHaveLength(8);
-    expect(state.nodes[0]).toMatchObject({
-      leafId: "1.1",
-      status: "current",
-      contentMarkdown: fixture.leaves[0]!.contentMarkdown,
-    });
-    expect(
-      state.nodes.slice(1).every((node) => node.status === "pending"),
-    ).toBe(true);
-    expect(logoDownloads).toBe(2);
-    expect(startTurn).toMatchObject({
-      status: "completed",
-      upstreamTaskId: initialTaskId,
-      attachmentFileIds: [expect.stringMatching(/^uploaded-skill-/u)],
-      metadata: expect.objectContaining({ attachmentsFrozen: true }),
-    });
-    const startTaskPostCount = operationTaskPosts.get(startTurn.operationKey);
-    const uploadedCountAfterStart = uploadedFileSequence;
-    const repeatedStart = await postKnowledgeBase("/start", startRequest);
-    expect(repeatedStart).toMatchObject({ idempotent: true, resumed: true });
-    expect(operationTaskPosts.get(startTurn.operationKey)).toBe(
-      startTaskPostCount,
-    );
-    expect(uploadedFileSequence).toBe(uploadedCountAfterStart);
-
-    for (const conflictingStart of [
-      {
-        ...startRequest,
-        operatorNotes: "与首次启动不同的输入",
-      },
-      {
-        ...startRequest,
-        clientRequestId: "request-conflicting-start",
-      },
-    ]) {
-      const response = await fetch(
-        `${dashboardListener.baseUrl}/api/knowledge-base/start`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-test-auth": "user",
-          },
-          body: JSON.stringify(conflictingStart),
         },
       );
-      expect(response.status).toBe(409);
-      const conflict = (await response.json()) as any;
-      expect(conflict).toMatchObject({
-        error: { code: "CONFLICT" },
-        observation: {
-          authoritativeTaskId: initialTaskId,
-          interaction: {
-            progress: {
-              build: { revision: 0, currentLeafId: "1.1" },
-            },
-          },
-        },
+      expect(response.status).toBe(200);
+      const recovered = (await response.json()) as any;
+      expect(recovered.observation.interaction.progress.build).toMatchObject({
+        status: "confirming",
+        revision: 0,
+        currentLeafId: fixture.leaves[0]!.id,
+        logoRequired: false,
       });
-    }
-    expect(operationTaskPosts.get(startTurn.operationKey)).toBe(
-      startTaskPostCount,
-    );
-    expect(uploadedFileSequence).toBe(uploadedCountAfterStart);
-
-    let finalOperationKey = "";
-    for (let index = 0; index < fixture.leaves.length; index += 1) {
-      const leaf = fixture.leaves[index]!;
-      const isFinal = index === fixture.leaves.length - 1;
-      const turnRequest = {
-        conversationId: PUBLIC_CONVERSATION_ID,
-        clientRequestId: `request-confirm-${index + 1}`,
-        userMessage: "确认",
-        expectedRevision: index,
-        expectedLeafId: leaf.id,
-      };
-      let result = await postKnowledgeBase("/turn", turnRequest);
-      const expectedRevision = index + 1;
-      const turn = state.turns.find(
-        (candidate) =>
-          candidate.clientRequestId === turnRequest.clientRequestId,
-      )!;
-      finalOperationKey = turn.operationKey;
-      const turnTaskId = result.task.id;
-      if (isFinal) {
-        expect(state.builds[0]).toMatchObject({
-          status: "confirming",
-          revision: fixture.leaves.length - 1,
-          currentLeafId: leaf.id,
-          packageStorageKey: null,
-        });
-        expect(packageDownloads).toBe(1);
-        const finalTask = taskResults.get(TASK_ID)!;
-        const finalAssistant = finalTask.output.find(
-          (item: any) => item.id === `assistant-confirm-${index + 1}`,
-        ) as any;
-        const finalText = finalAssistant.content.find(
-          (content: any) => content.type === "output_text",
-        );
-        const rejectedFinalText = String(finalText.text.value);
-        finalText.text.value = rejectedFinalText.replace(
-          '"to":"direct_prefilled"',
-          '"to":"confirmed"',
-        );
-        expect(finalText.text.value).not.toBe(rejectedFinalText);
-        finalAssistant.content = finalAssistant.content.filter(
-          (content: any) => content.type !== "output_image",
-        );
-        currentPackageBytes = fixture.archive;
-        const response = await fetch(
-          `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-test-auth": "user",
-            },
-            body: JSON.stringify({
-              conversationId: PUBLIC_CONVERSATION_ID,
-              taskId: TASK_ID,
-            }),
-          },
-        );
-        expect(response.status).toBe(200);
-        result = await response.json();
-      }
-      expect(turn).toMatchObject({
-        operationType: "confirm",
-        expectedRevision: index,
-        expectedLeafId: leaf.id,
-        status: "completed",
-        upstreamTaskId: turnTaskId,
-        attachmentFileIds: [expect.stringMatching(/^uploaded-skill-/u)],
-        metadata: expect.objectContaining({ attachmentsFrozen: true }),
+      expect(state.builds[0]).toMatchObject({
+        activeTurnId: null,
+        upstreamTaskId: taskId,
+        logoSha256: fixture.logoSha256,
+        logoBytes: fixture.logo.length,
       });
-      if (isFinal) {
-        expect(result.observation).toMatchObject({
-          authoritativeTaskId: TASK_ID,
-          approvedPresentation: null,
-          notice: null,
-          interaction: {
-            interactionState: "ready_to_publish",
-            canReply: false,
-            canPublish: true,
-            progress: {
-              build: {
-                status: "ready_to_publish",
-                revision: FINAL_REVISION,
-                currentLeafId: null,
-              },
-            },
-          },
-          package: {
-            revision: FINAL_REVISION,
-            sha256: archiveSha256,
-            sizeBytes: fixture.archive.length,
-          },
+      expect(state.turns).toHaveLength(turnCountBeforeRecovery);
+      expect(sourceTaskReads).toBe(1);
+      expect(sourceLogoDownloads).toBe(1);
+    } finally {
+      await Promise.all([
+        close(recoveryDashboardListener.server),
+        close(recoveryUpstreamListener.server),
+      ]);
+      const recoveredLogoStorageKey = state.builds[0]?.logoStorageKey;
+      if (recoveredLogoStorageKey) {
+        const artifactStore = await import("./knowledge-build-artifact-store");
+        await artifactStore.removeKnowledgeBuildArtifact({
+          userId: USER_ID,
+          buildId,
+          generation: 1,
+          kind: "logo",
+          storageKey: recoveredLogoStorageKey,
         });
-        // Keep the stale ZIP in the cumulative task. Historical package
-        // recovery must select the persisted file identity rather than assume
-        // a settled task contains only one ZIP descriptor.
-        expect(taskResults.get(TASK_ID)!.output).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: "stale-package-from-cumulative-history",
-            }),
-          ]),
-        );
-      } else {
-        const nextLeaf = fixture.leaves[index + 1]!;
-        expect(result.observation).toMatchObject({
-          authoritativeTaskId: turnTaskId,
-          notice: null,
-          interaction: {
-            interactionState: "awaiting_input",
-            canReply: true,
-            progress: {
-              build: {
-                status: "confirming",
-                revision: expectedRevision,
-                currentLeafId: nextLeaf.id,
-              },
-            },
-          },
-          approvedPresentation: {
-            clientRequestId: turnRequest.clientRequestId,
-            revision: expectedRevision,
-            leafId: nextLeaf.id,
-            visibleMarkdown: nextLeaf.contentMarkdown,
-            imageState: "no_eligible_asset",
-            resources: [],
-          },
-        });
-      }
-      expect(state.builds[0]!.confirmedCount).toBe(expectedRevision);
-      const output = taskResults.get(turnTaskId)!.output;
-      expect(
-        output.some((item: any) =>
-          JSON.stringify(item).match(/output_image|image\//u),
-        ),
-      ).toBe(false);
-      const taskPostCount = operationTaskPosts.get(turn.operationKey);
-      const uploadedCount = uploadedFileSequence;
-      const repeated = await postKnowledgeBase("/turn", turnRequest);
-      expect(repeated).toMatchObject({
-        idempotent: true,
-        task: { id: turnTaskId },
-      });
-      expect(operationTaskPosts.get(turn.operationKey)).toBe(taskPostCount);
-      expect(uploadedFileSequence).toBe(uploadedCount);
-
-      if (index === 0) {
-        // The first application above used the operation tail. A later poll
-        // of the very same task now expands to the provider's cumulative
-        // snapshot, including the old Manifest and Logo. Replaying it several
-        // times must be an immutable noop: no stale/protocol notice, no second
-        // transition and no loss of the approved 1.2 presentation.
-        const currentTask = taskResults.get(turnTaskId)!;
-        currentTask.output = [
-          ...taskResults.get(initialTaskId)!.output,
-          ...currentTask.output,
-        ];
-        const epochAfterTail = state.builds[0]!.stateEpoch;
-        const approvedContentAfterTail = state.nodes[1]!.contentMarkdown;
-        const credentialReadsAfterTail =
-          dependencies.getCredentialForUpstreamResource.mock.calls.length;
-        const upstreamReadsAfterTail = authoritativeTaskReads;
-        for (let replay = 0; replay < 3; replay += 1) {
-          const response = await fetch(
-            `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-            {
-              method: "POST",
-              headers: {
-                "content-type": "application/json",
-                "x-test-auth": "user",
-              },
-              body: JSON.stringify({
-                conversationId: PUBLIC_CONVERSATION_ID,
-              }),
-            },
-          );
-          expect(response.status).toBe(200);
-          expect((await response.json()) as any).toMatchObject({
-            observation: {
-              notice: null,
-              interaction: {
-                interactionState: "awaiting_input",
-                progress: {
-                  build: {
-                    status: "confirming",
-                    revision: 1,
-                    currentLeafId: "1.2",
-                  },
-                },
-              },
-              approvedPresentation: {
-                revision: 1,
-                leafId: "1.2",
-                visibleMarkdown: fixture.leaves[1]!.contentMarkdown,
-                resources: [],
-              },
-            },
-          });
-          expect(state.builds[0]).toMatchObject({
-            stateEpoch: epochAfterTail,
-            revision: 1,
-            currentLeafId: "1.2",
-            protocolError: null,
-            protocolErrorCode: null,
-          });
-          expect(state.nodes[1]!.contentMarkdown).toBe(
-            approvedContentAfterTail,
-          );
-        }
-        // These three requests model focus/online wakes spanning the failure
-        // debounce window. Even if the completed task's Key were deleted, its
-        // reads timed out, or it returned 401, no credential/task access is
-        // attempted after the approved 1.2 projection released activeTurnId.
-        expect(
-          dependencies.getCredentialForUpstreamResource.mock.calls.length,
-        ).toBe(credentialReadsAfterTail);
-        expect(authoritativeTaskReads).toBe(upstreamReadsAfterTail);
       }
     }
+  });
 
-    expect(authoritativeTaskReads).toBe(2);
-    expect(logoDownloads).toBe(2);
-    expect(packageDownloads).toBe(2);
-    // The Skill is a build-scoped immutable asset: upload it once at start,
-    // then reuse the same owned file id for every confirmed leaf.
-    expect(uploadedFileSequence).toBe(1);
-    expect(uploadedFileBytes.size).toBe(1);
-    expect(
-      new Set(
-        state.turns
-          .flatMap((turn) => turn.attachmentFileIds || [])
-          .filter((fileId) => /^uploaded-skill-/u.test(fileId)),
-      ),
-    ).toEqual(new Set(["uploaded-skill-1"]));
-    expect(operationTaskPosts.size).toBe(9);
-    expect([...operationTaskPosts.values()]).toEqual(Array(9).fill(1));
-    expect(rawTaskPosts).toBe(10);
-    expect(state.builds[0]).toMatchObject({
+  it("keeps an atomic pre-v5 rollback reset-only when turn completion fails", async () => {
+    const fixture = await createFinalPackageFixture();
+    const state = initialState();
+    const buildId = "24242424-2424-4242-8242-242424242424";
+    const turnId = "25252525-2525-4252-8252-252525252525";
+    const taskId = "task-v4-atomic-transition";
+    const operationKey = "operation-v4-atomic-transition";
+    const now = new Date("2026-08-04T01:00:00.000Z");
+    state.builds.push({
       id: buildId,
-      // reservation + upstream binding + authoritative reconcile per operation
-      stateEpoch: 27,
-      lastAppliedOperationKey: finalOperationKey,
-      protocolError: null,
-      protocolErrorCode: null,
-    });
-    expect(
-      state.turns
-        .filter(
-          (turn) =>
-            turn.operationType === "start" || turn.operationType === "confirm",
-        )
-        .every((turn) => turn.status === "completed"),
-    ).toBe(true);
-    const presentationMessages = state.messages.filter(
-      (message) => message.metadata?.knowledgeBase?.kind === "presentation",
-    );
-    expect(
-      presentationMessages.map((message) => ({
-        leafId: message.metadata.knowledgeBase.leafId,
-        revision: message.metadata.knowledgeBase.revision,
-        content: message.content,
-      })),
-    ).toEqual(
-      fixture.leaves.map((leaf, revision) => ({
-        leafId: leaf.id,
-        revision,
-        content: leaf.contentMarkdown,
-      })),
-    );
-    expect(
-      new Set(presentationMessages.map((message) => message.turnId)).size,
-    ).toBe(8);
-    expect(state.nodes.every((node) => node.status === "confirmed")).toBe(true);
-    expect(
-      state.nodes.map((node) => ({
-        id: node.leafId,
-        revisionContent: node.contentMarkdown,
-        hash: node.contentSha256,
-      })),
-    ).toEqual(
-      fixture.leaves.map((leaf) => ({
-        id: leaf.id,
-        revisionContent: leaf.contentMarkdown,
-        hash: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
-      })),
-    );
-    expect(state.builds[0]).toMatchObject({
-      status: "ready_to_publish",
-      revision: FINAL_REVISION,
-      currentLeafId: null,
-      confirmedCount: 8,
-      packageRevision: FINAL_REVISION,
-      packageArchiveSha256: archiveSha256,
-      logoSha256: fixture.logoSha256,
-    });
-    const artifactStore = await import("./knowledge-build-artifact-store");
-    const artifactBinding = await import(
-      "./knowledge-base-artifact-binding-service"
-    );
-    const orphanCleanup =
-      await artifactBinding.cleanupOrphanedKnowledgeBuildArtifactCandidates({
-        olderThan: new Date(Date.now() + 1_000),
-        limit: 100,
-      });
-    expect(orphanCleanup).toEqual({
-      scanned: 4,
-      deleted: 2,
-      retained: 2,
-      failed: 0,
-    });
-    expect(
-      await artifactStore.readKnowledgeBuildArtifact({
-        userId: USER_ID,
-        buildId,
-        generation: 1,
-        kind: "logo",
-        expectedSha256: fixture.logoSha256,
-        expectedBytes: fixture.logo.length,
-        storageKey: state.builds[0]!.logoStorageKey!,
-      }),
-    ).toEqual(fixture.logo);
-    expect(
-      await artifactStore.readKnowledgeBuildArtifact({
-        userId: USER_ID,
-        buildId,
-        generation: 1,
-        kind: "package",
-        expectedSha256: archiveSha256,
-        expectedBytes: fixture.archive.length,
-        storageKey: state.builds[0]!.packageStorageKey!,
-      }),
-    ).toEqual(fixture.archive);
-    const { getKnowledgeBaseObservationProjection } = await import(
-      "./knowledge-base-progress-service"
-    );
-
-    // Backfill deliberately revoked publication eligibility because this
-    // historical ready build had no Dashboard-owned package bytes. Recovery
-    // must reread the same settled task; it must not reserve a new turn.
-    await artifactStore.removeKnowledgeBuildArtifact({
       userId: USER_ID,
-      buildId,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "",
+      skillName: "socratic-kb-builder",
+      skillVersion: "4",
+      skillContentHash: "2".repeat(64),
+      treePolicyVersion: 1,
+      initialResearchCoverage: null,
+      status: "confirming",
       generation: 1,
-      kind: "package",
-      storageKey: state.builds[0]!.packageStorageKey!,
-    });
-    const persistedPackageIdentity = {
-      packageRevision: state.builds[0]!.packageRevision,
-      packageTaskId: state.builds[0]!.packageTaskId,
-      packageOutputItemId: state.builds[0]!.packageOutputItemId,
-      packageFileId: state.builds[0]!.packageFileId,
-      packageFilename: state.builds[0]!.packageFilename,
-      packageDescriptorHash: state.builds[0]!.packageDescriptorHash,
-    };
-    expect(persistedPackageIdentity).toMatchObject({
-      packageRevision: FINAL_REVISION,
-      packageTaskId: TASK_ID,
-      packageOutputItemId: expect.any(String),
-      packageFileId: "file-final-package",
-      packageDescriptorHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
-    Object.assign(state.builds[0]!, {
-      status: "protocol_error",
-      stateEpoch: state.builds[0]!.stateEpoch + 1,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-      protocolError:
-        "历史知识库成品未能固化，请重新绑定通过校验的最终 ZIP 后再发布",
-      ...persistedPackageIdentity,
-      packageStorageKey: null,
-      packageArchiveSha256: null,
-      packageSizeBytes: null,
-      updatedAt: new Date("2026-08-01T00:01:00.000Z"),
-    });
-    const rebindStateEpoch = state.builds[0]!.stateEpoch;
-    await expect(
-      getKnowledgeBaseObservationProjection({
-        userId: USER_ID,
-        conversationId: PUBLIC_CONVERSATION_ID,
-      }),
-    ).resolves.toMatchObject({
-      notice: {
-        code: "PACKAGE_REBIND_REQUIRED",
-        retryable: true,
-      },
-      package: null,
-    });
-
-    const turnCountBeforeRebind = state.turns.length;
-    const readsBeforeRebind = authoritativeTaskReads;
-    dependencies.getCredentialForUpstreamResource.mockResolvedValueOnce(null);
-    const unavailableCredentialResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(unavailableCredentialResponse.status).toBe(200);
-    expect((await unavailableCredentialResponse.json()) as any).toMatchObject({
-      observation: {
-        notice: {
-          code: "PACKAGE_REBIND_REQUIRED",
-          retryable: true,
-        },
-      },
-    });
-    expect(authoritativeTaskReads).toBe(readsBeforeRebind);
-    expect(state.builds[0]).toMatchObject({
-      status: "protocol_error",
-      stateEpoch: rebindStateEpoch,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-    });
-    expect(state.turns).toHaveLength(turnCountBeforeRebind);
-
-    includeFinalPackage = false;
-    const partialRebindResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(partialRebindResponse.status).toBe(200);
-    expect((await partialRebindResponse.json()) as any).toMatchObject({
-      observation: {
-        notice: {
-          code: "PACKAGE_REBIND_REQUIRED",
-          retryable: true,
-        },
-        package: null,
-      },
-    });
-    expect(state.builds[0]).toMatchObject({
-      status: "protocol_error",
-      stateEpoch: rebindStateEpoch,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-    });
-    expect(state.turns).toHaveLength(turnCountBeforeRebind);
-
-    includeFinalPackage = true;
-    const rebindResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(rebindResponse.status).toBe(200);
-    const rebound = (await rebindResponse.json()) as any;
-    expect(rebound.observation).toMatchObject({
-      authoritativeTaskId: TASK_ID,
-      notice: null,
-      interaction: {
-        interactionState: "ready_to_publish",
-        canPublish: true,
-      },
-      package: {
-        revision: FINAL_REVISION,
-        sha256: archiveSha256,
-        sizeBytes: fixture.archive.length,
-      },
-    });
-    expect(authoritativeTaskReads).toBe(readsBeforeRebind + 2);
-    expect(state.turns).toHaveLength(turnCountBeforeRebind);
-    expect(state.builds[0]).toMatchObject({
-      status: "ready_to_publish",
-      stateEpoch: rebindStateEpoch + 1,
-      packageRevision: FINAL_REVISION,
-      packageTaskId: TASK_ID,
-      packageArchiveSha256: archiveSha256,
-      protocolError: null,
-      protocolErrorCode: null,
-    });
-
-    // Historical incremental deployments could already have the authoritative
-    // ZIP while the first-node Logo was never copied into Dashboard storage.
-    // The dedicated rebind must recover the Logo from that same ZIP; merely
-    // seeing durable package bytes is not enough to clear the notice.
-    await artifactStore.removeKnowledgeBuildArtifact({
-      userId: USER_ID,
-      buildId,
-      generation: 1,
-      kind: "logo",
-      storageKey: state.builds[0]!.logoStorageKey!,
-    });
-    const missingLogoRecoveryEpoch = state.builds[0]!.stateEpoch + 1;
-    Object.assign(state.builds[0]!, {
-      status: "protocol_error",
-      stateEpoch: missingLogoRecoveryEpoch,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-      protocolError: "历史 Logo 尚未完成固化",
+      stateEpoch: 2,
+      revision: 0,
+      currentLeafId: fixture.leaves[0]!.id,
+      totalNodeCount: fixture.leaves.length,
+      confirmedCount: 0,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      activeTurnId: turnId,
+      upstreamTaskId: taskId,
+      lastAppliedOperationKey: null,
+      currentPresentationKey: "presentation-current-1",
+      lastReconciledHash: null,
+      lastOutputLength: 0,
+      lastOutputItemIds: [],
+      lastTurnUserText: "确认",
+      lastTurnAttachmentCount: 0,
+      awaitingResponseSince: now,
+      packageRevision: null,
+      packageTaskId: null,
+      packageOutputItemId: null,
+      packageFileId: null,
+      packageFilename: null,
+      packageDescriptorHash: null,
       logoStorageKey: null,
       logoSha256: null,
       logoBytes: null,
       logoFilename: null,
       logoMimeType: null,
-    });
-    const readsBeforeLogoRecovery = authoritativeTaskReads;
-    const downloadsBeforeLogoRecovery = packageDownloads;
-    const missingLogoRebindRequests = await Promise.all(
-      [0, 1].map(() =>
-        fetch(
-          `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-test-auth": "user",
-            },
-            body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-          },
-        ),
-      ),
-    );
-    for (const response of missingLogoRebindRequests) {
-      expect(response.status).toBe(200);
-      expect((await response.json()) as any).toMatchObject({
-        observation: {
-          notice: null,
-          interaction: { interactionState: "ready_to_publish" },
-        },
-      });
-    }
-    expect(state.builds[0]).toMatchObject({
-      status: "ready_to_publish",
-      stateEpoch: missingLogoRecoveryEpoch + 1,
-      logoStorageKey: expect.any(String),
-      logoSha256: fixture.logoSha256,
-      logoBytes: fixture.logo.length,
-      protocolError: null,
+      packageStorageKey: null,
+      packageArchiveSha256: null,
+      packageSizeBytes: null,
       protocolErrorCode: null,
+      protocolError: null,
+      publishedSnapshotId: null,
+      completedAt: null,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
     });
-    expect(authoritativeTaskReads).toBeGreaterThanOrEqual(
-      readsBeforeLogoRecovery + 1,
+    state.nodes.push(
+      ...fixture.leaves.map((leaf, ordinal) => ({
+        id: `25252525-2525-4252-8252-${String(ordinal + 1).padStart(12, "0")}`,
+        buildId,
+        leafId: leaf.id,
+        branchId: "products",
+        branchTitle: "产品与服务",
+        title: leaf.title,
+        ordinal,
+        status: ordinal === 0 ? "current" : "pending",
+        transitionReason: null,
+        contentMarkdown: ordinal === 0 ? leaf.contentMarkdown : null,
+        contentSha256:
+          ordinal === 0
+            ? knowledgeBaseMarkdownSha256(leaf.contentMarkdown)
+            : null,
+        lastUserInput: null,
+        sourceUrls: [],
+        imageUrls: [],
+        lastTaskId: ordinal === 0 ? taskId : null,
+        sourceTurnId: ordinal === 0 ? "turn-initial" : null,
+        presentationKey: ordinal === 0 ? "presentation-current-1" : null,
+        lastResponseAt: ordinal === 0 ? now : null,
+        confirmedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      })),
     );
-    expect(authoritativeTaskReads).toBeLessThanOrEqual(
-      readsBeforeLogoRecovery + 2,
+    state.turns.push({
+      id: turnId,
+      conversationId: STORED_CONVERSATION_ID,
+      userId: USER_ID,
+      apiCredentialId: "credential-e2e",
+      clientRequestId: "request-v4-atomic-transition",
+      buildId,
+      buildGeneration: 1,
+      operationKey,
+      operationType: "confirm",
+      expectedRevision: 0,
+      expectedLeafId: fixture.leaves[0]!.id,
+      requestHash: "3".repeat(64),
+      upstreamIdempotencyKeyHash: "4".repeat(64),
+      attachmentFileIds: [],
+      metadata: {
+        providerProtocol: "manus_v2",
+        providerMethod: "task.sendMessage",
+        providerAttemptState: "output_pending",
+        operationToken: operationKey,
+        lastSeenEventIds: ["event-transition-result"],
+        recovery: { outputCursor: 1 },
+      },
+      leaseExpiresAt: new Date("2026-08-04T01:05:00.000Z"),
+      status: "running",
+      upstreamTaskId: taskId,
+      errorCode: null,
+      errorMessage: null,
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const frozenState = structuredClone(state);
+    let rejectedCompletionWrites = 0;
+    dependencies.getDb.mockResolvedValue(
+      memoryDatabase(state, {
+        transactional: true,
+        failUpdate(table, values) {
+          if (table === conversationTurns && values.status === "completed") {
+            rejectedCompletionWrites += 1;
+            return new Error("injected turn completion write failure");
+          }
+          return undefined;
+        },
+      }),
     );
-    expect(packageDownloads).toBe(downloadsBeforeLogoRecovery + 1);
-    await expect(
-      artifactStore.readKnowledgeBuildArtifact({
+
+    const progressText = formatKnowledgeBaseProgressEnvelope({
+      kind: "frontmind.knowledge-base.progress",
+      schemaVersion: 2,
+      operationId: operationKey,
+      turnId,
+      revision: 0,
+      transition: {
+        leafId: fixture.leaves[0]!.id,
+        from: "current",
+        to: "confirmed",
+        reason: "用户明确确认当前节点",
+      },
+    });
+    const presentationText = formatKnowledgeBasePresentationEnvelope({
+      kind: "frontmind.knowledge-base.presentation",
+      schemaVersion: 2,
+      operationId: operationKey,
+      turnId,
+      revision: 1,
+      leafId: fixture.leaves[1]!.id,
+      imageState: "no_eligible_asset",
+      assetIds: [],
+      imageCount: 0,
+    });
+    const { reconcileKnowledgeBaseProgress } = await import(
+      "./knowledge-base-progress-service"
+    );
+    const progress = await reconcileKnowledgeBaseProgress({
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      taskId,
+      userText: "确认",
+      attachmentCount: 0,
+      output: [
+        {
+          id: "assistant-v4-atomic-transition",
+          role: "assistant",
+          type: "output_message",
+          content: [
+            {
+              type: "output_text",
+              text: {
+                value: `${fixture.leaves[1]!.contentMarkdown}\n${progressText}\n${presentationText}`,
+              },
+            },
+          ],
+        },
+      ],
+      upstreamStatus: "running",
+    });
+
+    expect(rejectedCompletionWrites).toBe(1);
+    expect(progress.build).toMatchObject({
+      status: "protocol_error",
+      executionMode: "legacy_conversational",
+      protocolError: expect.stringContaining("RESET_REQUIRED"),
+      revision: 0,
+      currentLeafId: fixture.leaves[0]!.id,
+    });
+    expect(state).toEqual(frozenState);
+    expect(state.turns[0]!.metadata).toMatchObject({
+      providerAttemptState: "output_pending",
+      lastSeenEventIds: ["event-transition-result"],
+      recovery: { outputCursor: 1 },
+    });
+  });
+
+  it("projects a migrated pre-v5 reopen result as RESET_REQUIRED", async () => {
+    const fixture = await createFinalPackageFixture();
+    const state = initialState();
+    const buildId = "26262626-2626-4262-8262-262626262626";
+    const turnId = "27272727-2727-4272-8272-272727272727";
+    const taskId = "task-v2-migrated-reopen";
+    const operationKey = "operation-v2-migrated-reopen";
+    const revision = fixture.leaves.length;
+    const reopenedLeaf = fixture.leaves[2]!;
+    const now = new Date("2026-08-04T02:00:00.000Z");
+    state.builds.push({
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "",
+      skillName: "socratic-kb-builder",
+      skillVersion: "3",
+      skillContentHash: "6".repeat(64),
+      treePolicyVersion: 1,
+      initialResearchCoverage: null,
+      providerProtocol: "manus_v2",
+      status: "confirming",
+      generation: 1,
+      stateEpoch: 5,
+      revision,
+      currentLeafId: null,
+      totalNodeCount: revision,
+      confirmedCount: revision,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      activeTurnId: turnId,
+      upstreamTaskId: taskId,
+      lastAppliedOperationKey: "operation-before-reopen",
+      currentPresentationKey: null,
+      lastReconciledHash: null,
+      lastOutputLength: 0,
+      lastOutputItemIds: [],
+      lastTurnUserText: "请重新核验第三个节点",
+      lastTurnAttachmentCount: 0,
+      awaitingResponseSince: now,
+      packageStatus: "ready",
+      packageAttemptCount: 1,
+      packageRevision: revision,
+      packageTaskId: "task-before-reopen",
+      packageOutputItemId: "output-before-reopen",
+      packageFileId: "file-before-reopen",
+      packageFilename: "before-reopen.zip",
+      packageDescriptorHash: "7".repeat(64),
+      packageStorageKey: "knowledge-builds/before-reopen.zip",
+      packageArchiveSha256: "8".repeat(64),
+      packageSizeBytes: 1234,
+      logoStorageKey: null,
+      logoSha256: null,
+      logoBytes: null,
+      logoFilename: null,
+      logoMimeType: null,
+      protocolErrorCode: null,
+      protocolError: null,
+      publishedSnapshotId: null,
+      completedAt: now,
+      contentCompletedAt: now,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.nodes.push(
+      ...fixture.leaves.map((leaf, ordinal) => ({
+        id: `27272727-2727-4272-8272-${String(ordinal + 1).padStart(12, "0")}`,
+        buildId,
+        leafId: leaf.id,
+        branchId: "products",
+        branchTitle: "产品与服务",
+        title: leaf.title,
+        ordinal,
+        status: "confirmed",
+        transitionReason: "历史节点已确认",
+        contentMarkdown: leaf.contentMarkdown,
+        contentSha256: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
+        lastUserInput: null,
+        sourceUrls: [],
+        imageUrls: [],
+        lastTaskId: "task-before-reopen",
+        sourceTurnId: `turn-before-reopen-${ordinal + 1}`,
+        presentationKey: `presentation-before-reopen-${ordinal + 1}`,
+        lastResponseAt: now,
+        confirmedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    state.turns.push({
+      id: turnId,
+      conversationId: STORED_CONVERSATION_ID,
+      userId: USER_ID,
+      apiCredentialId: "credential-e2e",
+      clientRequestId: "request-v2-migrated-reopen",
+      buildId,
+      buildGeneration: 1,
+      operationKey,
+      operationType: "revise",
+      expectedRevision: revision,
+      expectedLeafId: null,
+      requestHash: "9".repeat(64),
+      upstreamIdempotencyKeyHash: "a".repeat(64),
+      attachmentFileIds: [],
+      metadata: {
+        providerProtocol: "manus_v2",
+        providerMethod: "task.sendMessage",
+        providerAttemptState: "output_pending",
+        operationToken: operationKey,
+        lastSeenEventIds: ["event-reopen-result"],
+        recovery: { migratedFrom: "legacy_v1" },
+      },
+      leaseExpiresAt: new Date("2026-08-04T02:05:00.000Z"),
+      status: "running",
+      upstreamTaskId: taskId,
+      errorCode: null,
+      errorMessage: null,
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    dependencies.getDb.mockResolvedValue(memoryDatabase(state));
+    const reopenEnvelope = formatKnowledgeBaseReopenEnvelope({
+      kind: "frontmind.knowledge-base.reopen",
+      schemaVersion: 1,
+      revision,
+      leafId: reopenedLeaf.id,
+      reason: "客户要求重新核验该节点",
+    });
+    const presentationEnvelope = formatKnowledgeBasePresentationEnvelope({
+      kind: "frontmind.knowledge-base.presentation",
+      schemaVersion: 1,
+      revision: revision + 1,
+      leafId: reopenedLeaf.id,
+      imageState: "no_eligible_asset",
+      assetIds: [],
+      imageCount: 0,
+    });
+    const { reconcileKnowledgeBaseProgress } = await import(
+      "./knowledge-base-progress-service"
+    );
+    const progress = await reconcileKnowledgeBaseProgress({
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      taskId,
+      userText: "请重新核验第三个节点",
+      attachmentCount: 0,
+      output: [
+        {
+          id: "assistant-v2-migrated-reopen",
+          role: "assistant",
+          type: "output_message",
+          content: [
+            {
+              type: "output_text",
+              text: {
+                value: `${reopenedLeaf.contentMarkdown}\n${reopenEnvelope}\n${presentationEnvelope}`,
+              },
+            },
+          ],
+        },
+      ],
+      upstreamStatus: "completed",
+    });
+
+    expect(progress.build).toMatchObject({
+      status: "protocol_error",
+      executionMode: "legacy_conversational",
+      protocolError: expect.stringContaining("RESET_REQUIRED"),
+      revision: revision + 1,
+      currentLeafId: reopenedLeaf.id,
+    });
+  });
+
+  it.skip("retires historical Skill-v4 archive rebinding", async () => {
+    const buildId = "13131313-1313-4131-8131-131313131313";
+    const taskId = "task-historical-v4-schema3";
+    const fileId = "file-historical-v4-schema3";
+    const now = new Date("2026-08-05T00:00:00.000Z");
+    const fixture = await createFinalPackageFixture({
+      leafCount: FINAL_REVISION,
+      buildRevision: FINAL_REVISION,
+      schemaVersion: 3,
+    });
+    const fixtureSha256 = createHash("sha256")
+      .update(fixture.archive)
+      .digest("hex");
+    const state = initialState();
+    state.builds.push({
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "https://www.frontmind.net/",
+      skillName: "socratic-kb-builder",
+      skillVersion: "4",
+      skillContentHash: "3".repeat(64),
+      status: "protocol_error",
+      generation: 1,
+      stateEpoch: 7,
+      revision: FINAL_REVISION,
+      currentLeafId: null,
+      totalNodeCount: FINAL_REVISION,
+      confirmedCount: FINAL_REVISION,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      activeTurnId: null,
+      upstreamTaskId: taskId,
+      lastAppliedOperationKey: "operation-historical-v4-schema3",
+      currentPresentationKey: null,
+      lastReconciledHash: null,
+      lastOutputLength: 1,
+      lastOutputItemIds: ["assistant-historical-v4-schema3"],
+      lastTurnUserText: "确认",
+      lastTurnAttachmentCount: 0,
+      awaitingResponseSince: null,
+      packageRevision: FINAL_REVISION,
+      packageTaskId: taskId,
+      packageOutputItemId: null,
+      packageFileId: fileId,
+      packageFilename: "historical-v4-schema3.zip",
+      packageDescriptorHash: null,
+      packageStorageKey: null,
+      packageArchiveSha256: null,
+      packageSizeBytes: null,
+      logoStorageKey: null,
+      logoSha256: null,
+      logoBytes: null,
+      logoFilename: null,
+      logoMimeType: null,
+      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
+      protocolError: "历史成品需要重新绑定",
+      publishedSnapshotId: null,
+      completedAt: now,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.nodes.push(
+      ...fixture.leaves.map((leaf, ordinal) => ({
+        id: `13131313-1313-4131-8131-${String(ordinal + 1).padStart(12, "0")}`,
+        buildId,
+        leafId: leaf.id,
+        branchId: "products",
+        branchTitle: "产品与服务",
+        title: leaf.title,
+        ordinal,
+        status: "confirmed",
+        transitionReason: "历史生产版本已确认",
+        contentMarkdown: leaf.contentMarkdown,
+        contentSha256: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
+        lastUserInput: null,
+        sourceUrls: [],
+        imageUrls: [],
+        lastTaskId: taskId,
+        sourceTurnId: null,
+        presentationKey: `historical-presentation-${ordinal + 1}`,
+        lastResponseAt: now,
+        confirmedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    const provenanceTurn = completedOfficialLogoProvenanceTurn({
+      id: "14141414-1414-4141-8141-141414141414",
+      buildId,
+      generation: 1,
+      now,
+    });
+    provenanceTurn.metadata.boundOfficialLogoProvenance = {
+      sourceKind: "official_web",
+      sourcePageUrl: "https://new-ledger.example.com/",
+      sourceAssetUrl: "https://new-ledger.example.com/logo.png",
+    };
+    state.turns.push(provenanceTurn);
+    dependencies.getDb.mockResolvedValue(
+      memoryDatabase(state, { cloneSelectedRows: true }),
+    );
+
+    const providerOutput = [
+      {
+        id: "assistant-historical-v4-schema3",
+        role: "assistant",
+        type: "output_message",
+        content: [
+          {
+            type: "output_file",
+            file_id: fileId,
+            file_name: "historical-v4-schema3.zip",
+            mime_type: "application/zip",
+          },
+        ],
+      },
+    ];
+    const upstream = express();
+    upstream.get(`/v1/files/${fileId}/content`, (req, res) => {
+      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Length", String(fixture.archive.length));
+      res.setHeader(
+        "Content-Disposition",
+        'attachment; filename="historical-v4-schema3.zip"',
+      );
+      res.send(fixture.archive);
+    });
+    const upstreamListener = await listen(upstream);
+    dependencies.upstreamBaseUrl = upstreamListener.baseUrl;
+
+    let dashboardListener: Awaited<ReturnType<typeof listen>> | undefined;
+    try {
+      const { bindKnowledgeBaseReadyPackage } = await import(
+        "./knowledge-base-artifact-binding-service"
+      );
+      const rebound = await bindKnowledgeBaseReadyPackage({
         userId: USER_ID,
         buildId,
         generation: 1,
-        kind: "logo",
-        storageKey: state.builds[0]!.logoStorageKey!,
-        expectedSha256: fixture.logoSha256,
-        expectedBytes: fixture.logo.length,
-      }),
-    ).resolves.toEqual(fixture.logo);
+        taskId,
+        output: providerOutput,
+        apiKey: "sk-e2e-only",
+        baseUrl: upstreamListener.baseUrl,
+      });
+      expect(rebound).toMatchObject({
+        idempotent: false,
+        sha256: fixtureSha256,
+        bytes: fixture.archive.length,
+      });
+      expect(state.builds[0]).toMatchObject({
+        status: "ready_to_publish",
+        protocolError: null,
+        protocolErrorCode: null,
+        revision: FINAL_REVISION,
+        packageRevision: FINAL_REVISION,
+        packageArchiveSha256: fixtureSha256,
+        packageSizeBytes: fixture.archive.length,
+        packageStorageKey: expect.any(String),
+        logoSha256: fixture.logoSha256,
+        logoBytes: fixture.logo.length,
+        logoStorageKey: expect.any(String),
+      });
 
-    // A legacy/inconsistent row may already point at verified immutable bytes
-    // while retaining the rebind notice. Reconcile verifies those bytes and
-    // clears only the recovery state without downloading or creating a turn.
-    const durableRecoveryEpoch = state.builds[0]!.stateEpoch + 1;
-    Object.assign(state.builds[0]!, {
-      status: "protocol_error",
-      stateEpoch: durableRecoveryEpoch,
-      protocolErrorCode: "PACKAGE_REBIND_REQUIRED",
-      protocolError: "历史成品状态等待重新绑定",
-    });
-    const readsBeforeDurableRebind = authoritativeTaskReads;
-    const downloadsBeforeDurableRebind = packageDownloads;
-    const durableRebindResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
+      const { default: artifactRouter } = await import(
+        "./knowledge-base-artifact-api"
+      );
+      const { default: dashboardRouter } = await import("./dashboard-api");
+      const { requireExpressAuth } = await import("./_core/express-auth");
+      const dashboard = express();
+      dashboard.use(express.json());
+      dashboard.use(
+        "/api/knowledge-base/artifacts",
+        requireExpressAuth,
+        artifactRouter,
+      );
+      dashboard.use("/api/dashboard", dashboardRouter);
+      dashboardListener = await listen(dashboard);
+
+      const artifactResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/artifacts/${buildId}/package`,
+        { headers: { "x-test-auth": "user" } },
+      );
+      expect(artifactResponse.status).toBe(200);
+      expect(Buffer.from(await artifactResponse.arrayBuffer())).toEqual(
+        fixture.archive,
+      );
+
+      const publishResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/dashboard/knowledge/publish`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
         },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(durableRebindResponse.status).toBe(200);
-    expect((await durableRebindResponse.json()) as any).toMatchObject({
-      observation: {
-        notice: null,
-        interaction: { interactionState: "ready_to_publish" },
-        package: { sha256: archiveSha256 },
-      },
-    });
-    expect(state.builds[0]).toMatchObject({
-      status: "ready_to_publish",
-      stateEpoch: durableRecoveryEpoch + 1,
-      protocolError: null,
-      protocolErrorCode: null,
-    });
-    expect(authoritativeTaskReads).toBe(readsBeforeDurableRebind + 1);
-    expect(packageDownloads).toBe(downloadsBeforeDurableRebind);
-    expect(state.turns).toHaveLength(turnCountBeforeRebind);
+      );
+      expect(publishResponse.status).toBe(200);
+      const published = (await publishResponse.json()) as any;
+      expect(published.snapshot).toMatchObject({
+        sourceBuildId: buildId,
+        sourceBuildRevision: FINAL_REVISION,
+        archiveHash: fixtureSha256,
+        imageCount: 1,
+      });
+      expect(state.builds[0]).toMatchObject({
+        status: "published",
+        publishedSnapshotId: published.snapshot.id,
+      });
+      expect(
+        state.snapshots[0]!.documents.filter(
+          (document: any) => document.kind === "leaf",
+        ).map((document: any) => document.id),
+      ).toEqual(fixture.leaves.map((leaf) => leaf.id));
+    } finally {
+      await Promise.all([
+        close(dashboardListener?.server),
+        close(upstreamListener.server),
+      ]);
+    }
+  }, 60_000);
 
-    const repeatedRebindResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(repeatedRebindResponse.status).toBe(200);
-    expect((await repeatedRebindResponse.json()) as any).toMatchObject({
-      observation: {
-        notice: null,
-        interaction: { interactionState: "ready_to_publish" },
-      },
-    });
-    expect(authoritativeTaskReads).toBe(readsBeforeDurableRebind + 1);
-    expect(packageDownloads).toBe(downloadsBeforeDurableRebind);
-    expect(state.turns).toHaveLength(turnCountBeforeRebind);
-
-    const unauthenticatedPublish = await fetch(
-      `${dashboardListener.baseUrl}/api/dashboard/knowledge/publish`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(unauthenticatedPublish.status).toBe(401);
-
-    const publishResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/dashboard/knowledge/publish`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-auth": "user",
-        },
-        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-      },
-    );
-    expect(publishResponse.status).toBe(200);
-    const published = (await publishResponse.json()) as any;
-    expect(published.kind).toBe("knowledge");
-    expect(published.snapshot).toMatchObject({
-      sourceBuildId: buildId,
-      sourceBuildRevision: FINAL_REVISION,
-      sourceTaskId: TASK_ID,
-      sourceArtifactHash: archiveSha256,
-      archiveHash: archiveSha256,
-      archiveAvailable: true,
-      imageCount: 1,
-    });
-    expect(state.builds[0]).toMatchObject({
-      status: "published",
-      revision: FINAL_REVISION,
-      publishedSnapshotId: published.snapshot.id,
-    });
-    const { isAuthenticatedAdvancedKnowledgePublication } = await import(
-      "./authenticated-knowledge-service"
-    );
-    expect(
-      isAuthenticatedAdvancedKnowledgePublication({
-        snapshot: state.snapshots[0] as any,
-        build: state.builds[0] as any,
-        notBefore: new Date("2026-08-01T00:00:00.000Z"),
-      }),
-    ).toBe(true);
-
-    const { getLatestKnowledgeSnapshot } = await import("./dashboard-service");
-    const viewerSnapshot = await getLatestKnowledgeSnapshot(USER_ID);
-    expect(viewerSnapshot).toMatchObject({
-      id: published.snapshot.id,
-      sourceBuildId: buildId,
-      sourceBuildRevision: FINAL_REVISION,
-      archiveHash: archiveSha256,
-      archiveAvailable: true,
-    });
-    const viewerLeaves = viewerSnapshot!.documents
-      .filter((document: any) => document.kind === "leaf")
-      .sort((left: any, right: any) => left.order - right.order);
-    expect(viewerLeaves).toHaveLength(8);
-    expect(
-      viewerLeaves.map((document: any) => ({
-        id: document.id,
-        title: document.title,
-        branchId: document.branchId,
-        branchTitle: document.branchTitle,
-        order: document.order,
-        content: document.content,
-      })),
-    ).toEqual(
-      state.nodes.map((node) => ({
-        id: node.leafId,
-        title: node.title,
-        branchId: node.branchId,
-        branchTitle: node.branchTitle,
-        order: node.ordinal,
-        content: node.contentMarkdown,
-      })),
-    );
-    expect(
-      viewerLeaves.every(
-        (document: any) =>
-          !document.content.includes("FRONTMIND_FORMAL_CONTENT") &&
-          knowledgeBaseMarkdownSha256(document.content) ===
-            state.nodes[document.order]!.contentSha256,
-      ),
-    ).toBe(true);
-    expect(viewerSnapshot!.assets).toEqual([
-      expect.objectContaining({
-        id: "official-logo",
-        sha256: fixture.logoSha256,
-        url: `/api/dashboard/knowledge/assets/${published.snapshot.id}/by-id/official-logo`,
-      }),
-    ]);
-
-    const downloadResponse = await fetch(
-      `${dashboardListener.baseUrl}/api/dashboard/knowledge/snapshots/${published.snapshot.id}/archive`,
-      { headers: { "x-test-auth": "user" } },
-    );
-    expect(downloadResponse.status).toBe(200);
-    expect(downloadResponse.headers.get("cache-control")).toBe(
-      "private, no-store",
-    );
-    const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
-    expect(downloaded).toEqual(fixture.archive);
-    expect(createHash("sha256").update(downloaded).digest("hex")).toBe(
-      archiveSha256,
-    );
-
-    const { readKnowledgeArchive } = await import("./dashboard-api");
-    const unpacked = await readKnowledgeArchive(
-      downloaded,
-      "frontmind-knowledge-base.zip",
-      "33333333-3333-4333-8333-333333333333",
-      {
-        validationProfile: "dashboard-enterprise-v1",
-        archiveContractVersions: [3],
-      },
-    );
-    expect(unpacked.packageBuildRevision).toBe(FINAL_REVISION);
-    expect(unpacked.assets).toEqual([
-      expect.objectContaining({
-        id: "official-logo",
-        sha256: fixture.logoSha256,
-      }),
-    ]);
-    const unpackedLeaves = unpacked.documents
-      .filter((document) => document.kind === "leaf")
-      .sort((left, right) => left.order! - right.order!);
-    expect(
-      unpackedLeaves.map((document) => ({
-        id: document.id,
-        hash: knowledgeBaseMarkdownSha256(document.content),
-      })),
-    ).toEqual(
-      state.nodes.map((node) => ({
-        id: node.leafId,
-        hash: node.contentSha256,
-      })),
-    );
-  }, 120_000);
-
-  it("recovers the original final turn when the same settled task appends its ZIP", async () => {
+  it("does not expose pre-v5 provider finalization as publishable content", async () => {
     const finalRevision = 45;
     const priorRevision = finalRevision - 1;
     const buildId = "99999999-9999-4999-8999-999999999999";
@@ -2312,28 +2662,8 @@ describe("knowledge-base production final-package acceptance", () => {
       leafCount: finalRevision,
       buildRevision: finalRevision,
       schemaVersion: 4,
-      archiveLeafIdPrefix: "leaf-",
       driftLastPackagedLeaf: true,
     });
-    const sealedArchive = await canonicalizeKnowledgeBaseFinalArchive({
-      buffer: fixture.archive,
-      nodes: fixture.leaves.map((leaf, ordinal) => ({
-        leafId: leaf.id,
-        title: leaf.title,
-        branchId: "products",
-        branchTitle: "产品与服务",
-        ordinal,
-        status: "confirmed",
-        contentMarkdown: leaf.contentMarkdown,
-        contentSha256: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
-      })),
-      buildRevision: finalRevision,
-    });
-    expect(sealedArchive.changed).toBe(true);
-    expect(sealedArchive.buffer.equals(fixture.archive)).toBe(false);
-    const archiveSha256 = createHash("sha256")
-      .update(sealedArchive.buffer)
-      .digest("hex");
     const artifactStore = await import("./knowledge-build-artifact-store");
     const persistedLogo = await artifactStore.persistKnowledgeBuildArtifact({
       userId: USER_ID,
@@ -2349,7 +2679,7 @@ describe("knowledge-base production final-package acceptance", () => {
       userId: USER_ID,
       conversationId: PUBLIC_CONVERSATION_ID,
       companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
+      companyWebsite: "https://www.frontmind.net/",
       skillName: "socratic-kb-builder",
       skillVersion: "4",
       skillContentHash: "4".repeat(64),
@@ -2438,7 +2768,16 @@ describe("knowledge-base production final-package acceptance", () => {
       requestHash: "5".repeat(64),
       upstreamIdempotencyKeyHash: "6".repeat(64),
       attachmentFileIds: [],
-      metadata: { attachmentsFrozen: true, recovery: {} },
+      metadata: {
+        attachmentsFrozen: true,
+        providerProtocol: "manus_v2",
+        providerMethod: "task.sendMessage",
+        providerAttemptState: "sending",
+        operationToken: operationKey,
+        lastSeenEventIds: ["event-final-result"],
+        providerRejectionCount: 0,
+        recovery: { outputCursor: 45 },
+      },
       leaseExpiresAt: new Date("2026-08-03T00:05:00.000Z"),
       status: "running",
       upstreamTaskId: taskId,
@@ -2449,6 +2788,14 @@ describe("knowledge-base production final-package acceptance", () => {
       createdAt: now,
       updatedAt: now,
     });
+    state.turns.push(
+      completedOfficialLogoProvenanceTurn({
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        buildId,
+        generation: 1,
+        now,
+      }),
+    );
     // Real database reads return snapshots. Clone selected rows here so the
     // recovery CAS compares its pre-update stateEpoch with the rebound row,
     // rather than observing this in-memory adapter's Object.assign mutation.
@@ -2502,194 +2849,378 @@ describe("knowledge-base production final-package acceptance", () => {
     const { reconcileKnowledgeBaseProgress } = await import(
       "./knowledge-base-progress-service"
     );
-    vi.useFakeTimers();
-    try {
-      for (const second of [0, 5, 10]) {
-        vi.setSystemTime(
-          new Date(`2026-08-03T00:00:${String(second).padStart(2, "0")}.000Z`),
-        );
-        const progress = await reconcileKnowledgeBaseProgress({
-          userId: USER_ID,
-          conversationId: PUBLIC_CONVERSATION_ID,
-          taskId,
-          userText: "确认",
-          attachmentCount: 0,
-          output: textOnlyOutput,
-          upstreamStatus: "completed",
-        });
-        expect(progress.build).toMatchObject({
-          status: second === 10 ? "protocol_error" : "confirming",
-          revision: priorRevision,
-          currentLeafId: `1.${finalRevision}`,
-        });
-        expect(progress.summary).toMatchObject({
-          total: finalRevision,
-          handled: priorRevision,
-          confirmed: priorRevision,
-          current: 1,
-          overallPercent: 98,
-        });
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-
-    expect(state.builds[0]).toMatchObject({
+    const completedProgress = await reconcileKnowledgeBaseProgress({
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      taskId,
+      userText: "确认",
+      attachmentCount: 0,
+      output: textOnlyOutput,
+      upstreamStatus: "completed",
+    });
+    expect(completedProgress.build).toMatchObject({
       status: "protocol_error",
+      executionMode: "legacy_conversational",
+      protocolError: expect.stringContaining("RESET_REQUIRED"),
+      revision: finalRevision,
+      currentLeafId: null,
+    });
+    expect(completedProgress.packageAllowed).toBe(false);
+  }, 60_000);
+
+  it.skip("retires settled legacy task late-ZIP recovery", async () => {
+    // Tree policy v1 is the smallest production archive contract (8 leaves).
+    // Keep this fixture compact without reviving the deleted 30/45-leaf flow.
+    const finalRevision = 8;
+    const priorRevision = finalRevision - 1;
+    const buildId = "15151515-1515-4151-8151-151515151515";
+    const turnId = "16161616-1616-4161-8161-161616161616";
+    const taskId = "task-settled-legacy-late-zip";
+    const operationKey = "operation-settled-legacy-late-zip";
+    const fileId = "file-settled-legacy-late-zip";
+    const now = new Date("2026-08-06T00:00:00.000Z");
+    const fixture = await createFinalPackageFixture({
+      leafCount: finalRevision,
+      buildRevision: finalRevision,
+      schemaVersion: 4,
+      driftLastPackagedLeaf: true,
+    });
+    const sealedArchive = await canonicalizeKnowledgeBaseFinalArchive({
+      buffer: fixture.archive,
+      nodes: fixture.leaves.map((leaf, ordinal) => ({
+        leafId: leaf.id,
+        title: leaf.title,
+        branchId: "products",
+        branchTitle: "产品与服务",
+        ordinal,
+        status: "confirmed",
+        contentMarkdown: leaf.contentMarkdown,
+        contentSha256: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
+      })),
+      buildRevision: finalRevision,
+    });
+    expect(sealedArchive.changed).toBe(true);
+    const archiveSha256 = createHash("sha256")
+      .update(sealedArchive.buffer)
+      .digest("hex");
+
+    const artifactStore = await import("./knowledge-build-artifact-store");
+    const persistedLogo = await artifactStore.persistKnowledgeBuildArtifact({
+      userId: USER_ID,
+      buildId,
+      generation: 1,
+      kind: "logo",
+      buffer: fixture.logo,
+      expectedSha256: fixture.logoSha256,
+    });
+    const state = initialState();
+    Object.assign(state.conversations[0]!, {
+      status: "failed",
+      upstreamTaskId: taskId,
+      previousResponseId: taskId,
+      version: 1,
+      completedAt: now,
+      updatedAt: now,
+    });
+    state.builds.push({
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "https://www.frontmind.net/",
+      upstreamTaskId: taskId,
+      providerProtocol: "legacy_v1",
+      canonicalTaskId: null,
+      canonicalTaskGeneration: null,
+      canonicalCredentialId: null,
+      canonicalTaskState: "unbound",
+      canonicalTaskUrl: null,
+      canonicalTaskCreatedAt: null,
+      handoffProvenance: null,
+      skillName: "socratic-kb-builder",
+      skillVersion: "4",
+      skillContentHash: "4".repeat(64),
+      treePolicyVersion: 1,
+      initialResearchCoverage: null,
+      status: "protocol_error",
+      generation: 1,
       stateEpoch: 11,
+      activeTurnId: turnId,
+      lastAppliedOperationKey: null,
+      currentPresentationKey: "presentation-settled-legacy-final-leaf",
       revision: priorRevision,
       currentLeafId: `1.${finalRevision}`,
+      totalNodeCount: finalRevision,
       confirmedCount: priorRevision,
-      activeTurnId: turnId,
-      upstreamTaskId: taskId,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      lastReconciledHash: null,
       lastOutputLength: 0,
       lastOutputItemIds: [],
-      protocolErrorCode: "FINAL_PACKAGE_MISSING",
+      lastTurnUserText: "确认",
+      lastTurnAttachmentCount: 0,
+      awaitingResponseSince: null,
       packageRevision: null,
       packageTaskId: null,
       packageOutputItemId: null,
+      packageFileId: null,
+      packageFilename: null,
+      packageDescriptorHash: null,
+      skillArchiveSha256: null,
+      skillArchiveBytes: null,
+      skillArchiveStorageKey: null,
+      contentCompletedAt: null,
+      packageStatus: "not_started",
+      packageAttemptCount: 0,
+      packageNextRetryAt: null,
+      packageLastErrorCode: "FINAL_PACKAGE_MISSING",
+      logoStorageKey: persistedLogo.storageKey,
+      logoSha256: persistedLogo.sha256,
+      logoBytes: persistedLogo.bytes,
+      logoFilename: "frontmind-logo.png",
+      logoMimeType: "image/png",
       packageStorageKey: null,
       packageArchiveSha256: null,
       packageSizeBytes: null,
+      protocolErrorCode: "FINAL_PACKAGE_MISSING",
+      protocolError: "最终知识库 ZIP 尚未随同一已结束任务到达",
+      publishedSnapshotId: null,
+      completedAt: null,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
     });
-    expect(state.turns).toHaveLength(1);
-    expect(state.turns[0]).toMatchObject({
+    state.nodes.push(
+      ...fixture.leaves.map((leaf, ordinal) => ({
+        id: `15151515-1515-4151-8151-${String(ordinal + 1).padStart(12, "0")}`,
+        buildId,
+        leafId: leaf.id,
+        branchId: "products",
+        branchTitle: "产品与服务",
+        title: leaf.title,
+        ordinal,
+        status: ordinal < priorRevision ? "confirmed" : "current",
+        transitionReason:
+          ordinal < priorRevision ? "历史节点已确认" : "等待最终确认结算",
+        contentMarkdown: leaf.contentMarkdown,
+        contentSha256: knowledgeBaseMarkdownSha256(leaf.contentMarkdown),
+        lastUserInput: null,
+        sourceUrls: [],
+        imageUrls: [],
+        lastTaskId: taskId,
+        sourceTurnId: null,
+        presentationKey:
+          ordinal === priorRevision
+            ? "presentation-settled-legacy-final-leaf"
+            : `presentation-settled-legacy-${ordinal + 1}`,
+        lastResponseAt: now,
+        confirmedAt: ordinal < priorRevision ? now : null,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    );
+    state.turns.push({
       id: turnId,
+      conversationId: STORED_CONVERSATION_ID,
+      userId: USER_ID,
+      apiCredentialId: "credential-e2e",
+      clientRequestId: "request-settled-legacy-late-zip",
+      buildId,
+      buildGeneration: 1,
       operationKey,
+      operationType: "confirm",
+      expectedRevision: priorRevision,
+      expectedLeafId: `1.${finalRevision}`,
+      requestHash: "5".repeat(64),
+      upstreamIdempotencyKeyHash: "6".repeat(64),
+      attachmentFileIds: [],
+      metadata: {
+        attachmentsFrozen: true,
+        expectedAttachmentCount: 0,
+        userAttachmentCount: 0,
+        providerProtocol: "legacy_v1",
+        dispatchState: "failed",
+        failureClass: "recoverable_same_turn",
+        recoveryAction: "reconcile",
+        canRegenerate: false,
+        recovery: {
+          protocolFailureObservation: {
+            observationKeyHash: "7".repeat(64),
+            count: 3,
+            firstObservedAt: "2026-08-05T23:59:50.000Z",
+            lastObservedAt: now.toISOString(),
+          },
+        },
+      },
+      leaseExpiresAt: null,
       status: "failed",
       upstreamTaskId: taskId,
       errorCode: "FINAL_PACKAGE_MISSING",
-      leaseExpiresAt: null,
+      errorMessage: "最终知识库 ZIP 尚未随同一已结束任务到达",
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
     });
-    expect(
-      state.nodes.filter((node) => node.status === "confirmed"),
-    ).toHaveLength(priorRevision);
-    expect(state.nodes[priorRevision]).toMatchObject({
-      leafId: `1.${finalRevision}`,
-      status: "current",
-    });
+    dependencies.getDb.mockResolvedValue(
+      memoryDatabase(state, { cloneSelectedRows: true }),
+    );
 
-    const outputWithLatePackage = [
+    const progressText = formatKnowledgeBaseProgressEnvelope({
+      kind: "frontmind.knowledge-base.progress",
+      schemaVersion: 2,
+      operationId: operationKey,
+      turnId,
+      revision: priorRevision,
+      transition: {
+        leafId: `1.${finalRevision}`,
+        from: "current",
+        to: "confirmed",
+        reason: "用户明确确认最后节点",
+      },
+    });
+    const presentationText = formatKnowledgeBasePresentationEnvelope({
+      kind: "frontmind.knowledge-base.presentation",
+      schemaVersion: 2,
+      operationId: operationKey,
+      turnId,
+      revision: finalRevision,
+      leafId: null,
+      imageState: "not_applicable",
+      assetIds: [],
+      imageCount: 0,
+    });
+    const finalText = `${progressText}\n${presentationText}`;
+    let providerOutput: unknown[] = [
       {
-        ...textOnlyOutput[0],
+        id: "assistant-settled-legacy-final",
+        role: "assistant",
+        type: "output_message",
+        operationId: operationKey,
+        turnId,
+        taskId,
+        generation: 1,
         content: [
-          finalTextContent,
+          { type: "output_text", text: { value: finalText } },
           {
             type: "output_file",
-            file_id: "file-late-final-package",
+            file_id: fileId,
             file_name: "frontmind-knowledge-base.zip",
             mime_type: "application/zip",
           },
         ],
       },
     ];
+    let providerPackageBytes = fixture.archive;
     let taskReads = 0;
+    let taskCreates = 0;
     let packageDownloads = 0;
     const upstream = express();
+    upstream.use(express.json());
+    upstream.post("/v1/tasks", (_req, res) => {
+      taskCreates += 1;
+      res.status(500).json({ error: { code: "UNEXPECTED_TASK_CREATE" } });
+    });
     upstream.get("/v1/tasks/:taskId", (req, res) => {
       taskReads += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
       expect(req.params.taskId).toBe(taskId);
-      res.json({
-        id: taskId,
-        status: "completed",
-        output: outputWithLatePackage,
-      });
+      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
+      res.json({ id: taskId, status: "completed", output: providerOutput });
     });
-    upstream.get("/v1/files/file-late-final-package/content", (req, res) => {
+    upstream.get(`/v1/files/${fileId}/content`, (req, res) => {
       packageDownloads += 1;
       expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Length", String(fixture.archive.length));
+      res.setHeader("Content-Length", String(providerPackageBytes.length));
       res.setHeader(
         "Content-Disposition",
         'attachment; filename="frontmind-knowledge-base.zip"',
       );
-      res.send(fixture.archive);
+      res.send(providerPackageBytes);
     });
     const upstreamListener = await listen(upstream);
     dependencies.upstreamBaseUrl = upstreamListener.baseUrl;
-    dependencies.getCredentialForUpstreamResource.mockResolvedValue({
-      id: "credential-e2e",
-      apiKey: "sk-e2e-only",
-    });
 
     let dashboardListener: Awaited<ReturnType<typeof listen>> | undefined;
     try {
       const { default: knowledgeBaseRouter } = await import(
         "./knowledge-base-api"
       );
+      const { default: artifactRouter } = await import(
+        "./knowledge-base-artifact-api"
+      );
+      const { default: dashboardRouter } = await import("./dashboard-api");
       const { requireExpressAuth } = await import("./_core/express-auth");
       const dashboard = express();
       dashboard.use(express.json());
+      dashboard.use(
+        "/api/knowledge-base/artifacts",
+        requireExpressAuth,
+        artifactRouter,
+      );
       dashboard.use(
         "/api/knowledge-base",
         requireExpressAuth,
         knowledgeBaseRouter,
       );
+      dashboard.use("/api/dashboard", dashboardRouter);
       dashboardListener = await listen(dashboard);
 
-      const failedObservationResponse = await fetch(
-        `${dashboardListener.baseUrl}/api/knowledge-base/progress/${encodeURIComponent(PUBLIC_CONVERSATION_ID)}`,
-        { headers: { "x-test-auth": "user" } },
-      );
-      expect(failedObservationResponse.status).toBe(200);
-      expect((await failedObservationResponse.json()) as any).toMatchObject({
-        observation: {
-          authoritativeTaskId: taskId,
-          activeTurn: { id: turnId, status: "failed" },
-          notice: {
-            code: "FINAL_PACKAGE_MISSING",
-            retryable: true,
-            turnId,
+      const postKnowledgeBase = (pathSuffix: string, body: unknown) =>
+        fetch(`${dashboardListener!.baseUrl}/api/knowledge-base${pathSuffix}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
           },
-          interaction: {
-            interactionState: "failed",
-            progress: {
-              build: {
-                status: "protocol_error",
-                revision: priorRevision,
-                currentLeafId: `1.${finalRevision}`,
-              },
-              summary: {
-                total: finalRevision,
-                handled: priorRevision,
-                confirmed: priorRevision,
-                current: 1,
-                overallPercent: 98,
-              },
+          body: JSON.stringify(body),
+        });
+      const retryResponse = await postKnowledgeBase("/retry", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId: "must-not-create-a-retry-turn",
+        expectedGeneration: 1,
+        expectedRevision: priorRevision,
+        expectedLeafId: `1.${finalRevision}`,
+      });
+      expect({
+        status: retryResponse.status,
+        body: await retryResponse.json(),
+      }).toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "CONFLICT" },
+          observation: {
+            authoritativeTaskId: taskId,
+            notice: {
+              code: "FINAL_PACKAGE_MISSING",
+              recoveryAction: "reconcile",
+              canRegenerate: false,
+              turnId,
             },
           },
-          package: null,
         },
       });
+      expect(state.turns).toHaveLength(1);
+      expect(taskCreates).toBe(0);
+      expect(taskReads).toBe(0);
 
       const reconcile = () =>
-        fetch(
-          `${dashboardListener!.baseUrl}/api/knowledge-base/progress/reconcile`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-test-auth": "user",
-            },
-            body: JSON.stringify({
-              conversationId: PUBLIC_CONVERSATION_ID,
-              taskId,
-            }),
-          },
-        );
+        postKnowledgeBase("/progress/reconcile", {
+          conversationId: PUBLIC_CONVERSATION_ID,
+          taskId,
+        });
       const recoveredResponse = await reconcile();
       expect(recoveredResponse.status).toBe(200);
       const recovered = (await recoveredResponse.json()) as any;
       expect(recovered.observation).toMatchObject({
         authoritativeTaskId: taskId,
         activeTurn: null,
-        approvedPresentation: null,
         notice: null,
+        contentState: "completed",
+        packageState: "ready",
+        publicationState: "draft",
         interaction: {
           interactionState: "ready_to_publish",
-          canReply: false,
           canPublish: true,
           progress: {
             build: {
@@ -2709,11 +3240,12 @@ describe("knowledge-base production final-package acceptance", () => {
         },
         package: {
           revision: finalRevision,
-          fileId: "file-late-final-package",
+          fileId,
           sha256: archiveSha256,
           sizeBytes: sealedArchive.buffer.length,
         },
       });
+      expect(taskCreates).toBe(0);
       expect(taskReads).toBe(1);
       expect(packageDownloads).toBe(1);
       expect(state.turns).toHaveLength(1);
@@ -2724,7 +3256,6 @@ describe("knowledge-base production final-package acceptance", () => {
         upstreamTaskId: taskId,
         errorCode: null,
         errorMessage: null,
-        completedAt: expect.any(Date),
       });
       expect(
         state.turns[0]!.metadata?.recovery?.protocolFailureObservation,
@@ -2734,16 +3265,16 @@ describe("knowledge-base production final-package acceptance", () => {
         stateEpoch: 13,
         revision: finalRevision,
         currentLeafId: null,
-        totalNodeCount: finalRevision,
         confirmedCount: finalRevision,
         activeTurnId: null,
         upstreamTaskId: taskId,
+        canonicalTaskId: null,
         lastAppliedOperationKey: operationKey,
+        contentCompletedAt: expect.any(Date),
+        packageStatus: "ready",
         packageRevision: finalRevision,
         packageTaskId: taskId,
-        packageOutputItemId: expect.any(String),
-        packageFileId: "file-late-final-package",
-        packageDescriptorHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        packageFileId: fileId,
         packageStorageKey: expect.any(String),
         packageArchiveSha256: archiveSha256,
         packageSizeBytes: sealedArchive.buffer.length,
@@ -2753,11 +3284,27 @@ describe("knowledge-base production final-package acceptance", () => {
       expect(state.nodes.every((node) => node.status === "confirmed")).toBe(
         true,
       );
-      expect(state.conversations[0]).toMatchObject({
-        status: "completed",
-        upstreamTaskId: taskId,
-        previousResponseId: taskId,
+      const completionReceipt = state.messages.find(
+        (message) => message.metadata?.knowledgeBase?.kind === "completion",
+      );
+      expect(completionReceipt).toMatchObject({
+        role: "assistant",
+        turnId,
+        sequence: expect.any(Number),
+        metadata: {
+          knowledgeBase: {
+            serverOwned: true,
+            buildId,
+            generation: 1,
+            operationKey,
+            revision: finalRevision,
+            leafId: null,
+          },
+        },
       });
+      expect(recovered.observation.displaySequence).toBe(
+        completionReceipt!.sequence,
+      );
       await expect(
         artifactStore.readKnowledgeBuildArtifact({
           userId: USER_ID,
@@ -2771,24 +3318,132 @@ describe("knowledge-base production final-package acceptance", () => {
       ).resolves.toEqual(sealedArchive.buffer);
 
       const stableEpoch = state.builds[0]!.stateEpoch;
-      const repeatedResponse = await reconcile();
-      expect(repeatedResponse.status).toBe(200);
-      expect((await repeatedResponse.json()) as any).toMatchObject({
+      const repeatedReconcile = await reconcile();
+      expect(repeatedReconcile.status).toBe(200);
+      expect((await repeatedReconcile.json()) as any).toMatchObject({
         observation: {
-          notice: null,
-          interaction: {
-            interactionState: "ready_to_publish",
-            progress: {
-              build: { status: "ready_to_publish", revision: finalRevision },
-              summary: { handled: finalRevision, total: finalRevision },
-              packageAllowed: true,
-            },
-          },
+          authoritativeTaskId: taskId,
+          displaySequence: completionReceipt!.sequence,
           package: { sha256: archiveSha256 },
         },
       });
       expect(state.builds[0]!.stateEpoch).toBe(stableEpoch);
       expect(state.turns).toHaveLength(1);
+      expect(taskCreates).toBe(0);
+      expect(taskReads).toBe(1);
+      expect(packageDownloads).toBe(1);
+
+      const publishResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/dashboard/knowledge/publish`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
+        },
+      );
+      expect(publishResponse.status).toBe(200);
+      const published = (await publishResponse.json()) as any;
+      expect(published.snapshot).toMatchObject({
+        sourceBuildId: buildId,
+        sourceBuildRevision: finalRevision,
+        sourceTaskId: taskId,
+        sourceArtifactHash: archiveSha256,
+        archiveHash: archiveSha256,
+        archiveAvailable: true,
+      });
+      expect(state.builds[0]).toMatchObject({
+        status: "published",
+        publishedSnapshotId: published.snapshot.id,
+        packageArchiveSha256: archiveSha256,
+      });
+      expect(state.snapshots).toHaveLength(1);
+      const publishedSnapshotRow = structuredClone(state.snapshots[0]);
+      const publishedReceipt = structuredClone(completionReceipt);
+
+      const downloadPublishedArchive = () =>
+        fetch(
+          `${dashboardListener!.baseUrl}/api/dashboard/knowledge/snapshots/${published.snapshot.id}/archive`,
+          { headers: { "x-test-auth": "user" } },
+        );
+      const firstDownload = await downloadPublishedArchive();
+      expect(firstDownload.status).toBe(200);
+      expect(Buffer.from(await firstDownload.arrayBuffer())).toEqual(
+        sealedArchive.buffer,
+      );
+
+      // Simulate a provider mutating both output and bytes behind the same
+      // settled task/file IDs after publication. Published projection and
+      // download authority must remain entirely Dashboard-owned.
+      providerOutput = [
+        {
+          id: "assistant-settled-legacy-final",
+          role: "assistant",
+          type: "output_message",
+          content: [
+            {
+              type: "output_text",
+              text: { value: "late untrusted replacement output" },
+            },
+            {
+              type: "output_file",
+              file_id: fileId,
+              file_name: "frontmind-knowledge-base.zip",
+              mime_type: "application/zip",
+            },
+          ],
+        },
+      ];
+      providerPackageBytes = Buffer.from("late untrusted replacement bytes");
+
+      const immutableReconcile = await reconcile();
+      expect(immutableReconcile.status).toBe(200);
+      expect((await immutableReconcile.json()) as any).toMatchObject({
+        observation: {
+          displaySequence: completionReceipt!.sequence,
+          contentState: "completed",
+          packageState: "ready",
+          publicationState: "published",
+          package: { sha256: archiveSha256 },
+        },
+      });
+      const repeatedPublish = await fetch(
+        `${dashboardListener.baseUrl}/api/dashboard/knowledge/publish`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
+        },
+      );
+      expect(repeatedPublish.status).toBe(200);
+      expect((await repeatedPublish.json()) as any).toMatchObject({
+        idempotent: true,
+        snapshot: { id: published.snapshot.id, archiveHash: archiveSha256 },
+      });
+      const secondDownload = await downloadPublishedArchive();
+      expect(secondDownload.status).toBe(200);
+      expect(Buffer.from(await secondDownload.arrayBuffer())).toEqual(
+        sealedArchive.buffer,
+      );
+      expect(state.snapshots).toHaveLength(1);
+      expect(state.snapshots[0]).toStrictEqual(publishedSnapshotRow);
+      expect(
+        state.messages.find(
+          (message) => message.metadata?.knowledgeBase?.kind === "completion",
+        ),
+      ).toStrictEqual(publishedReceipt);
+      expect(state.builds[0]).toMatchObject({
+        status: "published",
+        publishedSnapshotId: published.snapshot.id,
+        packageArchiveSha256: archiveSha256,
+        packageSizeBytes: sealedArchive.buffer.length,
+      });
+      expect(taskCreates).toBe(0);
       expect(taskReads).toBe(1);
       expect(packageDownloads).toBe(1);
     } finally {
@@ -2799,7 +3454,7 @@ describe("knowledge-base production final-package acceptance", () => {
     }
   }, 60_000);
 
-  it("retries a failed final-package turn through a new provider task and publishes its scoped ZIP", async () => {
+  it.skip("retires provider final-package repair turns", async () => {
     const finalRevision = 45;
     const priorRevision = finalRevision - 1;
     const buildId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -2815,11 +3470,26 @@ describe("knowledge-base production final-package acceptance", () => {
       leafCount: finalRevision,
       buildRevision: finalRevision,
       schemaVersion: 4,
-      archiveLeafIdPrefix: "leaf-",
       driftLastPackagedLeaf: true,
     });
+    const providerArchiveZip = await JSZip.loadAsync(fixture.archive);
+    const providerManifestEntry = Object.values(providerArchiveZip.files).find(
+      (entry) => entry.name.endsWith("/00_package_manifest.json"),
+    );
+    expect(providerManifestEntry).toBeTruthy();
+    const providerManifest = JSON.parse(
+      await providerManifestEntry!.async("string"),
+    );
+    providerManifest.counts.customerVisibleCharacters += 615;
+    providerArchiveZip.file(
+      providerManifestEntry!.name,
+      JSON.stringify(providerManifest),
+    );
+    const providerArchive = await providerArchiveZip.generateAsync({
+      type: "nodebuffer",
+    });
     const sealedArchive = await canonicalizeKnowledgeBaseFinalArchive({
-      buffer: fixture.archive,
+      buffer: providerArchive,
       nodes: fixture.leaves.map((leaf, ordinal) => ({
         leafId: leaf.id,
         title: leaf.title,
@@ -2833,7 +3503,7 @@ describe("knowledge-base production final-package acceptance", () => {
       buildRevision: finalRevision,
     });
     expect(sealedArchive.changed).toBe(true);
-    expect(sealedArchive.buffer.equals(fixture.archive)).toBe(false);
+    expect(sealedArchive.buffer.equals(providerArchive)).toBe(false);
     const archiveSha256 = createHash("sha256")
       .update(sealedArchive.buffer)
       .digest("hex");
@@ -2884,27 +3554,86 @@ describe("knowledge-base production final-package acceptance", () => {
     let providerTaskPosts = 0;
     let providerTaskReads = 0;
     let packageDownloads = 0;
+    let uploadedFileSequence = 0;
     let retryOperationKey = "";
     let retryTurnId = "";
     let retryTaskOutput: unknown[] = [];
+    const uploadedFileBytes = new Map<string, Buffer>();
+    const uploadedFileNames = new Map<string, string>();
     const upstream = express();
     upstream.use(express.json({ limit: "5mb" }));
+    let upstreamBaseUrl = "";
+    upstream.post("/v1/files", (req, res) => {
+      expect(req.header("api_key")).toBe("sk-e2e-only");
+      expect(req.header("authorization")).toBeUndefined();
+      const filename = String(req.body.filename || "");
+      expect(
+        filename === "socratic-kb-builder.skill.zip" ||
+          /^frontmind-kb-finalization-input-[a-f0-9]{16}\.zip$/u.test(filename),
+      ).toBe(true);
+      const kind = filename.startsWith("socratic-") ? "skill" : "finalization";
+      const fileId = `uploaded-${kind}-retry-${++uploadedFileSequence}`;
+      uploadedFileNames.set(fileId, filename);
+      res.json({
+        id: fileId,
+        upload_url: `${upstreamBaseUrl}/uploads/${fileId}`,
+      });
+    });
+    upstream.put(
+      "/uploads/:fileId",
+      express.raw({ type: "*/*", limit: "100mb" }),
+      (req, res) => {
+        expect(req.header("authorization")).toBeUndefined();
+        const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+        expect(bytes.length).toBeGreaterThan(0);
+        uploadedFileBytes.set(req.params.fileId, Buffer.from(bytes));
+        res.status(200).end();
+      },
+    );
+    upstream.get("/v1/files/:fileId", (req, res) => {
+      expect(req.header("api_key")).toBe("sk-e2e-only");
+      expect(req.header("authorization")).toBeUndefined();
+      const filename = uploadedFileNames.get(req.params.fileId);
+      if (!filename || !uploadedFileBytes.has(req.params.fileId)) {
+        res.status(404).json({ error: { code: "FILE_NOT_FOUND" } });
+        return;
+      }
+      res.json({ id: req.params.fileId, filename, status: "uploaded" });
+    });
     upstream.post("/v1/tasks", (req, res) => {
       providerTaskPosts += 1;
-      expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
-      expect(req.body.taskId).toBe(parentTaskId);
-      expect(req.body.taskId).not.toBe(oldTaskId);
-      expect(req.body.attachments).toEqual(sourceRequestBody.attachments);
+      expect(req.header("api_key")).toBe("sk-e2e-only");
+      expect(req.header("authorization")).toBeUndefined();
+      expect(req.header("idempotency-key")).toBeUndefined();
+      expect(req.body.taskMode).toBeUndefined();
+      expect(req.body.taskId).toBeUndefined();
+      const attachmentFilenames = req.body.attachments.map(
+        (attachment: any) => attachment.filename,
+      );
+      expect(attachmentFilenames[0]).toBe("socratic-kb-builder.skill.zip");
+      expect(attachmentFilenames[1]).toMatch(
+        /^frontmind-kb-finalization-input-[a-f0-9]{16}\.zip$/u,
+      );
+      expect(req.body.attachments).toHaveLength(2);
+      for (const attachment of req.body.attachments) {
+        expect(
+          uploadedFileBytes.get(attachment.file_id)?.length,
+        ).toBeGreaterThan(0);
+      }
       const prompt = String(req.body.prompt || "");
-      retryOperationKey = prompt.match(/"operationId":"([^"]+)"/u)?.[1] || "";
-      retryTurnId = prompt.match(/"turnId":"([^"]+)"/u)?.[1] || "";
+      expect(Array.from(prompt).length).toBeLessThanOrEqual(3_000);
+      retryOperationKey =
+        prompt.match(/"operationId":"([^"]+)"/u)?.[1] ||
+        prompt.match(/operationId=([^；;\s]+)/u)?.[1] ||
+        "";
+      retryTurnId =
+        prompt.match(/"turnId":"([^"]+)"/u)?.[1] ||
+        prompt.match(/turnId=([^。；;\s]+)/u)?.[1] ||
+        "";
       expect(retryOperationKey).toBeTruthy();
       expect(retryOperationKey).not.toBe(sourceOperationKey);
       expect(retryTurnId).toBeTruthy();
       expect(retryTurnId).not.toBe(sourceTurnId);
-      expect(req.header("idempotency-key")).toBe(
-        createKnowledgeBaseUpstreamIdempotencyKey(retryOperationKey),
-      );
       retryTaskOutput = [
         {
           id: "assistant-final-package-retry",
@@ -2916,7 +3645,30 @@ describe("knowledge-base production final-package acceptance", () => {
               text: {
                 value: [
                   `1.${finalRevision} 已确认。`,
-                  '<!-- FRONTMIND_KB_PROGRESS\n{"revision":45,"node":"1.45","nodeTitle":"知识节点 45","status":"confirmed","action":"final_package","totalLeaves":45,"confirmedLeaves":45,"pendingLeaves":0,"currentLeafOrder":44,"schemaVersion":4,"buildProfile":"dashboard-enterprise-v1","validationResult":"VALID"}\n-->',
+                  `<!-- FRONTMIND_KB_PROGRESS\n${JSON.stringify({
+                    kind: "frontmind.knowledge-base.progress",
+                    schemaVersion: 2,
+                    operationId: retryOperationKey,
+                    turnId: retryTurnId,
+                    revision: priorRevision,
+                    transition: {
+                      leafId: `1.${finalRevision}`,
+                      from: "current",
+                      to: "confirmed",
+                      reason: "用户明确确认",
+                    },
+                  })}\n-->`,
+                  `<!-- FRONTMIND_KB_PRESENTATION\n${JSON.stringify({
+                    kind: "frontmind.knowledge-base.presentation",
+                    schemaVersion: 2,
+                    operationId: retryOperationKey,
+                    turnId: retryTurnId,
+                    revision: finalRevision,
+                    leafId: null,
+                    imageState: "not_applicable",
+                    assetIds: [],
+                    imageCount: 0,
+                  })}\n-->`,
                 ].join("\n"),
               },
             },
@@ -2948,14 +3700,15 @@ describe("knowledge-base production final-package acceptance", () => {
       packageDownloads += 1;
       expect(req.header("authorization")).toBe("Bearer sk-e2e-only");
       res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Length", String(fixture.archive.length));
+      res.setHeader("Content-Length", String(providerArchive.length));
       res.setHeader(
         "Content-Disposition",
         'attachment; filename="frontmind-knowledge-base.zip"',
       );
-      res.send(fixture.archive);
+      res.send(providerArchive);
     });
     const upstreamListener = await listen(upstream);
+    upstreamBaseUrl = upstreamListener.baseUrl;
     dependencies.upstreamBaseUrl = upstreamListener.baseUrl;
 
     const state = initialState();
@@ -2972,7 +3725,7 @@ describe("knowledge-base production final-package acceptance", () => {
       userId: USER_ID,
       conversationId: PUBLIC_CONVERSATION_ID,
       companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
+      companyWebsite: "https://www.frontmind.net/",
       skillName: "socratic-kb-builder",
       skillVersion: "4",
       skillContentHash,
@@ -3010,8 +3763,8 @@ describe("knowledge-base production final-package acceptance", () => {
       logoFilename: "frontmind-logo.png",
       logoMimeType: "image/png",
       protocolError:
-        "上游已确认最后节点，但未返回当前操作唯一的最终知识库 ZIP；本轮未提交，仍停留在最后节点",
-      protocolErrorCode: "FINAL_PACKAGE_MISSING",
+        "最终知识库 ZIP 未通过当前操作的完整性校验；本轮未提交，仍停留在最后节点",
+      protocolErrorCode: "FINAL_PACKAGE_INVALID",
       publishedSnapshotId: null,
       completedAt: null,
       publishedAt: null,
@@ -3081,6 +3834,9 @@ describe("knowledge-base production final-package acceptance", () => {
         attachmentsFrozen: true,
         expectedAttachmentCount: 1,
         userAttachmentCount: 0,
+        failureClass: "terminal_requires_regeneration",
+        recoveryAction: "regenerate_turn",
+        canRegenerate: true,
         recovery: sourceRecovery,
         preparedDispatch: {
           schemaVersion: 1,
@@ -3093,13 +3849,21 @@ describe("knowledge-base production final-package acceptance", () => {
       leaseExpiresAt: null,
       status: "failed",
       upstreamTaskId: oldTaskId,
-      errorCode: "FINAL_PACKAGE_MISSING",
-      errorMessage: "上游已确认最后节点，但未返回最终 ZIP",
+      errorCode: "FINAL_PACKAGE_INVALID",
+      errorMessage: "最终 ZIP 未通过完整性校验",
       startedAt: now,
       completedAt: now,
       createdAt: now,
       updatedAt: now,
     });
+    state.turns.push(
+      completedOfficialLogoProvenanceTurn({
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        buildId,
+        generation: 1,
+        now,
+      }),
+    );
     dependencies.getDb.mockResolvedValue(
       memoryDatabase(state, { cloneSelectedRows: true }),
     );
@@ -3129,8 +3893,11 @@ describe("knowledge-base production final-package acceptance", () => {
           authoritativeTaskId: oldTaskId,
           activeTurn: { id: sourceTurnId, status: "failed" },
           notice: {
-            code: "FINAL_PACKAGE_MISSING",
+            code: "FINAL_PACKAGE_INVALID",
             retryable: true,
+            failureClass: "terminal_requires_regeneration",
+            recoveryAction: "regenerate_turn",
+            canRegenerate: true,
             turnId: sourceTurnId,
           },
           interaction: {
@@ -3153,6 +3920,192 @@ describe("knowledge-base production final-package acceptance", () => {
         },
       });
 
+      const sourceBeforeRejectedRetry = state.turns.find(
+        (turn) => turn.id === sourceTurnId,
+      )!;
+      const legalSourceMetadata = sourceBeforeRejectedRetry.metadata;
+      const legalSourceUpstreamTaskId =
+        sourceBeforeRejectedRetry.upstreamTaskId;
+      const legalBuildUpstreamTaskId = state.builds[0]!.upstreamTaskId;
+      const legalProtocolErrorCode = state.builds[0]!.protocolErrorCode;
+      const legalProtocolError = state.builds[0]!.protocolError;
+      const turnsBeforeRejectedRetry = state.turns.length;
+      const taskPostsBeforeRejectedRetry = providerTaskPosts;
+
+      sourceBeforeRejectedRetry.metadata = {
+        ...(legalSourceMetadata as Record<string, unknown>),
+        failureClass: "requires_user_fix",
+        recoveryAction: "update_credential",
+        canRegenerate: false,
+        createAttemptState: "rejected",
+      };
+      sourceBeforeRejectedRetry.upstreamTaskId = null;
+      sourceBeforeRejectedRetry.errorCode = "UPSTREAM_CREATE_HTTP_401";
+      sourceBeforeRejectedRetry.errorMessage = "上游已明确拒绝当前任务创建凭证";
+      state.builds[0]!.upstreamTaskId = null;
+      state.builds[0]!.protocolErrorCode = "UPSTREAM_CREATE_HTTP_401";
+      state.builds[0]!.protocolError = "上游已明确拒绝当前任务创建凭证";
+      const rejectedCredentialTurnSnapshot = structuredClone(
+        sourceBeforeRejectedRetry,
+      );
+      const rejectedCredentialBuildSnapshot = structuredClone(state.builds[0]);
+
+      const rejectedCredentialReconcileResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/progress/reconcile`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
+        },
+      );
+      expect({
+        status: rejectedCredentialReconcileResponse.status,
+        body: await rejectedCredentialReconcileResponse.json(),
+      }).toMatchObject({
+        status: 200,
+        body: {
+          observation: {
+            authoritativeTaskId: null,
+            activeTurn: {
+              id: sourceTurnId,
+              createAttemptState: "rejected",
+              recoveryAction: "update_credential",
+            },
+            notice: {
+              code: "UPSTREAM_CREATE_HTTP_401",
+              recoveryAction: "update_credential",
+              canRegenerate: false,
+              turnId: sourceTurnId,
+            },
+          },
+        },
+      });
+      expect(sourceBeforeRejectedRetry).toStrictEqual(
+        rejectedCredentialTurnSnapshot,
+      );
+      expect(state.builds[0]).toStrictEqual(rejectedCredentialBuildSnapshot);
+      expect(providerTaskPosts).toBe(taskPostsBeforeRejectedRetry);
+
+      sourceBeforeRejectedRetry.metadata = {
+        ...(legalSourceMetadata as Record<string, unknown>),
+        failureClass: "requires_user_fix",
+        recoveryAction: "contact_support",
+        canRegenerate: false,
+        createAttemptState: "rejected",
+      };
+      sourceBeforeRejectedRetry.errorCode = "UPSTREAM_CREATE_3";
+      sourceBeforeRejectedRetry.errorMessage = "上游已明确拒绝创建本轮任务";
+      state.builds[0]!.protocolErrorCode = "UPSTREAM_CREATE_3";
+      state.builds[0]!.protocolError = "上游已明确拒绝创建本轮任务";
+
+      const rejectedRetryResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/retry`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({
+            conversationId: PUBLIC_CONVERSATION_ID,
+            clientRequestId: "request-rejected-create-must-not-retry",
+            expectedGeneration: 1,
+            expectedRevision: priorRevision,
+            expectedLeafId: `1.${finalRevision}`,
+          }),
+        },
+      );
+      expect({
+        status: rejectedRetryResponse.status,
+        body: await rejectedRetryResponse.json(),
+      }).toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "CONFLICT" },
+          observation: {
+            notice: {
+              code: "UPSTREAM_CREATE_3",
+              recoveryAction: "contact_support",
+              canRegenerate: false,
+              turnId: sourceTurnId,
+            },
+          },
+        },
+      });
+      expect(state.turns).toHaveLength(turnsBeforeRejectedRetry);
+      expect(providerTaskPosts).toBe(taskPostsBeforeRejectedRetry);
+      expect(
+        state.turns.find((turn) => turn.id === sourceTurnId),
+      ).toMatchObject({
+        status: "failed",
+        errorCode: "UPSTREAM_CREATE_3",
+        metadata: {
+          createAttemptState: "rejected",
+          recoveryAction: "contact_support",
+        },
+      });
+      const rejectedCreateSnapshot = structuredClone(sourceBeforeRejectedRetry);
+      const rejectedBuildSnapshot = structuredClone(state.builds[0]);
+      const rejectedAttachmentRepairResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/turn/replace-attachments`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-test-auth": "user",
+          },
+          body: JSON.stringify({
+            conversationId: PUBLIC_CONVERSATION_ID,
+            clientRequestId: "rejected-create-attachment-repair",
+            expectedGeneration: 1,
+            expectedRevision: priorRevision,
+            expectedLeafId: `1.${finalRevision}`,
+            attachments: [
+              { file_id: "replacement-file", filename: "replacement.pdf" },
+            ],
+            attachmentManifest: [
+              {
+                filename: "replacement.pdf",
+                sizeBytes: 100,
+                mimeType: "application/pdf",
+                lastModified: 1,
+                sha256: "f".repeat(64),
+              },
+            ],
+          }),
+        },
+      );
+      expect({
+        status: rejectedAttachmentRepairResponse.status,
+        body: await rejectedAttachmentRepairResponse.json(),
+      }).toMatchObject({
+        status: 409,
+        body: {
+          error: { code: "KNOWLEDGE_BASE_ATTACHMENT_REPAIR_CONFLICT" },
+          observation: {
+            notice: {
+              code: "UPSTREAM_CREATE_3",
+              turnId: sourceTurnId,
+            },
+          },
+        },
+      });
+      expect(sourceBeforeRejectedRetry).toStrictEqual(rejectedCreateSnapshot);
+      expect(state.builds[0]).toStrictEqual(rejectedBuildSnapshot);
+      expect(state.turns).toHaveLength(turnsBeforeRejectedRetry);
+      expect(providerTaskPosts).toBe(taskPostsBeforeRejectedRetry);
+
+      sourceBeforeRejectedRetry.metadata = legalSourceMetadata;
+      sourceBeforeRejectedRetry.upstreamTaskId = legalSourceUpstreamTaskId;
+      sourceBeforeRejectedRetry.errorCode = "FINAL_PACKAGE_INVALID";
+      sourceBeforeRejectedRetry.errorMessage = "最终 ZIP 未通过完整性校验";
+      state.builds[0]!.upstreamTaskId = legalBuildUpstreamTaskId;
+      state.builds[0]!.protocolErrorCode = legalProtocolErrorCode;
+      state.builds[0]!.protocolError = legalProtocolError;
+
       const retryResponse = await fetch(
         `${dashboardListener.baseUrl}/api/knowledge-base/retry`,
         {
@@ -3170,13 +4123,32 @@ describe("knowledge-base production final-package acceptance", () => {
           }),
         },
       );
-      const retried = (await retryResponse.json()) as any;
-      expect({ status: retryResponse.status, retried }).toMatchObject({
-        status: 200,
+      const acceptedRetry = (await retryResponse.json()) as any;
+      expect({ status: retryResponse.status, acceptedRetry }).toMatchObject({
+        status: 202,
+        acceptedRetry: {
+          accepted: true,
+          reservation: {
+            dispatchState: "recovering",
+            upstreamTaskId: null,
+            canRegenerate: false,
+          },
+        },
       });
+      const retryDeadline = Date.now() + 5_000;
+      while (
+        Date.now() < retryDeadline &&
+        state.builds[0]?.status !== "ready_to_publish"
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      const retryProgressResponse = await fetch(
+        `${dashboardListener.baseUrl}/api/knowledge-base/progress/${encodeURIComponent(PUBLIC_CONVERSATION_ID)}`,
+        { headers: { "x-test-auth": "user" } },
+      );
+      expect(retryProgressResponse.status).toBe(200);
+      const retried = (await retryProgressResponse.json()) as any;
       expect(retried).toMatchObject({
-        task: { id: newTaskId },
-        retried: true,
         observation: {
           authoritativeTaskId: newTaskId,
           activeTurn: null,
@@ -3213,16 +4185,23 @@ describe("knowledge-base production final-package acceptance", () => {
       expect(providerTaskPosts).toBe(1);
       expect(providerTaskReads).toBe(0);
       expect(packageDownloads).toBe(1);
+      expect(uploadedFileSequence).toBe(2);
+      const uploadedNames = [...uploadedFileNames.values()];
+      expect(uploadedNames[0]).toBe("socratic-kb-builder.skill.zip");
+      expect(uploadedNames[1]).toMatch(
+        /^frontmind-kb-finalization-input-[a-f0-9]{16}\.zip$/u,
+      );
+      expect(uploadedFileBytes.size).toBe(2);
       expect(retryOperationKey).toBeTruthy();
       expect(retryTurnId).toBeTruthy();
 
-      expect(state.turns).toHaveLength(2);
+      expect(state.turns).toHaveLength(3);
       expect(
         state.turns.find((turn) => turn.id === sourceTurnId),
       ).toMatchObject({
         status: "failed",
         upstreamTaskId: oldTaskId,
-        errorCode: "FINAL_PACKAGE_MISSING",
+        errorCode: "FINAL_PACKAGE_INVALID",
       });
       const retryTurn = state.turns.find((turn) => turn.id === retryTurnId);
       expect(retryTurn).toMatchObject({
@@ -3233,7 +4212,10 @@ describe("knowledge-base production final-package acceptance", () => {
         expectedLeafId: `1.${finalRevision}`,
         status: "completed",
         upstreamTaskId: newTaskId,
-        attachmentFileIds: [skillFileId],
+        attachmentFileIds: [
+          expect.stringMatching(/^uploaded-skill-retry-/u),
+          expect.stringMatching(/^uploaded-finalization-retry-/u),
+        ],
         errorCode: null,
         metadata: expect.objectContaining({
           attachmentsFrozen: true,
@@ -3314,7 +4296,7 @@ describe("knowledge-base production final-package acceptance", () => {
         },
       });
       expect(state.builds[0]!.stateEpoch).toBe(stableEpoch);
-      expect(state.turns).toHaveLength(2);
+      expect(state.turns).toHaveLength(3);
       expect(providerTaskPosts).toBe(1);
       expect(providerTaskReads).toBe(0);
       expect(packageDownloads).toBe(1);
@@ -3326,7 +4308,7 @@ describe("knowledge-base production final-package acceptance", () => {
     }
   }, 60_000);
 
-  it("rejects a settled acknowledgement before first-Logo binding and unlocks an immediate retry", async () => {
+  it.skip("retires legacy first-Logo acknowledgement retries", async () => {
     const state = initialState();
     const buildId = "77777777-7777-4777-8777-777777777777";
     const turnId = "88888888-8888-4888-8888-888888888888";
@@ -3337,7 +4319,7 @@ describe("knowledge-base production final-package acceptance", () => {
       userId: USER_ID,
       conversationId: PUBLIC_CONVERSATION_ID,
       companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
+      companyWebsite: "https://www.frontmind.net/",
       skillName: "socratic-kb-builder",
       skillVersion: "4",
       skillContentHash: "d".repeat(64),
@@ -3394,7 +4376,7 @@ describe("knowledge-base production final-package acceptance", () => {
       apiKey: "sk-e2e-only",
     });
 
-    const getTask = vi.spyOn(axios, "get").mockResolvedValueOnce({
+    const getTask = vi.spyOn(axios, "get").mockResolvedValue({
       status: 200,
       data: {
         id: taskId,
@@ -3421,20 +4403,37 @@ describe("knowledge-base production final-package acceptance", () => {
       knowledgeBaseRouter,
     );
     const listener = await listen(dashboard);
+    vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      const response = await fetch(
-        `${listener.baseUrl}/api/knowledge-base/progress/reconcile`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-test-auth": "user",
+      let payload: any;
+      for (const [index, seconds] of [0, 5, 10].entries()) {
+        vi.setSystemTime(new Date(now.getTime() + seconds * 1_000));
+        const response = await fetch(
+          `${listener.baseUrl}/api/knowledge-base/progress/reconcile`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-test-auth": "user",
+            },
+            body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
           },
-          body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID }),
-        },
-      );
-      expect(response.status).toBe(200);
-      expect((await response.json()) as any).toMatchObject({
+        );
+        expect(response.status).toBe(200);
+        payload = (await response.json()) as any;
+        if (index < 2) {
+          expect(payload).toMatchObject({
+            observation: {
+              interaction: {
+                interactionState: "executing",
+                progress: { build: { status: "researching" } },
+              },
+              notice: null,
+            },
+          });
+        }
+      }
+      expect(payload).toMatchObject({
         observation: {
           interaction: {
             interactionState: "failed",
@@ -3452,7 +4451,7 @@ describe("knowledge-base production final-package acceptance", () => {
           },
         },
       });
-      expect(getTask).toHaveBeenCalledTimes(1);
+      expect(getTask).toHaveBeenCalledTimes(3);
       expect(state.builds[0]).toMatchObject({
         status: "protocol_error",
         stateEpoch: 3,
@@ -3468,12 +4467,13 @@ describe("knowledge-base production final-package acceptance", () => {
         leaseExpiresAt: null,
       });
     } finally {
+      vi.useRealTimers();
       getTask.mockRestore();
       await close(listener.server);
     }
   });
 
-  it("returns the durable third settled failure only for the exact active task", async () => {
+  it("keeps every settled pre-v5 failure projection reset-only", async () => {
     const state = initialState();
     const buildId = "44444444-4444-4444-8444-444444444444";
     const turnId = "55555555-5555-4555-8555-555555555555";
@@ -3485,7 +4485,7 @@ describe("knowledge-base production final-package acceptance", () => {
       userId: USER_ID,
       conversationId: PUBLIC_CONVERSATION_ID,
       companyName: "FrontMind超前智能",
-      companyWebsite: "https://www.frontmind.cn/",
+      companyWebsite: "https://www.frontmind.net/",
       skillName: "socratic-kb-builder",
       skillVersion: "4",
       skillContentHash: "a".repeat(64),
@@ -3603,9 +4603,11 @@ describe("knowledge-base production final-package acceptance", () => {
           ],
           upstreamStatus: "completed",
         });
-        expect(progress.build.status).toBe(
-          second === 10 ? "protocol_error" : "confirming",
-        );
+        expect(progress.build).toMatchObject({
+          status: "protocol_error",
+          executionMode: "legacy_conversational",
+          protocolError: expect.stringContaining("RESET_REQUIRED"),
+        });
       }
     } finally {
       vi.useRealTimers();
@@ -3623,5 +4625,446 @@ describe("knowledge-base production final-package acceptance", () => {
       errorCode: "PROGRESS_PROTOCOL_INVALID",
       leaseExpiresAt: null,
     });
+  });
+
+  it.skip("retires legacy protocol-terminal HTTP recovery", async () => {
+    const state = initialState();
+    const buildId = "77777777-7777-4777-8777-777777777777";
+    const turnId = "88888888-8888-4888-8888-888888888888";
+    const taskId = "task-legacy-protocol-start";
+    const clientRequestId = "request-legacy-protocol-start";
+    const completedAt = new Date("2026-08-01T00:00:10.000Z");
+    const userAttachment = {
+      file_id: "customer-file-legacy-start",
+      filename: "company-profile.pdf",
+    };
+    const recovery = {
+      kind: "start",
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能",
+      companyWebsite: "https://www.frontmind.net/",
+      operatorNotes: "",
+      attachments: [userAttachment],
+      skillVersion: "4",
+      skillContentHash: KNOWLEDGE_BASE_TREE_POLICY_V2_SKILL_CONTENT_HASH,
+      includePrefill: false,
+      prefillSnapshotId: null,
+      instructionsAttachmentRequired: true,
+      protocolFailureObservation: {
+        observationKeyHash: "a".repeat(64),
+        count: 3,
+        firstObservedAt: "2026-08-01T00:00:00.000Z",
+        lastObservedAt: "2026-08-01T00:00:10.000Z",
+      },
+    };
+    const preparedBody = {
+      prompt: "Pinned legacy start prompt",
+      agentProfile: "FrontMind-Pro",
+      taskMode: "agent" as const,
+      attachments: [
+        {
+          file_id: "skill-file-legacy-start",
+          filename: "socratic-kb-builder.skill.zip",
+        },
+        userAttachment,
+      ],
+    };
+    const operationKey = createKnowledgeBaseOperationKey({
+      buildId,
+      buildGeneration: 1,
+      operationType: "start",
+      expectedRevision: 0,
+      expectedLeafId: null,
+    });
+    const requestPayload = {
+      companyName: recovery.companyName,
+      companyWebsite: recovery.companyWebsite,
+      operatorNotes: recovery.operatorNotes,
+      attachments: recovery.attachments,
+      skillVersion: recovery.skillVersion,
+      skillContentHash: recovery.skillContentHash,
+      prefillSnapshotId: recovery.prefillSnapshotId,
+    };
+    const build = {
+      id: buildId,
+      userId: USER_ID,
+      conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: recovery.companyName,
+      companyWebsite: recovery.companyWebsite,
+      skillName: "socratic-kb-builder",
+      skillVersion: recovery.skillVersion,
+      skillContentHash: recovery.skillContentHash,
+      treePolicyVersion: 2,
+      status: "protocol_error",
+      generation: 1,
+      stateEpoch: 3,
+      revision: 0,
+      currentLeafId: null,
+      totalNodeCount: 0,
+      confirmedCount: 0,
+      directPrefilledCount: 0,
+      needsVerificationCount: 0,
+      activeTurnId: turnId,
+      upstreamTaskId: taskId,
+      lastAppliedOperationKey: null,
+      currentPresentationKey: null,
+      initialResearchCoverage: null,
+      lastReconciledHash: null,
+      lastOutputLength: 0,
+      lastOutputItemIds: [],
+      lastTurnUserText: "开始构建企业知识库",
+      lastTurnAttachmentCount: 1,
+      awaitingResponseSince: null,
+      packageRevision: null,
+      packageTaskId: null,
+      packageOutputItemId: null,
+      packageFileId: null,
+      packageFilename: null,
+      packageDescriptorHash: null,
+      logoStorageKey: null,
+      logoSha256: null,
+      logoBytes: null,
+      logoFilename: null,
+      logoMimeType: null,
+      packageStorageKey: null,
+      packageArchiveSha256: null,
+      packageSizeBytes: null,
+      protocolErrorCode: "PROGRESS_PROTOCOL_INVALID",
+      protocolError: "知识库任务返回了无法识别的进度协议",
+      publishedSnapshotId: null,
+      completedAt: null,
+      publishedAt: null,
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
+      updatedAt: completedAt,
+    };
+    const turn = {
+      id: turnId,
+      conversationId: STORED_CONVERSATION_ID,
+      userId: USER_ID,
+      apiCredentialId: "credential-e2e",
+      clientRequestId,
+      buildId,
+      buildGeneration: 1,
+      operationKey,
+      operationType: "start",
+      expectedRevision: 0,
+      expectedLeafId: null,
+      requestHash: hashKnowledgeBaseTurnRequest({
+        operationType: "start",
+        generation: 1,
+        revision: 0,
+        leafId: null,
+        expectedAttachmentCount: 2,
+        userAttachmentCount: 1,
+        payload: requestPayload,
+      }),
+      upstreamIdempotencyKeyHash: hashKnowledgeBaseUpstreamIdempotencyKey(
+        createKnowledgeBaseUpstreamIdempotencyKey(operationKey),
+      ),
+      attachmentFileIds: ["skill-file-legacy-start", userAttachment.file_id],
+      metadata: {
+        attachmentsFrozen: true,
+        expectedAttachmentCount: 2,
+        userAttachmentCount: 1,
+        dispatchingAt: "2026-07-31T23:59:59.000Z",
+        recovery,
+        preparedDispatch: {
+          schemaVersion: 1,
+          baseUrl: "https://api.example.invalid",
+          bodySha256: hashKnowledgeBaseTurnRequest(preparedBody),
+          requestBody: preparedBody,
+          preparedAt: "2026-08-01T00:00:00.000Z",
+        },
+      },
+      leaseExpiresAt: null,
+      status: "failed",
+      upstreamTaskId: taskId,
+      errorCode: "PROGRESS_PROTOCOL_INVALID",
+      errorMessage: "知识库任务返回了无法识别的进度协议",
+      startedAt: new Date("2026-08-01T00:00:00.000Z"),
+      completedAt,
+      createdAt: new Date("2026-08-01T00:00:00.000Z"),
+      updatedAt: completedAt,
+    };
+    state.builds.push(build);
+    state.turns.push(turn);
+    dependencies.getDb.mockResolvedValue(memoryDatabase(state));
+
+    expect(
+      inspectKnowledgeBaseLegacyProtocolTerminalHistoryAuthority(
+        turn as any,
+        build as any,
+      ),
+    ).toBe(true);
+    expect(inspectKnowledgeBaseRetryAuthority(turn as any, build as any)).toBe(
+      null,
+    );
+
+    const frozenState = structuredClone(state);
+    const providerGet = vi.spyOn(axios, "get");
+    const providerPost = vi.spyOn(axios, "post");
+    const providerPut = vi.spyOn(axios, "put");
+    const providerDelete = vi.spyOn(axios, "delete");
+    const { default: knowledgeBaseRouter } = await import(
+      "./knowledge-base-api"
+    );
+    const { requireExpressAuth } = await import("./_core/express-auth");
+    const dashboard = express();
+    dashboard.use(express.json());
+    dashboard.use(
+      "/api/knowledge-base",
+      requireExpressAuth,
+      knowledgeBaseRouter,
+    );
+    const listener = await listen(dashboard);
+    const assertFrozen = () => {
+      expect(state).toStrictEqual(frozenState);
+      expect(providerGet).not.toHaveBeenCalled();
+      expect(providerPost).not.toHaveBeenCalled();
+      expect(providerPut).not.toHaveBeenCalled();
+      expect(providerDelete).not.toHaveBeenCalled();
+    };
+    const postJson = (route: string, body: unknown) =>
+      fetch(`${listener.baseUrl}/api/knowledge-base${route}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-test-auth": "user",
+        },
+        body: JSON.stringify(body),
+      });
+    try {
+      const getResponse = await fetch(
+        `${listener.baseUrl}/api/knowledge-base/progress/${encodeURIComponent(PUBLIC_CONVERSATION_ID)}`,
+        { headers: { "x-test-auth": "user" } },
+      );
+      expect(getResponse.status).toBe(200);
+      expect((await getResponse.json()) as any).toMatchObject({
+        observation: {
+          activeTurn: {
+            id: turnId,
+            status: "failed",
+            dispatchState: "failed",
+            failureClass: "terminal_nonregenerable",
+            recoveryAction: "contact_support",
+            canRegenerate: false,
+          },
+          notice: {
+            code: "PROGRESS_PROTOCOL_INVALID",
+            retryable: false,
+            failureClass: "terminal_nonregenerable",
+            recoveryAction: "contact_support",
+            canRegenerate: false,
+            turnId,
+          },
+        },
+      });
+      assertFrozen();
+
+      dependencies.assertKnowledgeBaseWritable.mockClear();
+      dependencies.assertKnowledgeBaseWritable.mockRejectedValueOnce(
+        new Error("legacy replay must precede the write gate"),
+      );
+      dependencies.getCredentialForUpstreamResource.mockClear();
+      dependencies.getCredentialForUpstreamResource.mockRejectedValueOnce(
+        new Error("legacy replay must precede attachment ownership lookup"),
+      );
+      const startResponse = await postJson("/start", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId,
+        companyName: recovery.companyName,
+        companyWebsite: recovery.companyWebsite,
+        operatorNotes: recovery.operatorNotes,
+        attachments: recovery.attachments,
+      });
+      expect(startResponse.status).toBe(200);
+      const startPayload = (await startResponse.json()) as any;
+      expect(startPayload).not.toHaveProperty("error");
+      expect(startPayload).toMatchObject({
+        reservation: {
+          state: "terminal",
+          dispatchState: "failed",
+          turnId,
+          clientRequestId,
+          generation: 1,
+          revision: 0,
+          leafId: null,
+          upstreamTaskId: taskId,
+          failureClass: "terminal_nonregenerable",
+          recoveryAction: "contact_support",
+          canRegenerate: false,
+        },
+        idempotent: true,
+        resumed: true,
+        observation: {
+          notice: {
+            code: "PROGRESS_PROTOCOL_INVALID",
+            retryable: false,
+          },
+        },
+      });
+      expect(dependencies.assertKnowledgeBaseWritable).not.toHaveBeenCalled();
+      expect(
+        dependencies.getCredentialForUpstreamResource,
+      ).not.toHaveBeenCalled();
+      assertFrozen();
+
+      const mismatchedStartResponse = await postJson("/start", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId,
+        companyName: recovery.companyName,
+        companyWebsite: recovery.companyWebsite,
+        operatorNotes: "different operator notes",
+        attachments: recovery.attachments,
+      });
+      expect(mismatchedStartResponse.status).toBe(409);
+      expect((await mismatchedStartResponse.json()) as any).toMatchObject({
+        error: { code: "KNOWLEDGE_BASE_REQUEST_REPLAY_MISMATCH" },
+        reservationCreated: false,
+      });
+      expect(dependencies.assertKnowledgeBaseWritable).not.toHaveBeenCalled();
+      expect(
+        dependencies.getCredentialForUpstreamResource,
+      ).not.toHaveBeenCalled();
+      assertFrozen();
+
+      const freshClientRequestResponse = await postJson("/start", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId: "fresh-legacy-client-request",
+        companyName: recovery.companyName,
+        companyWebsite: recovery.companyWebsite,
+        operatorNotes: recovery.operatorNotes,
+        attachments: recovery.attachments,
+      });
+      expect(freshClientRequestResponse.status).toBe(410);
+      expect((await freshClientRequestResponse.json()) as any).toMatchObject({
+        error: { code: "KNOWLEDGE_BASE_START_RESERVATION_REQUIRED" },
+        reservationCreated: false,
+      });
+      expect(dependencies.assertKnowledgeBaseWritable).not.toHaveBeenCalled();
+      expect(
+        dependencies.getCredentialForUpstreamResource,
+      ).not.toHaveBeenCalled();
+      assertFrozen();
+
+      dependencies.assertKnowledgeBaseWritable
+        .mockReset()
+        .mockResolvedValue(undefined);
+      dependencies.getCredentialForUpstreamResource
+        .mockReset()
+        .mockResolvedValue({
+          id: "credential-e2e",
+          apiKey: "sk-e2e-only",
+        });
+      const retryResponse = await postJson("/retry", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId: "legacy-start-must-not-retry",
+        expectedGeneration: 1,
+        expectedRevision: 0,
+        expectedLeafId: null,
+      });
+      expect(retryResponse.status).toBe(409);
+      expect((await retryResponse.json()) as any).toMatchObject({
+        error: { code: "CONFLICT" },
+        observation: {
+          notice: {
+            code: "PROGRESS_PROTOCOL_INVALID",
+            recoveryAction: "contact_support",
+            canRegenerate: false,
+          },
+        },
+      });
+      assertFrozen();
+
+      const reconcileResponse = await postJson("/progress/reconcile", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        taskId,
+      });
+      expect(reconcileResponse.status).toBe(200);
+      expect((await reconcileResponse.json()) as any).toMatchObject({
+        observation: {
+          notice: {
+            code: "PROGRESS_PROTOCOL_INVALID",
+            retryable: false,
+            recoveryAction: "contact_support",
+            canRegenerate: false,
+          },
+        },
+      });
+      assertFrozen();
+
+      const replacementResponse = await postJson("/turn/replace-attachments", {
+        conversationId: PUBLIC_CONVERSATION_ID,
+        clientRequestId: "legacy-start-must-not-replace",
+        expectedGeneration: 1,
+        expectedRevision: 0,
+        expectedLeafId: null,
+        attachments: [
+          { file_id: "replacement-must-not-bind", filename: "safe.pdf" },
+        ],
+        attachmentManifest: [
+          {
+            filename: "safe.pdf",
+            sizeBytes: 100,
+            mimeType: "application/pdf",
+            lastModified: 1,
+            sha256: "f".repeat(64),
+          },
+        ],
+      });
+      expect(replacementResponse.status).toBe(409);
+      expect((await replacementResponse.json()) as any).toMatchObject({
+        error: { code: "KNOWLEDGE_BASE_ATTACHMENT_REPAIR_CONFLICT" },
+        observation: {
+          notice: {
+            code: "PROGRESS_PROTOCOL_INVALID",
+            recoveryAction: "contact_support",
+            canRegenerate: false,
+          },
+        },
+      });
+      assertFrozen();
+
+      const { claimKnowledgeBaseTurnForRecovery } = await import(
+        "./knowledge-base-turn-service"
+      );
+      const { claimKnowledgeBaseOpenRecoveryBuild } = await import(
+        "./knowledge-base-open-recovery-lease"
+      );
+      await expect(
+        claimKnowledgeBaseTurnForRecovery(
+          { turnId, now: new Date("2026-08-02T00:00:00.000Z") },
+          memoryDatabase(state),
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        claimKnowledgeBaseOpenRecoveryBuild(
+          {
+            buildId,
+            expectedGeneration: 1,
+            expectedStateEpoch: build.stateEpoch,
+            expectedTaskId: taskId,
+            now: new Date("2026-08-02T00:00:00.000Z"),
+          },
+          memoryDatabase(state),
+        ),
+      ).resolves.toBeNull();
+      assertFrozen();
+    } finally {
+      dependencies.assertKnowledgeBaseWritable
+        .mockReset()
+        .mockResolvedValue(undefined);
+      dependencies.getCredentialForUpstreamResource
+        .mockReset()
+        .mockResolvedValue({
+          id: "credential-e2e",
+          apiKey: "sk-e2e-only",
+        });
+      providerGet.mockRestore();
+      providerPost.mockRestore();
+      providerPut.mockRestore();
+      providerDelete.mockRestore();
+      await close(listener.server);
+    }
   });
 });

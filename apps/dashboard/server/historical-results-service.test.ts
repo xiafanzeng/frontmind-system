@@ -150,6 +150,14 @@ describe("historical question results", () => {
         "carried-question",
       ]),
     );
+    expect(deps.loadMonitoringSamples).toHaveBeenCalledWith(
+      7,
+      "history-question",
+    );
+    expect(deps.loadMonitoringCitations).toHaveBeenCalledWith(
+      7,
+      "history-question",
+    );
     expect(result).toMatchObject({
       readOnly: true,
       question: { id: "history-question" },

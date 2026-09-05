@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { accountMarketEditionSchema } from "./account-edition";
+
 const serviceCategorySchema = z.enum([
   "product_scenario",
   "reputation",
@@ -19,6 +21,10 @@ const purchaseContractBaseShape = {
 export const websitePurchaseRequestV2Schema = z
   .object({
     schemaVersion: z.literal(2),
+    // Optional for compatibility with website clients deployed before account
+    // editions existed. The service resolves an omitted value to domestic for
+    // new accounts, or to the bound account's persisted edition.
+    marketEdition: accountMarketEditionSchema.optional(),
     project: z
       .object({
         id: z.string().trim().min(8).max(80),
@@ -179,6 +185,9 @@ export const websitePurchaseResponseV2Schema = z
         projectId: z.string().trim().min(8).max(80),
         orderId: z.string().trim().min(8).max(64),
         status: purchaseStatusSchema,
+        // Optional at the schema boundary so a rolling Website deployment can
+        // still read responses from an older Dashboard instance.
+        marketEdition: accountMarketEditionSchema.optional(),
         updatedAt: isoDateTimeSchema,
         retryable: z.boolean().optional(),
         message: z.string().trim().min(1).max(1000).optional(),

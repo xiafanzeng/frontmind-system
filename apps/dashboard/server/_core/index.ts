@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { monitoringModule } from "../monitoring-module";
 import express from "express";
 import { createServer } from "http";
 import path from "node:path";
@@ -8,11 +9,12 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./static";
+import { configureServerTimeouts } from "./server-timeouts";
 import manusProxy from "../manus-proxy";
+import frontmindV2ChatRouter from "../frontmind-v2-chat-router";
 import knowledgeBaseApi, {
   getKnowledgeBaseSkillDescriptor,
   recoverExpiredKnowledgeBaseTurns,
-  recoverOpenKnowledgeBaseTasks,
 } from "../knowledge-base-api";
 import { cleanupOrphanedKnowledgeBuildArtifactCandidates } from "../knowledge-base-artifact-binding-service";
 import responseLogicApi, {
@@ -22,11 +24,12 @@ import dashboardApi, {
   assertDashboardAssetStorageConfigured,
 } from "../dashboard-api";
 import brandQuestionPortfolioApi from "../brand-question-portfolio-api";
+import brandTrackingApi from "../brand-tracking-api";
+import { startJenovaBrandTrackingRecoveryScheduler } from "../jenova-brand-tracking-service";
 import { getBrandQuestionPortfolioSkillDescriptor } from "../brand-question-portfolio-runtime";
 import preparedFileRouter from "../prepared-file-router";
-import presalesProxy, {
-  assertPresalesProxyConfigured,
-} from "../presales-proxy";
+import presalesV2Router from "../presales-v2-router";
+import { assertPresalesServiceConfigured } from "../presales-service-auth";
 import provisioningRouter, {
   assertProvisioningConfigured,
 } from "../provisioning-router";
@@ -41,9 +44,14 @@ import { resolveUpstreamCredential } from "./upstream-credential";
 import {
   enforceDeliveryProjectContext,
   enforceFrontMindProxyAccess,
+  rejectDeliveryMemberKnowledgeBaseProjectScope,
 } from "./frontmind-proxy-policy";
 import { processKnowledgeResetCleanupJobs } from "../knowledge-base-reset-service";
-import { assertCredentialEncryptionConfigured } from "../auth-service";
+import { sweepOrphanedKnowledgeBaseUploadEvidence } from "../knowledge-base-upload-evidence-lifecycle";
+import {
+  assertCredentialEncryptionConfigured,
+  reconcileManagedUploadAccountDeletionFencesOnStartup,
+} from "../auth-service";
 import { getDb } from "../db";
 import deliveryTicketAttachmentRouter from "../delivery-ticket-attachment-router";
 import { startDeliveryTicketRetentionScheduler } from "../delivery-ticket-retention";
@@ -62,29 +70,31 @@ import {
 import { startApiUsageSnapshotScheduler } from "../api-usage-snapshot-service";
 import {
   assertDedicatedMonitorCredentialConfigured,
-  isDedicatedMonitorCredentialConfigured,
+  getDedicatedMonitorCredentialReadiness,
   monitorBaseUrl,
 } from "../presales-monitor";
-import {
-  assertFrontMindPublicUrlConfigured,
-  isFrontMindPublicUrlConfigured,
-} from "../public-url";
+import { assertFrontMindPublicUrlConfigured } from "../public-url";
 import {
   assertDashboardImportPreflightConfigured,
   startDashboardImportPreflightCleanupScheduler,
 } from "../dashboard-import-preflight-service";
 import websiteContentTemplateApi from "../website-content-template-api";
 import { assertAdminAccessLevelsBackfilled } from "../admin-control-plane-service";
-import {
-  assertUpstreamBaseUrlConfigured,
-  isUpstreamBaseUrlConfigured,
-} from "../upstream-config";
+import { assertUpstreamBaseUrlConfigured } from "../upstream-config";
 import { createPaymentReceiptLedgerService } from "../payment-receipt-ledger-service";
 import { createProjectOrderRegistryService } from "../project-order-registry-service";
-import knowledgeBaseLivePreviewApi from "../knowledge-base-live-preview-api";
+import { startServiceContractLifecycleReconciliationScheduler } from "../service-entitlement";
 import knowledgeBaseArtifactApi from "../knowledge-base-artifact-api";
-import { auditKnowledgeBaseStateInvariants } from "../knowledge-base-invariant-audit";
+import {
+  auditKnowledgeBaseStateInvariants,
+  getKnowledgeBaseInvariantAuditSnapshot,
+} from "../knowledge-base-invariant-audit";
 import { runtimeErrorForLog } from "./runtime-error-log";
+import {
+  ensureManagedUploadIntentWorker,
+  getManagedUploadIntentWorkerReadiness,
+} from "../managed-upload-intent";
+import { knowledgeBaseNewBuildPolicyBinding } from "../knowledge-base-tree-policy-rollout";
 import {
   evaluateKnowledgeBaseReadiness,
   knowledgeBaseReadinessHttpStatus,
@@ -92,14 +102,33 @@ import {
   runLeasedKnowledgeBaseRecovery,
 } from "./knowledge-base-readiness";
 import { createKnowledgeBaseRecoverySweep } from "../knowledge-base-recovery-worker";
+import { runKnowledgeBasePackageSweep } from "../knowledge-base-local-package";
+import { sweepKnowledgeBaseBuildSources } from "../knowledge-base-local-source-lifecycle";
 import {
   bundledMigrationManifestPath,
   evaluateMigrationJournal,
   loadMigrationManifest,
   type MigrationManifest,
 } from "./migration-journal";
-import { validateProductionRuntimeEnvironment } from "../../scripts/validate-production-runtime.mjs";
 import { evaluateDatabaseSchema } from "../../scripts/schema-contract.mjs";
+import {
+  applicationReleaseChannel,
+  applyReleaseChannelHeaders,
+  validateReleaseRuntimeEnvironment,
+} from "./release-channel-adapter";
+import { startSiteOpsWorkerScheduler } from "../siteops/worker";
+import { siteOpsArtifactApi } from "../siteops/artifact-api";
+import { registerSiteOpsRuntimeProviders } from "../siteops/runtime-providers";
+import { getSiteOpsSocialWorkflowReadiness } from "../siteops/manus-provider";
+import { getStaticTemplateCatalogReadiness } from "../siteops/static-template-catalog";
+import { startBrandQuestionUniverseWorkerScheduler } from "../brand-question-universe-worker";
+import {
+  resolveFrontMindRuntimeRole,
+  runtimeRoleReadinessRequirements,
+  runtimeRoleRunsKnowledgeBaseWorker,
+  runtimeRoleRunsSiteOps,
+  runtimeRoleServesWeb,
+} from "./runtime-role";
 
 declare const __FRONTMIND_BUILD_SHA__: string | undefined;
 
@@ -120,6 +149,8 @@ const applicationBuildSha =
 const applicationImageDigest =
   process.env.FRONTMIND_IMAGE_DIGEST?.trim().toLowerCase() || null;
 const runtimeBuildRoot = path.dirname(fileURLToPath(import.meta.url));
+const runtimeRole = resolveFrontMindRuntimeRole();
+const readinessRequirements = runtimeRoleReadinessRequirements(runtimeRole);
 
 function assertProductionConfiguration() {
   if (process.env.NODE_ENV !== "production") return;
@@ -127,7 +158,7 @@ function assertProductionConfiguration() {
     throw new Error("DATABASE_URL is required in production");
   }
   assertCredentialEncryptionConfigured();
-  assertPresalesProxyConfigured();
+  assertPresalesServiceConfigured();
   assertProvisioningConfigured();
   assertDedicatedMonitorCredentialConfigured();
   monitorBaseUrl();
@@ -142,12 +173,18 @@ function assertProductionConfiguration() {
 }
 
 async function getRuntimeSkillReadiness() {
-  const [knowledgeBase, brandQuestions, responseLogic] = await Promise.all([
-    getKnowledgeBaseSkillDescriptor(),
-    getBrandQuestionPortfolioSkillDescriptor(),
-    getResponseLogicSkillDescriptor(),
-  ]);
-  return [knowledgeBase, brandQuestions, responseLogic];
+  const knowledgeBasePolicy = knowledgeBaseNewBuildPolicyBinding();
+  const [knowledgeBase, brandQuestions, responseLogic, siteOpsSocial] =
+    await Promise.all([
+      getKnowledgeBaseSkillDescriptor({
+        version: knowledgeBasePolicy.skillVersion,
+        contentHash: knowledgeBasePolicy.skillContentHash,
+      }),
+      getBrandQuestionPortfolioSkillDescriptor(),
+      getResponseLogicSkillDescriptor(),
+      getSiteOpsSocialWorkflowReadiness(),
+    ]);
+  return [knowledgeBase, brandQuestions, responseLogic, siteOpsSocial];
 }
 
 async function evaluateReleaseReadiness(
@@ -171,11 +208,15 @@ async function evaluateReleaseReadiness(
 
 async function startServer() {
   let migrationManifest: MigrationManifest | null = null;
+  const knowledgeBaseTreePolicyWriter = knowledgeBaseNewBuildPolicyBinding();
+  console.info("[KnowledgeBase] tree_policy_writer", {
+    enabled: knowledgeBaseTreePolicyWriter.treePolicyVersion === 2,
+    treePolicyVersion: knowledgeBaseTreePolicyWriter.treePolicyVersion,
+    skillVersion: knowledgeBaseTreePolicyWriter.skillVersion,
+    skillContentHash: knowledgeBaseTreePolicyWriter.skillContentHash,
+  });
   if (process.env.NODE_ENV === "production") {
-    const runtimeIdentity = validateProductionRuntimeEnvironment(process.env);
-    if (runtimeIdentity.buildSourceSha !== applicationBuildSha) {
-      throw new Error("FRONTMIND_RUNTIME_BUILD_SOURCE_SHA_MISMATCH");
-    }
+    validateReleaseRuntimeEnvironment(process.env, applicationBuildSha);
     migrationManifest = await loadMigrationManifest(
       process.env.FRONTMIND_MIGRATION_MANIFEST_PATH ||
         bundledMigrationManifestPath(runtimeBuildRoot),
@@ -213,6 +254,7 @@ async function startServer() {
   }
   const app = express();
   const server = createServer(app);
+  configureServerTimeouts(server);
   app.disable("x-powered-by");
   // 1Panel/OpenResty is the single trusted reverse proxy in production.
   app.set("trust proxy", 1);
@@ -228,6 +270,7 @@ async function startServer() {
       "Content-Security-Policy",
       "object-src 'none'; worker-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
     );
+    applyReleaseChannelHeaders(res);
     if (process.env.NODE_ENV === "production") {
       res.setHeader(
         "Strict-Transport-Security",
@@ -237,20 +280,18 @@ async function startServer() {
     next();
   });
   // Authenticate private service routes before the global JSON parser.
-  app.use("/api/internal/presales", presalesProxy);
+  app.use("/api/internal/presales/v2", presalesV2Router);
   app.use("/api/internal/provisioning", provisioningRouter);
 
   // JSON/form payloads keep a bounded parser.
+  app.use("/api/monitoring", monitoringModule);
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-  if (process.env.NODE_ENV === "development") {
-    app.use("/api/dev/knowledge-base-live", knowledgeBaseLivePreviewApi);
-  }
 
   app.get("/healthz", (_req, res) => {
     res.status(200).json({
       status: "ok",
+      channel: applicationReleaseChannel,
       build: {
         sha: applicationBuildSha,
         imageDigest: applicationImageDigest,
@@ -273,13 +314,8 @@ async function startServer() {
         migrationManifest,
       );
       const fileRetention = fileRetentionPreflightEvidence.read();
-      const [
-        preparedFiles,
-        skills,
-        paymentReceipts,
-        projectOrders,
-        knowledgeBase,
-      ] = await Promise.all([
+      const managedUploads = getManagedUploadIntentWorkerReadiness();
+      const [, , , , knowledgeBase, , templateCatalog] = await Promise.all([
         preparedFileService.health(),
         getRuntimeSkillReadiness(),
         paymentReceiptLedgerReadiness.ready(),
@@ -289,57 +325,60 @@ async function startServer() {
           schemaVerified:
             migrationState.journal.status === "exact" &&
             migrationState.schema.status === "exact",
-          recoveryRequired: process.env.NODE_ENV === "production",
+          recoveryRequired:
+            process.env.NODE_ENV === "production" &&
+            readinessRequirements.knowledgeBaseRecovery,
           assetRootRequired: process.env.NODE_ENV === "production",
+          degradedBuildCount:
+            getKnowledgeBaseInvariantAuditSnapshot().degradedBuildCount,
         }),
+        getDedicatedMonitorCredentialReadiness(),
+        getStaticTemplateCatalogReadiness(),
       ]);
       const ready =
         fileRetention?.ready === true &&
+        (!readinessRequirements.managedUploads ||
+          (managedUploads.started === true &&
+            managedUploads.storageReady === true)) &&
         knowledgeBaseReadinessHttpStatus(knowledgeBase) === 200 &&
+        templateCatalog.ready === true &&
+        templateCatalog.requiredAdmissionReady === true &&
         migrationState.journal.status === "exact" &&
         migrationState.schema.status === "exact";
       const status = ready ? 200 : 503;
+      const invariantSnapshot = getKnowledgeBaseInvariantAuditSnapshot();
       const response = {
         status: "ok",
+        channel: applicationReleaseChannel,
         build: {
           sha: applicationBuildSha,
           imageDigest: applicationImageDigest,
         },
         migration: {
           status: migrationState.journal.status,
-          journalHash: migrationState.journal.journalHash,
-          expectedCount: migrationState.journal.expected.count,
-          appliedCount: migrationState.journal.applied.count,
-          latestExpectedTag: migrationState.journal.expected.latestTag,
-          latestAppliedTag: migrationState.journal.applied.latestTag,
-          pendingCount: migrationState.journal.pending.length,
-          allPendingExpand: migrationState.journal.allPendingExpand,
-          schema: migrationState.schema,
+          schema: {
+            status: migrationState.schema.status,
+          },
         },
-        configuration: {
-          monitorCredentialConfigured: isDedicatedMonitorCredentialConfigured(),
-          monitorApiBaseUrlConfigured: true,
-          publicUrlConfigured: isFrontMindPublicUrlConfigured(),
-          upstreamBaseUrlConfigured: isUpstreamBaseUrlConfigured(),
+        schema: {
+          status:
+            migrationState.schema.status === "exact" &&
+            knowledgeBase.dto.schema.status === "ok"
+              ? "ok"
+              : "unavailable",
         },
-        preparedFiles: {
-          status: "ok",
-          availableBytes: preparedFiles.availableBytes,
-          reserveBytes: preparedFiles.reserveBytes,
-          queueLength: preparedFiles.queueLength,
-          activeWorkers: preparedFiles.activeWorkers,
+        templateCatalog: {
+          status: templateCatalog.ready ? "ok" : "unavailable",
+          version: templateCatalog.activeCatalogVersion,
+          entryCount: templateCatalog.ready ? templateCatalog.entryCount : 0,
+          admittedCount: templateCatalog.admittedCount,
+          unavailableCount: templateCatalog.unavailableCount,
+          requiredAdmissionReady: templateCatalog.requiredAdmissionReady,
         },
-        fileRetention,
-        internalLedgers: {
-          paymentReceipts,
-          projectOrders,
-        },
-        skills: skills.map(({ name, version, contentHash }) => ({
-          name,
-          version,
-          contentHash,
-        })),
-        knowledgeBase: knowledgeBase.dto,
+        // Build-local findings are observable, but never participate in the
+        // readiness decision above. Do not expose their internal codes.
+        degradedBuildCount: invariantSnapshot.degradedBuildCount,
+        violationCount: invariantSnapshot.violationCount,
       };
       if (!ready) {
         console.error("[Health] readiness_unavailable", {
@@ -347,6 +386,12 @@ async function startServer() {
           migrationStatus: migrationState.journal.status,
           schemaStatus: migrationState.schema.status,
           fileRetentionReady: fileRetention?.ready ?? false,
+          managedUploadsStarted: managedUploads.started,
+          managedUploadsStorageReady: managedUploads.storageReady,
+          templateCatalogReady: templateCatalog.ready,
+          templateCatalogAdmittedCount: templateCatalog.admittedCount,
+          templateCatalogRequiredAdmissionReady:
+            templateCatalog.requiredAdmissionReady,
         });
         res.status(status).json({
           ...response,
@@ -377,49 +422,63 @@ async function startServer() {
     preparedFileRouter,
   );
   app.use(
+    "/api/frontmind/v2",
+    requireExpressAuth,
+    enforceFrontMindProxyAccess,
+    attachOptionalActiveCredential,
+    frontmindV2ChatRouter,
+  );
+  app.use(
     "/api/frontmind",
     requireExpressAuth,
     enforceFrontMindProxyAccess,
     resolveUpstreamCredential,
     manusProxy,
   );
-  app.use("/api/manus", (_req, res) => {
-    res
-      .status(404)
-      .json({ error: { message: "接口不存在", code: "NOT_FOUND" } });
-  });
   // One-click enterprise knowledge base workflow powered by the Socratic KB skill.
   app.use(
     "/api/knowledge-base/artifacts",
     requireExpressAuth,
+    enforceDeliveryProjectContext,
+    rejectDeliveryMemberKnowledgeBaseProjectScope,
     knowledgeBaseArtifactApi,
   );
   app.use(
     "/api/knowledge-base",
     requireExpressAuth,
+    enforceDeliveryProjectContext,
+    rejectDeliveryMemberKnowledgeBaseProjectScope,
     attachOptionalActiveCredential,
     knowledgeBaseApi,
   );
-  // Per-question response logic workflow powered by a private Skill and Pro.
+  // Per-question response logic workflow; the active credential version
+  // freezes Base/Pro for each operation.
   app.use(
     "/api/response-logic",
     requireExpressAuth,
     attachOptionalActiveCredential,
     responseLogicApi,
   );
-  // Evidence-backed brand question candidates. Capability and quota are
-  // resolved server-side before any Pro task is created.
+  // Evidence-backed brand question candidates. Capability, quota and the
+  // credential-frozen Base/Pro profile are resolved before task creation.
   app.use(
     "/api/brand-question-portfolio",
     requireExpressAuth,
     attachOptionalActiveCredential,
     brandQuestionPortfolioApi,
   );
+  // Jenova Brand Tracker conversations use an authenticated SSE transport.
+  // Its credential is resolved from the dedicated server-side assignment pool.
+  app.use("/api/brand-tracking", requireExpressAuth, brandTrackingApi);
   // Durable user dashboard content and final knowledge-base snapshot imports.
   app.use("/api/dashboard", dashboardApi);
   // Revision-bound, preview-first bulk completion for the five formal website
   // content ticket categories. Domain/ICP prerequisites are not in this API.
   app.use("/api/website-content-template", websiteContentTemplateApi);
+  // Tenant-bound SiteOps build previews and immutable download artifacts.
+  // Authentication precedes every wildcard path so cross-tenant misses stay
+  // indistinguishable from absent artifacts.
+  app.use("/api/site-ops", requireExpressAuth, siteOpsArtifactApi);
   // tRPC API
   app.use(
     "/api/trpc",
@@ -478,46 +537,84 @@ async function startServer() {
     throw new Error("PORT must be an integer between 1 and 65535");
   }
 
-  await startApiUsageSnapshotScheduler();
-  startDashboardImportPreflightCleanupScheduler();
+  if (runtimeRoleServesWeb(runtimeRole)) {
+    await startApiUsageSnapshotScheduler();
+    startDashboardImportPreflightCleanupScheduler();
+    // Start only after configuration, durable storage and database startup
+    // checks have completed. Importing a route module must never trigger
+    // provider side effects or hide a preflight failure.
+    await reconcileManagedUploadAccountDeletionFencesOnStartup();
+    await ensureManagedUploadIntentWorker();
+  }
   server.listen(port, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${port}/`);
+    console.log(`Server running on http://0.0.0.0:${port}/`, {
+      runtimeRole,
+    });
     if (process.env.NODE_ENV === "production") {
-      startDeliveryTicketRetentionScheduler();
-      startConversationRetentionScheduler();
-      startFileContentRetentionScheduler({
-        // Let the conversation transaction finish its initial pass before the
-        // file worker reconciles newly orphaned resources.
-        initialDelayMs: 2 * 60_000,
-        run: () =>
-          runFileContentRetentionCleanup({
-            cleanup: async () => {
-              const result = await cleanupExpiredFileContent({
-                removePreparedAssets: (resource) =>
-                  preparedFileService.deleteByOwnedFileSource({
-                    ownerUserId: resource.userId,
-                    fileId: resource.upstreamId,
-                    projectAssignmentId: resource.projectAssignmentId,
-                  }),
-                removePreparedAssetsByFileId: (fileId) =>
-                  preparedFileService.deleteByFileSource(fileId),
-              });
-              return result;
-            },
-          }),
-      });
+      registerSiteOpsRuntimeProviders();
+      if (runtimeRoleRunsSiteOps(runtimeRole)) {
+        startSiteOpsWorkerScheduler();
+      }
+      if (runtimeRoleServesWeb(runtimeRole)) {
+        startDeliveryTicketRetentionScheduler();
+        startConversationRetentionScheduler();
+        startJenovaBrandTrackingRecoveryScheduler();
+        startServiceContractLifecycleReconciliationScheduler();
+        startBrandQuestionUniverseWorkerScheduler();
+        startFileContentRetentionScheduler({
+          // Let the conversation transaction finish its initial pass before the
+          // file worker reconciles newly orphaned resources.
+          initialDelayMs: 2 * 60_000,
+          run: () =>
+            runFileContentRetentionCleanup({
+              cleanup: async () => {
+                const result = await cleanupExpiredFileContent({
+                  removePreparedAssets: (resource) =>
+                    preparedFileService.deleteByOwnedFileSource({
+                      ownerUserId: resource.userId,
+                      fileId: resource.upstreamId,
+                      projectAssignmentId: resource.projectAssignmentId,
+                    }),
+                  removePreparedAssetsByFileId: (fileId) =>
+                    preparedFileService.deleteByFileSource(fileId),
+                });
+                return result;
+              },
+            }),
+        });
+      }
+      if (!runtimeRoleRunsKnowledgeBaseWorker(runtimeRole)) return;
       const recoverKnowledgeBaseState = createKnowledgeBaseRecoverySweep({
         recoverExpiredTurns: () => recoverExpiredKnowledgeBaseTurns(),
-        recoverOpenBuilds: (options) => recoverOpenKnowledgeBaseTasks(options),
         cleanupArtifactCandidates: () =>
           cleanupOrphanedKnowledgeBuildArtifactCandidates(),
       });
       const runKnowledgeRecovery = async () => {
-        try {
-          const recovery = await runLeasedKnowledgeBaseRecovery({
+        const [recoveryResult, packageResult] = await Promise.allSettled([
+          runLeasedKnowledgeBaseRecovery({
             tracker: knowledgeBaseRecoveryHealth,
             recover: recoverKnowledgeBaseState,
-          });
+          }),
+          runKnowledgeBasePackageSweep(),
+        ]);
+        if (packageResult.status === "fulfilled") {
+          const packages = packageResult.value;
+          if (packages.scanned || packages.ready || packages.failed) {
+            console.info(
+              "[KnowledgeBasePackage] scan_complete",
+              JSON.stringify(packages),
+            );
+          }
+        } else {
+          // Package generation is build-local. Its failure must not hide a
+          // successful provider recovery sweep or degrade global readiness.
+          console.error(
+            "[KnowledgeBasePackage] scan_failed",
+            runtimeErrorForLog(packageResult.reason),
+          );
+        }
+        if (recoveryResult.status === "fulfilled") {
+          const recovery = recoveryResult.value;
           if (!recovery) return;
           const { claimedTurnIds: _claimedTurnIds, ...turnMetrics } =
             recovery.turns;
@@ -525,14 +622,13 @@ async function startServer() {
             "[KnowledgeBaseRecovery] scan_complete",
             JSON.stringify({
               turns: turnMetrics,
-              builds: recovery.builds,
               artifacts: recovery.artifacts,
             }),
           );
-        } catch (error) {
+        } else {
           console.error(
             "[KnowledgeBaseRecovery] scan_failed",
-            runtimeErrorForLog(error),
+            runtimeErrorForLog(recoveryResult.reason),
           );
         }
       };
@@ -543,9 +639,7 @@ async function startServer() {
       );
       knowledgeRecoveryTimer.unref();
       const runKnowledgeInvariantAudit = () => {
-        void auditKnowledgeBaseStateInvariants({
-          blockWritesOnP0: true,
-        }).catch((error) => {
+        void auditKnowledgeBaseStateInvariants().catch((error) => {
           console.error(
             "[KnowledgeBaseInvariant] audit_failed",
             runtimeErrorForLog(error),
@@ -563,12 +657,31 @@ async function startServer() {
       );
       knowledgeInvariantTimer.unref();
       const runResetCleanup = () => {
-        void processKnowledgeResetCleanupJobs().catch((error) => {
-          console.error(
-            "[KnowledgeBaseReset] cleanup_retry_failed",
-            runtimeErrorForLog(error),
-          );
-        });
+        void Promise.all([
+          processKnowledgeResetCleanupJobs(),
+          sweepOrphanedKnowledgeBaseUploadEvidence(),
+          sweepKnowledgeBaseBuildSources(),
+        ])
+          .then(([, evidence, buildSources]) => {
+            if (
+              !evidence.scanned &&
+              !evidence.failed &&
+              !buildSources.scanned &&
+              !buildSources.failed
+            ) {
+              return;
+            }
+            console.info(
+              "[KnowledgeBaseEvidence] orphan_sweep_complete",
+              JSON.stringify({ evidence, buildSources }),
+            );
+          })
+          .catch((error) => {
+            console.error(
+              "[KnowledgeBaseReset] cleanup_retry_failed",
+              runtimeErrorForLog(error),
+            );
+          });
       };
       runResetCleanup();
       const resetCleanupTimer = setInterval(runResetCleanup, 15 * 60 * 1000);
@@ -577,7 +690,11 @@ async function startServer() {
   });
 }
 
-startServer().catch((error) => {
+async function main() {
+  await startServer();
+}
+
+main().catch((error) => {
   console.error("[Server] startup_failed", runtimeErrorForLog(error));
   process.exitCode = 1;
 });

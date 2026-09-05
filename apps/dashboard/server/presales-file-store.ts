@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream, type ReadStream } from "node:fs";
+import {
+  createReadStream,
+  createWriteStream,
+  type ReadStream,
+  type WriteStream,
+} from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { Transform, type Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import type { Readable } from "node:stream";
 
 type PresalesFileManifest = {
   schemaVersion: 1;
@@ -28,6 +32,7 @@ type PresalesFileCreateReservation = {
   schemaVersion: 1;
   keyHash: string;
   requestHash: string;
+  projectId?: string | null;
   apiCredentialId: string;
   credentialVersion: number;
   status: "pending" | "completed" | "deleted";
@@ -69,8 +74,12 @@ export type PresalesFileCreateReservationResult =
   | { state: "conflict" }
   | { state: "pending"; retryAfterMs: number };
 
-const FILE_CREATE_RESERVATION_LEASE_MS = 60_000;
+// Must outlive the 120-second upstream file-create timeout so project purge
+// cannot retire a reservation while its HTTP request can still succeed.
+const FILE_CREATE_RESERVATION_LEASE_MS = 3 * 60_000;
 const FILE_CREATE_LOCK_STALE_MS = 30_000;
+const FILE_MUTATION_LOCK_STALE_MS = 2 * 60_000;
+const FILE_MUTATION_LOCK_WAIT_MS = 60_000;
 const DEFAULT_STALE_UPLOAD_TEMP_MS = 6 * 60 * 60 * 1_000;
 const DEFAULT_STALE_MANIFEST_TEMP_MS = 6 * 60 * 60 * 1_000;
 const DEFAULT_STORAGE_SWEEP_BATCH_SIZE = 200;
@@ -78,6 +87,7 @@ const DEFAULT_STORAGE_SWEEP_MAX_BATCHES = 20;
 const DEFAULT_STORED_UPLOAD_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const STORAGE_SWEEP_CURSOR_FILENAME = ".retention-sweep-cursor.json";
 const PRESALES_FILE_STORAGE_RESERVE_BYTES = 64 * 1024 * 1024;
+export const PRESALES_FILE_STAGE_IO_TIMEOUT_MS = 120_000;
 
 export type StagedPresalesFile = {
   sizeBytes: number;
@@ -88,7 +98,24 @@ export type StagedPresalesFile = {
     mimeType?: string;
     uploadedAt?: Date | string | number;
     contentExpiresAt?: Date | string | number;
+    /**
+     * Re-arm retention only when a caller has independently proved that an
+     * immutable ownership row still names these exact bytes and the prior
+     * stored body is missing/expired. Ordinary commits keep the first upload
+     * deadline immutable.
+     */
+    replaceManagedRetention?: boolean;
   }) => Promise<void>;
+  discard: () => Promise<void>;
+};
+
+/**
+ * Incremental staging lets a caller apply backpressure to each durable write
+ * while the same incoming bytes are concurrently forwarded elsewhere.
+ */
+export type IncrementalPresalesFileStage = {
+  append: (chunk: Buffer | Uint8Array | string) => Promise<void>;
+  finalize: () => Promise<StagedPresalesFile>;
   discard: () => Promise<void>;
 };
 
@@ -225,6 +252,7 @@ export function hashPresalesFileIdempotencyKey(value: string) {
 
 export function hashPresalesFileCreatePayload(input: {
   filename: string;
+  projectId?: string;
   mimeType?: string;
   sizeBytes?: number;
 }) {
@@ -232,6 +260,7 @@ export function hashPresalesFileCreatePayload(input: {
     .update(
       JSON.stringify({
         filename: input.filename,
+        projectId: input.projectId ?? null,
         mimeType: input.mimeType ?? null,
         sizeBytes: input.sizeBytes ?? null,
       }),
@@ -242,6 +271,14 @@ export function hashPresalesFileCreatePayload(input: {
 
 function reservationRoot() {
   return path.join(storageRoot(), "create-reservations");
+}
+
+function fileMutationLockPaths(fileId: string) {
+  const root = path.join(storageRoot(), "mutation-locks");
+  return {
+    root,
+    lock: path.join(root, `${storageKey(fileId)}.lock`),
+  };
 }
 
 function reservationPaths(keyHash: string) {
@@ -260,6 +297,15 @@ function reservationIndexPath(fileId: string) {
 async function ensurePrivateDirectory(directory: string) {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700).catch(() => undefined);
+}
+
+async function fsyncPresalesDirectory(directory: string) {
+  const handle = await fs.open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 async function writeJsonAtomic(target: string, value: unknown) {
@@ -289,6 +335,9 @@ function parseReservation(
     record.schemaVersion !== 1 ||
     record.keyHash !== expectedKeyHash ||
     typeof record.requestHash !== "string" ||
+    (record.projectId !== undefined &&
+      record.projectId !== null &&
+      typeof record.projectId !== "string") ||
     typeof record.apiCredentialId !== "string" ||
     !Number.isSafeInteger(record.credentialVersion) ||
     (record.status !== "pending" &&
@@ -359,6 +408,65 @@ async function withReservationLock<T>(
   throw new Error("PRESALES_FILE_RESERVATION_LOCKED");
 }
 
+/**
+ * Serializes the short final-file/ownership-row commit across application
+ * processes which share the durable asset volume. Upload bodies are staged
+ * before this lock is taken, so a slow client never monopolizes it.
+ */
+export async function withStoredPresalesFileMutationLock<T>(
+  fileId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const { root, lock } = fileMutationLockPaths(fileId);
+  await ensurePrivateDirectory(root);
+  const deadline = Date.now() + FILE_MUTATION_LOCK_WAIT_MS;
+  let acquiredNonce: string | null = null;
+
+  while (Date.now() < deadline) {
+    const nonce = randomUUID();
+    try {
+      const handle = await fs.open(lock, "wx", 0o600);
+      try {
+        await handle.writeFile(`${nonce}\n`, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      acquiredNonce = nonce;
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stats = await fs.stat(lock).catch(() => null);
+      if (stats && Date.now() - stats.mtimeMs > FILE_MUTATION_LOCK_STALE_MS) {
+        // Rename, rather than unlink, so an old owner's nonce-aware release
+        // cannot remove a newly acquired lock at the original path.
+        const stale = path.join(
+          root,
+          `${path.basename(lock)}.${randomUUID()}.stale`,
+        );
+        await fs.rename(lock, stale).catch((renameError) => {
+          if ((renameError as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw renameError;
+          }
+        });
+        await fs.rm(stale, { force: true }).catch(() => undefined);
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  if (!acquiredNonce) throw new Error("PRESALES_FILE_MUTATION_LOCKED");
+  try {
+    return await operation();
+  } finally {
+    const owner = await fs.readFile(lock, "utf8").catch(() => null);
+    if (owner?.trim() === acquiredNonce) {
+      await fs.rm(lock, { force: true }).catch(() => undefined);
+      await fsyncPresalesDirectory(root).catch(() => undefined);
+    }
+  }
+}
+
 function completedReservationResult(
   reservation: PresalesFileCreateReservation,
 ): PresalesFileCreateReservationResult {
@@ -378,6 +486,8 @@ function completedReservationResult(
 export async function acquirePresalesFileCreateReservation(input: {
   idempotencyKey: string;
   requestHash: string;
+  compatibleRequestHashes?: readonly string[];
+  projectId?: string;
   apiCredentialId: string;
   credentialVersion: number;
   now?: Date;
@@ -398,6 +508,7 @@ export async function acquirePresalesFileCreateReservation(input: {
         schemaVersion: 1 as const,
         keyHash,
         requestHash: input.requestHash,
+        projectId: input.projectId ?? null,
         apiCredentialId: input.apiCredentialId,
         credentialVersion: input.credentialVersion,
         status: "pending" as const,
@@ -435,14 +546,28 @@ export async function acquirePresalesFileCreateReservation(input: {
   }
 
   return withReservationLock(keyHash, async () => {
-    const current = await readReservation(keyHash);
+    let current = await readReservation(keyHash);
     if (!current) {
       const replacement = createPendingReservation();
       await writeJsonAtomic(paths.reservation, replacement.reservation);
       return replacement.result;
     }
-    if (current.requestHash !== input.requestHash) {
+    if (
+      current.requestHash !== input.requestHash &&
+      !(input.compatibleRequestHashes ?? []).includes(current.requestHash)
+    ) {
       return { state: "conflict" };
+    }
+    if (
+      current.projectId &&
+      input.projectId &&
+      current.projectId !== input.projectId
+    ) {
+      return { state: "conflict" };
+    }
+    if (!current.projectId && input.projectId) {
+      current = { ...current, projectId: input.projectId };
+      await writeJsonAtomic(paths.reservation, current);
     }
     // A completed operation is immutable. If its HTTP response was lost, a
     // retry after API-key rotation must return the one file already created,
@@ -592,6 +717,122 @@ export async function removePresalesFileCreateReservation(fileId: string) {
   });
 }
 
+/** Project deletion uses the project-level tombstone, so no per-file reuse
+ * barrier is retained after the file and its upstream copy are gone. */
+export async function purgePresalesFileCreateReservation(fileId: string) {
+  const indexPath = reservationIndexPath(fileId);
+  let keyHash: string | null = null;
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(indexPath, "utf8"),
+    ) as Partial<PresalesFileCreateIndex>;
+    if (
+      parsed.schemaVersion === 1 &&
+      parsed.upstreamFileId === fileId &&
+      typeof parsed.keyHash === "string" &&
+      /^[a-f0-9]{64}$/.test(parsed.keyHash)
+    ) {
+      keyHash = parsed.keyHash;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (!keyHash) {
+    await fs.rm(indexPath, { force: true });
+    return;
+  }
+  await withReservationLock(keyHash, async () => {
+    const current = await readReservation(keyHash!);
+    if (current?.upstreamFileId === fileId) {
+      await fs.rm(reservationPaths(keyHash!).reservation, { force: true });
+    }
+    await fs.rm(indexPath, { force: true });
+  });
+}
+
+export type PresalesProjectFileCreateReservationSnapshot = {
+  pendingReservations: number;
+  files: Array<{ fileId: string; apiCredentialId: string }>;
+};
+
+/**
+ * Enumerates project-bound file creations after the project lifecycle fence is
+ * closed. Expired pending reservations without an upstream file id are
+ * physically removed; the permanent project tombstone alone prevents replay.
+ */
+export async function readPresalesProjectFileCreateReservations(
+  projectId: string,
+  now = new Date(),
+): Promise<PresalesProjectFileCreateReservationSnapshot> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(reservationRoot());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { pendingReservations: 0, files: [] };
+    }
+    throw error;
+  }
+  let pendingReservations = 0;
+  const files = new Map<string, { fileId: string; apiCredentialId: string }>();
+  for (const entry of entries) {
+    const match = /^([a-f0-9]{64})\.json$/.exec(entry);
+    if (!match) continue;
+    const keyHash = match[1]!;
+    await withReservationLock(keyHash, async () => {
+      const reservation = await readReservation(keyHash);
+      if (!reservation || reservation.projectId !== projectId) return;
+      if (reservation.status === "deleted") {
+        await fs.rm(reservationPaths(keyHash).reservation, { force: true });
+        return;
+      }
+      if (reservation.status === "completed" && reservation.upstreamFileId) {
+        files.set(reservation.upstreamFileId, {
+          fileId: reservation.upstreamFileId,
+          apiCredentialId: reservation.apiCredentialId,
+        });
+        return;
+      }
+      if (reservation.status !== "pending") return;
+      if (Date.parse(reservation.leaseExpiresAt) > now.getTime()) {
+        pendingReservations += 1;
+        return;
+      }
+      await fs.rm(reservationPaths(keyHash).reservation, { force: true });
+    });
+  }
+  return {
+    pendingReservations,
+    files: [...files.values()],
+  };
+}
+
+export async function hasPresalesFileCreateReservationsForCredentials(
+  credentialIds: ReadonlySet<string>,
+) {
+  if (credentialIds.size === 0) return false;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(reservationRoot());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  for (const entry of entries) {
+    const match = /^([a-f0-9]{64})\.json$/.exec(entry);
+    if (!match) continue;
+    const reservation = await readReservation(match[1]!);
+    if (
+      reservation &&
+      reservation.status !== "deleted" &&
+      credentialIds.has(reservation.apiCredentialId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function pathsFor(fileId: string) {
   const root = storageRoot();
   const key = storageKey(fileId);
@@ -689,8 +930,23 @@ function immutableManifestRetention(
   input: {
     uploadedAt?: Date | string | number;
     contentExpiresAt?: Date | string | number;
+    replaceManagedRetention?: boolean;
   },
 ) {
+  if (input.replaceManagedRetention === true) {
+    const uploadedAt = normalizedRetentionTimestamp(input.uploadedAt);
+    const contentExpiresAt = normalizedRetentionTimestamp(
+      input.contentExpiresAt,
+    );
+    if (
+      !uploadedAt ||
+      !contentExpiresAt ||
+      Date.parse(contentExpiresAt) <= Date.parse(uploadedAt)
+    ) {
+      throw new Error("PRESALES_FILE_RETENTION_INVALID");
+    }
+    return { uploadedAt, contentExpiresAt };
+  }
   const previousRetention = previous
     ? manifestRetention(previous)
     : ({ state: "unmanaged" } as const);
@@ -739,12 +995,15 @@ async function writeManifest(fileId: string, value: PresalesFileManifest) {
   await fs.chmod(root, 0o700).catch(() => undefined);
   const temporary = `${manifest}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(temporary, `${JSON.stringify(value)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await fs.rename(temporary, manifest);
+    await fsyncPresalesDirectory(root);
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
@@ -788,57 +1047,24 @@ export async function recordPresalesFileDescriptor(input: {
   });
 }
 
-export async function stagePresalesFileContent(input: {
+function stagedPresalesFileFromTemporary(input: {
   fileId: string;
-  stream: Readable;
-  maxBytes: number;
-}): Promise<StagedPresalesFile> {
-  await assertPresalesFileStorageWritable({ requiredBytes: input.maxBytes });
+  temporary: string;
+  sizeBytes: number;
+  sha256: string;
+}): StagedPresalesFile {
   const paths = pathsFor(input.fileId);
-  await fs.mkdir(paths.root, { recursive: true, mode: 0o700 });
-  await fs.chmod(paths.root, 0o700).catch(() => undefined);
-  const temporary = path.join(
-    paths.root,
-    `${storageKey(input.fileId)}.${randomUUID()}.upload.tmp`,
-  );
-  let sizeBytes = 0;
-  const hash = createHash("sha256");
-  const limiter = new Transform({
-    transform(chunk, _encoding, callback) {
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      sizeBytes += bytes.length;
-      if (sizeBytes > input.maxBytes) {
-        callback(new Error("FILE_TOO_LARGE"));
-        return;
-      }
-      hash.update(bytes);
-      callback(null, bytes);
-    },
-  });
-
-  try {
-    await pipeline(
-      input.stream,
-      limiter,
-      createWriteStream(temporary, { flags: "wx", mode: 0o600 }),
-    );
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
-
-  const sha256 = hash.digest("hex");
   let consumed = false;
   const discard = async () => {
     if (consumed) return;
     consumed = true;
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    await fs.rm(input.temporary, { force: true }).catch(() => undefined);
   };
 
   return {
-    sizeBytes,
-    sha256,
-    createReadStream: () => createReadStream(temporary),
+    sizeBytes: input.sizeBytes,
+    sha256: input.sha256,
+    createReadStream: () => createReadStream(input.temporary),
     discard,
     commit: async (commitInput) => {
       if (consumed) throw new Error("STAGED_FILE_ALREADY_CONSUMED");
@@ -850,25 +1076,22 @@ export async function stagePresalesFileContent(input: {
         const manifest: PresalesFileManifest = {
           schemaVersion: 1,
           fileId: input.fileId,
-          filename: cleanFilename(
-            filename ?? previous?.filename,
-            input.fileId,
-          ),
+          filename: cleanFilename(filename ?? previous?.filename, input.fileId),
           mimeType: cleanMimeType(mimeType ?? previous?.mimeType),
-          sizeBytes,
-          sha256,
+          sizeBytes: input.sizeBytes,
+          sha256: input.sha256,
           state: "stored",
           ...retention,
           updatedAt: new Date().toISOString(),
         };
-        await fs.rename(temporary, paths.content);
+        await fs.rename(input.temporary, paths.content);
         renamed = true;
         consumed = true;
         await writeManifest(input.fileId, manifest);
       } catch (error) {
         consumed = true;
         await Promise.all([
-          fs.rm(temporary, { force: true }).catch(() => undefined),
+          fs.rm(input.temporary, { force: true }).catch(() => undefined),
           renamed
             ? fs.rm(paths.content, { force: true }).catch(() => undefined)
             : Promise.resolve(),
@@ -877,6 +1100,351 @@ export async function stagePresalesFileContent(input: {
       }
     },
   };
+}
+
+function presalesStageAbortError(signal: AbortSignal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : Object.assign(new Error("Presales file stage cancelled"), {
+        code: "ERR_CANCELED",
+      });
+}
+
+async function awaitPresalesStageOperation<T>(
+  operation: Promise<T>,
+  signal?: AbortSignal,
+) {
+  if (!signal) return operation;
+  if (signal.aborted) {
+    void operation.catch(() => undefined);
+    throw presalesStageAbortError(signal);
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(presalesStageAbortError(signal)));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
+export async function createIncrementalPresalesFileStage(input: {
+  fileId: string;
+  maxBytes: number;
+  ioTimeoutMs?: number;
+  writeStreamFactory?: typeof createWriteStream;
+  storagePreflight?: typeof assertPresalesFileStorageWritable;
+  signal?: AbortSignal;
+}): Promise<IncrementalPresalesFileStage> {
+  const preflight = (
+    input.storagePreflight ?? assertPresalesFileStorageWritable
+  )({ requiredBytes: input.maxBytes });
+  await awaitPresalesStageOperation(preflight, input.signal);
+  const paths = pathsFor(input.fileId);
+  await awaitPresalesStageOperation(
+    fs.mkdir(paths.root, { recursive: true, mode: 0o700 }),
+    input.signal,
+  );
+  await awaitPresalesStageOperation(
+    fs.chmod(paths.root, 0o700).catch(() => undefined),
+    input.signal,
+  );
+  const temporary = path.join(
+    paths.root,
+    `${storageKey(input.fileId)}.${randomUUID()}.upload.tmp`,
+  );
+  let sizeBytes = 0;
+  const hash = createHash("sha256");
+  const output: WriteStream = (input.writeStreamFactory ?? createWriteStream)(
+    temporary,
+    { flags: "wx", mode: 0o600, autoClose: true },
+  );
+  let closed = false;
+  let finalized = false;
+  let failure: unknown;
+  let pending = Promise.resolve();
+  const ioTimeoutMs = input.ioTimeoutMs ?? PRESALES_FILE_STAGE_IO_TIMEOUT_MS;
+  output.on("error", (error) => {
+    failure ??= error;
+  });
+  const abortStage = () => {
+    const reason = input.signal?.reason;
+    const error =
+      reason instanceof Error
+        ? reason
+        : Object.assign(new Error("Presales file stage cancelled"), {
+            code: "ERR_CANCELED",
+          });
+    failure ??= error;
+    output.destroy(error);
+  };
+  input.signal?.addEventListener("abort", abortStage, { once: true });
+  if (input.signal?.aborted) abortStage();
+
+  const waitForOpen = async () => {
+    if (typeof (output as WriteStream & { fd?: unknown }).fd === "number") {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timeout);
+        output.off("open", onOpen);
+        output.off("error", onError);
+      };
+      const onOpen = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const timeout = setTimeout(() => {
+        const error = Object.assign(
+          new Error("PRESALES_FILE_STAGE_OPEN_TIMEOUT"),
+          { code: "PRESALES_FILE_STAGE_OPEN_TIMEOUT" },
+        );
+        cleanup();
+        output.destroy(error);
+        reject(error);
+      }, ioTimeoutMs);
+      timeout.unref?.();
+      output.once("open", onOpen);
+      output.once("error", onError);
+    });
+  };
+  try {
+    await waitForOpen();
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  const destroyAndWaitForClose = async () => {
+    if (closed) return;
+    if (!output.destroyed) output.destroy();
+    await new Promise<void>((resolve) => {
+      if (output.closed) {
+        closed = true;
+        resolve();
+        return;
+      }
+      const timeout = setTimeout(() => {
+        output.off("close", onClose);
+        resolve();
+      }, ioTimeoutMs);
+      timeout.unref?.();
+      const onClose = () => {
+        clearTimeout(timeout);
+        closed = true;
+        resolve();
+      };
+      output.once("close", onClose);
+    });
+  };
+  const discard = async () => {
+    finalized = true;
+    input.signal?.removeEventListener("abort", abortStage);
+    if (!output.destroyed) output.destroy();
+    await pending.catch(() => undefined);
+    await destroyAndWaitForClose();
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  };
+  const append = async (chunk: Buffer | Uint8Array | string) => {
+    if (finalized) throw new Error("STAGED_FILE_ALREADY_CONSUMED");
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const operation = pending.then(async () => {
+      if (failure) throw failure;
+      if (sizeBytes + bytes.length > input.maxBytes) {
+        throw new Error("FILE_TOO_LARGE");
+      }
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (error?: Error | null) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (error) reject(error);
+          else resolve();
+        };
+        const timeout = setTimeout(() => {
+          const error = Object.assign(
+            new Error("PRESALES_FILE_STAGE_WRITE_TIMEOUT"),
+            { code: "PRESALES_FILE_STAGE_WRITE_TIMEOUT" },
+          );
+          output.destroy(error);
+          finish(error);
+        }, ioTimeoutMs);
+        timeout.unref?.();
+        output.write(bytes, finish);
+      });
+      sizeBytes += bytes.length;
+      hash.update(bytes);
+    });
+    pending = operation.catch((error) => {
+      failure = error;
+    });
+    await operation;
+  };
+
+  return {
+    append,
+    discard,
+    finalize: async () => {
+      if (finalized) throw new Error("STAGED_FILE_ALREADY_CONSUMED");
+      finalized = true;
+      await pending;
+      if (failure) {
+        await discard();
+        throw failure;
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finish = (error?: Error | null) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            output.off("close", onClose);
+            if (error) reject(error);
+            else if (failure) reject(failure);
+            else resolve();
+          };
+          const onClose = () => {
+            closed = true;
+            finish();
+          };
+          const timeout = setTimeout(() => {
+            const error = Object.assign(
+              new Error("PRESALES_FILE_STAGE_CLOSE_TIMEOUT"),
+              { code: "PRESALES_FILE_STAGE_CLOSE_TIMEOUT" },
+            );
+            output.destroy(error);
+            finish(error);
+          }, ioTimeoutMs);
+          timeout.unref?.();
+          output.once("close", onClose);
+          output.end((error?: Error | null) => {
+            if (error) finish(error);
+          });
+        });
+      } catch (error) {
+        input.signal?.removeEventListener("abort", abortStage);
+        await destroyAndWaitForClose();
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      input.signal?.removeEventListener("abort", abortStage);
+      return stagedPresalesFileFromTemporary({
+        fileId: input.fileId,
+        temporary,
+        sizeBytes,
+        sha256: hash.digest("hex"),
+      });
+    },
+  };
+}
+
+export async function stagePresalesFileContent(input: {
+  fileId: string;
+  stream: Readable;
+  maxBytes: number;
+  onProgress?: (receivedBytes: number) => void;
+}): Promise<StagedPresalesFile> {
+  const incremental = await createIncrementalPresalesFileStage({
+    fileId: input.fileId,
+    maxBytes: input.maxBytes,
+  });
+  let receivedBytes = 0;
+  try {
+    for await (const chunk of input.stream) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      await incremental.append(bytes);
+      receivedBytes += bytes.length;
+      input.onProgress?.(receivedBytes);
+    }
+    return await incremental.finalize();
+  } catch (error) {
+    await incremental.discard();
+    throw error;
+  }
+}
+
+/**
+ * Installs a sealed managed-upload intent without copying its bytes. The
+ * no-replace hard link makes a crash between linking and manifest commit
+ * recoverable, while the size/hash check prevents an existing destination
+ * from being mistaken for the same upload.
+ */
+export async function installStoredPresalesFileFromPath(input: {
+  fileId: string;
+  sourcePath: string;
+  filename: string;
+  mimeType?: string;
+  sizeBytes: number;
+  sha256: string;
+  uploadedAt: Date | string | number;
+  contentExpiresAt: Date | string | number;
+}) {
+  const paths = pathsFor(input.fileId);
+  await ensurePrivateDirectory(paths.root);
+  let linked = false;
+  try {
+    await fs.link(input.sourcePath, paths.content);
+    linked = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const existing = await fs.stat(paths.content);
+    if (existing.size !== input.sizeBytes) {
+      throw new Error("PRESALES_FILE_EXISTING_CONTENT_MISMATCH");
+    }
+    const hash = createHash("sha256");
+    const stream = createReadStream(paths.content);
+    for await (const raw of stream) {
+      hash.update(Buffer.isBuffer(raw) ? raw : Buffer.from(raw));
+    }
+    if (hash.digest("hex") !== input.sha256) {
+      throw new Error("PRESALES_FILE_EXISTING_CONTENT_MISMATCH");
+    }
+  }
+  // The intent source was already fsynced. Persist the new hard-link inode and
+  // directory entry before writing the stored descriptor/DB retention.
+  const contentHandle = await fs.open(paths.content, "r");
+  try {
+    await contentHandle.sync();
+  } finally {
+    await contentHandle.close();
+  }
+  await fsyncPresalesDirectory(paths.root);
+  try {
+    const previous = await readManifest(input.fileId);
+    const retention = immutableManifestRetention(previous, input);
+    await writeManifest(input.fileId, {
+      schemaVersion: 1,
+      fileId: input.fileId,
+      filename: cleanFilename(input.filename, input.fileId),
+      mimeType: cleanMimeType(input.mimeType),
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      state: "stored",
+      ...retention,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (linked) {
+      await fs.rm(paths.content, { force: true }).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 export async function readStoredPresalesFile(
@@ -1016,6 +1584,9 @@ export async function removeStoredPresalesFile(fileId: string) {
     fs.rm(paths.content, { force: true }),
     fs.rm(paths.manifest, { force: true }),
   ]);
+  await fsyncPresalesDirectory(paths.root).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  });
 }
 
 /** Remove damaged bytes while retaining their immutable lifecycle ledger. */
@@ -1059,6 +1630,14 @@ export async function sweepPresalesFileStorageRetention(
      * filename is required so unrelated temporary files are never guessed at.
      */
     staleManifestTempMs?: number;
+    /**
+     * Domain-owned generated artifacts do not share the 30-day user-upload
+     * clock. The database-aware caller must prove an active domain reference;
+     * callback failures fail closed and keep the bytes for a later sweep.
+     */
+    shouldRetainFile?: (input: {
+      fileId: string;
+    }) => boolean | Promise<boolean>;
     onRetainedFile?: (input: RetainedPresalesFile) => void | Promise<void>;
     onExpiredFile?: (input: {
       fileId: string;
@@ -1133,6 +1712,17 @@ export async function sweepPresalesFileStorageRetention(
     } catch {
       result.failures += 1;
       return false;
+    }
+  };
+  const shouldRetainFile = async (fileId: string) => {
+    if (!input.shouldRetainFile) return false;
+    try {
+      return await input.shouldRetainFile({ fileId });
+    } catch {
+      // Retention is destructive. An unavailable reference authority must
+      // never be interpreted as proof that a generated artifact is orphaned.
+      result.failures += 1;
+      return true;
     }
   };
 
@@ -1308,6 +1898,7 @@ export async function sweepPresalesFileStorageRetention(
       typeof manifest.fileId === "string" &&
       `${storageKey(manifest.fileId)}.json` === name
     ) {
+      if (await shouldRetainFile(manifest.fileId)) continue;
       const retention = manifestRetention(manifest);
       const deletedAt = normalizedRetentionTimestamp(manifest.contentDeletedAt);
       if (retention.state !== "managed" || !deletedAt) {
@@ -1319,16 +1910,42 @@ export async function sweepPresalesFileStorageRetention(
       // have been reclaimed, and prevents an expired upstream file from being
       // silently downloaded and granted a fresh lifetime.
       try {
-        const contentPath = pathsFor(manifest.fileId).content;
-        const contentStats = await fs.stat(contentPath).catch((error) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-          throw error;
+        const tombstoneFileId = manifest.fileId;
+        await withStoredPresalesFileMutationLock(tombstoneFileId, async () => {
+          const current = await readManifest(tombstoneFileId);
+          const currentRetention = current
+            ? manifestRetention(current)
+            : ({ state: "unmanaged" } as const);
+          const currentDeletedAt = normalizedRetentionTimestamp(
+            current?.contentDeletedAt,
+          );
+          // A same-id recovery may have replaced this tombstone after the
+          // outer scan read it. Never let the stale observation remove the
+          // newly re-armed body.
+          if (
+            current?.schemaVersion !== 1 ||
+            current.fileId !== tombstoneFileId ||
+            current.state !== "expired"
+          ) {
+            return;
+          }
+          if (currentRetention.state !== "managed" || !currentDeletedAt) {
+            result.invalidManifestsSkipped += 1;
+            return;
+          }
+          const contentPath = pathsFor(tombstoneFileId).content;
+          const contentStats = await fs.stat(contentPath).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              return null;
+            }
+            throw error;
+          });
+          if (contentStats?.isFile()) {
+            await fs.rm(contentPath, { force: true });
+            result.bytesReclaimed += contentStats.size;
+            result.reclaimedBytes += contentStats.size;
+          }
         });
-        if (contentStats?.isFile()) {
-          await fs.rm(contentPath, { force: true });
-          result.bytesReclaimed += contentStats.size;
-          result.reclaimedBytes += contentStats.size;
-        }
       } catch {
         result.failures += 1;
       }
@@ -1382,6 +1999,7 @@ export async function sweepPresalesFileStorageRetention(
     }
     result.scannedStoredManifests += 1;
     const manifestFileId = manifest.fileId;
+    if (await shouldRetainFile(manifestFileId)) continue;
     const storedPaths = pathsFor(manifestFileId);
     const [manifestStats, contentStats] = await Promise.all([
       fs.stat(entryPath).catch(() => null),
@@ -1464,35 +2082,66 @@ export async function sweepPresalesFileStorageRetention(
     if (!expired) continue;
 
     try {
-      // The manifest is the retry ledger: retain it until both byte removal
-      // and downstream derived-file cleanup have succeeded.
-      await fs.rm(storedPaths.content, { force: true });
-      result.bytesReclaimed += contentStats?.size ?? 0;
-      result.reclaimedBytes += contentStats?.size ?? 0;
-      await input.onExpiredFile?.({
-        fileId: manifestFileId,
-        sizeBytes:
-          contentStats?.size ??
-          (Number.isSafeInteger(manifest.sizeBytes) &&
-          Number(manifest.sizeBytes) >= 0
-            ? Number(manifest.sizeBytes)
-            : 0),
+      await withStoredPresalesFileMutationLock(manifestFileId, async () => {
+        const current = await readManifest(manifestFileId);
+        const currentRetention = current
+          ? manifestRetention(current)
+          : ({ state: "unmanaged" } as const);
+        if (
+          current?.schemaVersion !== 1 ||
+          current.fileId !== manifestFileId ||
+          current.state !== "stored"
+        ) {
+          return;
+        }
+        if (currentRetention.state !== "managed") {
+          result.invalidManifestsSkipped += 1;
+          return;
+        }
+        // The scan's expired observation is only advisory. A same-id upload
+        // can re-arm retention before this destructive section acquires the
+        // shared mutation lock, so decide again from the locked manifest.
+        if (Date.parse(currentRetention.contentExpiresAt) > now.getTime()) {
+          return;
+        }
+        const currentContentStats = await fs
+          .stat(storedPaths.content)
+          .catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              return null;
+            }
+            throw error;
+          });
+        // The manifest is the retry ledger: retain it until both byte removal
+        // and downstream derived-file cleanup have succeeded.
+        await fs.rm(storedPaths.content, { force: true });
+        result.bytesReclaimed += currentContentStats?.size ?? 0;
+        result.reclaimedBytes += currentContentStats?.size ?? 0;
+        await input.onExpiredFile?.({
+          fileId: manifestFileId,
+          sizeBytes:
+            currentContentStats?.size ??
+            (Number.isSafeInteger(current.sizeBytes) &&
+            Number(current.sizeBytes) >= 0
+              ? Number(current.sizeBytes)
+              : 0),
+        });
+        await writeManifest(manifestFileId, {
+          schemaVersion: 1,
+          fileId: manifestFileId,
+          filename: cleanFilename(current.filename, manifestFileId),
+          mimeType: cleanMimeType(current.mimeType),
+          sizeBytes: null,
+          sha256: null,
+          state: "expired",
+          uploadedAt: currentRetention.uploadedAt,
+          contentExpiresAt: currentRetention.contentExpiresAt,
+          contentDeletedAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        });
+        result.deleted += 1;
+        result.expiredFilesDeleted += 1;
       });
-      await writeManifest(manifestFileId, {
-        schemaVersion: 1,
-        fileId: manifestFileId,
-        filename: cleanFilename(manifest.filename, manifestFileId),
-        mimeType: cleanMimeType(manifest.mimeType),
-        sizeBytes: null,
-        sha256: null,
-        state: "expired",
-        uploadedAt: retainedUploadedAt,
-        contentExpiresAt: retainedContentExpiresAt,
-        contentDeletedAt: now.toISOString(),
-        updatedAt: now.toISOString(),
-      });
-      result.deleted += 1;
-      result.expiredFilesDeleted += 1;
     } catch {
       result.failures += 1;
     }

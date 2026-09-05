@@ -19,16 +19,25 @@ import {
   isNull,
   ne,
   or,
+  sql,
 } from "drizzle-orm";
 import type { Request } from "express";
 import { COOKIE_NAME } from "../shared/const";
+import {
+  DEFAULT_MANAGED_AGENT_PROFILE,
+  managedAgentProfileModel,
+  normalizeManagedAgentProfile,
+  type ManagedAgentProfile,
+} from "../shared/manus-agent-profile";
 import {
   isExplicitAdminAccessLevel,
   isProtectedBuiltinAdminUsername,
 } from "../shared/admin-access";
 import {
+  agentOperations,
   apiCredentials,
   apiKeyOwnership,
+  attachments,
   conversations,
   conversationTurns,
   deliveryProjectAssignments,
@@ -38,22 +47,44 @@ import {
   knowledgeBaseBuilds,
   knowledgeBaseResetRequests,
   presalesApiCredentials,
+  providerFileLeases,
   sessions,
   upstreamResources,
   userAdminAssignments,
   userPasswordSetupTokens,
   userUsageOwners,
   users,
+  visualCandidatePools,
   websiteStyleSampleBatches,
   websiteStyleSamples,
   websiteUserProvisions,
+  workspaceAuditEvents,
   type ApiCredential,
   type UpstreamResource,
   type User,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { isFileResourceContentExpired } from "./file-content-retention";
+import { removeStoredPresalesFile } from "./presales-file-store";
 import { getUpstreamBaseUrl } from "./upstream-config";
+import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
+import {
+  acquireManagedUploadDeletionFence,
+  advanceManagedUploadAccountDeletionFence,
+  assertManagedUploadScopesAvailable,
+  assertCredentialDeletionFenceToken,
+  completeManagedUploadDeletionFence,
+  listManagedUploadCredentialDeletionFenceScopes,
+  listManagedUploadUserDeletionFences,
+  ManagedUploadDeletionFenceError,
+  reconcileStaleManagedUploadDeletionFence,
+  replayManagedUploadRetirementForDeletedAccount,
+  retireManagedUploadIntentsForAccountDeletion,
+  rollbackManagedUploadDeletionFence,
+  startManagedUploadDeletionFenceHeartbeat,
+  type ManagedUploadDeletionFenceToken,
+  type ManagedUploadAccountProviderCleanupTarget,
+} from "./managed-upload-intent-fence";
 
 export const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MANAGED_ACCOUNT_SETUP_DURATION_MS = 48 * 60 * 60 * 1000;
@@ -78,6 +109,7 @@ export type AuthServiceErrorCode =
   | "INVALID_PASSWORD"
   | "LAST_ADMIN"
   | "NOT_FOUND"
+  | "PROJECT_DELETED"
   | "RATE_LIMITED"
   | "UPSTREAM_UNAVAILABLE";
 
@@ -164,6 +196,26 @@ export type DecryptedCredential = {
   fingerprint: string;
   status: "active" | "retired";
   verifiedAt: Date | null;
+  agentProfile: ManagedAgentProfile;
+  upstreamModel: "manus-1.6" | "manus-1.6-max";
+};
+
+export type KnowledgeBaseUploadReservationCredential = DecryptedCredential & {
+  reservation: {
+    clientRequestId: string;
+    sourceResetRevision: number;
+    attachmentManifest: Array<{
+      filename: string;
+      sizeBytes: number;
+      mimeType: string;
+      lastModified: number;
+      sha256: string;
+      itemId?: string;
+      ordinal?: number;
+      total?: number;
+    }>;
+    stagedAttachmentCount: number;
+  };
 };
 
 export type CredentialStatus = {
@@ -172,6 +224,8 @@ export type CredentialStatus = {
   fingerprint: string | null;
   status: "active" | "retired" | "invalid" | null;
   verifiedAt: number | null;
+  agentProfile: ManagedAgentProfile;
+  upstreamModel: "manus-1.6" | "manus-1.6-max";
 };
 
 type LoginAttempt = {
@@ -1038,7 +1092,7 @@ export async function setManagedUserActive(userId: number, isActive: boolean) {
       if (assignmentRows[0] || ticketRows[0]) {
         throw new AuthServiceError(
           "CONFLICT",
-          "该工程师仍负责客户项目或未结束工单，请先完成转交",
+          "该工程师仍负责客户项目或未结束需求，请先完成转交",
         );
       }
     }
@@ -1059,6 +1113,12 @@ export async function permanentlyDeleteManagedUserRows(
   executor: any,
   userId: number,
 ) {
+  // Candidate pools reference style batches, operations, credentials and
+  // snapshots restrictively. Delete the account-owned root first; pages and
+  // items cascade from it before any of those parent rows are removed.
+  await executor
+    .delete(visualCandidatePools)
+    .where(eq(visualCandidatePools.userId, userId));
   const styleBatchRows = await executor
     .select({ id: websiteStyleSampleBatches.id })
     .from(websiteStyleSampleBatches)
@@ -1104,9 +1164,185 @@ export async function permanentlyDeleteManagedUserRows(
   await executor.delete(users).where(eq(users.id, userId));
 }
 
+/**
+ * Invoked only from the deletion-fence retirement channel, which durably
+ * claims each Provider file before this callback. Resolve the exact frozen
+ * credential and make one idempotent delete attempt; local retained bytes are
+ * removed independently of the remote outcome.
+ */
+export async function discardManagedUploadProviderFileForRetirement(
+  target: ManagedUploadAccountProviderCleanupTarget,
+  executor?: any,
+) {
+  try {
+    const credential = await getDecryptedCredentialForManagedUploadIntent(
+      {
+        credentialId: target.credentialId,
+        credentialOwnerUserId: target.credentialOwnerUserId,
+        credentialVersion: target.credentialVersion,
+      },
+      executor,
+    );
+    if (!credential) {
+      throw new Error("MANAGED_UPLOAD_RETIREMENT_CREDENTIAL_UNAVAILABLE");
+    }
+    try {
+      await new ManusV2Client({
+        baseUrl: getUpstreamBaseUrl(),
+        apiKey: credential.apiKey,
+        timeoutMs: 5_000,
+      }).deleteFile(target.fileId);
+    } catch (error) {
+      if (!(error instanceof ManusV2ApiError && error.status === 404)) {
+        throw error;
+      }
+    }
+  } finally {
+    await removeStoredPresalesFile(target.fileId).catch(() => undefined);
+  }
+}
+
+/**
+ * Startup-only, bounded reconciliation for process exit around the final user
+ * deletion commit. Database absence is the authority for converting a
+ * `deleting` fence to `deleted`; local replay never contacts Provider APIs or
+ * reconstructs conversations.
+ */
+export async function reconcileManagedUploadAccountDeletionFencesOnStartup(
+  limit = 25,
+) {
+  const db = await requireDb();
+  const fences = await listManagedUploadUserDeletionFences(limit);
+  let deleted = 0;
+  let active = 0;
+  let failed = 0;
+  for (const fence of fences) {
+    try {
+      const user = await db.transaction(async (tx) => {
+        const rows = await tx
+          .select({
+            id: users.id,
+            username: users.username,
+            isActive: users.isActive,
+          })
+          .from(users)
+          .where(eq(users.id, fence.scope.userId))
+          .limit(1)
+          .for("update");
+        return rows[0] ?? null;
+      });
+      if (!user) {
+        await reconcileStaleManagedUploadDeletionFence(fence.scope, "deleted");
+        await replayManagedUploadRetirementForDeletedAccount(
+          fence.scope.userId,
+        );
+        deleted += 1;
+        continue;
+      }
+      if (
+        fence.purpose === "account_deletion" &&
+        (fence.accountDeletionPhase === "prepared" ||
+          fence.accountDeletionPhase === "retired") &&
+        user.isActive === false &&
+        !isProtectedBuiltinAdminUsername(user.username)
+      ) {
+        const token = await acquireManagedUploadDeletionFence(fence.scope, {
+          disposition: "cancel_active_intents",
+          purpose: "account_deletion",
+        });
+        // Startup continuation is deliberately local-only. Provider cleanup
+        // was either claimed before the crash or remains best-effort; it is
+        // never replayed without the initiating administrator's live
+        // credential context.
+        await retireManagedUploadIntentsForAccountDeletion({
+          userId: fence.scope.userId,
+          token,
+        });
+        await advanceManagedUploadAccountDeletionFence(token, "retired");
+        const removed = await db.transaction(async (tx) => {
+          const rows = await tx
+            .select({
+              id: users.id,
+              username: users.username,
+              isActive: users.isActive,
+            })
+            .from(users)
+            .where(eq(users.id, fence.scope.userId))
+            .limit(1)
+            .for("update");
+          const current = rows[0];
+          if (!current) return false;
+          if (
+            current.isActive !== false ||
+            isProtectedBuiltinAdminUsername(current.username)
+          ) {
+            throw new AuthServiceError(
+              "CONFLICT",
+              "Prepared account deletion no longer has safe startup authority",
+            );
+          }
+          await permanentlyDeleteManagedUserRows(tx, fence.scope.userId);
+          await tx.insert(workspaceAuditEvents).values({
+            id: randomUUID(),
+            actorUserId: null,
+            actorUsername: "signed-image-maintenance",
+            actorAccessLevel: null,
+            action: "account.deleted_after_crash_recovery",
+            targetType: "user",
+            targetId: String(fence.scope.userId),
+            workspaceUserId: fence.scope.userId,
+            reason: "durable_account_deletion_fence",
+            metadata: {
+              disposition: "permanently_deleted",
+              recovery: "startup_local_only",
+              priorPhase: fence.accountDeletionPhase,
+            },
+            createdAt: new Date(),
+          });
+          return true;
+        });
+        if (removed) {
+          await completeManagedUploadDeletionFence(token);
+          await replayManagedUploadRetirementForDeletedAccount(
+            fence.scope.userId,
+          );
+          deleted += 1;
+          continue;
+        }
+      }
+      if (
+        fence.state === "deleting" &&
+        fence.leaseExpiresAt &&
+        Date.parse(fence.leaseExpiresAt) <= Date.now()
+      ) {
+        // A permanent-account deletion fence is a resumable tombstone, not a
+        // temporary worker lease. Clearing it would re-enable upload
+        // capabilities for an account whose preparation transaction may
+        // already have disabled login and retired local intents. Any system
+        // administrator can resume it through deleteManagedUser.
+        if (fence.purpose !== "account_deletion") {
+          await reconcileStaleManagedUploadDeletionFence(fence.scope, "active");
+        }
+      }
+      active += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { scanned: fences.length, deleted, active, failed };
+}
+
 export async function deleteManagedUser(
   actorUserId: number,
   targetUserId: number,
+  options: {
+    onResultInTransaction?: (
+      result: {
+        disposition: "deactivated_for_history" | "permanently_deleted";
+      },
+      executor: any,
+    ) => Promise<void>;
+  } = {},
 ) {
   if (actorUserId === targetUserId) {
     throw new AuthServiceError(
@@ -1116,203 +1352,292 @@ export async function deleteManagedUser(
   }
 
   const db = await requireDb();
-  const result = await db.transaction(async (tx) => {
-    const rows = await tx
-      .select()
-      .from(users)
-      .where(eq(users.id, targetUserId))
-      .limit(1)
-      .for("update");
-    const user = rows[0];
-    if (!user) throw new AuthServiceError("NOT_FOUND", "User not found");
-    if (isProtectedBuiltinAdminUsername(user.username)) {
-      throw new AuthServiceError("CONFLICT", "内置 admin 系统管理员不能被删除");
-    }
-    if (user.role === "delivery_member") {
-      const [
-        assignmentRows,
-        ticketRows,
-        projectResourceRows,
-        projectConversationRows,
-      ] = await Promise.all([
-        tx
-          .select({ id: deliveryProjectAssignments.id })
-          .from(deliveryProjectAssignments)
-          .where(eq(deliveryProjectAssignments.engineerUserId, targetUserId))
-          .limit(1)
-          .for("update"),
-        tx
-          .select({ id: deliveryTickets.id })
-          .from(deliveryTickets)
-          .where(
-            and(
-              eq(deliveryTickets.assignedMemberId, targetUserId),
-              inArray(deliveryTickets.status, [
-                "submitted",
-                "needs_information",
-                "scheduled",
-                "in_progress",
-              ]),
-            ),
-          )
-          .limit(1)
-          .for("update"),
-        tx
-          .select({ id: upstreamResources.id })
-          .from(upstreamResources)
-          .where(
-            and(
-              eq(upstreamResources.userId, targetUserId),
-              isNotNull(upstreamResources.projectAssignmentId),
-            ),
-          )
-          .limit(1)
-          .for("update"),
-        tx
-          .select({ id: conversations.id })
-          .from(conversations)
-          .where(
-            and(
-              eq(conversations.userId, targetUserId),
-              isNotNull(conversations.projectAssignmentId),
-            ),
-          )
-          .limit(1)
-          .for("update"),
-      ]);
-      if (assignmentRows[0] || ticketRows[0]) {
-        throw new AuthServiceError(
-          "CONFLICT",
-          "该工程师仍负责客户项目或未结束工单，请先完成转交",
-        );
-      }
-      if (projectResourceRows[0] || projectConversationRows[0]) {
-        const now = new Date();
-        await tx
-          .update(users)
-          .set({ isActive: false, updatedAt: now })
-          .where(eq(users.id, targetUserId));
-        await consumeAllUserPasswordSetupTokensInExecutor(
-          tx,
-          targetUserId,
-          now,
-        );
-        await revokeAllUserSessionsInExecutor(tx, targetUserId, now);
-        return { disposition: "deactivated_for_history" as const };
-      }
-    }
-
-    if (user.role === "admin") {
-      const protectedAdminRows = await tx
-        .select({
-          id: users.id,
-          adminAccessLevel: users.adminAccessLevel,
-          isActive: users.isActive,
-        })
-        .from(users)
-        .where(eq(users.username, "admin"))
-        .limit(1)
-        .for("update");
-      const protectedAdmin = protectedAdminRows[0];
-      if (
-        !protectedAdmin ||
-        protectedAdmin.adminAccessLevel !== "system_admin" ||
-        !protectedAdmin.isActive
-      ) {
-        throw new AuthServiceError(
-          "CONFLICT",
-          "内置 admin 未保持启用的系统管理员状态，无法安全交接客户",
-        );
-      }
-      const ownedUsers = await tx
-        .select({
-          userId: userUsageOwners.userId,
-          revision: userUsageOwners.revision,
-        })
-        .from(userUsageOwners)
-        .where(eq(userUsageOwners.deliveryAdminId, targetUserId))
-        .for("update");
-      const assignedUsers = await tx
-        .select({ userId: userAdminAssignments.userId })
-        .from(userAdminAssignments)
-        .where(eq(userAdminAssignments.adminId, targetUserId))
-        .for("update");
-      const historicalResources = await tx
-        .select({ id: upstreamResources.id })
-        .from(upstreamResources)
-        .innerJoin(
-          apiCredentials,
-          eq(upstreamResources.apiCredentialId, apiCredentials.id),
-        )
-        .where(
-          and(
-            eq(apiCredentials.userId, targetUserId),
-            ne(upstreamResources.userId, targetUserId),
-          ),
-        )
-        .limit(1)
-        .for("update");
-      const retainHistoricalAccount = historicalResources.length > 0;
-
-      if (user.isActive) {
-        const administrators = await tx
-          .select({
-            id: users.id,
-            adminAccessLevel: users.adminAccessLevel,
-            isActive: users.isActive,
-          })
+  const scope = { kind: "user" as const, userId: targetUserId };
+  let fence: ManagedUploadDeletionFenceToken;
+  try {
+    fence = await acquireManagedUploadDeletionFence(scope, {
+      disposition: "cancel_active_intents",
+      purpose: "account_deletion",
+    });
+  } catch (error) {
+    if (error instanceof ManagedUploadDeletionFenceError) {
+      const existing = await db.transaction(async (tx) => {
+        const rows = await tx
+          .select({ id: users.id })
           .from(users)
-          .where(eq(users.role, "admin"))
-          .orderBy(asc(users.id))
+          .where(eq(users.id, targetUserId))
+          .limit(1)
           .for("update");
-        const deletingLastActiveSystemAdmin =
-          user.adminAccessLevel === "system_admin" &&
-          administrators.every(
-            (administrator) =>
-              administrator.id === user.id ||
-              !administrator.isActive ||
-              administrator.adminAccessLevel !== "system_admin",
-          );
-        if (deletingLastActiveSystemAdmin) {
+        await reconcileStaleManagedUploadDeletionFence(
+          scope,
+          rows[0] ? "active" : "deleted",
+        ).catch((reconcileError) => {
+          if (
+            reconcileError instanceof ManagedUploadDeletionFenceError &&
+            reconcileError.code === "DELETION_IN_PROGRESS" &&
+            rows[0]
+          ) {
+            return;
+          }
+          throw reconcileError;
+        });
+        return rows[0];
+      });
+      if (!existing) {
+        await replayManagedUploadRetirementForDeletedAccount(
+          targetUserId,
+        ).catch(() => undefined);
+        return {
+          disposition: "permanently_deleted" as const,
+          replayed: true as const,
+        };
+      }
+      if (error.code === "STALE_DELETION_FENCE") {
+        fence = await acquireManagedUploadDeletionFence(scope, {
+          disposition: "cancel_active_intents",
+          purpose: "account_deletion",
+        });
+      } else {
+        throw new AuthServiceError(
+          "CONFLICT",
+          "该账号的永久删除正在进行，请稍后重试",
+        );
+      }
+    } else {
+      throw error;
+    }
+  }
+  const resumedPermanentDeletion = fence.resumed === true;
+  const stopFenceHeartbeat = startManagedUploadDeletionFenceHeartbeat(fence);
+  let finalDeletionCommitted = false;
+  let permanentDeletionPrepared = false;
+  try {
+    const preparation = await db.transaction(async (tx) => {
+      const transactionResult = await (async () => {
+        const rows = await tx
+          .select()
+          .from(users)
+          .where(eq(users.id, targetUserId))
+          .limit(1)
+          .for("update");
+        const user = rows[0];
+        if (!user) {
+          return {
+            disposition: "permanently_deleted" as const,
+            replayed: true as const,
+          };
+        }
+        if (isProtectedBuiltinAdminUsername(user.username)) {
           throw new AuthServiceError(
-            "LAST_ADMIN",
-            "至少需要保留一个已启用的系统管理员",
+            "CONFLICT",
+            "内置 admin 系统管理员不能被删除",
           );
         }
-      }
+        if (user.role === "delivery_member") {
+          const [
+            assignmentRows,
+            ticketRows,
+            projectResourceRows,
+            projectConversationRows,
+          ] = await Promise.all([
+            tx
+              .select({ id: deliveryProjectAssignments.id })
+              .from(deliveryProjectAssignments)
+              .where(
+                eq(deliveryProjectAssignments.engineerUserId, targetUserId),
+              )
+              .limit(1)
+              .for("update"),
+            tx
+              .select({ id: deliveryTickets.id })
+              .from(deliveryTickets)
+              .where(
+                and(
+                  eq(deliveryTickets.assignedMemberId, targetUserId),
+                  inArray(deliveryTickets.status, [
+                    "submitted",
+                    "needs_information",
+                    "scheduled",
+                    "in_progress",
+                  ]),
+                ),
+              )
+              .limit(1)
+              .for("update"),
+            tx
+              .select({ id: upstreamResources.id })
+              .from(upstreamResources)
+              .where(
+                and(
+                  eq(upstreamResources.userId, targetUserId),
+                  isNotNull(upstreamResources.projectAssignmentId),
+                ),
+              )
+              .limit(1)
+              .for("update"),
+            tx
+              .select({ id: conversations.id })
+              .from(conversations)
+              .where(
+                and(
+                  eq(conversations.userId, targetUserId),
+                  isNotNull(conversations.projectAssignmentId),
+                ),
+              )
+              .limit(1)
+              .for("update"),
+          ]);
+          if (assignmentRows[0] || ticketRows[0]) {
+            throw new AuthServiceError(
+              "CONFLICT",
+              "该工程师仍负责客户项目或未结束需求，请先完成转交",
+            );
+          }
+          if (projectResourceRows[0] || projectConversationRows[0]) {
+            const now = new Date();
+            await tx
+              .update(users)
+              .set({ isActive: false, updatedAt: now })
+              .where(eq(users.id, targetUserId));
+            await consumeAllUserPasswordSetupTokensInExecutor(
+              tx,
+              targetUserId,
+              now,
+            );
+            await revokeAllUserSessionsInExecutor(tx, targetUserId, now);
+            return { disposition: "deactivated_for_history" as const };
+          }
+        }
 
-      for (const owner of ownedUsers) {
-        await tx
-          .update(userUsageOwners)
-          .set({
-            deliveryAdminId: protectedAdmin.id,
-            revision: owner.revision + 1,
-            updatedAt: new Date(),
-          })
-          .where(eq(userUsageOwners.userId, owner.userId));
-      }
-      const reassignedUserIds = [
-        ...new Set([
-          ...ownedUsers.map((owner) => owner.userId),
-          ...assignedUsers.map((assignment) => assignment.userId),
-        ]),
-      ];
-      if (reassignedUserIds.length > 0) {
-        await tx
-          .insert(userAdminAssignments)
-          .values(
-            reassignedUserIds.map((userId) => ({
-              userId,
-              adminId: protectedAdmin.id,
-              assignedByUserId: actorUserId,
-            })),
-          )
-          .onDuplicateKeyUpdate({
-            set: { assignedByUserId: actorUserId },
-          });
-      }
+        if (user.role === "admin") {
+          const protectedAdminRows = await tx
+            .select({
+              id: users.id,
+              adminAccessLevel: users.adminAccessLevel,
+              isActive: users.isActive,
+            })
+            .from(users)
+            .where(eq(users.username, "admin"))
+            .limit(1)
+            .for("update");
+          const protectedAdmin = protectedAdminRows[0];
+          if (
+            !protectedAdmin ||
+            protectedAdmin.adminAccessLevel !== "system_admin" ||
+            !protectedAdmin.isActive
+          ) {
+            throw new AuthServiceError(
+              "CONFLICT",
+              "内置 admin 未保持启用的系统管理员状态，无法安全交接客户",
+            );
+          }
+          const ownedUsers = await tx
+            .select({
+              userId: userUsageOwners.userId,
+              revision: userUsageOwners.revision,
+            })
+            .from(userUsageOwners)
+            .where(eq(userUsageOwners.deliveryAdminId, targetUserId))
+            .for("update");
+          const assignedUsers = await tx
+            .select({ userId: userAdminAssignments.userId })
+            .from(userAdminAssignments)
+            .where(eq(userAdminAssignments.adminId, targetUserId))
+            .for("update");
+          const historicalResources = await tx
+            .select({ id: upstreamResources.id })
+            .from(upstreamResources)
+            .innerJoin(
+              apiCredentials,
+              eq(upstreamResources.apiCredentialId, apiCredentials.id),
+            )
+            .where(
+              and(
+                eq(apiCredentials.userId, targetUserId),
+                ne(upstreamResources.userId, targetUserId),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          const retainHistoricalAccount = historicalResources.length > 0;
 
-      if (retainHistoricalAccount) {
+          if (user.isActive) {
+            const administrators = await tx
+              .select({
+                id: users.id,
+                adminAccessLevel: users.adminAccessLevel,
+                isActive: users.isActive,
+              })
+              .from(users)
+              .where(eq(users.role, "admin"))
+              .orderBy(asc(users.id))
+              .for("update");
+            const deletingLastActiveSystemAdmin =
+              user.adminAccessLevel === "system_admin" &&
+              administrators.every(
+                (administrator) =>
+                  administrator.id === user.id ||
+                  !administrator.isActive ||
+                  administrator.adminAccessLevel !== "system_admin",
+              );
+            if (deletingLastActiveSystemAdmin) {
+              throw new AuthServiceError(
+                "LAST_ADMIN",
+                "至少需要保留一个已启用的系统管理员",
+              );
+            }
+          }
+
+          for (const owner of ownedUsers) {
+            await tx
+              .update(userUsageOwners)
+              .set({
+                deliveryAdminId: protectedAdmin.id,
+                revision: owner.revision + 1,
+                updatedAt: new Date(),
+              })
+              .where(eq(userUsageOwners.userId, owner.userId));
+          }
+          const reassignedUserIds = [
+            ...new Set([
+              ...ownedUsers.map((owner) => owner.userId),
+              ...assignedUsers.map((assignment) => assignment.userId),
+            ]),
+          ];
+          if (reassignedUserIds.length > 0) {
+            await tx
+              .insert(userAdminAssignments)
+              .values(
+                reassignedUserIds.map((userId) => ({
+                  userId,
+                  adminId: protectedAdmin.id,
+                  assignedByUserId: actorUserId,
+                })),
+              )
+              .onDuplicateKeyUpdate({
+                set: { assignedByUserId: actorUserId },
+              });
+          }
+
+          if (retainHistoricalAccount) {
+            const now = new Date();
+            await tx
+              .update(users)
+              .set({ isActive: false, updatedAt: now })
+              .where(eq(users.id, targetUserId));
+            await consumeAllUserPasswordSetupTokensInExecutor(
+              tx,
+              targetUserId,
+              now,
+            );
+            await revokeAllUserSessionsInExecutor(tx, targetUserId, now);
+            return { disposition: "deactivated_for_history" as const };
+          }
+        }
+
+        // Website provisions retain their audit row with ON DELETE SET NULL. Mark
+        // both setup-token protocols consumed before deleting the account so the
+        // durable ledger does not preserve a misleading live capability.
         const now = new Date();
         await tx
           .update(users)
@@ -1324,20 +1649,101 @@ export async function deleteManagedUser(
           now,
         );
         await revokeAllUserSessionsInExecutor(tx, targetUserId, now);
-        return { disposition: "deactivated_for_history" as const };
+        return { disposition: "permanently_deleted" as const };
+      })();
+      if (transactionResult.disposition === "deactivated_for_history") {
+        await options.onResultInTransaction?.(transactionResult, tx);
+      }
+      return transactionResult;
+    });
+    if (preparation.disposition === "deactivated_for_history") {
+      await stopFenceHeartbeat().catch(() => undefined);
+      await rollbackManagedUploadDeletionFence(fence);
+      return preparation;
+    }
+    permanentDeletionPrepared = true;
+    await advanceManagedUploadAccountDeletionFence(fence, "prepared");
+
+    // No transaction is held across filesystem retirement or Provider I/O.
+    // The preparation transaction has already disabled the account and
+    // revoked sessions, while the user fence excludes every upload worker.
+    await retireManagedUploadIntentsForAccountDeletion({
+      userId: targetUserId,
+      token: fence,
+      discardProviderFile: discardManagedUploadProviderFileForRetirement,
+    });
+    await advanceManagedUploadAccountDeletionFence(fence, "retired");
+
+    const result = await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.id, targetUserId))
+        .limit(1)
+        .for("update");
+      const userExisted = Boolean(rows[0]);
+      if (userExisted) {
+        await permanentlyDeleteManagedUserRows(tx, targetUserId);
+      }
+      const deletionResult = {
+        disposition: "permanently_deleted" as const,
+        ...("replayed" in preparation && preparation.replayed
+          ? { replayed: true as const }
+          : {}),
+      };
+      // A concurrent/resumed caller that finds the row already gone must not
+      // duplicate the original account.deleted audit event.
+      if (userExisted) {
+        await options.onResultInTransaction?.(deletionResult, tx);
+      }
+      return deletionResult;
+    });
+    finalDeletionCommitted = true;
+    await stopFenceHeartbeat().catch(() => undefined);
+    // Once the final transaction removed the account, filesystem/provider
+    // tail failure cannot change the public deletion result. Startup replay
+    // consumes this durable tombstone without reissuing Provider calls.
+    await completeManagedUploadDeletionFence(fence).catch(() => undefined);
+    return result;
+  } catch (error) {
+    await stopFenceHeartbeat().catch(() => undefined);
+    if (
+      !finalDeletionCommitted &&
+      (permanentDeletionPrepared || resumedPermanentDeletion)
+    ) {
+      const userStillExists = await db
+        .transaction(async (tx) => {
+          const rows = await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, targetUserId))
+            .limit(1)
+            .for("update");
+          return Boolean(rows[0]);
+        })
+        .catch(() => true);
+      if (!userStillExists) {
+        await reconcileStaleManagedUploadDeletionFence(scope, "deleted").catch(
+          () => undefined,
+        );
+        await replayManagedUploadRetirementForDeletedAccount(
+          targetUserId,
+        ).catch(() => undefined);
+        return {
+          disposition: "permanently_deleted" as const,
+          replayed: true as const,
+        };
       }
     }
-
-    // Website provisions retain their audit row with ON DELETE SET NULL. Mark
-    // both setup-token protocols consumed before deleting the account so the
-    // durable ledger does not preserve a misleading live capability.
-    const now = new Date();
-    await consumeAllUserPasswordSetupTokensInExecutor(tx, targetUserId, now);
-    await revokeAllUserSessionsInExecutor(tx, targetUserId, now);
-    await permanentlyDeleteManagedUserRows(tx, targetUserId);
-    return { disposition: "permanently_deleted" as const };
-  });
-  return result;
+    if (
+      !finalDeletionCommitted &&
+      !permanentDeletionPrepared &&
+      !resumedPermanentDeletion
+    ) {
+      await rollbackManagedUploadDeletionFence(fence).catch(() => undefined);
+    }
+    throw error;
+  }
 }
 
 function decodeMasterKey(value: string): Buffer {
@@ -1490,37 +1896,42 @@ export function decryptApiKey(
 }
 
 export async function validateUpstreamApiKey(apiKey: string) {
-  let response: globalThis.Response;
   try {
-    response = await fetch(`${getUpstreamBaseUrl()}/v1/tasks?limit=1`, {
-      method: "GET",
-      redirect: "error",
-      headers: {
-        API_KEY: apiKey,
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
+    await new ManusV2Client({
+      baseUrl: getUpstreamBaseUrl(),
+      apiKey,
+    }).probeCredential();
+  } catch (error) {
+    if (
+      error instanceof ManusV2ApiError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      throw new AuthServiceError(
+        "INVALID_CREDENTIAL",
+        "API credential is invalid",
+      );
+    }
     throw new AuthServiceError(
       "UPSTREAM_UNAVAILABLE",
       "Unable to validate the API credential",
     );
   }
+}
 
-  if (response.status === 401 || response.status === 403) {
-    throw new AuthServiceError(
-      "INVALID_CREDENTIAL",
-      "API credential is invalid",
-    );
-  }
-  if (!response.ok) {
-    throw new AuthServiceError(
-      "UPSTREAM_UNAVAILABLE",
-      "Upstream service could not validate the API credential",
-    );
-  }
+function credentialAgentProfile(credential?: unknown): ManagedAgentProfile {
+  return normalizeManagedAgentProfile(
+    credential && typeof credential === "object"
+      ? (credential as { agentProfile?: unknown }).agentProfile
+      : undefined,
+  );
+}
+
+function credentialProfileProjection(credential?: unknown) {
+  const agentProfile = credentialAgentProfile(credential);
+  return {
+    agentProfile,
+    upstreamModel: managedAgentProfileModel(agentProfile),
+  } as const;
 }
 
 function toCredentialStatus(
@@ -1538,6 +1949,7 @@ function toCredentialStatus(
     fingerprint: credential?.fingerprint ?? null,
     status,
     verifiedAt: credential?.verifiedAt?.getTime() ?? null,
+    ...credentialProfileProjection(credential),
   };
 }
 
@@ -1553,25 +1965,10 @@ export async function getApiCredentialStatus(userId: number) {
 }
 
 export async function getEffectiveApiCredentialStatus(accountId: number) {
-  const db = await requireDb();
-  const directStatus = await getApiCredentialStatus(accountId);
-  if (directStatus.configured) {
-    return {
-      ...directStatus,
-      ownerUserId: accountId,
-      inherited: false,
-    };
-  }
-  const ownerRows = await db
-    .select({ deliveryAdminId: userUsageOwners.deliveryAdminId })
-    .from(userUsageOwners)
-    .where(eq(userUsageOwners.userId, accountId))
-    .limit(1);
-  const ownerUserId = ownerRows[0]?.deliveryAdminId ?? accountId;
   return {
-    ...(await getApiCredentialStatus(ownerUserId)),
-    ownerUserId,
-    inherited: ownerUserId !== accountId,
+    ...(await getApiCredentialStatus(accountId)),
+    ownerUserId: accountId,
+    inherited: false,
   };
 }
 
@@ -1581,11 +1978,31 @@ export async function replaceApiCredentialInTransaction(input: {
   apiKey: string;
   now?: Date;
   credentialId?: string;
+  agentProfile?: ManagedAgentProfile | null;
 }): Promise<CredentialStatus> {
+  // Permanent account deletion fences the credential owner before enumerating
+  // all key generations. Check inside every transactional rotation path so a
+  // new generation cannot appear outside that frozen set. Ordinary rotation
+  // remains unaffected when no deletion fence exists.
+  await assertManagedUploadScopesAvailable([
+    { kind: "user", userId: input.userId },
+  ]).catch((error) => {
+    if (error instanceof ManagedUploadDeletionFenceError) {
+      throw new AuthServiceError(
+        "CONFLICT",
+        "账号正在永久删除，不能轮换 API Key",
+      );
+    }
+    throw error;
+  });
   const fingerprint = getApiKeyFingerprint(input.apiKey);
   const credentialId = input.credentialId ?? randomUUID();
   const encrypted = encryptApiKey(input.userId, credentialId, input.apiKey);
   const now = input.now ?? new Date();
+  const agentProfile =
+    input.agentProfile === null
+      ? null
+      : (input.agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE);
   const tx = input.executor;
 
   const ownerRows = await tx
@@ -1621,6 +2038,7 @@ export async function replaceApiCredentialInTransaction(input: {
     version: nextVersion,
     ...encrypted,
     fingerprint,
+    agentProfile,
     status: "active" as const,
     validationStatus: "verified" as const,
     verifiedAt: now,
@@ -1629,13 +2047,14 @@ export async function replaceApiCredentialInTransaction(input: {
     retiredAt: null,
     deletedAt: null,
   };
-  await tx.insert(apiCredentials).values(inserted);
+  await tx.insert(apiCredentials).values(inserted as any);
   return toCredentialStatus(inserted);
 }
 
 export async function replaceApiCredential(
   userId: number,
   apiKey: string,
+  agentProfile: ManagedAgentProfile = DEFAULT_MANAGED_AGENT_PROFILE,
   validator: (apiKey: string) => Promise<void> = validateUpstreamApiKey,
 ): Promise<CredentialStatus> {
   const db = await requireDb();
@@ -1645,23 +2064,143 @@ export async function replaceApiCredential(
       executor: tx,
       userId,
       apiKey,
+      agentProfile,
     }),
   );
 }
 
 export async function deleteActiveApiCredential(userId: number) {
+  const fence = await acquireActiveApiCredentialDeletionFence(userId);
+  if (!fence) return;
   const db = await requireDb();
-  await db.transaction((tx) =>
-    deleteActiveApiCredentialInTransaction({
-      executor: tx,
-      userId,
-    }),
-  );
+  const stopFenceHeartbeat = startManagedUploadDeletionFenceHeartbeat(fence);
+  let transactionCommitted = false;
+  try {
+    await db.transaction((tx) =>
+      deleteActiveApiCredentialInTransaction({
+        executor: tx,
+        userId,
+        fenceToken: fence,
+      }),
+    );
+    transactionCommitted = true;
+    await stopFenceHeartbeat();
+    await completeManagedUploadDeletionFence(fence);
+  } catch (error) {
+    await stopFenceHeartbeat().catch(() => undefined);
+    if (!transactionCommitted) {
+      await rollbackManagedUploadDeletionFence(fence).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+export async function acquireActiveApiCredentialDeletionFence(userId: number) {
+  const db = await requireDb();
+  const pendingScopes =
+    await listManagedUploadCredentialDeletionFenceScopes(userId);
+  for (const pendingScope of pendingScopes) {
+    await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ status: apiCredentials.status })
+        .from(apiCredentials)
+        .where(
+          and(
+            eq(apiCredentials.userId, userId),
+            eq(apiCredentials.id, pendingScope.credentialId),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      await reconcileStaleManagedUploadDeletionFence(
+        pendingScope,
+        !rows[0] || rows[0].status === "deleted" ? "deleted" : "active",
+      ).catch((error) => {
+        if (
+          error instanceof ManagedUploadDeletionFenceError &&
+          error.code === "DELETION_IN_PROGRESS"
+        ) {
+          throw new AuthServiceError(
+            "CONFLICT",
+            "API Key 删除正在进行，请稍后重试",
+          );
+        }
+        throw error;
+      });
+    });
+  }
+  const rows = await db
+    .select({ id: apiCredentials.id, status: apiCredentials.status })
+    .from(apiCredentials)
+    .where(eq(apiCredentials.userId, userId))
+    .orderBy(desc(apiCredentials.version))
+    .limit(1);
+  const latest = rows[0];
+  if (!latest) return null;
+  const scope = {
+    kind: "credential" as const,
+    userId,
+    credentialId: latest.id,
+  };
+  if (latest.status !== "active") {
+    await reconcileStaleManagedUploadDeletionFence(scope, "deleted").catch(
+      (error) => {
+        if (
+          error instanceof ManagedUploadDeletionFenceError &&
+          error.code === "DELETION_IN_PROGRESS"
+        ) {
+          throw new AuthServiceError(
+            "CONFLICT",
+            "API Key 删除正在收口，请稍后重试",
+          );
+        }
+        throw error;
+      },
+    );
+    return null;
+  }
+  try {
+    return await acquireManagedUploadDeletionFence(scope);
+  } catch (error) {
+    if (
+      error instanceof ManagedUploadDeletionFenceError &&
+      error.code === "STALE_DELETION_FENCE"
+    ) {
+      await reconcileStaleManagedUploadDeletionFence(scope, "active");
+      return acquireManagedUploadDeletionFence(scope);
+    }
+    if (error instanceof ManagedUploadDeletionFenceError) {
+      throw new AuthServiceError(
+        "CONFLICT",
+        "当前 API Key 仍有本地上传记录正在接收、恢复或清理；请先完成或取消上传，普通 Key 轮换不受影响",
+      );
+    }
+    throw error;
+  }
+}
+
+export async function completeActiveApiCredentialDeletionFence(
+  token: ManagedUploadDeletionFenceToken,
+) {
+  await completeManagedUploadDeletionFence(token);
+}
+
+export async function rollbackActiveApiCredentialDeletionFence(
+  token: ManagedUploadDeletionFenceToken,
+) {
+  await rollbackManagedUploadDeletionFence(token);
+}
+
+export function startActiveApiCredentialDeletionFenceHeartbeat(
+  token: ManagedUploadDeletionFenceToken,
+) {
+  return startManagedUploadDeletionFenceHeartbeat(token);
 }
 
 export async function deleteActiveApiCredentialInTransaction(input: {
   executor: any;
   userId: number;
+  fenceToken: ManagedUploadDeletionFenceToken;
   now?: Date;
 }) {
   const now = input.now ?? new Date();
@@ -1676,6 +2215,10 @@ export async function deleteActiveApiCredentialInTransaction(input: {
   if (!latest || latest.status !== "active") {
     return { version: latest?.version ?? 0, deleted: false as const };
   }
+  assertCredentialDeletionFenceToken(input.fenceToken, {
+    userId: input.userId,
+    credentialId: latest.id,
+  });
   // Reservation creation locks the exact credential before the build. Keep the
   // same credential -> build lock order here so deletion cannot race a new
   // active turn into existence after this check.
@@ -1725,6 +2268,48 @@ export async function deleteActiveApiCredentialInTransaction(input: {
     throw new AuthServiceError(
       "CONFLICT",
       "当前 API Key 仍绑定已有任务或文件，无法安全撤销；请改用替换 Key，系统会保留旧版本供在途任务恢复",
+    );
+  }
+
+  // v2-only chat and materialized knowledge-base work is represented by the
+  // durable operation/lease tables rather than upstream_resources. Deleting
+  // the frozen credential while either side effect is non-terminal would
+  // strand reconciliation or an upload whose outcome is still unknown.
+  const activeAgentOperations = await input.executor
+    .select({ id: agentOperations.id })
+    .from(agentOperations)
+    .where(
+      and(
+        eq(agentOperations.apiCredentialId, latest.id),
+        inArray(agentOperations.status, [
+          "queued",
+          "running",
+          "result_pending",
+          "attention_required",
+        ]),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  const activeProviderFileLeases = await input.executor
+    .select({ id: providerFileLeases.id })
+    .from(providerFileLeases)
+    .where(
+      and(
+        eq(providerFileLeases.apiCredentialId, latest.id),
+        inArray(providerFileLeases.uploadState, [
+          "reserved",
+          "uploading",
+          "outcome_unknown",
+        ]),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  if (activeAgentOperations[0] || activeProviderFileLeases[0]) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "当前 API Key 仍被 v2 任务或文件上传使用，无法安全撤销；请等待任务完成或改用替换 Key。",
     );
   }
 
@@ -1978,6 +2563,10 @@ export async function deleteActiveApiCredentialInTransaction(input: {
     encryptionIv: randomBytes(12).toString("base64"),
     encryptionAuthTag: randomBytes(16).toString("base64"),
     fingerprint: randomBytes(16).toString("hex"),
+    agentProfile:
+      typeof (latest as { agentProfile?: unknown }).agentProfile === "string"
+        ? (latest as { agentProfile: string }).agentProfile
+        : null,
     status: "deleted",
     validationStatus: "unverified",
     verifiedAt: null,
@@ -2018,6 +2607,7 @@ export async function getDecryptedCredentialForUser(
     fingerprint: credential.fingerprint,
     status: credential.status,
     verifiedAt: credential.verifiedAt,
+    ...credentialProfileProjection(credential),
   };
 }
 
@@ -2055,6 +2645,59 @@ export async function getDecryptedCredentialForAccountById(
     fingerprint: credential.fingerprint,
     status: credential.status,
     verifiedAt: credential.verifiedAt,
+    ...credentialProfileProjection(credential),
+  };
+}
+
+/**
+ * Resolve the immutable credential identity captured by one sealed managed
+ * upload intent. Unlike the ordinary account resolver this intentionally does
+ * not consult the account's current usage-owner assignment: that relationship
+ * may change after Dashboard has durably accepted the browser body. The
+ * intent's authenticated actor/project/ticket checks and deletion fences are
+ * the authorization boundary; this lookup only proves that the exact owner,
+ * credential and version still exist and remain decryptable.
+ */
+export async function getDecryptedCredentialForManagedUploadIntent(
+  input: {
+    credentialId: string;
+    credentialOwnerUserId: number;
+    credentialVersion: number;
+  },
+  executor?: any,
+): Promise<DecryptedCredential | null> {
+  const db = executor ?? (await requireDb());
+  const rows = await db
+    .select()
+    .from(apiCredentials)
+    .where(
+      and(
+        eq(apiCredentials.id, input.credentialId),
+        eq(apiCredentials.userId, input.credentialOwnerUserId),
+        eq(apiCredentials.version, input.credentialVersion),
+        inArray(apiCredentials.status, ["active", "retired"]),
+      ),
+    )
+    .limit(1);
+  const credential = rows[0];
+  if (
+    !credential ||
+    credential.id !== input.credentialId ||
+    credential.userId !== input.credentialOwnerUserId ||
+    credential.version !== input.credentialVersion ||
+    (credential.status !== "active" && credential.status !== "retired")
+  ) {
+    return null;
+  }
+  return {
+    id: credential.id,
+    userId: credential.userId,
+    version: credential.version,
+    apiKey: decryptApiKey(credential),
+    fingerprint: credential.fingerprint,
+    status: credential.status,
+    verifiedAt: credential.verifiedAt,
+    ...credentialProfileProjection(credential),
   };
 }
 
@@ -2158,35 +2801,235 @@ export async function getDecryptedCredentialForKnowledgeBaseReservation(
       fingerprint: credential.fingerprint,
       status: credential.status,
       verifiedAt: credential.verifiedAt,
+      ...credentialProfileProjection(credential),
     };
   });
 }
 
 /**
- * Returns the active runtime credential for an account. A customer-owned
- * credential always wins. Legacy customers without one may temporarily
- * inherit the credential of their assigned usage owner.
+ * Resolve the exact credential frozen by a knowledge-base upload reservation.
+ * Unlike the dispatch resolver, this permits the active turn to still be in
+ * `awaitingClientAttachments`; no provider operation has started yet. It is
+ * intentionally scoped by owner + public conversation + turn and accepts a
+ * retired credential so key rotation cannot strand a reserved upload batch.
  */
+export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
+  input: {
+    userId: number;
+    conversationId: string;
+    turnId: string;
+    projectAssignmentId?: string | null;
+  },
+  executor?: any,
+): Promise<KnowledgeBaseUploadReservationCredential | null> {
+  const db = executor ?? (await requireDb());
+  const storedConversationId = `u${input.userId}:${input.conversationId}`;
+  return db.transaction(async (tx: any) => {
+    const turn = (
+      await tx
+        .select({
+          id: conversationTurns.id,
+          clientRequestId: conversationTurns.clientRequestId,
+          userId: conversationTurns.userId,
+          conversationId: conversationTurns.conversationId,
+          buildId: conversationTurns.buildId,
+          buildGeneration: conversationTurns.buildGeneration,
+          apiCredentialId: conversationTurns.apiCredentialId,
+          status: conversationTurns.status,
+          metadata: conversationTurns.metadata,
+        })
+        .from(conversationTurns)
+        .where(
+          and(
+            eq(conversationTurns.id, input.turnId),
+            eq(conversationTurns.userId, input.userId),
+            eq(conversationTurns.conversationId, storedConversationId),
+          ),
+        )
+        .limit(1)
+        .for("update")
+    )[0];
+    const metadata =
+      turn?.metadata &&
+      typeof turn.metadata === "object" &&
+      !Array.isArray(turn.metadata)
+        ? turn.metadata
+        : {};
+    const recovery =
+      metadata.recovery &&
+      typeof metadata.recovery === "object" &&
+      !Array.isArray(metadata.recovery)
+        ? (metadata.recovery as Record<string, unknown>)
+        : {};
+    const rawAttachmentManifest = Array.isArray(recovery.attachmentManifest)
+      ? recovery.attachmentManifest
+      : [];
+    const attachmentManifest = rawAttachmentManifest
+      .map((value, index) => {
+        const item =
+          value && typeof value === "object" && !Array.isArray(value)
+            ? (value as Record<string, unknown>)
+            : {};
+        const filename = String(item.filename || "").trim();
+        const sizeBytes = Number(item.sizeBytes);
+        const mimeType = String(item.mimeType || "").trim();
+        const lastModified = Number(item.lastModified);
+        const sha256 = String(item.sha256 || "")
+          .trim()
+          .toLowerCase();
+        const itemId = String(item.itemId || "").trim();
+        const ordinal = Number(item.ordinal);
+        const total = Number(item.total);
+        const hasStarterCoordinate = Boolean(itemId);
+        if (
+          !filename ||
+          !Number.isSafeInteger(sizeBytes) ||
+          sizeBytes < 0 ||
+          !mimeType ||
+          !Number.isSafeInteger(lastModified) ||
+          lastModified < 0 ||
+          !/^[a-f0-9]{64}$/u.test(sha256) ||
+          (hasStarterCoordinate &&
+            (!Number.isSafeInteger(ordinal) ||
+              ordinal !== index + 1 ||
+              !Number.isSafeInteger(total) ||
+              total !== rawAttachmentManifest.length))
+        ) {
+          return null;
+        }
+        return {
+          filename,
+          sizeBytes,
+          mimeType,
+          lastModified,
+          sha256,
+          ...(hasStarterCoordinate ? { itemId, ordinal, total } : {}),
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is KnowledgeBaseUploadReservationCredential["reservation"]["attachmentManifest"][number] =>
+          Boolean(item),
+      );
+    if (
+      !turn?.buildId ||
+      !turn.buildGeneration ||
+      !turn.clientRequestId ||
+      !turn.apiCredentialId ||
+      (turn.status !== "queued" && turn.status !== "running") ||
+      metadata.awaitingClientAttachments !== true
+    ) {
+      return null;
+    }
+    const declaredUserAttachmentCount = Number(metadata.userAttachmentCount);
+    const sourceResetRevision = Number(metadata.sourceResetRevision);
+    if (
+      !Number.isSafeInteger(declaredUserAttachmentCount) ||
+      declaredUserAttachmentCount < 0 ||
+      !Number.isSafeInteger(sourceResetRevision) ||
+      sourceResetRevision < 0 ||
+      attachmentManifest.length !== declaredUserAttachmentCount
+    ) {
+      return null;
+    }
+    const build = (
+      await tx
+        .select({
+          id: knowledgeBaseBuilds.id,
+          userId: knowledgeBaseBuilds.userId,
+          conversationId: knowledgeBaseBuilds.conversationId,
+          generation: knowledgeBaseBuilds.generation,
+          activeTurnId: knowledgeBaseBuilds.activeTurnId,
+          status: knowledgeBaseBuilds.status,
+        })
+        .from(knowledgeBaseBuilds)
+        .where(
+          and(
+            eq(knowledgeBaseBuilds.id, turn.buildId),
+            eq(knowledgeBaseBuilds.userId, input.userId),
+            eq(knowledgeBaseBuilds.conversationId, input.conversationId),
+            eq(knowledgeBaseBuilds.generation, turn.buildGeneration),
+          ),
+        )
+        .limit(1)
+        .for("update")
+    )[0];
+    if (
+      !build ||
+      build.activeTurnId !== turn.id ||
+      !["researching", "confirming", "protocol_error"].includes(
+        String(build.status),
+      )
+    ) {
+      return null;
+    }
+    const conversation = (
+      await tx
+        .select({
+          id: conversations.id,
+          userId: conversations.userId,
+          projectAssignmentId: conversations.projectAssignmentId,
+          deletedAt: conversations.deletedAt,
+        })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, storedConversationId),
+            eq(conversations.userId, input.userId),
+          ),
+        )
+        .limit(1)
+        .for("update")
+    )[0];
+    if (
+      !conversation ||
+      conversation.deletedAt ||
+      (conversation.projectAssignmentId ?? null) !==
+        (input.projectAssignmentId ?? null)
+    ) {
+      return null;
+    }
+    const credential = (
+      await tx
+        .select()
+        .from(apiCredentials)
+        .where(eq(apiCredentials.id, turn.apiCredentialId))
+        .limit(1)
+        .for("update")
+    )[0] as ApiCredential | undefined;
+    if (
+      !credential ||
+      (credential.status !== "active" && credential.status !== "retired")
+    ) {
+      return null;
+    }
+    return {
+      id: credential.id,
+      userId: credential.userId,
+      version: credential.version,
+      apiKey: decryptApiKey(credential),
+      fingerprint: credential.fingerprint,
+      status: credential.status,
+      verifiedAt: credential.verifiedAt,
+      ...credentialProfileProjection(credential),
+      reservation: {
+        clientRequestId: turn.clientRequestId,
+        sourceResetRevision,
+        attachmentManifest,
+        stagedAttachmentCount: Array.isArray(metadata.clientStagedAttachments)
+          ? metadata.clientStagedAttachments.length
+          : 0,
+      },
+    };
+  });
+}
+
+/** Returns only the account's own active runtime credential. */
 export async function getEffectiveDecryptedCredentialForAccount(
   accountId: number,
 ): Promise<DecryptedCredential | null> {
-  const db = await requireDb();
-  const accountRows = await db
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.id, accountId))
-    .limit(1);
-  const account = accountRows[0];
-  if (!account) return null;
-  const directCredential = await getDecryptedCredentialForUser(accountId);
-  if (directCredential || account.role === "admin") return directCredential;
-  const ownerRows = await db
-    .select({ deliveryAdminId: userUsageOwners.deliveryAdminId })
-    .from(userUsageOwners)
-    .where(eq(userUsageOwners.userId, accountId))
-    .limit(1);
-  const ownerId = ownerRows[0]?.deliveryAdminId;
-  return ownerId ? getDecryptedCredentialForUser(ownerId) : null;
+  return getDecryptedCredentialForUser(accountId);
 }
 
 export async function credentialMayServeAccount(
@@ -2204,13 +3047,7 @@ export async function credentialMayServeAccount(
     .limit(1);
   const credential = credentialRows[0];
   if (!credential || credential.status === "deleted") return false;
-  if (credential.ownerUserId === accountId) return true;
-  const ownerRows = await executor
-    .select({ deliveryAdminId: userUsageOwners.deliveryAdminId })
-    .from(userUsageOwners)
-    .where(eq(userUsageOwners.userId, accountId))
-    .limit(1);
-  return ownerRows[0]?.deliveryAdminId === credential.ownerUserId;
+  return credential.ownerUserId === accountId;
 }
 
 export async function getCredentialForUpstreamResource(
@@ -2260,8 +3097,155 @@ export async function getCredentialForUpstreamResource(
     fingerprint: row.credential.fingerprint,
     status: row.credential.status,
     verifiedAt: row.credential.verifiedAt,
+    ...credentialProfileProjection(row.credential),
     resource: row.resource,
   };
+}
+
+export type UnboundUpstreamFileDiscardContext = {
+  fileId: string;
+  userId: number;
+  projectAssignmentId: string | null;
+  apiCredentialId: string;
+  apiKey: string;
+};
+
+/**
+ * Locks an owned file record, proves that no durable conversation surface has
+ * bound it, performs the caller's idempotent provider/filesystem cleanup, and
+ * only then removes the ownership row in the same transaction. Holding the
+ * resource row lock is intentional: conversation persistence takes the same
+ * lock before setting conversationId, so cancellation cannot delete a file
+ * while a turn is binding it.
+ */
+export async function discardUnboundUpstreamFileInTransaction(input: {
+  executor: any;
+  userId: number;
+  fileId: string;
+  projectAssignmentId?: string | null;
+  discard: (context: UnboundUpstreamFileDiscardContext) => Promise<void>;
+}) {
+  const projectAssignmentId = input.projectAssignmentId ?? null;
+  const rows = await input.executor
+    .select({ resource: upstreamResources, credential: apiCredentials })
+    .from(upstreamResources)
+    .innerJoin(
+      apiCredentials,
+      eq(upstreamResources.apiCredentialId, apiCredentials.id),
+    )
+    .where(
+      and(
+        eq(upstreamResources.kind, "file"),
+        eq(upstreamResources.upstreamId, input.fileId),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  const row = rows[0];
+  const owned = projectAssignmentId
+    ? row?.resource.projectAssignmentId === projectAssignmentId
+    : row?.resource.userId === input.userId &&
+      row?.resource.projectAssignmentId == null;
+  if (!row || !owned || row.credential.status === "deleted") {
+    return { discarded: false as const };
+  }
+  if (row.resource.conversationId) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "UPLOAD_ALREADY_BOUND: file is already bound to a conversation",
+    );
+  }
+
+  const liveAttachments = await input.executor
+    .select({ id: attachments.id })
+    .from(attachments)
+    .where(
+      and(
+        eq(attachments.upstreamFileId, input.fileId),
+        isNull(attachments.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (liveAttachments[0]) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "UPLOAD_ALREADY_BOUND: file has a live attachment reference",
+    );
+  }
+
+  const turnReferences = await input.executor
+    .select({ id: conversationTurns.id })
+    .from(conversationTurns)
+    .where(
+      sql`JSON_CONTAINS(${conversationTurns.attachmentFileIds}, JSON_QUOTE(${input.fileId}), '$')`,
+    )
+    .limit(1);
+  if (turnReferences[0]) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "UPLOAD_ALREADY_BOUND: file has a knowledge turn reference",
+    );
+  }
+
+  const deliveryAttachmentReferences = await input.executor
+    .select({ id: deliveryTicketAttachments.id })
+    .from(deliveryTicketAttachments)
+    .where(eq(deliveryTicketAttachments.upstreamFileId, input.fileId))
+    .limit(1);
+  const redirectPreviewReferences = deliveryAttachmentReferences[0]
+    ? []
+    : await input.executor
+        .select({ id: deliveryRedirectPreviews.id })
+        .from(deliveryRedirectPreviews)
+        .where(eq(deliveryRedirectPreviews.upstreamFileId, input.fileId))
+        .limit(1);
+  const knowledgeBuildReferences =
+    deliveryAttachmentReferences[0] || redirectPreviewReferences[0]
+      ? []
+      : await input.executor
+          .select({ id: knowledgeBaseBuilds.id })
+          .from(knowledgeBaseBuilds)
+          .where(eq(knowledgeBaseBuilds.packageFileId, input.fileId))
+          .limit(1);
+  if (
+    deliveryAttachmentReferences[0] ||
+    redirectPreviewReferences[0] ||
+    knowledgeBuildReferences[0]
+  ) {
+    throw new AuthServiceError(
+      "CONFLICT",
+      "UPLOAD_ALREADY_BOUND: file has a durable workspace reference",
+    );
+  }
+
+  await input.discard({
+    fileId: input.fileId,
+    userId: row.resource.userId,
+    projectAssignmentId: row.resource.projectAssignmentId,
+    apiCredentialId: row.resource.apiCredentialId,
+    apiKey: decryptApiKey(row.credential),
+  });
+  await input.executor
+    .delete(upstreamResources)
+    .where(
+      and(
+        eq(upstreamResources.id, row.resource.id),
+        isNull(upstreamResources.conversationId),
+      ),
+    );
+  return { discarded: true as const };
+}
+
+export async function discardUnboundUpstreamFile(input: {
+  userId: number;
+  fileId: string;
+  projectAssignmentId?: string | null;
+  discard: (context: UnboundUpstreamFileDiscardContext) => Promise<void>;
+}) {
+  const db = await requireDb();
+  return db.transaction((executor) =>
+    discardUnboundUpstreamFileInTransaction({ ...input, executor }),
+  );
 }
 
 export async function getOwnedUpstreamResourceIds(
@@ -2323,6 +3307,7 @@ export async function isUpstreamApiKeyShared(
       .from(presalesApiCredentials)
       .where(
         and(
+          eq(presalesApiCredentials.slot, "website"),
           eq(presalesApiCredentials.fingerprint, fingerprint),
           ne(presalesApiCredentials.status, "deleted"),
         ),

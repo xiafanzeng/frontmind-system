@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://frontmind.net/schemas/siteops/frontmind-run-envelope-v4.json",
+  "title": "FrontMind SiteOps Run Envelope V4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "buildId",
+    "source",
+    "workflow",
+    "visual",
+    "sourceDossier"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 4 },
+    "buildId": { "type": "string", "format": "uuid" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["knowledgeSnapshotId", "archiveSha256"],
+      "properties": {
+        "knowledgeSnapshotId": { "type": "string", "format": "uuid" },
+        "archiveSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "manifestSha256",
+        "starterSha256",
+        "materializerSha256"
+      ],
+      "properties": {
+        "version": { "const": "1.5.0" },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "starterSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "materializerSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalogRole",
+        "providerItemKey",
+        "visualEvidenceSha256",
+        "previewSha256"
+      ],
+      "properties": {
+        "catalogRole": { "const": "hero" },
+        "providerItemKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "visualEvidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "previewSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "supportEvidenceSha256s": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    },
+    "sourceDossier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifestFilename",
+        "manifestSha256",
+        "totalDecodedBytes",
+        "parts"
+      ],
+      "properties": {
+        "manifestFilename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 191
+        },
+        "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "totalDecodedBytes": { "type": "integer", "minimum": 1 },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["filename", "decodedBytes", "sha256"],
+            "properties": {
+              "filename": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 191
+              },
+              "decodedBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16777216
+              },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

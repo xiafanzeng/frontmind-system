@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE,
   knowledgeBaseNoticeSeverities,
   knowledgeBaseOperationTypes,
   knowledgeBaseTurnStatuses,
@@ -8,6 +9,15 @@ import {
 } from "./knowledge-base-progress";
 
 describe("knowledge-base observation contract", () => {
+  it("keeps customer-visible integrity errors FrontMind branded", () => {
+    expect(KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE).toContain(
+      "FrontMind AI",
+    );
+    expect(KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE).not.toMatch(
+      /manus/iu,
+    );
+  });
+
   it("publishes the durable operation, turn and notice vocabularies", () => {
     expect(knowledgeBaseOperationTypes).toEqual([
       "start",

@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "becab17a-b62e-4801-95e4-cb4a5da84553",
-  "prevId": "2dc9ed45-32e1-410d-9a39-ee3d9509d2e5",
+  "id": "d23f5406-8899-41f6-84cb-f54c6be73762",
+  "prevId": "becab17a-b62e-4801-95e4-cb4a5da84553",
   "tables": {
     "api_credentials": {
       "name": "api_credentials",

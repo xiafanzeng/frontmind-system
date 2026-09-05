@@ -1,5 +1,9 @@
 import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  websiteProjectDeletionTombstones,
+  websiteUserProvisions,
+} from "../drizzle/schema";
 
 const databaseState = vi.hoisted(() => ({ value: undefined as any }));
 
@@ -40,14 +44,35 @@ function selectRowsDatabase(rows: any[]) {
 }
 
 function decisionDatabase(row: any) {
-  const query: any = {
-    from: () => query,
-    where: () => query,
-    limit: () => query,
-    for: async () => [row],
+  const select = () => ({
+    from: (table: unknown) => {
+      const rows =
+        table === websiteProjectDeletionTombstones
+          ? [{ status: "active" }]
+          : table === websiteUserProvisions
+            ? [row]
+            : [];
+      const query: any = {
+        where: () => query,
+        limit: () => query,
+        for: async () => rows,
+        then: (resolve: (value: unknown[]) => unknown) =>
+          Promise.resolve(rows).then(resolve),
+      };
+      return query;
+    },
+  });
+  const tx = {
+    select,
+    insert: (table: unknown) => ({
+      values: () =>
+        table === websiteProjectDeletionTombstones
+          ? { onDuplicateKeyUpdate: async () => undefined }
+          : Promise.resolve(undefined),
+    }),
   };
-  const tx = { select: () => query };
   return {
+    select,
     transaction: async (operation: (value: typeof tx) => unknown) =>
       operation(tx),
   };
@@ -137,6 +162,7 @@ describe("manual purchase ledger ownership", () => {
         requestedUsername: "example.standard",
         requestedDisplayName: "示例科技有限公司",
         accountMode: "create",
+        marketEdition: "overseas",
         contractId: "contract-standard-001",
         contractTemplateVersion: "basic-2026.07-v2",
         contractEvidence: { type: "system_admin_confirmation" },
@@ -149,6 +175,7 @@ describe("manual purchase ledger ownership", () => {
       expect.objectContaining({
         reference: "provision-standard-001",
         contractId: "contract-standard-001",
+        marketEdition: "overseas",
         paidAt: paidAt.getTime(),
         createdAt: createdAt.getTime(),
       }),

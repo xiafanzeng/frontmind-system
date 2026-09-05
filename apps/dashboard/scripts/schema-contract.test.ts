@@ -57,6 +57,14 @@ function generatedColumnSnapshot() {
             autoincrement: false,
             default: "'ready'",
           },
+          budget: {
+            name: "budget",
+            type: "decimal(20,8)",
+            primaryKey: false,
+            notNull: true,
+            autoincrement: false,
+            default: "'10.00000000'",
+          },
         },
         indexes: {},
         foreignKeys: {},
@@ -517,6 +525,14 @@ describe("database schema contract", () => {
       generatedColumnSnapshot(),
     );
     const rows = metadataRows(contract);
+    const budget = rows.columns.find(
+      (column) => column.columnName === "budget",
+    )!;
+    expect(
+      contract.tables[0]?.columns.find((column) => column.name === "budget")
+        ?.default,
+    ).toEqual({ kind: "literal", value: "10" });
+    budget.columnDefault = "10.00000000";
 
     await expect(
       evaluateDatabaseSchema(databaseFromRows(rows), contract),

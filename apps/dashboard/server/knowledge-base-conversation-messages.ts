@@ -6,20 +6,24 @@ import {
   type MessageMetadata,
 } from "../drizzle/schema";
 import {
+  KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
+  knowledgeBaseCompletionMessagePublicId,
   knowledgeBasePresentationMessagePublicId,
   knowledgeBaseUserMessagePublicId,
 } from "../shared/knowledge-base-message";
+import { knowledgeBaseMarkdownSha256 } from "./knowledge-base-package-validation";
 
 export type KnowledgeBaseServerOwnedMessageMetadata = {
   schemaVersion: 1;
   serverOwned: true;
-  kind: "pending_user" | "presentation";
+  kind: "pending_user" | "presentation" | "completion";
   buildId: string;
   generation: number;
   turnId: string;
   operationKey: string;
   clientRequestId?: string;
   presentationKey?: string;
+  contentSha256?: string;
   revision: number;
   leafId: string | null;
 };
@@ -84,9 +88,8 @@ async function insertImmutableServerMessage(input: {
   } satisfies MessageMetadata;
 
   if (existing) {
-    const existingKnowledgeBase = (
-      existing.metadata as MessageMetadata | null
-    )?.knowledgeBase;
+    const existingKnowledgeBase = (existing.metadata as MessageMetadata | null)
+      ?.knowledgeBase;
     if (
       existing.userId !== input.userId ||
       existing.conversationId !== input.conversationId ||
@@ -202,7 +205,8 @@ export async function persistKnowledgeBasePresentationInTransaction(input: {
     input.presentationKey,
   );
   const content = String(input.content || "").trim();
-  if (!content) throw new Error("Approved knowledge-base presentation is empty");
+  if (!content)
+    throw new Error("Approved knowledge-base presentation is empty");
   const result = await insertImmutableServerMessage({
     ...input,
     publicMessageId,
@@ -217,6 +221,7 @@ export async function persistKnowledgeBasePresentationInTransaction(input: {
       turnId: input.turnId,
       operationKey: input.operationKey,
       presentationKey: input.presentationKey,
+      contentSha256: knowledgeBaseMarkdownSha256(content),
       revision: input.revision,
       leafId: input.leafId,
     },
@@ -246,15 +251,13 @@ export async function persistKnowledgeBasePresentationInTransaction(input: {
   return { ...result, publicMessageId };
 }
 
-export async function markKnowledgeBaseConversationCompletedInTransaction(
-  input: {
-    tx: any;
-    userId: number;
-    conversationId: string;
-    authoritativeTaskId: string | null;
-    completedAt: Date;
-  },
-) {
+export async function markKnowledgeBaseConversationCompletedInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  authoritativeTaskId: string | null;
+  completedAt: Date;
+}) {
   const conversation = await lockedConversation(input.tx, input);
   await input.tx
     .update(conversations)
@@ -273,6 +276,69 @@ export async function markKnowledgeBaseConversationCompletedInTransaction(
         eq(conversations.version, conversation.version),
       ),
     );
+}
+
+/**
+ * Persist the customer-visible content-completion receipt before package
+ * preparation.  This is deliberately stored in the same immutable message
+ * ledger as accepted presentations so package retries can never make a
+ * completed build disappear from another browser.
+ */
+export async function persistKnowledgeBaseCompletionInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  turnId: string;
+  buildId: string;
+  generation: number;
+  operationKey: string;
+  revision: number;
+  authoritativeTaskId: string | null;
+  sentAt: Date;
+}) {
+  const conversation = await lockedConversation(input.tx, input);
+  const publicMessageId = knowledgeBaseCompletionMessagePublicId(input);
+  const content = KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT;
+  const result = await insertImmutableServerMessage({
+    ...input,
+    publicMessageId,
+    role: "assistant",
+    content,
+    metadata: {
+      schemaVersion: 1,
+      serverOwned: true,
+      kind: "completion",
+      buildId: input.buildId,
+      generation: input.generation,
+      turnId: input.turnId,
+      operationKey: input.operationKey,
+      revision: input.revision,
+      leafId: null,
+    },
+  });
+  if (result.inserted) {
+    await input.tx
+      .update(conversations)
+      .set({
+        status: "completed",
+        upstreamTaskId: input.authoritativeTaskId,
+        previousResponseId: input.authoritativeTaskId,
+        deletedMessageIds: (conversation.deletedMessageIds || []).filter(
+          (id: string) => id !== publicMessageId,
+        ),
+        version: conversation.version + 1,
+        completedAt: input.sentAt,
+        updatedAt: input.sentAt,
+      })
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          eq(conversations.userId, input.userId),
+          eq(conversations.version, conversation.version),
+        ),
+      );
+  }
+  return { ...result, publicMessageId };
 }
 
 export async function markKnowledgeBaseConversationFailedInTransaction(input: {
@@ -302,15 +368,13 @@ export async function markKnowledgeBaseConversationFailedInTransaction(input: {
     );
 }
 
-export async function markKnowledgeBaseConversationAwaitingInputInTransaction(
-  input: {
-    tx: any;
-    userId: number;
-    conversationId: string;
-    authoritativeTaskId: string | null;
-    updatedAt: Date;
-  },
-) {
+export async function markKnowledgeBaseConversationAwaitingInputInTransaction(input: {
+  tx: any;
+  userId: number;
+  conversationId: string;
+  authoritativeTaskId: string | null;
+  updatedAt: Date;
+}) {
   const conversation = await lockedConversation(input.tx, input);
   await input.tx
     .update(conversations)

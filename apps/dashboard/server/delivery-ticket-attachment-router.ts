@@ -97,7 +97,7 @@ export async function resolveAuthorizedTicketAttachment(input: {
   if (!row) {
     throw new DeliveryTicketError(
       "ATTACHMENT_NOT_FOUND",
-      "工单附件不存在。",
+      "需求附件不存在。",
       404,
     );
   }
@@ -111,7 +111,7 @@ export async function resolveAuthorizedTicketAttachment(input: {
     ) {
       throw new DeliveryTicketError(
         "ATTACHMENT_NOT_FOUND",
-        "工单附件不存在。",
+        "需求附件不存在。",
         404,
       );
     }
@@ -126,7 +126,7 @@ export async function resolveAuthorizedTicketAttachment(input: {
       ) {
         throw new DeliveryTicketError(
           "ATTACHMENT_NOT_FOUND",
-          "工单附件不存在。",
+          "需求附件不存在。",
           404,
         );
       }
@@ -139,7 +139,7 @@ export async function resolveAuthorizedTicketAttachment(input: {
     if (row.assignedMemberId !== input.actor.id) {
       throw new DeliveryTicketError(
         "ATTACHMENT_NOT_FOUND",
-        "工单附件不存在。",
+        "需求附件不存在。",
         404,
       );
     }

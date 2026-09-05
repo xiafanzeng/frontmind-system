@@ -9,6 +9,7 @@ import {
   writeBuildArtifactManifest,
 } from "./build-artifact-identity.mjs";
 import { recreateEmptyProductionBuildRoot } from "./production-build-root.mjs";
+import { releasePresentation } from "./release-channel.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const buildRoot = path.join(projectRoot, "dist");
@@ -25,6 +26,9 @@ await recreateEmptyProductionBuildRoot({
 const releaseEnvironment = {
   ...process.env,
   NODE_ENV: "production",
+  FRONTMIND_RELEASE_CHANNEL: releasePresentation.releaseChannel,
+  VITE_FRONTMIND_RELEASE_CHANNEL: releasePresentation.releaseChannel,
+  VITE_FRONTMIND_WEBSITE_URL: releasePresentation.websiteUrl,
   FRONTMIND_BUILD_SHA: buildSourceSha,
   BUILD_SHA: buildSourceSha,
   FRONTMIND_INTERNAL_RELEASE_BUILD_STAGE: buildSourceSha,

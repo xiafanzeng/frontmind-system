@@ -7,6 +7,7 @@
   ],
   "purchaseRequest": {
     "schemaVersion": 2,
+    "marketEdition": "overseas",
     "project": {
       "id": "project-contract-20260726",
       "companyName": "跨仓契约示例企业"
@@ -15,7 +16,7 @@
       "id": "order-contract-20260726",
       "tradeNo": "trade-contract-20260726",
       "status": "paid",
-      "amountFen": 150000,
+      "amountFen": 300000,
       "paidAt": "2026-07-26T00:00:00.000Z"
     },
     "service": {

@@ -176,8 +176,9 @@ describe("conversation retention", () => {
         return [
           [
             {
-              id: "build-1",
+              id: "10000000-0000-4000-8000-000000000001",
               userId: 7,
+              generation: 2,
               conversationId: "knowledge-conversation",
               logoStorageKey: null,
               packageStorageKey: null,
@@ -191,6 +192,7 @@ describe("conversation retention", () => {
         query.includes(
           "INSERT INTO knowledge_base_conversation_retention_tombstones",
         ) ||
+        query.includes("INSERT INTO knowledge_base_reset_cleanup_jobs") ||
         query.includes("DELETE FROM knowledge_base_builds")
       ) {
         return [{ affectedRows: 1 }];
@@ -223,6 +225,16 @@ describe("conversation retention", () => {
         ),
       ),
     ).toBe(true);
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO knowledge_base_reset_cleanup_jobs"),
+      [
+        7,
+        "knowledge-builds/7/10000000-0000-4000-8000-000000000001/generation-2/upload-evidence",
+        "knowledge-builds/7/10000000-0000-4000-8000-000000000001/generation-2/upload-evidence",
+        new Date("2026-07-14T12:00:00.000Z"),
+        new Date("2026-07-14T12:00:00.000Z"),
+      ],
+    );
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining("FROM knowledge_base_builds"),
       [7, "knowledge-conversation"],

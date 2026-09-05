@@ -6,6 +6,11 @@ import type {
 import { Link } from "wouter";
 import { formatCnyTenThousandths } from "../billingView";
 import { trpc } from "../trpc";
+import {
+  acceptanceIntentKey,
+  restoreAcceptanceIntent,
+  saveAcceptanceIntent,
+} from "./platformAcceptanceIntent";
 
 const dimensions: Record<string, string> = {
   search_default: "默认搜索",
@@ -35,6 +40,7 @@ const active = (status?: string) =>
 type FrozenPlan = {
   input: PlatformAcceptancePlanInput;
   quote: PlatformAcceptancePlanOutput;
+  idempotencyKey: string;
 };
 
 export default function PlatformAcceptancePanel() {
@@ -93,7 +99,14 @@ export default function PlatformAcceptancePanel() {
     try {
       const quote =
         await utils.client.admin.platforms.acceptance.plan.query(input);
-      setFrozen({ input, quote });
+      setFrozen({
+        input,
+        quote,
+        idempotencyKey: restoreAcceptanceIntent(
+          input.ownerId,
+          quote.planFingerprint,
+        ),
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "验收报价失败");
     } finally {
@@ -107,13 +120,18 @@ export default function PlatformAcceptancePanel() {
     inFlight.current = true;
     setError("");
     try {
+      saveAcceptanceIntent(
+        frozen.input.ownerId,
+        frozen.quote.planFingerprint,
+        frozen.idempotencyKey,
+      );
       const batch = await start.mutateAsync({
         ...frozen.input,
         planFingerprint: frozen.quote.planFingerprint,
         confirmedTotalAmountTenThousandths:
           frozen.quote.totalAmountTenThousandths,
-        // One immutable plan has one key, including after a timeout or page reload.
-        idempotencyKey: `platform-acceptance:${frozen.quote.planFingerprint}`,
+        // Retries and reloads retain the same explicit execution intent.
+        idempotencyKey: frozen.idempotencyKey,
       });
       setBatchId(batch.id);
       setFrozen(undefined);
@@ -128,6 +146,61 @@ export default function PlatformAcceptancePanel() {
       setError(cause instanceof Error ? cause.message : "验收启动失败");
     } finally {
       inFlight.current = false;
+    }
+  }
+  const previousBatch = frozen
+    ? [detail.data, ...(history.data || [])].find(
+        (batch) =>
+          batch &&
+          batch.ownerId === frozen.input.ownerId &&
+          batch.requestedBy === frozen.input.ownerId &&
+          batch.planFingerprint === frozen.quote.planFingerprint &&
+          batch.completedAt &&
+          ["passed", "failed", "unsupported", "stale"].includes(batch.status),
+      )
+    : undefined;
+  const hasActiveBatch =
+    frozen &&
+    [detail.data, ...(history.data || [])].some(
+      (batch) =>
+        batch?.planFingerprint === frozen.quote.planFingerprint &&
+        active(batch.status),
+    );
+  async function prepareRepeat() {
+    if (!frozen || !previousBatch || hasActiveBatch || inFlight.current) return;
+    inFlight.current = true;
+    setQuoting(true);
+    setConfirmed(false);
+    setError("");
+    try {
+      // Refresh the selected batch before creating another paid execution intent.
+      const previous = await utils.client.admin.platforms.acceptance.get.query({
+        batchId: previousBatch.id,
+      });
+      if (
+        previous.ownerId !== frozen.input.ownerId ||
+        previous.requestedBy !== frozen.input.ownerId ||
+        previous.planFingerprint !== frozen.quote.planFingerprint ||
+        !previous.completedAt ||
+        !["passed", "failed", "unsupported", "stale"].includes(previous.status)
+      ) {
+        throw new Error("上轮验收尚未确认结束，请先恢复并查看原批次。");
+      }
+      const idempotencyKey = acceptanceIntentKey(
+        frozen.quote.planFingerprint,
+        previous.id,
+      );
+      saveAcceptanceIntent(
+        frozen.input.ownerId,
+        frozen.quote.planFingerprint,
+        idempotencyKey,
+      );
+      setFrozen({ ...frozen, idempotencyKey });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法创建新一轮验收");
+    } finally {
+      inFlight.current = false;
+      setQuoting(false);
     }
   }
   const loadError =
@@ -301,6 +374,26 @@ export default function PlatformAcceptancePanel() {
           </div>
           <p>
             启动时会重新核对目录和价格，并从验收账号余额预留金额；仅成功且有内容的回答结算。服务端预算默认关闭，需已配置预算上限。
+          </p>
+          {previousBatch &&
+            !hasActiveBatch &&
+            frozen.idempotencyKey !==
+              acceptanceIntentKey(
+                frozen.quote.planFingerprint,
+                previousBatch.id,
+              ) && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void prepareRepeat()}
+              >
+                发起新一轮验收
+              </button>
+            )}
+          <p>
+            {frozen.idempotencyKey.includes(":after:")
+              ? "已选择新一轮验收；超时或刷新后继续恢复本轮。"
+              : "重复提交会恢复已有批次。相同计划需要重验时，请先明确选择新一轮验收。"}
           </p>
           <label className="acceptance-confirm">
             <input

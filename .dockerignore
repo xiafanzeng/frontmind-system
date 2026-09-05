@@ -1,0 +1,17 @@
+.git
+.github
+**/.git
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.log
+**/.DS_Store
+**/._*
+**/test-results
+**/playwright-report
+apps/dashboard/tmp
+apps/dashboard/output
+apps/dashboard/outputs

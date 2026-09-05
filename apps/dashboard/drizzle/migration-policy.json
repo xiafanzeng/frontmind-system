@@ -7,6 +7,8 @@
     "0051_delivery_ticket_retention": "contract",
     "0052_delivery_ticket_retention_guards": "contract",
     "0053_low_dorian_gray": "expand",
-    "0054_file_content_retention": "expand"
+    "0054_file_content_retention": "expand",
+    "0055_mean_dark_beast": "expand",
+    "0056_monitoring_domain": "expand"
   }
 }

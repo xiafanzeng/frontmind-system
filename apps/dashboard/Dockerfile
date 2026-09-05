@@ -7,21 +7,19 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
 COPY . .
 RUN test "${#SOURCE_SHA}" -eq 40 && pnpm install --frozen-lockfile \
-    && pnpm --filter frontmind-client build \
-    && cp -aL apps/dashboard/node_modules /tmp/dashboard-node_modules
+    && pnpm --filter frontmind-client build
 
 FROM 1panel/node:22.22.2@sha256:4cb7297e1c72cac9ee17659f28807f4756cefd4a13cf7bc2c0ba7254c616bb28
 ARG SOURCE_SHA
 ENV NODE_ENV=production PORT=3001 FRONTMIND_BUILD_SHA=${SOURCE_SHA} \
-    FRONTMIND_MIGRATIONS_DIR=/app/drizzle FRONTMIND_MIGRATION_MANIFEST_PATH=/app/migration-manifest.json
-WORKDIR /app
+    FRONTMIND_MIGRATIONS_DIR=/app/apps/dashboard/drizzle FRONTMIND_MIGRATION_MANIFEST_PATH=/app/apps/dashboard/migration-manifest.json
+WORKDIR /app/apps/dashboard
 RUN groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/frontmind/prepared-files /var/lib/frontmind/dashboard-assets
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/package.json /app/apps/dashboard/pnpm-lock.yaml ./
-# Flatten the dashboard's workspace symlinks so Node can resolve production
-# dependencies from /app/dist without requiring the source workspace layout.
-COPY --from=build --chown=10001:10001 /tmp/dashboard-node_modules ./node_modules
-COPY --from=build --chown=10001:10001 /app/node_modules/.pnpm ./node_modules/.pnpm
+# Preserve the pnpm workspace layout: app symlinks resolve to /app/node_modules/.pnpm.
+COPY --from=build --chown=10001:10001 /app/apps/dashboard/node_modules ./node_modules
+COPY --from=build --chown=10001:10001 /app/node_modules/.pnpm /app/node_modules/.pnpm
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/dist ./dist
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/drizzle ./drizzle
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/scripts/validate-production-runtime.mjs ./scripts/validate-production-runtime.mjs

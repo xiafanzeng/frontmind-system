@@ -1408,7 +1408,20 @@ export async function inspectDatabaseSchema(database, expectedContract) {
   const foreignKeyRows = groupRows(resultRows(foreignKeyResult), "tableName");
   const checkRows = groupRows(resultRows(checkResult), "tableName");
 
-  const tables = tableRows
+  // The monitoring domain is introduced through additive SQL migrations and
+  // is intentionally kept outside the Dashboard Drizzle snapshot. During
+  // the fused deployment, validate every table represented by the Dashboard
+  // contract while allowing those migration-owned tables to coexist.
+  const contractTableRows =
+    process.env.FRONTMIND_SCHEMA_CONTRACT_ALLOW_EXTRA_TABLES === "1"
+      ? tableRows.filter((tableRow) =>
+          expectedTables.has(
+            normalizeName(rowValue(tableRow, "tableName", "TABLE_NAME")),
+          ),
+        )
+      : tableRows;
+
+  const tables = contractTableRows
     .map((tableRow) => {
       const name = normalizeName(rowValue(tableRow, "tableName", "TABLE_NAME"));
       const engine = String(rowValue(tableRow, "engine", "ENGINE") || "")

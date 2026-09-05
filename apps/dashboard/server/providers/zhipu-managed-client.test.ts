@@ -125,3 +125,31 @@ describe("Managed Agents transport", () => {
     ).rejects.toBeInstanceOf(ZhipuManagedError);
   });
 });
+
+it("decodes CRLF split across chunks and an EOF frame without losing durable events", async () => {
+  for (const pieces of [
+    [`data: {"id":"event_1","type":"agent.message"}\r`, "\n\r", "\n"],
+    [`data: {"id":"event_1","type":"agent.message"}`],
+  ]) {
+    const body = new ReadableStream({
+      start(controller) {
+        for (const piece of pieces)
+          controller.enqueue(new TextEncoder().encode(piece));
+        controller.close();
+      },
+    });
+    const client = new ZhipuManagedClient({
+      apiKey: "test",
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+    });
+    const stream = await client.subscribeEvents("sess_split");
+    const seen = [];
+    for await (const event of stream.events) seen.push(event.id);
+    expect(seen).toEqual(["event_1"]);
+  }
+});

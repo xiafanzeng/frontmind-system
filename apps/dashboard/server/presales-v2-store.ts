@@ -26,6 +26,11 @@ export type ZhipuTaskRuntime = {
       requestHash: string;
       startedAt: string;
       resourceId?: string;
+      attempts?: number;
+      lastAttemptAt?: string;
+      rejectionStatus?: number | null;
+      rejectionCode?: string;
+      retryable?: boolean;
     }
   >;
   agentId?: string;

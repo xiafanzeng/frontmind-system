@@ -34,6 +34,13 @@ const digest = (value: string | Buffer) =>
 const runtime = (record: PresalesV2TaskRecord): ZhipuTaskRuntime =>
   record.providerRuntime ?? { revision: 1, model: "glm-5.3", mutations: {} };
 const RUNTIME_SYSTEM = `Execute the original FrontMind task and its supplied skill/workflow without changing their instructions, stage order, schemas or user confirmation points. Attached files are mounted read-only below /mnt/session/uploads/input with their original filenames. Copy workflow ZIPs byte-for-byte to /workspace/frontmind, safely extract a writable copy, and follow the supplied workflow entrypoint. Never treat the workflow ZIP itself as customer material. Use the installed tools to perform the task, including network/browser work when required; do not fabricate research or evidence. Stop at each user pause; do not choose or confirm on the user's behalf. Keep working files in /workspace/frontmind. Put only the requested final deliverables in /mnt/session/outputs. Do not include input files, internal skills, credentials, temporary files or intermediate work in outputs. For a structured JSON response, emit the exact requested JSON in the final public assistant message. This runtime instruction adapts paths and delivery only; preserve the original business task below.`;
+export function zhipuTaskPrompt(
+  input: Parameters<ManusV2Client["createTask"]>[0],
+) {
+  if (!input.structuredOutputSchema) return input.prompt;
+  return `${input.prompt}\n\nRuntime delivery contract (the original skill and business input above remain unchanged): return exactly one JSON object in the final public assistant message. Validate it against this exact frozen JSON Schema before ending the turn. Do not wrap JSON in Markdown or return the schema itself.\n${JSON.stringify(input.structuredOutputSchema)}`;
+}
+
 function asRecord(value: unknown): ZhipuRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as ZhipuRecord)
@@ -194,13 +201,22 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
           existing = prior.resourceId;
           return current;
         }
-        throw new ManusV2ApiError(
-          key.startsWith("file") ? "file.create" : "task.create",
-          null,
-          "ZHIPU_MUTATION_OUTCOME_UNKNOWN",
-          false,
-          true,
-        );
+        if (prior.state !== "rejected")
+          throw new ManusV2ApiError(
+            key.startsWith("file") ? "file.create" : "task.create",
+            null,
+            "ZHIPU_MUTATION_OUTCOME_UNKNOWN",
+            false,
+            true,
+          );
+        if (!prior.retryable || (prior.attempts ?? 1) >= 2)
+          throw new ManusV2ApiError(
+            key.startsWith("file") ? "file.create" : "task.create",
+            prior.rejectionStatus ?? 400,
+            prior.rejectionCode ?? "ZHIPU_MUTATION_REJECTED",
+            false,
+            false,
+          );
       }
       owns = true;
       return {
@@ -212,7 +228,9 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
             [key]: {
               state: "sending",
               requestHash,
-              startedAt: new Date().toISOString(),
+              startedAt: prior?.startedAt ?? new Date().toISOString(),
+              lastAttemptAt: new Date().toISOString(),
+              attempts: (prior?.attempts ?? (prior ? 1 : 0)) + 1,
             },
           },
         },
@@ -241,6 +259,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
     } catch (error) {
       await this.update(this.record.localTaskId, (current) => {
         const state = runtime(current);
+        if (state.mutations[key]?.state === "acknowledged") return current;
         return {
           ...current,
           providerRuntime: {
@@ -253,6 +272,13 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
                   error instanceof ZhipuManagedError && !error.outcomeUnknown
                     ? "rejected"
                     : "outcome_unknown",
+                ...(error instanceof ZhipuManagedError && !error.outcomeUnknown
+                  ? {
+                      rejectionStatus: error.status,
+                      rejectionCode: `ZHIPU_${error.code}`,
+                      retryable: error.status === 429,
+                    }
+                  : {}),
               },
             },
           },
@@ -386,6 +412,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
   async createTask(
     input: Parameters<ManusV2Client["createTask"]>[0],
   ): ReturnType<ManusV2Client["createTask"]> {
+    const providerPrompt = zhipuTaskPrompt(input);
     const agentBody = {
       name: `FrontMind Website ${this.record.operationId}`,
       model: "glm-5.3",
@@ -444,9 +471,9 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
     await this.connect(sessionId);
     const eventId = await this.once(
       "message:initial",
-      { sessionId, prompt: input.prompt },
+      { sessionId, prompt: providerPrompt },
       async () => {
-        const result = await this.api.sendMessage(sessionId, input.prompt);
+        const result = await this.api.sendMessage(sessionId, providerPrompt);
         return zhipuResourceId((result.data as unknown[])[0]);
       },
       (state, id) => ({ ...state, commandEventIds: [id] }),

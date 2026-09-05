@@ -1,3 +1,4 @@
+import { presalesUsageCredentialPlan } from "./presales-service";
 import {
   projectZhipuNativeUsage,
   newWebsiteAgentProvider,
@@ -1695,4 +1696,13 @@ describe("Website provider usage units", () => {
       else process.env.WEBSITE_AGENT_PROVIDER = before;
     }
   });
+});
+
+it("continues scanning retired Manus tasks after the active Website key switches to Zhipu", () => {
+  const old = { id: "old-manus", provider: "manus", status: "retired" };
+  const next = { id: "new-zhipu", provider: "zhipu", status: "active" };
+  const plan = presalesUsageCredentialPlan([next, old]);
+  expect(plan.activeZhipu).toBe(true);
+  expect(plan.manusRows).toEqual([old]);
+  expect(presalesUsageCredentialPlan([next]).manusRows).toEqual([]);
 });

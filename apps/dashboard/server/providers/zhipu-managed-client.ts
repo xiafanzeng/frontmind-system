@@ -260,10 +260,13 @@ export class ZhipuManagedClient {
       try {
         for (;;) {
           const chunk = await reader.read();
-          if (chunk.done) break;
-          buffer += decoder
-            .decode(chunk.value, { stream: true })
-            .replace(/\r\n/g, "\n");
+          buffer += chunk.done
+            ? decoder.decode()
+            : decoder.decode(chunk.value, { stream: true });
+          // Normalize after concatenation: CR and LF may arrive in separate
+          // transport chunks. EOF may still contain one complete JSON frame.
+          buffer = buffer.replace(/\r\n/g, "\n");
+          if (chunk.done && buffer.trim()) buffer += "\n\n";
           if (buffer.length > 8 * 1024 * 1024)
             throw new Error("SSE_FRAME_TOO_LARGE");
           let end: number;
@@ -280,6 +283,7 @@ export class ZhipuManagedClient {
             // Complete events alone are durable. No reasoning/delta subscription.
             if (typeof value.id === "string") yield value;
           }
+          if (chunk.done) break;
         }
       } finally {
         close();

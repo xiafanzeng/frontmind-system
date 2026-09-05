@@ -2738,6 +2738,17 @@ export function projectZhipuNativeUsage(
   return result;
 }
 
+export function presalesUsageCredentialPlan<
+  T extends { provider?: string; status: string },
+>(rows: T[]) {
+  return {
+    activeZhipu: rows.some(
+      (row) => row.provider === "zhipu" && row.status === "active",
+    ),
+    manusRows: rows.filter((row) => row.provider !== "zhipu"),
+  };
+}
+
 export async function getPresalesCreditUsage(
   windowDays = CREDIT_USAGE_LOOKBACK_DAYS,
   now = Date.now(),
@@ -2769,13 +2780,11 @@ export async function getPresalesCreditUsage(
     };
   }
 
-  const activeZhipu = credentialRows.some(
-    (credential) =>
-      credential.status === "active" && credential.provider === "zhipu",
-  );
-  if (activeZhipu) {
-    // The existing local ledger remains the authority for historical Manus
-    // credits. Zhipu token observations are exposed separately by the snapshot.
+  const { activeZhipu, manusRows } =
+    presalesUsageCredentialPlan(credentialRows);
+  if (activeZhipu && manusRows.length === 0) {
+    // There is no historical Manus credential to scan. Native tokens remain
+    // separate; an unavailable account-credit unit is explicitly null.
     const historical = await getPresalesCreditUsageSnapshot(now);
     return {
       windowDays: normalizedWindowDays,
@@ -2787,16 +2796,12 @@ export async function getPresalesCreditUsage(
       attributionComplete: true,
     };
   }
-  const credentialIds = credentialRows
-    .filter((credential) => credential.provider !== "zhipu")
-    .map((credential) => credential.id);
+  const credentialIds = manusRows.map((credential) => credential.id);
   const credentialByFingerprint = new Map<
     string,
     ReturnType<typeof toDecryptedCredential>
   >();
-  for (const credentialRow of selectPhysicalCredentialRows(
-    credentialRows.filter((credential) => credential.provider !== "zhipu"),
-  )) {
+  for (const credentialRow of selectPhysicalCredentialRows(manusRows)) {
     if (!credentialByFingerprint.has(credentialRow.fingerprint)) {
       credentialByFingerprint.set(
         credentialRow.fingerprint,
@@ -2815,11 +2820,13 @@ export async function getPresalesCreditUsage(
   });
   const usageNow = now;
   const cutoffMs = usageNow - normalizedWindowDays * 24 * 60 * 60 * 1000;
-  const authoritativePoolUsage = await getManusRollingCreditUsage({
-    apiKey: currentCredential.apiKey,
-    startAt: cutoffMs,
-    endAt: usageNow,
-  });
+  const authoritativePoolUsage = activeZhipu
+    ? { totalUsed: null, complete: true }
+    : await getManusRollingCreditUsage({
+        apiKey: currentCredential.apiKey,
+        startAt: cutoffMs,
+        endAt: usageNow,
+      });
   const terminalProofsByFingerprint = await loadTerminalUsageTaskProofs({
     executor: db,
     scope: "website_frontend",

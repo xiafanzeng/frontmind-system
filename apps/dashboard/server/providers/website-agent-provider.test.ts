@@ -9,6 +9,7 @@ vi.mock("../presales-v2-store", () => ({
 import {
   ZhipuWebsiteAgentProvider,
   normalizeZhipuEvents,
+  zhipuTaskPrompt,
   createWebsiteAgentClient,
 } from "./website-agent-provider";
 import { ZhipuManagedClient, ZhipuManagedError } from "./zhipu-managed-client";
@@ -318,4 +319,54 @@ describe("public execution text", () => {
     ).toBeUndefined();
     expect(safeExecutionText('{"internal":true}')).toBeUndefined();
   });
+});
+
+it("delivers the exact frozen structured schema while preserving the original task", () => {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["decision"],
+    properties: { decision: { const: "accept" } },
+  };
+  const prompt = zhipuTaskPrompt({
+    prompt: "Original skill and task instructions.",
+    structuredOutputSchema: schema,
+  });
+  expect(prompt.startsWith("Original skill and task instructions.\n\n")).toBe(
+    true,
+  );
+  expect(JSON.parse(prompt.split("\n").at(-1)!)).toEqual(schema);
+});
+
+it("retries a definite 429 rejection once while never replaying an unknown outcome", async () => {
+  const uploadFile = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new ZhipuManagedError("/v1/files", 429, "HTTP_429", false),
+    )
+    .mockResolvedValueOnce({ id: "file_retry" });
+  const provider = new ZhipuWebsiteAgentProvider(state.record, update, "test", {
+    uploadFile,
+  } as unknown as ZhipuManagedClient);
+  const input = {
+    filename: "original.skill.zip",
+    contentType: "application/zip",
+    bytes: Buffer.from("original"),
+  };
+  await expect(provider.uploadFile(input)).rejects.toMatchObject({
+    status: 429,
+    outcomeUnknown: false,
+  });
+  const first = {
+    ...Object.values(state.record.providerRuntime!.mutations)[0]!,
+  };
+  expect((await provider.uploadFile(input)).fileId).toBe("file_retry");
+  const final = Object.values(state.record.providerRuntime!.mutations)[0]!;
+  expect(final).toMatchObject({
+    state: "acknowledged",
+    attempts: 2,
+    startedAt: first.startedAt,
+    requestHash: first.requestHash,
+  });
+  expect(uploadFile).toHaveBeenCalledTimes(2);
 });

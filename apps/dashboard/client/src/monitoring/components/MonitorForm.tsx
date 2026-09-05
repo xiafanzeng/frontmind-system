@@ -34,6 +34,7 @@ import {
 import {
   buildRunCostQuoteInput,
   type QuoteRunCost,
+  type RunCostQuoteInput,
   type RunCostQuoteView,
 } from "../runBilling";
 import ModelBrandIcon from "./ModelBrandIcon";
@@ -451,10 +452,13 @@ export default function MonitorForm({
       return;
     }
 
+    // Parent query/mutation updates can recreate equal model/input objects.
+    // Bind this request to the semantic fingerprint, not their identities.
+    const input: RunCostQuoteInput = JSON.parse(quoteFingerprint);
     let cancelled = false;
     setQuoteState({ fingerprint: quoteFingerprint, loading: true });
     void Promise.resolve()
-      .then(() => quoteRunCost(quoteInput))
+      .then(() => quoteRunCost(input))
       .then(
         (quote) => {
           if (!cancelled) {
@@ -478,7 +482,7 @@ export default function MonitorForm({
     return () => {
       cancelled = true;
     };
-  }, [quoteEligible, quoteFingerprint, quoteInput, quoteRunCost]);
+  }, [quoteEligible, quoteFingerprint, quoteRunCost]);
 
   useEffect(() => {
     if (!questionImportOpen) return;

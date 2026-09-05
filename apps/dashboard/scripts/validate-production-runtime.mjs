@@ -18,7 +18,6 @@ const fail = (code) => {
 const exactValues = {
   NODE_ENV: "production",
   PORT: "3001",
-  FRONTMIND_PUBLIC_URL: "https://dashboard.frontmind.cn",
   FRONTMIND_WEBSITE_URL: "https://www.frontmind.cn",
   FRONTMIND_DASHBOARD_IMPORT_PREFLIGHT_TTL_SECONDS: "300",
   FRONTMIND_PREPARED_FILE_DIR: "/var/lib/frontmind/prepared-files",
@@ -84,6 +83,16 @@ export function validateProductionRuntimeEnvironment(env = process.env) {
 
   for (const [name, expected] of Object.entries(exactValues)) {
     if (env[name] !== expected) fail(`${name}_VALUE_INVALID`);
+  }
+
+  const ipv4PhaseUrl = "http://149.88.85.240";
+  const publicUrl = env.FRONTMIND_PUBLIC_URL || "";
+  const ipv4Phase = env.FRONTMIND_IPV4_PHASE === "1";
+  if (
+    publicUrl !== "https://dashboard.frontmind.cn" &&
+    !(ipv4Phase && publicUrl === ipv4PhaseUrl)
+  ) {
+    fail("FRONTMIND_PUBLIC_URL_VALUE_INVALID");
   }
 
   const knowledgeBaseRollout = env.FRONTMIND_KB_V4_ROLLOUT_PERCENT || "";

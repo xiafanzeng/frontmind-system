@@ -15,6 +15,8 @@ export interface PublisherWorkerEngineOptions {
   leaseMs?: number;
   pollMs?: number;
   maintenanceMs?: number;
+  providerEnabled?: boolean;
+  allowedTypes?: readonly PublisherJobType[];
   typeConcurrency?: Partial<Record<PublisherJobType, number>>;
 }
 
@@ -71,7 +73,9 @@ export class PublisherWorkerEngine {
     while (!signal.aborted) {
       const now = new Date();
       if (now.valueOf() - lastMaintenance >= this.maintenanceMs) {
-        await this.repository.enqueuePublisherMaintenanceJobs(now);
+        if (this.options.providerEnabled !== false) {
+          await this.repository.enqueuePublisherMaintenanceJobs(now);
+        }
         const recovered =
           await this.repository.recoverExpiredPublisherSubmissions(now, 500);
         if (recovered)
@@ -94,6 +98,7 @@ export class PublisherWorkerEngine {
         now,
         limit: this.options.concurrency,
         leaseMs: this.leaseMs,
+        ...(this.options.allowedTypes ? { allowedTypes: this.options.allowedTypes } : {}),
       });
       if (!jobs.length) {
         await delay(this.pollMs, undefined, { signal }).catch(() => undefined);

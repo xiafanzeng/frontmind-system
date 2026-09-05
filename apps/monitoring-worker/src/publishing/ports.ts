@@ -76,6 +76,7 @@ export interface PublisherWorkerRepositoryPort {
     now: Date;
     limit: number;
     leaseMs: number;
+    allowedTypes?: readonly PublisherJob["type"][];
   }): Promise<readonly PublisherJob[]>;
   renewPublisherJobLease(
     jobId: string,

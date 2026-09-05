@@ -1,5 +1,5 @@
 import type { PrivateObjectStore } from "@frontmind/monitoring-object-store";
-import { KolClient, MockKolClient } from "@frontmind/monitoring-provider-kol";
+import { KolClient, MockKolClient, type KolProviderPort } from "@frontmind/monitoring-provider-kol";
 import type { PublisherRuntimeConfig } from "../config.js";
 import type { LoggerPort } from "../ports.js";
 import { PublisherWorkerEngine } from "./engine.js";
@@ -14,7 +14,9 @@ export function createPublisherWorkerEngine(input: {
   logger: LoggerPort;
 }): PublisherWorkerEngine {
   const provider =
-    input.config.mode === "mock"
+    input.config.providerEnabled === false
+      ? unavailablePublishingProvider(input.config.mode)
+      : input.config.mode === "mock"
       ? new MockKolClient()
       : new KolClient({
           baseUrl: input.config.baseUrl,
@@ -53,6 +55,8 @@ export function createPublisherWorkerEngine(input: {
   return new PublisherWorkerEngine(input.repository, processor, input.logger, {
     workerId: input.config.workerId,
     concurrency: input.config.concurrency,
+    providerEnabled: input.config.providerEnabled,
+    ...(input.config.providerEnabled === false ? { allowedTypes: ["import_docx", "purge_publisher_assets"] as const } : {}),
     typeConcurrency: {
       submit_publication_item: 1,
       sync_kol_catalog: 1,
@@ -61,4 +65,13 @@ export function createPublisherWorkerEngine(input: {
       poll_publication_item: input.config.pollConcurrency,
     },
   });
+}
+
+/** No provider client, credentials, mock catalog or network in local article mode. */
+export function unavailablePublishingProvider(mode: KolProviderPort["mode"]): KolProviderPort {
+  const unavailable = async (): Promise<never> => {
+    throw new Error("Media publishing provider is not configured");
+  };
+  return { mode, listResources: unavailable, createOrder: unavailable,
+    listOrders: unavailable, getOrderByOrderId: unavailable };
 }

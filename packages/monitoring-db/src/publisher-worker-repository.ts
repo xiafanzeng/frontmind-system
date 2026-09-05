@@ -140,7 +140,9 @@ export class PublisherWorkerRepository {
     now: Date;
     limit: number;
     leaseMs: number;
+    allowedTypes?: readonly (typeof publisherJobs.$inferSelect)["type"][];
   }) {
+    if (input.allowedTypes?.length === 0) return [];
     return this.db.transaction(async (tx) => {
       const candidates = await tx
         .select()
@@ -158,6 +160,7 @@ export class PublisherWorkerRepository {
               ),
             ),
             sql`${publisherJobs.attempts} < ${publisherJobs.maxAttempts}`,
+            input.allowedTypes ? inArray(publisherJobs.type, [...input.allowedTypes]) : undefined,
           ),
         )
         .orderBy(

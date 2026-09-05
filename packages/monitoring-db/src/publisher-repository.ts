@@ -2076,7 +2076,7 @@ export class PublishingRepository {
       });
       return {
         mediaResourceId: resource.id,
-        logoUrl: `/api/publisher/media-logos/${encodeURIComponent(resource.id)}/${input.sha256}`,
+        logoUrl: `/api/monitoring/publisher/media-logos/${encodeURIComponent(resource.id)}/${input.sha256}`,
         logoSource: "manual_verified" as const,
         logoResolutionStatus: "archived" as const,
       };
@@ -5074,7 +5074,7 @@ function publisherMediaLogoAccessPath(
   ) {
     return null;
   }
-  return `/api/publisher/media-logos/${encodeURIComponent(resource.id)}/${resource.logoSha256}`;
+  return `/api/monitoring/publisher/media-logos/${encodeURIComponent(resource.id)}/${resource.logoSha256}`;
 }
 
 function publisherMediaLogoDisplaySource(

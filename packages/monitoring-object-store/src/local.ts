@@ -38,9 +38,11 @@ function assertActive(signal?: AbortSignal): void {
 }
 
 /**
- * Private, process-local storage for development and end-to-end verification.
- * Production configuration rejects this driver. Objects are never exposed by
- * an HTTP route and immutable keys cannot be overwritten with different bytes.
+ * Private storage on an application-owned directory or persistent shared volume.
+ * Production use is explicitly enabled and API/worker must mount the same root.
+ * Access is through authenticated domain routes or scoped publication capabilities;
+ * this directory must never be mounted as static HTTP content. Immutable keys
+ * cannot be overwritten with different bytes.
  */
 export class LocalPrivateObjectStore
   implements PrivateObjectStore, PrivateObjectReader

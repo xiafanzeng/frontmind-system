@@ -58,6 +58,9 @@ export class PublisherWorkerProcessor {
   }
 
   async handle(job: PublisherJob, signal?: AbortSignal): Promise<void> {
+    if (this.config.providerEnabled === false && !["import_docx", "purge_publisher_assets"].includes(job.type)) {
+      throw new DeferPublisherJobError("Media publishing provider is not configured", new Date(this.now().valueOf() + 30 * 60_000));
+    }
     switch (job.type) {
       case "import_docx":
         await this.importDocx(
@@ -819,7 +822,7 @@ export class PublisherWorkerProcessor {
             sha256: image.sha256,
           });
           const src = new URL(
-            `/api/publisher/public-assets/${encodeURIComponent(assetId)}/${encodeURIComponent(capability)}`,
+            `/api/monitoring/publisher/public-assets/${encodeURIComponent(assetId)}/${encodeURIComponent(capability)}`,
             this.config.publicOrigin,
           ).toString();
           return { assetId, capability, storageKey, src };

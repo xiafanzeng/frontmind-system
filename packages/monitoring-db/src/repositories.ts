@@ -4402,10 +4402,10 @@ export class MonitoringRepository {
         ordinal: media.ordinal,
         archiveStatus: media.archiveStatus,
         accessPath:
-          media.archiveStatus === "archived" ? `/api/media/${media.id}` : null,
+          media.archiveStatus === "archived" ? `/api/monitoring/media/${media.id}` : null,
         thumbnailAccessPath:
           media.archiveStatus === "archived" && media.thumbnailObjectKey
-            ? `/api/media/${media.id}?variant=thumbnail`
+            ? `/api/monitoring/media/${media.id}?variant=thumbnail`
             : null,
         mimeType: media.mimeType,
         sizeBytes: media.sizeBytes,
@@ -5387,11 +5387,11 @@ export class MonitoringRepository {
         archiveStatus: media.archiveStatus,
         accessPath:
           media.archiveStatus === "archived"
-            ? `/api/media/${media.id}`
+            ? `/api/monitoring/media/${media.id}`
             : null,
         thumbnailAccessPath:
           media.archiveStatus === "archived" && media.thumbnailObjectKey
-            ? `/api/media/${media.id}?variant=thumbnail`
+            ? `/api/monitoring/media/${media.id}?variant=thumbnail`
             : null,
       })),
       configuration: {

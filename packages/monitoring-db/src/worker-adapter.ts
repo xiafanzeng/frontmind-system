@@ -1,3 +1,4 @@
+import { syncDashboardMonitoringAccountStates } from "./dashboard-account-links.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   MoliBalance,
@@ -399,6 +400,7 @@ export class DrizzleWorkerRepository {
   }
 
   async heartbeatWorker(workerId: string, at: Date) {
+    await syncDashboardMonitoringAccountStates(this.db);
     await this.db
       .insert(workerHeartbeats)
       .values({ workerId, heartbeatAt: at })

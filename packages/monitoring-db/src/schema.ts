@@ -291,7 +291,7 @@ const updatedAt = () =>
     .onUpdateNow();
 
 export const users = mysqlTable(
-  "users",
+  "monitoring_users",
   {
     id: id("id").primaryKey(),
     username: varchar("username", { length: 64 }).notNull(),
@@ -316,7 +316,7 @@ export const users = mysqlTable(
 );
 
 export const sessions = mysqlTable(
-  "sessions",
+  "monitoring_sessions",
   {
     id: id("id").primaryKey(),
     userId: id("user_id")

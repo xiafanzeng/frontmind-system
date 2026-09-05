@@ -4,8 +4,8 @@
   "private": true,
   "packageManager": "pnpm@10.4.1",
   "scripts": {
-    "build": "pnpm --filter frontmind-client build && pnpm --filter @frontmind/monitoring-worker build",
-    "typecheck": "pnpm --filter frontmind-client check && pnpm --filter @frontmind/monitoring-worker typecheck && pnpm --filter @frontmind/monitoring-db typecheck",
+    "build": "pnpm build:packages && pnpm --filter frontmind-client build && pnpm --filter @frontmind/monitoring-worker build",
+    "typecheck": "pnpm --filter frontmind-client check && pnpm -r --filter \"./packages/**\" --if-present typecheck && pnpm --filter @frontmind/monitoring-worker typecheck",
     "test": "pnpm --filter frontmind-client test",
     "build:packages": "pnpm -r --filter './packages/**' --if-present build"
   }

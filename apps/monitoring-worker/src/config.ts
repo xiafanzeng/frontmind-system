@@ -114,6 +114,7 @@ export interface WorkerConfig {
 
 export interface PublisherRuntimeConfig {
   enabled: boolean;
+  providerEnabled: boolean;
   workerId: string;
   mode: "mock" | "test" | "live";
   realEnabled: boolean;
@@ -167,8 +168,8 @@ export function loadWorkerConfig(
   const objectStore = (() => {
     const driver = env.OBJECT_STORE_DRIVER?.trim().toLowerCase() ?? "oss";
     if (driver === "local") {
-      if (env.NODE_ENV === "production") {
-        throw new Error("Local object storage is forbidden in production");
+      if (env.NODE_ENV === "production" && !booleanFlag(env, "ALLOW_LOCAL_OBJECT_STORE_IN_PRODUCTION")) {
+        throw new Error("Production local storage requires ALLOW_LOCAL_OBJECT_STORE_IN_PRODUCTION=true");
       }
       const configuredDirectory = required(env, "LOCAL_OBJECT_STORE_DIR");
       if (!path.isAbsolute(configuredDirectory)) {
@@ -192,15 +193,19 @@ export function loadWorkerConfig(
     };
   })();
   const publisherEnabled = booleanFlag(env, "PUBLISHER_FEATURE_ENABLED");
+  const publisherProviderEnabled = publisherEnabled && booleanFlag(env, "PUBLISHER_PROVIDER_ENABLED", true);
   const publisherFlag = (key: string, fallback = false): boolean =>
     publisherEnabled ? booleanFlag(env, key, fallback) : fallback;
   const publisherPositiveInteger = (key: string, fallback: number): number =>
     publisherEnabled ? positiveInteger(env, key, fallback) : fallback;
   const publisherMode = (() => {
     if (!publisherEnabled) return "mock" as const;
-    const value = env.PUBLISHER_MODE?.trim().toLowerCase() ?? "mock";
+    const value = env.PUBLISHER_MODE?.trim().toLowerCase() ?? (env.NODE_ENV === "production" ? "live" : "mock");
     if (value !== "mock" && value !== "test" && value !== "live") {
       throw new Error("PUBLISHER_MODE must be mock, test or live");
+    }
+    if (env.NODE_ENV === "production" && value === "mock") {
+      throw new Error("Mock publishing is forbidden in production");
     }
     return value;
   })();
@@ -258,7 +263,7 @@ export function loadWorkerConfig(
   const publisherStorageSecret = (key: string): string | undefined =>
     publisherEnabled ? optionalSecret(env, key) : undefined;
   const publisherProviderSecret = (key: string): string | undefined =>
-    publisherEnabled && publisherMode !== "mock"
+    publisherProviderEnabled && publisherMode !== "mock"
       ? optionalSecret(env, key)
       : undefined;
   const publisherKolAccessToken = publisherProviderSecret(
@@ -297,7 +302,7 @@ export function loadWorkerConfig(
     "KOL_CAPTCHA_TOKEN",
   );
   const publisherLogoSearchEndpoint =
-    publisherEnabled && publisherMode !== "mock"
+    publisherProviderEnabled && publisherMode !== "mock"
       ? env.PUBLISHER_LOGO_SEARCH_ENDPOINT?.trim()
       : undefined;
   const publisherLogoSearchApiKey = publisherProviderSecret(
@@ -316,7 +321,7 @@ export function loadWorkerConfig(
     );
   }
   if (
-    publisherEnabled &&
+    publisherProviderEnabled &&
     publisherMode !== "mock" &&
     !publisherKolAccessToken &&
     ![
@@ -378,6 +383,7 @@ export function loadWorkerConfig(
     },
     publisher: {
       enabled: publisherEnabled,
+      providerEnabled: publisherProviderEnabled,
       workerId: `${workerId}:publisher`,
       mode: publisherMode,
       realEnabled: publisherFlag("PUBLISHER_REAL_ENABLED"),

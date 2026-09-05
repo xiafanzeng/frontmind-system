@@ -26,12 +26,6 @@ const exactValues = {
   FRONTMIND_PDF_WORKERS: "1",
   FRONTMIND_CONVERSATION_RETENTION_DAYS: "30",
   FRONTMIND_SERVICE_ENTITLEMENT_ENFORCEMENT: "auto",
-  FRONTMIND_KB_SKILL_PATH:
-    "/app/apps/dashboard/dist/private-workflows/socratic-kb-builder.skill",
-  FRONTMIND_BRAND_QUESTION_SKILL_PATH:
-    "/app/apps/dashboard/dist/private-workflows/brand-question-portfolio.skill",
-  FRONTMIND_RESPONSE_LOGIC_SKILL_PATH:
-    "/app/apps/dashboard/dist/private-workflows/response-logic-builder.skill",
 };
 
 const secretNames = [
@@ -93,6 +87,24 @@ export function validateProductionRuntimeEnvironment(env = process.env) {
     !(ipv4Phase && publicUrl === ipv4PhaseUrl)
   ) {
     fail("FRONTMIND_PUBLIC_URL_VALUE_INVALID");
+  }
+
+  const skillPaths = {
+    FRONTMIND_KB_SKILL_PATH: [
+      "/app/dist/private-workflows/socratic-kb-builder.skill",
+      "/app/apps/dashboard/dist/private-workflows/socratic-kb-builder.skill",
+    ],
+    FRONTMIND_BRAND_QUESTION_SKILL_PATH: [
+      "/app/dist/private-workflows/brand-question-portfolio.skill",
+      "/app/apps/dashboard/dist/private-workflows/brand-question-portfolio.skill",
+    ],
+    FRONTMIND_RESPONSE_LOGIC_SKILL_PATH: [
+      "/app/dist/private-workflows/response-logic-builder.skill",
+      "/app/apps/dashboard/dist/private-workflows/response-logic-builder.skill",
+    ],
+  };
+  for (const [name, allowed] of Object.entries(skillPaths)) {
+    if (!allowed.includes(env[name] || "")) fail(`${name}_VALUE_INVALID`);
   }
 
   const knowledgeBaseRollout = env.FRONTMIND_KB_V4_ROLLOUT_PERCENT || "";

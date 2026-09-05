@@ -26,6 +26,7 @@ services:
       - --max-connections=150
       - --innodb-buffer-pool-size=2G
       - --binlog-expire-logs-seconds=2592000
+      - --log-bin-trust-function-creators=1
     env_file:
       - ${FRONTMIND_SYSTEM_ENV_DIR:-/etc/frontmind-system}/mysql.env
     volumes:

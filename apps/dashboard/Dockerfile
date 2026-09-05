@@ -7,7 +7,8 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
 COPY . .
 RUN test "${#SOURCE_SHA}" -eq 40 && pnpm install --frozen-lockfile \
-    && pnpm --filter frontmind-client build
+    && pnpm --filter frontmind-client build \
+    && cp -aL apps/dashboard/node_modules /tmp/dashboard-node_modules
 
 FROM 1panel/node:22.22.2@sha256:4cb7297e1c72cac9ee17659f28807f4756cefd4a13cf7bc2c0ba7254c616bb28
 ARG SOURCE_SHA
@@ -17,9 +18,9 @@ WORKDIR /app
 RUN groupadd --gid 10001 frontmind && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/frontmind --shell /usr/sbin/nologin frontmind \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/frontmind/prepared-files /var/lib/frontmind/dashboard-assets
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/package.json /app/apps/dashboard/pnpm-lock.yaml ./
-# The workspace installs dependencies in the repository-level .pnpm store;
-# copying the root node_modules preserves its symlink graph in the runtime.
-COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
+# Flatten the dashboard's workspace symlinks so Node can resolve production
+# dependencies from /app/dist without requiring the source workspace layout.
+COPY --from=build --chown=10001:10001 /tmp/dashboard-node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/dist ./dist
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/drizzle ./drizzle
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/scripts/validate-production-runtime.mjs ./scripts/validate-production-runtime.mjs

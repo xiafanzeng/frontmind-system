@@ -201,9 +201,7 @@ export async function runApiUsageSnapshotSyncWithLock(input: {
 type ApiUsageScope = "website_frontend" | "managed_user";
 type ApiUsageSeverity = "normal" | "warning" | "critical" | "unavailable";
 export type ManagedApiKeyTargetKind =
-  | "customer"
-  | "delivery_admin"
-  | "engineer";
+  "customer" | "delivery_admin" | "engineer";
 
 export type BulkManagedApiKeyScope =
   | { kind: "all" }
@@ -1467,8 +1465,8 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
     // last successful pool total or turn an old successful read into pending.
     const snapshotMatchesCredential = Boolean(
       snapshot &&
-        credentialFingerprint &&
-        snapshot.credentialFingerprint === credentialFingerprint,
+      credentialFingerprint &&
+      snapshot.credentialFingerprint === credentialFingerprint,
     );
     const matchingSnapshot = snapshotMatchesCredential ? snapshot : undefined;
     const snapshotCurrent = snapshotMatchesCredential
@@ -2234,32 +2232,54 @@ async function syncApiUsageSnapshotsUnlocked(
           DEFAULT_API_USAGE_WINDOW_DAYS,
           now.getTime(),
         );
-        const completion = apiUsageSnapshotCompletionState({
-          totalComplete: usage.complete,
-        });
-        const finalized = await finalizeApiUsageSnapshotClaim({
-          executor: db,
-          policy,
-          credentialFingerprint: fingerprints.website,
-          used: usage.keyTotalUsed,
-          accountUsed: usage.websiteUsed,
-          status: completion.status,
-          errorCode: completion.errorCode,
-          windowStartedAt: new Date(
-            getShanghaiRollingUsagePeriod(
-              DEFAULT_API_USAGE_WINDOW_DAYS,
-              now.getTime(),
-            ).startAt,
-          ),
-          now,
-          syncToken: websiteSyncToken,
-        });
-        if (finalized) {
+        if (usage.keyTotalUsed === null) {
+          // A successful provider observation can have no compatible credit
+          // unit. Preserve the old numeric columns as historical data, without
+          // recording tokens or inventing a zero account balance.
+          await db
+            .update(apiUsageSnapshots)
+            .set({
+              credentialFingerprint: fingerprints.website,
+              syncStatus: "ok",
+              errorCode: "CREDIT_NOT_APPLICABLE",
+              fetchedAt: null,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(apiUsageSnapshots.policyId, policy.id),
+                eq(apiUsageSnapshots.syncToken, websiteSyncToken),
+              ),
+            );
           synced += 1;
-          if (!usage.complete) failed += 1;
         } else {
-          failed += 1;
-          retryableFailed += 1;
+          const completion = apiUsageSnapshotCompletionState({
+            totalComplete: usage.complete,
+          });
+          const finalized = await finalizeApiUsageSnapshotClaim({
+            executor: db,
+            policy,
+            credentialFingerprint: fingerprints.website,
+            used: usage.keyTotalUsed,
+            accountUsed: usage.websiteUsed,
+            status: completion.status,
+            errorCode: completion.errorCode,
+            windowStartedAt: new Date(
+              getShanghaiRollingUsagePeriod(
+                DEFAULT_API_USAGE_WINDOW_DAYS,
+                now.getTime(),
+              ).startAt,
+            ),
+            now,
+            syncToken: websiteSyncToken,
+          });
+          if (finalized) {
+            synced += 1;
+            if (!usage.complete) failed += 1;
+          } else {
+            failed += 1;
+            retryableFailed += 1;
+          }
         }
       } catch (error) {
         await finalizeApiUsageSnapshotClaim({

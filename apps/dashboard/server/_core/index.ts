@@ -28,7 +28,9 @@ import brandTrackingApi from "../brand-tracking-api";
 import { startJenovaBrandTrackingRecoveryScheduler } from "../jenova-brand-tracking-service";
 import { getBrandQuestionPortfolioSkillDescriptor } from "../brand-question-portfolio-runtime";
 import preparedFileRouter from "../prepared-file-router";
-import presalesV2Router from "../presales-v2-router";
+import presalesV2Router, {
+  startWebsiteAgentRecoveryScheduler,
+} from "../presales-v2-router";
 import { assertPresalesServiceConfigured } from "../presales-service-auth";
 import provisioningRouter, {
   assertProvisioningConfigured,
@@ -556,6 +558,7 @@ async function startServer() {
         startSiteOpsWorkerScheduler();
       }
       if (runtimeRoleServesWeb(runtimeRole)) {
+        startWebsiteAgentRecoveryScheduler();
         startDeliveryTicketRetentionScheduler();
         startConversationRetentionScheduler();
         startJenovaBrandTrackingRecoveryScheduler();

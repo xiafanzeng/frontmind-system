@@ -11,6 +11,7 @@
     "0055_mean_dark_beast": "expand",
     "0056_monitoring_domain": "expand",
     "0057_concerned_ares": "expand",
-    "0058_dashboard_production_parity": "expand"
+    "0058_dashboard_production_parity": "expand",
+    "0059_website_zhipu_provider": "expand"
   }
 }

@@ -14,10 +14,41 @@ export type PresalesV2TaskStatus =
   | "cancelled"
   | "attention_required";
 
+export type WebsiteAgentProvider = "manus" | "zhipu";
+
+export type ZhipuTaskRuntime = {
+  revision: 1;
+  model: "glm-5.3";
+  mutations: Record<
+    string,
+    {
+      state: "sending" | "acknowledged" | "rejected" | "outcome_unknown";
+      requestHash: string;
+      startedAt: string;
+      resourceId?: string;
+    }
+  >;
+  agentId?: string;
+  environmentId?: string;
+  sessionId?: string;
+  commandEventIds?: string[];
+  eventCursor?: string;
+  observedEventIds?: string[];
+  files?: Array<{
+    id: string;
+    filename: string;
+    sha256: string;
+    bytes: number;
+    role: "input" | "output";
+  }>;
+  usage?: Record<string, unknown>;
+};
+
 export type PresalesV2SafeEvent = {
   id: string;
   type: string;
   timestamp: number;
+  message?: string;
 };
 
 export type PresalesV2Artifact = {
@@ -84,6 +115,8 @@ export type PresalesV2TaskRecord = {
   };
   profile: ManagedAgentProfile;
   upstreamModel: string;
+  provider?: WebsiteAgentProvider;
+  providerRuntime?: ZhipuTaskRuntime;
   operationToken: string;
   operationMarker: string;
   providerTitle: string;
@@ -98,11 +131,7 @@ export type PresalesV2TaskRecord = {
     expiresAt: number;
     providerRequestId: string | null;
     uploadState:
-      | "reserved"
-      | "uploading"
-      | "uploaded"
-      | "failed"
-      | "outcome_unknown";
+      "reserved" | "uploading" | "uploaded" | "failed" | "outcome_unknown";
   }>;
   status: PresalesV2TaskStatus;
   safeEvents: PresalesV2SafeEvent[];
@@ -126,10 +155,7 @@ export type PresalesV2TaskRecord = {
   repair?: PresalesV2RepairRecord | null;
   providerDeleteAt?: string | null;
   providerCleanupDisposition?:
-    | "completed"
-    | "terminal_unavailable"
-    | "outcome_unknown"
-    | null;
+    "completed" | "terminal_unavailable" | "outcome_unknown" | null;
   providerCleanupErrorCode?: string | null;
   projectCleanupAt?: string | null;
   /** Optional so pre-existing revision-3 records keep their frozen behavior. */
@@ -448,6 +474,7 @@ export async function acquirePresalesV2Task(input: {
   contract: PresalesV2TaskRecord["contract"];
   profile: ManagedAgentProfile;
   upstreamModel: string;
+  provider?: WebsiteAgentProvider;
   credentialId: string;
   credentialVersion: number;
   preparation?: {
@@ -484,6 +511,7 @@ export async function acquirePresalesV2Task(input: {
       contract: input.contract,
       profile: input.profile,
       upstreamModel: input.upstreamModel,
+      provider: input.provider ?? "manus",
       operationToken: operationId,
       operationMarker: `FRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: operationId, operationId, contractName: input.contract.name, contractRevision: input.contract.revision, schemaHash: input.contract.schemaHash })}`,
       providerTitle: `FrontMind Website ${input.contract.name} ${operationId}`,
@@ -530,6 +558,17 @@ export async function acquirePresalesV2Task(input: {
     } satisfies PresalesV2IdempotencyIndex);
     return { state: "acquired", record };
   });
+}
+
+/** Server recovery owns provider polling independently of browser sessions. */
+export async function listOutstandingZhipuTasks() {
+  return (await readJsonDirectory<PresalesV2TaskRecord>("tasks"))
+    .filter(
+      (task) =>
+        task.provider === "zhipu" &&
+        ["queued", "running", "result_pending"].includes(task.status),
+    )
+    .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
 }
 
 export async function readPresalesV2Task(localTaskId: string) {
@@ -608,6 +647,32 @@ export async function updatePresalesV2Task(
       next.credentialVersion !== current.credentialVersion ||
       next.profile !== current.profile ||
       next.upstreamModel !== current.upstreamModel ||
+      (next.provider ?? "manus") !== (current.provider ?? "manus") ||
+      ["agentId", "environmentId", "sessionId"].some((key) => {
+        const before =
+          current.providerRuntime?.[
+            key as "agentId" | "environmentId" | "sessionId"
+          ];
+        return (
+          before !== undefined &&
+          before !==
+            next.providerRuntime?.[
+              key as "agentId" | "environmentId" | "sessionId"
+            ]
+        );
+      }) ||
+      Object.entries(current.providerRuntime?.mutations ?? {}).some(
+        ([key, before]) => {
+          const after = next.providerRuntime?.mutations[key];
+          return (
+            !after ||
+            before.requestHash !== after.requestHash ||
+            before.startedAt !== after.startedAt ||
+            (before.resourceId !== undefined &&
+              before.resourceId !== after.resourceId)
+          );
+        },
+      ) ||
       next.operationToken !== current.operationToken ||
       next.operationMarker !== current.operationMarker ||
       next.providerTitle !== current.providerTitle ||

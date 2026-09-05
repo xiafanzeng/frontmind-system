@@ -1,3 +1,7 @@
+import {
+  projectZhipuNativeUsage,
+  newWebsiteAgentProvider,
+} from "./presales-service";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -629,8 +633,7 @@ function createPresalesFileRetentionExecutor(input?: {
         }
         if (typeof values.contentSource === "string") {
           resource.contentSource = values.contentSource as
-            | "user_upload"
-            | "assistant_output";
+            "user_upload" | "assistant_output";
         }
         if (typeof values.parentTaskId === "string") {
           resource.parentTaskId = values.parentTaskId;
@@ -1647,5 +1650,49 @@ describe("presales migrations", () => {
     expect(retentionSql).toContain(
       "CREATE INDEX `presales_upstream_resources_content_expiry_idx` ON `presales_upstream_resources` (`kind`,`contentSource`,`uploadReservedAt`,`contentExpiresAt`,`contentDeletedAt`,`id`)",
     );
+  });
+});
+
+describe("Website provider usage units", () => {
+  it("sums observed native tokens separately from historical Manus credits", () => {
+    expect(
+      projectZhipuNativeUsage([
+        {
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_read_input_tokens: 4,
+          },
+        },
+        {
+          usage: {
+            input_tokens: 8,
+            output_tokens: 2,
+            cache_read_input_tokens: -1,
+          },
+        },
+        {},
+        null,
+      ]),
+    ).toEqual({
+      provider: "zhipu",
+      unit: "tokens",
+      inputTokens: 20,
+      outputTokens: 5,
+      cacheReadInputTokens: 4,
+      observedTasks: 2,
+    });
+  });
+  it("defaults only newly saved Website credentials to Zhipu", () => {
+    const before = process.env.WEBSITE_AGENT_PROVIDER;
+    delete process.env.WEBSITE_AGENT_PROVIDER;
+    try {
+      expect(newWebsiteAgentProvider()).toBe("zhipu");
+      process.env.WEBSITE_AGENT_PROVIDER = "manus";
+      expect(newWebsiteAgentProvider()).toBe("manus");
+    } finally {
+      if (before === undefined) delete process.env.WEBSITE_AGENT_PROVIDER;
+      else process.env.WEBSITE_AGENT_PROVIDER = before;
+    }
   });
 });

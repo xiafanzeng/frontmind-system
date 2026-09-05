@@ -1,3 +1,8 @@
+import {
+  ZhipuManagedClient,
+  ZhipuManagedError,
+} from "./providers/zhipu-managed-client";
+import type { WebsiteAgentProvider } from "./presales-v2-store";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 
@@ -121,6 +126,7 @@ function validatePresalesResourceContentSource(
 }
 
 export type PresalesCredentialStatus = {
+  provider?: WebsiteAgentProvider | null;
   configured: boolean;
   fingerprint: string | null;
   status: "active" | "retired" | "invalid" | null;
@@ -130,6 +136,7 @@ export type PresalesCredentialStatus = {
 };
 
 export type DecryptedPresalesCredential = {
+  provider?: WebsiteAgentProvider;
   id: string;
   version: number;
   apiKey: string;
@@ -149,7 +156,7 @@ export type PresalesCreditUsageTask = {
 
 export type WebsiteApiKeyUsage = {
   windowDays: number;
-  keyTotalUsed: number;
+  keyTotalUsed: number | null;
   websiteUsed: number;
   recentWebsiteTasks: PresalesCreditUsageTask[];
   fetchedAt: number;
@@ -158,6 +165,14 @@ export type WebsiteApiKeyUsage = {
 };
 
 export type WebsiteApiKeyUsageSnapshot = {
+  nativeUsage?: {
+    provider: "zhipu";
+    unit: "tokens";
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    observedTasks: number;
+  };
   windowDays: 30;
   rollingWebsiteUsed: number;
   usageObservedAt: number | null;
@@ -255,11 +270,7 @@ export function projectWebsiteUsageOwnership(input: {
       unsettledCredentialIds.add(row.apiCredentialId);
     }
   }
-  const terminalAgentStates = new Set([
-    "succeeded",
-    "failed",
-    "cancelled",
-  ]);
+  const terminalAgentStates = new Set(["succeeded", "failed", "cancelled"]);
   for (const row of input.agentTaskRows) {
     if (!row.status || !terminalAgentStates.has(row.status)) {
       unsettledCredentialIds.add(row.apiCredentialId);
@@ -328,6 +339,11 @@ function toCredentialStatus(
         : credential.status;
   return {
     configured: Boolean(credential && credential.status === "active"),
+    provider: isVisible
+      ? credential?.provider === "zhipu"
+        ? "zhipu"
+        : "manus"
+      : null,
     fingerprint: isVisible ? (credential?.fingerprint ?? null) : null,
     status,
     version: isVisible ? (credential?.version ?? null) : null,
@@ -352,12 +368,41 @@ export async function getPresalesCredentialStatus() {
   return toCredentialStatus(rows[0]);
 }
 
+export function newWebsiteAgentProvider(): WebsiteAgentProvider {
+  const value = process.env.WEBSITE_AGENT_PROVIDER ?? "zhipu";
+  if (value !== "manus" && value !== "zhipu")
+    throw new AuthServiceError("CONFLICT", "官网执行服务配置无效");
+  return value;
+}
+export async function validateWebsiteApiKey(
+  apiKey: string,
+  provider: WebsiteAgentProvider,
+) {
+  if (provider === "manus") return validateUpstreamApiKey(apiKey);
+  try {
+    const result = await new ZhipuManagedClient({ apiKey }).request(
+      "GET",
+      "/v1/agents?limit=1",
+    );
+    if (!Array.isArray(result.data)) throw new Error("INVALID_RESPONSE");
+  } catch (error) {
+    throw new AuthServiceError(
+      error instanceof ZhipuManagedError &&
+        (error.status === 401 || error.status === 403)
+        ? "INVALID_CREDENTIAL"
+        : "UPSTREAM_UNAVAILABLE",
+      "智谱 Managed Agents 凭据验证失败",
+    );
+  }
+}
+
 export async function replacePresalesApiCredential(
   actorUserId: number,
   apiKey: string,
-  validator: (apiKey: string) => Promise<void> = validateUpstreamApiKey,
+  validator?: (apiKey: string) => Promise<void>,
 ) {
-  await validator(apiKey);
+  const provider = newWebsiteAgentProvider();
+  await (validator ?? ((key) => validateWebsiteApiKey(key, provider)))(apiKey);
   const db = await requireDb();
   const existingRows = await db
     .select()
@@ -405,6 +450,7 @@ export async function replacePresalesApiCredential(
     const credential = {
       id: credentialId,
       slot: PRESALES_CREDENTIAL_SLOT,
+      provider,
       version: nextVersion,
       ...encrypted,
       fingerprint,
@@ -549,29 +595,57 @@ export async function getPresalesCreditUsageSnapshot(
   });
   const snapshotMatchesCredential = Boolean(
     credential &&
-      snapshot &&
-      snapshot.credentialFingerprint === credential.fingerprint,
+    snapshot &&
+    snapshot.credentialFingerprint === credential.fingerprint,
   );
   const keyLastSuccessfulAt = snapshotMatchesCredential
     ? (snapshot?.fetchedAt?.getTime() ?? null)
     : null;
-  const keyHealth: WebsiteApiKeyUsageSnapshot["keyHealth"] = !credential
-    ? "unconfigured"
-    : !snapshotMatchesCredential
-      ? "pending"
-      : snapshot!.syncStatus === "ok"
-        ? "connected"
-        : snapshot!.syncStatus === "pending"
+  const keyHealth: WebsiteApiKeyUsageSnapshot["keyHealth"] =
+    credential?.provider === "zhipu"
+      ? credential.validationStatus === "invalid"
+        ? "invalid_or_revoked"
+        : credential.validationStatus === "verified"
+          ? "connected"
+          : "pending"
+      : !credential
+        ? "unconfigured"
+        : !snapshotMatchesCredential
           ? "pending"
-          : snapshot!.syncStatus === "unconfigured"
-            ? "unconfigured"
-            : snapshot!.errorCode === "INVALID_CREDENTIAL" ||
-                snapshot!.errorCode === "invalid_or_revoked"
-              ? "invalid_or_revoked"
-              : "sync_error";
+          : snapshot!.syncStatus === "ok"
+            ? "connected"
+            : snapshot!.syncStatus === "pending"
+              ? "pending"
+              : snapshot!.syncStatus === "unconfigured"
+                ? "unconfigured"
+                : snapshot!.errorCode === "INVALID_CREDENTIAL" ||
+                    snapshot!.errorCode === "invalid_or_revoked"
+                  ? "invalid_or_revoked"
+                  : "sync_error";
+  const zhipuRuntimeRows =
+    credential?.provider === "zhipu"
+      ? await db
+          .select({ runtime: agentTasks.providerRuntime })
+          .from(agentTasks)
+          .innerJoin(
+            agentOperations,
+            eq(agentTasks.operationId, agentOperations.id),
+          )
+          .where(
+            and(
+              eq(agentOperations.scope, "website_frontend"),
+              eq(agentOperations.provider, "zhipu"),
+              gte(agentOperations.createdAt, new Date(cutoffMs)),
+            ),
+          )
+      : [];
+  const nativeUsage = projectZhipuNativeUsage(
+    zhipuRuntimeRows.map((row) => row.runtime),
+  );
   const observedAt = ledgerRows[0]?.observedAt;
   return {
     windowDays: 30,
+    ...(credential?.provider === "zhipu" ? { nativeUsage } : {}),
     rollingWebsiteUsed: Math.max(0, Number(ledgerRows[0]?.used) || 0),
     usageObservedAt:
       observedAt instanceof Date
@@ -579,9 +653,12 @@ export async function getPresalesCreditUsageSnapshot(
         : Number.isFinite(Number(observedAt))
           ? Number(observedAt)
           : null,
-    keyPoolTotalUsed: snapshotMatchesCredential && keyLastSuccessfulAt !== null
-      ? Math.max(0, Number(snapshot!.used) || 0)
-      : null,
+    keyPoolTotalUsed:
+      credential?.provider !== "zhipu" &&
+      snapshotMatchesCredential &&
+      keyLastSuccessfulAt !== null
+        ? Math.max(0, Number(snapshot!.used) || 0)
+        : null,
     keyLastSuccessfulAt,
     keyLastAttemptAt: snapshotMatchesCredential
       ? (snapshot!.updatedAt?.getTime() ?? null)
@@ -724,6 +801,7 @@ function toDecryptedCredential(
     id: credential.id,
     version: credential.version,
     apiKey: decryptPresalesApiKey(credential),
+    provider: credential.provider === "zhipu" ? "zhipu" : "manus",
     fingerprint: credential.fingerprint,
     status: credential.status,
     verifiedAt: credential.verifiedAt,
@@ -773,7 +851,10 @@ export async function testPresalesApiCredential(apiKey?: string) {
   if (!value) {
     throw new AuthServiceError("NOT_FOUND", "请先配置售前 API Key");
   }
-  await validateUpstreamApiKey(value);
+  await validateWebsiteApiKey(
+    value,
+    apiKey ? newWebsiteAgentProvider() : (credential?.provider ?? "manus"),
+  );
   return { ok: true } as const;
 }
 
@@ -2625,6 +2706,38 @@ export function aggregatePresalesCreditUsagePage(input: {
   };
 }
 
+export function projectZhipuNativeUsage(
+  runtimes: Array<Record<string, unknown> | null>,
+) {
+  const result = {
+    provider: "zhipu" as const,
+    unit: "tokens" as const,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    observedTasks: 0,
+  };
+  for (const runtime of runtimes) {
+    const usage = runtime?.usage as Record<string, unknown> | undefined;
+    if (!usage || typeof usage !== "object") continue;
+    result.observedTasks += 1;
+    for (const [field, target] of [
+      ["input_tokens", "inputTokens"],
+      ["output_tokens", "outputTokens"],
+      ["cache_read_input_tokens", "cacheReadInputTokens"],
+    ] as const) {
+      const value = usage[field];
+      if (
+        typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        value >= 0
+      )
+        result[target] += value;
+    }
+  }
+  return result;
+}
+
 export async function getPresalesCreditUsage(
   windowDays = CREDIT_USAGE_LOOKBACK_DAYS,
   now = Date.now(),
@@ -2656,12 +2769,34 @@ export async function getPresalesCreditUsage(
     };
   }
 
-  const credentialIds = credentialRows.map((credential) => credential.id);
+  const activeZhipu = credentialRows.some(
+    (credential) =>
+      credential.status === "active" && credential.provider === "zhipu",
+  );
+  if (activeZhipu) {
+    // The existing local ledger remains the authority for historical Manus
+    // credits. Zhipu token observations are exposed separately by the snapshot.
+    const historical = await getPresalesCreditUsageSnapshot(now);
+    return {
+      windowDays: normalizedWindowDays,
+      keyTotalUsed: null,
+      websiteUsed: historical.rollingWebsiteUsed,
+      recentWebsiteTasks: historical.recentWebsiteTasks,
+      fetchedAt: now,
+      complete: true,
+      attributionComplete: true,
+    };
+  }
+  const credentialIds = credentialRows
+    .filter((credential) => credential.provider !== "zhipu")
+    .map((credential) => credential.id);
   const credentialByFingerprint = new Map<
     string,
     ReturnType<typeof toDecryptedCredential>
   >();
-  for (const credentialRow of selectPhysicalCredentialRows(credentialRows)) {
+  for (const credentialRow of selectPhysicalCredentialRows(
+    credentialRows.filter((credential) => credential.provider !== "zhipu"),
+  )) {
     if (!credentialByFingerprint.has(credentialRow.fingerprint)) {
       credentialByFingerprint.set(
         credentialRow.fingerprint,

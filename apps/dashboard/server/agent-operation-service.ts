@@ -1,3 +1,4 @@
+import { executionEventMessage } from "./providers/execution-log-projector";
 import { randomUUID } from "node:crypto";
 
 import { and, eq, isNull } from "drizzle-orm";
@@ -111,7 +112,8 @@ export async function ensureWebsiteAgentOperation(
       existing[0].apiCredentialId !== record.credentialId ||
       existing[0].credentialVersion !== record.credentialVersion ||
       existing[0].publicProfile !== record.profile ||
-      existing[0].upstreamModel !== record.upstreamModel
+      existing[0].upstreamModel !== record.upstreamModel ||
+      (existing[0].provider ?? "manus") !== (record.provider ?? "manus")
     ) {
       throw new Error("AGENT_OPERATION_IDEMPOTENCY_CONFLICT");
     }
@@ -133,6 +135,7 @@ export async function ensureWebsiteAgentOperation(
       credentialVersion: record.credentialVersion,
       publicProfile: record.profile,
       upstreamModel: record.upstreamModel,
+      provider: record.provider ?? "manus",
       status: record.status,
       errorCode: record.errorCode,
     });
@@ -187,7 +190,8 @@ export async function ensureWebsiteAgentRepairOperation(
       existing[0].apiCredentialId !== record.credentialId ||
       existing[0].credentialVersion !== record.credentialVersion ||
       existing[0].publicProfile !== record.profile ||
-      existing[0].upstreamModel !== record.upstreamModel
+      existing[0].upstreamModel !== record.upstreamModel ||
+      (existing[0].provider ?? "manus") !== (record.provider ?? "manus")
     ) {
       throw new Error("AGENT_REPAIR_IDEMPOTENCY_CONFLICT");
     }
@@ -208,6 +212,7 @@ export async function ensureWebsiteAgentRepairOperation(
     credentialVersion: record.credentialVersion,
     publicProfile: record.profile,
     upstreamModel: record.upstreamModel,
+    provider: record.provider ?? "manus",
     status: repair.status,
     errorCode: record.errorCode,
   });
@@ -226,6 +231,7 @@ export async function persistWebsiteAgentTaskState(
     id: string;
     type: string;
     timestamp: number;
+    [key: string]: unknown;
   }> = [],
 ) {
   const db = await requireDb();
@@ -240,6 +246,7 @@ export async function persistWebsiteAgentTaskState(
         providerTaskId: record.providerTaskId,
         providerRequestId: record.providerRequestId,
         providerState: record.status,
+        providerRuntime: record.providerRuntime ?? null,
         lastMessageSyncAt:
           record.safeEvents.length > 0 ? new Date() : undefined,
         resultDeadlineAt: record.resultDeadlineAt
@@ -273,6 +280,9 @@ export async function persistWebsiteAgentTaskState(
             id: event.id,
             type: event.type,
             timestamp: event.timestamp,
+            ...(executionEventMessage(event)
+              ? { message: executionEventMessage(event) }
+              : {}),
           },
         })
         .onDuplicateKeyUpdate({
@@ -283,6 +293,9 @@ export async function persistWebsiteAgentTaskState(
               id: event.id,
               type: event.type,
               timestamp: event.timestamp,
+              ...(executionEventMessage(event)
+                ? { message: executionEventMessage(event) }
+                : {}),
             },
           },
         });

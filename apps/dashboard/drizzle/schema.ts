@@ -197,6 +197,7 @@ export const presalesApiCredentials = mysqlTable(
   "presales_api_credentials",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    provider: varchar("provider", { length: 16 }).default("manus").notNull(),
     slot: varchar("slot", { length: 32 }).default("website").notNull(),
     version: int("version").notNull(),
     encryptionVersion: int("encryptionVersion").default(1).notNull(),
@@ -240,6 +241,7 @@ export const agentOperations = mysqlTable(
   "agent_operations",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    provider: varchar("provider", { length: 16 }).default("manus").notNull(),
     scope: mysqlEnum("scope", ["managed_user", "website_frontend"]).notNull(),
     accountUserId: int("account_user_id"),
     presalesProjectId: varchar("presales_project_id", { length: 80 }),
@@ -314,6 +316,7 @@ export const agentTasks = mysqlTable(
   "agent_tasks",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    providerRuntime: json("provider_runtime").$type<Record<string, unknown>>(),
     operationId: varchar("operation_id", { length: 36 }).notNull(),
     providerTaskId: varchar("provider_task_id", { length: 255 }),
     providerRequestId: varchar("provider_request_id", { length: 512 }),
@@ -4990,4 +4993,3 @@ export const monitoringAccountLinks = mysqlTable(
     ),
   ],
 );
-

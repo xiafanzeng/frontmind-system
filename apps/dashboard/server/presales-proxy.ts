@@ -615,8 +615,11 @@ function sendKnownError(res: Response, error: unknown) {
 
 async function requireActiveCredential() {
   const credential = await getActivePresalesCredential();
-  if (!credential) {
-    throw new AuthServiceError("INVALID_CREDENTIAL", "售前 API Key 尚未配置");
+  if (!credential || credential.provider === "zhipu") {
+    throw new AuthServiceError(
+      "INVALID_CREDENTIAL",
+      "此旧接口需要历史 Manus 凭据，请使用官网新版任务接口",
+    );
   }
   return credential;
 }
@@ -1024,8 +1027,7 @@ router.post("/files", fileJsonParser, async (req, res) => {
       );
     }
     const payload = redactUpstreamPayload(response.data, credential.apiKey) as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     const uploadUrl =
       typeof payload?.upload_url === "string" ? payload.upload_url : "";
     if (reservation) {

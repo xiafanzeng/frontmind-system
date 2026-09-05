@@ -129,9 +129,7 @@ export type TwentyFirstNativeTemplateArchive = {
 };
 
 export type TwentyFirstNativeTemplateFailureCategory =
-  | "catalog_unavailable"
-  | "plan_ineligible"
-  | "download_unavailable";
+  "catalog_unavailable" | "plan_ineligible" | "download_unavailable";
 
 export class TwentyFirstNativeTemplateError extends AuthServiceError {
   constructor(
@@ -1368,9 +1366,9 @@ export function projectTwentyFirstToolPayload(
       (item): item is { type: "text"; text: string } =>
         Boolean(
           item &&
-            typeof item === "object" &&
-            (item as { type?: unknown }).type === "text" &&
-            typeof (item as { text?: unknown }).text === "string",
+          typeof item === "object" &&
+          (item as { type?: unknown }).type === "text" &&
+          typeof (item as { text?: unknown }).text === "string",
         ),
     );
     const totalTextBytes = textItems.reduce(
@@ -1408,9 +1406,9 @@ export function projectTwentyFirstToolPayload(
     ? result.content.filter((item): item is { type: "text"; text: string } =>
         Boolean(
           item &&
-            typeof item === "object" &&
-            (item as { type?: unknown }).type === "text" &&
-            typeof (item as { text?: unknown }).text === "string",
+          typeof item === "object" &&
+          (item as { type?: unknown }).type === "text" &&
+          typeof (item as { text?: unknown }).text === "string",
         ),
       )
     : [];
@@ -2151,8 +2149,7 @@ type TwentyFirstCredentialInspectionCache = {
 };
 
 let twentyFirstCredentialInspectionCache:
-  | TwentyFirstCredentialInspectionCache
-  | undefined;
+  TwentyFirstCredentialInspectionCache | undefined;
 
 function rememberTwentyFirstCredentialInspection(
   credential: Pick<PresalesApiCredential, "id" | "version" | "fingerprint">,
@@ -2189,8 +2186,8 @@ function toCredentialStatus(
   const visible = Boolean(credential && credential.status !== "deleted");
   const configured = Boolean(
     credential &&
-      credential.status === "active" &&
-      credential.validationStatus === "verified",
+    credential.status === "active" &&
+    credential.validationStatus === "verified",
   );
   const status =
     !credential || credential.status === "deleted"
@@ -2202,8 +2199,8 @@ function toCredentialStatus(
     configured,
     revocationPending: Boolean(
       credential &&
-        credential.status !== "deleted" &&
-        credential.validationStatus === "invalid",
+      credential.status !== "deleted" &&
+      credential.validationStatus === "invalid",
     ),
     fingerprint: visible ? (credential?.fingerprint ?? null) : null,
     status,
@@ -2365,6 +2362,7 @@ export async function replaceTwentyFirstApiCredential(
     const credential = {
       id: credentialId,
       slot: TWENTY_FIRST_CREDENTIAL_SLOT,
+      provider: "twenty_first",
       version: nextVersion,
       ...encrypted,
       fingerprint,

@@ -831,7 +831,8 @@ async function getActiveMonitorCredential() {
   const dedicatedCredential = monitorCredentialFromEnv();
   if (dedicatedCredential) return dedicatedCredential;
   if (process.env.NODE_ENV === "production") return null;
-  return getActivePresalesCredential();
+  const legacy = await getActivePresalesCredential();
+  return legacy?.provider === "zhipu" ? null : legacy;
 }
 
 async function getMonitorCredentialById(credentialId: string) {
@@ -839,7 +840,8 @@ async function getMonitorCredentialById(credentialId: string) {
   if (envCredential?.id === credentialId) return envCredential;
   if (credentialId.startsWith(ENV_MONITOR_CREDENTIAL_PREFIX)) return null;
   if (process.env.NODE_ENV === "production") return null;
-  return getPresalesCredentialById(credentialId);
+  const legacy = await getPresalesCredentialById(credentialId);
+  return legacy?.provider === "zhipu" ? null : legacy;
 }
 
 function toUpstreamMonitorPlatform(platform: MonitorPlatform) {
@@ -920,12 +922,12 @@ function sameMonitorRequestSnapshot(
 ) {
   return Boolean(
     left &&
-      right &&
-      left.consumerTaskId === right.consumerTaskId &&
-      left.screenshot === right.screenshot &&
-      (left.monitorKeyword ?? "") === (right.monitorKeyword ?? "") &&
-      (left.region?.scope ?? "") === (right.region?.scope ?? "") &&
-      (left.region?.code ?? "") === (right.region?.code ?? ""),
+    right &&
+    left.consumerTaskId === right.consumerTaskId &&
+    left.screenshot === right.screenshot &&
+    (left.monitorKeyword ?? "") === (right.monitorKeyword ?? "") &&
+    (left.region?.scope ?? "") === (right.region?.scope ?? "") &&
+    (left.region?.code ?? "") === (right.region?.code ?? ""),
   );
 }
 
@@ -2624,7 +2626,7 @@ function publicMonitorRun(
         const referenceList = checkpointItemReferenceList(sourceRecord);
         const screenshotAvailable = Boolean(
           request?.screenshot === 1 &&
-            safeMonitorScreenshotUrl(sourceRecord.pageScreenshot),
+          safeMonitorScreenshotUrl(sourceRecord.pageScreenshot),
         );
         return [
           {
@@ -3843,9 +3845,7 @@ const requestMonitorScreenshot: MonitorScreenshotRequester = async (input) => {
   };
 };
 
-export class AxiosMonitorScreenshotTransport
-  implements MonitorScreenshotTransport
-{
+export class AxiosMonitorScreenshotTransport implements MonitorScreenshotTransport {
   constructor(
     private readonly request: MonitorScreenshotRequester = requestMonitorScreenshot,
   ) {}
@@ -4576,7 +4576,7 @@ export class PresalesMonitorService {
       const recoveryDeadline = monitorRecoveryDeadline(lease.run);
       const recoveryExpired = Boolean(
         recoveryDeadline &&
-          pollStartedAt.getTime() >= recoveryDeadline.getTime(),
+        pollStartedAt.getTime() >= recoveryDeadline.getTime(),
       );
       const existingCheckpoint = monitorCheckpoint(lease.run.checkpoint);
       const statusChanged =

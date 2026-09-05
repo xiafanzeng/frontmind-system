@@ -1,3 +1,8 @@
+import { executionEventMessage } from "./providers/execution-log-projector";
+import {
+  createWebsiteAgentClient,
+  ZhipuWebsiteAgentProvider,
+} from "./providers/website-agent-provider";
 import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -53,6 +58,7 @@ import {
   readPresalesV2Artifact,
   readPresalesV2Asset,
   readPresalesV2Task,
+  listOutstandingZhipuTasks,
   recordPresalesV2Artifact,
   updatePresalesV2Asset,
   updatePresalesV2Task as updatePresalesV2TaskStore,
@@ -470,11 +476,14 @@ async function clientForTask(record: PresalesV2TaskRecord) {
       record.operationId,
     );
   }
-  return new ManusV2Client({
-    apiKey: credential.apiKey,
-    baseUrl: getUpstreamBaseUrl(),
-    rateLimitScope: "website-managed-provider",
-  });
+  if ((credential.provider ?? "manus") !== (record.provider ?? "manus")) {
+    throw new PresalesV2HttpError("TASK_PROVIDER_CONFLICT", 409);
+  }
+  return createWebsiteAgentClient(
+    credential.apiKey,
+    record,
+    updatePresalesV2Task,
+  );
 }
 
 async function readStoredBytes(localAssetId: string) {
@@ -574,7 +583,10 @@ class PresalesV2FailurePersistenceError extends Error {
 export type PresalesV2DispatchDependencies = {
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
-  createClient: (apiKey: string) => PresalesV2DispatchClient;
+  createClient: (
+    apiKey: string,
+    record: PresalesV2TaskRecord,
+  ) => PresalesV2DispatchClient;
   readStoredBytes: typeof readStoredBytes;
   updateTask: typeof updatePresalesV2Task;
   persistProviderFileLease: typeof persistWebsiteProviderFileLease;
@@ -586,12 +598,8 @@ function dispatchDependencies(
   return {
     now: () => new Date(),
     sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-    createClient: (apiKey) =>
-      new ManusV2Client({
-        apiKey,
-        baseUrl: getUpstreamBaseUrl(),
-        rateLimitScope: "website-managed-provider",
-      }),
+    createClient: (apiKey, record) =>
+      createWebsiteAgentClient(apiKey, record, updatePresalesV2Task),
     readStoredBytes,
     updateTask: updatePresalesV2Task,
     persistProviderFileLease: persistWebsiteProviderFileLease,
@@ -728,7 +736,7 @@ async function dispatchPresalesV2Task(
   let record = input.record;
   let client: PresalesV2DispatchClient;
   try {
-    client = dependencies.createClient(input.apiKey);
+    client = dependencies.createClient(input.apiKey, record);
   } catch (error) {
     await settlePresalesV2PreparationFailure(
       record.localTaskId,
@@ -904,8 +912,7 @@ async function dispatchPresalesV2Task(
       let inMemoryCandidateAttempts = candidateCount();
       let lastTransientFailure: unknown = null;
       let uploaded:
-        | Awaited<ReturnType<PresalesV2DispatchClient["uploadFile"]>>
-        | undefined;
+        Awaited<ReturnType<PresalesV2DispatchClient["uploadFile"]>> | undefined;
 
       const reserveFreshCandidateAttempt = async () => {
         if (!record.preparation) {
@@ -1252,9 +1259,16 @@ function localSafeEventId(localTaskId: string, providerEventId: string) {
 
 export function presalesV2SafeEvents(
   localTaskId: string,
-  events: ReadonlyArray<Pick<ManusV2MessageEvent, "id" | "type" | "timestamp">>,
+  events: ReadonlyArray<
+    Pick<ManusV2MessageEvent, "id" | "type" | "timestamp"> & {
+      message?: string;
+    }
+  >,
 ) {
-  return events.map((event) => ({
+  return events.slice(-200).map((event) => ({
+    ...(executionEventMessage(event)
+      ? { message: executionEventMessage(event) }
+      : {}),
     id: /^safeevt_[a-f0-9]{64}$/u.test(event.id)
       ? event.id
       : localSafeEventId(localTaskId, event.id),
@@ -1907,21 +1921,28 @@ function latestAcceptedCandidate(
   )[0];
 }
 
+function comparePresalesV2Events(
+  left: ManusV2MessageEvent,
+  right: ManusV2MessageEvent,
+) {
+  return (
+    left.timestamp - right.timestamp ||
+    (Number.isInteger(left.providerOriginalRank) &&
+    Number.isInteger(right.providerOriginalRank)
+      ? left.providerOriginalRank! - right.providerOriginalRank!
+      : left.id.localeCompare(right.id))
+  );
+}
+
 function presalesV2LatestOperationSegment(
   events: ReadonlyArray<ManusV2MessageEvent>,
 ) {
   const latestUserMessage = [...events]
     .filter((event) => event.type === "user_message")
-    .sort(
-      (left, right) =>
-        right.timestamp - left.timestamp || right.id.localeCompare(left.id),
-    )[0];
+    .sort((left, right) => comparePresalesV2Events(right, left))[0];
   if (!latestUserMessage) return [...events];
   return events.filter(
-    (event) =>
-      event.timestamp > latestUserMessage.timestamp ||
-      (event.timestamp === latestUserMessage.timestamp &&
-        event.id.localeCompare(latestUserMessage.id) >= 0),
+    (event) => comparePresalesV2Events(event, latestUserMessage) >= 0,
   );
 }
 
@@ -1935,9 +1956,8 @@ export function decodePresalesV2StructuredResultV3(
   } = {},
 ): PresalesV2StructuredResultDecode {
   const operationEvents = presalesV2LatestOperationSegment(events);
-  const ordered = [...operationEvents].sort(
-    (left, right) =>
-      right.timestamp - left.timestamp || right.id.localeCompare(left.id),
+  const ordered = [...operationEvents].sort((left, right) =>
+    comparePresalesV2Events(right, left),
   );
   const structuredEventCount = ordered.filter(
     (event) => event.type === "structured_output_result",
@@ -2096,10 +2116,7 @@ function presalesV2EventTypeCounts(events: ReadonlyArray<ManusV2MessageEvent>) {
 }
 
 type PresalesV2WaitingClassification =
-  | "cascade"
-  | "ask_user"
-  | "other"
-  | "missing";
+  "cascade" | "ask_user" | "other" | "missing";
 
 function classifyPresalesV2Waiting(
   waiting: ReturnType<typeof latestManusV2WaitingDetail>,
@@ -2248,21 +2265,34 @@ async function localizeArtifact(input: {
     return existing;
   }
 
-  const normalizedUrl = assertSafeExternalUrl(input.attachment.url);
-  if (new URL(normalizedUrl).protocol !== "https:") {
-    throw new PresalesV2HttpError("UNSAFE_ARTIFACT_URL", 502);
+  let response: {
+    status: number;
+    data: Readable;
+    headers: Record<string, unknown>;
+  };
+  if (input.record.provider === "zhipu") {
+    const match = /^zhipu-file:([A-Za-z0-9_-]{1,255})$/u.exec(
+      input.attachment.url,
+    );
+    if (!match) throw new PresalesV2HttpError("UNSAFE_ARTIFACT_URL", 502);
+    const client = await clientForTask(input.record);
+    if (!(client instanceof ZhipuWebsiteAgentProvider))
+      throw new PresalesV2HttpError("TASK_PROVIDER_CONFLICT", 409);
+    response = await client.downloadArtifact(match[1]!);
+  } else {
+    const normalizedUrl = assertSafeExternalUrl(input.attachment.url);
+    if (new URL(normalizedUrl).protocol !== "https:")
+      throw new PresalesV2HttpError("UNSAFE_ARTIFACT_URL", 502);
+    response = await axios.get<Readable>(normalizedUrl, {
+      ...safeExternalRequestOptions,
+      beforeRedirect: presalesV2ArtifactBeforeRedirect,
+      responseType: "stream",
+      timeout: 120_000,
+      maxContentLength: MAX_ASSET_BYTES,
+      maxBodyLength: MAX_ASSET_BYTES,
+      validateStatus: () => true,
+    });
   }
-  const response = await axios.get<Readable>(normalizedUrl, {
-    ...safeExternalRequestOptions,
-    // The generic egress helper permits both protocols for unrelated callers.
-    // Provider artifacts are HTTPS-only, including every redirect hop.
-    beforeRedirect: presalesV2ArtifactBeforeRedirect,
-    responseType: "stream",
-    timeout: 120_000,
-    maxContentLength: MAX_ASSET_BYTES,
-    maxBodyLength: MAX_ASSET_BYTES,
-    validateStatus: () => true,
-  });
   if (response.status !== 200) {
     response.data.destroy();
     throw new PresalesV2HttpError("ARTIFACT_DOWNLOAD_FAILED", 502, true);
@@ -2835,8 +2865,8 @@ async function reconcileTask(
   const relevantEvents = presalesV2LatestOperationSegment(events);
   const state = latestManusV2TaskState(relevantEvents);
   let decodeConclusion:
-    | PresalesV2StructuredResultDecode["kind"]
-    | "not_applicable" = "not_applicable";
+    PresalesV2StructuredResultDecode["kind"] | "not_applicable" =
+    "not_applicable";
   let artifactConclusion: "missing" | "single" | "multiple" | "not_applicable" =
     "not_applicable";
 
@@ -3049,7 +3079,7 @@ async function reconcileTask(
       decodeConclusion,
       artifactConclusion,
     });
-    if (waitingClassification !== "ask_user") {
+    if (waitingClassification !== "ask_user" && record.provider !== "zhipu") {
       return (
         (await dependencies.updateTask(
           localTaskId,
@@ -3163,6 +3193,35 @@ async function reconcileTask(
       events,
     )) ?? record
   );
+}
+
+let zhipuRecoveryTimer: ReturnType<typeof setInterval> | undefined;
+export function startWebsiteAgentRecoveryScheduler() {
+  if (zhipuRecoveryTimer) return;
+  let active = false;
+  const run = async () => {
+    if (active) return;
+    active = true;
+    try {
+      const tasks = (await listOutstandingZhipuTasks()).slice(0, 8);
+      for (const record of tasks) {
+        try {
+          await reconcileTask(record.localTaskId);
+        } catch {
+          console.warn("[Website Agents] bounded recovery deferred", {
+            taskHash: presalesV2TaskHash(record.localTaskId),
+          });
+        }
+      }
+    } catch {
+      console.warn("[Website Agents] recovery inventory deferred");
+    } finally {
+      active = false;
+    }
+  };
+  zhipuRecoveryTimer = setInterval(() => void run(), 20_000);
+  zhipuRecoveryTimer.unref();
+  void run();
 }
 
 export const presalesV2ReconcileTestHooks = {
@@ -3416,7 +3475,11 @@ router.post("/tasks", jsonParser, async (req, res) => {
       projectId: input.projectId ?? null,
       contract: input.contract,
       profile: contract.profile,
-      upstreamModel: managedAgentProfileModel(contract.profile),
+      upstreamModel:
+        credential.provider === "zhipu"
+          ? "glm-5.3"
+          : managedAgentProfileModel(contract.profile),
+      provider: credential.provider ?? "manus",
       credentialId: credential.id,
       credentialVersion: credential.version,
       preparation: {

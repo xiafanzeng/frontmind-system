@@ -27,6 +27,35 @@ async function migration(name: string) {
   return readFile(path.join(drizzleRoot, name), "utf8");
 }
 
+const parityMigrationName = "0058_dashboard_production_parity";
+
+// The unified repository introduces the production Dashboard features together
+// after its existing monitoring migrations. Scope feature assertions by the
+// statement's owning table, not by the retired standalone migration number.
+async function parityMigration(...tables: string[]) {
+  const sql = await migration(`${parityMigrationName}.sql`);
+  if (tables.length === 0) return sql;
+  const statements = sql
+    .split("--> statement-breakpoint")
+    .map((value) => value.trim());
+  const owned = statements.map((statement) => ({
+    statement,
+    table:
+      /^(?:CREATE|ALTER) TABLE `([^`]+)`/u.exec(statement)?.[1] ??
+      /^CREATE (?:UNIQUE )?INDEX `[^`]+` ON `([^`]+)`/u.exec(statement)?.[1],
+  }));
+  for (const table of tables) {
+    expect(
+      owned.some((entry) => entry.table === table),
+      `Missing parity table ${table}`,
+    ).toBe(true);
+  }
+  return owned
+    .filter((entry) => entry.table && tables.includes(entry.table))
+    .map((entry) => entry.statement)
+    .join("\n--> statement-breakpoint\n");
+}
+
 describe("service portal migration chain", () => {
   it("keeps a complete Drizzle snapshot chain for every registered migration", async () => {
     const journal = JSON.parse(
@@ -112,25 +141,68 @@ describe("service portal migration chain", () => {
       "0052_delivery_ticket_retention_guards",
       "0053_low_dorian_gray",
       "0054_file_content_retention",
-      "0055_provisioning_market_edition",
-      "0056_project_order_deletion_tombstones",
-      "0057_productive_kang",
-      "0058_jenova_brand_tracking",
-      "0059_delivery_ticket_workflow_contracts",
-      "0060_knowledge_base_tree_policy",
-      "0061_knowledge_base_resilient_manus_v2",
-      "0062_hard_glorian",
-      "0063_lean_blue_marvel",
-      "0064_siteops_v1",
-      "0065_siteops_alidns_oauth",
-      "0066_visual_candidate_pools",
-      "0067_siteops_revision_inputs",
-      "0068_siteops_knowledge_input_epoch",
+      "0055_mean_dark_beast",
+      "0056_monitoring_domain",
+      "0057_concerned_ares",
+      "0058_dashboard_production_parity",
+      "0059_website_zhipu_provider",
+    ]);
+  });
+
+  it("preserves existing data and columns across the consolidated production expansion", async () => {
+    const sql = await parityMigration();
+    const statements = sql
+      .split("--> statement-breakpoint")
+      .map((statement) => statement.trim());
+    const nullableExpansions = [
+      "ALTER TABLE `website_style_sample_batches` MODIFY COLUMN `ticketId` varchar(36);",
+      "ALTER TABLE `website_style_samples` MODIFY COLUMN `attachmentId` varchar(36);",
+    ];
+    expect(
+      statements.filter((statement) => /\bMODIFY COLUMN\b/u.test(statement)),
+    ).toEqual(nullableExpansions);
+    for (const statement of statements) {
+      if (nullableExpansions.includes(statement)) continue;
+      expect(statement).toMatch(
+        /^(?:CREATE TABLE `|CREATE (?:UNIQUE )?INDEX `|ALTER TABLE `[^`]+` ADD )/u,
+      );
+      expect(statement).not.toMatch(
+        /\b(?:DROP|RENAME)\s+(?:TABLE|COLUMN|INDEX)|\bCREATE\s+TRIGGER/iu,
+      );
+    }
+    const before = JSON.parse(await migration("meta/0057_snapshot.json"));
+    const after = JSON.parse(await migration("meta/0058_snapshot.json"));
+    for (const [table, definition] of Object.entries(before.tables) as Array<
+      [string, { columns: Record<string, object> }]
+    >) {
+      expect(after.tables).toHaveProperty(table);
+      for (const [column, previous] of Object.entries(definition.columns)) {
+        const nullable =
+          (table === "website_style_sample_batches" && column === "ticketId") ||
+          (table === "website_style_samples" && column === "attachmentId");
+        expect(
+          after.tables[table].columns[column],
+          `${table}.${column}`,
+        ).toEqual(nullable ? { ...previous, notNull: false } : previous);
+      }
+    }
+  });
+
+  it("adds only provider routing and recovery fields after the production parity snapshot", async () => {
+    const sql = await migration("0059_website_zhipu_provider.sql");
+    expect(
+      sql
+        .split("--> statement-breakpoint")
+        .map((statement) => statement.trim()),
+    ).toEqual([
+      "ALTER TABLE `agent_operations` ADD `provider` varchar(16) DEFAULT 'manus' NOT NULL;",
+      "ALTER TABLE `agent_tasks` ADD `provider_runtime` json;",
+      "ALTER TABLE `presales_api_credentials` ADD `provider` varchar(16) DEFAULT 'manus' NOT NULL;",
     ]);
   });
 
   it("adds immutable Website project attribution as an expand-only table", async () => {
-    const migrationSql = await migration("0063_lean_blue_marvel.sql");
+    const migrationSql = await parityMigration("website_project_attributions");
     expect(migrationSql).toContain(
       "CREATE TABLE `website_project_attributions`",
     );
@@ -143,7 +215,7 @@ describe("service portal migration chain", () => {
     );
     const snapshot = JSON.parse(
       await readFile(
-        path.join(drizzleRoot, "meta", "0063_snapshot.json"),
+        path.join(drizzleRoot, "meta", "0058_snapshot.json"),
         "utf8",
       ),
     );
@@ -153,7 +225,11 @@ describe("service portal migration chain", () => {
   });
 
   it("adds durable visual candidate pools, pages and item references as one expand migration", async () => {
-    const migrationSql = await migration("0066_visual_candidate_pools.sql");
+    const migrationSql = await parityMigration(
+      "visual_candidate_pools",
+      "visual_candidate_pool_pages",
+      "visual_candidate_pool_items",
+    );
     expect(migrationSql).toContain("CREATE TABLE `visual_candidate_pools`");
     expect(migrationSql).toContain(
       "CREATE TABLE `visual_candidate_pool_pages`",
@@ -173,11 +249,14 @@ describe("service portal migration chain", () => {
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations["0066_visual_candidate_pools"]).toBe("expand");
+    expect(policy.migrations[parityMigrationName]).toBe("expand");
   });
 
   it("adds immutable revision input assets as an expand-only table", async () => {
-    const migrationSql = await migration("0067_siteops_revision_inputs.sql");
+    const migrationSql = await parityMigration(
+      "site_build_input_assets",
+      "site_builds",
+    );
     expect(migrationSql).toContain("CREATE TABLE `site_build_input_assets`");
     expect(migrationSql).toContain(
       "CONSTRAINT `site_build_input_assets_build_source_uq` UNIQUE(`build_id`,`source_asset_id`)",
@@ -185,26 +264,22 @@ describe("service portal migration chain", () => {
     expect(migrationSql).toContain(
       "CONSTRAINT `site_build_input_assets_local_asset_id_local_assets_id_fk`",
     );
-    expect(migrationSql).toContain(
-      "ALTER TABLE `site_builds` ADD `content_plan_local_asset_id` varchar(36)",
-    );
-    expect(migrationSql).toContain(
-      "ALTER TABLE `site_builds` ADD `content_plan_sha256` varchar(64)",
-    );
+    expect(migrationSql).toContain("`content_plan_local_asset_id` varchar(36)");
+    expect(migrationSql).toContain("`content_plan_sha256` varchar(64)");
     expect(migrationSql).not.toMatch(
       /(?:^|-->\s*statement-breakpoint\s*)(?:UPDATE|INSERT|REPLACE|DELETE|DROP|TRUNCATE|RENAME)\b/imu,
     );
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations["0067_siteops_revision_inputs"]).toBe("expand");
+    expect(policy.migrations[parityMigrationName]).toBe("expand");
   });
 
   it("adds nullable SiteOps knowledge epochs without backfilling historical rows", async () => {
-    const migrationSql = await migration(
-      "0068_siteops_knowledge_input_epoch.sql",
-    );
-    for (const coordinate of [
+    const migrationSql = await parityMigration();
+    const before = JSON.parse(await migration("meta/0057_snapshot.json"));
+    const after = JSON.parse(await migration("meta/0058_snapshot.json"));
+    for (const [table, column] of [
       ["site_projects", "knowledge_input_epoch_id"],
       ["knowledge_base_builds", "site_ops_knowledge_input_epoch_id"],
       ["knowledge_base_snapshots", "siteOpsKnowledgeInputEpochId"],
@@ -212,8 +287,17 @@ describe("service portal migration chain", () => {
       ["local_assets", "site_ops_knowledge_input_epoch_id"],
       ["site_build_input_assets", "site_ops_knowledge_input_epoch_id"],
     ] as const) {
-      expect(migrationSql).toContain(
-        `ALTER TABLE \`${coordinate[0]}\` ADD \`${coordinate[1]}\` varchar(36)`,
+      expect(after.tables[table].columns[column]).toMatchObject({
+        type: "varchar(36)",
+        notNull: false,
+      });
+      expect(after.tables[table].columns[column].default).toBeUndefined();
+      expect(before.tables[table]?.columns[column]).toBeUndefined();
+      const tableSql = await parityMigration(table);
+      expect(tableSql).toContain(
+        before.tables[table]
+          ? `ALTER TABLE \`${table}\` ADD \`${column}\` varchar(36)`
+          : `\`${column}\` varchar(36)`,
       );
     }
     expect(migrationSql).not.toMatch(
@@ -222,13 +306,11 @@ describe("service portal migration chain", () => {
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations["0068_siteops_knowledge_input_epoch"]).toBe(
-      "expand",
-    );
+    expect(policy.migrations[parityMigrationName]).toBe("expand");
   });
 
   it("adds an optional unsigned overseas brand-tracking quota as an expand migration", async () => {
-    const migrationSql = await migration("0057_productive_kang.sql");
+    const migrationSql = await parityMigration("users");
     expect(migrationSql.trim()).toBe(
       "ALTER TABLE `users` ADD `brandTrackingMonthlyLimit` int unsigned;",
     );
@@ -238,9 +320,7 @@ describe("service portal migration chain", () => {
   });
 
   it("adds Manus v2 resilience fields as a data-preserving expand migration", async () => {
-    const migrationSql = await migration(
-      "0061_knowledge_base_resilient_manus_v2.sql",
-    );
+    const migrationSql = await parityMigration("knowledge_base_builds");
     for (const column of [
       "providerProtocol",
       "canonicalTaskId",
@@ -255,7 +335,7 @@ describe("service portal migration chain", () => {
       );
     }
     expect(migrationSql).toContain(
-      "CREATE UNIQUE INDEX `knowledge_base_builds_canonical_task_idx`",
+      "ADD CONSTRAINT `knowledge_base_builds_canonical_task_idx` UNIQUE(`canonicalTaskId`)",
     );
     expect(migrationSql).not.toMatch(
       /(?:^|-->\s*statement-breakpoint\s*)(?:UPDATE|INSERT|REPLACE|DELETE|DROP|TRUNCATE|RENAME)\b/imu,
@@ -263,7 +343,7 @@ describe("service portal migration chain", () => {
     expect(migrationSql).not.toMatch(/\bFOREIGN KEY\b/iu);
     const snapshot = JSON.parse(
       await readFile(
-        path.join(drizzleRoot, "meta", "0061_snapshot.json"),
+        path.join(drizzleRoot, "meta", "0058_snapshot.json"),
         "utf8",
       ),
     );
@@ -278,7 +358,19 @@ describe("service portal migration chain", () => {
   });
 
   it("adds the v2 operation and materialized knowledge-base stores without contract SQL", async () => {
-    const migrationSql = await migration("0062_hard_glorian.sql");
+    const migrationSql = await parityMigration(
+      "agent_operations",
+      "agent_tasks",
+      "agent_events",
+      "local_assets",
+      "provider_file_leases",
+      "artifacts",
+      "knowledge_base_executions",
+      "knowledge_base_working_sets",
+      "api_credentials",
+      "knowledge_base_build_nodes",
+      "knowledge_base_builds",
+    );
     for (const table of [
       "agent_operations",
       "agent_tasks",
@@ -320,7 +412,7 @@ describe("service portal migration chain", () => {
 
     const snapshot = JSON.parse(
       await readFile(
-        path.join(drizzleRoot, "meta", "0062_snapshot.json"),
+        path.join(drizzleRoot, "meta", "0058_snapshot.json"),
         "utf8",
       ),
     );
@@ -356,65 +448,76 @@ describe("service portal migration chain", () => {
     });
   });
 
-  it("keeps every 0062 index within the InnoDB 3072-byte key limit", async () => {
-    const migrationSql = await migration("0062_hard_glorian.sql");
-    const tableColumns = new Map<string, Map<string, number>>();
-    const indexes: Array<{ table: string; name: string; columns: string[] }> =
-      [];
-    for (const match of migrationSql.matchAll(
-      /CREATE TABLE `([^`]+)` \(([\s\S]*?)\n\);/gu,
-    )) {
-      const [, tableName, body] = match;
-      const columns = new Map<string, number>();
-      for (const column of body!.matchAll(/^\s*`([^`]+)`\s+([^,\n]+)/gmu)) {
-        const definition = column[2]!;
-        const varchar = /\bvarchar\((\d+)\)/iu.exec(definition);
-        const bytes = varchar
-          ? Number(varchar[1]) * 4
-          : /\bbigint\b/iu.test(definition)
-            ? 8
-            : /\b(?:int|timestamp|enum)\b/iu.test(definition)
-              ? 4
-              : 16;
-        columns.set(column[1]!, bytes);
-      }
-      tableColumns.set(tableName!, columns);
-      for (const index of body!.matchAll(
-        /CONSTRAINT `([^`]+)` (?:PRIMARY KEY|UNIQUE)\(([^)]+)\)/gu,
-      )) {
-        indexes.push({
-          table: tableName!,
-          name: index[1]!,
-          columns: [...index[2]!.matchAll(/`([^`]+)`/gu)].map(
-            (column) => column[1]!,
-          ),
-        });
+  it("keeps every index added by production parity within the InnoDB 3072-byte key limit", async () => {
+    type Index = { columns: string[] };
+    type Table = {
+      columns: Record<string, { type: string }>;
+      indexes: Record<string, Index>;
+      compositePrimaryKeys: Record<string, Index>;
+      uniqueConstraints: Record<string, Index>;
+    };
+    const before = JSON.parse(await migration("meta/0057_snapshot.json")) as {
+      tables: Record<string, Table>;
+    };
+    const after = JSON.parse(await migration("meta/0058_snapshot.json")) as {
+      tables: Record<string, Table>;
+    };
+    const addedIndexes: Array<{
+      table: string;
+      name: string;
+      estimatedBytes: number;
+    }> = [];
+    for (const [tableName, table] of Object.entries(after.tables)) {
+      for (const kind of [
+        "indexes",
+        "compositePrimaryKeys",
+        "uniqueConstraints",
+      ] as const) {
+        for (const [name, index] of Object.entries(table[kind])) {
+          if (
+            JSON.stringify(before.tables[tableName]?.[kind][name]) ===
+            JSON.stringify(index)
+          )
+            continue;
+          const estimatedBytes = index.columns.reduce((sum, column) => {
+            const type = table.columns[column]?.type ?? "";
+            const varchar = /^varchar\((\d+)\)$/iu.exec(type);
+            const bytes = varchar
+              ? Number(varchar[1]) * 4
+              : /^(?:boolean|tinyint)/iu.test(type)
+                ? 1
+                : /^(?:bigint|double)/iu.test(type)
+                  ? 8
+                  : /^(?:int|timestamp|enum)/iu.test(type)
+                    ? 4
+                    : /^decimal/iu.test(type)
+                      ? 16
+                      : 3_073;
+            return sum + bytes;
+          }, 0);
+          addedIndexes.push({ table: tableName, name, estimatedBytes });
+        }
       }
     }
-    for (const index of migrationSql.matchAll(
-      /CREATE (?:UNIQUE )?INDEX `([^`]+)` ON `([^`]+)` \(([^)]+)\)/gu,
-    )) {
-      indexes.push({
-        table: index[2]!,
-        name: index[1]!,
-        columns: [...index[3]!.matchAll(/`([^`]+)`/gu)].map(
-          (column) => column[1]!,
-        ),
-      });
-    }
-    const oversized = indexes.flatMap((index) => {
-      const columns = tableColumns.get(index.table);
-      const estimatedBytes = index.columns.reduce(
-        (sum, column) => sum + (columns?.get(column) ?? 3_073),
-        0,
-      );
-      return estimatedBytes > 3_072 ? [{ ...index, estimatedBytes }] : [];
-    });
-    expect(oversized).toEqual([]);
+    expect(addedIndexes.length).toBeGreaterThan(0);
+    expect(
+      addedIndexes.some(
+        (index) => index.name === "local_assets_scope_storage_uq",
+      ),
+    ).toBe(true);
+    expect(
+      addedIndexes.filter((index) => index.estimatedBytes > 3_072),
+    ).toEqual([]);
   });
 
   it("adds an independent fixed-point Jenova tracking ledger without migrating Monitor data", async () => {
-    const migrationSql = await migration("0058_jenova_brand_tracking.sql");
+    const migrationSql = await parityMigration(
+      "jenova_brand_tracking_credentials",
+      "jenova_brand_tracking_assignments",
+      "jenova_brand_tracking_policies",
+      "jenova_brand_tracking_sessions",
+      "jenova_brand_tracking_turns",
+    );
     for (const table of [
       "jenova_brand_tracking_credentials",
       "jenova_brand_tracking_assignments",
@@ -461,9 +564,7 @@ describe("service portal migration chain", () => {
   });
 
   it("adds delivery workflow relationships and credential linkage without rewriting tickets", async () => {
-    const migrationSql = await migration(
-      "0059_delivery_ticket_workflow_contracts.sql",
-    );
+    const migrationSql = await parityMigration("delivery_tickets");
     for (const column of [
       "parentTicketId",
       "rootTicketId",
@@ -491,19 +592,20 @@ describe("service portal migration chain", () => {
   });
 
   it("adds domestic-by-default purchase edition fields as an expand migration", async () => {
-    const migrationSql = await migration(
-      "0055_provisioning_market_edition.sql",
+    const migrationSql = await parityMigration(
+      "website_user_provisions",
+      "website_manual_service_orders",
     );
     for (const table of [
       "website_user_provisions",
       "website_manual_service_orders",
     ]) {
       expect(migrationSql).toContain(
-        `ALTER TABLE \`${table}\` ADD \`marketEdition\` enum('domestic','overseas') NOT NULL DEFAULT 'domestic'`,
+        `ALTER TABLE \`${table}\` ADD \`marketEdition\` enum('domestic','overseas') DEFAULT 'domestic' NOT NULL`,
       );
     }
     expect(migrationSql).not.toMatch(
-      /\b(?:UPDATE|INSERT|REPLACE|DELETE|DROP|TRUNCATE|RENAME)\b/iu,
+      /^(?:UPDATE|INSERT|REPLACE|DELETE|DROP|TRUNCATE|RENAME)\b/imu,
     );
   });
 
@@ -1493,8 +1595,10 @@ describe("service portal migration chain", () => {
   });
 
   it("creates a compact permanent project-deletion barrier", async () => {
-    const tombstones = await migration(
-      "0056_project_order_deletion_tombstones.sql",
+    const tombstones = await parityMigration(
+      "website_project_deletion_tombstones",
+      "presales_upstream_resources",
+      "presales_monitor_runs",
     );
     expect(tombstones).toContain(
       "CREATE TABLE `website_project_deletion_tombstones`",
@@ -1522,7 +1626,9 @@ describe("service portal migration chain", () => {
     );
     expect(tombstones).not.toMatch(/CREATE\s+TRIGGER/i);
     expect(tombstones).not.toMatch(/DROP\s+(?:TABLE|COLUMN|INDEX)/i);
-    expect(tombstones).not.toMatch(
+    expect(
+      await parityMigration("website_project_deletion_tombstones"),
+    ).not.toMatch(
       /`(?:orderId|tradeNo|authorizationDigest|userId|companyName|question|content)`/i,
     );
   });

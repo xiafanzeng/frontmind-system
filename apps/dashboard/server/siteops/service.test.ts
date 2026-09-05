@@ -2269,13 +2269,22 @@ describe("SiteOps core contracts", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("ships one contract migration that removes commerce and rebuilds the OAuth connection", async () => {
+  it("introduces the final OAuth connection directly without legacy commerce or destructive resets", async () => {
     const sql = await readFile(
-      path.join(process.cwd(), "drizzle/0065_siteops_alidns_oauth.sql"),
+      path.join(process.cwd(), "drizzle/0058_dashboard_production_parity.sql"),
       "utf8",
     );
-    expect(sql).toContain("DROP TABLE `site_domain_operations`");
-    expect(sql).toContain("DROP TABLE `site_provider_connections`");
+    const before = JSON.parse(
+      await readFile(
+        path.join(process.cwd(), "drizzle/meta/0057_snapshot.json"),
+        "utf8",
+      ),
+    );
+    expect(before.tables).not.toHaveProperty("site_domain_operations");
+    expect(before.tables).not.toHaveProperty("site_provider_connections");
+    expect(sql).toContain("CREATE TABLE `site_provider_connections`");
+    expect(sql).not.toContain("CREATE TABLE `site_domain_operations`");
+    expect(sql).not.toMatch(/^(?:DROP|DELETE|UPDATE|TRUNCATE|RENAME)\b/imu);
     expect(sql).toContain("'domain_sync','dns_apply','dns_rollback'");
     expect(sql).toContain("`oauth_credential_id` varchar(36) NOT NULL");
     expect(sql).toContain("`encrypted_refresh_token` text NOT NULL");

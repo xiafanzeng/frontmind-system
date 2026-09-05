@@ -7,8 +7,7 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
 COPY . .
 RUN test "${#SOURCE_SHA}" -eq 40 && pnpm install --frozen-lockfile \
-    && pnpm --filter frontmind-client build \
-    && pnpm --filter frontmind-client prune --prod
+    && pnpm --filter frontmind-client build
 
 FROM 1panel/node:22.22.2@sha256:4cb7297e1c72cac9ee17659f28807f4756cefd4a13cf7bc2c0ba7254c616bb28
 ARG SOURCE_SHA

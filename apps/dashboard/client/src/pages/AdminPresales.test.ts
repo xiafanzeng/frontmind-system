@@ -4,11 +4,26 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  websiteCredentialProviderLabel,
   aliyunOAuthConfigurationDisplayState,
   presalesUsageDisplayState,
 } from "./AdminPresales";
 
 describe("presalesUsageDisplayState", () => {
+  it("identifies Website provider without reclassifying historical Manus credentials", () => {
+    expect(websiteCredentialProviderLabel({ configured: false })).toBe(
+      "等待配置",
+    );
+    expect(websiteCredentialProviderLabel({ configured: true })).toBe(
+      "Manus（历史凭据）",
+    );
+    expect(
+      websiteCredentialProviderLabel({ configured: true, provider: "manus" }),
+    ).toBe("Manus（历史凭据）");
+    expect(
+      websiteCredentialProviderLabel({ configured: true, provider: "zhipu" }),
+    ).toBe("智谱 AutoGLM");
+  });
   it("does not contain the retired attribution or emergency-replacement gates", () => {
     const source = readFileSync(
       resolve(process.cwd(), "client/src/pages/AdminPresales.tsx"),

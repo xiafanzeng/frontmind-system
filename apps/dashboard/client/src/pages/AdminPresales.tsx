@@ -51,6 +51,18 @@ type CredentialStatus = {
   updatedAt: number | null;
 };
 
+type WebsiteCredentialStatus = CredentialStatus & {
+  provider?: "manus" | "zhipu";
+};
+
+export function websiteCredentialProviderLabel(status: {
+  configured: boolean;
+  provider?: "manus" | "zhipu";
+}) {
+  if (!status.configured) return "等待配置";
+  return status.provider === "zhipu" ? "智谱 AutoGLM" : "Manus（历史凭据）";
+}
+
 type TwentyFirstCredentialStatus = CredentialStatus & {
   revocationPending: boolean;
   nativeVisualReadiness:
@@ -201,7 +213,7 @@ export default function AdminPresales() {
     retry: false,
     refetchOnWindowFocus: false,
   });
-  const status = (statusQuery.data ?? EMPTY_STATUS) as CredentialStatus;
+  const status = (statusQuery.data ?? EMPTY_STATUS) as WebsiteCredentialStatus;
   const twentyFirstStatusQuery =
     trpc.admin.presales.twentyFirst.status.useQuery(undefined, {
       enabled: isAdmin,
@@ -704,8 +716,8 @@ export default function AdminPresales() {
                       官网前台 API Key
                     </CardTitle>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      与个人账号凭据分开配置，仅供官网服务端调用 Base
-                      模型；上游积分池总额仍可能与同一账号下的其他 Key 共享。
+                      仅供官网任务使用，新凭据接入智谱 AutoGLM。 个人账号及其他
+                      Manus 功能继续使用各自凭据。
                     </p>
                   </div>
                   <Badge
@@ -727,6 +739,10 @@ export default function AdminPresales() {
               </CardHeader>
               <CardContent className="space-y-6 p-5 sm:p-6">
                 <div className="grid gap-3 sm:grid-cols-2">
+                  <StatusTile
+                    label="当前服务"
+                    value={websiteCredentialProviderLabel(status)}
+                  />
                   <StatusTile label="凭据标识" value={maskedFingerprint} mono />
                   <StatusTile
                     label="凭据版本"
@@ -738,8 +754,8 @@ export default function AdminPresales() {
                   <div className="space-y-2">
                     <Label htmlFor="presales-api-key">
                       {status.configured
-                        ? "输入新的售前 API Key"
-                        : "官网前台 API Key"}
+                        ? "输入新的智谱 API Key"
+                        : "智谱 AutoGLM API Key"}
                     </Label>
                     <div className="relative">
                       <Input
@@ -750,7 +766,7 @@ export default function AdminPresales() {
                         placeholder={
                           status.configured
                             ? "留空不会更改当前 API Key"
-                            : "粘贴 FrontMind Website API Key"
+                            : "粘贴智谱开放平台 API Key"
                         }
                         autoComplete="off"
                         spellCheck={false}
@@ -773,8 +789,8 @@ export default function AdminPresales() {
                       </button>
                     </div>
                     <p className="text-xs leading-relaxed text-muted-foreground">
-                      保存前会先验证连接；更换 API Key
-                      后，新任务使用新版本，已有任务仍绑定原版本。
+                      保存前会先验证连接；启用后，新官网任务使用智谱。
+                      已有任务仍绑定原服务和凭据版本，文件查询继续沿用原版本。
                     </p>
                   </div>
 

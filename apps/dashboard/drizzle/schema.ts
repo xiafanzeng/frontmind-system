@@ -10,6 +10,7 @@ import {
   longtext,
   mysqlEnum,
   mysqlTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -109,15 +110,19 @@ export const monitoringAccountLinks = mysqlTable(
   {
     dashboardUserId: int("dashboardUserId")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" })
-      .unique(),
+      .references(() => users.id, { onDelete: "cascade" }),
     monitoringUserId: varchar("monitoringUserId", { length: 36 })
       .notNull()
       .unique(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  (table) => [index("monitoring_account_links_dashboard_idx").on(table.dashboardUserId)],
+  (table) => [
+    primaryKey({ columns: [table.dashboardUserId] }),
+    uniqueIndex("monitoring_account_links_monitoring_user_uq").on(
+      table.monitoringUserId,
+    ),
+  ],
 );
 
 /**

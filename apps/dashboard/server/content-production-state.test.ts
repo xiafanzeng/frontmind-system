@@ -15,7 +15,10 @@ import {
 } from "./content-production-state";
 import {
   contentProductionSystemAttachments,
+  contentProductionSystemContext,
   originalContentWorkflowArchive,
+  isContentWorkflowInternalFilename,
+  isContentWorkflowSnapshotFilename,
   CONTENT_WORKFLOW_SHA256,
 } from "./content-production-runtime";
 
@@ -95,6 +98,39 @@ function context(mode: "single_article" | "p0" = "single_article") {
 }
 
 describe("original v4.11 content workflow state", () => {
+  it("keeps complete current-Job transport private without hiding ordinary deliverables", () => {
+    const snapshot =
+      "frontmind_workflow_job_snapshot_1788700140846_52cf72553694a0b9_c271a52fb6616062.zip";
+    expect(isContentWorkflowSnapshotFilename(snapshot)).toBe(true);
+    expect(isContentWorkflowInternalFilename(snapshot)).toBe(true);
+    expect(
+      isContentWorkflowInternalFilename(
+        "frontmind_workflow_job_state_52cf72553694a0b9.json",
+      ),
+    ).toBe(true);
+    expect(
+      isContentWorkflowInternalFilename("frontmind_workflow_job_state.json"),
+    ).toBe(true);
+    for (const filename of [
+      "Reference_Pack_v2.zip",
+      "p0.docx",
+      "p0_title_map.json",
+      `review_${snapshot}`,
+      `../${snapshot}`,
+    ]) {
+      expect(isContentWorkflowSnapshotFilename(filename)).toBe(false);
+      expect(isContentWorkflowInternalFilename(filename)).toBe(false);
+    }
+    const malformedSnapshot = snapshot.replace("52cf72553694a0b9_", "");
+    expect(isContentWorkflowSnapshotFilename(malformedSnapshot)).toBe(false);
+    expect(isContentWorkflowInternalFilename(malformedSnapshot)).toBe(true);
+    const system = contentProductionSystemContext(context());
+    expect(system).toContain("ZIP the entire current Job tree");
+    expect(system).toContain("binary inputs and documents");
+    expect(system).toContain("lastObservation.sha256 and runnerRevision");
+    expect(system).toContain("never filesystem mtime");
+    expect(system).toContain("never reconstruct files from conversation text");
+  });
   it.each(CONTENT_PRODUCTION_CONFIRMATIONS)(
     "preserves native pause %s with revision and choices",
     (status) => {

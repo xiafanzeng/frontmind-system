@@ -391,6 +391,7 @@ function clientFor(
       : {}),
     ...(purpose?.purpose === "content_production"
       ? {
+          contentProduction: true,
           systemContext: contentProductionSystemContext(purpose),
           systemAttachments: contentProductionSystemAttachments(purpose),
           recoverableStatusArtifact: isContentWorkflowStateFilename,

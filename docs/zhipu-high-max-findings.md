@@ -64,6 +64,8 @@ Website 的生产 `WEBSITE_ZHIPU_EFFORT=high` 由 Dashboard 代理在创建时�
 
 企业问答补充验收：`f1513870-add6-4506-8f87-b799c48fd448`，`glm-5.3 / max / standard`，一次原 UI 提交、一次上游指令、无重试新建。知识库 v1 的 55 篇资料以冻结附件提供；引用 `0001.md`《企业概况》和 `0002.md`《注册主体与经营资质》与原文一致。此简单问答成功不能替代 160 条研究任务的稳定性结论。
 
+内容制作的 E9 补充：服务器上的密钥不会自动进入远端 Runner，适配器现补齐官方 Vault 接入路径。配置正式 `FRONTMIND_HARNESSGEO_API_KEY` 后，新内容任务以原冻结 Zhipu 身份创建专用 Vault，仅向 `api.xty.app` 请求头注入；普通通用 Agent 和企业问答不挂载该凭据。原 ZIP、E9 模型和阶段保持不变。目前生产仍缺少正式 E9 密钥，完整文章交付未验收，不能把凭据接入测试当作 High/Max 业务成功。
+
 代码依据：Website `server/geo/broker.ts` 的六类任务，Dashboard `presales-v2-store.ts` / `providers/website-agent-provider.ts` 的 Website 冻结参数；`credential-agent-client.ts` 和 `general-agent-runtime.ts` 的账号 Key 及历史 profile；`siteops/service.ts` 的 SiteOps 凭据继承；`providers/dashboard-agent-provider.ts` 的 `speed: standard`。生产只读记录未导出密钥。
 
 [官方 OpenAPI](https://docs.bigmodel.cn/openapi/openapi-managed-agents.json) 定义 `model.effort` 为 `low / high / max`，`model.speed` 为 `standard`。省略 effort 时，`glm-5.3` 默认 Max；它们是推理档位，不是旧 Manus 的 Base/Pro 套餐。

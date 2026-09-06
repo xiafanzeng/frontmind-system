@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { collectKnowledgeArchiveDescriptors } from "../knowledge-base-artifact";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ManusV2ApiError,
   manusV2EventMatchesGeneralChatRequest,
@@ -18,7 +18,11 @@ import {
   type DashboardRuntimeRecord,
   type DashboardProviderIdentity,
 } from "./dashboard-agent-runtime-store";
-import { ZhipuManagedClient, type ZhipuRecord } from "./zhipu-managed-client";
+import {
+  ZhipuManagedClient,
+  ZhipuManagedError,
+  type ZhipuRecord,
+} from "./zhipu-managed-client";
 import {
   generalAgentRuntimeForCredential,
   generalAgentRuntimeForOperation,
@@ -156,6 +160,12 @@ function fixture() {
       return json({ id: "agent_1" });
     if (path === "/v1/environments" && method === "POST")
       return json({ id: "environment_1" });
+    if (path === "/v1/vaults" && method === "POST")
+      return json({ id: "vault_1" });
+    if (path === "/v1/vaults/vault_1/credentials" && method === "POST")
+      return json({ id: "vault_credential_1" });
+    if (path === "/v1/vaults/vault_1" && method === "DELETE")
+      return json({ id: "vault_1", type: "vault_deleted" });
     if (path === "/v1/sessions" && method === "POST") {
       resources.push(
         ...body.resources.map((r: ZhipuRecord) => ({
@@ -308,6 +318,293 @@ const request = {
   title: "Original task",
   prompt: "Original Skill and prompt bytes\n保留用户确认点",
 };
+
+describe("content Workflow E9 Vault", () => {
+  const secret = "synthetic-harnessgeo-secret";
+  const content = { contentProduction: true };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("injects the original E9 variable through a host-restricted Vault and persists only IDs and hashes", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    await f.client(content).createTask(request);
+    const creation = f.calls.filter((call) => call.path.includes("/vaults"));
+    expect(creation).toEqual([
+      {
+        method: "POST",
+        path: "/v1/vaults",
+        body: { display_name: expect.stringContaining("FrontMind E9 ") },
+      },
+      {
+        method: "POST",
+        path: "/v1/vaults/vault_1/credentials",
+        body: {
+          display_name: "FrontMind HarnessGEO",
+          auth: {
+            type: "environment_variable",
+            secret_name: "FRONTMIND_HARNESSGEO_API_KEY",
+            secret_value: secret,
+            networking: { type: "limited", allowed_hosts: ["api.xty.app"] },
+            injection_location: { header: true, body: false },
+          },
+        },
+      },
+    ]);
+    const session = f.calls.find((call) => call.path === "/v1/sessions")!;
+    expect(session.body.vault_ids).toEqual(["vault_1"]);
+    const runtime = [...f.rows.values()][0].runtime;
+    expect(runtime.mutations["content-workflow-vault"]).toMatchObject({
+      state: "acknowledged",
+      resourceId: "vault_1",
+    });
+    expect(runtime.mutations["content-workflow-credential"]).toMatchObject({
+      state: "acknowledged",
+      resourceId: "vault_credential_1",
+      requestHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(JSON.stringify(runtime)).not.toContain(secret);
+    expect(JSON.stringify(runtime)).not.toContain("secret_value");
+    expect(
+      JSON.stringify(
+        f.calls.filter((call) => !call.path.endsWith("/credentials")),
+      ),
+    ).not.toContain(secret);
+    expect(runtime.files).toEqual([]);
+    expect(runtime.commands[0].prompt).toBe(request.prompt);
+  });
+
+  it.each([undefined, false])(
+    "never provisions an E9 Vault for ordinary purpose %s",
+    async (purpose) => {
+      vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+      const f = fixture();
+      await f.client({ contentProduction: purpose }).createTask(request);
+      expect(f.calls.some((call) => call.path.includes("/vaults"))).toBe(false);
+      expect(
+        f.calls.find((call) => call.path === "/v1/sessions")!.body,
+      ).not.toHaveProperty("vault_ids");
+    },
+  );
+
+  it("allows the original Workflow without an E9 key and keeps that session unchanged when a key is later configured", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "");
+    const f = fixture();
+    await f.client(content).createTask(request);
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    await f.client(content).createTask(request);
+    expect(f.calls.some((call) => call.path.includes("/vaults"))).toBe(false);
+    const sessions = f.calls.filter((call) => call.path === "/v1/sessions");
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].body).not.toHaveProperty("vault_ids");
+  });
+
+  it("reuses acknowledged resources after key rotation and removal without re-provisioning or duplicate commands", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    await f.client(content).createTask(request);
+    const original = structuredClone([...f.rows.values()][0].runtime);
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "rotated-synthetic-secret");
+    await f.client(content).createTask(request);
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "");
+    await f.client(content).createTask(request);
+    expect(
+      f.calls.filter((call) => call.path.includes("/vaults")),
+    ).toHaveLength(2);
+    expect(f.calls.filter((call) => call.path === "/v1/sessions")).toHaveLength(
+      1,
+    );
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path.endsWith("/events"),
+      ),
+    ).toHaveLength(1);
+    expect([...f.rows.values()][0].runtime.mutations).toEqual(
+      original.mutations,
+    );
+  });
+
+  it("deletes the dedicated Vault once after the Session, even when the purpose flag and deployment key are absent", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    await f.client(content).createTask(request);
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "");
+    await f.client().deleteContentProductionResources!();
+    await f.client().deleteContentProductionResources!();
+    expect(f.calls.filter((call) => call.method === "DELETE")).toEqual([
+      { method: "DELETE", path: "/v1/sessions/session_1", body: undefined },
+      { method: "DELETE", path: "/v1/vaults/vault_1", body: undefined },
+    ]);
+    expect(
+      [...f.rows.values()][0].runtime.mutations[
+        "delete-content-workflow-vault"
+      ],
+    ).toMatchObject({
+      state: "acknowledged",
+      resourceId: "vault_1",
+    });
+  });
+
+  it.each(["/v1/vaults/vault_1/credentials", "/v1/sessions"])(
+    "revokes an acknowledged Vault without a known Session after failure at %s and prevents redispatch",
+    async (failedPath) => {
+      vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+      const f = fixture();
+      const create = f.api.create.bind(f.api);
+      vi.spyOn(f.api, "create").mockImplementation(async (path, body) => {
+        if (path === failedPath)
+          throw new ZhipuManagedError(path, null, "TRANSPORT_ERROR", true);
+        return create(path, body);
+      });
+      await expect(f.client(content).createTask(request)).rejects.toMatchObject(
+        {
+          outcomeUnknown: true,
+        },
+      );
+      expect([...f.rows.values()][0].runtime.sessionId).toBeUndefined();
+      vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "");
+      const before = f.calls.length;
+      await f.client().deleteContentProductionResources!();
+      await f.client().deleteContentProductionResources!();
+      expect(f.calls.slice(before)).toEqual([
+        { method: "DELETE", path: "/v1/vaults/vault_1", body: undefined },
+      ]);
+      expect([...f.rows.values()][0].runtime.deleted).toBe(true);
+      const after = f.calls.length;
+      await expect(f.client(content).createTask(request)).rejects.toMatchObject(
+        {
+          code: "TASK_NOT_FOUND",
+          status: 404,
+        },
+      );
+      expect(f.calls).toHaveLength(after);
+    },
+  );
+
+  it("does not reserve records or change ordinary tasks without a dedicated Vault", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    const reserve = vi.spyOn(f.store, "reserve");
+    await f.client().deleteContentProductionResources!();
+    expect(reserve).not.toHaveBeenCalled();
+    expect(f.rows.size).toBe(0);
+    expect(f.calls).toHaveLength(0);
+    await f.client().createTask(request);
+    const original = structuredClone([...f.rows.values()][0].runtime);
+    const before = f.calls.length;
+    await f.client().deleteContentProductionResources!();
+    expect(f.calls).toHaveLength(before);
+    expect([...f.rows.values()][0].runtime).toEqual(original);
+  });
+
+  it("refuses resource cleanup for a mismatched local task or operation and exposes no resources to another identity", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    await f.client(content).createTask(request);
+    const before = f.calls.length;
+    for (const extra of [
+      { localTaskId: "wrong-task" },
+      { operationId: "wrong-operation" },
+    ])
+      await expect(
+        f.client(extra).deleteContentProductionResources!(),
+      ).rejects.toMatchObject({
+        code: "TASK_NOT_FOUND",
+        status: 404,
+      });
+    for (const extra of [
+      { accountUserId: 99 },
+      { credentialId: "another-key" },
+      { credentialVersion: 3 },
+    ])
+      await f.client(extra).deleteContentProductionResources!();
+    expect(f.calls).toHaveLength(before);
+    expect([...f.rows.values()][0].runtime.deleted).toBeUndefined();
+  });
+
+  it("retains the acknowledged E9 binding when session creation must resume after a known 429 rejection", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    const f = fixture();
+    const create = f.api.create.bind(f.api);
+    let rejected = false;
+    vi.spyOn(f.api, "create").mockImplementation(async (path, body) => {
+      if (path === "/v1/sessions" && !rejected) {
+        rejected = true;
+        throw new ZhipuManagedError(path, 429, "HTTP_429", false);
+      }
+      return create(path, body);
+    });
+    await expect(f.client(content).createTask(request)).rejects.toMatchObject({
+      retryable: true,
+      outcomeUnknown: false,
+    });
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "rotated-synthetic-secret");
+    await f.client(content).createTask(request);
+    expect(
+      f.calls.filter((call) => call.path.includes("/vaults")),
+    ).toHaveLength(2);
+    expect(
+      f.calls.find((call) => call.path === "/v1/sessions")!.body.vault_ids,
+    ).toEqual(["vault_1"]);
+    expect(JSON.stringify([...f.rows.values()])).not.toContain(secret);
+    expect(JSON.stringify([...f.rows.values()])).not.toContain(
+      "rotated-synthetic-secret",
+    );
+  });
+
+  it("does not add newly configured credentials to a session with an unknown creation outcome", async () => {
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", "");
+    const f = fixture();
+    const create = f.api.create.bind(f.api);
+    const spy = vi
+      .spyOn(f.api, "create")
+      .mockImplementation(async (path, body) => {
+        if (path === "/v1/sessions")
+          throw new ZhipuManagedError(path, null, "TRANSPORT_ERROR", true);
+        return create(path, body);
+      });
+    await expect(f.client(content).createTask(request)).rejects.toMatchObject({
+      outcomeUnknown: true,
+    });
+    vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+    await expect(f.client(content).createTask(request)).rejects.toMatchObject({
+      outcomeUnknown: true,
+    });
+    expect(
+      spy.mock.calls.filter(([path]) => path === "/v1/sessions"),
+    ).toHaveLength(1);
+    expect(f.calls.some((call) => call.path.includes("/vaults"))).toBe(false);
+  });
+
+  it.each(["/v1/vaults", "/v1/vaults/vault_1/credentials"])(
+    "does not retry an unknown creation outcome at %s",
+    async (failedPath) => {
+      vi.stubEnv("FRONTMIND_HARNESSGEO_API_KEY", secret);
+      const f = fixture();
+      const create = f.api.create.bind(f.api);
+      const spy = vi
+        .spyOn(f.api, "create")
+        .mockImplementation(async (path, body) => {
+          if (path === failedPath)
+            throw new ZhipuManagedError(path, null, "TRANSPORT_ERROR", true);
+          return create(path, body);
+        });
+      await expect(f.client(content).createTask(request)).rejects.toMatchObject(
+        { outcomeUnknown: true },
+      );
+      await expect(f.client(content).createTask(request)).rejects.toMatchObject(
+        { outcomeUnknown: true },
+      );
+      expect(
+        spy.mock.calls.filter(([path]) => path === failedPath),
+      ).toHaveLength(1);
+      expect(f.calls.some((call) => call.path === "/v1/sessions")).toBe(false);
+      expect(JSON.stringify([...f.rows.values()])).not.toContain(secret);
+    },
+  );
+});
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
   it("mounts frozen server context files without changing the original user turn or attachment evidence", async () => {

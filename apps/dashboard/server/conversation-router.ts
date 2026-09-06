@@ -36,6 +36,7 @@ import { normalizeKnowledgeBaseAttachmentFilename } from "../shared/knowledge-ba
 import { uniquifyOrderedIds } from "../shared/ordered-id";
 import { generalChatDispatchSchema } from "../shared/frontmind-general-chat-dispatch";
 import { frozenGeneralAgentPurpose } from "./general-agent-purpose";
+import { cleanupContentProductionConversation } from "./content-production-cleanup";
 import {
   type AuthenticatedUser,
   credentialMayServeAccount,
@@ -3528,6 +3529,12 @@ export const conversationRouter = router({
         input.id,
         projectAssignmentId,
       );
+      await cleanupContentProductionConversation({
+        db,
+        userId: ctx.user.id,
+        conversationId: persistedConversationId,
+        projectAssignmentId,
+      });
       await runConversationWriteTransaction(db, async (tx) => {
         const siteOpsProject = projectAssignmentId
           ? []

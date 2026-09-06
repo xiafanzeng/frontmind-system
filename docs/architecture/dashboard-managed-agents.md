@@ -70,6 +70,39 @@ retaining these controls does not include site building or social generation in
 the current acceptance scope.
 No new Dashboard execution-log interface is introduced.
 
+### Content Workflow E9 credential transport
+
+The original v2.3 ZIP runs in the Managed Agents cloud session, so a Dashboard
+environment variable alone is not available to its Runner. The server-owned
+`content_production` purpose enables a dedicated Vault when
+`FRONTMIND_HARNESSGEO_API_KEY` is configured in Dashboard's secret environment
+(`/etc/frontmind-system/dashboard.env` in production). Ordinary General and
+enterprise-QA sessions do not receive this credential.
+
+The adapter creates the Vault and its `environment_variable` Credential with
+the same frozen Zhipu identity as the new task, then mounts its ID through
+the Session's `vault_ids`. The secret name is
+`FRONTMIND_HARNESSGEO_API_KEY`; networking allows only `api.xty.app`, with
+header injection enabled and body injection disabled. The original Runner's
+environment lookup, XTY endpoint, model, scripts and ZIP remain unchanged.
+The real secret goes only to the official credential-create endpoint. It is
+absent from prompts, files, metadata, local runtime and customer responses;
+the existing mutation ledger retains IDs and request hashes only.
+
+Acknowledged resources are reused through the original mutation mechanism.
+An unknown create outcome is not resubmitted. Existing sessions retain their
+original binding even after configuration changes; a new task takes the new
+configuration. With no E9 key, other content stages remain usable and the
+original Runner reports the missing credential at E9. No artificial E9 skip
+or final-delivery success is introduced. A legitimate key and a real complete
+Workflow run are still required for business acceptance.
+Deleting a task removes its Session first, then its dedicated Vault and
+credential through the existing acknowledged mutation mechanism.
+
+API contract: the official [Managed Agents OpenAPI](https://docs.bigmodel.cn/openapi/openapi-managed-agents.json),
+`ManagedCredentialAuthCreate.environment_variable`,
+`ManagedVaultNetworking`, and `ManagedSessionCreateRequest.vault_ids`.
+
 A knowledge-base research task remains active while the provider reports it
 as running. The old 15-minute reset rule rejected a healthy 23-minute task
 before its ZIP existed; it has been removed. The downloaded ZIP from that

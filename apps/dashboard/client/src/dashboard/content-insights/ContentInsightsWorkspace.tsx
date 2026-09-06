@@ -118,7 +118,7 @@ export default function ContentInsightsWorkspace() {
     });
     if (module === "settings") params.set("contentTab", tab);
     setLocation(
-      `${location.startsWith("/preview/user") ? location : "/"}?${params}`,
+      `${import.meta.env.DEV && location.startsWith("/preview/user") ? location : "/"}?${params}`,
     );
   };
   return (

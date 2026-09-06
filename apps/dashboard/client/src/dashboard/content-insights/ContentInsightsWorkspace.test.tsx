@@ -23,6 +23,7 @@ describe("content insights interface preview", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     window.history.replaceState(null, "", "/");
   });
 
@@ -41,6 +42,27 @@ describe("content insights interface preview", () => {
       readContentInsightsRoute("?contentModule=unknown&contentTab=unknown"),
     ).toEqual({ section: "analytics", module: "overview", tab: "basic" });
   });
+
+  it.each([true, false])(
+    "retains the development path only when DEV is %s",
+    (development) => {
+      vi.stubEnv("DEV", development);
+      window.history.replaceState(
+        null,
+        "",
+        "/preview/user?view=content-insights",
+      );
+      render(<ContentInsightsWorkspace />);
+      fireEvent.click(screen.getByRole("button", { name: "AI 部件" }));
+      expect(window.location.pathname).toBe(
+        development ? "/preview/user" : "/",
+      );
+      expect(window.location.search).toBe(
+        "?view=content-insights&contentModule=settings&contentTab=basic",
+      );
+      expect(screen.getByLabelText("机器人名称")).toBeInTheDocument();
+    },
+  );
 
   it("retains local widget edits across module tabs and only copies a valid preview link", () => {
     const fetchSpy = vi.fn();

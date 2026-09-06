@@ -3635,7 +3635,7 @@ export function assertDashboardImportModuleEnabled(
   }
 }
 
-async function assertDashboardImportCapability(
+export async function assertDashboardImportCapability(
   userId: number,
   module: DashboardAdminImportModule,
 ) {
@@ -3657,12 +3657,13 @@ async function assertDashboardImportCapability(
     if (
       module !== "profile" ||
       !(error instanceof ServiceEntitlementError) ||
-      error.code !== "CAPABILITY_UPGRADE_REQUIRED"
+      (error.code !== "CAPABILITY_UPGRADE_REQUIRED" &&
+        error.code !== "KNOWLEDGE_SNAPSHOT_NOT_FOUND")
     ) {
       throw error;
     }
-    // A knowledge-only customer still needs an administrator-confirmed
-    // enterprise identity before a knowledge archive can be published.
+    // Enterprise identity must be configured before the first knowledge archive
+    // can be published, including for plans whose content assets require it.
     return assertServiceCapability(userId, "knowledgeBuild");
   }
 }

@@ -14,6 +14,7 @@ import {
   buildMonitoringCurrentTemplatePreview,
   assertKnowledgeArchiveEnterpriseIdentity,
   assertDashboardOwnedKnowledgePackageEnterpriseIdentity,
+  assertDashboardImportCapability,
   assertDashboardImportModuleEnabled,
   assertDashboardImportPublishHash,
   assertDashboardImportRevision,
@@ -60,6 +61,127 @@ import {
   DashboardEnterpriseMismatchError,
   DashboardRevisionConflictError,
 } from "./dashboard-service";
+import * as serviceEntitlement from "./service-entitlement";
+
+describe("dashboard profile import entitlement", () => {
+  const userId = 37;
+  const portal = {} as Awaited<
+    ReturnType<typeof serviceEntitlement.assertServiceCapability>
+  >;
+
+  it.each([
+    "KNOWLEDGE_SNAPSHOT_NOT_FOUND",
+    "CAPABILITY_UPGRADE_REQUIRED",
+  ] as const)(
+    "allows enterprise setup with knowledgeBuild when contentAssets reports %s",
+    async (code) => {
+      const capability = vi
+        .spyOn(serviceEntitlement, "assertServiceCapability")
+        .mockRejectedValueOnce(
+          new serviceEntitlement.ServiceEntitlementError(code, code),
+        )
+        .mockResolvedValueOnce(portal);
+
+      await expect(
+        assertDashboardImportCapability(userId, "profile"),
+      ).resolves.toBe(portal);
+
+      expect(capability.mock.calls).toEqual([
+        [userId, "contentAssets"],
+        [userId, "knowledgeBuild"],
+      ]);
+    },
+  );
+
+  it("still rejects a profile when the same customer's knowledgeBuild is denied", async () => {
+    const denied = new serviceEntitlement.ServiceEntitlementError(
+      "CAPABILITY_UPGRADE_REQUIRED",
+      "knowledgeBuild denied",
+      403,
+    );
+    const capability = vi
+      .spyOn(serviceEntitlement, "assertServiceCapability")
+      .mockRejectedValueOnce(
+        new serviceEntitlement.ServiceEntitlementError(
+          "KNOWLEDGE_SNAPSHOT_NOT_FOUND",
+          "first knowledge snapshot missing",
+        ),
+      )
+      .mockRejectedValueOnce(denied);
+
+    await expect(
+      assertDashboardImportCapability(userId, "profile"),
+    ).rejects.toBe(denied);
+    expect(capability.mock.calls).toEqual([
+      [userId, "contentAssets"],
+      [userId, "knowledgeBuild"],
+    ]);
+  });
+
+  it.each([
+    ["metrics", "contentAssets"],
+    ["sections", "contentAssets"],
+    ["section-table", "contentAssets"],
+    ["keywords", "globalKeywords"],
+    ["questions", "questionSelection"],
+    ["monitoring", "monitoring"],
+    ["response-logic", "responseLogic"],
+    ["content-assets", "contentAssets"],
+    ["optimization-report", "progressReport"],
+  ] as const)(
+    "preserves the %s prerequisite without a profile fallback",
+    async (module, expectedCapability) => {
+      const denied = new serviceEntitlement.ServiceEntitlementError(
+        "KNOWLEDGE_SNAPSHOT_NOT_FOUND",
+        "first knowledge snapshot missing",
+      );
+      const capability = vi
+        .spyOn(serviceEntitlement, "assertServiceCapability")
+        .mockRejectedValueOnce(denied);
+
+      await expect(
+        assertDashboardImportCapability(userId, module),
+      ).rejects.toBe(denied);
+      expect(capability.mock.calls).toEqual([[userId, expectedCapability]]);
+    },
+  );
+
+  it.each([
+    new serviceEntitlement.ServiceEntitlementError(
+      "SERVICE_PLAN_SUSPENDED",
+      "suspended",
+    ),
+    new serviceEntitlement.ServiceEntitlementError(
+      "SERVICE_PLAN_EXPIRED",
+      "expired",
+    ),
+    new serviceEntitlement.ServiceEntitlementError(
+      "DATABASE_UNAVAILABLE",
+      "unavailable",
+    ),
+    new Error("unexpected failure"),
+  ])("does not bypass unrelated profile access failures: %s", async (denied) => {
+    const capability = vi
+      .spyOn(serviceEntitlement, "assertServiceCapability")
+      .mockRejectedValueOnce(denied);
+
+    await expect(
+      assertDashboardImportCapability(userId, "profile"),
+    ).rejects.toBe(denied);
+    expect(capability.mock.calls).toEqual([[userId, "contentAssets"]]);
+  });
+
+  it("uses the existing contentAssets entitlement when available", async () => {
+    const capability = vi
+      .spyOn(serviceEntitlement, "assertServiceCapability")
+      .mockResolvedValueOnce(portal);
+
+    await expect(
+      assertDashboardImportCapability(userId, "profile"),
+    ).resolves.toBe(portal);
+    expect(capability.mock.calls).toEqual([[userId, "contentAssets"]]);
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

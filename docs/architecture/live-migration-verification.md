@@ -1,16 +1,16 @@
 # CN migration verification — 2026-09-06
 
-## Recorded deployment baseline and business acceptance status
+## Current deployment and business acceptance status
 
-The table records the verified deployment preceding the long-running-task and
-unified-workspace update described at the end of this document. Public
-`/readyz` reports the active build SHA and image digest. Completed business
-acceptance below is separate from the pending brand-universe acceptance.
-Historical sections retain the outcomes and identities of their own stages.
+The table records the deployed runtime after the long-running-task and unified
+workspace update. Public `/readyz` reports this build SHA and image digest.
+Completed business acceptance below remains separate from brand-universe
+acceptance, which is blocked by native provider failures. Historical sections
+retain the outcomes and identities of their own stages.
 
-| Service | Recorded source revision | Recorded image digest |
+| Service | Runtime source revision | Runtime image digest |
 | --- | --- | --- |
-| Dashboard | `237cd0aa6b815e70d0ac276396c6c3af08a1e88a` | `sha256:70b130ff33af01cfa365d6dfe33301ffde45e32fcbc95cb5c48fe7b4260f965b` |
+| Dashboard | `2ef9e6454d3b4990a684d659e12f9349a8232bf3` | `sha256:ed9aa8f7be75e14160ff63a6300c27dd6b16565d899a835cc6150845cab96774` |
 | Monitoring worker | `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` | `sha256:7134db0d9d3690533f470ce5af5a64e6876914021858368fdb926295187661a3` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
@@ -22,7 +22,7 @@ Historical sections retain the outcomes and identities of their own stages.
 | General agent | Complete on `70fa85f`: the original two turns and both JSON downloads were reverified, including the attachment's exact-byte sum and hash. |
 | Customer self-service | Complete: own Dashboard editing/restoration and fresh KB reset passed live; on `70fa85f`, fresh direct question selection, draft save, response reset/replay, modification and subsequent deletion all passed. The pre-fix successful reset also replayed correctly. Retired ticket routes returned NOT_FOUND. |
 | Dashboard knowledge base | Complete on `1c89b0e`: fresh generation, one real node revision, 55 read/confirm actions, original final ZIP download and formal snapshot publication all passed. |
-| Dashboard brand universe | Not yet passed: three tasks failed with native provider service-unavailable/retries-exhausted events and no deliverable or publication. All used the original Skill hashes, formal KB, model and effort; no old session was reconstructed. |
+| Dashboard brand universe | Not passed: three original max tasks and one controlled high comparison all failed with native provider service-unavailable/retries-exhausted events and no deliverable. Original Skill hashes, formal KB and model were unchanged. The account default was restored to max; no fifth task was submitted. |
 | Dashboard response logic | Complete: direct question selection, binding, initial generation/save, same-session continuation/save and confirmation passed. Confirmed revision 6/version 1 and all four original fields matched independent API/DB readback after the `70fa85f` restart. |
 | Original Website knowledge base, assessment and forecast | Complete: the original KB ZIP and both perspectives' assessments and forecasts survived reload. Its monitoring runs remain at exactly ten successful answers, with no additional attempts. |
 | Website execution-log presentation | Complete: only standalone generic tool messages are hidden; detailed events, errors and absolute timers are preserved. |
@@ -847,3 +847,46 @@ local settings, reload and original sidebar through monitoring/publishing.
 Focused validation passed 173 KB service tests (four existing skips), 42
 Website/Dashboard adapter tests, 103 router/transport tests, credential/Key
 regressions and the affected client suites; TypeScript and source checks passed.
+
+## Verified deployment of the long-running-task update
+
+Production runs source `2ef9e6454d3b4990a684d659e12f9349a8232bf3`, Dashboard
+and SiteOps digest
+`sha256:ed9aa8f7be75e14160ff63a6300c27dd6b16565d899a835cc6150845cab96774`.
+[Image publication](https://github.com/xiafanzeng/frontmind-system/actions/runs/34018969271)
+passed both jobs. The earlier build correctly rejected a development preview
+route in a new production chunk; a DEV-only guard fixed the source and the
+unchanged production audit passed. Public health/readiness returned 200 with
+the exact SHA/digest and exact migration/schema state. No migration ran; the
+Website and independent monitoring-worker container identities/start times
+were unchanged. The preceding `237cd0a` image is retained for rollback.
+
+Production browser acceptance passed ten customer and twelve administrator
+checks, including all nine admin subpages' actual inner content and both Key
+dialogs without Base/Pro. No write request, failed GET or browser exception
+occurred. Publishing remains in its pre-existing MOCK state with no provider
+credentials; real publishing/orders were not accepted or claimed.
+
+Independent before/after section hashes matched for all 55 formal KB nodes,
+the published snapshot and archive, all four response fields at revision
+6/version 1, the three prior brand failures, eight Website tasks and two
+monitoring runs totaling ten successful answers. The dedicated local preview
+server was stopped after acceptance.
+
+## Single high-effort comparison
+
+The dedicated customer 3 used the existing administrator credential API to
+start exactly one fresh original brand task with glm-5.3/high (credential
+version 2), retaining the original Skill and published KB. Its default was
+immediately restored through the same API to verified glm-5.3/max (version 3);
+the new task retained its immutable high binding across deployment.
+
+Operation `9fae3969-1351-47d2-a5cf-8badf7b9c993`, session
+`sess_01a0759a-738b-7427-b7bd-35754c9ab3a2`, failed natively at
+07:40:28.859 UTC with unknown_error/service unavailable/exhausted, followed
+by idle/retries_exhausted. The last model request lasted 704.300 seconds and
+ended with is_error=true. All 41 model requests and 61 tool calls had end
+events; no valid public JSON or downloadable output existed. There was one
+initial dispatch, no repair, no publication and no fifth attempt. This result
+does not establish a provider root cause and does not support silently changing
+all customer defaults to high.

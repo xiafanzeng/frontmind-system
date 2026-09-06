@@ -109,7 +109,7 @@ nullable upstream effort. All previous migrations and all pre-existing schema
 fields remain unchanged. The adapter
 no longer directly depends on AJV. Existing dependency versions are preserved.
 
-The pre-update `237cd0aa6b815e70d0ac276396c6c3af08a1e88a` Dashboard release was deployed. Dashboard
+The `2ef9e6454d3b4990a684d659e12f9349a8232bf3` Dashboard release is deployed. Dashboard
 readiness reports the expected revision and exact migration/schema state, with
 no degraded builds or violations. Website remains on
 `f1dc5182819574aea32dbc50a2f715c414d50e41`.
@@ -183,3 +183,9 @@ the existing Zhipu default, while an already verified identical Key remains
 unchanged. An invalid/unverified Key is freshly verified and repaired through
 a new credential version. Existing task bindings and frozen model settings
 are not rewritten. No migration accompanies these changes.
+
+Production acceptance for this update passed ten customer and twelve
+administrator browser checks, with unchanged completed KB/response/Website
+data. A single controlled glm-5.3/high brand comparison also failed natively
+without output; the dedicated account default was restored to max. The three
+max failures and this high failure remain honest incomplete business acceptance.

@@ -141,6 +141,145 @@ describe("Managed Agents transport", () => {
       }),
     ).toMatchObject({ id: "file_original" });
   });
+  it("lets an upload finish after 60 seconds while an ordinary request still times out", async () => {
+    vi.useFakeTimers();
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => {
+        const controller = new AbortController();
+        setTimeout(
+          () =>
+            controller.abort(
+              new DOMException("synthetic timeout", "TimeoutError"),
+            ),
+          ms,
+        );
+        return controller.signal;
+      });
+    try {
+      const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        return new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              resolve(
+                json({
+                  id: "file_slow",
+                  filename: "workflow.zip",
+                  size_bytes: 3,
+                }),
+              ),
+            90_000,
+          );
+          init!.signal!.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(init!.signal!.reason);
+            },
+            { once: true },
+          );
+        });
+      });
+      const client = new ZhipuManagedClient({
+        apiKey: "test",
+        fetchImpl: transport,
+      });
+      let uploadCompleted = false;
+      const upload = client
+        .uploadFile({
+          filename: "workflow.zip",
+          bytes: Buffer.from("zip"),
+          contentType: "application/zip",
+        })
+        .then((value) => {
+          uploadCompleted = true;
+          return value;
+        });
+      const ordinary = client
+        .request("GET", "/v1/agents")
+        .catch((error) => error);
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(await ordinary).toMatchObject({
+        code: "TRANSPORT_ERROR",
+        outcomeUnknown: false,
+      });
+      expect(uploadCompleted).toBe(false);
+      await vi.advanceTimersByTimeAsync(29_999);
+      await expect(upload).resolves.toMatchObject({ id: "file_slow" });
+      expect(transport).toHaveBeenCalledTimes(2);
+      expect(
+        transport.mock.calls.filter(([, init]) => init?.method === "POST"),
+      ).toHaveLength(1);
+    } finally {
+      timeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+  it.each([
+    [{}, 600_000, 60_000],
+    [{ requestTimeoutMs: 12_000 }, 12_000, 12_000],
+    [{ uploadTimeoutMs: 120_000 }, 120_000, 60_000],
+    [{ requestTimeoutMs: 12_000, uploadTimeoutMs: 120_000 }, 120_000, 12_000],
+  ])(
+    "honors explicit upload and existing request timeout choices: %j",
+    async (options, uploadMs, requestMs) => {
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockImplementation(() => new AbortController().signal);
+      try {
+        const client = new ZhipuManagedClient({
+          apiKey: "test",
+          ...options,
+          fetchImpl: vi.fn(async () =>
+            json({
+              id: "file_custom",
+              filename: "workflow.zip",
+              size_bytes: 3,
+            }),
+          ),
+        });
+        await client.uploadFile({
+          filename: "workflow.zip",
+          bytes: Buffer.from("zip"),
+          contentType: "application/zip",
+        });
+        await client.request("GET", "/v1/agents");
+        expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([
+          uploadMs,
+          requestMs,
+        ]);
+      } finally {
+        timeout.mockRestore();
+      }
+    },
+  );
+  it.each([
+    [401, false],
+    [413, false],
+    [429, false],
+    [500, true],
+  ] as const)(
+    "still reports upload HTTP %s immediately without resubmitting",
+    async (status, outcomeUnknown) => {
+      const transport = vi.fn(async () => json({}, status));
+      const client = new ZhipuManagedClient({
+        apiKey: "test",
+        fetchImpl: transport,
+      });
+      await expect(
+        client.uploadFile({
+          filename: "workflow.zip",
+          bytes: Buffer.from("zip"),
+          contentType: "application/zip",
+        }),
+      ).rejects.toMatchObject({
+        code: `HTTP_${status}`,
+        status,
+        outcomeUnknown,
+      });
+      expect(transport).toHaveBeenCalledOnce();
+    },
+  );
   it("exhausts cursor pages and deduplicates equal-time event identities", async () => {
     const transport = vi
       .fn()

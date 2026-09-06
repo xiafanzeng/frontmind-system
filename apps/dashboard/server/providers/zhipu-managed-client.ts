@@ -30,6 +30,7 @@ export class ZhipuManagedClient {
       apiKey: string;
       fetchImpl?: typeof fetch;
       requestTimeoutMs?: number;
+      uploadTimeoutMs?: number;
       maxFileBytes?: number;
     },
   ) {
@@ -138,8 +139,9 @@ export class ZhipuManagedClient {
     path: string,
     body?: unknown,
     validate?: (value: ZhipuRecord) => void,
+    signal?: AbortSignal,
   ): Promise<ZhipuRecord> {
-    const response = await this.open(method, path, body);
+    const response = await this.open(method, path, body, signal);
     const bytes = await this.bytes(
       response,
       8 * 1024 * 1024,
@@ -213,14 +215,24 @@ export class ZhipuManagedClient {
       new Blob([new Uint8Array(input.bytes)], { type: input.contentType }),
       input.filename,
     );
-    return this.request("POST", "/v1/files", form, (value) => {
-      zhipuResourceId(value);
-      if (
-        value.filename !== input.filename ||
-        value.size_bytes !== input.bytes.length
-      )
-        throw new Error("FILE_IDENTITY_CONFLICT");
-    });
+    return this.request(
+      "POST",
+      "/v1/files",
+      form,
+      (value) => {
+        zhipuResourceId(value);
+        if (
+          value.filename !== input.filename ||
+          value.size_bytes !== input.bytes.length
+        )
+          throw new Error("FILE_IDENTITY_CONFLICT");
+      },
+      AbortSignal.timeout(
+        this.options.uploadTimeoutMs ??
+          this.options.requestTimeoutMs ??
+          600_000,
+      ),
+    );
   }
   async sendMessage(sessionId: string, text: string) {
     return this.request(

@@ -101,7 +101,19 @@ export class ZhipuManagedClient {
       let size = 0;
       try {
         for (;;) {
-          const item = await reader.read();
+          let item: ReadableStreamReadResult<Uint8Array>;
+          try {
+            item = await reader.read();
+          } catch {
+            // A response header does not prove that its body was received.
+            // Reads may retry; mutations still have an unknown outcome.
+            throw new ZhipuManagedError(
+              path,
+              null,
+              "TRANSPORT_ERROR",
+              mutation,
+            );
+          }
           if (item.done) break;
           size += item.value.byteLength;
           if (size > max) throw new Error("RESPONSE_TOO_LARGE");
@@ -111,7 +123,8 @@ export class ZhipuManagedClient {
         await reader.cancel().catch(() => undefined);
       }
       return Buffer.concat(chunks);
-    } catch {
+    } catch (error) {
+      if (error instanceof ZhipuManagedError) throw error;
       throw new ZhipuManagedError(
         path,
         response.status,

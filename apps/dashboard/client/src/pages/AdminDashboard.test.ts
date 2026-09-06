@@ -93,8 +93,9 @@ describe("administrator channel navigation", () => {
         "客户交付工作台",
         "客户项目团队",
         "账号与权限",
-        "问题监控",
-        _name === "real" ? "媒体发布" : "渠道分发",
+        ...(_name === "real"
+          ? ["账号与余额", "模型能力", "任务运行", "内容查阅", "操作记录", "发布集成", "目录同步", "图文能力", "异常对账"]
+          : ["问题监控", "渠道分发"]),
       ]);
     },
   );
@@ -107,16 +108,16 @@ describe("administrator channel navigation", () => {
       (item) => item.href === channelDistributionUrl,
     );
     expect(issueIndex).toBeGreaterThanOrEqual(0);
-    expect(distributionIndex).toBe(issueIndex + 1);
+    expect(distributionIndex).toBe(issueIndex + 5);
     expect(adminNav[issueIndex]).toMatchObject({
-      label: "问题监控",
+      label: "账号与余额",
       href: "/admin/monitoring/accounts",
-      group: "监控与发布管理",
+      group: "问题监控管理",
     });
     expect(adminNav[distributionIndex]).toMatchObject({
-      label: "媒体发布",
+      label: "发布集成",
       href: "/admin/monitoring/media-publishing/integration",
-      group: "监控与发布管理",
+      group: "媒体发布管理",
     });
     for (const item of [adminNav[issueIndex], adminNav[distributionIndex]]) {
       expect(item.external).not.toBe(true);
@@ -241,7 +242,7 @@ describe("administrator channel navigation", () => {
     );
     expect(source).not.toContain("管理员自用 Agent 积分");
     expect(source).toContain("统一 API Key 管理");
-    expect(source).toContain("客户、交付管理员和工程师使用同一套管理入口");
+    expect(source).toContain("客户、交付管理员和工程师统一使用智谱 Key");
     expect(source).not.toContain('["system_admin", "系统管理员"]');
     expect(source).toContain(
       "trpc.admin.apiKeyUsageAlerts.replaceTargetCredential.useMutation()",
@@ -278,8 +279,8 @@ describe("administrator channel navigation", () => {
     expect(source).not.toContain("accountUsageComplete");
     expect(source).not.toContain("账号归因不完整");
     expect(source).toContain("row.nativeUsage?.observedTasks");
-    expect(source).toContain('value="frontmind-pro"');
-    expect(source).toContain('value="frontmind-base"');
+    expect(source).not.toContain('value="frontmind-pro"');
+    expect(source).not.toContain('value="frontmind-base"');
     expect(source).toContain("只读验收预览 · 近 30 天");
     expect(source).not.toContain("管理员通用 Agent");
     expect(source).not.toContain("从客户签约到交付验收的统一工作台");

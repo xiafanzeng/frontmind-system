@@ -16,15 +16,16 @@ import {
 } from "../drizzle/schema";
 import { runtimeErrorForLog } from "./_core/runtime-error-log";
 import {
+  DEFAULT_MANAGED_AGENT_PROFILE,
+  managedAgentProfileEffort,
   managedAgentProfileModel,
-  normalizeManagedAgentProfile,
-  type ManagedAgentProfile,
 } from "../shared/manus-agent-profile";
 import { readRollingManagedUsageByAccounts } from "./api-usage-ledger";
 import {
   acquireActiveApiCredentialDeletionFence,
   AuthServiceError,
   credentialProfileProjection,
+  toCredentialStatus,
   getDecryptedCredentialForUser,
   completeActiveApiCredentialDeletionFence,
   deleteActiveApiCredentialInTransaction,
@@ -331,6 +332,7 @@ export function bulkManagedApiKeyActionTargets<
     number,
     {
       status: string;
+      validationStatus?: string;
       fingerprint?: string | null;
       agentProfile?: unknown;
       provider?: unknown;
@@ -338,7 +340,6 @@ export function bulkManagedApiKeyActionTargets<
   >;
   applyMode: BulkManagedApiKeyApplyMode;
   nextFingerprint: string;
-  nextAgentProfile?: ManagedAgentProfile;
 }) {
   return input.resolvedTargets.filter((target) => {
     const credential = input.latestCredentials.get(target.userId);
@@ -349,9 +350,7 @@ export function bulkManagedApiKeyActionTargets<
       credential?.status !== "active" ||
       credential.fingerprint !== input.nextFingerprint ||
       credential.provider !== "zhipu" ||
-      (target.kind === "customer" &&
-        normalizeManagedAgentProfile(credential.agentProfile) !==
-          normalizeManagedAgentProfile(input.nextAgentProfile))
+      credential.validationStatus !== "verified"
     );
   });
 }
@@ -586,7 +585,6 @@ export async function bulkReplaceManagedApiKeyTargets(
     targets: BulkManagedApiKeyRequestedTarget[];
     applyMode: BulkManagedApiKeyApplyMode;
     apiKey: string;
-    agentProfile?: ManagedAgentProfile;
     reason?: string;
   },
   runtimeOverrides: Partial<BulkManagedApiKeyRuntime> = {},
@@ -607,7 +605,7 @@ export async function bulkReplaceManagedApiKeyTargets(
       "只有系统管理员可以批量配置账号 API Key。",
     );
   }
-  const agentProfile = normalizeManagedAgentProfile(input.agentProfile);
+  const agentProfile = DEFAULT_MANAGED_AGENT_PROFILE;
   const db = await runtime.requireDatabase();
   const initialScope = await loadBulkManagedApiKeyScopeState({
     executor: db,
@@ -637,7 +635,6 @@ export async function bulkReplaceManagedApiKeyTargets(
     latestCredentials: initialLatestCredentials,
     applyMode: input.applyMode,
     nextFingerprint,
-    nextAgentProfile: agentProfile,
   });
   if (initialActionTargets.length > 200) {
     throw new AuthServiceError(
@@ -682,7 +679,6 @@ export async function bulkReplaceManagedApiKeyTargets(
       latestCredentials,
       applyMode: input.applyMode,
       nextFingerprint,
-      nextAgentProfile: agentProfile,
     });
     if (lockedActionTargets.length > 200) {
       throw new AuthServiceError(
@@ -706,10 +702,8 @@ export async function bulkReplaceManagedApiKeyTargets(
         currentCredential?.status === "active" &&
         (input.applyMode === "unconfigured_only" ||
           (currentCredential.fingerprint === nextFingerprint &&
-            (target.kind !== "customer" ||
-              normalizeManagedAgentProfile(
-                (currentCredential as { agentProfile?: unknown }).agentProfile,
-              ) === agentProfile)))
+            currentCredential.provider === "zhipu" &&
+            currentCredential.validationStatus === "verified"))
       ) {
         unchangedCount += 1;
         versions.push({
@@ -771,7 +765,11 @@ export async function bulkReplaceManagedApiKeyTargets(
           ...(lockedScopeTargets.some((target) => target.kind === "customer")
             ? {
                 customerAgentProfile: agentProfile,
-                customerUpstreamModel: managedAgentProfileModel(agentProfile),
+                customerUpstreamModel: managedAgentProfileModel(
+                  agentProfile,
+                  "zhipu",
+                ),
+                customerUpstreamEffort: managedAgentProfileEffort(agentProfile),
               }
             : {}),
           targetUserIds: lockedActionTargets.map((target) => target.userId),
@@ -802,25 +800,37 @@ export async function bulkReplaceManagedApiKeyTargets(
   return result;
 }
 
-export async function replaceManagedApiKeyTarget(input: {
-  actor: AuthenticatedUser;
-  kind: ManagedApiKeyTargetKind;
-  userId: number;
-  apiKey: string;
-  agentProfile?: ManagedAgentProfile;
-  expectedVersion: number;
-  reason?: string;
-}) {
+export async function replaceManagedApiKeyTarget(
+  input: {
+    actor: AuthenticatedUser;
+    kind: ManagedApiKeyTargetKind;
+    userId: number;
+    apiKey: string;
+    expectedVersion: number;
+    reason?: string;
+  },
+  runtimeOverrides: Partial<BulkManagedApiKeyRuntime> = {},
+) {
+  const runtime: BulkManagedApiKeyRuntime = {
+    requireDatabase: requireDb,
+    validateApiKey: validateManagedUpstreamApiKey,
+    fingerprintApiKey: getApiKeyFingerprint,
+    replaceCredential: replaceApiCredentialInTransaction,
+    writeAuditEvent: writeWorkspaceAuditEvent,
+    queueRefresh: queueManagedApiUsageFingerprintRefresh,
+    now: () => new Date(),
+    ...runtimeOverrides,
+  };
   if (!isSystemAdmin(input.actor)) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "只有系统管理员可以替换账号 API Key。",
     );
   }
-  await validateManagedUpstreamApiKey(input.apiKey);
-  const agentProfile = normalizeManagedAgentProfile(input.agentProfile);
-  const nextFingerprint = getApiKeyFingerprint(input.apiKey);
-  const db = await requireDb();
+  await runtime.validateApiKey(input.apiKey);
+  const agentProfile = DEFAULT_MANAGED_AGENT_PROFILE;
+  const nextFingerprint = runtime.fingerprintApiKey(input.apiKey);
+  const db = await runtime.requireDatabase();
   const replacement = await db.transaction(async (tx) => {
     const targetRows = await tx
       .select({
@@ -846,13 +856,27 @@ export async function replaceManagedApiKeyTarget(input: {
       actualVersion,
       expectedVersion: input.expectedVersion,
     });
-    const credential = await replaceApiCredentialInTransaction({
+    const currentCredential = credentialRows[0];
+    if (
+      currentCredential?.status === "active" &&
+      currentCredential.provider === "zhipu" &&
+      currentCredential.fingerprint === nextFingerprint &&
+      currentCredential.validationStatus === "verified"
+    ) {
+      // An already verified Key keeps its frozen legacy runtime. A repaired
+      // invalid/unverified Key still needs a verified replacement version.
+      return {
+        credential: toCredentialStatus(currentCredential),
+        changed: false,
+      };
+    }
+    const credential = await runtime.replaceCredential({
       executor: tx,
       userId: input.userId,
       apiKey: input.apiKey,
       agentProfile: input.kind === "customer" ? agentProfile : null,
     });
-    await writeWorkspaceAuditEvent(
+    await runtime.writeAuditEvent(
       {
         actor: input.actor,
         action: "admin.api_credential.replaced",
@@ -875,12 +899,14 @@ export async function replaceManagedApiKeyTarget(input: {
       },
       tx,
     );
-    return { credential };
+    return { credential, changed: true };
   });
-  queueManagedApiUsageFingerprintRefresh({
-    actor: input.actor,
-    fingerprint: nextFingerprint,
-  });
+  if (replacement.changed) {
+    runtime.queueRefresh({
+      actor: input.actor,
+      fingerprint: nextFingerprint,
+    });
+  }
   return replacement.credential;
 }
 

@@ -584,7 +584,11 @@ export async function listOutstandingZhipuTasks() {
     .filter(
       (task) =>
         task.provider === "zhipu" &&
-        ["queued", "running", "result_pending"].includes(task.status),
+        (["queued", "running", "result_pending"].includes(task.status) ||
+          (task.resultDecoderRevision === 3 &&
+            task.status === "attention_required" &&
+            task.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED" &&
+            Boolean(task.providerTaskId))),
     )
     .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
 }
@@ -655,13 +659,26 @@ export async function updatePresalesV2Task(
       current.status === "attention_required" &&
       current.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED" &&
       (next.status === "succeeded" || next.status === "failed");
+    const expiredRunResumption =
+      current.resultDecoderRevision === 3 &&
+      next.resultDecoderRevision === 3 &&
+      current.status === "attention_required" &&
+      current.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED" &&
+      Boolean(current.providerTaskId) &&
+      next.providerTaskId === current.providerTaskId &&
+      next.status === "running" &&
+      next.errorCode === null &&
+      next.providerRunDeadlineAt === null &&
+      next.providerRunDeadlineExceededAt === null &&
+      next.terminalAt === null;
     const terminalStatusRegression =
       (current.status === "succeeded" && next.status !== "succeeded") ||
       (current.status === "failed" && next.status !== "failed") ||
       (current.status === "cancelled" && next.status !== "cancelled") ||
       (current.status === "attention_required" &&
         next.status !== "attention_required" &&
-        !deadlineResultFinalization);
+        !deadlineResultFinalization &&
+        !expiredRunResumption);
     if (terminalStatusRegression) {
       throw new Error("PRESALES_V2_TERMINAL_STATUS_REGRESSION");
     }

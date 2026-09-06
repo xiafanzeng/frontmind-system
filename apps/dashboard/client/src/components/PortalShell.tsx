@@ -224,6 +224,7 @@ export default function PortalShell({
                   ) : (
                     <Link
                       href={item.href}
+                      aria-current={active ? "page" : undefined}
                       className={className}
                       title={sidebarCollapsed ? item.label : undefined}
                       aria-label={sidebarCollapsed ? item.label : undefined}

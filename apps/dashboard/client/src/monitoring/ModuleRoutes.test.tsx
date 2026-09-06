@@ -47,9 +47,9 @@ describe("Dashboard module routes", () => {
     "/monitoring-system/m1/runs/r1",
     "/publishing",
     "/publishing/articles/a1",
-  ])("opens the authenticated business module at %s", async (path) => {
+  ])("opens the authenticated business module inside the customer dashboard at %s", async (path) => {
     open(path);
-    expect(await screen.findByText("CONNECTED_MODULE")).toBeInTheDocument();
+    expect(await screen.findByText("CUSTOMER_HOME")).toBeInTheDocument();
   });
   it("denies customers access to monitoring administration", async () => {
     open("/admin/monitoring/accounts");

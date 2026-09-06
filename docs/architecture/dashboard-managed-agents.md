@@ -70,13 +70,15 @@ A knowledge-base research task remains active while the provider reports it
 as running. The old 15-minute reset rule rejected a healthy 23-minute task
 before its ZIP existed; it has been removed. The downloaded ZIP from that
 incident passed the original materialized validator. Fresh-run acceptance on
-the deployed `c6b8f74` release remains pending; the failed historical
-conversation is not rebuilt. That fresh task subsequently produced an original
+the deployed `c6b8f74` release was then attempted; the failed historical
+conversation was not rebuilt. That fresh task subsequently produced an original
 ZIP accepted as 55 leaves and 129 evidence files. Its node-modification task
 then failed with a native Zhipu `session.error` (service unavailable, retries
-exhausted), so formal publication is still pending. The adapter now preserves
+exhausted), so that build was not published. The adapter now preserves
 that terminal error across the following idle event instead of reporting a
-successful completion with an invalid archive.
+successful completion with an invalid archive. A later fresh task on `1c89b0e`
+completed the whole original workflow: 55 leaves, one successful node revision,
+55 read/confirm actions, final download validation and formal publication.
 
 ## Customer self-service
 
@@ -107,27 +109,46 @@ nullable upstream effort. All previous migrations and all pre-existing schema
 fields remain unchanged. The adapter
 no longer directly depends on AJV. Existing dependency versions are preserved.
 
-The `c6b8f7465d0a5a09bd5d7bef422afc2bb50ef0b7` release is deployed. Dashboard
+The pre-update `237cd0aa6b815e70d0ac276396c6c3af08a1e88a` Dashboard release was deployed. Dashboard
 readiness reports the expected revision and exact migration/schema state, with
 no degraded builds or violations. Website remains on
 `f1dc5182819574aea32dbc50a2f715c414d50e41`.
 
 ## Current acceptance scope and status
 
-The deployed release passed read-only browser checks for system administrator,
-customer and engineer accounts: eight pages and twelve reloads retained their
-authenticated identities without page errors. The original Dashboard navigation
+Release `1c89b0e` passed read-only browser checks for system administrator,
+customer and engineer accounts: nine role paths, nine reloads and 27
+page/identity/editor checks retained their authenticated identities without
+failed GET requests or uncaught errors. The original Dashboard navigation
 and settings remain available, including Zhipu Token, 21st and Aliyun controls.
 Customer navigation adds 问题监控 and 媒体发布 under 监控与发布; the system
 administrator has a separate 监控与发布管理 section. The original general-agent
-two-turn conversation and both JSON downloads were also reverified on this
-release.
+two-turn conversation and both JSON downloads were also reverified on that
+release. Customer Dashboard editing and exact full-payload restoration also
+passed, including stale revision and cross-account rejection. Customer
+self-service knowledge reset succeeded and began a fresh task at 05:10:55 UTC
+on 2026-09-06 without reusing the old ZIP or provider session.
+After KB publication, `ac5ac7c` passed seven further customer checks covering
+the dedicated content/website editor entries, actual template downloads and
+identity preservation after navigation and reload.
+On `70fa85f`, fresh question selection, response-draft save/reset, idempotent
+replay, question modification and subsequent deletion passed through the
+customer APIs. The UUID correction preserves earlier audit replay keys; an
+actual pre-fix successful reset replayed correctly after deployment. Removed
+ticket routes returned NOT_FOUND. General-agent downloads were also reverified.
 
-Dashboard's fresh formal knowledge-base publication is still pending. Brand
-universe and response-logic acceptance depend on that snapshot and are also
-pending. A historical ZIP passing its local validator is not a published
-knowledge snapshot. Website's completed knowledge base, assessments and
-forecasts are separate results and do not satisfy Dashboard acceptance.
+Dashboard's fresh formal knowledge base is published. Its 175,337-byte final
+ZIP passed archive and leaf-body verification after a real single-node change;
+the other 54 leaves remained unchanged. Response logic completed original
+generation, save, same-session continuation, second save and confirmation;
+revision 6/version 1 matched independent API and database readback after the
+`70fa85f` restart. Brand-universe acceptance has not yet passed after three bounded fresh
+tasks received native service-unavailable/retries-exhausted failures. All three
+failed sessions had no deliverable or valid result to publish, and independent
+checks found no local interruption. Original Skill hashes, the published KB
+archive, model and effort remain unchanged; the derived input ZIP contains
+each new operation token. Website's completed
+knowledge base, assessments and forecasts are separate business results.
 
 The user excluded website building and template work from this task. WeChat
 and Xiaohongshu generation have no independent original UI entry: their
@@ -140,3 +161,25 @@ Exact production identities, test outcomes and completed versus pending
 business checks are recorded in
 [`live-migration-verification.md`](live-migration-verification.md). Passing
 transport tests alone is not production business acceptance.
+
+## Long-running tasks and unified workspace update
+
+No nonterminal Managed Agents task is failed solely for elapsed runtime or
+waiting time. Website's former 60-minute deadline and KB's remaining unknown,
+waiting and transient ZIP-read deadlines are removed. Temporary network reads
+continue against the same session; retrying errors stay active, while explicit
+terminal errors and cancellations retain their meaning. Original Skill bytes,
+model settings and business result validation are unchanged.
+
+The customer monitoring/publishing routes now render inside UserBrandDashboard
+with its existing sidebar and expanded subpages. System administrators use the
+same PortalShell/getAdminNav navigation across all nine management subpages.
+The new 内容分析与 AI 部件 subsection under AI 友好内容资产 adapts the requested
+reference UI with explicit sample-data preview labeling; it performs no real
+AI, collection, publishing or HelpLook writes.
+
+Administrator Key assignment no longer offers Base/Pro. New credentials use
+the existing Zhipu default, while an already verified identical Key remains
+unchanged. An invalid/unverified Key is freshly verified and repaired through
+a new credential version. Existing task bindings and frozen model settings
+are not rewritten. No migration accompanies these changes.

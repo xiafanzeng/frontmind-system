@@ -154,17 +154,16 @@ export default function PublishingAdminLivePage({
     setLiveWhitelist.isPending ||
     bindUnknown.isPending ||
     authorizeResubmit.isPending;
-  const queryError = [
-    runtimeQuery.error,
-    catalogRunsQuery.error,
-    capabilitiesQuery.error,
-    unknownItemsQuery.error,
-  ].find(Boolean);
-  const loading =
-    runtimeQuery.isPending ||
-    catalogRunsQuery.isPending ||
-    capabilitiesQuery.isPending ||
-    unknownItemsQuery.isPending;
+  const activeQueries =
+    section === "integration"
+      ? [runtimeQuery]
+      : section === "catalog"
+        ? [runtimeQuery, catalogRunsQuery]
+        : section === "capabilities"
+          ? [capabilitiesQuery]
+          : [unknownItemsQuery];
+  const queryError = activeQueries.map((query) => query.error).find(Boolean);
+  const loading = activeQueries.some((query) => query.isPending);
   const confirmDisabled =
     !pending ||
     reason.trim().length < 3 ||

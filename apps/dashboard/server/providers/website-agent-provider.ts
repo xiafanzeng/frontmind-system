@@ -56,16 +56,15 @@ function messageText(content: unknown) {
           .join("\n")
       : "";
 }
-export function normalizeZhipuEvents(
-  raw: ZhipuRecord[],
-): ManusV2MessageEvent[] {
-  return raw.flatMap((event, rank): ManusV2MessageEvent[] => {
+function createZhipuEventNormalizer() {
+  let terminalStatus: "error" | "cancelled" | null = null;
+  return (event: ZhipuRecord, rank: number): ManusV2MessageEvent[] => {
+    if (event.processed_at == null && String(event.type).startsWith("user."))
+      return [];
     const timestamp = Date.parse(
       String(event.processed_at ?? event.created_at ?? ""),
     );
     if (!Number.isFinite(timestamp)) {
-      if (event.processed_at == null && String(event.type).startsWith("user."))
-        return [];
       throw new ManusV2ApiError(
         "task.listMessages",
         502,
@@ -79,6 +78,14 @@ export function normalizeZhipuEvents(
       timestamp,
       providerOriginalRank: rank,
     };
+    if (
+      [
+        "user.message",
+        "session.status_running",
+        "session.status_rescheduled",
+      ].includes(String(event.type))
+    )
+      terminalStatus = null;
     if (event.type === "user.message")
       return [
         {
@@ -97,7 +104,10 @@ export function normalizeZhipuEvents(
       ];
     if (event.type === "agent.tool_use" || event.type === "agent.tool_result")
       return [{ ...base, type: event.type, is_error: event.is_error === true }];
-    if (event.type === "session.status_running")
+    if (
+      event.type === "session.status_running" ||
+      event.type === "session.status_rescheduled"
+    )
       return [
         {
           ...base,
@@ -105,6 +115,19 @@ export function normalizeZhipuEvents(
           status_update: { agent_status: "running" },
         },
       ];
+    if (
+      event.type === "session.status_terminated" ||
+      event.type === "session.deleted"
+    ) {
+      terminalStatus = "cancelled";
+      return [
+        {
+          ...base,
+          type: "status_update",
+          status_update: { agent_status: "cancelled" },
+        },
+      ];
+    }
     if (event.type === "session.status_idle") {
       const reason = asRecord(event.stop_reason);
       const stopped = reason.type === "end_turn";
@@ -113,11 +136,18 @@ export function normalizeZhipuEvents(
           ...base,
           type: "status_update",
           status_update: {
-            agent_status: stopped
-              ? "stopped"
-              : reason.type === "requires_action"
-                ? "waiting"
-                : "error",
+            agent_status: terminalStatus
+              ? terminalStatus
+              : stopped
+                ? "stopped"
+                : reason.type === "requires_action"
+                  ? "waiting"
+                  : reason.type === "interrupted" ||
+                      reason.type === "user_interrupt"
+                    ? "cancelled"
+                    : reason.type === "retries_exhausted"
+                      ? "error"
+                      : "unknown",
             ...(reason.type === "requires_action"
               ? {
                   status_detail: {
@@ -133,10 +163,15 @@ export function normalizeZhipuEvents(
         },
       ];
     }
-    if (
-      event.type === "session.error" &&
-      asRecord(event.error).retry_status !== "retrying"
-    )
+    if (event.type === "session.error") {
+      const retryStatus = asRecord(event.error).retry_status;
+      if (
+        retryStatus === "retrying" ||
+        asRecord(retryStatus).type === "retrying"
+      )
+        return [];
+      // The following idle event ends this failed turn; it is not a success.
+      terminalStatus = "error";
       return [
         {
           ...base,
@@ -144,8 +179,14 @@ export function normalizeZhipuEvents(
           status_update: { agent_status: "error" },
         },
       ];
+    }
     return []; // Never persist or project reasoning or raw tool output.
-  });
+  };
+}
+export function normalizeZhipuEvents(
+  raw: ZhipuRecord[],
+): ManusV2MessageEvent[] {
+  return raw.flatMap(createZhipuEventNormalizer());
 }
 function compat(error: unknown, operation: string): never {
   if (error instanceof ManusV2ApiError) throw error;
@@ -156,6 +197,8 @@ function compat(error: unknown, operation: string): never {
       `ZHIPU_${error.code}`,
       !error.outcomeUnknown &&
         (error.status === null ||
+          error.status === 408 ||
+          error.status === 425 ||
           error.status === 429 ||
           (error.status ?? 0) >= 500),
       error.outcomeUnknown,
@@ -361,8 +404,9 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
         timer = setTimeout(close, 60 * 60_000);
         timer.unref?.();
         connected();
+        const normalizeEvent = createZhipuEventNormalizer();
         for await (const raw of stream.events) {
-          const normalized = normalizeZhipuEvents([raw]);
+          const normalized = normalizeEvent(raw, 0);
           const event = normalized[0];
           if (event) {
             const message = executionEventMessage(event);
@@ -548,6 +592,23 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
         { order: "asc" },
       );
       const events = normalizeZhipuEvents(raw);
+      if (session.status === "terminated") {
+        const terminatedAt = Date.parse(
+          String(session.updated_at ?? session.created_at),
+        );
+        events.push({
+          id: `${input.taskId}_terminated`,
+          type: "status_update",
+          timestamp: events.reduce(
+            (latest, event) => Math.max(latest, event.timestamp),
+            Number.isFinite(terminatedAt)
+              ? terminatedAt
+              : (events.at(-1)?.timestamp ?? Date.now()),
+          ),
+          providerOriginalRank: raw.length,
+          status_update: { agent_status: "cancelled" },
+        });
+      }
       await this.update(this.record.localTaskId, (record) => ({
         ...record,
         providerRuntime: {
@@ -593,7 +654,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
             )}`,
             type: "assistant_message",
             timestamp: lastStatus!.timestamp,
-            providerOriginalRank: events.length,
+            providerOriginalRank: raw.length,
             assistant_message: {
               content: "",
               attachments: outputs.map((file) => ({

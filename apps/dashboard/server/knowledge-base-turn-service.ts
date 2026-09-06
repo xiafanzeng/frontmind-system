@@ -95,7 +95,6 @@ import {
 const DEFAULT_LEASE_MS = 300_000;
 /** A stopped malformed result must settle or become explicit attention. */
 const MANUS_V2_FORMAT_REPAIR_DEADLINE_MS = 120_000;
-const MATERIALIZED_RESULT_READ_WINDOW_MS = 10 * 60_000;
 const MATERIALIZED_RESULT_READ_BACKOFF_MS = [
   15_000, 30_000, 60_000, 120_000,
 ] as const;
@@ -11161,9 +11160,9 @@ export type KnowledgeBaseMaterializedProviderStatus =
   | "list_messages_404";
 
 /**
- * Persist an explicit no-candidate Provider state with a hard deadline. Error
- * states not proven to be an exact quota type settle immediately; waiting and
- * quota interruption retain the same task for at most 24 hours.
+ * Persist an explicit no-candidate provider state and continue polling the same
+ * task until a terminal result or user action. Error states not proven to be an
+ * exact quota type settle immediately.
  */
 export async function deferKnowledgeBaseMaterializedProviderStatus(
   input: {
@@ -11218,15 +11217,15 @@ export async function deferKnowledgeBaseMaterializedProviderStatus(
       now,
       isRunning: input.status === "running",
     });
-    // A running provider task has not failed merely because a full research
-    // bundle takes longer than a short UI progress window. Keep polling the
-    // same task until it delivers, stops, or reports an actual interruption.
+    // Elapsed time in a nonterminal state is not evidence of provider failure.
+    // Keep the original observation for diagnostics, including transitions
+    // between waiting and quota interruption on the same task.
     const priorStatus = stored.lastStatus;
     const sameInterruptionClass =
       (priorStatus === "waiting" || priorStatus === "quota_error") &&
       (input.status === "waiting" || input.status === "quota_error");
     const sameStatus = priorStatus === input.status || sameInterruptionClass;
-    const firstObservedAt = sameStatus
+    const observedAt = sameStatus
       ? stored.statusFirstObservedAt || now.toISOString()
       : input.status === "running" &&
           !priorStatus &&
@@ -11234,38 +11233,10 @@ export async function deferKnowledgeBaseMaterializedProviderStatus(
           Number.isFinite(turn.startedAt.getTime())
         ? turn.startedAt.toISOString()
         : now.toISOString();
-    const firstObservedMs = Date.parse(firstObservedAt);
-    const durationMs =
-      input.status === "running"
-        ? null
-        : input.status === "list_messages_404" || input.status === "unknown"
-          ? 10 * 60_000
-          : input.status === "waiting" || input.status === "quota_error"
-            ? 24 * 60 * 60_000
-            : 10 * 60_000;
-    const deadlineMs =
-      durationMs === null ? null : firstObservedMs + durationMs;
-    if (
-      !Number.isFinite(firstObservedMs) ||
-      (deadlineMs !== null &&
-        (!Number.isFinite(deadlineMs) || now.getTime() >= deadlineMs))
-    ) {
-      const settled =
-        await settleLockedKnowledgeBaseMaterializedResultForApprovedReset({
-          tx,
-          userId: input.userId,
-          turn,
-          build,
-          metadata,
-          code: "KNOWLEDGE_BASE_MATERIALIZED_RESULT_UNAVAILABLE",
-          now,
-        });
-      return { state: "unavailable", turn: settled };
-    }
-    const nextRetryAt = completionPollAt(
-      now,
-      deadlineMs === null ? undefined : new Date(deadlineMs).toISOString(),
-    );
+    const firstObservedAt = Number.isFinite(Date.parse(observedAt))
+      ? observedAt
+      : now.toISOString();
+    const nextRetryAt = completionPollAt(now);
     const { statusDeadlineAt: _statusDeadlineAt, ...clockedWithoutDeadline } =
       clocked;
     const ledger: KnowledgeBaseMaterializedCompletionLedger = {
@@ -11273,9 +11244,6 @@ export async function deferKnowledgeBaseMaterializedProviderStatus(
       schemaVersion: 1,
       lastStatus: input.status,
       statusFirstObservedAt: firstObservedAt,
-      ...(deadlineMs === null
-        ? {}
-        : { statusDeadlineAt: new Date(deadlineMs).toISOString() }),
       ...(input.status === "list_messages_404"
         ? { listMessages404FirstObservedAt: firstObservedAt }
         : {}),
@@ -11660,9 +11628,9 @@ export type KnowledgeBaseMaterializedResultReadDisposition =
     };
 
 /**
- * Lease-fenced retry schedule for transient reads of one stopped Manus result.
- * The original task remains the sole provider task; at ten minutes the same
- * transaction converts it to the approved-reset terminal state.
+ * Lease-fenced retry schedule for transient reads of one provider result.
+ * Keep retrying the original task with bounded backoff; elapsed time does not
+ * establish that the provider result is unavailable.
  */
 export async function deferKnowledgeBaseMaterializedResultRead(
   input: {
@@ -11715,11 +11683,13 @@ export async function deferKnowledgeBaseMaterializedResultRead(
     const storedFirstObservedMs = stored
       ? Date.parse(stored.firstObservedAt)
       : Number.NaN;
-    const firstObservedAt = stored ? stored.firstObservedAt : now.toISOString();
-    const firstObservedMs = stored ? storedFirstObservedMs : now.getTime();
+    const firstObservedAt = Number.isFinite(storedFirstObservedMs)
+      ? stored!.firstObservedAt
+      : now.toISOString();
     const existingRetryAt = Date.parse(stored?.nextRetryAt || "");
     if (
       stored &&
+      Number.isFinite(storedFirstObservedMs) &&
       Number.isFinite(existingRetryAt) &&
       existingRetryAt > now.getTime()
     ) {
@@ -11732,32 +11702,6 @@ export async function deferKnowledgeBaseMaterializedResultRead(
         deduplicated: true,
       };
     }
-    const deadlineAt = firstObservedMs + MATERIALIZED_RESULT_READ_WINDOW_MS;
-    if (!Number.isFinite(firstObservedMs) || now.getTime() >= deadlineAt) {
-      const settledTurn =
-        await settleLockedKnowledgeBaseMaterializedResultForApprovedReset({
-          tx,
-          userId: input.userId,
-          turn,
-          build,
-          metadata: {
-            ...metadata,
-            materializedResultRead: {
-              firstObservedAt: Number.isFinite(firstObservedMs)
-                ? firstObservedAt
-                : now.toISOString(),
-              attempt:
-                Number.isSafeInteger(stored?.attempt) && stored!.attempt >= 0
-                  ? stored!.attempt
-                  : 0,
-              lastErrorKind,
-            },
-          },
-          code: "KNOWLEDGE_BASE_MATERIALIZED_RESULT_UNAVAILABLE",
-          now,
-        });
-      return { state: "unavailable", turn: settledTurn, deduplicated: false };
-    }
     const priorAttempt =
       Number.isSafeInteger(stored?.attempt) && stored!.attempt >= 0
         ? stored!.attempt
@@ -11767,7 +11711,7 @@ export async function deferKnowledgeBaseMaterializedResultRead(
       MATERIALIZED_RESULT_READ_BACKOFF_MS[
         Math.min(attempt - 1, MATERIALIZED_RESULT_READ_BACKOFF_MS.length - 1)
       ];
-    const nextRetryMs = Math.min(now.getTime() + delayMs, deadlineAt);
+    const nextRetryMs = now.getTime() + delayMs;
     const nextRetryAt = new Date(nextRetryMs).toISOString();
     const materializedResultRead: KnowledgeBaseMaterializedResultRead = {
       firstObservedAt,

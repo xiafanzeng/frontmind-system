@@ -63,6 +63,50 @@ describe("Managed Agents transport", () => {
       code: "TRANSPORT_ERROR",
     });
   });
+  it.each(["GET", "POST"])(
+    "classifies a %s response-body timeout as transport loss without retrying the request",
+    async (method) => {
+      const transport = vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"id":'));
+                controller.error(
+                  new DOMException("synthetic timeout", "TimeoutError"),
+                );
+              },
+            }),
+          ),
+      );
+      const client = new ZhipuManagedClient({
+        apiKey: "test",
+        fetchImpl: transport,
+      });
+      await expect(
+        client.request(method, "/v1/sessions/sess_read"),
+      ).rejects.toMatchObject({
+        code: "TRANSPORT_ERROR",
+        status: null,
+        outcomeUnknown: method === "POST",
+      });
+      expect(transport).toHaveBeenCalledOnce();
+    },
+  );
+  it("does not relabel a complete malformed response as a transport loss", async () => {
+    const client = new ZhipuManagedClient({
+      apiKey: "test",
+      fetchImpl: vi.fn(async () => new Response('{"id":')),
+    });
+    await expect(
+      client.request("GET", "/v1/sessions/sess_read"),
+    ).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      status: 200,
+      outcomeUnknown: false,
+    });
+  });
+
   it("treats malformed success acknowledgement as unknown", async () => {
     const client = new ZhipuManagedClient({
       apiKey: "test",

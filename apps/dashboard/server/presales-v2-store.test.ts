@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PRESALES_V2_CONTRACT_HASHES } from "./presales-v2-contracts";
 import {
   acquirePresalesV2Task,
+  listOutstandingZhipuTasks,
   readPresalesV2Task,
   updatePresalesV2Task,
 } from "./presales-v2-store";
@@ -141,4 +142,63 @@ describe("Website task effort identity", () => {
       providerRuntime: { model: "glm-5.3" },
     });
   });
+});
+
+describe("Website recovery after the removed run deadline", () => {
+  it.each([
+    [3, "PROVIDER_RUN_DEADLINE_EXCEEDED", true],
+    [2, "PROVIDER_RUN_DEADLINE_EXCEEDED", false],
+    [3, "PROVIDER_ACTION_REQUIRED", false],
+  ] as const)(
+    "only resumes the same v3 deadline task (%s, %s)",
+    async (revision, errorCode, resumable) => {
+      const created = await acquirePresalesV2Task(input);
+      if (created.state === "conflict") throw new Error("Unexpected conflict");
+      const expired = await updatePresalesV2Task(
+        created.record.localTaskId,
+        (record) => ({
+          ...record,
+          providerTaskId: "sess_original",
+          resultDecoderRevision: revision,
+          status: "attention_required",
+          errorCode,
+          providerRunDeadlineAt: "2026-09-01T01:00:00.000Z",
+          providerRunDeadlineExceededAt: "2026-09-01T01:00:01.000Z",
+          terminalAt: "2026-09-01T01:00:01.000Z",
+        }),
+      );
+      expect(
+        (await listOutstandingZhipuTasks()).map((record) => record.localTaskId),
+      ).toEqual(resumable ? [created.record.localTaskId] : []);
+      const resume = (record: NonNullable<typeof expired>) => ({
+        ...record,
+        status: "running" as const,
+        errorCode: null,
+        providerRunDeadlineAt: null,
+        providerRunDeadlineExceededAt: null,
+        terminalAt: null,
+      });
+      await expect(
+        updatePresalesV2Task(created.record.localTaskId, (record) => ({
+          ...resume(record),
+          providerTaskId: "sess_replacement",
+        })),
+      ).rejects.toThrow("PRESALES_V2_TERMINAL_STATUS_REGRESSION");
+      const result = updatePresalesV2Task(created.record.localTaskId, resume);
+      if (resumable) {
+        await expect(result).resolves.toMatchObject({
+          status: "running",
+          errorCode: null,
+          providerTaskId: "sess_original",
+          credentialId: expired!.credentialId,
+          credentialVersion: expired!.credentialVersion,
+          providerRuntime: expired!.providerRuntime,
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          "PRESALES_V2_TERMINAL_STATUS_REGRESSION",
+        );
+      }
+    },
+  );
 });

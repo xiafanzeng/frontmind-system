@@ -1211,6 +1211,7 @@ export function getRouteCapability(
   if (section === "public-opinion" && sub === "brand-tracking") {
     return "brandTracking";
   }
+  if (section === "semantic" && sub === "content-insights") return null;
   if (section === "semantic") return "contentAssets";
   return null;
 }

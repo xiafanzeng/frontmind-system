@@ -432,18 +432,15 @@ export const adminNav: PortalNavItem[] = [
     icon: Users,
     group: "系统管理",
   },
-  {
-    label: "问题监控",
-    href: issueMonitorUrl,
-    icon: Activity,
-    group: "监控与发布管理",
-  },
-  {
-    label: "媒体发布",
-    href: channelDistributionUrl,
-    icon: Send,
-    group: "监控与发布管理",
-  },
+  { label: "账号与余额", href: issueMonitorUrl, icon: Users, group: "问题监控管理" },
+  { label: "模型能力", href: "/admin/monitoring/models", icon: Bot, group: "问题监控管理" },
+  { label: "任务运行", href: "/admin/monitoring/operations", icon: Activity, group: "问题监控管理" },
+  { label: "内容查阅", href: "/admin/monitoring/content-review", icon: ClipboardList, group: "问题监控管理" },
+  { label: "操作记录", href: "/admin/monitoring/audit-log", icon: ClipboardList, group: "问题监控管理" },
+  { label: "发布集成", href: channelDistributionUrl, icon: Send, group: "媒体发布管理" },
+  { label: "目录同步", href: "/admin/monitoring/media-publishing/catalog", icon: RefreshCw, group: "媒体发布管理" },
+  { label: "图文能力", href: "/admin/monitoring/media-publishing/capabilities", icon: ClipboardList, group: "媒体发布管理" },
+  { label: "异常对账", href: "/admin/monitoring/media-publishing/reconciliation", icon: Activity, group: "媒体发布管理" },
 ];
 
 export function getAdminNav(systemAdmin: boolean) {
@@ -1021,8 +1018,6 @@ function AdminOverviewApiKeyDialog({
   onSaved: () => Promise<void> | void;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [agentProfile, setAgentProfile] =
-    useState<ManagedAgentProfile>("frontmind-pro");
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
   const replaceTargetMutation =
@@ -1038,16 +1033,9 @@ function AdminOverviewApiKeyDialog({
         ? "客户"
         : "工程师";
 
-  useEffect(() => {
-    if (target?.kind === "customer") {
-      setAgentProfile(target.agentProfile ?? "frontmind-pro");
-    }
-  }, [target]);
-
   const close = () => {
     if (busy) return;
     setApiKey("");
-    setAgentProfile("frontmind-pro");
     setRevokeOpen(false);
     setReplaceConfirmOpen(false);
     replaceTargetMutation.reset();
@@ -1072,16 +1060,18 @@ function AdminOverviewApiKeyDialog({
         reason: "API与人员管理统一入口替换账号 API Key",
         confirmation: "REPLACE_API_KEY" as const,
       };
-      await replaceTargetMutation.mutateAsync(
+      const saved = await replaceTargetMutation.mutateAsync(
         target.kind === "customer"
-          ? { ...commonInput, kind: "customer", agentProfile }
+          ? { ...commonInput, kind: "customer" }
           : target.kind === "delivery_admin"
             ? { ...commonInput, kind: "delivery_admin" }
             : { ...commonInput, kind: "engineer" },
       );
       await onSaved();
       toast.success(
-        `${subjectLabel} API Key 已${target.configured ? "替换" : "配置"}`,
+        saved.version === target.version
+          ? `${subjectLabel} API Key 已验证，配置保持不变`
+          : `${subjectLabel} API Key 已${target.configured ? "替换" : "配置"}`,
         { description: target.displayName },
       );
       setApiKey("");
@@ -1146,26 +1136,6 @@ function AdminOverviewApiKeyDialog({
                 {target?.configured ? "已配置" : "未配置"}
               </span>
             </div>
-            {target?.kind === "customer" && (
-              <div className="space-y-2">
-                <Label htmlFor="overview-agent-profile">客户服务模型</Label>
-                <select
-                  id="overview-agent-profile"
-                  value={agentProfile}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setAgentProfile(event.target.value as ManagedAgentProfile)
-                  }
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="frontmind-pro">Pro</option>
-                  <option value="frontmind-base">Base</option>
-                </select>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  客户服务流程会将 Base/Pro 选择冻结在新的 Key 版本上。
-                </p>
-              </div>
-            )}
             <div className="space-y-2">
               <Label htmlFor="overview-api-key">
                 {target?.configured ? "新的智谱 API Key" : "智谱 API Key"}
@@ -1234,9 +1204,7 @@ function AdminOverviewApiKeyDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-sm">
-            {target?.kind === "customer"
-              ? `客户服务模型：${agentProfile === "frontmind-pro" ? "Pro" : "Base"}。`
-              : "内部账号的通用智能体模型会在新任务中单独选择，不绑定到 Key。"}
+            新版本统一使用智谱服务配置，已提交任务继续使用原绑定版本。
             近 30 天自用按本地任务账本滚动累计，Key 轮换不会清空历史数字。
           </div>
           <AlertDialogFooter>
@@ -1309,8 +1277,6 @@ function AdminBulkApiKeyDialog({
   const [engineerIds, setEngineerIds] = useState<number[]>([]);
   const [engineerSearch, setEngineerSearch] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [agentProfile, setAgentProfile] =
-    useState<ManagedAgentProfile>("frontmind-pro");
   const [replaceExisting, setReplaceExisting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const bulkMutation =
@@ -1342,9 +1308,6 @@ function AdminBulkApiKeyDialog({
           ? { kind: "engineers", engineerIds }
           : null;
   const targets = scope ? bulkApiKeyTargetsForScope(rows, scope) : [];
-  const targetsContainCustomers = targets.some(
-    (target) => target.kind === "customer",
-  );
   const configuredCount = targets.filter((target) => target.configured).length;
   const unconfiguredCount = targets.length - configuredCount;
   const actionTargets = replaceExisting
@@ -1366,7 +1329,6 @@ function AdminBulkApiKeyDialog({
     setEngineerIds([]);
     setEngineerSearch("");
     setApiKey("");
-    setAgentProfile("frontmind-pro");
     setReplaceExisting(false);
     setConfirmOpen(false);
     bulkMutation.reset();
@@ -1413,7 +1375,6 @@ function AdminBulkApiKeyDialog({
         })),
         applyMode: replaceExisting ? "replace_all" : "unconfigured_only",
         apiKey: apiKey.trim(),
-        ...(targetsContainCustomers ? { agentProfile } : {}),
         reason: "API与人员管理批量配置账号 API Key",
         confirmation: "BULK_REPLACE_API_KEYS",
       });
@@ -1644,27 +1605,6 @@ function AdminBulkApiKeyDialog({
                 </span>
               </span>
             </label>
-
-            {targetsContainCustomers && (
-              <div className="space-y-2">
-                <Label htmlFor="bulk-agent-profile">客户服务模型</Label>
-                <select
-                  id="bulk-agent-profile"
-                  value={agentProfile}
-                  disabled={busy}
-                  onChange={(event) =>
-                    setAgentProfile(event.target.value as ManagedAgentProfile)
-                  }
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="frontmind-pro">Pro</option>
-                  <option value="frontmind-base">Base</option>
-                </select>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Base/Pro 只应用于当前范围内的客户；内部账号 Key 不绑定模型。
-                </p>
-              </div>
-            )}
 
             <div className="space-y-2">
               <Label htmlFor="bulk-api-key">智谱 Managed Agents API Key</Label>
@@ -2592,7 +2532,7 @@ export default function AdminDashboard({
                 </div>
                 <p className="mt-1 text-sm leading-6 text-[#716a80]">
                   {apiKeyManagementTab === "general"
-                    ? "客户、交付管理员和工程师使用同一套管理入口；内部账号 Key 不绑定模型，客户服务流程保留 Base/Pro，近 30 天自用量按本地任务账本滚动累计。"
+                    ? "客户、交付管理员和工程师统一使用智谱 Key；近 30 天自用量按本地任务账本滚动累计。"
                     : "只为海外客户分配 FrontMind 品牌追踪 Key。不同客户可以共享同一 Key，个人积分仍按每轮实际用量分别归因。"}
                 </p>
               </div>
@@ -2778,13 +2718,6 @@ export default function AdminDashboard({
                                 {row.provider === "zhipu"
                                   ? "智谱"
                                   : "历史服务凭据"}
-                              </p>
-                            )}
-                            {row.kind === "customer" && (
-                              <p className="mt-1 text-[#716a80]">
-                                {row.agentProfile === "frontmind-pro"
-                                  ? "Pro"
-                                  : "Base"}
                               </p>
                             )}
                             {row.inherited && (

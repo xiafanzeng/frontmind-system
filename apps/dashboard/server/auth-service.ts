@@ -1956,7 +1956,7 @@ export function credentialProfileProjection(credential?: unknown) {
   } as const;
 }
 
-function toCredentialStatus(
+export function toCredentialStatus(
   credential?: ApiCredential | null,
 ): CredentialStatus {
   const requiresReplacement = Boolean(

@@ -52,3 +52,12 @@
 .monitoring-module .modal-card {
   z-index: 111;
 }
+
+.dashboard-module-content {
+  min-width: 0;
+  padding: 0 24px 24px;
+}
+.dashboard-module-content .monitoring-module {
+  min-width: 0;
+  min-height: calc(100vh - 150px);
+}

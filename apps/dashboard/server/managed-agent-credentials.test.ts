@@ -124,71 +124,77 @@ describe("versioned managed provider credentials", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retires the old row and encrypts a distinct Zhipu version with frozen profile", async () => {
-    vi.stubEnv(
-      "FRONTMIND_CREDENTIAL_ENCRYPTION_KEY",
-      randomBytes(32).toString("base64"),
-    );
-    const prior = Object.freeze({
-      id: "old-manus",
-      userId: 77,
-      version: 4,
-      provider: "manus",
-      agentProfile: "frontmind-pro",
-      encryptedKey: "unchanged-history",
-    });
-    let selectIndex = 0;
-    const retired = vi
-      .fn()
-      .mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
-    const inserted = vi.fn().mockResolvedValue(undefined);
-    const executor = {
-      select: () => {
-        const rows = selectIndex++ === 0 ? [{ id: 77 }] : [prior];
-        const limit = Object.assign(Promise.resolve(rows), {
-          for: () => Promise.resolve(rows),
-        });
-        const query: any = {
-          from: () => query,
-          where: () => query,
-          orderBy: () => query,
-          limit: () => limit,
-        };
-        return query;
-      },
-      update: () => ({ set: retired }),
-      insert: () => ({ values: inserted }),
-    };
-    const result = await replaceApiCredentialInTransaction({
-      executor,
-      userId: 77,
-      apiKey: "fixture-new-key",
-      credentialId: "new-zhipu",
-      agentProfile: "frontmind-base",
-    });
-    expect(retired.mock.calls[0]![0]).toMatchObject({ status: "retired" });
-    expect(Object.keys(retired.mock.calls[0]![0]).sort()).toEqual([
-      "retiredAt",
-      "status",
-      "updatedAt",
-    ]);
-    const row = inserted.mock.calls[0]![0];
-    expect(row).toMatchObject({
-      id: "new-zhipu",
-      version: 5,
-      provider: "zhipu",
-      upstreamModel: "glm-5.3",
-      upstreamEffort: "high",
-      validationStatus: "verified",
-    });
-    expect(row.encryptedKey).not.toContain("fixture-new-key");
-    expect(decryptApiKey(row)).toBe("fixture-new-key");
-    expect(result).toMatchObject({
-      provider: "zhipu",
-      version: 5,
-      upstreamModel: "glm-5.3",
-      upstreamEffort: "high",
-    });
-    expect(prior.encryptedKey).toBe("unchanged-history");
-  });
+  it.each([
+    { profile: undefined, effort: "max" },
+    { profile: "frontmind-base" as const, effort: "high" },
+  ])(
+    "freezes a distinct Zhipu version with profile $profile and effort $effort",
+    async ({ profile, effort }) => {
+      vi.stubEnv(
+        "FRONTMIND_CREDENTIAL_ENCRYPTION_KEY",
+        randomBytes(32).toString("base64"),
+      );
+      const prior = Object.freeze({
+        id: "old-manus",
+        userId: 77,
+        version: 4,
+        provider: "manus",
+        agentProfile: "frontmind-pro",
+        encryptedKey: "unchanged-history",
+      });
+      let selectIndex = 0;
+      const retired = vi
+        .fn()
+        .mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      const inserted = vi.fn().mockResolvedValue(undefined);
+      const executor = {
+        select: () => {
+          const rows = selectIndex++ === 0 ? [{ id: 77 }] : [prior];
+          const limit = Object.assign(Promise.resolve(rows), {
+            for: () => Promise.resolve(rows),
+          });
+          const query: any = {
+            from: () => query,
+            where: () => query,
+            orderBy: () => query,
+            limit: () => limit,
+          };
+          return query;
+        },
+        update: () => ({ set: retired }),
+        insert: () => ({ values: inserted }),
+      };
+      const result = await replaceApiCredentialInTransaction({
+        executor,
+        userId: 77,
+        apiKey: "fixture-new-key",
+        credentialId: "new-zhipu",
+        ...(profile ? { agentProfile: profile } : {}),
+      });
+      expect(retired.mock.calls[0]![0]).toMatchObject({ status: "retired" });
+      expect(Object.keys(retired.mock.calls[0]![0]).sort()).toEqual([
+        "retiredAt",
+        "status",
+        "updatedAt",
+      ]);
+      const row = inserted.mock.calls[0]![0];
+      expect(row).toMatchObject({
+        id: "new-zhipu",
+        version: 5,
+        provider: "zhipu",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: effort,
+        validationStatus: "verified",
+      });
+      expect(row.encryptedKey).not.toContain("fixture-new-key");
+      expect(decryptApiKey(row)).toBe("fixture-new-key");
+      expect(result).toMatchObject({
+        provider: "zhipu",
+        version: 5,
+        upstreamModel: "glm-5.3",
+        upstreamEffort: effort,
+      });
+      expect(prior.encryptedKey).toBe("unchanged-history");
+    },
+  );
 });

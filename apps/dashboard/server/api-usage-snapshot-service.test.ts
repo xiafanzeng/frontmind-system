@@ -20,6 +20,7 @@ import {
   assertBulkManagedApiKeyTargetVersions,
   assertManagedApiKeyTarget,
   bulkReplaceManagedApiKeyTargets,
+  replaceManagedApiKeyTarget,
   bulkManagedApiKeyActionTargets,
   claimUsageSnapshotRefresh,
   createManagedApiUsageRefreshQueue,
@@ -951,7 +952,15 @@ describe("bulk managed API Key scopes", () => {
       { userId: 4, kind: "engineer" as const },
     ];
     const latestCredentials = new Map([
-      [1, { status: "active", fingerprint: "fp_next", provider: "zhipu" }],
+      [
+        1,
+        {
+          status: "active",
+          fingerprint: "fp_next",
+          provider: "zhipu",
+          validationStatus: "verified",
+        },
+      ],
       [2, { status: "deleted", fingerprint: "fp_retired" }],
     ]);
 
@@ -984,6 +993,7 @@ describe("bulk managed API Key scopes", () => {
         {
           status: "active",
           provider: "zhipu",
+          validationStatus: "verified",
           fingerprint: target.userId === 201 ? "fp_old" : "fp_next",
         },
       ]),
@@ -999,7 +1009,7 @@ describe("bulk managed API Key scopes", () => {
     ).toEqual([201]);
   });
 
-  it("creates a new credential version when only the selected model changes", () => {
+  it("preserves an existing customer Key when its historical runtime differs from the new default", () => {
     const targets = [{ userId: 1, kind: "customer" as const }];
     const latestCredentials = new Map([
       [
@@ -1007,8 +1017,11 @@ describe("bulk managed API Key scopes", () => {
         {
           status: "active",
           provider: "zhipu",
+          validationStatus: "verified",
           fingerprint: "fp_same",
-          agentProfile: "frontmind-pro",
+          agentProfile: "frontmind-base",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: "high",
         },
       ],
     ]);
@@ -1018,9 +1031,8 @@ describe("bulk managed API Key scopes", () => {
         latestCredentials,
         applyMode: "replace_all",
         nextFingerprint: "fp_same",
-        nextAgentProfile: "frontmind-base",
       }),
-    ).toEqual(targets);
+    ).toEqual([]);
   });
 
   it("does not bind an internal account Key to a customer service model", () => {
@@ -1034,6 +1046,7 @@ describe("bulk managed API Key scopes", () => {
             {
               status: "active",
               provider: "zhipu",
+              validationStatus: "verified",
               fingerprint: "fp_same",
               agentProfile: "frontmind-pro",
             },
@@ -1041,7 +1054,6 @@ describe("bulk managed API Key scopes", () => {
         ]),
         applyMode: "replace_all",
         nextFingerprint: "fp_same",
-        nextAgentProfile: "frontmind-base",
       }),
     ).toEqual([]);
   });
@@ -1176,7 +1188,8 @@ describe("bulk managed API Key scopes", () => {
       updatedCount: 15,
       unchangedCount: 0,
       customerAgentProfile: "frontmind-pro",
-      customerUpstreamModel: "manus-1.6-max",
+      customerUpstreamModel: "glm-5.3",
+      customerUpstreamEffort: "max",
     });
     expect(auditEvents.at(-1)?.metadata).not.toHaveProperty(
       "historyIncompleteCount",
@@ -1267,5 +1280,167 @@ describe("bulk managed API Key scopes", () => {
     expect(bulkPath).not.toContain("批量操作已全部停止");
     expect(bulkPath).not.toContain("apiUsageSnapshots");
     expect(bulkPath).not.toContain(".delete(");
+  });
+});
+
+describe("unified managed Key assignment defaults", () => {
+  const actor = {
+    id: 900,
+    role: "admin",
+    username: "system-admin",
+    adminAccessLevel: "system_admin",
+  } as any;
+  const prior = Object.freeze({
+    id: "frozen-key-version",
+    userId: 77,
+    version: 8,
+    status: "active",
+    provider: "zhipu",
+    fingerprint: "fp_same",
+    agentProfile: "frontmind-base",
+    upstreamModel: "glm-5.3",
+    upstreamEffort: "high",
+    validationStatus: "verified",
+    verifiedAt: new Date("2026-09-01T00:00:00.000Z"),
+  });
+  const input = {
+    actor,
+    kind: "customer" as const,
+    userId: 77,
+    apiKey: "fixture-key",
+    expectedVersion: 8,
+    reason: "verify the assigned Key",
+  };
+  function harness(
+    credential: Omit<typeof prior, "validationStatus"> & {
+      validationStatus: string;
+    } = prior,
+  ) {
+    const rowsFor = (table: unknown) => {
+      if (table === users) return [{ id: 77, role: "user", isActive: true }];
+      if (table === apiCredentials) return [credential];
+      throw new Error("unexpected table");
+    };
+    const database: any = {
+      select: () => ({
+        from: (table: unknown) => {
+          const query: any = {
+            where: () => query,
+            orderBy: () => query,
+            limit: () => query,
+            for: async () => rowsFor(table),
+            then: (
+              resolve: (rows: unknown[]) => unknown,
+              reject: (error: unknown) => unknown,
+            ) => Promise.resolve(rowsFor(table)).then(resolve, reject),
+          };
+          return query;
+        },
+      }),
+      transaction: (operation: (tx: any) => Promise<unknown>) =>
+        operation(database),
+    };
+    const runtime = {
+      requireDatabase: async () => database,
+      validateApiKey: vi.fn().mockResolvedValue(undefined),
+      fingerprintApiKey: () => "fp_same",
+      replaceCredential: vi.fn().mockResolvedValue({
+        configured: true,
+        version: 9,
+        agentProfile: "frontmind-pro",
+        provider: "zhipu",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "max",
+      }),
+      writeAuditEvent: vi.fn().mockResolvedValue(undefined),
+      queueRefresh: vi.fn(),
+    };
+    return { database, runtime };
+  }
+
+  it("keeps the same Key version and frozen runtime without replacing or auditing a rotation", async () => {
+    const h = harness();
+    const result = await replaceManagedApiKeyTarget(input, h.runtime);
+    expect(result).toMatchObject({
+      configured: true,
+      version: 8,
+      provider: "zhipu",
+      agentProfile: "frontmind-base",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
+    });
+    expect(h.runtime.validateApiKey).toHaveBeenCalledOnce();
+    expect(h.runtime.replaceCredential).not.toHaveBeenCalled();
+    expect(h.runtime.writeAuditEvent).not.toHaveBeenCalled();
+    expect(h.runtime.queueRefresh).not.toHaveBeenCalled();
+    expect(prior.upstreamEffort).toBe("high");
+  });
+
+  it.each(["invalid", "unverified"])(
+    "restores a %s same Key through verified replacement for single and bulk assignment",
+    async (validationStatus) => {
+      const credential = Object.freeze({ ...prior, validationStatus });
+      const single = harness(credential);
+      await expect(
+        replaceManagedApiKeyTarget(input, single.runtime),
+      ).resolves.toMatchObject({ configured: true, version: 9 });
+      expect(single.runtime.validateApiKey).toHaveBeenCalledOnce();
+      expect(single.runtime.replaceCredential).toHaveBeenCalledOnce();
+      expect(single.runtime.replaceCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 77,
+          agentProfile: "frontmind-pro",
+        }),
+      );
+      expect(single.runtime.queueRefresh).toHaveBeenCalledOnce();
+
+      const bulk = harness(credential);
+      await expect(
+        bulkReplaceManagedApiKeyTargets(
+          {
+            actor,
+            scope: { kind: "all" },
+            targets: [{ userId: 77, expectedVersion: 8 }],
+            applyMode: "replace_all",
+            apiKey: input.apiKey,
+            reason: input.reason,
+          },
+          bulk.runtime,
+        ),
+      ).resolves.toMatchObject({ updatedCount: 1, unchangedCount: 0 });
+      expect(bulk.runtime.validateApiKey).toHaveBeenCalledOnce();
+      expect(bulk.runtime.replaceCredential).toHaveBeenCalledOnce();
+      expect(bulk.runtime.queueRefresh).toHaveBeenCalledOnce();
+      expect(credential).toEqual({ ...prior, validationStatus });
+      expect(credential.upstreamEffort).toBe("high");
+    },
+  );
+
+  it("checks the expected credential version before treating an identical Key as unchanged", async () => {
+    const h = harness();
+    await expect(
+      replaceManagedApiKeyTarget({ ...input, expectedVersion: 7 }, h.runtime),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(h.runtime.replaceCredential).not.toHaveBeenCalled();
+  });
+
+  it("uses the server default only for a distinct new Key version", async () => {
+    const h = harness();
+    h.runtime.fingerprintApiKey = () => "fp_new";
+    const result = await replaceManagedApiKeyTarget(input, h.runtime);
+    expect(h.runtime.replaceCredential).toHaveBeenCalledWith({
+      executor: h.database,
+      userId: 77,
+      apiKey: "fixture-key",
+      agentProfile: "frontmind-pro",
+    });
+    expect(result).toMatchObject({
+      version: 9,
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "max",
+    });
+    expect(h.runtime.writeAuditEvent).toHaveBeenCalledOnce();
+    expect(h.runtime.queueRefresh).toHaveBeenCalledOnce();
+    expect(prior.upstreamEffort).toBe("high");
   });
 });

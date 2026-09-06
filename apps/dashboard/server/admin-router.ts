@@ -1,6 +1,5 @@
 import { assertDashboardUpdateCapability } from "./dashboard-editing";
 import { z } from "zod";
-import { managedAgentProfileSchema } from "../shared/manus-agent-profile";
 import { adminProcedure, router } from "./_core/trpc";
 import {
   createManagedUser,
@@ -434,9 +433,6 @@ export const adminRouter = router({
               .enum(["unconfigured_only", "replace_all"])
               .default("unconfigured_only"),
             apiKey: presalesApiKeySchema,
-            agentProfile: managedAgentProfileSchema
-              .default("frontmind-pro")
-              .optional(),
             reason: z.string().trim().min(1).max(2_000),
             confirmation: z.literal("BULK_REPLACE_API_KEYS"),
           })
@@ -451,7 +447,6 @@ export const adminRouter = router({
             targets: input.targets,
             applyMode: input.applyMode,
             apiKey: input.apiKey,
-            agentProfile: input.agentProfile,
             reason: input.reason,
           });
         } catch (error) {
@@ -465,7 +460,6 @@ export const adminRouter = router({
             .object({
               ...managedApiKeyReplaceShape,
               kind: z.literal("customer"),
-              agentProfile: managedAgentProfileSchema.default("frontmind-pro"),
             })
             .strict(),
           z
@@ -490,8 +484,6 @@ export const adminRouter = router({
             kind: input.kind,
             userId: input.userId,
             apiKey: input.apiKey,
-            agentProfile:
-              input.kind === "customer" ? input.agentProfile : undefined,
             expectedVersion: input.expectedVersion,
             reason: input.reason,
           });

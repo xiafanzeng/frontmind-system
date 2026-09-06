@@ -13,7 +13,7 @@ import {
   createWebsiteAgentClient,
 } from "./website-agent-provider";
 import { ZhipuManagedClient, ZhipuManagedError } from "./zhipu-managed-client";
-import { ManusV2Client } from "../manus-v2-client";
+import { ManusV2Client, latestManusV2TaskState } from "../manus-v2-client";
 import {
   executionEventMessage,
   safeExecutionText,
@@ -72,7 +72,7 @@ describe("Website provider compatibility", () => {
         (event) =>
           (event.status_update as { agent_status: string }).agent_status,
       ),
-    ).toEqual(["error", "waiting", "stopped"]);
+    ).toEqual(["unknown", "waiting", "stopped"]);
     expect(JSON.stringify(events)).not.toContain("private reasoning");
   });
   it("preserves stable rank for equal-time events and drops unprocessed inputs", () => {
@@ -97,6 +97,126 @@ describe("Website provider compatibility", () => {
     ]);
     expect(events.map((event) => event.providerOriginalRank)).toEqual([0, 1]);
   });
+  it.each(["session.status_terminated", "session.deleted"])(
+    "preserves explicit %s cancellation across a later idle",
+    (type) => {
+      const events = normalizeZhipuEvents([
+        { id: "run", type: "session.status_running", processed_at: stamp },
+        { id: "cancel", type, processed_at: stamp },
+        {
+          id: "queued",
+          type: "user.message",
+          processed_at: null,
+          created_at: stamp,
+        },
+        {
+          id: "idle",
+          type: "session.status_idle",
+          processed_at: stamp,
+          stop_reason: { type: "end_turn" },
+        },
+      ]);
+      expect(
+        events.map(
+          (event) =>
+            (event.status_update as { agent_status: string }).agent_status,
+        ),
+      ).toEqual(["running", "cancelled", "cancelled"]);
+    },
+  );
+  it.each(["interrupted", "user_interrupt"])(
+    "projects explicit %s as cancelled",
+    (type) => {
+      expect(
+        normalizeZhipuEvents([
+          {
+            id: "interrupt",
+            type: "session.status_idle",
+            processed_at: stamp,
+            stop_reason: { type },
+          },
+        ])[0]?.status_update,
+      ).toEqual({ agent_status: "cancelled" });
+    },
+  );
+  it.each(["retrying", { type: "retrying" }])(
+    "keeps provider retry status %j active until its actual completion",
+    (retryStatus) => {
+      const events = normalizeZhipuEvents([
+        { id: "run", type: "session.status_running", processed_at: stamp },
+        {
+          id: "retry",
+          type: "session.error",
+          processed_at: stamp,
+          error: {
+            type: "unknown_error",
+            message: "服务暂时不可用",
+            retry_status: retryStatus,
+          },
+        },
+        {
+          id: "answer",
+          type: "agent.message",
+          processed_at: stamp,
+          content: [{ type: "text", text: "original result" }],
+        },
+        {
+          id: "done",
+          type: "session.status_idle",
+          processed_at: stamp,
+          stop_reason: { type: "end_turn" },
+        },
+      ]);
+      expect(
+        events
+          .filter((event) => event.type === "status_update")
+          .map(
+            (event) =>
+              (event.status_update as { agent_status: string }).agent_status,
+          ),
+      ).toEqual(["running", "stopped"]);
+      expect(
+        events.find((event) => event.id === "answer")?.assistant_message,
+      ).toEqual({ content: "original result" });
+    },
+  );
+  it.each(["exhausted", { type: "exhausted" }, "terminal"])(
+    "retains terminal status %j across idle and clears it for the next acknowledged turn",
+    (retryStatus) => {
+      const events = normalizeZhipuEvents([
+        { id: "run", type: "session.status_running", processed_at: stamp },
+        {
+          id: "failed",
+          type: "session.error",
+          processed_at: stamp,
+          error: {
+            type: "unknown_error",
+            message: "服务暂时不可用",
+            retry_status: retryStatus,
+          },
+        },
+        {
+          id: "idle",
+          type: "session.status_idle",
+          processed_at: stamp,
+          stop_reason: { type: "end_turn" },
+        },
+        { id: "resumed", type: "session.status_running", processed_at: stamp },
+        {
+          id: "done",
+          type: "session.status_idle",
+          processed_at: stamp,
+          stop_reason: { type: "end_turn" },
+        },
+      ]);
+      expect(
+        events.map(
+          (event) =>
+            (event.status_update as { agent_status: string }).agent_status,
+        ),
+      ).toEqual(["running", "error", "error", "running", "stopped"]);
+    },
+  );
   it("does not repeat file upload after response loss or a process restart", async () => {
     const uploadFile = vi.fn(async () => {
       throw new ZhipuManagedError("/v1/files", null, "TRANSPORT_ERROR", true);
@@ -230,6 +350,119 @@ describe("Website provider compatibility", () => {
   });
 });
 describe("session output ownership", () => {
+  it("uses authoritative terminated status when history still ends at running", async () => {
+    state.record.providerRuntime = {
+      revision: 1,
+      model: "glm-5.3",
+      sessionId: "sess_terminated",
+      mutations: {},
+    };
+    const api = {
+      request: vi
+        .fn()
+        .mockResolvedValue({ status: "terminated", updated_at: stamp }),
+      listAll: vi.fn().mockResolvedValue([
+        { id: "think1", type: "agent.thinking", processed_at: stamp },
+        { id: "think2", type: "agent.thinking", processed_at: stamp },
+        {
+          id: "run",
+          type: "session.status_running",
+          processed_at: "2026-09-05T00:00:01.000Z",
+        },
+      ]),
+    } as unknown as ZhipuManagedClient;
+    const events = await new ZhipuWebsiteAgentProvider(
+      state.record,
+      update,
+      "test",
+      api,
+    ).listAllMessages({ taskId: "sess_terminated" });
+    expect(events.at(-1)?.status_update).toEqual({ agent_status: "cancelled" });
+    expect(latestManusV2TaskState(events)).toBe("cancelled");
+    expect(events.at(-1)?.providerOriginalRank).toBe(3);
+    expect(api.listAll).toHaveBeenCalledTimes(1);
+  });
+  it.each([408, 425])(
+    "defers HTTP %s reads without changing the bound session",
+    async (status) => {
+      state.record.providerRuntime = {
+        revision: 1,
+        model: "glm-5.3",
+        sessionId: "sess_read",
+        mutations: {},
+      };
+      const api = {
+        request: vi
+          .fn()
+          .mockRejectedValue(
+            new ZhipuManagedError(
+              "/v1/sessions/sess_read",
+              status,
+              `HTTP_${status}`,
+              false,
+            ),
+          ),
+      } as unknown as ZhipuManagedClient;
+      await expect(
+        new ZhipuWebsiteAgentProvider(
+          state.record,
+          update,
+          "test",
+          api,
+        ).listAllMessages({ taskId: "sess_read" }),
+      ).rejects.toMatchObject({
+        status,
+        retryable: true,
+        outcomeUnknown: false,
+      });
+      expect(state.record.providerRuntime.sessionId).toBe("sess_read");
+      expect(api.request).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("keeps a streamed terminal failure from becoming a successful idle log", async () => {
+    state.record.providerRuntime = {
+      revision: 1,
+      model: "glm-5.3",
+      mutations: {},
+      sessionId: "sess_stream_failure",
+    };
+    const close = vi.fn();
+    const api = {
+      request: vi.fn(async () => ({ status: "running" })),
+      listAll: vi.fn(async () => []),
+      subscribeEvents: vi.fn(async () => ({
+        close,
+        events: (async function* () {
+          yield {
+            id: "failed",
+            type: "session.error",
+            processed_at: stamp,
+            error: {
+              type: "unknown_error",
+              retry_status: { type: "exhausted" },
+            },
+          };
+          yield {
+            id: "idle",
+            type: "session.status_idle",
+            processed_at: stamp,
+            stop_reason: { type: "end_turn" },
+          };
+        })(),
+      })),
+    } as unknown as ZhipuManagedClient;
+    await new ZhipuWebsiteAgentProvider(
+      state.record,
+      update,
+      "test",
+      api,
+    ).listAllMessages({ taskId: "sess_stream_failure", order: "asc" });
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(state.record.safeEvents.map((event) => event.message)).toEqual([
+      "上游执行异常。",
+      "上游执行异常。",
+    ]);
+  });
   it("never publishes mounted inputs or another session's files", async () => {
     state.record.providerRuntime = {
       revision: 1,
@@ -276,6 +509,8 @@ describe("session output ownership", () => {
         path === "/v1/files"
           ? files
           : [
+              { id: "think1", type: "agent.thinking", processed_at: stamp },
+              { id: "think2", type: "agent.thinking", processed_at: stamp },
               {
                 id: "ended",
                 type: "session.status_idle",
@@ -292,6 +527,7 @@ describe("session output ownership", () => {
       api,
     );
     const events = await provider.listAllMessages({ taskId: "sess_output" });
+    expect(events.at(-1)?.providerOriginalRank).toBe(3);
     const attached = events.find((event) => event.type === "assistant_message")!
       .assistant_message as { attachments: Array<{ filename: string }> };
     expect(attached.attachments.map((file) => file.filename)).toEqual([

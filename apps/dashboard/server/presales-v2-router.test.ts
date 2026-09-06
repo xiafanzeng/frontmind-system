@@ -1493,9 +1493,7 @@ describe("Presales v2 public contract", () => {
       status: "running",
       errorCode: null,
       providerStartedAt: now.toISOString(),
-      providerRunDeadlineAt: new Date(
-        now.getTime() + 60 * 60_000,
-      ).toISOString(),
+      providerRunDeadlineAt: null,
     });
   });
 
@@ -2965,9 +2963,7 @@ describe("Presales v2 public contract", () => {
       providerTaskId: "provider-bound-from-operation-marker",
       errorCode: null,
       providerStartedAt: now.toISOString(),
-      providerRunDeadlineAt: new Date(
-        now.getTime() + 60 * 60_000,
-      ).toISOString(),
+      providerRunDeadlineAt: null,
     });
     expect(harness.providerCalls.findCreatedTask).toHaveBeenCalledOnce();
     expect(harness.providerCalls.createTask).not.toHaveBeenCalled();
@@ -3211,6 +3207,9 @@ describe("Presales v2 public contract", () => {
     "PERMISSION_DENIED",
     "CONFIGURATION_INVALID",
     "CONTRACT_INVALID",
+    "ZHIPU_INVALID_PAGINATION",
+    "ZHIPU_INVALID_RESPONSE",
+    "ZHIPU_HISTORY_LIMIT_EXCEEDED",
   ])(
     "does not hide permanent %s read failures marked retryable",
     async (code) => {
@@ -3249,47 +3248,55 @@ describe("Presales v2 public contract", () => {
     },
   );
 
-  it("uses the actual failure time when a Provider read crosses the run deadline", async () => {
-    const startedAt = new Date("2026-08-15T13:00:00.000Z");
-    const deadlineAt = new Date(startedAt.getTime() + 30 * 60_000);
-    const requestStartedAt = new Date(deadlineAt.getTime() - 1_000);
-    const failureAt = new Date(deadlineAt.getTime() + 1_000);
-    const harness = reconcileHarness({
-      now: requestStartedAt,
-      events: [],
-      record: taskRecord({
-        status: "running",
-        structuredResult: null,
-        terminalAt: null,
-        providerStartedAt: startedAt.toISOString(),
-        providerRunDeadlineAt: deadlineAt.toISOString(),
-      }),
-    });
-    harness.providerCalls.listAllMessages.mockImplementationOnce(async () => {
-      harness.setNow(failureAt);
-      throw new ManusV2ApiError(
-        "task.listMessages",
-        503,
-        "PROVIDER_BUSY",
-        true,
-        false,
-      );
-    });
+  it.each([
+    [503, "PROVIDER_BUSY"],
+    [null, "ZHIPU_TRANSPORT_ERROR"],
+  ] as const)(
+    "keeps the same task waiting when a %s/%s read fails across the former run deadline",
+    async (status, code) => {
+      const startedAt = new Date("2026-08-15T13:00:00.000Z");
+      const deadlineAt = new Date(startedAt.getTime() + 60 * 60_000);
+      const requestStartedAt = new Date(deadlineAt.getTime() - 1_000);
+      const failureAt = new Date(deadlineAt.getTime() + 1_000);
+      const harness = reconcileHarness({
+        now: requestStartedAt,
+        events: [],
+        record: taskRecord({
+          status: "running",
+          structuredResult: null,
+          terminalAt: null,
+          providerStartedAt: startedAt.toISOString(),
+          providerRunDeadlineAt: deadlineAt.toISOString(),
+        }),
+      });
+      harness.providerCalls.listAllMessages.mockImplementationOnce(async () => {
+        harness.setNow(failureAt);
+        throw new ManusV2ApiError(
+          "task.listMessages",
+          status,
+          code,
+          true,
+          false,
+        );
+      });
 
-    await expect(
-      presalesV2ReconcileTestHooks.reconcileTask(
-        harness.current().localTaskId,
-        harness.dependencies,
-      ),
-    ).resolves.toMatchObject({
-      status: "attention_required",
-      errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
-      providerRunDeadlineExceededAt: failureAt.toISOString(),
-      terminalAt: failureAt.toISOString(),
-    });
-    expect(harness.dependencies.updateTask).toHaveBeenCalledOnce();
-    expect(harness.providerCalls.listAllMessages).toHaveBeenCalledOnce();
-  });
+      await expect(
+        presalesV2ReconcileTestHooks.reconcileTask(
+          harness.current().localTaskId,
+          harness.dependencies,
+        ),
+      ).resolves.toMatchObject({
+        status: "running",
+        errorCode: null,
+        terminalAt: null,
+        providerTaskId: "provider-task-secret",
+      });
+      expect(harness.dependencies.updateTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.createTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.stopTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.listAllMessages).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not log a free-form Provider error code", async () => {
     const now = new Date("2026-08-15T13:00:00.000Z");
@@ -3993,101 +4000,96 @@ describe("Presales v2 public contract", () => {
     },
   );
 
-  it("uses a 60 minute fallback deadline without rewriting persisted deadlines", async () => {
-    const startedAt = new Date("2026-08-29T07:00:00.000Z");
-    const beforeDeadline = new Date(startedAt.getTime() + 60 * 60_000 - 1);
-    const before = reconcileHarness({
-      now: beforeDeadline,
-      events: [
-        {
-          id: "running-before-deadline",
-          type: "status_update",
-          timestamp: 10,
-          status_update: { agent_status: "running" },
-        },
-      ],
-      record: taskRecord({
+  it.each([
+    [null, "running"],
+    ["2026-08-29T07:30:00.000Z", "running"],
+    [null, "unknown"],
+  ])(
+    "keeps a Zhipu task active beyond 60 minutes with legacy deadline %s and provider state %s",
+    async (providerRunDeadlineAt, providerState) => {
+      const startedAt = new Date("2026-08-29T07:00:00.000Z");
+      const harness = reconcileHarness({
+        now: new Date(startedAt.getTime() + 2 * 60 * 60_000),
+        events: [
+          {
+            id: "still-running",
+            type: "status_update",
+            timestamp: 10,
+            status_update: { agent_status: providerState },
+          },
+        ],
+        record: taskRecord({
+          provider: "zhipu",
+          status: "running",
+          structuredResult: null,
+          errorCode: null,
+          terminalAt: null,
+          providerStartedAt: startedAt.toISOString(),
+          providerRunDeadlineAt,
+        }),
+      });
+      await expect(
+        presalesV2ReconcileTestHooks.reconcileTask(
+          harness.current().localTaskId,
+          harness.dependencies,
+        ),
+      ).resolves.toMatchObject({
         status: "running",
-        structuredResult: null,
         errorCode: null,
         terminalAt: null,
-        providerStartedAt: startedAt.toISOString(),
-        providerRunDeadlineAt: null,
-      }),
-    });
-    await expect(
-      presalesV2ReconcileTestHooks.reconcileTask(
-        before.current().localTaskId,
-        before.dependencies,
-      ),
-    ).resolves.toMatchObject({
-      status: "running",
-      providerRunDeadlineAt: new Date(
-        startedAt.getTime() + 60 * 60_000,
-      ).toISOString(),
-    });
+        providerTaskId: "provider-task-secret",
+        providerRunDeadlineAt,
+      });
+      expect(harness.providerCalls.createTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.sendMessage).not.toHaveBeenCalled();
+      expect(harness.providerCalls.stopTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.deleteTask).not.toHaveBeenCalled();
+    },
+  );
 
-    const exactDeadline = new Date(startedAt.getTime() + 60 * 60_000);
-    const atBoundary = reconcileHarness({
-      now: exactDeadline,
-      events: [
-        {
-          id: "running-at-deadline",
-          type: "status_update",
-          timestamp: 10,
-          status_update: { agent_status: "running" },
-        },
-      ],
-      record: taskRecord({
-        status: "running",
-        structuredResult: null,
-        errorCode: null,
-        terminalAt: null,
-        providerStartedAt: startedAt.toISOString(),
-        providerRunDeadlineAt: null,
-      }),
-    });
-    await expect(
-      presalesV2ReconcileTestHooks.reconcileTask(
-        atBoundary.current().localTaskId,
-        atBoundary.dependencies,
-      ),
-    ).resolves.toMatchObject({
-      status: "attention_required",
-      errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
-      providerRunDeadlineAt: exactDeadline.toISOString(),
-    });
-
-    const persistedDeadline = new Date(startedAt.getTime() + 30 * 60_000);
-    const persisted = reconcileHarness({
-      now: new Date(persistedDeadline.getTime() - 1),
-      events: [
-        {
-          id: "legacy-running-before-persisted-deadline",
-          type: "status_update",
-          timestamp: 10,
-          status_update: { agent_status: "running" },
-        },
-      ],
-      record: taskRecord({
-        status: "running",
-        structuredResult: null,
-        errorCode: null,
-        terminalAt: null,
-        providerStartedAt: startedAt.toISOString(),
-        providerRunDeadlineAt: persistedDeadline.toISOString(),
-      }),
-    });
-    await expect(
-      presalesV2ReconcileTestHooks.reconcileTask(
-        persisted.current().localTaskId,
-        persisted.dependencies,
-      ),
-    ).resolves.toMatchObject({
-      status: "running",
-      providerRunDeadlineAt: persistedDeadline.toISOString(),
-    });
-  });
+  it.each([
+    ["error", "failed", "PROVIDER_TASK_FAILED"],
+    ["cancelled", "cancelled", "PROVIDER_TASK_CANCELLED"],
+  ])(
+    "records provider %s as %s after a long run",
+    async (providerState, status, errorCode) => {
+      const now = new Date("2026-09-06T10:00:00.000Z");
+      const harness = reconcileHarness({
+        now,
+        record: taskRecord({
+          provider: "zhipu",
+          status: "running",
+          structuredResult: null,
+          providerStartedAt: new Date(
+            now.getTime() - 2 * 60 * 60_000,
+          ).toISOString(),
+          providerRunDeadlineAt: new Date(
+            now.getTime() - 60 * 60_000,
+          ).toISOString(),
+        }),
+        events: [
+          {
+            id: "provider-error",
+            type: "status_update",
+            timestamp: now.getTime(),
+            status_update: { agent_status: providerState },
+          },
+        ],
+      });
+      await expect(
+        presalesV2ReconcileTestHooks.reconcileTask(
+          harness.current().localTaskId,
+          harness.dependencies,
+        ),
+      ).resolves.toMatchObject({
+        status,
+        errorCode,
+        terminalAt: now.toISOString(),
+      });
+      expect(harness.providerCalls.stopTask).not.toHaveBeenCalled();
+      expect(harness.providerCalls.createTask).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["attention_required", "PROVIDER_ACTION_REQUIRED"],
@@ -4172,7 +4174,7 @@ describe("Presales v2 public contract", () => {
     expect(harness.providerCalls.deleteTask).not.toHaveBeenCalled();
   });
 
-  it("turns a 30 minute provider run into read-only attention and later promotes the same task", async () => {
+  it("keeps a long provider run active and later accepts the same task result", async () => {
     const now = new Date("2026-08-15T13:00:00.000Z");
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const harness = reconcileHarness({
@@ -4199,14 +4201,14 @@ describe("Presales v2 public contract", () => {
       }),
     });
     try {
-      const timedOut = await presalesV2ReconcileTestHooks.reconcileTask(
+      const stillRunning = await presalesV2ReconcileTestHooks.reconcileTask(
         harness.current().localTaskId,
         harness.dependencies,
       );
-      expect(timedOut).toMatchObject({
-        status: "attention_required",
-        errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
-        providerRunDeadlineExceededAt: now.toISOString(),
+      expect(stillRunning).toMatchObject({
+        status: "running",
+        errorCode: null,
+        terminalAt: null,
       });
       expect(harness.providerCalls.sendMessage).not.toHaveBeenCalled();
       expect(harness.providerCalls.createTask).not.toHaveBeenCalled();
@@ -4257,7 +4259,7 @@ describe("Presales v2 public contract", () => {
     }
   });
 
-  it("keeps an expired task in safe attention when the read-only Provider check is unavailable", async () => {
+  it("resumes only a former local deadline task when a provider read times out", async () => {
     const now = new Date("2026-08-15T13:00:00.000Z");
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const harness = reconcileHarness({
@@ -4276,7 +4278,13 @@ describe("Presales v2 public contract", () => {
       }),
     });
     harness.providerCalls.listAllMessages.mockRejectedValueOnce(
-      new Error("sensitive-provider-read-error"),
+      new ManusV2ApiError(
+        "task.listMessages",
+        null,
+        "ZHIPU_TRANSPORT_ERROR",
+        true,
+        false,
+      ),
     );
     try {
       await expect(
@@ -4285,8 +4293,12 @@ describe("Presales v2 public contract", () => {
           harness.dependencies,
         ),
       ).resolves.toMatchObject({
-        status: "attention_required",
-        errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
+        status: "running",
+        errorCode: null,
+        terminalAt: null,
+        providerRunDeadlineAt: null,
+        providerRunDeadlineExceededAt: null,
+        providerTaskId: "provider-task-secret",
       });
       expect(harness.providerCalls.listAllMessages).toHaveBeenCalledTimes(1);
       expect(harness.providerCalls.sendMessage).not.toHaveBeenCalled();

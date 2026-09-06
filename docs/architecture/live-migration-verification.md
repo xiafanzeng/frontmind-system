@@ -1,25 +1,29 @@
 # CN migration verification — 2026-09-06
 
-## Current release, scope and acceptance status
+## Recorded deployment baseline and business acceptance status
 
-The current Dashboard release is deployed. This report distinguishes completed
-deployment and read-only checks from the still-pending Dashboard business
-acceptance. Historical sections below preserve the evidence at each earlier
-stage; their earlier blockers and runtime identities are not the current state.
+The table records the verified deployment preceding the long-running-task and
+unified-workspace update described at the end of this document. Public
+`/readyz` reports the active build SHA and image digest. Completed business
+acceptance below is separate from the pending brand-universe acceptance.
+Historical sections retain the outcomes and identities of their own stages.
 
-| Service | Current source revision | Current image digest |
+| Service | Recorded source revision | Recorded image digest |
 | --- | --- | --- |
-| Dashboard | `c6b8f7465d0a5a09bd5d7bef422afc2bb50ef0b7` | `sha256:8785f7cd904118aa1abf6e8e7516d5aba07d10d2106d523e115711d238cecf87` |
+| Dashboard | `237cd0aa6b815e70d0ac276396c6c3af08a1e88a` | `sha256:70b130ff33af01cfa365d6dfe33301ffde45e32fcbc95cb5c48fe7b4260f965b` |
+| Monitoring worker | `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` | `sha256:7134db0d9d3690533f470ce5af5a64e6876914021858368fdb926295187661a3` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
 | Area | Current acceptance result |
 | --- | --- |
 | Dashboard deployment | Complete: production `/readyz` returned 200 with the exact SHA, migrations and schema; `degradedBuildCount` and `violationCount` were both zero. Website was unchanged by this release. |
-| Login and unified navigation | Complete on `c6b8f74`: system administrator, customer and engineer accounts retained their identities across eight pages and twelve reloads, with no browser HTTP errors or page errors. The earlier real password-change boundary test also passed. |
+| Login and unified navigation | Three roles passed nine paths, nine reloads and 27 page/identity/editor checks on `1c89b0e`. Seven further customer editor/download/identity checks passed on `ac5ac7c` after KB publication. No failed GET requests or uncaught browser errors; the earlier password-change boundary test also passed. |
 | Original configuration and Token controls | Effective source environments and 1Panel runtime definitions were reconciled. The deployed UI retains the original Zhipu Token, 21st and Aliyun settings; native Website token counters were visible. |
-| General agent | Complete on `c6b8f74`: the original two turns and both JSON downloads were reverified, including the attachment's exact-byte sum and hash. |
-| Dashboard knowledge base | Pending: the approved reset and fresh upload/task started at 03:48:18 UTC (11:48:18 UTC+08:00); research remains in progress. No formal snapshot publication is claimed. |
-| Dashboard brand universe and response logic | Pending: both require the fresh formal knowledge snapshot before business acceptance. |
+| General agent | Complete on `70fa85f`: the original two turns and both JSON downloads were reverified, including the attachment's exact-byte sum and hash. |
+| Customer self-service | Complete: own Dashboard editing/restoration and fresh KB reset passed live; on `70fa85f`, fresh direct question selection, draft save, response reset/replay, modification and subsequent deletion all passed. The pre-fix successful reset also replayed correctly. Retired ticket routes returned NOT_FOUND. |
+| Dashboard knowledge base | Complete on `1c89b0e`: fresh generation, one real node revision, 55 read/confirm actions, original final ZIP download and formal snapshot publication all passed. |
+| Dashboard brand universe | Not yet passed: three tasks failed with native provider service-unavailable/retries-exhausted events and no deliverable or publication. All used the original Skill hashes, formal KB, model and effort; no old session was reconstructed. |
+| Dashboard response logic | Complete: direct question selection, binding, initial generation/save, same-session continuation/save and confirmation passed. Confirmed revision 6/version 1 and all four original fields matched independent API/DB readback after the `70fa85f` restart. |
 | Original Website knowledge base, assessment and forecast | Complete: the original KB ZIP and both perspectives' assessments and forecasts survived reload. Its monitoring runs remain at exactly ten successful answers, with no additional attempts. |
 | Website execution-log presentation | Complete: only standalone generic tool messages are hidden; detailed events, errors and absolute timers are preserved. |
 | Website and Dashboard HTTPS | Complete: public/authoritative DNS, ACME issuance, dedicated SNI certificates and normal trust-chain/hostname validation passed. See the certificate section below. |
@@ -482,7 +486,7 @@ neither initial full run is described as an all-green run. TypeScript, test
 partition/source checks and frozen-lock validation passed. This is code
 validation, not the pending fresh production workflow acceptance.
 
-## Current c6b8f74 deployment and browser verification
+## Historical c6b8f74 deployment and browser verification
 
 Dashboard readiness returned HTTP 200 for
 `c6b8f7465d0a5a09bd5d7bef422afc2bb50ef0b7`, digest
@@ -517,7 +521,7 @@ administrator/customer/engineer screenshot/text captures. They are retained
 under `/tmp/frontmind-zhipu-validation-private`; authentication material is not
 included in this report.
 
-## Pending Dashboard business acceptance
+## Historical Dashboard business acceptance before self-service release
 
 The approved original reset and fresh upload/task began at 03:48:18 UTC
 (11:48:18 UTC+08:00), with reset revision 2. The provider is still conducting
@@ -552,9 +556,9 @@ existed in the restored source baseline; this migration does not claim that
 all 32 templates are selectable. No further template investigation or build
 acceptance is part of this task.
 
-## Customer self-service release preparation — 2026-09-06
+## Customer self-service release — 2026-09-06
 
-The user removed the entire delivery-ticket workflow from scope and authorized
+The user requested removal of the entire delivery-ticket workflow and authorized
 customers to reset and modify their own Dashboard directly. Customer ticket
 history, engineer processing and approval, administrator dispatch, ticket
 attachments and their active APIs have been removed. Existing schema and
@@ -591,4 +595,255 @@ service unavailable, retries exhausted. No modification archive was produced,
 and the build was not published. The adapter now retains this error across the
 following idle notification instead of presenting an archive-integrity failure.
 The old conversation is not repaired or reimported; a new reset/upload/task
-will verify the original KB workflow on the self-service release.
+subsequently verified the original KB workflow on the self-service release,
+as recorded in the completed knowledge-base acceptance below.
+
+Release `1c89b0e1077c97a561e91d5e4da4ebb414d45fb8` was pushed and built by
+[the successful image workflow](https://github.com/xiafanzeng/frontmind-system/actions/runs/34012525001).
+Both deployed images carried that source revision; later runtime identities
+are listed at the top of this report. Dashboard readiness returned the exact source revision and exact
+migration/schema state. This release required no migration. Website retained
+its prior image, container identity and start time.
+
+The dedicated customer edited and then restored its own Dashboard through the
+public API. Revisions advanced from 1 to 2 to 3; the full original payload,
+including hidden source content, was restored exactly. A stale revision was
+rejected, and adding another account's user ID was rejected. No provider task
+was started by this editing check. The same customer's direct knowledge reset
+then succeeded, cleaned the former build/conversation and started a new
+conversation at 05:10:55 UTC using the original company, website and public
+notes. It did not reuse an old ZIP or provider session.
+
+Read-only browser acceptance passed nine role paths, nine reloads and 27
+page/identity/editor checks. Customer, delivery-member engineer and system
+administrator identities matched exactly. There were no failed GET requests
+or uncaught errors. The customer's global Dashboard editor opened the original
+content and website tabs with their template download controls. Dedicated
+content/website editors correctly remain unavailable during KB reconstruction,
+matching the server's existing service prerequisite and displayed reason.
+The harness blocked 13 automatic conversation snapshot POSTs; it performed no
+business mutation. These deliberate blocks were not application errors.
+
+The existing general-agent initial and continuation downloads were reverified
+on `1c89b0e`; both `validation-result.json` and `validation-followup.json`
+retained their expected values and attachment hash.
+
+## Self-service entry corrections — 2026-09-06
+
+Follow-up source revision `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` fixes two
+client entry failures discovered during review. A Basic customer can have more
+than one still-active purchase period. The question action dialog now reads
+the portal's full purchased-question set, matching the existing server mutation
+scope, so earlier active purchases can be modified, deleted or have response
+logic reset. Expired or another account's questions are still unavailable.
+No server ownership or service rule was widened.
+
+A new customer's unconfigured R0 Dashboard returns a null public payload.
+The editor now initializes that explicit R0 state with the existing empty
+Dashboard structure, allowing the original profile download/import/confirmation
+flow to create the first version. It does not synthesize an empty payload for
+an unavailable existing Dashboard. Response confirmation now points to direct
+reset instead of the removed request workflow.
+
+The four affected client suites passed 90 tests with seven existing skips.
+TypeScript and `git diff --check` passed. Image build and deployment are tracked
+separately from these source checks.
+
+The [image build](https://github.com/xiafanzeng/frontmind-system/actions/runs/34013983024)
+succeeded, and `ac5ac7c` was deployed with images built from that revision.
+Readiness reported exact source, migration and schema state; no migration was
+required. Website's container and start time were unchanged. After formal KB
+publication the customer passed seven further browser checks: both dedicated
+content/website editors opened directly, original current-data templates
+downloaded with revision 3, and returning/reloading retained the same customer
+identity. No failed GET or uncaught error occurred. The harness blocked one
+automatic SiteOps initialization POST, so no site project or build was created.
+
+## Fresh Dashboard knowledge-base acceptance completed — 2026-09-06
+
+The customer self-service reset started a wholly new upload and conversation at
+05:10:55 UTC. Initial generation completed after more than 20 minutes, with 55
+leaves and 43,827 body characters. The original parser reported complete,
+downstream-eligible and publishable output. The former 15-minute cutoff did not
+interrupt this healthy task.
+
+One real revision clarified source attribution in leaf 1.1 and removed an
+internal workflow tailnote. The original node-revision flow succeeded; exact
+comparisons established that the other 54 leaves retained their bodies,
+titles and order. All 55 leaves were read and confirmed against the current
+presentation hashes. Final build revision was 56 and content version was 2.
+Both API and database reported the published state without a notice.
+
+Formal snapshot: `8c8d14ab-1e0b-4688-afeb-1dbf140103f9`.
+The original final download contains 175,337 bytes, 119 entries and 115 Markdown
+files. SHA-256:
+`1beb7c1a79da97b46632d9ae4abdface8f03f7e4b09b433651009aa5695c33b1`.
+ZIP CRC, byte count, archive hash and all 55 leaf bodies passed verification.
+The run did not import any previous ZIP or reconstruct an old conversation.
+
+## Replacement-question identifier correction
+
+Real customer acceptance on `ac5ac7c` passed direct selection, draft response
+save, response reset, idempotent replay and question modification. Deleting the
+returned replacement exposed a malformed identifier: the deterministic hash
+had not set UUID version/variant bits. Source `70fa85f` corrects only new
+replacement IDs to UUID v8. Existing internal audit keys remain unchanged so
+previous successful requests retain their replay results; the public UUID
+input validation is unchanged.
+
+Twenty focused maintenance/self-service tests and TypeScript passed. A read-only
+database check found exactly one affected replacement, belonging solely to the
+dedicated validation customer, with no response, monitoring or derived-question
+dependencies. That temporary row was conditionally archived by its exact owner,
+ID, revision and test text. The formal knowledge snapshot and separate response
+question were untouched.
+
+The [image build](https://github.com/xiafanzeng/frontmind-system/actions/runs/34015141629)
+succeeded. Dashboard and its same-image SiteOps worker were deployed from
+`70fa85fee243240b99ccc29a3b28f00f68de9e84`; readiness returned the exact source
+revision, image digest and migration/schema state. No migration was needed.
+The independently unchanged monitoring worker remained on `ac5ac7c`, and both
+its container/start time and Website's container/start time were preserved.
+
+Fresh customer API acceptance on `70fa85f` passed selection, draft response
+save, reset and replay, modification and deletion of the resulting UUID v8
+question. The successful reset issued before this correction also returned its
+original replay result. Both temporary new questions ended archived; the
+separate formal response question and knowledge snapshot were preserved.
+Removed customer, engineer and administrator ticket routes returned NOT_FOUND.
+No provider execution was initiated by these self-service actions. The existing
+general-agent two-turn downloads also passed verification after this restart.
+
+## Dashboard response-logic acceptance completed — 2026-09-06
+
+An independently selected customer question used the published knowledge
+snapshot and original `response-logic-builder` Skill. The complete original
+workflow passed: bind at revision 1, start at revision 2, initial save at
+revision 3, continuation at revision 4, second raw-result save at revision 5
+and confirmation at revision 6/version 1. Both provider turns used the same
+session. The continuation remained running until its own result arrived;
+the first turn's output was not misclassified as a completed second turn.
+
+After the `70fa85f` restart, the acknowledged task and its second result were
+still readable. Independent API and database checks at 06:15:17 UTC confirmed
+all four final fields exactly matched the second raw result and the reviewed
+SHA-256 values. The review checked relevant KB leaves for product, protocol,
+model-count, example-price and scale statements. No monitoring batch or sample
+was created. Response generation used exactly the original initial and
+continuation calls; the existing keyword table payload remained unchanged.
+
+Question: `d935bb97-ae71-41a3-8729-12fcbeb04362`.
+Confirmed record: `93cd2eac-372d-49a6-a7fd-d7515447188c`.
+The provider improved attribution, dates, price qualification and API migration
+boundaries in the second turn. It retained the original Skill's five-step
+structure and expanded the conclusion from 336 to 375 characters, so the
+internal request to shorten it was not fully followed. No manual rewrite or
+third provider call was used to disguise that content limitation.
+
+Seven focused read-only browser checks on `70fa85f` confirmed the four fields
+in the formal question workspace and confirmed editor, the correct editable
+question/reset targets, disabled confirmation for the confirmed record, and
+identity/content persistence after refresh. API state remained revision 6,
+version 1, confirmed. No failed reads or uncaught page errors were observed.
+All browser mutations were blocked and dialogs were canceled. Consequently,
+the conversation pane's automatic save/synchronization was not exercised;
+these checks establish field display and controls, not conversation-pane loading.
+
+## Brand-universe native failures and bounded fresh retry
+
+The first operation, `c8cb9498-4a82-44ed-a188-8f90395611bb`, ran for
+16 minutes 1.519 seconds before the upstream emitted `session.error` with
+`unknown_error`, service unavailable and exhausted retries. Its last model
+request lasted 10 minutes 59.253 seconds and ended with `is_error=true`.
+
+The second operation, `06f92e33-11ed-42e2-a8f3-72a12fb6e02d`, ran for
+17 minutes 1.628 seconds, from 06:09:22.894 to 06:26:24.522 UTC, and received
+the same native error followed by idle with `retries_exhausted`. Its final
+model request lasted 11 minutes 54.649 seconds. All 85 tool results had
+`is_error=false`; public progress showed successful KB reading and research.
+The two tasks stopped at different specific research steps. Both last requests
+reported zero usage, but that does not establish the upstream cause or billing.
+
+Independent read-only checks found no local interrupt/delete operation,
+native user interruption or cleanup job. The result deadline was null.
+Each session contained only the three input archives, zero downloadable
+deliverables and zero valid formal JSON candidates. No usable result was
+discarded by a validator, and neither task published or entered a repair loop.
+The 60-second network timeout applies to individual HTTP requests, not the
+session lifetime; the removed 15-minute KB timeout did not affect these tasks.
+
+Both terminal failures were preserved before starting one further bounded,
+fresh attempt under the user's retry authorization. The formal KB archive,
+original upstream and adapter Skill hashes, `glm-5.3` and `max` effort remain
+unchanged. The derived knowledge input ZIP changes because its context contains
+the new operation token. No old session is reconstructed or resumed.
+
+## Response-reset wording release
+
+Source `237cd0aa6b815e70d0ac276396c6c3af08a1e88a` replaces the last obsolete
+approval wording in the confirmed response editor with the direct reset action:
+`如需调整，可点击“重置应答逻辑”后重新生成并确认。` The single-line copy
+change passed whitespace/diff checks and the existing image publication build.
+Dashboard and its same-image SiteOps worker use digest
+`sha256:70b130ff33af01cfa365d6dfe33301ffde45e32fcbc95cb5c48fe7b4260f965b`.
+Startup readiness returned the exact source, digest and schema. No database
+migration or write was required. The previous `70fa85f` image remains available
+for rollback; Website and monitoring-worker container IDs/start times were
+unchanged. The acknowledged third brand task retained its original session.
+
+Public `/healthz` and `/readyz` returned 200 with the exact source and digest.
+Four focused read-only browser checks confirmed the new footer, absence of
+“需求通过后”, stable customer identity after refresh, and unchanged confirmed
+revision 6/version 1 with all four fields preserved. No read failure or browser
+exception occurred; all four automatic save/snapshot POSTs were blocked.
+
+## Third native brand failure
+
+Operation `5d12dd31-8b91-4e7c-a204-07ef336e5f42` received the same native
+service-unavailable/exhausted error at 06:49:39.586 UTC, followed by
+idle/retries_exhausted. Its final model request lasted 9 minutes 20.468 seconds
+and ended with `is_error=true`. There were three input files, zero downloadable
+outputs and zero valid public JSON results. The database deadline remained
+null, with no interrupt/delete mutation or cleanup job. The third failure was
+preserved; no fourth identical attempt was submitted. See
+[`zhipu-managed-failure-handling.md`](zhipu-managed-failure-handling.md) for
+official source references, known affected workflows and handling boundaries.
+
+## Long-running-task and unified-workspace update
+
+Website's 60-minute running cutoff, KB's unknown/404 10-minute and waiting/quota
+24-hour cutoffs, and the 10-minute transient ZIP download cutoff are removed.
+Reads continue against the same acknowledged session. Website recognizes both
+retry_status formats, keeps terminal errors across idle notifications, and
+projects explicit cancellation; an unknown initial idle does not prove failure.
+Transport read failures defer, including interruption while reading an HTTP
+200 response body. Permanent malformed responses remain visible errors.
+
+The three failed brand sessions were independently rechecked: all had native
+provider error status, null result deadlines, only their initial command, and
+no interrupt/delete mutation. Removing local cutoffs does not explain or fix
+those upstream model failures. No fourth identical paid task was submitted.
+
+The requested 内容分析与 AI 部件 preview is integrated under AI 友好内容资产.
+Customer monitoring/publishing routes keep the original Dashboard sidebar;
+system administration directly expands five monitoring and four publishing
+subpages in the ordinary sidebar. Key assignment removes Base/Pro choices and
+keeps verified identical credentials unchanged, while revalidation repairs an
+invalid/unverified credential without changing an existing task binding.
+
+The update requires no migration. Website task execution is hosted by the
+Dashboard service, so the Dashboard image contains the Website execution
+fixes; its frontend image and the independent monitoring worker need no change.
+Focused provider/router/credential/KB and affected client regressions, source
+governance, test partitioning and TypeScript checks validate these changes.
+
+The strengthened local browser check found and fixed a pre-existing publishing
+admin loading bug: disabled React Query reads remained pending and incorrectly
+kept every section loading. Only queries needed by the current section now
+participate in loading/error presentation. All nine management subpages were
+then checked for actual inner content, alongside both Key dialogs (12 checks,
+13 successful API GETs, no writes/errors). Customer checks cover the preview,
+local settings, reload and original sidebar through monitoring/publishing.
+Focused validation passed 173 KB service tests (four existing skips), 42
+Website/Dashboard adapter tests, 103 router/transport tests, credential/Key
+regressions and the affected client suites; TypeScript and source checks passed.

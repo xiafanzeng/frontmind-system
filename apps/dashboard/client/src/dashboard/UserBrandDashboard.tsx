@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import {
   Activity,
@@ -75,6 +75,16 @@ import {
   ServiceQuotaOverview,
 } from "./service-portal-ui";
 import "./dashboard-styles.css";
+import {
+  customerMonitoringPages,
+  customerPublishingPages,
+  dashboardModuleRoute,
+} from "./module-navigation";
+
+const MonitoringModule = lazy(() => import("@/monitoring/Workspace"));
+const ContentInsightsWorkspace = lazy(
+  () => import("./content-insights/ContentInsightsWorkspace"),
+);
 
 export { ManagedKeywordTables };
 
@@ -252,6 +262,12 @@ const semanticSubpages = [
     section: "semantic",
     label: SITEOPS_CUSTOMER_DISPLAY_NAME,
     desc: "先购买并提交域名，领取 AI 运维返回的备案服务码后完成 ICP 备案。",
+  },
+  {
+    id: "content-insights",
+    section: "semantic",
+    label: "内容分析与 AI 部件",
+    desc: "预览内容分析和 AI 部件界面。",
   },
 ];
 
@@ -619,11 +635,21 @@ function UserBrandDashboardContent({
   buildPreviewHistoricalResults = null,
 }) {
   const previewMode = import.meta.env.DEV && preview;
-  const [route, setRoute] = useState(
+  const [location, setLocation] = useLocation();
+  const search = useSearch();
+  const moduleRoute = previewMode ? null : dashboardModuleRoute(location);
+  const insightsRoute =
+    new URLSearchParams(search).get("view") === "content-insights";
+  const [localRoute, setRoute] = useState(
     initialSection === "knowledge-agent"
       ? { section: "knowledge-agent", sub: "build" }
       : { section: "service", sub: null },
   );
+  const route =
+    moduleRoute ||
+    (insightsRoute
+      ? { section: "semantic", sub: "content-insights" }
+      : localRoute);
   const [accountOpen, setAccountOpen] = useState(false);
   const [salesAdvisorOpen, setSalesAdvisorOpen] = useState(false);
   const [responseQuestionId, setResponseQuestionId] = useState(null);
@@ -669,6 +695,16 @@ function UserBrandDashboardContent({
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const navigate = (section, sub = null) => {
+    if (section === "monitoring-module" || section === "publishing-module") {
+      setLocation(sub);
+      setMobileNavOpen(false);
+      return;
+    }
+    if (section === "semantic" && sub === "content-insights") {
+      setLocation(`${previewMode ? location : "/"}?view=content-insights`);
+    } else if (moduleRoute || insightsRoute) {
+      setLocation(previewMode ? location : "/");
+    }
     const legacyMonitoringRoute =
       (section === "intent" && sub === "monitor") ||
       (section === "progress" &&
@@ -801,14 +837,32 @@ function UserBrandDashboardContent({
               }
             />
           )}
-          {!immersiveAgentWorkspace && onEditDashboard && (
-            <div className="flex justify-end px-6 py-3">
-              <Button variant="outline" onClick={() => onEditDashboard("home")}>
-                编辑看板内容
-              </Button>
+          {!immersiveAgentWorkspace &&
+            !moduleRoute &&
+            !insightsRoute &&
+            onEditDashboard && (
+              <div className="flex justify-end px-6 py-3">
+                <Button
+                  variant="outline"
+                  onClick={() => onEditDashboard("home")}
+                >
+                  编辑看板内容
+                </Button>
+              </div>
+            )}
+          {moduleRoute ? (
+            <div className="dashboard-module-content">
+              <Suspense
+                fallback={
+                  <div className="page-shell" role="status">
+                    正在读取工作区…
+                  </div>
+                }
+              >
+                <MonitoringModule />
+              </Suspense>
             </div>
-          )}
-          {route.section === "service" ? (
+          ) : route.section === "service" ? (
             <ServiceHome
               portal={servicePortal}
               companyName={
@@ -935,7 +989,17 @@ function UserBrandDashboardContent({
                   />
                 ))}
               {route.section === "semantic" &&
-                (route.sub === "website-management" ? (
+                (route.sub === "content-insights" ? (
+                  <Suspense
+                    fallback={
+                      <div className="page-shell" role="status">
+                        正在读取界面预览…
+                      </div>
+                    }
+                  >
+                    <ContentInsightsWorkspace />
+                  </Suspense>
+                ) : route.sub === "website-management" ? (
                   <section className="page-shell">
                     <PageHeader
                       title={SITEOPS_CUSTOMER_DISPLAY_NAME}
@@ -1101,20 +1165,24 @@ function Sidebar({
           <div className="nav-group-head">
             <span>监控与发布</span>
           </div>
-          <Link
-            href="/monitoring-system"
-            className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"
-          >
-            <Activity size={17} />
-            问题监控
-          </Link>
-          <Link
-            href="/publishing"
-            className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"
-          >
-            <Database size={17} />
-            媒体发布
-          </Link>
+          <SidebarGroup
+            id="monitoring-module"
+            label="问题监控"
+            icon={Activity}
+            items={customerMonitoringPages}
+            route={route}
+            onNavigate={onNavigate}
+            portal={portal}
+          />
+          <SidebarGroup
+            id="publishing-module"
+            label="媒体发布"
+            icon={Database}
+            items={customerPublishingPages}
+            route={route}
+            onNavigate={onNavigate}
+            portal={portal}
+          />
         </div>
       )}
       <div className="mt-auto grid gap-2">

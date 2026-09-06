@@ -2074,129 +2074,154 @@ describe("Manus v2 canonical task writer fence", () => {
     ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
   });
 
-  it("backs off transient materialized result reads and terminalizes at the ten-minute boundary", async () => {
-    const leaseToken = "materialized-result-read-lease";
-    const activeTurn = turn({
-      status: "running",
-      upstreamTaskId: "canonical-task",
-      metadata: {
-        attachmentsFrozen: true,
-        materializedRecoveryContractVersion: 1,
-        leaseOwnerHash: createHash("sha256")
-          .update(leaseToken, "utf8")
-          .digest("hex"),
-        providerProtocol: "manus_v2",
-        providerMethod: "task.create",
-        createAttemptState: "acknowledged",
-        providerAttemptState: "output_pending",
-        operationToken: "operation-1",
-      },
-    });
-    const current = (store: TurnServiceStore) =>
-      store.turns.filter((candidate) => candidate.id === activeTurn.id);
-    const harness = createTurnServiceExecutor({
-      build: build({
-        executionMode: "materialized_bundle_v1",
-        skillVersion: "5",
-        contentVersion: 1,
-        upstreamTaskId: "canonical-task",
-        canonicalTaskId: null,
-        canonicalTaskGeneration: null,
-        canonicalCredentialId: "credential-1",
-        canonicalTaskState: "active",
-        status: "researching",
-        stateEpoch: 30,
-      }),
-      conversation: {
-        id: activeTurn.conversationId,
-        userId: activeTurn.userId,
-        projectAssignmentId: null,
-        deletedAt: null,
+  it.each([undefined, "invalid-local-timestamp"] as const)(
+    "keeps retrying transient materialized result reads with bounded backoff (stored observation: %s)",
+    async (storedObservation) => {
+      const leaseToken = "materialized-result-read-lease";
+      const activeTurn = turn({
         status: "running",
-        deletedMessageIds: [],
-        version: 8,
-      },
-      turns: [activeTurn],
-      turnSelections: [
-        [current],
-        [current],
-        [current],
-        [current],
-        [current],
-        [current],
-      ],
-    });
-    const startedAt = Date.parse("2026-08-01T00:00:00.000Z");
-    const deferAt = (offsetMs: number) =>
-      deferKnowledgeBaseMaterializedResultRead(
-        {
-          userId: activeTurn.userId,
-          turnId: activeTurn.id,
-          leaseToken,
-          lastErrorKind: "HTTP_503",
-          now: new Date(startedAt + offsetMs),
+        upstreamTaskId: "canonical-task",
+        metadata: {
+          attachmentsFrozen: true,
+          materializedRecoveryContractVersion: 1,
+          leaseOwnerHash: createHash("sha256")
+            .update(leaseToken, "utf8")
+            .digest("hex"),
+          providerProtocol: "manus_v2",
+          providerMethod: "task.create",
+          createAttemptState: "acknowledged",
+          providerAttemptState: "output_pending",
+          operationToken: "operation-1",
+          ...(storedObservation
+            ? {
+                materializedResultRead: {
+                  firstObservedAt: storedObservation,
+                  attempt: 0,
+                  nextRetryAt: "2026-08-01T00:02:00.000Z",
+                  lastErrorKind: "HTTP_503",
+                },
+              }
+            : {}),
         },
-        harness.executor,
-      );
+      });
+      const current = (store: TurnServiceStore) =>
+        store.turns.filter((candidate) => candidate.id === activeTurn.id);
+      const harness = createTurnServiceExecutor({
+        build: build({
+          executionMode: "materialized_bundle_v1",
+          skillVersion: "5",
+          contentVersion: 1,
+          upstreamTaskId: "canonical-task",
+          canonicalTaskId: null,
+          canonicalTaskGeneration: null,
+          canonicalCredentialId: "credential-1",
+          canonicalTaskState: "active",
+          status: "researching",
+          stateEpoch: 30,
+        }),
+        conversation: {
+          id: activeTurn.conversationId,
+          userId: activeTurn.userId,
+          projectAssignmentId: null,
+          deletedAt: null,
+          status: "running",
+          deletedMessageIds: [],
+          version: 8,
+        },
+        turns: [activeTurn],
+        turnSelections: [
+          [current],
+          [current],
+          [current],
+          [current],
+          [current],
+          [current],
+          [current],
+        ],
+      });
+      const startedAt = Date.parse("2026-08-01T00:00:00.000Z");
+      const deferAt = (offsetMs: number) =>
+        deferKnowledgeBaseMaterializedResultRead(
+          {
+            userId: activeTurn.userId,
+            turnId: activeTurn.id,
+            leaseToken,
+            lastErrorKind: "HTTP_503",
+            now: new Date(startedAt + offsetMs),
+          },
+          harness.executor,
+        );
 
-    await expect(deferAt(0)).resolves.toMatchObject({
-      state: "deferred",
-      attempt: 1,
-      retryAfterMs: 15_000,
-      deduplicated: false,
-    });
-    await expect(deferAt(1_000)).resolves.toMatchObject({
-      state: "deferred",
-      attempt: 1,
-      retryAfterMs: 14_000,
-      deduplicated: true,
-    });
-    await expect(deferAt(15_000)).resolves.toMatchObject({
-      state: "deferred",
-      attempt: 2,
-      retryAfterMs: 30_000,
-    });
-    await expect(deferAt(45_000)).resolves.toMatchObject({
-      state: "deferred",
-      attempt: 3,
-      retryAfterMs: 60_000,
-    });
-    await expect(deferAt(105_000)).resolves.toMatchObject({
-      state: "deferred",
-      attempt: 4,
-      retryAfterMs: 120_000,
-    });
-    await expect(deferAt(600_000)).resolves.toMatchObject({
-      state: "unavailable",
-      deduplicated: false,
-      turn: {
-        status: "failed",
-        providerAttemptState: "result_rejected",
-        recoveryAction: "approve_reset",
-      },
-    });
-    expect(harness.store.turns[0]?.metadata).toMatchObject({
-      materializedResultRead: {
-        firstObservedAt: "2026-08-01T00:00:00.000Z",
+      await expect(deferAt(0)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 1,
+        retryAfterMs: 15_000,
+        deduplicated: false,
+      });
+      await expect(deferAt(1_000)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 1,
+        retryAfterMs: 14_000,
+        deduplicated: true,
+      });
+      await expect(deferAt(15_000)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 2,
+        retryAfterMs: 30_000,
+      });
+      await expect(deferAt(45_000)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 3,
+        retryAfterMs: 60_000,
+      });
+      await expect(deferAt(105_000)).resolves.toMatchObject({
+        state: "deferred",
         attempt: 4,
-        lastErrorKind: "HTTP_503",
-      },
-    });
-    expect(
-      (harness.store.turns[0]?.metadata as any).materializedResultRead,
-    ).not.toHaveProperty("nextRetryAt");
-    expect(harness.store.build).toMatchObject({
-      status: "protocol_error",
-      activeTurnId: null,
-      canonicalTaskState: "attention_required",
-      protocolErrorCode: "KNOWLEDGE_BASE_MATERIALIZED_RESULT_UNAVAILABLE",
-      stateEpoch: 31,
-    });
-    expect(harness.store.conversation).toMatchObject({
-      status: "failed",
-      version: 9,
-    });
-  });
+        retryAfterMs: 120_000,
+      });
+      await expect(deferAt(600_000)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 5,
+        retryAfterMs: 120_000,
+        deduplicated: false,
+      });
+      await expect(deferAt(7 * 24 * 60 * 60_000)).resolves.toMatchObject({
+        state: "deferred",
+        attempt: 6,
+        retryAfterMs: 120_000,
+        deduplicated: false,
+      });
+      expect(harness.store.turns[0]?.metadata).toMatchObject({
+        providerAttemptState: "output_pending",
+        failureClass: "recoverable_same_turn",
+        recoveryAction: "wait",
+        materializedResultRead: {
+          firstObservedAt: "2026-08-01T00:00:00.000Z",
+          attempt: 6,
+          lastErrorKind: "HTTP_503",
+          nextRetryAt: "2026-08-08T00:02:00.000Z",
+        },
+      });
+      expect(harness.store.turns).toHaveLength(1);
+      expect(harness.store.turns[0]).toMatchObject({
+        id: activeTurn.id,
+        status: "running",
+        upstreamTaskId: "canonical-task",
+        leaseExpiresAt: new Date("2026-08-08T00:02:00.000Z"),
+      });
+      expect(harness.store.build).toMatchObject({
+        status: "researching",
+        activeTurnId: activeTurn.id,
+        upstreamTaskId: "canonical-task",
+        canonicalTaskState: "active",
+        stateEpoch: 30,
+      });
+      expect(harness.store.conversation).toMatchObject({
+        status: "running",
+        version: 8,
+      });
+    },
+  );
 
   it("stages only a birth-marked materialized completion candidate and records its immutable proof", async () => {
     const leaseToken = "materialized-completion-candidate-lease";
@@ -2655,7 +2680,7 @@ describe("Manus v2 canonical task writer fence", () => {
     ).not.toHaveProperty("statusDeadlineAt");
   });
 
-  it("retains one 24-hour interruption window for waiting to exact quota and clears a lost candidate", async () => {
+  it("retains the same task through prolonged waiting and exact quota interruption and clears a lost candidate", async () => {
     const leaseToken = "materialized-completion-quota-lease";
     const activeTurn = turn({
       operationType: "start",
@@ -2679,6 +2704,7 @@ describe("Manus v2 canonical task writer fence", () => {
         materializedCompletion: {
           schemaVersion: 1,
           lastStatus: "running",
+          statusDeadlineAt: "2026-08-01T00:15:00.000Z",
           activeRunningMs: 0,
           runningObservedAt: "2026-08-01T00:00:00.000Z",
           candidateEventIdHash: "a".repeat(64),
@@ -2706,7 +2732,7 @@ describe("Manus v2 canonical task writer fence", () => {
         status: "researching",
       }),
       turns: [activeTurn],
-      turnSelections: [[current], [current], [current]],
+      turnSelections: [[current], [current], [current], [current]],
     });
 
     const waiting = await deferKnowledgeBaseMaterializedProviderStatus(
@@ -2722,14 +2748,36 @@ describe("Manus v2 canonical task writer fence", () => {
     );
     expect(waiting).toMatchObject({
       state: "deferred",
+      retryAfterMs: 15_000,
       ledger: {
         lastStatus: "waiting",
         statusFirstObservedAt: "2026-08-01T00:05:00.000Z",
-        statusDeadlineAt: "2026-08-02T00:05:00.000Z",
       },
     });
     expect(harness.store.turns[0]?.metadata).toMatchObject({
       recoveryAction: "awaiting_input",
+    });
+    expect(
+      (harness.store.turns[0]?.metadata as any).materializedCompletion,
+    ).not.toHaveProperty("statusDeadlineAt");
+    await expect(
+      deferKnowledgeBaseMaterializedProviderStatus(
+        {
+          userId: 1,
+          turnId: activeTurn.id,
+          leaseToken,
+          status: "waiting",
+          now: new Date("2026-08-03T00:05:00.000Z"),
+        },
+        harness.executor,
+      ),
+    ).resolves.toMatchObject({
+      state: "deferred",
+      retryAfterMs: 15_000,
+      ledger: {
+        lastStatus: "waiting",
+        statusFirstObservedAt: "2026-08-01T00:05:00.000Z",
+      },
     });
     await expect(
       deferKnowledgeBaseMaterializedProviderStatus(
@@ -2738,16 +2786,16 @@ describe("Manus v2 canonical task writer fence", () => {
           turnId: activeTurn.id,
           leaseToken,
           status: "quota_error",
-          now: new Date("2026-08-01T00:06:00.000Z"),
+          now: new Date("2026-08-07T00:06:00.000Z"),
         },
         harness.executor,
       ),
     ).resolves.toMatchObject({
       state: "deferred",
+      retryAfterMs: 15_000,
       ledger: {
         lastStatus: "quota_error",
         statusFirstObservedAt: "2026-08-01T00:05:00.000Z",
-        statusDeadlineAt: "2026-08-02T00:05:00.000Z",
       },
     });
     const metadata = harness.store.turns[0]?.metadata as any;
@@ -2759,6 +2807,20 @@ describe("Manus v2 canonical task writer fence", () => {
     expect(metadata.materializedCompletion).not.toHaveProperty(
       "candidateArchiveSha256",
     );
+    expect(metadata.materializedCompletion).not.toHaveProperty(
+      "statusDeadlineAt",
+    );
+    expect(harness.store.turns[0]).toMatchObject({
+      id: activeTurn.id,
+      status: "running",
+      upstreamTaskId: "completion-task",
+      leaseExpiresAt: new Date("2026-08-07T00:06:15.000Z"),
+    });
+    expect(harness.store.build).toMatchObject({
+      status: "researching",
+      activeTurnId: activeTurn.id,
+      upstreamTaskId: "completion-task",
+    });
 
     await expect(
       deferKnowledgeBaseMaterializedProviderStatus(
@@ -2767,7 +2829,7 @@ describe("Manus v2 canonical task writer fence", () => {
           turnId: activeTurn.id,
           leaseToken,
           status: "running",
-          now: new Date("2026-08-01T00:07:00.000Z"),
+          now: new Date("2026-08-08T00:07:00.000Z"),
         },
         harness.executor,
       ),
@@ -2775,7 +2837,7 @@ describe("Manus v2 canonical task writer fence", () => {
       state: "deferred",
       ledger: {
         lastStatus: "running",
-        statusFirstObservedAt: "2026-08-01T00:07:00.000Z",
+        statusFirstObservedAt: "2026-08-08T00:07:00.000Z",
         activeRunningMs: 5 * 60_000,
       },
     });
@@ -2784,103 +2846,133 @@ describe("Manus v2 canonical task writer fence", () => {
     ).not.toHaveProperty("statusDeadlineAt");
   });
 
-  it("settles a non-quota provider error as contact-support attention rather than a bad-ZIP reset", async () => {
-    const leaseToken = "materialized-provider-attention-lease";
-    const activeTurn = turn({
-      operationType: "start",
-      expectedLeafId: null,
-      status: "running",
-      upstreamTaskId: "completion-task",
-      startedAt: new Date("2026-08-01T00:00:00.000Z"),
-      leaseExpiresAt: new Date("2026-08-01T01:00:00.000Z"),
-      metadata: {
-        attachmentsFrozen: true,
-        materializedRecoveryContractVersion: 1,
-        materializedCompletionContractVersion: 2,
-        leaseOwnerHash: createHash("sha256")
-          .update(leaseToken, "utf8")
-          .digest("hex"),
-        providerProtocol: "manus_v2",
-        providerMethod: "task.create",
-        createAttemptState: "acknowledged",
-        providerAttemptState: "output_pending",
-        operationToken: "operation-1",
-      },
-    });
-    const current = (store: TurnServiceStore) =>
-      store.turns.filter((candidate) => candidate.id === activeTurn.id);
-    const harness = createTurnServiceExecutor({
-      build: build({
-        executionMode: "materialized_bundle_v1",
-        skillVersion: "5",
-        contentVersion: 0,
-        handoffProvenance: {
+  it.each([undefined, "waiting", "quota_error"] as const)(
+    "settles a genuine provider error as contact-support attention (prior status: %s)",
+    async (priorStatus) => {
+      const leaseToken = "materialized-provider-attention-lease";
+      const activeTurn = turn({
+        operationType: "start",
+        expectedLeafId: null,
+        status: "running",
+        upstreamTaskId: "completion-task",
+        startedAt: new Date("2026-08-01T00:00:00.000Z"),
+        leaseExpiresAt: new Date("2026-08-01T01:00:00.000Z"),
+        metadata: {
+          attachmentsFrozen: true,
           materializedRecoveryContractVersion: 1,
           materializedCompletionContractVersion: 2,
+          leaseOwnerHash: createHash("sha256")
+            .update(leaseToken, "utf8")
+            .digest("hex"),
+          providerProtocol: "manus_v2",
+          providerMethod: "task.create",
+          createAttemptState: "acknowledged",
+          providerAttemptState: "output_pending",
+          operationToken: "operation-1",
+          ...(priorStatus
+            ? {
+                materializedCompletion: {
+                  schemaVersion: 1,
+                  lastStatus: priorStatus,
+                  statusFirstObservedAt: "2026-08-01T00:05:00.000Z",
+                  statusDeadlineAt: "2026-08-02T00:05:00.000Z",
+                },
+              }
+            : {}),
         },
-        upstreamTaskId: "completion-task",
-        canonicalTaskId: null,
-        status: "researching",
-      }),
-      conversation: {
-        id: activeTurn.conversationId,
-        userId: 1,
-        projectAssignmentId: null,
-        deletedAt: null,
-        status: "running",
-        deletedMessageIds: [],
-        version: 2,
-      },
-      turns: [activeTurn],
-      turnSelections: [[current]],
-    });
-
-    await expect(
-      deferKnowledgeBaseMaterializedProviderStatus(
-        {
+      });
+      const current = (store: TurnServiceStore) =>
+        store.turns.filter((candidate) => candidate.id === activeTurn.id);
+      const harness = createTurnServiceExecutor({
+        build: build({
+          executionMode: "materialized_bundle_v1",
+          skillVersion: "5",
+          contentVersion: 0,
+          handoffProvenance: {
+            materializedRecoveryContractVersion: 1,
+            materializedCompletionContractVersion: 2,
+          },
+          upstreamTaskId: "completion-task",
+          canonicalTaskId: null,
+          status: "researching",
+        }),
+        conversation: {
+          id: activeTurn.conversationId,
           userId: 1,
-          turnId: activeTurn.id,
-          leaseToken,
-          status: "error",
-          now: new Date("2026-08-01T00:05:00.000Z"),
+          projectAssignmentId: null,
+          deletedAt: null,
+          status: "running",
+          deletedMessageIds: [],
+          version: 2,
         },
-        harness.executor,
-      ),
-    ).resolves.toMatchObject({
-      state: "unavailable",
-      turn: {
-        status: "failed",
-        providerAttemptState: "output_pending",
-        failureClass: "terminal_nonregenerable",
-        recoveryAction: "contact_support",
-      },
-    });
-    expect(harness.store.turns[0]).toMatchObject({
-      status: "failed",
-      errorCode: "KNOWLEDGE_BASE_MATERIALIZED_PROVIDER_ATTENTION",
-      metadata: {
-        providerAttemptState: "output_pending",
-        failureClass: "terminal_nonregenerable",
-        recoveryAction: "contact_support",
-        canRegenerate: false,
-      },
-    });
-    expect(harness.store.build).toMatchObject({
-      status: "protocol_error",
-      activeTurnId: null,
-      canonicalTaskState: "attention_required",
-      protocolErrorCode: "KNOWLEDGE_BASE_MATERIALIZED_PROVIDER_ATTENTION",
-    });
-    expect(harness.store.build?.protocolError).toContain("请联系支持处理");
-    expect(harness.store.build?.protocolError).not.toMatch(
-      /(?:文件|完整性|重置)/u,
-    );
-    expect(harness.store.conversation).toMatchObject({ status: "failed" });
-  });
+        turns: [activeTurn],
+        turnSelections: [[current]],
+      });
 
-  it.each(["unknown", "list_messages_404"] as const)(
-    "bounds %s without candidate evidence to ten minutes",
-    async (status) => {
+      await expect(
+        deferKnowledgeBaseMaterializedProviderStatus(
+          {
+            userId: 1,
+            turnId: activeTurn.id,
+            leaseToken,
+            status: "error",
+            now: new Date(
+              priorStatus
+                ? "2026-08-08T00:05:00.000Z"
+                : "2026-08-01T00:05:00.000Z",
+            ),
+          },
+          harness.executor,
+        ),
+      ).resolves.toMatchObject({
+        state: "unavailable",
+        turn: {
+          status: "failed",
+          providerAttemptState: "output_pending",
+          failureClass: "terminal_nonregenerable",
+          recoveryAction: "contact_support",
+        },
+      });
+      expect(harness.store.turns[0]).toMatchObject({
+        status: "failed",
+        errorCode: "KNOWLEDGE_BASE_MATERIALIZED_PROVIDER_ATTENTION",
+        metadata: {
+          providerAttemptState: "output_pending",
+          failureClass: "terminal_nonregenerable",
+          recoveryAction: "contact_support",
+          canRegenerate: false,
+        },
+      });
+      expect(harness.store.build).toMatchObject({
+        status: "protocol_error",
+        activeTurnId: null,
+        canonicalTaskState: "attention_required",
+        protocolErrorCode: "KNOWLEDGE_BASE_MATERIALIZED_PROVIDER_ATTENTION",
+      });
+      expect(harness.store.build?.protocolError).toContain("请联系支持处理");
+      expect(harness.store.build?.protocolError).not.toMatch(
+        /(?:文件|完整性|重置)/u,
+      );
+      expect(harness.store.conversation).toMatchObject({ status: "failed" });
+    },
+  );
+
+  it.each(
+    (
+      [
+        "running",
+        "waiting",
+        "quota_error",
+        "unknown",
+        "list_messages_404",
+      ] as const
+    ).flatMap((status) => [
+      { status, storedObservation: "2026-08-01T00:05:00.000Z" },
+      { status, storedObservation: "invalid-local-timestamp" },
+    ]),
+  )(
+    "keeps polling the same $status task with observation $storedObservation",
+    async ({ status, storedObservation }) => {
       const leaseToken = `materialized-completion-${status}-lease`;
       const firstObserved = new Date("2026-08-01T00:05:00.000Z");
       const activeTurn = turn({
@@ -2902,6 +2994,12 @@ describe("Manus v2 canonical task writer fence", () => {
           createAttemptState: "acknowledged",
           providerAttemptState: "output_pending",
           operationToken: "operation-1",
+          materializedCompletion: {
+            schemaVersion: 1,
+            lastStatus: status,
+            statusFirstObservedAt: storedObservation,
+            statusDeadlineAt: "2026-08-01T00:15:00.000Z",
+          },
         },
       });
       const current = (store: TurnServiceStore) =>
@@ -2920,28 +3018,58 @@ describe("Manus v2 canonical task writer fence", () => {
           status: "researching",
         }),
         turns: [activeTurn],
-        turnSelections: [[current]],
+        turnSelections: [[current], [current], [current]],
       });
 
-      await expect(
-        deferKnowledgeBaseMaterializedProviderStatus(
-          {
-            userId: 1,
-            turnId: activeTurn.id,
-            leaseToken,
-            status,
-            now: firstObserved,
+      for (const now of [
+        firstObserved,
+        new Date("2026-08-01T00:15:00.000Z"),
+        new Date("2026-08-08T00:05:00.000Z"),
+      ]) {
+        const nextRetryAt = new Date(now.getTime() + 15_000);
+        await expect(
+          deferKnowledgeBaseMaterializedProviderStatus(
+            {
+              userId: 1,
+              turnId: activeTurn.id,
+              leaseToken,
+              status,
+              now,
+            },
+            harness.executor,
+          ),
+        ).resolves.toMatchObject({
+          state: "deferred",
+          retryAfterMs: 15_000,
+          ledger: {
+            lastStatus: status,
+            statusFirstObservedAt: firstObserved.toISOString(),
+            nextRetryAt: nextRetryAt.toISOString(),
+            ...(status === "list_messages_404"
+              ? { listMessages404FirstObservedAt: firstObserved.toISOString() }
+              : {}),
           },
-          harness.executor,
-        ),
-      ).resolves.toMatchObject({
-        state: "deferred",
-        ledger: {
-          lastStatus: status,
-          statusFirstObservedAt: firstObserved.toISOString(),
-          statusDeadlineAt: "2026-08-01T00:15:00.000Z",
-        },
-      });
+        });
+        expect(harness.store.turns).toHaveLength(1);
+        expect(harness.store.turns[0]).toMatchObject({
+          id: activeTurn.id,
+          status: "running",
+          upstreamTaskId: "completion-task",
+          leaseExpiresAt: nextRetryAt,
+          metadata: {
+            failureClass: "recoverable_same_turn",
+            canRegenerate: false,
+          },
+        });
+        expect(
+          (harness.store.turns[0]?.metadata as any).materializedCompletion,
+        ).not.toHaveProperty("statusDeadlineAt");
+        expect(harness.store.build).toMatchObject({
+          status: "researching",
+          activeTurnId: activeTurn.id,
+          upstreamTaskId: "completion-task",
+        });
+      }
     },
   );
 

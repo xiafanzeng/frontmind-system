@@ -118,7 +118,6 @@ const historicalOptimizationForecastSchema = (() => {
   } as NonNullable<PresalesV2Contract["structuredOutputSchema"]>;
 })();
 const CREATE_RECONCILE_WINDOW_MS = 5 * 60_000;
-const PROVIDER_RUN_DEADLINE_MS = 60 * 60_000;
 const PROVIDER_TASK_VISIBILITY_GRACE_MS = 180_000;
 const PROVIDER_FILE_MINIMUM_USABLE_SECONDS = 15 * 60;
 const MAX_PROVIDER_FILE_CANDIDATES = 2;
@@ -1230,9 +1229,7 @@ async function dispatchPresalesV2Task(
               status: "running",
               terminalAt: null,
               providerStartedAt,
-              providerRunDeadlineAt: new Date(
-                Date.parse(providerStartedAt) + PROVIDER_RUN_DEADLINE_MS,
-              ).toISOString(),
+              providerRunDeadlineAt: null,
             }
           : current,
     );
@@ -2511,6 +2508,7 @@ function canApplyProviderObservation(
   observed: PresalesV2TaskRecord,
   options: {
     resultFinalization?: boolean;
+    resumeExpiredRun?: boolean;
   } = {},
 ) {
   if (current.providerTaskId !== observed.providerTaskId) return false;
@@ -2523,7 +2521,7 @@ function canApplyProviderObservation(
   if (
     current.status === "attention_required" &&
     !(
-      options.resultFinalization &&
+      (options.resultFinalization || options.resumeExpiredRun) &&
       current.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED"
     )
   ) {
@@ -2549,15 +2547,9 @@ function providerTiming(record: PresalesV2TaskRecord, nowMs: number) {
     record.providerStartedAt,
     Number.isFinite(createdAt) ? createdAt : nowMs,
   );
-  const deadlineAtMs = validTimestamp(
-    record.providerRunDeadlineAt,
-    startedAtMs + PROVIDER_RUN_DEADLINE_MS,
-  );
   return {
     startedAtMs,
-    deadlineAtMs,
     providerStartedAt: new Date(startedAtMs).toISOString(),
-    providerRunDeadlineAt: new Date(deadlineAtMs).toISOString(),
   };
 }
 
@@ -2574,10 +2566,12 @@ const SAFE_PROVIDER_READ_ERROR_CODES = new Set([
   "transport_pre_dispatch_retry_exhausted",
   "transport_unknown",
   "upstream_unavailable",
+  "zhipu_transport_error",
 ]);
 
 const PERMANENT_PROVIDER_READ_ERROR_CODES = new Set([
   "invalid_pagination",
+  "history_limit_exceeded",
   "invalid_request",
   "invalid_response",
   "task_id_conflict",
@@ -2595,10 +2589,11 @@ function safeProviderReadErrorCode(error: ManusV2ApiError) {
 }
 
 function permanentProviderReadError(code: string) {
+  const canonicalCode = code.startsWith("zhipu_") ? code.slice(6) : code;
   return (
-    PERMANENT_PROVIDER_READ_ERROR_CODES.has(code) ||
+    PERMANENT_PROVIDER_READ_ERROR_CODES.has(canonicalCode) ||
     /(?:^|_)(?:auth|authentication|authorization|credential|permission|forbidden|config|configuration|contract|schema|validation)(?:_|$)/u.test(
-      code,
+      canonicalCode,
     )
   );
 }
@@ -2626,6 +2621,7 @@ function transientProviderReadError(error: ManusV2ApiError, code: string) {
       "transport_pre_dispatch_retry_exhausted",
       "transport_unknown",
       "upstream_unavailable",
+      "zhipu_transport_error",
     ].includes(code)
   ) {
     return true;
@@ -2644,10 +2640,8 @@ function deferTransientProviderRead(input: {
   error: unknown;
   nowMs: number;
   providerStartedAtMs: number;
-  providerDeadlineExceeded: boolean;
 }) {
   if (
-    input.providerDeadlineExceeded ||
     !(input.error instanceof ManusV2ApiError) ||
     input.error.operation !== "task.listMessages"
   ) {
@@ -2716,9 +2710,7 @@ async function reconcileUnknownCreate(
               status: "running",
               terminalAt: null,
               providerStartedAt,
-              providerRunDeadlineAt: new Date(
-                now.getTime() + PROVIDER_RUN_DEADLINE_MS,
-              ).toISOString(),
+              providerRunDeadlineAt: null,
             }
           : current,
       )) ?? record
@@ -2772,7 +2764,7 @@ async function reconcileTask(
     // reinterpret old messages, or revive an old conversation via repair.
     return record;
   }
-  const providerDeadlineRead =
+  const resumeExpiredRun =
     record.status === "attention_required" &&
     record.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED" &&
     Boolean(record.providerTaskId);
@@ -2780,7 +2772,7 @@ async function reconcileTask(
     ["succeeded", "failed", "cancelled", "attention_required"].includes(
       record.status,
     ) &&
-    !providerDeadlineRead
+    !resumeExpiredRun
   ) {
     return record;
   }
@@ -2789,21 +2781,44 @@ async function reconcileTask(
   const providerTaskId = record.providerTaskId;
 
   const now = dependencies.now();
+  // The old local run deadline never proved that the provider task failed.
+  // Resume only that exact v3 task, without creating or sending another turn.
+  if (resumeExpiredRun) {
+    const expiredRecord = record;
+    record =
+      (await dependencies.updateTask(localTaskId, (current) =>
+        current.status === "attention_required" &&
+        current.errorCode === "PROVIDER_RUN_DEADLINE_EXCEEDED"
+          ? applyProviderObservation(
+              current,
+              expiredRecord,
+              (candidate) =>
+                withRepairStatus(
+                  {
+                    ...candidate,
+                    status: "running",
+                    errorCode: null,
+                    providerRunDeadlineAt: null,
+                    providerRunDeadlineExceededAt: null,
+                    terminalAt: null,
+                  },
+                  "running",
+                ),
+              { resumeExpiredRun: true },
+            )
+          : current,
+      )) ?? record;
+    if (record.status !== "running") return record;
+  }
   const timing = providerTiming(record, now.getTime());
-  if (
-    record.providerStartedAt !== timing.providerStartedAt ||
-    record.providerRunDeadlineAt !== timing.providerRunDeadlineAt
-  ) {
+  if (record.providerStartedAt !== timing.providerStartedAt) {
     record =
       (await dependencies.updateTask(localTaskId, (current) => ({
         ...current,
         providerStartedAt: timing.providerStartedAt,
-        providerRunDeadlineAt: timing.providerRunDeadlineAt,
       }))) ?? record;
   }
 
-  const providerDeadlineExceeded =
-    providerDeadlineRead || now.getTime() >= timing.deadlineAtMs;
   let events: ManusV2MessageEvent[];
   try {
     const client = await dependencies.clientForTask(record);
@@ -2813,14 +2828,11 @@ async function reconcileTask(
     });
   } catch (error) {
     const failureNow = dependencies.now();
-    const providerDeadlineExceededAtFailure =
-      providerDeadlineRead || failureNow.getTime() >= timing.deadlineAtMs;
     if (
       deferTransientProviderRead({
         error,
         nowMs: failureNow.getTime(),
         providerStartedAtMs: timing.startedAtMs,
-        providerDeadlineExceeded: providerDeadlineExceededAtFailure,
       })
     ) {
       const providerError = error as ManusV2ApiError;
@@ -2834,36 +2846,7 @@ async function reconcileTask(
       });
       return record;
     }
-    if (!providerDeadlineExceededAtFailure) throw error;
-    logPresalesV2ResultObservation({
-      localTaskId,
-      contractName: record.contract.name,
-      providerState: "unknown",
-      eventTypeCounts: {},
-      decodeKind: "not_decoded",
-      repairReason: record.repair?.reason ?? null,
-      repairStatus: record.repair?.status ?? null,
-      providerDeadlineExceeded: true,
-      decoderRevision: record.resultDecoderRevision ?? 2,
-    });
-    return (
-      (await dependencies.updateTask(localTaskId, (current) =>
-        applyProviderObservation(current, record, (candidate) =>
-          withRepairStatus(
-            {
-              ...candidate,
-              status: "attention_required",
-              errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
-              providerRunDeadlineExceededAt:
-                candidate.providerRunDeadlineExceededAt ??
-                failureNow.toISOString(),
-              terminalAt: candidate.terminalAt ?? failureNow.toISOString(),
-            },
-            "attention_required",
-          ),
-        ),
-      )) ?? record
-    );
+    throw error;
   }
   const eventSummary = presalesV2SafeEvents(localTaskId, events);
   const relevantEvents = presalesV2LatestOperationSegment(events);
@@ -2953,11 +2936,7 @@ async function reconcileTask(
       },
     );
     decodeConclusion = decode.kind;
-    if (
-      decode.kind !== "missing" ||
-      state === "stopped" ||
-      providerDeadlineExceeded
-    ) {
+    if (decode.kind !== "missing" || state === "stopped") {
       logPresalesV2ResultObservation({
         localTaskId,
         contractName: contract.name,
@@ -2970,7 +2949,6 @@ async function reconcileTask(
         repairRules: decode.kind === "accepted" ? decode.repairRules : [],
         repairReason: record.repair?.reason ?? null,
         repairStatus: record.repair?.status ?? null,
-        providerDeadlineExceeded,
         decoderRevision: 3,
       });
     }
@@ -3035,41 +3013,6 @@ async function reconcileTask(
     }
   }
 
-  if (providerDeadlineExceeded) {
-    logPresalesV2ResultObservation({
-      localTaskId,
-      contractName: record.contract.name,
-      providerState: state ?? "unknown",
-      eventTypeCounts: presalesV2EventTypeCounts(events),
-      decodeKind: "not_decoded",
-      repairReason: record.repair?.reason ?? null,
-      repairStatus: record.repair?.status ?? null,
-      providerDeadlineExceeded: true,
-      decoderRevision: record.resultDecoderRevision ?? 2,
-    });
-    return (
-      (await dependencies.updateTask(
-        localTaskId,
-        (current) =>
-          applyProviderObservation(current, record, (candidate) =>
-            withRepairStatus(
-              {
-                ...candidate,
-                status: "attention_required",
-                errorCode: "PROVIDER_RUN_DEADLINE_EXCEEDED",
-                safeEvents: eventSummary,
-                providerRunDeadlineExceededAt:
-                  candidate.providerRunDeadlineExceededAt ?? now.toISOString(),
-                terminalAt: candidate.terminalAt ?? now.toISOString(),
-              },
-              "attention_required",
-            ),
-          ),
-        events,
-      )) ?? record
-    );
-  }
-
   if (state === "waiting") {
     const waitingClassification = classifyPresalesV2Waiting(
       latestManusV2WaitingDetail(relevantEvents),
@@ -3124,7 +3067,8 @@ async function reconcileTask(
       )) ?? record
     );
   }
-  if (state === "error") {
+  if (state === "error" || state === "cancelled") {
+    const status = state === "cancelled" ? "cancelled" : "failed";
     return (
       (await dependencies.updateTask(
         localTaskId,
@@ -3133,12 +3077,15 @@ async function reconcileTask(
             withRepairStatus(
               {
                 ...candidate,
-                status: "failed",
-                errorCode: "PROVIDER_TASK_FAILED",
+                status,
+                errorCode:
+                  state === "cancelled"
+                    ? "PROVIDER_TASK_CANCELLED"
+                    : "PROVIDER_TASK_FAILED",
                 safeEvents: eventSummary,
                 terminalAt: now.toISOString(),
               },
-              "failed",
+              status,
             ),
           ),
         events,

@@ -62,6 +62,12 @@ const {
   },
 }));
 
+vi.mock("@/monitoring/Workspace", () => ({
+  default: () => (
+    <div data-testid="embedded-monitoring-business">真实监控模块</div>
+  ),
+}));
+
 vi.mock("./siteops/ConnectedSiteOpsConversationPanel", () => ({
   default: () => (
     <div data-testid="connected-siteops-panel">OAuth-only SiteOps 已连接</div>
@@ -341,6 +347,7 @@ describe("UserBrandDashboard formal workspace", () => {
   });
 
   beforeEach(() => {
+    window.history.replaceState(null, "", "/");
     authState.marketEdition = "domestic";
     purchaseIntentMutateAsync.mockReset();
     purchaseIntentUseMutation.mockReset();
@@ -1342,6 +1349,32 @@ describe("UserBrandDashboard formal workspace", () => {
     ]) {
       expect(screen.queryByText(redundantCopy)).toBeNull();
     }
+  });
+
+  it("keeps the customer sidebar while navigating the live monitoring and publishing pages", async () => {
+    render(<UserBrandDashboard />);
+    const originalSidebar = screen
+      .getByRole("button", { name: "服务首页" })
+      .closest("aside");
+    fireEvent.click(screen.getByRole("button", { name: "监控工作台" }));
+    expect(
+      await screen.findByTestId("embedded-monitoring-business"),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/monitoring-system");
+    expect(
+      screen.getByRole("button", { name: "服务首页" }).closest("aside"),
+    ).toBe(originalSidebar);
+    fireEvent.click(screen.getByRole("button", { name: "稿件" }));
+    expect(window.location.pathname).toBe("/publishing/articles");
+    expect(screen.getByRole("button", { name: "稿件" })).toHaveClass("active");
+    expect(
+      screen.getByTestId("embedded-monitoring-business"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "服务首页" }));
+    expect(window.location.pathname).toBe("/");
+    expect(
+      screen.queryByTestId("embedded-monitoring-business"),
+    ).not.toBeInTheDocument();
   });
 
   it("fails closed when the service portal cannot be loaded", () => {

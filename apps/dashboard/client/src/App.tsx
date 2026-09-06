@@ -161,22 +161,22 @@ function Router() {
       <Route path={"/login"} component={RoleLanding} />
       <Route path="/monitoring-system">
         <MonitoringCustomerOnly>
-          <MonitoringModule />
+          <UserDashboard />
         </MonitoringCustomerOnly>
       </Route>
       <Route path="/monitoring-system/*">
         <MonitoringCustomerOnly>
-          <MonitoringModule />
+          <UserDashboard />
         </MonitoringCustomerOnly>
       </Route>
       <Route path="/publishing">
         <MonitoringCustomerOnly>
-          <MonitoringModule />
+          <UserDashboard />
         </MonitoringCustomerOnly>
       </Route>
       <Route path="/publishing/*">
         <MonitoringCustomerOnly>
-          <MonitoringModule />
+          <UserDashboard />
         </MonitoringCustomerOnly>
       </Route>
       <Route path="/admin/monitoring">

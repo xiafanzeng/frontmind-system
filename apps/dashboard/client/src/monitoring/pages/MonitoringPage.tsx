@@ -441,11 +441,23 @@ export default function MonitoringPage({
               : undefined
           }
         />
-      ) : null}
+      ) : (
+        <section className="panel-state" aria-label="监控项目空态">
+          <strong>尚未创建监控项目</strong>
+          <span>创建项目后，可配置问题、模型与监控计划。</span>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => setProjectModal(true)}
+          >
+            创建项目
+          </button>
+        </section>
+      )}
 
       <Modal
         open={projectModal}
-        onClose={() => project && setProjectModal(false)}
+        onClose={() => !submitting && setProjectModal(false)}
         title={project ? "编辑项目" : "创建第一个项目"}
         description="一个项目对应一个主监控品牌，历史运行保留当时的品牌版本。"
         size="large"
@@ -458,7 +470,7 @@ export default function MonitoringPage({
         <ProjectForm
           initial={project}
           submitting={submitting}
-          onCancel={() => project && setProjectModal(false)}
+          onCancel={() => !submitting && setProjectModal(false)}
           onSubmit={createProject}
         />
       </Modal>

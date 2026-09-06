@@ -5,11 +5,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
 import ChatInput from "./ChatInput";
+import GeneralAgentRuntimeBadge from "./GeneralAgentRuntimeBadge";
+import { DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY } from "@/lib/delivery-project";
 
 const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(async () => true),
@@ -121,6 +123,95 @@ vi.mock("@/lib/frontmind-api", () => ({
   getConfig: () => ({ agentProfile: "frontmind-pro" }),
   saveConfig: vi.fn(),
 }));
+
+describe("General Agent administrator runtime display", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  it("displays the administrator High setting without a customer model selector", async () => {
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) =>
+        key === DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY
+          ? "project-assignment-7"
+          : null,
+    });
+    const onProfile = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        configured: true,
+        source: "administrator",
+        upstreamEffort: "high",
+        publicProfile: "frontmind-base",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GeneralAgentRuntimeBadge onProfile={onProfile} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
+    );
+    expect(onProfile).toHaveBeenCalledWith("frontmind-base");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/frontmind/v2/runtime-config",
+      expect.objectContaining({
+        credentials: "same-origin",
+        headers: { "x-delivery-project-assignment-id": "project-assignment-7" },
+      }),
+    );
+  });
+
+  it("keeps a historical Low session visible and refreshes administrator settings for a new task", async () => {
+    const onProfile = vi.fn();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          configured: true,
+          source: "task",
+          upstreamEffort: "low",
+          publicProfile: "frontmind-lite",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          configured: true,
+          source: "administrator",
+          upstreamEffort: "max",
+          publicProfile: "frontmind-pro",
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const taskId = "591ebbb6-a8a4-439c-8f90-9d5b9b073471";
+    const { rerender } = render(
+      <GeneralAgentRuntimeBadge localTaskId={taskId} onProfile={onProfile} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("Low"),
+    );
+    expect(fetchMock.mock.calls[0][0]).toContain(`localTaskId=${taskId}`);
+    rerender(<GeneralAgentRuntimeBadge onProfile={onProfile} />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("Max"),
+    );
+    expect(onProfile).toHaveBeenLastCalledWith("frontmind-pro");
+  });
+
+  it("does not invent an effort when the runtime read fails", async () => {
+    const onProfile = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<GeneralAgentRuntimeBadge onProfile={onProfile} />);
+    await act(async () => {});
+    expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent(
+      "管理员配置",
+    );
+    expect(onProfile).not.toHaveBeenCalled();
+  });
+});
 
 const progress: KnowledgeBaseProgressDto = {
   build: {
@@ -814,7 +905,17 @@ describe("knowledge-base ChatInput actions", () => {
     );
   });
 
-  it("locks the model selector after a general Agent task is created", () => {
+  it("shows the existing task's frozen effort without a model selector", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        configured: true,
+        source: "task",
+        upstreamEffort: "high",
+        publicProfile: "frontmind-base",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
     mocks.activeConversation.previousResponseId = "local-task-1";
     mocks.activeConversation.messages = [
       {
@@ -828,9 +929,21 @@ describe("knowledge-base ChatInput actions", () => {
 
     render(<ChatInput />);
 
+    await waitFor(() =>
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/frontmind/v2/runtime-config?localTaskId=local-task-1",
+      expect.objectContaining({
+        credentials: "same-origin",
+        cache: "no-store",
+      }),
+    );
     expect(
-      screen.getByRole("button", { name: "FrontMind Pro" }),
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: /FrontMind Pro|High/ }),
+    ).toBeNull();
+    expect(mocks.activeConversation.previousResponseId).toBe("local-task-1");
+    vi.unstubAllGlobals();
   });
 
   it("does not submit Enter while a Chinese IME composition is active", () => {

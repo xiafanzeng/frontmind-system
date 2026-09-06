@@ -351,6 +351,41 @@ describe("useSendMessage", () => {
     }
   });
 
+  it("projects administrator High from the task DTO while preserving a legacy Pro dispatch", async () => {
+    mocks.createTask.mockResolvedValueOnce({
+      id: "high-task",
+      status: "completed",
+      model: "frontmind-base",
+      output: [
+        {
+          id: "high-output",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "结果" }],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useSendMessage());
+    await act(async () => {
+      await result.current.sendMessage("开始", [], {
+        agentProfile: "frontmind-pro",
+      });
+    });
+    expect(mocks.createTask.mock.calls[0][1]).toMatchObject({
+      modelProfile: "frontmind-pro",
+    });
+    expect(
+      mocks.addMessage.mock.calls.find(
+        ([, message]) => message.role === "user",
+      )?.[1].generalChatDispatch.modelProfile,
+    ).toBe("frontmind-pro");
+    expect(mocks.parseOutputMessages).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      "frontmind-base",
+    );
+  });
+
   it("keeps immediate partial output and emits one deterministic terminal notice", async () => {
     mocks.createTask.mockResolvedValue({
       id: "partial-task",

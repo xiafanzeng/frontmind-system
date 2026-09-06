@@ -1,8 +1,8 @@
 /**
- * ChatInput Component - Message input with file upload and model selector
+ * ChatInput Component - Message input with file upload and runtime status
  * Design: Floating glass card input area with drag-and-drop support.
  * Features: Text input, file picker, drag & drop, upload progress,
- *           per-message model selection (FrontMind-Lite/Base/Pro).
+ *           administrator-controlled reasoning effort.
  */
 import {
   useState,
@@ -22,12 +22,7 @@ import {
   currentKnowledgeBaseReplySnapshot,
   useConversation,
 } from "@/contexts/ConversationContext";
-import {
-  MODEL_OPTIONS,
-  getConfig,
-  saveConfig,
-  type ResponseLogicTaskContext,
-} from "@/lib/frontmind-api";
+import type { ResponseLogicTaskContext } from "@/lib/frontmind-api";
 import { Progress } from "@/components/ui/progress";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -37,7 +32,6 @@ import {
   FileText,
   Loader2,
   Upload,
-  ChevronDown,
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,6 +42,7 @@ import { useComposition } from "@/hooks/useComposition";
 import { chatAttachmentSizeError } from "@/lib/attachment-files";
 import { KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE } from "@/lib/knowledge-progress";
 import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
+import GeneralAgentRuntimeBadge from "./GeneralAgentRuntimeBadge";
 
 interface FilePreview {
   file: File;
@@ -167,21 +162,17 @@ export default function ChatInput({
   const [isDragging, setIsDragging] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [replacingOfficialLogo, setReplacingOfficialLogo] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const modelMenuRef = useRef<HTMLDivElement>(null);
   // Synchronous lock ref to prevent duplicate sends (React state updates are async)
   const sendLockRef = useRef(false);
   const appliedComposerPrefillRef = useRef<string | null>(
     composerPrefill || null,
   );
 
-  // Per-message model selection - default from config
+  // Retain the legacy dispatch field for idempotency; execution is server-owned.
   const [selectedModel, setSelectedModel] = useState(() => {
-    if (fixedAgentProfile) return fixedAgentProfile;
-    const config = getConfig();
-    return config.agentProfile || "frontmind-pro";
+    return fixedAgentProfile || "frontmind-pro";
   });
 
   useEffect(() => {
@@ -248,31 +239,6 @@ export default function ChatInput({
     wakeKnowledgeBaseConversation,
     rollbackPendingKnowledgeBaseTurn,
   } = useConversation();
-  const frozenConversationModel = [...(activeConversation?.messages ?? [])]
-    .reverse()
-    .find(
-      (message) =>
-        message.modelName &&
-        MODEL_OPTIONS.some((option) => option.value === message.modelName),
-    )?.modelName;
-  const modelSelectionLocked =
-    !fixedAgentProfile && Boolean(activeConversation?.previousResponseId);
-
-  useEffect(() => {
-    if (fixedAgentProfile) return;
-    if (frozenConversationModel) {
-      setSelectedModel(frozenConversationModel);
-      return;
-    }
-    if (!activeConversation?.previousResponseId) {
-      setSelectedModel(getConfig().agentProfile || "frontmind-pro");
-    }
-  }, [
-    activeConversation?.id,
-    activeConversation?.previousResponseId,
-    fixedAgentProfile,
-    frozenConversationModel,
-  ]);
 
   // Only show upload progress if it belongs to the current active conversation
   const uploadProgress =
@@ -407,23 +373,6 @@ export default function ChatInput({
   const clearSelectedFiles = useCallback(() => {
     setFiles([]);
   }, []);
-
-  // Close model menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        modelMenuRef.current &&
-        !modelMenuRef.current.contains(e.target as Node)
-      ) {
-        setModelMenuOpen(false);
-      }
-    };
-    if (modelMenuOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () =>
-        document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [modelMenuOpen]);
 
   const addFiles = useCallback(
     async (newFiles: File[]) => {
@@ -676,10 +625,6 @@ export default function ChatInput({
     (syncKnowledgeBaseSnapshot &&
       Boolean(currentKnowledgeLeaf) &&
       !currentNodePresentationReady);
-
-  // Get current model display info
-  const currentModelInfo =
-    MODEL_OPTIONS.find((m) => m.value === selectedModel) || MODEL_OPTIONS[2];
 
   return (
     <div
@@ -1120,91 +1065,20 @@ export default function ChatInput({
                 className="min-h-11 flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground/55 focus:outline-none"
               />
 
-              {/* Model selector + Send button */}
+              {/* Runtime status + Send button */}
               <div className="flex items-center gap-1 pb-0.5">
-                {/* Model selector dropdown */}
-                <div className="relative" ref={modelMenuRef}>
-                  {fixedAgentProfile ? null : (
-                    <>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            disabled={modelSelectionLocked}
-                            onClick={() =>
-                              !modelSelectionLocked &&
-                              setModelMenuOpen(!modelMenuOpen)
-                            }
-                            className={cn(
-                              "flex items-center gap-1.5 px-2.5 py-2 rounded-xl text-xs font-medium transition-all",
-                              "bg-secondary/80 text-muted-foreground hover:bg-primary/10 hover:text-primary",
-                              modelSelectionLocked &&
-                                "cursor-not-allowed opacity-70 hover:bg-secondary/80 hover:text-muted-foreground",
-                              modelMenuOpen && "bg-primary/10 text-primary",
-                            )}
-                          >
-                            <span className="truncate max-w-[76px] sm:max-w-[148px]">
-                              {currentModelInfo.label}
-                            </span>
-                            <ChevronDown
-                              className={cn(
-                                "w-3 h-3 transition-transform",
-                                modelMenuOpen && "rotate-180",
-                              )}
-                            />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {modelSelectionLocked
-                            ? "当前任务模型已锁定；新建任务后可重新选择"
-                            : "选择模型"}
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Dropdown menu */}
-                      <AnimatePresence>
-                        {modelMenuOpen && !modelSelectionLocked && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 4, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 4, scale: 0.95 }}
-                            transition={{ duration: 0.15 }}
-                            className="absolute bottom-full mb-1 right-0 w-52 rounded-xl border border-border/40 bg-popover shadow-lg z-50 overflow-hidden"
-                          >
-                            {MODEL_OPTIONS.map((model) => (
-                              <button
-                                key={model.value}
-                                onClick={() => {
-                                  setSelectedModel(model.value);
-                                  saveConfig({ agentProfile: model.value });
-                                  setModelMenuOpen(false);
-                                }}
-                                className={cn(
-                                  "w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors",
-                                  selectedModel === model.value
-                                    ? "bg-primary/10 text-primary"
-                                    : "hover:bg-muted/60 text-foreground",
-                                )}
-                              >
-                                <div>
-                                  <p className="text-sm font-medium">
-                                    {model.label}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {model.description}
-                                  </p>
-                                </div>
-                                {selectedModel === model.value && (
-                                  <div className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-                                )}
-                              </button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </>
+                {!fixedAgentProfile &&
+                  !syncKnowledgeBaseSnapshot &&
+                  !responseLogicContext && (
+                    <GeneralAgentRuntimeBadge
+                      key={activeConversation?.id ?? "new"}
+                      localTaskId={
+                        activeConversation?.previousResponseId ??
+                        activeConversation?.taskId
+                      }
+                      onProfile={setSelectedModel}
+                    />
                   )}
-                </div>
 
                 {/* Send button */}
                 <Button

@@ -1376,6 +1376,63 @@ describe("unified managed Key assignment defaults", () => {
     expect(prior.upstreamEffort).toBe("high");
   });
 
+  it("rotates the same Key when effort changes, preserving its prior frozen version", async () => {
+    const single = harness();
+    await expect(
+      replaceManagedApiKeyTarget(
+        { ...input, upstreamEffort: "max" },
+        single.runtime,
+      ),
+    ).resolves.toMatchObject({ version: 9, upstreamEffort: "max" });
+    expect(single.runtime.replaceCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ upstreamEffort: "max" }),
+    );
+    const bulk = harness();
+    await expect(
+      bulkReplaceManagedApiKeyTargets(
+        {
+          actor,
+          scope: { kind: "all" },
+          targets: [{ userId: 77, expectedVersion: 8 }],
+          applyMode: "replace_all",
+          apiKey: input.apiKey,
+          upstreamEffort: "max",
+        },
+        bulk.runtime,
+      ),
+    ).resolves.toMatchObject({ updatedCount: 1, unchangedCount: 0 });
+    expect(bulk.runtime.replaceCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ upstreamEffort: "max" }),
+    );
+    expect(prior).toMatchObject({ version: 8, upstreamEffort: "high" });
+  });
+
+  it("does not rotate an explicit identical effort on either assignment API", async () => {
+    const single = harness();
+    await expect(
+      replaceManagedApiKeyTarget(
+        { ...input, upstreamEffort: "high" },
+        single.runtime,
+      ),
+    ).resolves.toMatchObject({ version: 8, upstreamEffort: "high" });
+    expect(single.runtime.replaceCredential).not.toHaveBeenCalled();
+    const bulk = harness();
+    await expect(
+      bulkReplaceManagedApiKeyTargets(
+        {
+          actor,
+          scope: { kind: "all" },
+          targets: [{ userId: 77, expectedVersion: 8 }],
+          applyMode: "replace_all",
+          apiKey: input.apiKey,
+          upstreamEffort: "high",
+        },
+        bulk.runtime,
+      ),
+    ).resolves.toMatchObject({ updatedCount: 0, unchangedCount: 1 });
+    expect(bulk.runtime.replaceCredential).not.toHaveBeenCalled();
+  });
+
   it.each(["invalid", "unverified"])(
     "restores a %s same Key through verified replacement for single and bulk assignment",
     async (validationStatus) => {
@@ -1433,6 +1490,7 @@ describe("unified managed Key assignment defaults", () => {
       userId: 77,
       apiKey: "fixture-key",
       agentProfile: "frontmind-pro",
+      upstreamEffort: undefined,
     });
     expect(result).toMatchObject({
       version: 9,

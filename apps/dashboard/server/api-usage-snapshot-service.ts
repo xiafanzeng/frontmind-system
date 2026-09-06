@@ -324,6 +324,17 @@ export function assertBulkManagedApiKeyTargetSelection(input: {
   }));
 }
 
+function managedCredentialMatchesEffort(
+  credential: { upstreamModel?: unknown; upstreamEffort?: unknown },
+  effort?: "high" | "max",
+) {
+  return (
+    effort === undefined ||
+    (credential.upstreamModel === "glm-5.3" &&
+      credential.upstreamEffort === effort)
+  );
+}
+
 export function bulkManagedApiKeyActionTargets<
   T extends { userId: number; kind: ManagedApiKeyTargetKind },
 >(input: {
@@ -336,10 +347,13 @@ export function bulkManagedApiKeyActionTargets<
       fingerprint?: string | null;
       agentProfile?: unknown;
       provider?: unknown;
+      upstreamModel?: unknown;
+      upstreamEffort?: unknown;
     }
   >;
   applyMode: BulkManagedApiKeyApplyMode;
   nextFingerprint: string;
+  upstreamEffort?: "high" | "max";
 }) {
   return input.resolvedTargets.filter((target) => {
     const credential = input.latestCredentials.get(target.userId);
@@ -350,7 +364,8 @@ export function bulkManagedApiKeyActionTargets<
       credential?.status !== "active" ||
       credential.fingerprint !== input.nextFingerprint ||
       credential.provider !== "zhipu" ||
-      credential.validationStatus !== "verified"
+      credential.validationStatus !== "verified" ||
+      !managedCredentialMatchesEffort(credential, input.upstreamEffort)
     );
   });
 }
@@ -585,6 +600,7 @@ export async function bulkReplaceManagedApiKeyTargets(
     targets: BulkManagedApiKeyRequestedTarget[];
     applyMode: BulkManagedApiKeyApplyMode;
     apiKey: string;
+    upstreamEffort?: "high" | "max";
     reason?: string;
   },
   runtimeOverrides: Partial<BulkManagedApiKeyRuntime> = {},
@@ -605,7 +621,10 @@ export async function bulkReplaceManagedApiKeyTargets(
       "只有系统管理员可以批量配置账号 API Key。",
     );
   }
-  const agentProfile = DEFAULT_MANAGED_AGENT_PROFILE;
+  const agentProfile =
+    input.upstreamEffort === "high"
+      ? "frontmind-base"
+      : DEFAULT_MANAGED_AGENT_PROFILE;
   const db = await runtime.requireDatabase();
   const initialScope = await loadBulkManagedApiKeyScopeState({
     executor: db,
@@ -635,6 +654,7 @@ export async function bulkReplaceManagedApiKeyTargets(
     latestCredentials: initialLatestCredentials,
     applyMode: input.applyMode,
     nextFingerprint,
+    upstreamEffort: input.upstreamEffort,
   });
   if (initialActionTargets.length > 200) {
     throw new AuthServiceError(
@@ -679,6 +699,7 @@ export async function bulkReplaceManagedApiKeyTargets(
       latestCredentials,
       applyMode: input.applyMode,
       nextFingerprint,
+      upstreamEffort: input.upstreamEffort,
     });
     if (lockedActionTargets.length > 200) {
       throw new AuthServiceError(
@@ -703,7 +724,11 @@ export async function bulkReplaceManagedApiKeyTargets(
         (input.applyMode === "unconfigured_only" ||
           (currentCredential.fingerprint === nextFingerprint &&
             currentCredential.provider === "zhipu" &&
-            currentCredential.validationStatus === "verified"))
+            currentCredential.validationStatus === "verified" &&
+            managedCredentialMatchesEffort(
+              currentCredential,
+              input.upstreamEffort,
+            )))
       ) {
         unchangedCount += 1;
         versions.push({
@@ -717,6 +742,7 @@ export async function bulkReplaceManagedApiKeyTargets(
         userId: target.userId,
         apiKey: input.apiKey,
         agentProfile: target.kind === "customer" ? agentProfile : null,
+        upstreamEffort: input.upstreamEffort,
         now: replacedAt,
       });
       updatedCount += 1;
@@ -806,6 +832,7 @@ export async function replaceManagedApiKeyTarget(
     kind: ManagedApiKeyTargetKind;
     userId: number;
     apiKey: string;
+    upstreamEffort?: "high" | "max";
     expectedVersion: number;
     reason?: string;
   },
@@ -828,7 +855,10 @@ export async function replaceManagedApiKeyTarget(
     );
   }
   await runtime.validateApiKey(input.apiKey);
-  const agentProfile = DEFAULT_MANAGED_AGENT_PROFILE;
+  const agentProfile =
+    input.upstreamEffort === "high"
+      ? "frontmind-base"
+      : DEFAULT_MANAGED_AGENT_PROFILE;
   const nextFingerprint = runtime.fingerprintApiKey(input.apiKey);
   const db = await runtime.requireDatabase();
   const replacement = await db.transaction(async (tx) => {
@@ -861,10 +891,11 @@ export async function replaceManagedApiKeyTarget(
       currentCredential?.status === "active" &&
       currentCredential.provider === "zhipu" &&
       currentCredential.fingerprint === nextFingerprint &&
-      currentCredential.validationStatus === "verified"
+      currentCredential.validationStatus === "verified" &&
+      managedCredentialMatchesEffort(currentCredential, input.upstreamEffort)
     ) {
-      // An already verified Key keeps its frozen legacy runtime. A repaired
-      // invalid/unverified Key still needs a verified replacement version.
+      // Only identical Key and runtime selections are a no-op. A changed effort
+      // receives a new version; existing tasks retain their frozen binding.
       return {
         credential: toCredentialStatus(currentCredential),
         changed: false,
@@ -875,6 +906,7 @@ export async function replaceManagedApiKeyTarget(
       userId: input.userId,
       apiKey: input.apiKey,
       agentProfile: input.kind === "customer" ? agentProfile : null,
+      upstreamEffort: input.upstreamEffort,
     });
     await runtime.writeAuditEvent(
       {
@@ -1849,6 +1881,7 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       isActive: engineer.isActive !== false,
       apiKeyConfigured: latestCredential?.status === "active",
       apiKeyVersion: latestCredential?.version ?? 0,
+      ...credentialProfileProjection(latestCredential),
       provider: usage.provider,
       nativeUsage: usage.nativeUsage,
       rolling30DayUsed: usage.rolling30DayUsed,
@@ -1933,6 +1966,7 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
         isActive: manager.isActive !== false,
         apiKeyConfigured: latestManagerCredential?.status === "active",
         apiKeyVersion: latestManagerCredential?.version ?? 0,
+        ...credentialProfileProjection(latestManagerCredential),
         keyPool: {
           fingerprint: managerUsage.fingerprint,
           credentialCount: managerUsage.fingerprint ? 1 : 0,

@@ -125,11 +125,17 @@ describe("versioned managed provider credentials", () => {
   });
 
   it.each([
-    { profile: undefined, effort: "max" },
-    { profile: "frontmind-base" as const, effort: "high" },
+    { profile: undefined, effort: "max", selectedEffort: undefined },
+    { profile: null, effort: "high", selectedEffort: "high" as const },
+    { profile: null, effort: "max", selectedEffort: "max" as const },
+    {
+      profile: "frontmind-base" as const,
+      effort: "high",
+      selectedEffort: undefined,
+    },
   ])(
     "freezes a distinct Zhipu version with profile $profile and effort $effort",
-    async ({ profile, effort }) => {
+    async ({ profile, effort, selectedEffort }) => {
       vi.stubEnv(
         "FRONTMIND_CREDENTIAL_ENCRYPTION_KEY",
         randomBytes(32).toString("base64"),
@@ -169,7 +175,8 @@ describe("versioned managed provider credentials", () => {
         userId: 77,
         apiKey: "fixture-new-key",
         credentialId: "new-zhipu",
-        ...(profile ? { agentProfile: profile } : {}),
+        ...(profile !== undefined ? { agentProfile: profile } : {}),
+        upstreamEffort: selectedEffort,
       });
       expect(retired.mock.calls[0]![0]).toMatchObject({ status: "retired" });
       expect(Object.keys(retired.mock.calls[0]![0]).sort()).toEqual([

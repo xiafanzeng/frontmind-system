@@ -1,8 +1,12 @@
 # Dashboard Managed Agents migration
 
-This migration keeps Dashboard's existing workflows and uses Zhipu Managed Agents for all active
-AI execution. Manus execution and task reconstruction are retired. The original Website key settings
+This migration keeps Dashboard's existing workflows and uses Zhipu Managed Agents for the
+formerly Manus-backed AI execution paths. Manus execution and task reconstruction are retired. The original Website key settings
 remain in Dashboard; Website keeps its existing server boundary.
+
+Jenova brand tracking, Molizhishu question monitoring, KOL publishing, 21st and
+Aliyun are independent integrations. This migration does not replace those
+providers or reinterpret their credentials as Zhipu credentials.
 
 ## Execution boundaries
 
@@ -54,8 +58,8 @@ bounded archive or private artifact pipeline. Input files and Skill files are
 ineligible as customer output.
 
 The existing key controls save a new Zhipu credential version with frozen
-`glm-5.3` model and effort. Lite/Base/Pro map to low/high/max where those tiers
-are available in the original workflow. Old AI credentials are not used for execution and can be replaced through the
+`glm-5.3` model and effort. Administrator account-Key dialogs select High or Max.
+Legacy profile identifiers remain only where existing persisted contracts need them. Old AI credentials are not used for execution and can be replaced through the
 original settings. Non-AI credentials for 21st and Aliyun keep their original
 meaning and are not relabeled.
 
@@ -189,3 +193,79 @@ administrator browser checks, with unchanged completed KB/response/Website
 data. A single controlled glm-5.3/high brand comparison also failed natively
 without output; the dedicated account default was restored to max. The three
 max failures and this high failure remain honest incomplete business acceptance.
+
+## Historical inspection before explicit effort controls
+
+Read-only production inspection at 07:48–07:52 UTC on 2026-09-06 found the
+following effective settings. `standard` is the value of `model.speed`; neither
+adapter sends a `service_tier` field. High and max are reasoning-effort values,
+while Lite/Base/Pro are FrontMind's existing public profile names.
+
+| Execution entry | Model and effort source | Current effective setting | Speed |
+| --- | --- | --- | --- |
+| Website original KB, question, assessment and forecast tasks | `presales-v2-store.ts` freezes `glm-5.3` and `WEBSITE_ZHIPU_EFFORT`, defaulting to `high`, when reserving the original task | Environment override absent; Website credential v9 and all eight original acceptance tasks use `glm-5.3/high` | Explicit `standard` when frozen effort is present |
+| Customer KB, response logic and brand-question workflows | Exact account credential ID/version, then persisted `dashboardManaged.model/effort` | Customer 3 current credential v3 is `glm-5.3/max`; the first three brand attempts stay on v1/max and the fourth stays on v2/high | Explicit `standard` |
+| General Agent for delivery administrators and engineers | New operation freezes the selected public profile; Lite/Base/Pro map to `glm-5.3` with low/high/max, respectively | Default selector remains Pro; the accepted two-turn operation selected Base and remains high, although its credential default is max | Explicit `standard` |
+| Existing SiteOps and social implementation, outside real acceptance | Original requested profile, parent-operation profile or customer credential default; operation input freezes credential ID/version, model and effort | Base maps to high and Pro to max; no new build/social task was submitted | Explicit `standard` through the Dashboard adapter |
+
+Website's legacy no-effort compatibility branch sends a model string. New
+Website reservations always freeze a validated effort, so that branch is not
+used by the current eight original acceptance tasks. General-Agent continuation
+omits a new model selection and uses its original operation; changing a Key or
+the UI preference does not alter that session. Customer credential assignment
+currently has no Base/Pro selector and defaults new credentials to max; an
+already verified identical Key retains its previous frozen settings.
+
+The four brand failures do not satisfy the user's condition that high must
+pass before a global high switch. No model default or credential was changed
+by this inspection. Website's successful high workflows demonstrate those
+specific original workflows, not reliable high completion of the brand task.
+
+Account inventory found active Zhipu credentials for customer 3 and delivery
+administrator 4. Customer 2 and engineer 5 have no active AI credential and
+are not represented as enabled. No customer, delivery administrator or engineer
+has an active Manus credential. System administrator 1 retains a historical
+Manus row, but the original role has no General Agent entry: the UI requires
+`DeliveryAdminOnly`, and an authenticated read returned HTTP 403
+`GENERAL_AGENT_ROLE_FORBIDDEN` before the credential check. Unified credential
+targets deliberately exclude system administrators; this inspection neither
+changes that role boundary nor introduces a shared fallback Key.
+
+There were no active conversation turns or real nonterminal managed-agent or
+SiteOps operations. Ten `dashboard.provider.transport` wrapper rows retain
+their transport lifecycle status; they are not new active business tasks.
+Private, metadata-only evidence is retained as
+`zhipu-effective-runtime-readonly.json` and
+`zhipu-canonical-admin-readonly.json` under `/tmp/frontmind-reconcile`.
+
+
+## Administrator High / Max configuration
+
+The administrator's individual and bulk account-Key controls now submit
+`upstreamEffort: "high" | "max"`. All account roles in this control share
+`glm-5.3` and the adapter's `model.speed: "standard"`. An unchanged verified
+Key and identical explicit effort are a no-op; changing effort with the same
+Key creates a new credential version. Older tasks retain their original
+credential version and frozen model configuration. New unconfigured forms
+continue to default to Max. Omitting the new optional API field preserves the
+previous same-Key behavior for an already open client.
+
+New General Agent operations take their execution settings from the
+administrator's credential. The old client profile remains in existing request
+idempotency evidence but cannot override execution. Its composer shows the
+configured High/Max instead of the old Lite/Base/Pro picker; an existing task
+shows its own frozen setting, including a historical Low when applicable.
+The read-only runtime endpoint retains the original role and task ownership
+checks and returns no credential secrets.
+
+Website's original task settings remain glm-5.3/high/standard. No account was
+mass-updated to High. Site building, templates, preview-dependent social
+acceptance and real publishing orders remain outside this request.
+
+The user subsequently authorized one more original brand run with Max and
+one with High, with instructions to stop this portion if both fail. Max was
+submitted once as operation `2c53a25c-d0e8-494d-a1a3-578cf522cf7f`; this supersedes
+the earlier decision not to submit a fifth attempt. These runs reuse the
+original Skill bytes and formal knowledge snapshot, not an old provider session.
+Their final results and deployment identity are recorded in the live migration
+verification document when available.

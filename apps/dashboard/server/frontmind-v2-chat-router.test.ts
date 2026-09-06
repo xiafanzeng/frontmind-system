@@ -1,7 +1,137 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import express from "express";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import chatRouter from "./frontmind-v2-chat-router";
+import {
+  generalAgentRuntimeForCredential,
+  generalAgentRuntimeForOperation,
+} from "./general-agent-runtime";
+
+const runtimeMocks = vi.hoisted(() => ({
+  getDb: vi.fn(),
+  createCredentialAgentClient: vi.fn(),
+}));
+vi.mock("./db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./db")>()),
+  getDb: runtimeMocks.getDb,
+}));
+vi.mock("./credential-agent-client", () => ({
+  createCredentialAgentClient: runtimeMocks.createCredentialAgentClient,
+}));
+
+describe("General Agent runtime HTTP authorization", () => {
+  const servers: Server[] = [];
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await Promise.all(
+      servers.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          }),
+      ),
+    );
+  });
+  async function start(userId: number, adminAccessLevel = "delivery_admin") {
+    const app = express();
+    app.use((req, _res, next) => {
+      req.frontmindUser = {
+        id: userId,
+        role: "admin",
+        adminAccessLevel,
+      } as any;
+      req.frontmindCredential = {
+        provider: "zhipu",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "max",
+        apiKey: "synthetic-secret-must-not-be-returned",
+      } as any;
+      next();
+    });
+    app.use(chatRouter);
+    const server = createServer(app);
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}/runtime-config`;
+  }
+  it("returns the owned task's original High under a Max default and rejects another tenant", async () => {
+    const localTaskId = "baaf4d08-9f85-4d9c-8604-611e2541d76b";
+    const queries: ReturnType<MySqlDialect["sqlToQuery"]>[] = [];
+    let query: ReturnType<MySqlDialect["sqlToQuery"]>;
+    const chain: any = {
+      from: () => chain,
+      innerJoin: () => chain,
+      where: (condition: Parameters<MySqlDialect["sqlToQuery"]>[0]) => {
+        query = new MySqlDialect().sqlToQuery(condition);
+        queries.push(query);
+        return chain;
+      },
+      limit: async () =>
+        query.params[2] === 7
+          ? [
+              {
+                operation: {
+                  accountUserId: 7,
+                  upstreamModel: "glm-5.3",
+                  publicProfile: "frontmind-base",
+                },
+                task: { id: localTaskId },
+              },
+            ]
+          : [],
+    };
+    runtimeMocks.getDb.mockResolvedValue({ select: () => chain });
+    const ownerUrl = await start(7);
+    const current = await fetch(ownerUrl);
+    expect(await current.json()).toEqual({
+      configured: true,
+      source: "administrator",
+      publicProfile: "frontmind-pro",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "max",
+      speed: "standard",
+    });
+    const existing = await fetch(`${ownerUrl}?localTaskId=${localTaskId}`);
+    expect(existing.status).toBe(200);
+    expect(await existing.json()).toEqual({
+      configured: true,
+      source: "task",
+      publicProfile: "frontmind-base",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
+      speed: "standard",
+    });
+    const foreign = await fetch(`${await start(8)}?localTaskId=${localTaskId}`);
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toMatchObject({
+      error: { code: "TASK_NOT_FOUND" },
+    });
+    expect(queries.map((value) => value.params)).toEqual([
+      [localTaskId, "managed_user", 7, "dashboard.general-chat", 2],
+      [localTaskId, "managed_user", 8, "dashboard.general-chat", 2],
+    ]);
+    expect(
+      queries.every((value) => /account_user_id.*\?/u.test(value.sql)),
+    ).toBe(true);
+    expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+  });
+  it("retains the system administrator role boundary before reading credentials or tasks", async () => {
+    const response = await fetch(await start(1, "system_admin"));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { code: "GENERAL_AGENT_ROLE_FORBIDDEN" },
+    });
+    expect(runtimeMocks.getDb).not.toHaveBeenCalled();
+    expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+  });
+});
 
 describe("Dashboard ordinary-chat v2 boundary", () => {
   const serverSource = readFileSync(
@@ -84,9 +214,14 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
     );
   });
 
-  it("maps and freezes the public create-only model profile", () => {
-    expect(serverSource).toMatch(
-      /upstreamModel:\s*generalAgentModelProfileModel\(\s*input\.value\.modelProfile,\s*input\.credential\.provider \?\? "zhipu",?\s*\)/u,
+  it("freezes administrator execution settings while retaining browser dispatch evidence", () => {
+    expect(serverSource).toContain(
+      "const execution = generalAgentRuntimeForCredential(input.credential)",
+    );
+    expect(serverSource).toContain("publicProfile: execution.publicProfile");
+    expect(serverSource).toContain("upstreamModel: execution.upstreamModel");
+    expect(serverSource).not.toContain(
+      "publicProfile: input.value.modelProfile",
     );
     expect(serverSource).toContain("modelProfile: input.value.modelProfile");
     expect(serverSource).toContain(
@@ -105,6 +240,76 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
     expect(serverSource).toContain(
       ".omit({ conversationId: true, modelProfile: true })",
     );
+  });
+
+  it.each(["high", "max"] as const)(
+    "uses the administrator's %s even when a legacy client submits another profile",
+    (effort) => {
+      for (const browserProfile of [
+        "frontmind-lite",
+        "frontmind-base",
+        "frontmind-pro",
+      ]) {
+        const credential = {
+          provider: "zhipu",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: effort,
+          // Old profile metadata is not an execution override.
+          agentProfile: browserProfile,
+        };
+        const frozen = generalAgentRuntimeForCredential(credential);
+        expect(frozen).toEqual({
+          publicProfile: effort === "high" ? "frontmind-base" : "frontmind-pro",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: effort,
+          speed: "standard",
+        });
+        credential.upstreamEffort = effort === "high" ? "max" : "high";
+        expect(generalAgentRuntimeForOperation(frozen)).toEqual(frozen);
+      }
+    },
+  );
+
+  it("preserves historical Low/Base/Pro sessions and rejects an invalid new runtime", () => {
+    for (const [profile, effort] of [
+      ["frontmind-lite", "low"],
+      ["frontmind-base", "high"],
+      ["frontmind-pro", "max"],
+    ]) {
+      expect(
+        generalAgentRuntimeForOperation({
+          upstreamModel: "glm-5.3",
+          publicProfile: profile,
+        }),
+      ).toMatchObject({ upstreamEffort: effort, speed: "standard" });
+    }
+    expect(() =>
+      generalAgentRuntimeForCredential({
+        provider: "zhipu",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: null,
+      }),
+    ).toThrow("GENERAL_AGENT_CREDENTIAL_RUNTIME_INVALID");
+    expect(() =>
+      generalAgentRuntimeForCredential({
+        provider: "manus",
+        upstreamModel: "manus-1.6",
+        upstreamEffort: "max",
+      }),
+    ).toThrow("GENERAL_AGENT_CREDENTIAL_RUNTIME_INVALID");
+  });
+
+  it("reads runtime display settings within the original actor and task ownership boundary", () => {
+    const route = serverSource.slice(
+      serverSource.indexOf('router.get("/runtime-config"'),
+      serverSource.indexOf('router.post("/tasks"'),
+    );
+    expect(route).toContain("assertGeneralAgentActor(req.frontmindUser)");
+    expect(route).toContain("userId: req.frontmindUser.id");
+    expect(route).toContain("findOwnedTask({");
+    expect(route).toContain("generalAgentRuntimeForOperation(owned.operation)");
+    expect(route).not.toContain("createTask(");
+    expect(route).not.toContain("apiKey");
   });
 
   it("never leaks the internal operation marker into ordinary-chat prompts", () => {

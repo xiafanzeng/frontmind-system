@@ -230,6 +230,7 @@ const twentyFirstApiKeySchema = z
 const managedApiKeyReplaceShape = {
   userId: z.number().int().positive(),
   apiKey: presalesApiKeySchema,
+  upstreamEffort: z.enum(["high", "max"]).optional(),
   expectedVersion: z.number().int().nonnegative(),
   reason: z.string().trim().min(1).max(2_000),
   confirmation: z.literal("REPLACE_API_KEY"),
@@ -433,6 +434,7 @@ export const adminRouter = router({
               .enum(["unconfigured_only", "replace_all"])
               .default("unconfigured_only"),
             apiKey: presalesApiKeySchema,
+            upstreamEffort: z.enum(["high", "max"]).optional(),
             reason: z.string().trim().min(1).max(2_000),
             confirmation: z.literal("BULK_REPLACE_API_KEYS"),
           })
@@ -447,6 +449,7 @@ export const adminRouter = router({
             targets: input.targets,
             applyMode: input.applyMode,
             apiKey: input.apiKey,
+            upstreamEffort: input.upstreamEffort,
             reason: input.reason,
           });
         } catch (error) {
@@ -484,6 +487,7 @@ export const adminRouter = router({
             kind: input.kind,
             userId: input.userId,
             apiKey: input.apiKey,
+            upstreamEffort: input.upstreamEffort,
             expectedVersion: input.expectedVersion,
             reason: input.reason,
           });

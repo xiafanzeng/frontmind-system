@@ -47,6 +47,12 @@ afterEach(() => {
 });
 
 describe("sanitizeBrandText", () => {
+  it("labels frozen General Agent effort without changing public profile identities", () => {
+    expect(getModelDisplayName("frontmind-lite")).toBe("Low");
+    expect(getModelDisplayName("frontmind-base")).toBe("High");
+    expect(getModelDisplayName("frontmind-pro")).toBe("Max");
+    expect(getModelDisplayName(undefined)).toBe("FrontMind Agent");
+  });
   it("covers underscored codes, hyphenated identifiers, paths and domains", () => {
     const visible = sanitizeBrandText(
       "MANUS_V2_TASK_ERROR manus-v2 /__manus__/ https://open.manus.ai/task/1",

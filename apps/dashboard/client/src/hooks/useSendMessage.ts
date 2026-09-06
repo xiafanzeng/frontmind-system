@@ -1706,7 +1706,7 @@ export function useSendMessage() {
                 baselineOutputLength,
                 historicalOutputIds,
                 responseStartedAt,
-                modelName: agentProfile,
+                modelName: response.model,
                 knowledgeBase: false,
               });
               if (assistantMsgs.length > 0) {
@@ -1747,7 +1747,7 @@ export function useSendMessage() {
                   baselineOutputLength,
                   historicalOutputIds,
                   responseStartedAt,
-                  modelName: agentProfile,
+                  modelName: response.model,
                   knowledgeBase: false,
                 });
                 if (finalMsgs.length > 0) {

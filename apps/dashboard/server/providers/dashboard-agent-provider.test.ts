@@ -19,6 +19,10 @@ import {
   type DashboardProviderIdentity,
 } from "./dashboard-agent-runtime-store";
 import { ZhipuManagedClient, type ZhipuRecord } from "./zhipu-managed-client";
+import {
+  generalAgentRuntimeForCredential,
+  generalAgentRuntimeForOperation,
+} from "../general-agent-runtime";
 
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -306,6 +310,73 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
+  it("executes administrator High despite legacy Pro metadata and keeps that session High after the default becomes Max", async () => {
+    const f = fixture();
+    const credential = {
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
+    };
+    const legacyRequest = { ...request, modelProfile: "frontmind-pro" };
+    // This is the execution snapshot persisted by reserveCreate; legacy
+    // browser metadata remains a separate part of the idempotency request.
+    const operation = generalAgentRuntimeForCredential(credential);
+    const execution = generalAgentRuntimeForOperation(operation);
+    await f
+      .client({
+        model: execution.upstreamModel,
+        effort: execution.upstreamEffort,
+      })
+      .createTask({ ...legacyRequest, agentProfile: execution.upstreamModel });
+    expect(
+      f.calls.find(
+        (call) => call.path === "/v1/agents" && call.method === "POST",
+      )?.body.model,
+    ).toEqual({
+      id: "glm-5.3",
+      effort: "high",
+      speed: "standard",
+    });
+    f.finish();
+    credential.upstreamEffort = "max";
+    expect(generalAgentRuntimeForCredential(credential).upstreamEffort).toBe(
+      "max",
+    );
+    const original = [...f.rows.values()][0];
+    const continuation = generalAgentRuntimeForOperation(operation);
+    await f
+      .client({
+        localTaskId: original.localTaskId,
+        operationId: original.operationId,
+        intentId: "after-default-change",
+        model: continuation.upstreamModel,
+        effort: continuation.upstreamEffort,
+      })
+      .sendMessage({
+        taskId: "session_1",
+        prompt: "Continue the original task",
+      });
+    expect([...f.rows.values()][0].runtime).toMatchObject({
+      model: "glm-5.3",
+      effort: "high",
+      sessionId: "session_1",
+    });
+    expect(
+      f.calls.filter(
+        (call) => call.path === "/v1/agents" && call.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.calls.filter(
+        (call) => call.path === "/v1/sessions" && call.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.calls.filter(
+        (call) => call.path.endsWith("/events") && call.method === "POST",
+      ),
+    ).toHaveLength(2);
+  });
   it("rejects a legacy AI credential instead of calling Manus", () => {
     expect(() =>
       createDashboardAgentClient({

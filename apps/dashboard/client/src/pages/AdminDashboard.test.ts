@@ -490,6 +490,21 @@ describe("administrator channel navigation", () => {
     });
   });
 
+  it("preserves stored Zhipu effort for every Key target without mapping Manus profiles", () => {
+    const hierarchy = normalizeUsageHierarchy({
+      managers: [{ adminId: 10, provider: "zhipu", upstreamEffort: "high" }],
+      engineers: [{ engineerId: 20, provider: "zhipu", upstreamEffort: "max" }],
+      customers: [{ userId: 30, provider: "zhipu", upstreamEffort: "high" }],
+    });
+    expect(hierarchy.managers[0]?.upstreamEffort).toBe("high");
+    expect(hierarchy.engineers[0]?.upstreamEffort).toBe("max");
+    expect(hierarchy.customers[0]?.upstreamEffort).toBe("high");
+    expect(normalizeAgentUsageFields({ provider: "zhipu", upstreamEffort: "invalid" }))
+      .not.toHaveProperty("upstreamEffort");
+    expect(normalizeAgentUsageFields({ provider: "manus", agentProfile: "frontmind-base" }))
+      .not.toHaveProperty("upstreamEffort");
+  });
+
   it("presents project assignments as one status row per engineer", () => {
     const rows = buildDeliveryEngineerStatusRows({
       engineers: [

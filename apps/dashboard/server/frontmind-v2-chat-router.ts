@@ -95,11 +95,13 @@ import {
 } from "../shared/frontmind-general-chat-markdown";
 import { GENERAL_CHAT_PARTIAL_RESULT_ERROR_CODE } from "../shared/frontmind-general-chat-terminal";
 import {
-  generalAgentModelProfileModel,
-  generalAgentModelProfileEffort,
   generalAgentModelProfileSchema,
   type GeneralAgentModelProfile,
 } from "../shared/manus-agent-profile";
+import {
+  generalAgentRuntimeForCredential,
+  generalAgentRuntimeForOperation,
+} from "./general-agent-runtime";
 import { getUpstreamBaseUrl } from "./upstream-config";
 import {
   createGeneralChatPreparationClaim,
@@ -348,9 +350,8 @@ function clientFor(
           model: operation.upstreamModel,
           ...(operation.provider === "zhipu"
             ? {
-                effort: generalAgentModelProfileEffort(
-                  generalAgentModelProfileSchema.parse(operation.publicProfile),
-                ),
+                effort:
+                  generalAgentRuntimeForOperation(operation).upstreamEffort,
               }
             : {}),
         }
@@ -3545,6 +3546,7 @@ async function reserveCreate(input: {
     return { ...owned, ...claim, created: false as const };
   }
 
+  const execution = generalAgentRuntimeForCredential(input.credential);
   const operationId = randomUUID();
   const localTaskId = randomUUID();
   const createMarker = `chat-create:${operationId}`;
@@ -3565,11 +3567,10 @@ async function reserveCreate(input: {
         schemaHash: CHAT_SCHEMA_HASH,
         apiCredentialId: input.credential.id,
         credentialVersion: input.credential.version,
-        publicProfile: input.value.modelProfile,
-        upstreamModel: generalAgentModelProfileModel(
-          input.value.modelProfile,
-          input.credential.provider ?? "zhipu",
-        ),
+        // The browser profile stays in request/dispatch evidence for replay,
+        // but only the administrator's credential controls new execution.
+        publicProfile: execution.publicProfile,
+        upstreamModel: execution.upstreamModel,
         status: "queued",
       });
       await tx.insert(agentTasks).values({
@@ -3592,10 +3593,7 @@ async function reserveCreate(input: {
         localAssetIds: input.value.localAssetIds,
         operationId,
         localTaskId,
-        model: generalAgentModelProfileModel(
-          input.value.modelProfile,
-          input.credential.provider ?? "zhipu",
-        ),
+        model: execution.upstreamModel,
         modelProfile: input.value.modelProfile,
         continuation: false,
       });
@@ -4739,6 +4737,40 @@ router.get("/assets/:localAssetId/content", async (req, res) => {
       `attachment; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
     );
     asset.stream.pipe(res);
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.get("/runtime-config", async (req, res) => {
+  try {
+    if (!req.frontmindUser) throw new ChatV2HttpError("UNAUTHORIZED", 401);
+    assertGeneralAgentActor(req.frontmindUser);
+    const { localTaskId } = z
+      .object({ localTaskId: z.string().uuid().optional() })
+      .strict()
+      .parse(req.query);
+    if (localTaskId) {
+      const owned = await findOwnedTask({
+        userId: req.frontmindUser.id,
+        localTaskId,
+      });
+      res.json({
+        configured: true,
+        source: "task",
+        ...generalAgentRuntimeForOperation(owned.operation),
+      });
+      return;
+    }
+    if (!req.frontmindCredential) {
+      res.json({ configured: false, source: "administrator" });
+      return;
+    }
+    res.json({
+      configured: true,
+      source: "administrator",
+      ...generalAgentRuntimeForCredential(req.frontmindCredential),
+    });
   } catch (error) {
     sendError(res, error);
   }

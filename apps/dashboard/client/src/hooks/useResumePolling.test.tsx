@@ -121,9 +121,13 @@ describe("useResumePolling ordinary-task boundary", () => {
 
   it("keeps ordinary chat raw-output projection intact", async () => {
     mocks.hydrated = true;
+    mocks.conversations[0].messages = [
+      { id: "old-display", role: "assistant", modelName: "frontmind-pro" },
+    ];
     mocks.retrieveTask.mockResolvedValue({
       id: "task-1",
       status: "completed",
+      model: "frontmind-base",
       output: [{ id: "answer", type: "message" }],
     });
     mocks.projectTaskOutputMessages.mockReturnValue([
@@ -139,7 +143,10 @@ describe("useResumePolling ordinary-task boundary", () => {
     await act(() => vi.advanceTimersByTimeAsync(1_000));
 
     expect(mocks.projectTaskOutputMessages).toHaveBeenCalledWith(
-      expect.objectContaining({ knowledgeBase: false }),
+      expect.objectContaining({
+        knowledgeBase: false,
+        modelName: "frontmind-base",
+      }),
     );
     expect(mocks.updateAssistantMessages).toHaveBeenCalledWith(
       "ordinary",

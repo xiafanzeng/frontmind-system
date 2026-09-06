@@ -145,10 +145,7 @@ async function checkAndUpdateOrdinaryTask(
       baselineOutputLength: conversation.lastKnownOutputLength || 0,
       historicalOutputIds: collectAssistantOutputIds(historicalMessages),
       responseStartedAt: conversation.startedAt || conversation.createdAt,
-      modelName: [...conversation.messages]
-        .reverse()
-        .find((message) => message.role === "assistant" && message.modelName)
-        ?.modelName,
+      modelName: taskData.model,
       knowledgeBase: false,
     });
     if (messages.length && normalizedStatus === "completed") {

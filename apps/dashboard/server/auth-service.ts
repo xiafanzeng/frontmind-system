@@ -2009,6 +2009,7 @@ export async function replaceApiCredentialInTransaction(input: {
   now?: Date;
   credentialId?: string;
   agentProfile?: ManagedAgentProfile | null;
+  upstreamEffort?: "high" | "max";
 }): Promise<CredentialStatus> {
   // Permanent account deletion fences the credential owner before enumerating
   // all key generations. Check inside every transactional rotation path so a
@@ -2074,9 +2075,9 @@ export async function replaceApiCredentialInTransaction(input: {
       agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE,
       "zhipu",
     ),
-    upstreamEffort: managedAgentProfileEffort(
-      agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE,
-    ),
+    upstreamEffort:
+      input.upstreamEffort ??
+      managedAgentProfileEffort(agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE),
     status: "active" as const,
     validationStatus: "verified" as const,
     verifiedAt: now,

@@ -46,13 +46,12 @@ export {
 } from "@/lib/delivery-project";
 
 /**
- * Model display mapping: public model id -> display name.
- * Upstream model ids are translated on the server and never shipped in the browser bundle.
+ * Historical public profile IDs remain stable; labels describe frozen effort.
  */
 export const MODEL_OPTIONS = [
-  { value: "frontmind-lite", label: "FrontMind-Lite", description: "简单任务" },
-  { value: "frontmind-base", label: "FrontMind-Base", description: "通用任务" },
-  { value: "frontmind-pro", label: "FrontMind-Pro", description: "复杂分析" },
+  { value: "frontmind-lite", label: "Low", description: "历史推理档位" },
+  { value: "frontmind-base", label: "High", description: "高推理档位" },
+  { value: "frontmind-pro", label: "Max", description: "最高推理档位" },
 ] as const;
 
 export type GeneralAgentModelProfile = (typeof MODEL_OPTIONS)[number]["value"];
@@ -61,7 +60,7 @@ export type GeneralAgentModelProfile = (typeof MODEL_OPTIONS)[number]["value"];
  * Get the display label for a model value.
  */
 export function getModelDisplayName(modelValue: string | undefined): string {
-  if (!modelValue) return "FrontMind-Base";
+  if (!modelValue) return "FrontMind Agent";
   const found = MODEL_OPTIONS.find((m) => m.value === modelValue);
   return found ? found.label : sanitizeBrandText(modelValue);
 }

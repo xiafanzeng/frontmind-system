@@ -48,6 +48,7 @@ describe("administrator managed Key input", () => {
       kind: "customer",
       userId: 77,
       apiKey: input.apiKey,
+      upstreamEffort: undefined,
       expectedVersion: 8,
       reason: input.reason,
     });
@@ -61,9 +62,44 @@ describe("administrator managed Key input", () => {
       targets: bulkInput.targets,
       applyMode: "unconfigured_only",
       apiKey: bulkInput.apiKey,
+      upstreamEffort: undefined,
       reason: bulkInput.reason,
     });
   });
+
+  it.each(["high", "max"] as const)(
+    "passes %s through single and bulk assignments",
+    async (upstreamEffort) => {
+      await caller().replaceTargetCredential({ ...input, upstreamEffort });
+      await caller().bulkReplaceTargetCredentials({
+        ...bulkInput,
+        upstreamEffort,
+      });
+      expect(mutations.replaceManagedApiKeyTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ upstreamEffort }),
+      );
+      expect(mutations.bulkReplaceManagedApiKeyTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ upstreamEffort }),
+      );
+    },
+  );
+
+  it.each(["low", "medium", "turbo"])(
+    "rejects unsupported administrator effort %s",
+    async (upstreamEffort) => {
+      await expect(
+        caller().replaceTargetCredential({ ...input, upstreamEffort } as any),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(
+        caller().bulkReplaceTargetCredentials({
+          ...bulkInput,
+          upstreamEffort,
+        } as any),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(mutations.replaceManagedApiKeyTarget).not.toHaveBeenCalled();
+      expect(mutations.bulkReplaceManagedApiKeyTargets).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["frontmind-base", "frontmind-pro"])(
     "rejects the retired %s selector on both APIs",

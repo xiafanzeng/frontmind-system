@@ -82,10 +82,11 @@ export type ApiUsageSyncIssueCode =
   | "PAGINATION_INVALID"
   | "PAGE_DRIFT"
   | "PARTIAL_USAGE_SCAN";
-type ManagedAgentProfile = "frontmind-base" | "frontmind-pro";
+type ManagedAgentEffort = "high" | "max";
 
 type AgentUsageFields = {
   provider?: "unavailable" | "zhipu";
+  upstreamEffort?: ManagedAgentEffort;
   nativeUsage?: {
     unit: "tokens";
     inputTokens: number;
@@ -107,6 +108,9 @@ export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
       : 0;
   return {
     provider: "zhipu",
+    ...(row.upstreamEffort === "high" || row.upstreamEffort === "max"
+      ? { upstreamEffort: row.upstreamEffort }
+      : {}),
     ...(usage?.unit === "tokens"
       ? {
           nativeUsage: {
@@ -200,7 +204,6 @@ type AdminUsageHierarchyCustomer = AgentUsageFields & {
   deliveryAdminName: string | null;
   apiKeyConfigured: boolean;
   apiKeyVersion: number;
-  agentProfile: ManagedAgentProfile;
   usesInheritedKey: boolean;
   rolling30DayUsed: number;
   usageObservedAt: number | string | Date | null;
@@ -565,8 +568,6 @@ export function normalizeUsageHierarchy(value: unknown): {
   engineers: AdminUsageHierarchyEngineer[];
   customers: AdminUsageHierarchyCustomer[];
 } {
-  const profile = (candidate: unknown): ManagedAgentProfile =>
-    candidate === "frontmind-base" ? "frontmind-base" : "frontmind-pro";
   const keyHealth = (candidate: unknown): ManagedKeyHealth =>
     [
       "connected",
@@ -730,7 +731,6 @@ export function normalizeUsageHierarchy(value: unknown): {
           apiKeyConfigured: entry?.apiKeyConfigured === true,
           ...normalizeAgentUsageFields(entry),
           apiKeyVersion: Math.max(0, Number(entry?.apiKeyVersion) || 0),
-          agentProfile: profile(entry?.agentProfile),
           usesInheritedKey: entry?.usesInheritedKey === true,
           rolling30DayUsed: Math.max(0, Number(entry?.rolling30DayUsed) || 0),
           usageObservedAt: entry?.usageObservedAt ?? null,
@@ -830,7 +830,7 @@ type OverviewApiKeyTarget = {
   username: string;
   configured: boolean;
   version: number;
-  agentProfile?: ManagedAgentProfile;
+  upstreamEffort?: ManagedAgentEffort;
 };
 
 export type BrandTrackingCredentialRow = {
@@ -1008,7 +1008,40 @@ export function bulkApiKeyTargetsForScope(
   );
 }
 
-function AdminOverviewApiKeyDialog({
+function ManagedAgentEffortSelect({
+  id,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: ManagedAgentEffort;
+  disabled: boolean;
+  onChange: (effort: ManagedAgentEffort) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>智谱思考强度</Label>
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange(event.target.value === "high" ? "high" : "max")
+        }
+        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+      >
+        <option value="high">High</option>
+        <option value="max">Max</option>
+      </select>
+      <p className="text-xs leading-5 text-muted-foreground">
+        使用 GLM-5.3，标准速度。新任务按所选强度运行，已提交任务保留原配置。
+      </p>
+    </div>
+  );
+}
+
+export function AdminOverviewApiKeyDialog({
   target,
   onOpenChange,
   onSaved,
@@ -1018,6 +1051,9 @@ function AdminOverviewApiKeyDialog({
   onSaved: () => Promise<void> | void;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const [upstreamEffort, setUpstreamEffort] = useState<ManagedAgentEffort>(
+    target?.upstreamEffort ?? "max",
+  );
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
   const replaceTargetMutation =
@@ -1032,6 +1068,13 @@ function AdminOverviewApiKeyDialog({
       : target?.kind === "customer"
         ? "客户"
         : "工程师";
+
+  useEffect(() => {
+    setApiKey("");
+    setUpstreamEffort(target?.upstreamEffort ?? "max");
+    setRevokeOpen(false);
+    setReplaceConfirmOpen(false);
+  }, [target?.kind, target?.userId, target?.version, target?.upstreamEffort]);
 
   const close = () => {
     if (busy) return;
@@ -1056,6 +1099,7 @@ function AdminOverviewApiKeyDialog({
         kind: target.kind,
         userId: target.userId,
         apiKey: apiKey.trim(),
+        upstreamEffort,
         expectedVersion: target.version,
         reason: "API与人员管理统一入口替换账号 API Key",
         confirmation: "REPLACE_API_KEY" as const,
@@ -1153,6 +1197,12 @@ function AdminOverviewApiKeyDialog({
                 系统管理员统一维护账号 Key，交付管理员只负责岗位与项目安排。
               </p>
             </div>
+            <ManagedAgentEffortSelect
+              id="overview-api-key-effort"
+              value={upstreamEffort}
+              disabled={busy}
+              onChange={setUpstreamEffort}
+            />
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
               <Button
                 type="button"
@@ -1204,7 +1254,8 @@ function AdminOverviewApiKeyDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-sm">
-            新版本统一使用智谱服务配置，已提交任务继续使用原绑定版本。
+            新版本使用智谱 {upstreamEffort === "high" ? "High" : "Max"}
+            思考强度，已提交任务继续使用原绑定版本。
             近 30 天自用按本地任务账本滚动累计，Key 轮换不会清空历史数字。
           </div>
           <AlertDialogFooter>
@@ -1259,7 +1310,7 @@ function AdminOverviewApiKeyDialog({
   );
 }
 
-function AdminBulkApiKeyDialog({
+export function AdminBulkApiKeyDialog({
   open,
   rows,
   onOpenChange,
@@ -1277,6 +1328,8 @@ function AdminBulkApiKeyDialog({
   const [engineerIds, setEngineerIds] = useState<number[]>([]);
   const [engineerSearch, setEngineerSearch] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [upstreamEffort, setUpstreamEffort] =
+    useState<ManagedAgentEffort>("max");
   const [replaceExisting, setReplaceExisting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const bulkMutation =
@@ -1329,6 +1382,7 @@ function AdminBulkApiKeyDialog({
     setEngineerIds([]);
     setEngineerSearch("");
     setApiKey("");
+    setUpstreamEffort("max");
     setReplaceExisting(false);
     setConfirmOpen(false);
     bulkMutation.reset();
@@ -1375,6 +1429,7 @@ function AdminBulkApiKeyDialog({
         })),
         applyMode: replaceExisting ? "replace_all" : "unconfigured_only",
         apiKey: apiKey.trim(),
+        upstreamEffort,
         reason: "API与人员管理批量配置账号 API Key",
         confirmation: "BULK_REPLACE_API_KEYS",
       });
@@ -1562,7 +1617,7 @@ function AdminBulkApiKeyDialog({
               <p className="mt-1 text-xs leading-5">
                 首次配置 {unconfiguredCount} 个；已有 Key {configuredCount} 个。
                 {replaceExisting
-                  ? ` 服务器会排除已经是本次 Key 的账号，当前范围最多涉及 ${actionCount} 个账号。`
+                  ? ` 服务器会排除 Key 与思考强度均无需变更的账号，当前范围最多涉及 ${actionCount} 个账号。`
                   : ` 默认只配置 ${actionCount} 个尚未配置的账号。`}
               </p>
               {knownActionLimitExceeded && (
@@ -1575,7 +1630,7 @@ function AdminBulkApiKeyDialog({
                 targets.length > MAX_BULK_API_KEY_CHANGES &&
                 !scopeSnapshotLimitExceeded && (
                   <p className="mt-1 text-xs font-medium text-amber-700">
-                    提交后会按本次 Key 排除无需变化的账号；若实际仍需变更超过
+                    提交后会按本次 Key 与思考强度排除无需变化的账号；若实际仍需变更超过
                     {MAX_BULK_API_KEY_CHANGES} 个，整批将停止且不会写入。
                   </p>
                 )}
@@ -1601,7 +1656,7 @@ function AdminBulkApiKeyDialog({
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">
                   默认关闭以避免误退役现有
-                  Key。开启后，范围内账号将统一切换到本次输入的 Key。
+                  Key。开启后，范围内账号将统一切换到本次输入的 Key 与思考强度。
                 </span>
               </span>
             </label>
@@ -1622,6 +1677,12 @@ function AdminBulkApiKeyDialog({
               </p>
             </div>
 
+            <ManagedAgentEffortSelect
+              id="bulk-api-key-effort"
+              value={upstreamEffort}
+              disabled={busy}
+              onChange={setUpstreamEffort}
+            />
             <div className="flex justify-end gap-2">
               <Button
                 type="button"
@@ -1667,6 +1728,8 @@ function AdminBulkApiKeyDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+            本次统一配置智谱 {upstreamEffort === "high" ? "High" : "Max"}
+            思考强度，已提交任务保留原配置。
             这是一次性批量分发；以后单独修改某个账号不会自动联动其他账号。共享
             Key 会扩大泄露影响范围。旧 Key 即使已失效也不会阻断轮换；近 30
             天自用继续按本地任务账本滚动累计，不会因轮换清零。
@@ -2413,7 +2476,6 @@ export default function AdminDashboard({
         deliveryAdminId: customer.deliveryAdminId,
         configured: customer.apiKeyConfigured,
         version: customer.apiKeyVersion,
-        agentProfile: customer.agentProfile,
         typeLabel: "客户",
         scopeLabel: customer.deliveryAdminName
           ? `负责人：${customer.deliveryAdminName}`
@@ -2479,7 +2541,7 @@ export default function AdminDashboard({
       username: target.username,
       configured: target.configured,
       version: target.version,
-      ...(target.agentProfile ? { agentProfile: target.agentProfile } : {}),
+      upstreamEffort: target.upstreamEffort,
     });
     setCredentialDeepLinkOpened(true);
   }, [
@@ -2750,9 +2812,7 @@ export default function AdminDashboard({
                                 username: row.username,
                                 configured: row.configured,
                                 version: row.version,
-                                ...(row.agentProfile
-                                  ? { agentProfile: row.agentProfile }
-                                  : {}),
+                                upstreamEffort: row.upstreamEffort,
                               });
                             }}
                           >

@@ -460,6 +460,12 @@ export class KolClient implements KolProviderPort {
     for (let attempt = 1; attempt <= this.maxGetAttempts; attempt += 1) {
       try {
         const response = await this.fetchOnce(url, init, signal);
+        // HTTP authentication rejection is authoritative even when a proxy
+        // supplies an empty or HTML error page instead of the JSON envelope.
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel().catch(() => undefined);
+          return { response, body: undefined };
+        }
         const body = await readJson(response, this.maxResponseBytes);
         const envelope = kolErrorEnvelopeSchema.safeParse(body);
         const businessStatus = envelope.success

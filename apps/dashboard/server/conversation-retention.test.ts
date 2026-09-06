@@ -321,9 +321,10 @@ describe("conversation retention", () => {
       const candidateCall = execute.mock.calls.find(([statement]) =>
         String(statement).includes("SELECT id, userId"),
       );
+      // mysql2 binds JS numbers as DOUBLE, which MySQL 8.4 rejects for LIMIT.
       expect(candidateCall?.[1]).toEqual([
         new Date("2026-06-14T12:00:00.000Z"),
-        100,
+        "100",
       ]);
       expect(result.result?.cutoff).toEqual(
         new Date("2026-06-14T12:00:00.000Z"),

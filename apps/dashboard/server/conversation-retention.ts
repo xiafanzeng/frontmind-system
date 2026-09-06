@@ -378,7 +378,7 @@ export async function cleanupExpiredConversations(
           WHERE updatedAt <= ?
           ORDER BY updatedAt ASC, id ASC
           LIMIT ?`,
-        [cutoff, batchSize],
+        [cutoff, String(batchSize)],
       );
       if (!rows.length) {
         await connection.commit();

@@ -366,6 +366,30 @@ an explicit creation timestamp from the same clock as their other timestamps.
 The strict password-change fence and locked login transaction remain intact;
 regressions cover both sides of the half-second boundary.
 
+Both fixes are live in `26cec6d698ac751abdd5162938bf89734142b6b2`, built by
+GitHub run `34006859017`. Dashboard digest:
+`sha256:cc19973c1cc0a3d4f7cc21cb450a2b09c1e92a2a659f59e6392d74a8e644f01e`;
+worker digest:
+`sha256:34d69fba403c41233e106cb866272d6fffe1f7108d593ec080d4f03f67420b87`.
+No database migration was required. Public readiness returned exact schema;
+the Website container and its start time were preserved. The existing two-turn
+general-agent results still downloaded and validated after restart.
+
+The original password-change and login APIs then passed a real boundary test:
+password change was acknowledged at `02:48:51.793Z`, followed immediately by
+one login; first authentication succeeded at `02:48:51.955Z`. Password and
+new session timestamps both persisted as `02:48:52.000Z`. Eight browser reloads
+retained the user, all old sessions were revoked, and exactly one new session
+was created. This used only the independent validation engineer; no provider
+call was submitted.
+
+An independent read-only check isolated the inherited conversation-retention
+failure to MySQL 8.4 rejecting a prepared `LIMIT ?` bound as mysql2's numeric
+DOUBLE type. The same SELECT accepted its validated batch size as a string.
+Only that parameter binding was changed; the existing 30-day cutoff,
+transaction and deletion rules remain unchanged. Six retention tests passed.
+No cleanup was manually invoked for validation.
+
 ## Website funding recovery completed — 2026-09-06
 
 Each original perspective used its normal “重新评估” control once. Both

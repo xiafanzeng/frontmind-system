@@ -11,6 +11,8 @@ import {
   brandQuestionUniversePreparationServiceError,
   brandQuestionUniverseReplayMatches,
   brandQuestionUniverseStatusFencesStart,
+  brandQuestionUniverseCanRecheckFailedResult,
+  brandQuestionUniverseTerminalResultAction,
   observeBrandQuestionUniverse,
   projectBrandQuestionUniversePublicOperation,
   startBrandQuestionUniverse,
@@ -57,6 +59,60 @@ function replayContext() {
 }
 
 describe("brand question universe public API boundary", () => {
+  it("accepts an original valid delivery before provider failure without repairing invalid or missing failed output", () => {
+    expect(brandQuestionUniverseTerminalResultAction("error", "valid")).toBe(
+      "publish",
+    );
+    expect(brandQuestionUniverseTerminalResultAction("error", "invalid")).toBe(
+      "fail",
+    );
+    expect(brandQuestionUniverseTerminalResultAction("error", "missing")).toBe(
+      "fail",
+    );
+    expect(brandQuestionUniverseTerminalResultAction("running", "valid")).toBe(
+      "continue",
+    );
+    expect(
+      brandQuestionUniverseTerminalResultAction("cancelled", "valid"),
+    ).toBe("fail");
+  });
+  it("rechecks only an unpublished native-failed existing session and does not permanently fence late files", () => {
+    const operation = { status: "failed", errorCode: "PROVIDER_TASK_FAILED" };
+    const task = { providerTaskId: "original-session" };
+    const context = { firstDispatchState: "sent", publicationOutcome: null };
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(operation, task, context),
+    ).toBe(true);
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(operation, task, context),
+    ).toBe(true);
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(
+        operation,
+        { providerTaskId: null },
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(
+        { ...operation, errorCode: "TASK_CREATE_FAILED" },
+        task,
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(operation, task, {
+        ...context,
+        firstDispatchState: "send_ready",
+      }),
+    ).toBe(false);
+    expect(
+      brandQuestionUniverseCanRecheckFailedResult(operation, task, {
+        ...context,
+        publicationOutcome: "published",
+      }),
+    ).toBe(false);
+  });
   it("requires the frozen snapshot, client request and Dashboard CAS revision", () => {
     expect(
       brandQuestionUniverseStartInputSchema.parse({

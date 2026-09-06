@@ -23,6 +23,10 @@ import {
   loadBrandQuestionUniverseUpstreamArchive,
   parseBrandQuestionUniverseStructuredValue,
 } from "./brand-question-universe-runtime";
+import {
+  structuredRoundResult,
+  brandQuestionUniverseTerminalResultAction,
+} from "./brand-question-universe-service";
 
 const operationToken =
   "brand-question-universe:10000000-0000-4000-8000-000000000001";
@@ -156,6 +160,46 @@ describe("brand question universe strict contract", () => {
         operationToken,
       ),
     ).toThrow("BRAND_QUESTION_UNIVERSE_WIRE_INVALID");
+  });
+
+  it("accepts the original 160-row file contract despite later invalid JSON and native failure, while rejecting another operation token", () => {
+    const events = [
+      {
+        id: "original-file",
+        type: "structured_output_result",
+        timestamp: 1,
+        structured_output_result: {
+          success: true,
+          value: { payload: JSON.stringify(fixturePayload()) },
+        },
+      },
+      {
+        id: "invalid-later-json",
+        type: "structured_output_result",
+        timestamp: 2,
+        structured_output_result: { success: true, value: { payload: "{}" } },
+      },
+      {
+        id: "native-error",
+        type: "status_update",
+        timestamp: 3,
+        status_update: { agent_status: "error" },
+      },
+    ];
+    const result = structuredRoundResult(events, operationToken);
+    expect(result).toMatchObject({ kind: "valid", eventId: "original-file" });
+    if (result.kind !== "valid")
+      throw new Error("Expected original business payload");
+    expect(result.payload.rows).toHaveLength(160);
+    expect(
+      brandQuestionUniverseTerminalResultAction("error", result.kind),
+    ).toBe("publish");
+    expect(
+      structuredRoundResult(
+        events,
+        "brand-question-universe:20000000-0000-4000-8000-000000000001",
+      ).kind,
+    ).toBe("invalid");
   });
 
   it("enforces upstream phrase safety and recommendation wording diversity", () => {

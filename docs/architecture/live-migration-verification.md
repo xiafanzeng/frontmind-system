@@ -10,7 +10,7 @@ retain the outcomes and identities of their own stages.
 
 | Service | Runtime source revision | Runtime image digest |
 | --- | --- | --- |
-| Dashboard | `2ef9e6454d3b4990a684d659e12f9349a8232bf3` | `sha256:ed9aa8f7be75e14160ff63a6300c27dd6b16565d899a835cc6150845cab96774` |
+| Dashboard | `2609549b3116378814362d8936a9d65f022f6f93` | `sha256:efc0d5bc836938e0db153f97122be940f678c3b03eb05de860e7e3bf62d3c798` |
 | Monitoring worker | `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` | `sha256:7134db0d9d3690533f470ce5af5a64e6876914021858368fdb926295187661a3` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
@@ -29,8 +29,9 @@ retain the outcomes and identities of their own stages.
 | Website and Dashboard HTTPS | Complete: public/authoritative DNS, ACME issuance, dedicated SNI certificates and normal trust-chain/hostname validation passed. See the certificate section below. |
 | Website building, template work and preview-dependent social acceptance | Outside scope by user instruction. WeChat/Xiaohongshu acceptance is paused because the original UI requires a website preview snapshot; no SiteOps or social mutation was submitted. |
 
-All active AI execution uses Zhipu. Historical Manus tasks were retired by the
-user and are not reconstructed. Original non-AI 21st/Aliyun credentials retain
+All former Manus AI execution uses Zhipu. The original independent Jenova
+Brand Tracker and monitoring/publishing providers retain their integrations.
+Historical Manus tasks were retired by the user and are not reconstructed. Original non-AI 21st/Aliyun credentials retain
 their meaning even where historical database metadata defaults to Manus.
 No further monitoring attempts or KOL orders are part of this acceptance.
 
@@ -890,3 +891,85 @@ events; no valid public JSON or downloadable output existed. There was one
 initial dispatch, no repair, no publication and no fifth attempt. This result
 does not establish a provider root cause and does not support silently changing
 all customer defaults to high.
+
+
+## Administrator High / Max controls and final bounded comparison
+
+Source `2609549b3116378814362d8936a9d65f022f6f93` adds explicit High/Max account-Key
+configuration for individual and bulk assignment, with glm-5.3 and standard
+speed. Changing only the effort while reusing a verified Key creates a new
+credential version; identical settings do not rotate it. Existing tasks keep
+original bindings. New General Agent operations use the administrator's
+settings even if an old browser sends a different profile. Its UI shows the
+actual frozen effort, includes the engineer's original project context and
+uses the task response for assistant-message labels.
+
+The same release includes `e018ca0`'s removal of the obsolete pending-reset
+approval lock and customer approval wording. Ownership, revision and actual
+reset fencing remain. No historical rows are rewritten or reconstructed, and
+no migration is required. Focused effort/control regressions passed 382 tests;
+the preceding reset correction passed 105 tests. TypeScript, source governance
+and exact test partitions passed. Image publication run 34021158864 succeeded.
+At 08:25:47 UTC, public health/readiness returned 200 with the exact
+source/digest and exact schema. Dashboard and its SiteOps worker use digest
+`sha256:efc0d5bc836938e0db153f97122be940f678c3b03eb05de860e7e3bf62d3c798`.
+No migration ran. Website and the independent monitoring worker kept their
+container identities and start times. The previous `2ef9e64` image remains
+available for rollback.
+
+Three live administrator browser checks passed the individual and bulk effort
+controls, with no writes, failed reads or browser exceptions. Seven separate
+GET-only General Agent checks confirmed current Max, the existing task's High,
+and the original customer/system-admin role boundary. No General Agent was
+created or continued by these checks.
+
+The user explicitly authorized one further Max task and one further High task,
+with instructions to stop this portion if both cannot complete. This updates
+the earlier four-attempt acceptance limit.
+
+Max operation `2c53a25c-d0e8-494d-a1a3-578cf522cf7f` used session
+`sess_01a075ba-c2b9-7df0-b09e-d04d2dcdc309`, created at 07:59:28.998 UTC.
+The native session's own `agent.model` confirmed glm-5.3/max/standard. It failed
+at 08:17:45.521 UTC with unknown_error, 服务暂时不可用, exhausted and then
+idle/retries_exhausted. Total runtime was 18 minutes 16.523 seconds; the last
+model request lasted 650.499 seconds and ended with is_error=true. All 65 model
+requests and 108 tools had end events. There were no valid public JSON results
+or downloadable outputs, one initial dispatch, no repair and no publication.
+The original formal knowledge snapshot and exact Skill hashes were retained.
+
+High operation `3e5ecca0-ba72-41e7-a406-1717d463a741` was accepted once using
+session `sess_01a075d3-5a76-741e-aa51-d5854ceaecd9`. The normal administrator API
+rotated the same customer Key from version 3/Max to version 4/High, then restored
+the account default to version 5/Max after dispatch. The task retained version
+4/High. The native session model also directly confirmed glm-5.3/high/standard.
+This live change verifies that an effort-only rotation is not discarded as an
+identical-Key no-op.
+
+High ran from 08:26:20.732 to 08:41:37.115 UTC (15 minutes 16.383 seconds).
+Its native session also ended with unknown_error, 服务暂时不可用, exhausted and
+idle/retries_exhausted. The final model request lasted 672.655 seconds; all 35
+model requests and 97 tool calls ended. This was a native provider error, with
+no local task deadline and no repair dispatch.
+
+Unlike Max, High left a 30,403-byte downloadable
+`brand-question-universe-payload.json` at 08:40:43 UTC, scoped to that exact
+session. Its SHA-256 is
+`0de3a000a8cfd30f426c36f2704546e9057d330401edb3fd1408786d3834b420`.
+The unchanged original parser accepted its operation-bound payload. The
+original workbook generator and cell-by-cell readback passed: 160 questions,
+five columns and category counts 20/20/20/100. The adapter had ignored JSON
+files after native failure, and the business service had failed the operation
+before checking a usable result. A valid deliverable and an upstream execution
+error can coexist; this does not establish that High natively succeeded.
+
+The correction projects same-turn message/file JSON from a finalized native
+failure while retaining its error state. The original business parser selects
+a valid operation-bound candidate before error handling and uses the existing
+workbook, asset and Dashboard version-checked publication path. Normal observe
+can read the latest unpublished `PROVIDER_TASK_FAILED` session again; this sends
+no initial request or repair and does not permanently exclude late files. There
+is no historical conversation scan, reconstruction, direct database edit or
+manual import. Cancelled tasks remain cancelled. The three focused suites
+passed 39 tests, including prior-round and foreign-session exclusion, invalid
+JSON and original 160-row validation. TypeScript, source governance and exact
+test partitions passed; no migration is required.

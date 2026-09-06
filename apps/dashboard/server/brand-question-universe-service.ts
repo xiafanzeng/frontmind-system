@@ -1478,7 +1478,7 @@ function validationCodes(error: unknown) {
   return ["WIRE_INVALID"];
 }
 
-function structuredRoundResult(
+export function structuredRoundResult(
   events: readonly ManusV2MessageEvent[],
   operationToken: string,
 ):
@@ -1488,34 +1488,39 @@ function structuredRoundResult(
   const candidates = [...events]
     .filter((event) => event.type === "structured_output_result")
     .reverse();
-  const latest = candidates[0];
-  if (!latest) return { kind: "missing" };
-  const classified = classifyManusV2StructuredResultEnvelope(
-    latest.structured_output_result,
-  );
-  if (classified.kind !== "accepted") {
-    return {
-      kind: "invalid",
-      codes: [classified.code],
-      eventId: latest.id,
-    };
+  let invalid:
+    | { kind: "invalid"; codes: string[]; eventId: string | null }
+    | undefined;
+  for (const candidate of candidates) {
+    const classified = classifyManusV2StructuredResultEnvelope(
+      candidate.structured_output_result,
+    );
+    if (classified.kind !== "accepted") {
+      invalid ??= {
+        kind: "invalid",
+        codes: [classified.code],
+        eventId: candidate.id,
+      };
+      continue;
+    }
+    try {
+      return {
+        kind: "valid",
+        payload: parseBrandQuestionUniverseStructuredValue(
+          classified.value,
+          operationToken,
+        ),
+        eventId: candidate.id,
+      };
+    } catch (error) {
+      invalid ??= {
+        kind: "invalid",
+        codes: validationCodes(error),
+        eventId: candidate.id,
+      };
+    }
   }
-  try {
-    return {
-      kind: "valid",
-      payload: parseBrandQuestionUniverseStructuredValue(
-        classified.value,
-        operationToken,
-      ),
-      eventId: latest.id,
-    };
-  } catch (error) {
-    return {
-      kind: "invalid",
-      codes: validationCodes(error),
-      eventId: latest.id,
-    };
-  }
+  return invalid ?? { kind: "missing" };
 }
 
 async function scheduleRepair(input: {
@@ -1653,6 +1658,7 @@ async function completeOperation(input: {
   workbookSha256: string;
   tableId: string;
   dashboardRevision: number | null;
+  providerState?: string;
 }) {
   await mutateOperationContext(input.owned.task.id, (current) => ({
     ...current,
@@ -1666,7 +1672,7 @@ async function completeOperation(input: {
     operationId: input.owned.operation.id,
     taskId: input.owned.task.id,
     status: "succeeded",
-    providerState: "succeeded",
+    providerState: input.providerState ?? "succeeded",
     errorCode: null,
     resultDeadlineAt: null,
   });
@@ -1677,6 +1683,7 @@ async function publishPayload(input: {
   context: OperationContext;
   payload: BrandQuestionUniversePayload;
   sourceEventId: string;
+  providerState?: string;
 }) {
   const jsonBytes = Buffer.from(
     `${JSON.stringify(input.payload, null, 2)}\n`,
@@ -1723,6 +1730,7 @@ async function publishPayload(input: {
   if (currentSnapshot?.id !== input.context.knowledgeSnapshotId) {
     await completeOperation({
       owned: input.owned,
+      providerState: input.providerState,
       outcome: "snapshot_superseded",
       resultArtifacts,
       workbookSha256: workbook.sha256,
@@ -1742,6 +1750,7 @@ async function publishPayload(input: {
   if (decision !== "publish") {
     await completeOperation({
       owned: input.owned,
+      providerState: input.providerState,
       outcome: decision,
       resultArtifacts,
       workbookSha256: workbook.sha256,
@@ -1764,6 +1773,7 @@ async function publishPayload(input: {
     });
     await completeOperation({
       owned: input.owned,
+      providerState: input.providerState,
       outcome: "published",
       resultArtifacts,
       workbookSha256: workbook.sha256,
@@ -1792,6 +1802,7 @@ async function publishPayload(input: {
     }
     await completeOperation({
       owned: input.owned,
+      providerState: input.providerState,
       outcome: racedDecision,
       resultArtifacts,
       workbookSha256: workbook.sha256,
@@ -1866,7 +1877,10 @@ async function reconcileUnknownCreate(input: {
   return (await findOperationById(input.owned.operation.id)) ?? input.owned;
 }
 
-async function reconcileOperation(initial: OwnedOperation) {
+async function reconcileOperation(
+  initial: OwnedOperation,
+  terminalResultOnly = false,
+) {
   let owned = initial;
   let context = await readOperationContext(owned.task.id);
   const credential = await getDecryptedCredentialForAccountById(
@@ -1879,6 +1893,7 @@ async function reconcileOperation(initial: OwnedOperation) {
     credential.agentProfile !== owned.operation.publicProfile ||
     credential.upstreamModel !== owned.operation.upstreamModel
   ) {
+    if (terminalResultOnly) return owned;
     await updateOperationState({
       operationId: owned.operation.id,
       taskId: owned.task.id,
@@ -1892,7 +1907,7 @@ async function reconcileOperation(initial: OwnedOperation) {
     providerTaskId: owned.task.providerTaskId,
     state: context.firstDispatchState,
   });
-  if (firstDispatchAction === "dispatch") {
+  if (!terminalResultOnly && firstDispatchAction === "dispatch") {
     try {
       await dispatchOperation({
         owned,
@@ -1921,7 +1936,7 @@ async function reconcileOperation(initial: OwnedOperation) {
       state: context.firstDispatchState,
     });
   }
-  if (firstDispatchAction === "reconcile") {
+  if (!terminalResultOnly && firstDispatchAction === "reconcile") {
     owned = await reconcileUnknownCreate({ owned, context, credential });
   }
   if (!owned.task.providerTaskId) return owned;
@@ -1934,6 +1949,7 @@ async function reconcileOperation(initial: OwnedOperation) {
 
   let liveEvents: ManusV2MessageEvent[] = [];
   let detailState: string | null = null;
+  let readComplete = false;
   try {
     const client = clientFor(credential, owned.operation.accountUserId!, owned);
     liveEvents = await client.listAllMessages({
@@ -1942,6 +1958,7 @@ async function reconcileOperation(initial: OwnedOperation) {
     });
     await persistProviderEvents(owned.task.id, liveEvents);
     detailState = (await client.taskDetail(owned.task.providerTaskId)).status;
+    readComplete = true;
   } catch {
     // A prior successful sync remains usable. Observation never creates a
     // replacement task merely because one provider read was unavailable.
@@ -1950,8 +1967,48 @@ async function reconcileOperation(initial: OwnedOperation) {
     await cachedProviderEvents(owned.task.id),
     liveEvents,
   );
-  const state = latestManusV2TaskState(events) ?? detailState ?? "running";
-  if (["error", "failed", "cancelled"].includes(state)) {
+  const state =
+    latestManusV2TaskState(events) ??
+    detailState ??
+    (terminalResultOnly ? "error" : "running");
+  context = await readOperationContext(owned.task.id);
+  const terminalRoundToken =
+    ["pending", "send_unknown"].includes(context.repairState) &&
+    context.repairToken
+      ? context.repairToken
+      : context.operationToken;
+  const terminalRound = eventsForRound(events, terminalRoundToken);
+  const terminalResult = terminalRound
+    ? structuredRoundResult(terminalRound, context.operationToken)
+    : { kind: "missing" as const };
+  // Native failure and business delivery are separate facts. A schema-valid,
+  // operation-bound artifact uses the original workbook/CAS publication path.
+  const terminalAction = brandQuestionUniverseTerminalResultAction(
+    state,
+    terminalResult.kind,
+  );
+  if (terminalAction === "publish" && terminalResult.kind === "valid") {
+    try {
+      await publishPayload({
+        owned,
+        context,
+        payload: terminalResult.payload,
+        sourceEventId: terminalResult.eventId,
+        providerState: state,
+      });
+    } catch {
+      await updateOperationState({
+        operationId: owned.operation.id,
+        taskId: owned.task.id,
+        status: "failed",
+        providerState: state,
+        errorCode: "WORKBOOK_OR_PUBLISH_FAILED",
+      });
+    }
+    return (await findOperationById(owned.operation.id)) ?? owned;
+  }
+  if (terminalAction === "fail") {
+    if (terminalResultOnly && !readComplete) return owned;
     await updateOperationState({
       operationId: owned.operation.id,
       taskId: owned.task.id,
@@ -1961,6 +2018,9 @@ async function reconcileOperation(initial: OwnedOperation) {
     });
     return (await findOperationById(owned.operation.id)) ?? owned;
   }
+  // Old failed tasks are eligible only for existing-result reads. Never send
+  // an initial request or repair, or reopen them while a read is uncertain.
+  if (terminalResultOnly) return owned;
 
   context = await readOperationContext(owned.task.id);
   if (context.repairState === "send_ready") {
@@ -2092,6 +2152,33 @@ export function projectBrandQuestionUniversePublicOperation(input: {
   };
 }
 
+export function brandQuestionUniverseCanRecheckFailedResult(
+  operation: { status: string; errorCode: string | null },
+  task: { providerTaskId: string | null },
+  context: { firstDispatchState: string; publicationOutcome: unknown },
+) {
+  return (
+    operation.status === "failed" &&
+    operation.errorCode === "PROVIDER_TASK_FAILED" &&
+    Boolean(task.providerTaskId) &&
+    context.firstDispatchState === "sent" &&
+    context.publicationOutcome === null
+  );
+}
+
+export function brandQuestionUniverseTerminalResultAction(
+  state: string,
+  result: "valid" | "invalid" | "missing",
+) {
+  if (
+    result === "valid" &&
+    (TERMINAL_PROVIDER_STATES.has(state) || ["error", "failed"].includes(state))
+  )
+    return "publish";
+  if (["error", "failed", "cancelled"].includes(state)) return "fail";
+  return "continue";
+}
+
 function publicOperation(
   owned: OwnedOperation | undefined,
   context: OperationContext | null,
@@ -2110,6 +2197,23 @@ export async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
   assertCustomer(actor);
   let active = await findLatestOperation(actor.id, true);
   if (active) active = await reconcileOperation(active);
+  if (!active) {
+    const failed = await findLatestOperation(actor.id);
+    const failedContext = failed
+      ? await readOperationContext(failed.task.id).catch(() => null)
+      : null;
+    if (
+      failed &&
+      failedContext &&
+      brandQuestionUniverseCanRecheckFailedResult(
+        failed.operation,
+        failed.task,
+        failedContext,
+      )
+    ) {
+      active = await reconcileOperation(failed, true);
+    }
+  }
   const [snapshot, workspace, credential, latest] = await Promise.all([
     authenticatedSnapshot(actor.id),
     getDashboardWorkspace(actor.id),

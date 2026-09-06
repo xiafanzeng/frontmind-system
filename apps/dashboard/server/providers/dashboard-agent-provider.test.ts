@@ -792,9 +792,97 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
       error_content: "服务暂时不可用",
     });
     expect(
-      events.some((event) => event.type === "structured_output_result"),
-    ).toBe(false);
+      events.find((event) => event.type === "structured_output_result")
+        ?.structured_output_result,
+    ).toEqual({ success: true, value: { ok: true } });
     expect(JSON.stringify(events)).not.toContain(`zhipu-file:${archive.id}`);
+  });
+
+  it("exposes original same-round downloadable JSON while preserving the exhausted native failure", async () => {
+    const f = fixture();
+    await f
+      .client()
+      .createTask({ ...request, structuredOutputSchema: { type: "object" } });
+    f.output("prior-round.json", Buffer.from('{"payload":"prior round"}'));
+    f.finish("上一轮结束");
+    const previous = [...f.rows.values()][0];
+    await f
+      .client({
+        localTaskId: previous.localTaskId,
+        intentId: "next-original-round",
+      })
+      .sendMessage({
+        taskId: "session_1",
+        prompt: "This round",
+        structuredOutputSchema: { type: "object" },
+      });
+    const native = f.output(
+      "brand-question-universe-payload.json",
+      Buffer.from('{"payload":"original business payload"}'),
+    );
+    const invalid = f.output("invalid.json", Buffer.from("not JSON"));
+    const foreign = f.output(
+      "foreign.json",
+      Buffer.from('{"payload":"wrong tenant"}'),
+    );
+    foreign.scope.id = "another_session";
+    f.events.push({
+      id: "provider-exhausted",
+      type: "session.error",
+      processed_at: f.now(),
+      error: {
+        type: "unknown_error",
+        message: "服务暂时不可用",
+        retry_status: { type: "exhausted" },
+      },
+    });
+    f.finish("服务暂不可用");
+    f.events.at(-1)!.stop_reason = { type: "retries_exhausted" };
+    const events = await f
+      .client()
+      .listAllMessages({ taskId: "session_1", order: "asc" });
+    expect(latestManusV2TaskState(events)).toBe("error");
+    const currentRound = events.slice(
+      events.findLastIndex((event) => event.type === "user_message") + 1,
+    );
+    expect(
+      currentRound
+        .filter((event) => event.type === "structured_output_result")
+        .map((event) => event.structured_output_result),
+    ).toEqual([
+      { success: true, value: { payload: "original business payload" } },
+    ]);
+    const marker = events.findIndex((event) => event.type === "user_message");
+    const delivery = events.findIndex(
+      (event) => event.type === "structured_output_result",
+    );
+    const failure = events.findIndex(
+      (event) =>
+        event.type === "status_update" &&
+        event.status_update?.agent_status === "error",
+    );
+    expect(marker).toBeLessThan(delivery);
+    expect(delivery).toBeLessThan(failure);
+    const nativeRead = f.calls.filter(
+      (call) => call.path === `/v1/files/${native.id}/content`,
+    );
+    expect(nativeRead).toHaveLength(1);
+    expect(
+      f.calls.some((call) => call.path === `/v1/files/${invalid.id}/content`),
+    ).toBe(true);
+    expect(
+      f.calls.some((call) => call.path === `/v1/files/${foreign.id}/content`),
+    ).toBe(false);
+    expect(
+      f.calls.filter(
+        (call) => call.path.endsWith("/events") && call.method === "POST",
+      ),
+    ).toHaveLength(2);
+    expect(
+      f.calls.filter(
+        (call) => call.path === "/v1/sessions" && call.method === "POST",
+      ),
+    ).toHaveLength(1);
   });
 
   it("allows a retrying provider error to finish normally", async () => {

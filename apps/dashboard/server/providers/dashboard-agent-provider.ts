@@ -1055,16 +1055,23 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       const terminal = [...scoped]
         .reverse()
         .find((e) => e.type === "session.status_idle");
-      if (!terminal || object(terminal.stop_reason).type !== "end_turn")
-        continue;
+      if (!terminal) continue;
       const terminalIndex = scoped.indexOf(terminal);
-      if (terminalSessionError(scoped.slice(0, terminalIndex + 1))) continue;
+      const failure = terminalSessionError(scoped.slice(0, terminalIndex + 1));
+      const completed =
+        object(terminal.stop_reason).type === "end_turn" && !failure;
+      // A failed native run can still leave a complete structured deliverable.
+      // Keep its error status; only the existing business parser can accept it.
+      const failedStructuredDelivery = Boolean(command.schema && failure);
+      if (!completed && !failedStructuredDelivery) continue;
       if (
         scoped
           .slice(terminalIndex + 1)
           .some(
             (e) =>
-              e.type === "session.status_running" || e.type === "session.error",
+              e.type === "session.status_running" ||
+              e.type === "session.error" ||
+              e.type === "user.interrupt",
           )
       )
         continue;
@@ -1123,8 +1130,21 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         )
           continue;
         validFilename(String(file.filename));
+        const structuredFile = Boolean(
+          command.schema &&
+            /\.json$/iu.test(String(file.filename)) &&
+            Number(file.size_bytes) <= 512 * 1024,
+        );
+        if (!completed && !structuredFile) continue;
         const prior = record.runtime.files.find((f) => f.id === id);
         if (prior?.commandKey && prior.commandKey !== command.key) continue;
+        if (
+          structuredFile &&
+          prior &&
+          (prior.filename !== file.filename ||
+            prior.bytes !== Number(file.size_bytes))
+        )
+          fail("task.listMessages", "ARTIFACT_IDENTITY_CONFLICT");
         outputFiles.push(
           prior ?? {
             id,
@@ -1136,16 +1156,53 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
             commandKey: command.key,
           },
         );
+        if (structuredFile) {
+          // File bytes are authoritative output of this exact command/session.
+          // Never reinterpret uploads, a different round or an oversized file.
+          const downloaded = await this.api.downloadFile(id);
+          if (
+            downloaded.bytes.length !== Number(file.size_bytes) ||
+            (prior?.sha256 && prior.sha256 !== sha(downloaded.bytes)) ||
+            record.runtime.files.some(
+              (input) =>
+                input.role === "input" &&
+                input.sha256 === sha(downloaded.bytes),
+            )
+          ) {
+            fail("task.listMessages", "ARTIFACT_CONTENT_CONFLICT");
+          }
+          outputFiles[outputFiles.length - 1].sha256 = sha(downloaded.bytes);
+          let value: unknown;
+          try {
+            value = repairStructuredJsonCandidate(
+              downloaded.bytes.toString("utf8"),
+            ).value;
+          } catch {
+            continue;
+          }
+          result.push({
+            id: `zhipu_structured_file_${sha(`${command.key}:${id}:${sha(downloaded.bytes)}`)}`,
+            type: "structured_output_result",
+            timestamp: stamp(file.created_at) ?? endedAt,
+            providerOriginalRank: raw.indexOf(terminal) + 0.1,
+            structured_output_result: { success: true, value },
+            providerProjection: "zhipu_adapter_json_file",
+          });
+        }
       }
       await this.change(record, (runtime) => ({
         ...runtime,
         files: [
-          ...runtime.files,
+          ...runtime.files.map(
+            (file) =>
+              outputFiles.find((output) => output.id === file.id) ?? file,
+          ),
           ...outputFiles.filter(
             (f) => !runtime.files.some((old) => old.id === f.id),
           ),
         ],
       }));
+      if (!completed) continue;
       result.push({
         id: `zhipu_outputs_${sha(
           `${command.key}:${outputFiles

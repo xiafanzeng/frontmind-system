@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
+import { repairStructuredJsonCandidate } from "../../shared/model-output-repair";
 import {
   ManusV2ApiError,
   ManusV2Client,
-  manusV2EventsContainOperationToken,
-  manusV2EventMatchesGeneralChatRequest,
   type ManusV2Attachment,
   type ManusV2MessageEvent,
 } from "../manus-v2-client";
@@ -85,8 +82,6 @@ const stamp = (value: unknown): number | null => {
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
 const SYSTEM =
   "Execute the original FrontMind task and attached Skill without changing its instructions, business schema, stage order, or user confirmation points. Original input files are mounted read-only below /mnt/session/uploads/input under their original filenames. Copy any workflow ZIP byte-for-byte into /workspace/frontmind before extracting a writable copy. Do not treat workflow files as customer evidence. Preserve original prompt and file content. Stop at each requested user pause and wait for the next user message. Put only the requested final deliverables in /mnt/session/outputs. Never include input files, internal Skills, secrets, or temporary files in outputs. This instruction adapts transport paths and delivery only.";
-const ajv = new Ajv({ strict: false, allErrors: false });
-addFormats(ajv);
 const activeStreams = new Map<string, Promise<void>>();
 function fail(
   operation: string,
@@ -549,13 +544,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     const record = await this.reserve();
     if (record.runtime.intentId !== this.intent())
       fail("task.create", "PROVIDER_INITIAL_INTENT_CONFLICT");
-    if (input.structuredOutputSchema) {
-      try {
-        ajv.compile(input.structuredOutputSchema);
-      } catch {
-        fail("task.create", "STRUCTURED_SCHEMA_INVALID");
-      }
-    }
     const files = await this.attachments(input.attachments ?? [], record);
     const agentBody = {
       name: `FrontMind ${record.operationId}`,
@@ -755,13 +743,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     const intentId = this.intent();
     const key = initial ? "initial" : `turn:${sha(intentId)}`;
     const sessionId = record.runtime.sessionId!;
-    if (input.structuredOutputSchema) {
-      try {
-        ajv.compile(input.structuredOutputSchema);
-      } catch {
-        fail("task.sendMessage", "STRUCTURED_SCHEMA_INVALID");
-      }
-    }
     const providerPrompt = zhipuTaskPrompt(input);
     const request = {
       sessionId,
@@ -784,30 +765,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       prior &&
       (prior.state === "sending" || prior.state === "outcome_unknown")
     ) {
-      const history = await this.api.listAll(
-        `/v1/sessions/${sessionId}/events`,
-        { order: "asc" },
-      );
-      const observed = history.filter(
-        (event) =>
-          event.type === "user.message" &&
-          !command!.beforeEventIds.includes(String(event.id)) &&
-          sha(text(event.content)) === command!.providerPromptHash,
-      );
-      if (observed.length !== 1)
-        fail(
-          "task.sendMessage",
-          observed.length
-            ? "PROVIDER_COMMAND_AMBIGUOUS"
-            : "ZHIPU_MUTATION_OUTCOME_UNKNOWN",
-          true,
-        );
-      await this.acknowledgeObservedMessage(
-        record,
-        command,
-        zhipuResourceId(observed[0]),
-      );
-      return { ...command, eventId: zhipuResourceId(observed[0]) };
+      fail("task.sendMessage", "ZHIPU_MUTATION_OUTCOME_UNKNOWN", true);
     }
     if (!command) {
       const before = initial
@@ -941,7 +899,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     }
   }
   async findCreatedTask(
-    input: Parameters<ManusV2Client["findCreatedTask"]>[0],
+    _input: Parameters<ManusV2Client["findCreatedTask"]>[0],
   ): ReturnType<ManusV2Client["findCreatedTask"]> {
     const record = await this.store.findByIntent(this.identity, this.intent());
     const empty = {
@@ -951,63 +909,17 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       unresolvedEvidenceCount: 0,
       unique: null,
     };
-    if (!record?.runtime.sessionId) return empty;
-    const taskId = record.runtime.sessionId;
-    const [detail, events] = await Promise.all([
-      this.taskDetail(taskId),
-      this.readProvider("task.findCreatedTask", () =>
-        this.api.listAll(`/v1/sessions/${taskId}/events`, { order: "asc" }),
-      ),
-    ]);
-    const command = record.runtime.commands.find((c) => c.key === "initial");
-    if (!input.operationToken && !input.promptSha256)
-      throw new Error("findCreatedTask requires reconciliation evidence");
+    // A locally acknowledged task may be reused. Unknown sends require a
+    // reset/new task; never reconstruct an old conversation from its history.
     if (
-      detail.title !== input.title ||
-      (input.createdAfterSeconds !== undefined &&
-        detail.createdAt !== null &&
-        detail.createdAt < input.createdAfterSeconds) ||
-      (input.createdBeforeSeconds !== undefined &&
-        detail.createdAt !== null &&
-        detail.createdAt > input.createdBeforeSeconds)
+      !record?.runtime.sessionId ||
+      !record.runtime.commands.find((command) => command.key === "initial")
+        ?.eventId
     )
       return empty;
-    const canonical: ManusV2MessageEvent[] = command
-      ? [
-          {
-            id: "evidence",
-            type: "user_message",
-            timestamp: 0,
-            user_message: {
-              content: command.prompt,
-              attachments: command.attachments.map((f) => ({
-                file_id: f.fileId,
-                filename: f.filename,
-              })),
-            },
-          },
-        ]
-      : [];
-    const matchesEvidence =
-      (input.operationToken &&
-        manusV2EventsContainOperationToken(canonical, input.operationToken)) ||
-      (input.promptSha256 &&
-        canonical.some((event) =>
-          manusV2EventMatchesGeneralChatRequest(event, {
-            promptSha256: input.promptSha256!,
-            attachmentFileIds: input.attachmentFileIds ?? [],
-          }),
-        ));
-    const user = events.filter(
-      (e) =>
-        e.type === "user.message" &&
-        command &&
-        matchesEvidence &&
-        !command.beforeEventIds.includes(String(e.id)) &&
-        sha(text(e.content)) === command.providerPromptHash,
-    );
+    const detail = await this.taskDetail(record.runtime.sessionId);
     const candidate = {
-      id: taskId,
+      id: record.runtime.sessionId,
       title: detail.title ?? "",
       taskUrl: null,
       createdAt: detail.createdAt,
@@ -1015,48 +927,12 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       creditUsage: null,
       status: detail.status,
     };
-    if (user.length === 1 && command) {
-      await this.acknowledgeObservedMessage(
-        record,
-        command,
-        zhipuResourceId(user[0]),
-      );
-      return {
-        candidates: [candidate],
-        matches: [candidate],
-        unresolved: [],
-        unresolvedEvidenceCount: 0,
-        unique: candidate,
-      };
-    }
     return {
+      ...empty,
       candidates: [candidate],
-      matches: [],
-      unresolved: [candidate],
-      unresolvedEvidenceCount: 1,
-      unique: null,
+      matches: [candidate],
+      unique: candidate,
     };
-  }
-  private async acknowledgeObservedMessage(
-    record: DashboardRuntimeRecord,
-    command: DashboardManagedCommand,
-    eventId: string,
-  ) {
-    await this.change(record, (runtime) => {
-      const key = `message:${command.key}`;
-      const prior = runtime.mutations[key];
-      if (!prior) return runtime;
-      return {
-        ...runtime,
-        mutations: {
-          ...runtime.mutations,
-          [key]: { ...prior, state: "acknowledged", resourceId: eventId },
-        },
-        commands: runtime.commands.map((c) =>
-          c.key === command.key ? { ...c, eventId } : c,
-        ),
-      };
-    });
   }
   async listAllMessages(
     input: Parameters<ManusV2Client["listAllMessages"]>[0],
@@ -1071,23 +947,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       const raw = order === "desc" ? [...fetched].reverse() : fetched;
       if (zhipuResourceId(session) !== input.taskId)
         fail("task.listMessages", "TASK_ID_CONFLICT");
-      for (const command of record.runtime.commands.filter((c) => !c.eventId)) {
-        const matches = raw.filter(
-          (e) =>
-            e.type === "user.message" &&
-            !command.beforeEventIds.includes(String(e.id)) &&
-            sha(text(e.content)) === command.providerPromptHash,
-        );
-        if (matches.length === 1)
-          await this.acknowledgeObservedMessage(
-            record,
-            command,
-            zhipuResourceId(matches[0]),
-          );
-        if (matches.length > 1)
-          fail("task.listMessages", "PROVIDER_COMMAND_AMBIGUOUS");
-      }
-      record = await this.session(input.taskId);
       const events = normalizeDashboardZhipuEvents(raw, record.runtime);
       const files = await this.api.listAll(
         "/v1/files",
@@ -1172,28 +1031,26 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       const endedAt = stamp(terminal.processed_at);
       if (endedAt === null) continue;
       if (command.schema) {
-        const final = [...scoped]
-          .reverse()
-          .find((e) => e.type === "agent.message");
-        if (final) {
+        for (const final of [...scoped].reverse()) {
+          if (final.type !== "agent.message") continue;
           let value: unknown;
-          let accepted = false;
           try {
-            value = JSON.parse(text(final.content).trim());
-            accepted = ajv.validate(command.schema, value) === true;
+            value = repairStructuredJsonCandidate(text(final.content)).value;
           } catch {
-            /* rejected extraction stays explicit */
+            // A closing sentence must not hide earlier usable JSON or files.
+            continue;
           }
           result.push({
             id: `zhipu_structured_${sha(`${command.key}:${final.id}`)}`,
             type: "structured_output_result",
             timestamp: stamp(final.processed_at) ?? endedAt,
             providerOriginalRank: raw.indexOf(final) + 0.2,
-            structured_output_result: accepted
-              ? { success: true, value }
-              : { success: false, error: "STRUCTURED_OUTPUT_REJECTED" },
+            // Existing business parsers own the result contract. Transport
+            // only removes a known JSON envelope; it adds no second validator.
+            structured_output_result: { success: true, value },
             providerProjection: "zhipu_adapter_json",
           });
+          break;
         }
       }
       const beganAt =
@@ -1617,15 +1474,5 @@ export function normalizeDashboardZhipuEvents(
 export function createDashboardAgentClient(
   options: DashboardAgentClientOptions,
 ): DashboardAgentClient {
-  if (options.provider === "zhipu")
-    return new ZhipuDashboardAgentProvider(options);
-  if (options.provider !== "manus")
-    throw new Error("DASHBOARD_PROVIDER_UNSUPPORTED");
-  return new ManusV2Client({
-    apiKey: options.apiKey,
-    baseUrl: options.baseUrl ?? "https://api.manus.ai",
-    timeoutMs: options.timeoutMs,
-    rateLimitScope:
-      options.rateLimitScope ?? `managed-user:${options.accountUserId}`,
-  });
+  return new ZhipuDashboardAgentProvider(options);
 }

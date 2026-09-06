@@ -126,13 +126,13 @@ describe("Dashboard provider migration preserves business consumers", () => {
     );
   });
 
-  it("selects frozen Zhipu or historical Manus models and rejects conflicting metadata", () => {
+  it("selects frozen Zhipu models and rejects retired or conflicting credentials", () => {
     expect(knowledgeBaseUpstreamModelForCredential(credential)).toBe("glm-5.3");
-    expect(
+    expect(() =>
       knowledgeBaseUpstreamModelForCredential({
         upstreamModel: "manus-1.6-max",
       }),
-    ).toBe("manus-1.6-max");
+    ).toThrow();
     expect(() =>
       knowledgeBaseUpstreamModelForCredential({
         provider: "zhipu",

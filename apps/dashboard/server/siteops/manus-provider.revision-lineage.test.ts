@@ -79,6 +79,9 @@ function operation() {
     createdAt: new Date("2026-08-30T01:01:00.000Z"),
     input: {
       credentialScope: "customer",
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
       manusCredentialId: "50000000-0000-4000-8000-000000000001",
       manusCredentialVersion: 1,
       buildId: rootBuildId,

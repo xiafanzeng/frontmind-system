@@ -30,7 +30,8 @@ import {
   responseLogicTurnInputAttachmentFilename,
   setResponseLogicTaskStatusNoStore,
 } from "./response-logic-api";
-import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
+import { ManusV2ApiError } from "./manus-v2-client";
+import * as credentialAgentClient from "./credential-agent-client";
 import { assertResponseLogicDraftPublishable } from "./response-logic-service";
 import {
   normalizeResponseLogicPublicProvenance,
@@ -678,133 +679,123 @@ describe("response logic execution contract", () => {
       }),
     ).toThrow("attachment limit exceeded");
 
-    const post = vi.spyOn(axios.Axios.prototype, "post").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        request_id: "request-response-idempotent",
-        task_id: "task-response-idempotent",
-      },
+    const createTask = vi.fn().mockResolvedValue({
+      taskId: "task-response-idempotent",
+      raw: { ok: true, task_id: "task-response-idempotent" },
     });
+    const factory = vi
+      .spyOn(credentialAgentClient, "createCredentialAgentClient")
+      .mockReturnValue({ createTask } as any);
+    const credential = {
+      id: "credential-zhipu",
+      userId: 42,
+      provider: "zhipu",
+    } as any;
     await createResponseLogicTask({
-      baseUrl: "https://api.example.test",
+      baseUrl: "https://provider.example.test",
       apiKey: "secret-test-key",
+      credential,
+      accountUserId: 42,
       prompt: "bounded prompt",
       attachments: [],
       idempotencyKey: taskIdempotencyKey,
-      agentProfile: "manus-1.6-max",
+      agentProfile: "glm-5.3",
     });
-    expect(post).toHaveBeenCalledWith(
-      "https://api.example.test/v2/task.create",
+    expect(factory).toHaveBeenCalledWith(credential, {
+      accountUserId: 42,
+      intentId: taskIdempotencyKey,
+      rateLimitScope: undefined,
+    });
+    expect(createTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        agent_profile: "manus-1.6-max",
-        message: expect.objectContaining({
-          content: expect.arrayContaining([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("bounded prompt"),
-            }),
-          ]),
-        }),
-        structured_output_schema: expect.objectContaining({
+        prompt: expect.stringContaining("bounded prompt"),
+        agentProfile: "glm-5.3",
+        structuredOutputSchema: expect.objectContaining({
           required: ["concern", "conclusion", "facts", "boundaries"],
         }),
       }),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          "Content-Type": "application/json",
-        }),
-      }),
     );
-
-    post.mockClear();
+    createTask.mockClear();
     await expect(
       createResponseLogicTask({
-        baseUrl: "https://api.example.test",
+        baseUrl: "https://provider.example.test",
         apiKey: "secret-test-key",
+        credential,
+        accountUserId: 42,
         prompt: "界".repeat(3_001),
         attachments: [],
         idempotencyKey: taskIdempotencyKey,
-        agentProfile: "manus-1.6-max",
+        agentProfile: "glm-5.3",
       }),
     ).rejects.toThrow("UPSTREAM_PROMPT_EXCEEDS_3000_CHARACTERS");
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("requires tenant credential context instead of falling back to Manus", async () => {
+    const factory = vi.spyOn(
+      credentialAgentClient,
+      "createCredentialAgentClient",
+    );
+    const post = vi.spyOn(axios.Axios.prototype, "post");
+    await expect(
+      createResponseLogicTask({
+        baseUrl: "https://retired.example.test",
+        apiKey: "legacy-key",
+        prompt: "bounded prompt",
+        attachments: [],
+        idempotencyKey: "fresh-response-intent",
+        agentProfile: "glm-5.3",
+      }),
+    ).rejects.toMatchObject({ code: "ZHIPU_CREDENTIAL_CONTEXT_REQUIRED" });
+    expect(factory).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("preserves an ambiguous task.create when its reconciliation read fails", async () => {
-    const original = new ManusV2ApiError(
-      "task.create",
-      null,
-      "TRANSPORT_UNKNOWN",
-      false,
-      true,
-    );
-    const createTask = vi
-      .spyOn(ManusV2Client.prototype, "createTask")
-      .mockRejectedValueOnce(original);
-    const findCreatedTask = vi
-      .spyOn(ManusV2Client.prototype, "findCreatedTask")
-      .mockRejectedValueOnce(
-        new ManusV2ApiError(
-          "task.list",
-          503,
-          "UPSTREAM_UNAVAILABLE",
-          true,
-          false,
-        ),
+  it.each(["create", "continue"] as const)(
+    "keeps an unknown %s result without reconstructing a historical task",
+    async (operation) => {
+      const original = new ManusV2ApiError(
+        operation === "create" ? "task.create" : "task.sendMessage",
+        null,
+        "TRANSPORT_UNKNOWN",
+        false,
+        true,
       );
-
-    const result = await createResponseLogicTask({
-      baseUrl: "https://api.example.test",
-      apiKey: "secret-test-key",
-      prompt: "bounded prompt",
-      attachments: [],
-      idempotencyKey: "task-create-unknown",
-      agentProfile: "manus-1.6-max",
-    });
-
-    expect(result).toMatchObject({ ok: false, upstreamError: original });
-    expect(createTask).toHaveBeenCalledTimes(1);
-    expect(findCreatedTask).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves an ambiguous task message when its reconciliation read fails", async () => {
-    const original = new ManusV2ApiError(
-      "task.sendMessage",
-      null,
-      "TRANSPORT_UNKNOWN",
-      false,
-      true,
-    );
-    const sendMessage = vi
-      .spyOn(ManusV2Client.prototype, "sendMessage")
-      .mockRejectedValueOnce(original);
-    const listAllMessages = vi
-      .spyOn(ManusV2Client.prototype, "listAllMessages")
-      .mockRejectedValueOnce(
-        new ManusV2ApiError(
-          "task.listMessages",
-          503,
-          "UPSTREAM_UNAVAILABLE",
-          true,
-          false,
-        ),
-      );
-
-    const result = await createResponseLogicTask({
-      baseUrl: "https://api.example.test",
-      apiKey: "secret-test-key",
-      prompt: "bounded prompt",
-      attachments: [],
-      taskId: "existing-task",
-      idempotencyKey: "task-message-unknown",
-      agentProfile: "manus-1.6-max",
-    });
-
-    expect(result).toMatchObject({ ok: false, upstreamError: original });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(listAllMessages).toHaveBeenCalledTimes(1);
-  });
+      const createTask = vi.fn().mockRejectedValue(original);
+      const sendMessage = vi.fn().mockRejectedValue(original);
+      const findCreatedTask = vi.fn();
+      const listAllMessages = vi.fn();
+      vi.spyOn(
+        credentialAgentClient,
+        "createCredentialAgentClient",
+      ).mockReturnValue({
+        createTask,
+        sendMessage,
+        findCreatedTask,
+        listAllMessages,
+      } as any);
+      const result = await createResponseLogicTask({
+        baseUrl: "https://provider.example.test",
+        apiKey: "secret-test-key",
+        credential: { provider: "zhipu", userId: 42 } as any,
+        accountUserId: 42,
+        prompt: "bounded prompt",
+        attachments: [],
+        ...(operation === "continue" ? { taskId: "existing-task" } : {}),
+        idempotencyKey: "task-unknown",
+        agentProfile: "glm-5.3",
+      });
+      expect(result).toMatchObject({ ok: false, upstreamError: original });
+      expect(
+        operation === "create" ? createTask : sendMessage,
+      ).toHaveBeenCalledOnce();
+      expect(
+        operation === "create" ? sendMessage : createTask,
+      ).not.toHaveBeenCalled();
+      expect(findCreatedTask).not.toHaveBeenCalled();
+      expect(listAllMessages).not.toHaveBeenCalled();
+    },
+  );
 
   it("sanitizes every public field without deleting facts after a source marker", () => {
     const publicDraft = normalizeResponseLogicPublicProvenance({

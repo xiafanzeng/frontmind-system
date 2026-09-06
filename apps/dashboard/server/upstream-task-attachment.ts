@@ -1,5 +1,3 @@
-import { ManusV2Client } from "./manus-v2-client";
-
 export type CanonicalProviderFile = {
   id: string;
   filename: string;
@@ -182,80 +180,5 @@ export class UpstreamTaskAttachmentContentProofError extends Error {
         ? "UPSTREAM_FILE_CONTENT_PROOF_UNAVAILABLE"
         : "UPSTREAM_FILE_CONTENT_PROOF_INVALID";
     this.retryable = failureClass === "transient";
-  }
-}
-
-export async function uploadUpstreamTaskAttachment(input: {
-  baseUrl: string;
-  apiKey: string;
-  filename: string;
-  bytes: Buffer;
-  mimeType?: string;
-  /** Stable per-turn/per-slot key. Required by durable KB attachment callers. */
-  idempotencyKey?: string;
-  /** Completed reservation replay: verify/reuse this exact provider file. */
-  existingFileId?: string;
-  /** Persist file ownership before any byte upload can begin. */
-  onFileResolved?: (fileId: string) => Promise<void>;
-  /** Bounded provider readiness wait; production defaults to five minutes. */
-  readinessDeadlineMs?: number;
-  /** Test seam for readiness backoff without changing production timing. */
-  readinessSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-}) {
-  const mimeType = input.mimeType || "application/zip";
-  const client = new ManusV2Client({
-    baseUrl: input.baseUrl,
-    apiKey: input.apiKey,
-  });
-  const suppliedFileId = String(input.existingFileId ?? "");
-  const usesExistingFile = suppliedFileId.length > 0;
-  let fileId = suppliedFileId;
-  let candidateCreated = false;
-  const removeOrphan = async () => {
-    if (!fileId) return;
-    await client.deleteFile(fileId).catch(() => undefined);
-  };
-
-  try {
-    if (usesExistingFile) {
-      await input.onFileResolved?.(fileId);
-    }
-    const uploaded = await client.uploadFile({
-      filename: input.filename,
-      bytes: input.bytes,
-      contentType: mimeType,
-      sleep: input.readinessSleep
-        ? (ms) => input.readinessSleep!(ms)
-        : undefined,
-      ...(usesExistingFile
-        ? {
-            existingCandidate: {
-              fileId,
-              filename: input.filename,
-            },
-          }
-        : {}),
-      observer: usesExistingFile
-        ? undefined
-        : {
-            onCandidateCreated: async (created) => {
-              candidateCreated = true;
-              fileId = created.fileId;
-              // Ownership is persisted before the signed URL is used.
-              await input.onFileResolved?.(fileId);
-            },
-          },
-    });
-    fileId = uploaded.fileId;
-    return {
-      attachment: { file_id: fileId, filename: input.filename },
-      fileId,
-      removeOrphan,
-    };
-  } catch (error) {
-    if (!usesExistingFile && candidateCreated && !input.onFileResolved) {
-      await removeOrphan();
-    }
-    throw error;
   }
 }

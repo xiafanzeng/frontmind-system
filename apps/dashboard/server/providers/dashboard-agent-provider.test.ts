@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
+import { collectKnowledgeArchiveDescriptors } from "../knowledge-base-artifact";
 import { describe, expect, it, vi } from "vitest";
 import {
-  ManusV2Client,
   ManusV2ApiError,
   manusV2EventMatchesGeneralChatRequest,
   latestManusV2TaskState,
   latestManusV2WaitingDetail,
+  normalizeManusV2Output,
 } from "../manus-v2-client";
 import {
   createDashboardAgentClient,
@@ -305,14 +306,14 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
-  it("keeps frozen legacy credentials on native Manus", () => {
-    expect(
+  it("rejects a legacy AI credential instead of calling Manus", () => {
+    expect(() =>
       createDashboardAgentClient({
         ...identity,
         provider: "manus",
         apiKey: "synthetic",
       }),
-    ).toBeInstanceOf(ManusV2Client);
+    ).toThrow("DASHBOARD_PROVIDER_IDENTITY_REQUIRED");
   });
   it("uploads original bytes, establishes SSE before send, restores exact original prompt and attachments, and replays once", async () => {
     const f = fixture();
@@ -485,14 +486,18 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
     ).toHaveLength(1);
     expect([...f.rows.values()][0].runtime.intentId).toBe("initial-intent");
   });
-  it("reconciles a lost send acknowledgement from exact history without resending or remounting", async () => {
+  it("requires a fresh task after a lost send acknowledgement without reconstructing history", async () => {
     const f = fixture();
     f.failSend("lost_after_accept");
     await expect(f.client().createTask(request)).rejects.toMatchObject({
       outcomeUnknown: true,
     });
-    const recovered = await f.client().createTask(request);
-    expect(recovered.taskId).toBe("session_1");
+    await expect(f.client().createTask(request)).rejects.toMatchObject({
+      outcomeUnknown: true,
+    });
+    expect(
+      (await f.client().findCreatedTask({ title: request.title })).unique,
+    ).toBeNull();
     expect(
       f.calls.filter((c) => c.method === "POST" && c.path.endsWith("/events")),
     ).toHaveLength(1);
@@ -534,7 +539,7 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
     ).rejects.toMatchObject({ status: 404 });
     expect(f.calls).toHaveLength(count);
   });
-  it("validates structured JSON and binds only the current completed turn's output artifacts", async () => {
+  it("passes structured JSON to the business validator and binds the current turn artifacts", async () => {
     const f = fixture();
     const schema = {
       type: "object",
@@ -584,11 +589,43 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
         .map((e) => e.structured_output_result),
     ).toEqual([
       { success: true, value: { ok: true } },
-      { success: false, error: "STRUCTURED_OUTPUT_REJECTED" },
+      { success: true, value: { ok: false } },
     ]);
     expect(
       all.filter((e) => JSON.stringify(e).includes(`zhipu-file:${archive.id}`)),
     ).toHaveLength(1);
+  });
+  it("preserves an attachment-only KB result and usable JSON before a closing sentence", async () => {
+    const f = fixture();
+    await f
+      .client()
+      .createTask({ ...request, structuredOutputSchema: { type: "object" } });
+    const archive = f.output("frontmind-kb-bundle-original.zip");
+    f.events.push({
+      id: "business-json",
+      type: "agent.message",
+      processed_at: f.now(),
+      content: [
+        { type: "text", text: '```json\n{"payload":{"original":true}}\n```' },
+      ],
+    });
+    f.finish("已完成，知识库 ZIP 已附上。");
+    const events = await f
+      .client()
+      .listAllMessages({ taskId: "session_1", order: "desc" });
+    expect(
+      events.find((e) => e.type === "structured_output_result")
+        ?.structured_output_result,
+    ).toEqual({ success: true, value: { payload: { original: true } } });
+    expect(
+      collectKnowledgeArchiveDescriptors(normalizeManusV2Output(events)),
+    ).toEqual([
+      expect.objectContaining({
+        fileId: archive.id,
+        filename: archive.filename,
+        url: `zhipu-file:${archive.id}`,
+      }),
+    ]);
   });
   it("preserves pending tool confirmation and makes confirmation, stop and delete replay-safe", async () => {
     const f = fixture();
@@ -641,32 +678,19 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
     });
     expect(f.calls.filter((c) => c.method === "DELETE")).toHaveLength(1);
   });
-  it("uses exact operation evidence and validates schema before any paid mutation", async () => {
+  it("reuses only a locally acknowledged task without searching titles or validating business schemas twice", async () => {
     const f = fixture();
-    await expect(
-      f.client().createTask({
-        ...request,
-        structuredOutputSchema: { type: "invalid-type" },
-      }),
-    ).rejects.toMatchObject({ code: "STRUCTURED_SCHEMA_INVALID" });
-    expect(f.calls).toHaveLength(0);
-    await f.client().createTask({
-      ...request,
-      prompt: `${request.prompt}\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT={"operationToken":"token-1"}`,
-    });
     expect(
-      (
-        await f
-          .client()
-          .findCreatedTask({ title: request.title, operationToken: "token" })
-      ).unique,
+      (await f.client().findCreatedTask({ title: request.title })).unique,
     ).toBeNull();
+    await f
+      .client()
+      .createTask({ ...request, structuredOutputSchema: { type: "object" } });
     expect(
-      (
-        await f
-          .client()
-          .findCreatedTask({ title: request.title, operationToken: "token-1" })
-      ).unique?.id,
+      (await f.client().findCreatedTask({ title: request.title })).unique?.id,
     ).toBe("session_1");
+    expect(
+      f.calls.some((c) => c.path === "/v1/sessions" && c.method === "GET"),
+    ).toBe(false);
   });
 });

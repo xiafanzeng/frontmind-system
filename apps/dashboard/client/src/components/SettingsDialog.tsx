@@ -33,14 +33,13 @@ export default function SettingsDialog({
           </DialogTitle>
           <DialogDescription className="text-sm leading-6 text-muted-foreground">
             {systemAdministrator
-              ? "请前往“API 与人员管理”统一配置所有账号智谱 API Key，并查看近 30 天 Token 用量和历史积分。"
+              ? "请前往“API 与人员管理”统一配置所有账号智谱 API Key，并查看近 30 天 Token 用量。"
               : "API Key 由系统管理员统一维护，您可以直接使用当前账号已开放的功能。"}
           </DialogDescription>
         </DialogHeader>
         {systemAdministrator && (
           <div className="rounded-xl border border-primary/15 bg-primary/5 p-4 text-sm leading-6">
-            个人设置不再提供 Key
-            写入、本月积分或任务明细，避免与系统管理员工作台产生两套口径。
+            统一维护智谱 Key，账号的现有功能入口保持不变。
           </div>
         )}
         <div className="flex justify-end">

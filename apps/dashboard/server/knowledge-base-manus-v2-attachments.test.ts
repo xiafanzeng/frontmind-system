@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
 
-import axios from "axios";
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const attachmentLedgerMocks = vi.hoisted(() => ({
   finalize: vi.fn(),
@@ -64,24 +55,8 @@ import {
 } from "./knowledge-base-manus-v2-attachments";
 import { isAllowedManusV2AttachmentAttemptTransition } from "./knowledge-base-turn-service";
 import type { DashboardAgentClient } from "./providers/dashboard-agent-provider";
-import { encryptCredentialSecret } from "./auth-service";
-import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
-
-const originalCredentialEncryptionKey =
-  process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY;
-
-beforeAll(() => {
-  process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY = `base64:${Buffer.alloc(32, 71).toString("base64")}`;
-});
-
-afterAll(() => {
-  if (originalCredentialEncryptionKey === undefined) {
-    delete process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY;
-  } else {
-    process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY =
-      originalCredentialEncryptionKey;
-  }
-});
+import * as dashboardAgentProvider from "./providers/dashboard-agent-provider";
+import { ManusV2ApiError } from "./manus-v2-client";
 
 const mapping = {
   schemaVersion: 1 as const,
@@ -270,7 +245,7 @@ beforeEach(() => {
   }));
 });
 
-describe("Manus v2 complete attachment-set recovery", () => {
+describe("Knowledge base Zhipu frozen attachment set", () => {
   it("sends first-path Skill and Instructions inline in frozen order without file create or detail", async () => {
     const { claim, sources } = testClaim();
     const [skill, instructions] = sources;
@@ -330,21 +305,27 @@ describe("Manus v2 complete attachment-set recovery", () => {
       );
       return source!.bytes;
     });
-    const upload = vi.spyOn(ManusV2Client.prototype, "uploadFile");
-    const detail = vi.spyOn(ManusV2Client.prototype, "fileDetail");
+    const upload = vi.fn();
+    const detail = vi.fn();
+    const factory = vi
+      .spyOn(dashboardAgentProvider, "createDashboardAgentClient")
+      .mockReturnValue({
+        uploadFile: upload,
+        fileDetail: detail,
+      } as unknown as DashboardAgentClient);
 
     const result = await ensureKnowledgeBaseManusV2Attachments({
       claim,
       credential: {
         id: claim.turn.apiCredentialId!,
         userId: claim.turn.userId,
-        apiKey: "synthetic-manus-key",
+        apiKey: "synthetic-zhipu-key",
         version: 1,
-        provider: "manus",
-        upstreamModel: "manus-1.6",
+        provider: "zhipu",
+        upstreamModel: "glm-5",
         upstreamEffort: null,
       },
-      baseUrl: "https://api.manus.test",
+      baseUrl: "https://open.bigmodel.cn",
     });
 
     expect(result[0]).toEqual({
@@ -357,6 +338,14 @@ describe("Manus v2 complete attachment-set recovery", () => {
       filename: instructionsFilename,
       mime_type: "text/markdown",
     });
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "zhipu",
+        accountUserId: claim.turn.userId,
+        credentialOwnerUserId: claim.turn.userId,
+        intentId: claim.turn.id,
+      }),
+    );
     expect(upload).not.toHaveBeenCalled();
     expect(detail).not.toHaveBeenCalled();
     expect(attachmentLedgerMocks.persistAttempt).not.toHaveBeenCalled();
@@ -364,1086 +353,137 @@ describe("Manus v2 complete attachment-set recovery", () => {
     expect(attachmentLedgerMocks.finalize).not.toHaveBeenCalled();
   });
 
-  it("keeps a customer file with the reserved Skill filename strict while only the exact system slot is inline", async () => {
-    const { claim, sources } = testClaim();
-    const [customer, skill] = sources;
-    const collidingFilename = "socratic-kb-builder.skill.zip";
-    claim.preparedDispatch.requestBody.attachments = [
-      { file_id: customer!.sourceFileId, filename: collidingFilename },
-      { file_id: skill!.sourceFileId, filename: collidingFilename },
-    ];
-    claim.turn.attachmentFileIds = [
-      customer!.sourceFileId,
-      skill!.sourceFileId,
-    ];
-    claim.turn.generatedAttachmentReservations = {
-      "skill:1": {
-        schemaVersion: 1,
-        role: "skill",
-        attachmentIndex: 1,
-        requestHash: "a".repeat(64),
-        idempotencyKeyHash: "b".repeat(64),
-        filename: collidingFilename,
-        mimeType: "application/zip",
-        sizeBytes: skill!.sizeBytes,
-        contentSha256: skill!.contentSha256,
-        localStorageKey: skill!.localStorageKey,
-        status: "reserved",
-        reservedAt: "2026-08-12T00:00:00.000Z",
-      },
-    };
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockImplementation(async ({ storageKey }) => {
-      const source = [customer, skill].find(
-        (candidate) => candidate!.localStorageKey === storageKey,
+  it.each(["manus", undefined] as const)(
+    "requires fresh Zhipu credentials instead of falling back from %s",
+    async (provider) => {
+      const { claim } = testClaim();
+      attachmentLedgerMocks.load.mockResolvedValue({
+        turn: claim.turn,
+        preparedDispatch: claim.preparedDispatch,
+      });
+      const factory = vi.spyOn(
+        dashboardAgentProvider,
+        "createDashboardAgentClient",
       );
-      return source!.bytes;
-    });
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    const upload = vi
-      .spyOn(ManusV2Client.prototype, "uploadFile")
-      .mockImplementation(async (input: any) => {
-        const file = {
-          fileId: "customer-collision-file-g1",
-          filename: collidingFilename,
-          uploadUrl: "https://uploads.manus.test/customer-collision",
-          uploadExpiresAt: providerExpiry,
-          requestId: "upload-customer-collision",
-        };
-        await input.observer?.onCandidateCreated?.(file);
-        await input.observer?.onPutStarted?.(file);
-        await input.observer?.onPutAccepted?.(file);
-        return {
-          ...file,
-          detail: {
-            fileId: file.fileId,
-            filename: file.filename,
-            status: "uploaded",
-            bytes: customer!.sizeBytes,
-            expiresAt: providerExpiry,
-            contentType: customer!.mimeType,
-            requestId: "detail-customer-collision",
+      await expect(
+        ensureKnowledgeBaseManusV2Attachments({
+          claim,
+          credential: {
+            id: claim.turn.apiCredentialId,
+            userId: claim.turn.userId,
+            apiKey: "retired",
+            version: 1,
+            provider,
+            upstreamModel: null,
+            upstreamEffort: null,
           },
-        };
-      });
-    const detail = vi
-      .spyOn(ManusV2Client.prototype, "fileDetail")
-      .mockResolvedValue({
-        fileId: "customer-collision-file-g1",
-        filename: collidingFilename,
-        status: "uploaded",
-        bytes: customer!.sizeBytes,
-        expiresAt: providerExpiry,
-        contentType: customer!.mimeType,
-        requestId: "final-detail-customer-collision",
-      } as any);
+          baseUrl: "https://api.manus.test",
+        }),
+      ).rejects.toMatchObject({ code: "RESET_REQUIRED" });
+      expect(factory).not.toHaveBeenCalled();
+      expect(localSourceMocks.read).not.toHaveBeenCalled();
+    },
+  );
 
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([
-      {
-        file_id: "customer-collision-file-g1",
-        filename: collidingFilename,
-      },
-      {
-        file_data: `data:application/zip;base64,${skill!.bytes.toString("base64")}`,
-        filename: collidingFilename,
-        mime_type: "application/zip",
-      },
-    ]);
-
-    expect(upload).toHaveBeenCalledOnce();
-    expect(upload.mock.calls[0]![0].bytes).toEqual(customer!.bytes);
-    expect(detail).toHaveBeenCalledOnce();
-    expect(
-      localSourceMocks.read.mock.calls.map(([input]) => input.storageKey),
-    ).toEqual([customer!.localStorageKey, skill!.localStorageKey]);
-    expect(
-      attachmentLedgerMocks.persistMapping.mock.calls.map(
-        ([input]) => input.mapping.attachmentIndex,
-      ),
-    ).toEqual([0, 0]);
-    expect(attachmentLedgerMocks.finalize).not.toHaveBeenCalled();
-  });
-
-  it("keeps Working Set and customer binary slots on strict file upload around an inline Skill", async () => {
+  it("uploads every frozen customer byte through Zhipu and finalizes in source order", async () => {
     const { claim, sources } = testClaim();
-    const [skill, workingSet, customer] = sources;
-    const skillFilename = "socratic-kb-builder.skill.zip";
-    const workingSetFilename = "frontmind-kb-active-working-set.zip";
-    claim.preparedDispatch.requestBody.attachments = [
-      { file_id: skill!.sourceFileId, filename: skillFilename },
-      { file_id: workingSet!.sourceFileId, filename: workingSetFilename },
-      { file_id: customer!.sourceFileId, filename: customer!.filename },
-    ];
-    claim.turn.generatedAttachmentReservations = {
-      "skill:0": {
-        schemaVersion: 1,
-        role: "skill",
-        attachmentIndex: 0,
-        requestHash: "a".repeat(64),
-        idempotencyKeyHash: "b".repeat(64),
-        filename: skillFilename,
-        mimeType: "application/zip",
-        sizeBytes: skill!.sizeBytes,
-        contentSha256: skill!.contentSha256,
-        localStorageKey: skill!.localStorageKey,
-        status: "reserved",
-        reservedAt: "2026-08-12T00:00:00.000Z",
-      },
-      "working_set:1": {
-        schemaVersion: 1,
-        role: "working_set",
-        attachmentIndex: 1,
-        requestHash: "c".repeat(64),
-        idempotencyKeyHash: "d".repeat(64),
-        filename: workingSetFilename,
-        mimeType: "application/zip",
-        sizeBytes: workingSet!.sizeBytes,
-        contentSha256: workingSet!.contentSha256,
-        localStorageKey: workingSet!.localStorageKey,
-        status: "reserved",
-        reservedAt: "2026-08-12T00:00:00.000Z",
-      },
-    };
     attachmentLedgerMocks.load.mockResolvedValue({
       turn: claim.turn,
       preparedDispatch: claim.preparedDispatch,
     });
-    localSourceMocks.read.mockImplementation(async ({ storageKey }) => {
-      const source = sources.find(
-        (candidate) => candidate.localStorageKey === storageKey,
-      );
-      return source!.bytes;
-    });
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    const strictSlots = [
-      {
-        attachmentIndex: 1,
-        source: workingSet!,
-        filename: workingSetFilename,
-        mimeType: "application/zip",
-        fileId: "working-set-file-g1",
-      },
-      {
-        attachmentIndex: 2,
-        source: customer!,
-        filename: customer!.filename,
-        mimeType: customer!.mimeType,
-        fileId: "customer-file-g1",
-      },
-    ];
-    const upload = vi
-      .spyOn(ManusV2Client.prototype, "uploadFile")
-      .mockImplementation(async (input: any) => {
-        const slot = strictSlots.find(
-          (candidate) => candidate.filename === input.filename,
-        )!;
-        const file = {
-          fileId: slot.fileId,
-          filename: slot.filename,
-          uploadUrl: "https://uploads.manus.test/strict-slot",
-          uploadExpiresAt: providerExpiry,
-          requestId: `upload-${slot.attachmentIndex}`,
-        };
-        await input.observer?.onCandidateCreated?.(file);
-        await input.observer?.onPutStarted?.(file);
-        await input.observer?.onPutAccepted?.(file);
-        return {
-          ...file,
-          detail: {
-            fileId: slot.fileId,
-            filename: slot.filename,
-            status: "uploaded",
-            bytes: slot.source.sizeBytes,
-            expiresAt: providerExpiry,
-            contentType: slot.mimeType,
-            requestId: `detail-${slot.attachmentIndex}`,
-          },
-        };
-      });
-    const detail = vi
-      .spyOn(ManusV2Client.prototype, "fileDetail")
-      .mockImplementation(async (fileId) => {
-        const slot = strictSlots.find(
-          (candidate) => candidate.fileId === fileId,
-        )!;
-        return {
-          fileId: slot.fileId,
-          filename: slot.filename,
-          status: "uploaded",
-          bytes: slot.source.sizeBytes,
-          expiresAt: providerExpiry,
-          contentType: slot.mimeType,
-          requestId: `final-detail-${slot.attachmentIndex}`,
-        } as any;
-      });
-
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([
-      {
-        file_data: `data:application/zip;base64,${skill!.bytes.toString("base64")}`,
-        filename: skillFilename,
-        mime_type: "application/zip",
-      },
-      { file_id: "working-set-file-g1", filename: workingSetFilename },
-      { file_id: "customer-file-g1", filename: customer!.filename },
-    ]);
-
-    expect(upload.mock.calls.map(([input]) => input.filename)).toEqual([
-      workingSetFilename,
-      customer!.filename,
-    ]);
-    expect(detail.mock.calls.map(([fileId]) => fileId)).toEqual([
-      "working-set-file-g1",
-      "customer-file-g1",
-    ]);
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.map(
-        ([input]) => input.attempt.attachmentIndex,
-      ),
-    ).not.toContain(0);
-    expect(
-      attachmentLedgerMocks.persistMapping.mock.calls.map(
-        ([input]) => input.mapping.attachmentIndex,
-      ),
-    ).not.toContain(0);
-    expect(attachmentLedgerMocks.finalize).not.toHaveBeenCalled();
-  });
-
-  it("never inlines a rejected customer attachment", async () => {
-    const { claim, sources } = testClaim();
-    const user = sources[0]!;
-    claim.preparedDispatch.requestBody.attachments =
-      claim.preparedDispatch.requestBody.attachments.slice(0, 1);
-    claim.turn.attachmentFileIds = [user.sourceFileId];
-    claim.recoveryMetadata.attachments =
-      claim.recoveryMetadata.attachments.slice(0, 1);
-    claim.recoveryMetadata.attachmentManifest =
-      claim.recoveryMetadata.attachmentManifest.slice(0, 1);
-    claim.recoveryMetadata.attachmentSourceProofs =
-      claim.recoveryMetadata.attachmentSourceProofs.slice(0, 1);
-    claim.turn.manusV2AttachmentAttempts = {
-      rejectedUser: {
-        ...attemptFor(
-          user,
-          1,
-          "put_accepted",
-          Math.floor(Date.now() / 1_000) + 60 * 60,
-        ),
-        state: "create_rejected",
-        upstreamFileId: null,
-        uploadExpiresAt: null,
-        code: "permission_denied",
-      },
-    };
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockResolvedValue(user.bytes);
-
-    const upload = vi
-      .spyOn(ManusV2Client.prototype, "uploadFile")
-      .mockRejectedValue(new Error("customer upload remains strict"));
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).rejects.toThrow(/customer upload remains strict/u);
-    expect(upload).toHaveBeenCalledOnce();
-  });
-
-  it("resumes a durable candidate crash before its first PUT without POST or a replacement generation", async () => {
-    const { claim, sources } = testClaim();
-    const source = sources[0]!;
-    claim.preparedDispatch.requestBody.attachments =
-      claim.preparedDispatch.requestBody.attachments.slice(0, 1);
-    claim.turn.attachmentFileIds = claim.turn.attachmentFileIds.slice(0, 1);
-    claim.recoveryMetadata.attachments =
-      claim.recoveryMetadata.attachments.slice(0, 1);
-    claim.recoveryMetadata.attachmentManifest =
-      claim.recoveryMetadata.attachmentManifest.slice(0, 1);
-    claim.recoveryMetadata.attachmentSourceProofs =
-      claim.recoveryMetadata.attachmentSourceProofs.slice(0, 1);
-    const key = `g1:0:${source.contentSha256}:${source.sizeBytes}`;
-    const uploadUrl =
-      "https://uploads.manus.test/first-put?signature=never-log-first-put";
-    const upstreamFileId = "file-candidate-before-first-put";
-    const sealed = encryptCredentialSecret(
-      [
-        "frontmind-kb-manus-v2-upload-capability:v1",
-        claim.turn.userId,
-        claim.turn.id,
-        key,
-        1,
-        upstreamFileId,
-      ].join(":"),
-      uploadUrl,
+    localSourceMocks.read.mockImplementation(
+      async ({ storageKey }) =>
+        sources.find((source) => source.localStorageKey === storageKey)!.bytes,
     );
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    claim.turn.manusV2AttachmentAttempts = {
-      [key]: {
-        schemaVersion: 1,
-        mappingKey: key,
-        buildGeneration: 1,
-        attachmentIndex: 0,
-        sourceFileId: source.sourceFileId,
-        localStorageKey: source.localStorageKey,
-        contentSha256: source.contentSha256,
-        sizeBytes: source.sizeBytes,
-        filename: source.filename,
-        mimeType: source.mimeType,
-        providerGeneration: 1,
-        state: "candidate_created",
-        upstreamFileId,
-        uploadExpiresAt: providerExpiry,
-        uploadCapability: {
-          schemaVersion: 1,
-          encryptionVersion: 1,
-          ciphertext: sealed.encryptedKey,
-          iv: sealed.encryptionIv,
-          authTag: sealed.encryptionAuthTag,
-        },
-        code: null,
-        recordedAt: "2026-08-12T00:00:00.000Z",
-      },
-    };
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockResolvedValue(source.bytes);
-    const post = vi.spyOn(axios.Axios.prototype, "post");
-    const put = vi.spyOn(axios, "put").mockResolvedValue({ status: 200 });
-    vi.spyOn(axios.Axios.prototype, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: {
-          id: upstreamFileId,
-          filename: source.filename,
-          status: "uploaded",
-          bytes: source.sizeBytes,
-          content_type: source.mimeType,
-          expires_at: providerExpiry,
-        },
-      },
-    });
     attachmentLedgerMocks.finalize.mockImplementation(async ({ mappings }) => ({
-      attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
+      attachmentFileIds: mappings.map(
+        (mapping: { upstreamFileId: string }) => mapping.upstreamFileId,
+      ),
       manusV2AttachmentMappings: Object.fromEntries(
-        mappings.map((item: any) => [item.mappingKey, item]),
+        mappings.map((mapping: { mappingKey: string }) => [
+          mapping.mappingKey,
+          mapping,
+        ]),
       ),
     }));
-
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([
-      { file_id: upstreamFileId, filename: source.filename },
-    ]);
-
-    expect(post).not.toHaveBeenCalled();
-    expect(put).toHaveBeenCalledOnce();
-    expect(put.mock.calls[0]?.[0]).toBe(uploadUrl);
-    expect(JSON.stringify(claim.turn.manusV2AttachmentAttempts)).not.toContain(
-      "never-log-first-put",
+    const expiry = Math.floor(Date.now() / 1000) + 86400;
+    const details = sources.map((source, index) => ({
+      fileId: `zhipu-file-${index}`,
+      filename: source.filename,
+      bytes: source.sizeBytes,
+      contentType: source.mimeType,
+      contentTypeParseStatus: "valid" as const,
+      status: "uploaded" as const,
+      expiresAt: expiry,
+      requestId: null,
+    }));
+    const uploadFile = vi.fn(async (input) => {
+      const detail = details.find((item) => item.filename === input.filename)!;
+      return {
+        fileId: detail.fileId,
+        filename: detail.filename,
+        uploadUrl: "",
+        uploadExpiresAt: expiry,
+        requestId: null,
+        detail,
+      };
+    });
+    const fileDetail = vi.fn(
+      async (id) => details.find((detail) => detail.fileId === id)!,
+    );
+    const factory = vi
+      .spyOn(dashboardAgentProvider, "createDashboardAgentClient")
+      .mockReturnValue({
+        uploadFile,
+        fileDetail,
+      } as unknown as DashboardAgentClient);
+    const result = await ensureKnowledgeBaseManusV2Attachments({
+      claim,
+      credential: {
+        id: claim.turn.apiCredentialId,
+        userId: claim.turn.userId,
+        apiKey: "synthetic-zhipu",
+        version: 1,
+        provider: "zhipu",
+        upstreamModel: "glm-5",
+        upstreamEffort: null,
+      },
+      baseUrl: "https://open.bigmodel.cn",
+    });
+    expect(result).toEqual(
+      details.map((detail) => ({
+        file_id: detail.fileId,
+        filename: detail.filename,
+      })),
+    );
+    expect(uploadFile.mock.calls.map(([input]) => input.bytes)).toEqual(
+      sources.map((source) => source.bytes),
     );
     expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.some(
-        ([input]) => input.attempt.providerGeneration > 1,
+      factory.mock.calls.every(
+        ([input]) =>
+          input.provider === "zhipu" &&
+          input.accountUserId === claim.turn.userId &&
+          input.credentialOwnerUserId === claim.turn.userId,
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(attachmentLedgerMocks.finalize).toHaveBeenCalledTimes(1);
     expect(
       attachmentLedgerMocks.persistAttempt.mock.calls.map(
         ([input]) => input.attempt.state,
       ),
-    ).toEqual(["put_sending", "put_accepted"]);
-  });
-
-  it("uses the single bounded replacement for a historical candidate without a sealed capability", async () => {
-    const { claim, sources } = testClaim();
-    const source = sources[0]!;
-    claim.preparedDispatch.requestBody.attachments =
-      claim.preparedDispatch.requestBody.attachments.slice(0, 1);
-    claim.turn.attachmentFileIds = claim.turn.attachmentFileIds.slice(0, 1);
-    claim.recoveryMetadata.attachments =
-      claim.recoveryMetadata.attachments.slice(0, 1);
-    claim.recoveryMetadata.attachmentManifest =
-      claim.recoveryMetadata.attachmentManifest.slice(0, 1);
-    claim.recoveryMetadata.attachmentSourceProofs =
-      claim.recoveryMetadata.attachmentSourceProofs.slice(0, 1);
-    const key = `g1:0:${source.contentSha256}:${source.sizeBytes}`;
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    claim.turn.manusV2AttachmentAttempts = {
-      [key]: {
-        schemaVersion: 1,
-        mappingKey: key,
-        buildGeneration: 1,
-        attachmentIndex: 0,
-        sourceFileId: source.sourceFileId,
-        localStorageKey: source.localStorageKey,
-        contentSha256: source.contentSha256,
-        sizeBytes: source.sizeBytes,
-        filename: source.filename,
-        mimeType: source.mimeType,
-        providerGeneration: 1,
-        state: "candidate_created",
-        upstreamFileId: "historical-file-without-capability",
-        uploadExpiresAt: providerExpiry,
-        code: null,
-        recordedAt: "2026-08-12T00:00:00.000Z",
-      },
-    };
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockResolvedValue(source.bytes);
-    const post = vi.spyOn(axios.Axios.prototype, "post").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: { id: "replacement-file-g2", filename: source.filename },
-        upload_url: "https://uploads.manus.test/replacement-g2",
-        upload_expires_at: providerExpiry,
-      },
-    });
-    vi.spyOn(axios, "put").mockResolvedValue({ status: 200 });
-    vi.spyOn(axios.Axios.prototype, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: {
-          id: "replacement-file-g2",
-          filename: source.filename,
-          status: "uploaded",
-          bytes: source.sizeBytes,
-          content_type: source.mimeType,
-          expires_at: providerExpiry,
-        },
-      },
-    });
-    attachmentLedgerMocks.finalize.mockImplementation(async ({ mappings }) => ({
-      attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
-      manusV2AttachmentMappings: Object.fromEntries(
-        mappings.map((item: any) => [item.mappingKey, item]),
-      ),
-    }));
-
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([
-      { file_id: "replacement-file-g2", filename: source.filename },
+    ).toEqual([
+      "creating",
+      "complete_upload_accepted",
+      "creating",
+      "complete_upload_accepted",
+      "creating",
+      "complete_upload_accepted",
     ]);
-
-    expect(post).toHaveBeenCalledOnce();
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.filter(
-        ([input]) => input.attempt.state === "creating",
-      ),
-    ).toHaveLength(1);
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.some(
-        ([input]) => input.attempt.providerGeneration === 2,
-      ),
-    ).toBe(true);
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.some(
-        ([input]) => input.attempt.providerGeneration > 2,
-      ),
-    ).toBe(false);
   });
-
-  it("resumes a durable retryable PUT after process restart on the same signed capability and file id", async () => {
-    const { claim, sources } = testClaim();
-    const source = sources[0]!;
-    claim.preparedDispatch.requestBody.attachments =
-      claim.preparedDispatch.requestBody.attachments.slice(0, 1);
-    claim.turn.attachmentFileIds = claim.turn.attachmentFileIds.slice(0, 1);
-    claim.recoveryMetadata.attachments =
-      claim.recoveryMetadata.attachments.slice(0, 1);
-    claim.recoveryMetadata.attachmentManifest =
-      claim.recoveryMetadata.attachmentManifest.slice(0, 1);
-    claim.recoveryMetadata.attachmentSourceProofs =
-      claim.recoveryMetadata.attachmentSourceProofs.slice(0, 1);
-    const key = `g1:0:${source.contentSha256}:${source.sizeBytes}`;
-    const uploadUrl =
-      "https://uploads.manus.test/signed-object?signature=never-log-this";
-    const sealed = encryptCredentialSecret(
-      [
-        "frontmind-kb-manus-v2-upload-capability:v1",
-        claim.turn.userId,
-        claim.turn.id,
-        key,
-        1,
-        "file-put-retry",
-      ].join(":"),
-      uploadUrl,
-    );
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    const retryAttempt = {
-      schemaVersion: 1 as const,
-      mappingKey: key,
-      buildGeneration: 1,
-      attachmentIndex: 0,
-      sourceFileId: source.sourceFileId,
-      localStorageKey: source.localStorageKey,
-      contentSha256: source.contentSha256,
-      sizeBytes: source.sizeBytes,
-      filename: source.filename,
-      mimeType: source.mimeType,
-      providerGeneration: 1,
-      state: "put_retry_wait" as const,
-      upstreamFileId: "file-put-retry",
-      uploadExpiresAt: providerExpiry,
-      uploadCapability: {
-        schemaVersion: 1 as const,
-        encryptionVersion: 1 as const,
-        ciphertext: sealed.encryptedKey,
-        iv: sealed.encryptionIv,
-        authTag: sealed.encryptionAuthTag,
-      },
-      code: "MANUS_V2_FILE_PUT_HTTP_429",
-      rejectionCount: 1,
-      nextRetryAt: new Date(Date.now() - 1_000).toISOString(),
-      recordedAt: "2026-08-12T00:00:00.000Z",
-    };
-    claim.turn.manusV2AttachmentAttempts = { [key]: retryAttempt };
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockResolvedValue(source.bytes);
-    const post = vi.spyOn(axios.Axios.prototype, "post");
-    const put = vi.spyOn(axios, "put").mockResolvedValue({ status: 200 });
-    vi.spyOn(axios.Axios.prototype, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: {
-          id: "file-put-retry",
-          filename: source.filename,
-          status: "uploaded",
-          bytes: source.sizeBytes,
-          content_type: source.mimeType,
-          expires_at: providerExpiry,
-        },
-      },
-    });
-    attachmentLedgerMocks.finalize.mockImplementation(async ({ mappings }) => ({
-      attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
-      manusV2AttachmentMappings: Object.fromEntries(
-        mappings.map((item: any) => [item.mappingKey, item]),
-      ),
-    }));
-
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([
-      { file_id: "file-put-retry", filename: source.filename },
-    ]);
-
-    expect(post).not.toHaveBeenCalled();
-    expect(put).toHaveBeenCalledOnce();
-    expect(put.mock.calls[0]?.[0]).toBe(uploadUrl);
-    expect(JSON.stringify(claim.turn.manusV2AttachmentAttempts)).not.toContain(
-      "never-log-this",
-    );
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.some(
-        ([input]) => input.attempt.providerGeneration > 1,
-      ),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["deleted", { status: "deleted", bytes: null }],
-    ["error", { status: "error", bytes: null }],
-    [
-      "expiring",
-      {
-        status: "uploaded",
-        expiresAt: Math.floor(Date.now() / 1_000) + 14 * 60,
-      },
-    ],
-  ])(
-    "replaces only slot zero when its generation-one file becomes %s during the three-slot final pass",
-    async (_label, finalFailure) => {
-      const { claim, sources } = testClaim();
-      attachmentLedgerMocks.load.mockResolvedValue({
-        turn: claim.turn,
-        preparedDispatch: claim.preparedDispatch,
-      });
-      localSourceMocks.read.mockImplementation(async ({ storageKey }) => {
-        const source = sources.find(
-          (candidate) => candidate.localStorageKey === storageKey,
-        );
-        if (!source) throw new Error("unexpected source");
-        return source.bytes;
-      });
-      const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-      const uploadCounts = new Map<string, number>();
-      const uploadFile = vi
-        .spyOn(ManusV2Client.prototype, "uploadFile")
-        .mockImplementation(async (input: any) => {
-          const generation = (uploadCounts.get(input.filename) || 0) + 1;
-          uploadCounts.set(input.filename, generation);
-          const source = sources.find(
-            (candidate) => candidate.filename === input.filename,
-          )!;
-          const file = {
-            fileId: `${input.filename}-g${generation}`,
-            filename: input.filename,
-            uploadUrl: "https://upload.manus.test/signed",
-            uploadExpiresAt: providerExpiry,
-            requestId: `upload-${input.filename}-${generation}`,
-          };
-          await input.observer?.onCandidateCreated?.(file);
-          await input.observer?.onPutStarted?.(file);
-          await input.observer?.onPutAccepted?.(file);
-          return {
-            ...file,
-            detail: {
-              fileId: file.fileId,
-              filename: input.filename,
-              status: "uploaded",
-              bytes: source.sizeBytes,
-              expiresAt: providerExpiry,
-              contentType: source.mimeType,
-              requestId: file.requestId,
-            },
-          };
-        });
-      const detailIds: string[] = [];
-      vi.spyOn(ManusV2Client.prototype, "fileDetail").mockImplementation(
-        async (fileId) => {
-          detailIds.push(fileId);
-          const source = sources.find((candidate) =>
-            fileId.startsWith(`${candidate.filename}-g`),
-          )!;
-          if (fileId === `${sources[0]!.filename}-g1`) {
-            return {
-              fileId,
-              filename: source.filename,
-              status: "uploaded",
-              bytes: source.sizeBytes,
-              expiresAt: providerExpiry,
-              contentType: source.mimeType,
-              requestId: "detail-final-failure",
-              ...finalFailure,
-            } as any;
-          }
-          return {
-            fileId,
-            filename: source.filename,
-            status: "uploaded",
-            bytes: source.sizeBytes,
-            expiresAt: providerExpiry,
-            contentType: source.mimeType,
-            requestId: "detail-ready",
-          } as any;
-        },
-      );
-      attachmentLedgerMocks.finalize.mockImplementation(
-        async ({ mappings }) => ({
-          attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
-          manusV2AttachmentMappings: Object.fromEntries(
-            mappings.map((item: any) => [item.mappingKey, item]),
-          ),
-        }),
-      );
-
-      await expect(
-        ensureKnowledgeBaseManusV2Attachments({
-          claim,
-          credential: {
-            id: claim.turn.apiCredentialId!,
-            userId: claim.turn.userId,
-            apiKey: "synthetic-manus-key",
-            version: 1,
-            provider: "manus",
-            upstreamModel: "manus-1.6",
-            upstreamEffort: null,
-          },
-          baseUrl: "https://api.manus.test",
-        }),
-      ).resolves.toEqual([
-        { file_id: "alpha.pdf-g2", filename: "alpha.pdf" },
-        { file_id: "bravo.pdf-g1", filename: "bravo.pdf" },
-        { file_id: "charlie.pdf-g1", filename: "charlie.pdf" },
-      ]);
-
-      expect(uploadFile.mock.calls.map(([input]) => input.filename)).toEqual([
-        "alpha.pdf",
-        "bravo.pdf",
-        "charlie.pdf",
-        "alpha.pdf",
-      ]);
-      expect(uploadCounts).toEqual(
-        new Map([
-          ["alpha.pdf", 2],
-          ["bravo.pdf", 1],
-          ["charlie.pdf", 1],
-        ]),
-      );
-      expect(detailIds).toContain("alpha.pdf-g1");
-      expect(detailIds).toContain("alpha.pdf-g2");
-      expect(
-        attachmentLedgerMocks.persistAttempt.mock.calls.some(
-          ([input]) =>
-            input.attempt.attachmentIndex === 0 &&
-            input.attempt.providerGeneration === 1 &&
-            input.attempt.state === "unusable",
-        ),
-      ).toBe(true);
-      expect(
-        attachmentLedgerMocks.persistAttempt.mock.calls.some(
-          ([input]) => input.attempt.providerGeneration > 2,
-        ),
-      ).toBe(false);
-      expect(attachmentLedgerMocks.finalize).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["put_accepted", "put_sending"] as const)(
-    "recovers durable generation-two %s before a stale generation-one mapping without a new upload",
-    async (crashState) => {
-      const sources = testSources();
-      const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-      const readyMappings = sources.map((source) =>
-        mappingFor(source, 1, providerExpiry),
-      );
-      const durableAttempts = sources.map((source, index) =>
-        attemptFor(
-          source,
-          index === 0 ? 2 : 1,
-          index === 0 ? crashState : "put_accepted",
-          providerExpiry,
-        ),
-      );
-      const { claim } = testClaim({
-        mappings: Object.fromEntries(
-          readyMappings.map((item) => [item.mappingKey, item]),
-        ),
-        attempts: Object.fromEntries(
-          durableAttempts.map((item) => [item.mappingKey, item]),
-        ),
-      });
-      attachmentLedgerMocks.load.mockResolvedValue({
-        turn: claim.turn,
-        preparedDispatch: claim.preparedDispatch,
-      });
-      localSourceMocks.read.mockImplementation(async ({ storageKey }) => {
-        const source = sources.find(
-          (candidate) => candidate.localStorageKey === storageKey,
-        );
-        if (!source) throw new Error("unexpected source");
-        return source.bytes;
-      });
-      const detailIds: string[] = [];
-      vi.spyOn(ManusV2Client.prototype, "fileDetail").mockImplementation(
-        async (fileId) => {
-          detailIds.push(fileId);
-          const source = sources.find((candidate) =>
-            fileId.startsWith(`${candidate.filename}-g`),
-          )!;
-          return {
-            fileId,
-            filename: source.filename,
-            status: "uploaded",
-            bytes: source.sizeBytes,
-            expiresAt: providerExpiry,
-            contentType: source.mimeType,
-            requestId: "detail-recovered",
-          } as any;
-        },
-      );
-      const uploadFile = vi.spyOn(ManusV2Client.prototype, "uploadFile");
-      attachmentLedgerMocks.finalize.mockImplementation(
-        async ({ mappings }) => ({
-          attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
-          manusV2AttachmentMappings: Object.fromEntries(
-            mappings.map((item: any) => [item.mappingKey, item]),
-          ),
-        }),
-      );
-
-      const result = await ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      });
-
-      expect(result[0]).toEqual({
-        file_id: "alpha.pdf-g2",
-        filename: "alpha.pdf",
-      });
-      expect(detailIds).toContain("alpha.pdf-g2");
-      expect(detailIds).not.toContain("alpha.pdf-g1");
-      expect(uploadFile).not.toHaveBeenCalled();
-      expect(
-        attachmentLedgerMocks.persistAttempt.mock.calls.some(
-          ([input]) => input.attempt.providerGeneration >= 3,
-        ),
-      ).toBe(false);
-      expect(attachmentLedgerMocks.finalize).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("accepts an octet-stream PPTX on generation one and persists MIME evidence", async () => {
-    const { claim, sources } = testClaim();
-    const source = sources[0]!;
-    const filename = "hospital-profile.pptx";
-    const mimeType =
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    source.filename = filename;
-    source.mimeType = mimeType;
-    claim.preparedDispatch.requestBody.attachments = [
-      { file_id: source.sourceFileId, filename },
-    ];
-    claim.turn.attachmentFileIds = [source.sourceFileId];
-    claim.recoveryMetadata.attachments = [
-      { file_id: source.sourceFileId, filename },
-    ];
-    claim.recoveryMetadata.attachmentManifest = [
-      {
-        sizeBytes: source.sizeBytes,
-        sha256: source.contentSha256,
-        mimeType,
-      },
-    ];
-    claim.recoveryMetadata.attachmentSourceProofs = [
-      {
-        fileId: source.sourceFileId,
-        localStorageKey: source.localStorageKey,
-        sizeBytes: source.sizeBytes,
-        contentSha256: source.contentSha256,
-        mimeType,
-      },
-    ];
-    attachmentLedgerMocks.load.mockResolvedValue({
-      turn: claim.turn,
-      preparedDispatch: claim.preparedDispatch,
-    });
-    localSourceMocks.read.mockResolvedValue(source.bytes);
-    const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-    const post = vi.spyOn(axios.Axios.prototype, "post").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: { id: "pptx-file-g1", filename },
-        upload_url: "https://uploads.manus.test/pptx-g1",
-        upload_expires_at: providerExpiry,
-      },
-    });
-    vi.spyOn(axios, "put").mockResolvedValue({ status: 200 });
-    vi.spyOn(axios.Axios.prototype, "get").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        file: {
-          id: "pptx-file-g1",
-          filename,
-          status: "uploaded",
-          bytes: source.sizeBytes,
-          content_type: "application/octet-stream",
-          expires_at: providerExpiry,
-        },
-      },
-    });
-    attachmentLedgerMocks.finalize.mockImplementation(async ({ mappings }) => ({
-      attachmentFileIds: mappings.map((item: any) => item.upstreamFileId),
-      manusV2AttachmentMappings: Object.fromEntries(
-        mappings.map((item: any) => [item.mappingKey, item]),
-      ),
-    }));
-
-    await expect(
-      ensureKnowledgeBaseManusV2Attachments({
-        claim,
-        credential: {
-          id: claim.turn.apiCredentialId!,
-          userId: claim.turn.userId,
-          apiKey: "synthetic-manus-key",
-          version: 1,
-          provider: "manus",
-          upstreamModel: "manus-1.6",
-          upstreamEffort: null,
-        },
-        baseUrl: "https://api.manus.test",
-      }),
-    ).resolves.toEqual([{ file_id: "pptx-file-g1", filename }]);
-
-    expect(post).toHaveBeenCalledOnce();
-    expect(
-      attachmentLedgerMocks.persistAttempt.mock.calls.some(
-        ([input]) => input.attempt.providerGeneration > 1,
-      ),
-    ).toBe(false);
-    expect(
-      attachmentLedgerMocks.persistMapping.mock.calls.at(-1)?.[0].mapping,
-    ).toMatchObject({
-      providerGeneration: 1,
-      mimeEvidence: {
-        expectedContentType: mimeType,
-        providerContentType: "application/octet-stream",
-        disposition: "generic",
-      },
-    });
-  });
-
-  it.each([
-    [
-      "identity conflict",
-      1,
-      { status: "uploaded", bytes: 999 },
-      "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_INTEGRITY_CONFLICT",
-    ],
-    [
-      "exhausted lifecycle",
-      2,
-      { status: "deleted", bytes: null },
-      "KNOWLEDGE_BASE_MANUS_V2_ATTACHMENT_LIFECYCLE_EXHAUSTED",
-    ],
-  ] as const)(
-    "settles deterministic %s as a stable local-preparation error",
-    async (_label, providerGeneration, detailOverride, expectedCode) => {
-      const sources = testSources().slice(0, 1);
-      const source = sources[0]!;
-      const providerExpiry = Math.floor(Date.now() / 1_000) + 60 * 60;
-      const ready = mappingFor(source, providerGeneration, providerExpiry);
-      const { claim } = testClaim({ mappings: { [ready.mappingKey]: ready } });
-      claim.preparedDispatch.requestBody.attachments =
-        claim.preparedDispatch.requestBody.attachments.slice(0, 1);
-      claim.turn.attachmentFileIds = claim.turn.attachmentFileIds.slice(0, 1);
-      claim.recoveryMetadata.attachments =
-        claim.recoveryMetadata.attachments.slice(0, 1);
-      claim.recoveryMetadata.attachmentManifest =
-        claim.recoveryMetadata.attachmentManifest.slice(0, 1);
-      claim.recoveryMetadata.attachmentSourceProofs =
-        claim.recoveryMetadata.attachmentSourceProofs.slice(0, 1);
-      attachmentLedgerMocks.load.mockResolvedValue({
-        turn: claim.turn,
-        preparedDispatch: claim.preparedDispatch,
-      });
-      localSourceMocks.read.mockResolvedValue(source.bytes);
-      vi.spyOn(ManusV2Client.prototype, "fileDetail").mockResolvedValue({
-        fileId: ready.upstreamFileId,
-        filename: ready.filename,
-        status: "uploaded",
-        bytes: ready.sizeBytes,
-        expiresAt: providerExpiry,
-        contentType: ready.mimeType,
-        contentTypeParseStatus: "valid",
-        requestId: null,
-        ...detailOverride,
-      } as any);
-      const upload = vi.spyOn(ManusV2Client.prototype, "uploadFile");
-
-      await expect(
-        ensureKnowledgeBaseManusV2Attachments({
-          claim,
-          credential: {
-            id: claim.turn.apiCredentialId!,
-            userId: claim.turn.userId,
-            apiKey: "synthetic-manus-key",
-            version: 1,
-            provider: "manus",
-            upstreamModel: "manus-1.6",
-            upstreamEffort: null,
-          },
-          baseUrl: "https://api.manus.test",
-        }),
-      ).rejects.toMatchObject({ code: expectedCode });
-      expect(upload).not.toHaveBeenCalled();
-    },
-  );
 });
 
-describe("Manus v2 reusable attachment proof", () => {
+describe("Managed reusable attachment proof", () => {
   it("uses only one bounded replacement for a definite final-pass failure", () => {
     expect(
       finalKnowledgeBaseManusV2AttachmentInspectionAction({

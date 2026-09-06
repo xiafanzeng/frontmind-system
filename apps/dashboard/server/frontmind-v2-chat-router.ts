@@ -3553,7 +3553,7 @@ async function reserveCreate(input: {
     await db.transaction(async (tx) => {
       await tx.insert(agentOperations).values({
         id: operationId,
-        provider: input.credential.provider ?? "manus",
+        provider: input.credential.provider ?? "zhipu",
         scope: "managed_user",
         accountUserId: input.userId,
         presalesProjectId: null,
@@ -3568,7 +3568,7 @@ async function reserveCreate(input: {
         publicProfile: input.value.modelProfile,
         upstreamModel: generalAgentModelProfileModel(
           input.value.modelProfile,
-          input.credential.provider,
+          input.credential.provider ?? "zhipu",
         ),
         status: "queued",
       });
@@ -3594,7 +3594,7 @@ async function reserveCreate(input: {
         localTaskId,
         model: generalAgentModelProfileModel(
           input.value.modelProfile,
-          input.credential.provider,
+          input.credential.provider ?? "zhipu",
         ),
         modelProfile: input.value.modelProfile,
         continuation: false,

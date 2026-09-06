@@ -1,4 +1,3 @@
-import { presalesUsageCredentialPlan } from "./presales-service";
 import {
   projectZhipuNativeUsage,
   newWebsiteAgentProvider,
@@ -634,7 +633,8 @@ function createPresalesFileRetentionExecutor(input?: {
         }
         if (typeof values.contentSource === "string") {
           resource.contentSource = values.contentSource as
-            "user_upload" | "assistant_output";
+            | "user_upload"
+            | "assistant_output";
         }
         if (typeof values.parentTaskId === "string") {
           resource.parentTaskId = values.parentTaskId;
@@ -1684,13 +1684,13 @@ describe("Website provider usage units", () => {
       observedTasks: 2,
     });
   });
-  it("defaults only newly saved Website credentials to Zhipu", () => {
+  it("keeps Website execution on Zhipu even with an obsolete environment override", () => {
     const before = process.env.WEBSITE_AGENT_PROVIDER;
     delete process.env.WEBSITE_AGENT_PROVIDER;
     try {
       expect(newWebsiteAgentProvider()).toBe("zhipu");
       process.env.WEBSITE_AGENT_PROVIDER = "manus";
-      expect(newWebsiteAgentProvider()).toBe("manus");
+      expect(newWebsiteAgentProvider()).toBe("zhipu");
     } finally {
       if (before === undefined) delete process.env.WEBSITE_AGENT_PROVIDER;
       else process.env.WEBSITE_AGENT_PROVIDER = before;
@@ -1698,11 +1698,12 @@ describe("Website provider usage units", () => {
   });
 });
 
-it("continues scanning retired Manus tasks after the active Website key switches to Zhipu", () => {
-  const old = { id: "old-manus", provider: "manus", status: "retired" };
-  const next = { id: "new-zhipu", provider: "zhipu", status: "active" };
-  const plan = presalesUsageCredentialPlan([next, old]);
-  expect(plan.activeZhipu).toBe(true);
-  expect(plan.manusRows).toEqual([old]);
-  expect(presalesUsageCredentialPlan([next]).manusRows).toEqual([]);
+it("does not call the retired provider while reading Website usage", () => {
+  const source = readFileSync(
+    resolve(process.cwd(), "server/presales-service.ts"),
+    "utf8",
+  );
+  expect(source).not.toContain("new ManusV2Client");
+  expect(source).not.toContain("getManusRollingCreditUsage");
+  expect(source).toContain("getPresalesCreditUsageSnapshot(now)");
 });

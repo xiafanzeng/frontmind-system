@@ -4,9 +4,7 @@ import {
   ManusV2ApiError,
   ManusV2Client,
   type ManusV2MessageEvent,
-  type ManusV2TaskSummary,
 } from "../manus-v2-client";
-import { getUpstreamBaseUrl } from "../upstream-config";
 import {
   readPresalesV2Task,
   type PresalesV2TaskRecord,
@@ -38,7 +36,7 @@ export function zhipuTaskPrompt(
   input: Parameters<ManusV2Client["createTask"]>[0],
 ) {
   if (!input.structuredOutputSchema) return input.prompt;
-  return `${input.prompt}\n\nRuntime delivery contract (the original skill and business input above remain unchanged): return exactly one JSON object in the final public assistant message. The frozen JSON Schema below defines the transport shape only; it does not replace or relax the original skill's business constraints or attached output schema. Satisfy both schemas: wherever the original skill is stricter, its stricter constraint still applies, even if the transport schema permits a value. Validate against the original skill's output schema and business rules as well as this transport schema before ending the turn. Do not invent evidence to satisfy either schema. Do not wrap JSON in Markdown or return the schema itself.\n${JSON.stringify(input.structuredOutputSchema)}`;
+  return `${input.prompt}\n\nReturn the requested business result as JSON in the final public message. Preserve the original Skill and its instructions. The existing business interface expects this result shape:\n${JSON.stringify(input.structuredOutputSchema)}`;
 }
 
 function asRecord(value: unknown): ZhipuRecord {
@@ -494,67 +492,41 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
     };
   }
   async findCreatedTask(
-    input: Parameters<ManusV2Client["findCreatedTask"]>[0],
+    _input: Parameters<ManusV2Client["findCreatedTask"]>[0],
   ): ReturnType<ManusV2Client["findCreatedTask"]> {
-    try {
-      const current = await this.current();
-      const state = runtime(current);
-      const candidates: ManusV2TaskSummary[] = [];
-      const matches: ManusV2TaskSummary[] = [];
-      // We only reconcile the saved session. An unknown session-create result
-      // cannot safely be inferred from title alone and requires operator review.
-      if (state.sessionId) {
-        const session = await this.api.request(
-          "GET",
-          `/v1/sessions/${state.sessionId}`,
-        );
-        const candidate = {
-          id: state.sessionId,
-          title: String(session.title ?? ""),
-          taskUrl: null,
-          createdAt: Date.parse(String(session.created_at)) / 1000,
-          updatedAt: null,
-          creditUsage: null,
-          status: String(session.status ?? ""),
-        };
-        candidates.push(candidate);
-        const events = await this.api.listAll(
-          `/v1/sessions/${state.sessionId}/events`,
-          { order: "asc" },
-        );
-        const command = state.mutations["message:initial"];
-        const userEvents = events.filter(
-          (event) => event.type === "user.message",
-        );
-        // One isolated session has exactly one unresolved command. Both the
-        // marker and request hash must agree; duplicate user events are conflict.
-        const acknowledged = userEvents.filter(
-          (event) =>
-            input.operationToken &&
-            messageText(event.content).includes(
-              `"operationToken":"${input.operationToken}"`,
-            ) &&
-            command?.requestHash ===
-              digest(
-                JSON.stringify({
-                  sessionId: state.sessionId,
-                  prompt: messageText(event.content),
-                }),
-              ),
-        );
-        if (acknowledged.length === 1 && userEvents.length === 1)
-          matches.push(candidate);
-      }
-      return {
-        candidates,
-        matches,
-        unresolved: candidates.filter((item) => !matches.includes(item)),
-        unresolvedEvidenceCount: candidates.length - matches.length,
-        unique: matches.length === 1 ? matches[0]! : null,
-      };
-    } catch (error) {
-      compat(error, "task.listMessages");
-    }
+    const current = await this.current();
+    const state = runtime(current);
+    const empty = {
+      candidates: [],
+      matches: [],
+      unresolved: [],
+      unresolvedEvidenceCount: 0,
+      unique: null,
+    };
+    if (
+      !state.sessionId ||
+      state.mutations["message:initial"]?.state !== "acknowledged"
+    )
+      return empty;
+    const session = await this.api.request(
+      "GET",
+      `/v1/sessions/${state.sessionId}`,
+    );
+    const candidate = {
+      id: state.sessionId,
+      title: String(session.title ?? ""),
+      taskUrl: null,
+      createdAt: Date.parse(String(session.created_at)) / 1000,
+      updatedAt: null,
+      creditUsage: null,
+      status: String(session.status ?? ""),
+    };
+    return {
+      ...empty,
+      candidates: [candidate],
+      matches: [candidate],
+      unique: candidate,
+    };
   }
   async listAllMessages(
     input: Parameters<ManusV2Client["listAllMessages"]>[0],
@@ -683,13 +655,5 @@ export function createWebsiteAgentClient(
   record: PresalesV2TaskRecord,
   update: UpdateTask,
 ): WebsiteClient {
-  if (record.provider === "zhipu")
-    return new ZhipuWebsiteAgentProvider(record, update, apiKey);
-  if (record.provider && record.provider !== "manus")
-    throw new Error("UNKNOWN_WEBSITE_PROVIDER");
-  return new ManusV2Client({
-    apiKey,
-    baseUrl: getUpstreamBaseUrl(),
-    rateLimitScope: "website-managed-provider",
-  });
+  return new ZhipuWebsiteAgentProvider(record, update, apiKey);
 }

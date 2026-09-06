@@ -52,11 +52,7 @@ import {
   type SiteContentPlanV2,
 } from "../../shared/siteops-content-plan";
 import { createHostOwnedSiteDesignResultV2 } from "../../shared/siteops-host-design";
-import {
-  managedAgentProfileModel,
-  managedAgentProfileEffort,
-  managedAgentProfileSchema,
-} from "../../shared/manus-agent-profile";
+import { managedAgentProfileSchema } from "../../shared/manus-agent-profile";
 import {
   canonicalJson,
   createVisualEvidenceV1,
@@ -257,7 +253,8 @@ const PROVIDER_MUTABLE_SOCIAL_PACKAGE_STATUSES = [
 const operationInputSchema = z
   .object({
     credentialScope: z.literal("customer"),
-    provider: z.enum(["manus", "zhipu"]).default("manus"),
+    // Historical source lineage is read-only; the execution handler requires Zhipu.
+    provider: z.enum(["manus", "zhipu"]).optional(),
     upstreamModel: z.string().trim().min(1).max(64).optional(),
     upstreamEffort: z.enum(["low", "high", "max"]).nullable().optional(),
     manusCredentialId: z.string().uuid(),
@@ -1980,10 +1977,6 @@ function operationTitle(operation: SiteOperation) {
   return `FrontMind SiteOps ${operation.id}`;
 }
 
-function baseUrl() {
-  return process.env.MANUS_API_BASE_URL?.trim() || "https://api.manus.ai";
-}
-
 function acceptedSocialStructuredValue(
   events: readonly ManusV2MessageEvent[],
   token: string,
@@ -2586,26 +2579,6 @@ function socialOutputSchema(
   });
 }
 
-async function findUniqueCreatedTask(
-  client: DashboardAgentClient,
-  operation: SiteOperation,
-  token: string,
-) {
-  const result = await client.findCreatedTask({
-    title: operationTitle(operation),
-    operationToken: token,
-    createdAfterSeconds:
-      Math.floor(operation.createdAt.getTime() / 1_000) - 300,
-  });
-  if (result.matches.length > 1) {
-    throw new SiteOpsManusFailure(
-      "MANUS_CREATE_RECONCILIATION_AMBIGUOUS",
-      "找到多个同一建站操作的 Manus 任务，已停止自动推进以避免使用错误结果。",
-    );
-  }
-  return result.unique;
-}
-
 async function loadBuildContext(db: any, operation: SiteOperation) {
   if (!operation.buildId)
     throw new SiteOpsManusFailure(
@@ -2680,11 +2653,9 @@ async function assertFrozenCredential(
   }
   const projection = credentialProfileProjection(credential);
   if (
-    (input.provider === "zhipu" &&
-      (!input.upstreamModel ||
-        !input.upstreamEffort ||
-        input.upstreamModel !== projection.upstreamModel)) ||
-    (input.provider === "manus" && input.upstreamEffort != null)
+    !input.upstreamModel ||
+    !input.upstreamEffort ||
+    input.upstreamModel !== projection.upstreamModel
   ) {
     throw new SiteOpsManusFailure(
       "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
@@ -2693,13 +2664,6 @@ async function assertFrozenCredential(
     );
   }
   return { ...credential, ...projection };
-}
-
-function frozenTaskProfile(input: z.infer<typeof operationInputSchema>) {
-  // Zhipu model and effort belong to the frozen client identity; the legacy
-  // Manus task field must not reinterpret that model selection.
-  if (input.provider === "zhipu") return {};
-  return { agentProfile: managedAgentProfileModel(input.agentProfile) };
 }
 
 function stateFromOperation(operation: SiteOperation): ProviderState | null {
@@ -6138,28 +6102,12 @@ async function handleNativeReactSiteBuild(input: {
     if (!taskId) {
       client = client ?? (await input.getClient());
       if (currentState?.stage === "create_unknown") {
-        const found = await findUniqueCreatedTask(
-          client,
-          input.operation,
-          planToken,
+        throw new SiteOpsManusFailure(
+          "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
+          "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+          "attention_required",
+          currentState ?? undefined,
         );
-        if (!found) {
-          const sync = providerResultSyncWindow(
-            providerStateV2(currentState),
-            Date.now(),
-            input.operation.updatedAt,
-          );
-          if (sync.expired) {
-            throw new SiteOpsManusFailure(
-              "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-              "AI 信息架构任务创建结果未能在限定时间内确认；创建坐标已保留。",
-              "attention_required",
-              sync.state,
-            );
-          }
-          return pending(sync.state, undefined, "design_compiling", 60_000);
-        }
-        taskId = found.id;
       } else {
         const createRetryAt = Date.parse(
           currentState?.schemaVersion === 2
@@ -6199,7 +6147,6 @@ async function handleNativeReactSiteBuild(input: {
             }),
             attachments: planAttachments(),
             locale: input.brief.primaryLanguage,
-            ...frozenTaskProfile(input.input),
             structuredOutputSchema: siteContentPlanOutputSchema({
               operationToken: planToken,
               inventorySha256: inventoryBinding!.inventorySha256,
@@ -7321,28 +7268,12 @@ async function handleNativeReactSiteBuild(input: {
     }
     client = client ?? (await input.getClient());
     if (input.state?.stage === "create_unknown") {
-      const found = await findUniqueCreatedTask(
-        client,
-        input.operation,
-        operationToken,
+      throw new SiteOpsManusFailure(
+        "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
+        "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+        "attention_required",
+        currentState ?? undefined,
       );
-      if (!found) {
-        const sync = providerResultSyncWindow(
-          providerStateV2(currentState),
-          Date.now(),
-          input.operation.updatedAt,
-        );
-        if (sync.expired) {
-          throw new SiteOpsManusFailure(
-            "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-            "AI 建站任务创建结果未能在限定时间内确认；基础预览与创建坐标已保留。",
-            "attention_required",
-            sync.state,
-          );
-        }
-        return pending(sync.state, undefined, "qa_running", 60_000);
-      }
-      taskId = found.id;
     } else {
       const createRetryAt = Date.parse(
         currentState?.schemaVersion === 2
@@ -7393,7 +7324,6 @@ async function handleNativeReactSiteBuild(input: {
           }),
           attachments: createAttachments,
           locale: input.brief.primaryLanguage,
-          ...frozenTaskProfile(input.input),
           structuredOutputSchema: nativeSourceReceiptOutputSchema({
             operationToken,
             baseSourceSha256,
@@ -9660,8 +9590,14 @@ export function createSiteOpsAgentClient(
   options: DashboardAgentClientOptions,
   createClient: (input: DashboardAgentClientOptions) => DashboardAgentClient,
 ): DashboardAgentClient {
+  if (options.provider !== "zhipu") {
+    throw new SiteOpsManusFailure(
+      "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+      "请配置智谱凭证，批准重置后开始新的建站任务。",
+      "attention_required",
+    );
+  }
   const client = createClient(options);
-  if (options.provider !== "zhipu") return client;
   client.sendMessage = async (message) => {
     const operationToken = manusV2EventOperationToken({
       id: "siteops-command",
@@ -9701,7 +9637,6 @@ export function createManusSiteOpsProviderHandler(
     ((input) =>
       createDashboardAgentClient({
         ...input,
-        baseUrl: baseUrl(),
         rateLimitScope: input.credentialId,
         timeoutMs: 30_000,
       }));
@@ -9734,6 +9669,13 @@ export function createManusSiteOpsProviderHandler(
           "DATABASE_UNAVAILABLE",
           "AI 建站数据库暂时不可用。",
         );
+      if (operation.provider !== "zhipu") {
+        throw new SiteOpsManusFailure(
+          "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+          "请配置智谱凭证，批准重置后开始新的建站任务。",
+          "attention_required",
+        );
+      }
       const input = operationInputSchema.parse(operation.input);
       if (operation.provider !== input.provider) {
         throw new SiteOpsManusFailure(
@@ -9755,19 +9697,11 @@ export function createManusSiteOpsProviderHandler(
               credentialId: credential.id,
               credentialVersion: credential.version,
               accountUserId: operation.userId,
-              provider: credential.provider,
+              credentialOwnerUserId: credential.userId,
+              provider: "zhipu",
               intentId: `siteops:${operation.id}`,
-              upstreamModel:
-                input.upstreamModel ??
-                managedAgentProfileModel(
-                  input.agentProfile,
-                  credential.provider,
-                ),
-              upstreamEffort:
-                input.provider === "zhipu"
-                  ? (input.upstreamEffort ??
-                    managedAgentProfileEffort(input.agentProfile))
-                  : null,
+              upstreamModel: input.upstreamModel,
+              upstreamEffort: input.upstreamEffort,
             },
             createClient,
           ),
@@ -9825,10 +9759,12 @@ export function createManusSiteOpsProviderHandler(
         let taskId = state?.taskId ?? operation.providerTaskId ?? undefined;
         if (!taskId) {
           if (state?.stage === "create_unknown") {
-            const found = await findUniqueCreatedTask(client, operation, token);
-            if (!found)
-              return pending({ schemaVersion: 1, stage: "create_unknown" });
-            taskId = found.id;
+            throw new SiteOpsManusFailure(
+              "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
+              "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+              "attention_required",
+              state ?? undefined,
+            );
           } else {
             const documents = safePublicDocuments(context.snapshot);
             const socialWorkflow =
@@ -9859,7 +9795,6 @@ export function createManusSiteOpsProviderHandler(
                   }),
                 ],
                 locale: "zh-CN",
-                ...frozenTaskProfile(input),
                 structuredOutputSchema: socialOutputSchema(
                   token,
                   context.package.channel,
@@ -10846,61 +10781,11 @@ export function createManusSiteOpsProviderHandler(
 
       if (!taskId) {
         if (state?.stage === "create_unknown") {
-          const found = await findUniqueCreatedTask(
-            client,
-            operation,
-            designToken,
-          );
-          if (!found)
-            return pending(
-              transitionProviderState(state, {
-                stage: "create_unknown",
-                ...(hostOwnedDesign ? { design: hostOwnedDesign } : {}),
-              }),
-              undefined,
-              providerPendingBuildStatus(state),
-            );
-          taskId = found.id;
-          const taskPendingState = transitionProviderState(state, {
-            stage: hostOwnedContentDraft ? "content_pending" : "design_pending",
-            taskId,
-            ...(hostOwnedDesign ? { design: hostOwnedDesign } : {}),
-          });
-          try {
-            await bindCreatedBuildTask({
-              db,
-              operation,
-              buildId: context.build.id,
-              taskId,
-              state: taskPendingState,
-              preservePreview:
-                hostOwnedContentDraft &&
-                existingHostBaseline?.status === "bound",
-            });
-          } catch (error) {
-            const code = error instanceof Error ? error.message : "";
-            if (/^SITEOPS_OPERATION_LEASE_(?:LOST|EXPIRED)$/u.test(code)) {
-              throw error;
-            }
-            if (code === "SITEOPS_BUILD_TASK_BINDING_CONFLICT") {
-              throw new SiteOpsManusFailure(
-                "FRONTMIND_BUILD_RESULT_PENDING",
-                "FrontMind AI 建站任务坐标仍在确认中，系统不会重复创建任务。",
-              );
-            }
-            return pending(
-              transitionProviderState(state, {
-                stage: "create_unknown",
-                ...(hostOwnedDesign ? { design: hostOwnedDesign } : {}),
-              }),
-              undefined,
-              providerPendingBuildStatus(state),
-            );
-          }
-          return pending(
-            taskPendingState,
-            taskId,
-            providerPendingBuildStatus(taskPendingState),
+          throw new SiteOpsManusFailure(
+            "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
+            "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+            "attention_required",
+            state ?? undefined,
           );
         } else {
           const workflowPackage =
@@ -11028,7 +10913,6 @@ export function createManusSiteOpsProviderHandler(
               prompt,
               attachments: visualAttachments,
               locale: brief.primaryLanguage,
-              ...frozenTaskProfile(input),
               structuredOutputSchema: hostOwnedContentDraft
                 ? siteContentPatchOutputSchema({
                     operationToken: contentToken,
@@ -12603,12 +12487,10 @@ export function registerManusSiteOpsProvider(
 ) {
   if (registered) return () => undefined;
   const handler = createManusSiteOpsProviderHandler(dependencies);
-  const unregisterManus = registerSiteOpsProviderHandler("manus", handler);
   const unregisterZhipu = registerSiteOpsProviderHandler("zhipu", handler);
   registered = true;
   return () => {
     unregisterZhipu();
-    unregisterManus();
     registered = false;
   };
 }

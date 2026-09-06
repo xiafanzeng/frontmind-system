@@ -22,7 +22,6 @@ import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { isSystemAdminAccount } from "@/lib/admin-access";
-import { formatWebsiteUsageTaskDate } from "@/lib/website-usage-task-date";
 import PortalShell from "@/components/PortalShell";
 import { getAdminNav } from "@/pages/AdminDashboard";
 import {
@@ -52,17 +51,16 @@ type CredentialStatus = {
 };
 
 type WebsiteCredentialStatus = CredentialStatus & {
-  provider?: "manus" | "zhipu";
+  provider?: string;
 };
 
 export function websiteCredentialProviderLabel(status: {
   configured: boolean;
-  provider?: "manus" | "zhipu";
+  provider?: string;
 }) {
-  if (!status.configured) return "等待配置";
-  return status.provider === "zhipu"
-    ? "智谱 Managed Agents"
-    : "Manus（历史凭据）";
+  if (status.provider && status.provider !== "zhipu")
+    return "请配置智谱 API Key";
+  return status.configured ? "智谱 Managed Agents" : "等待配置";
 }
 
 type WebsiteNativeTokenUsage = {
@@ -186,9 +184,6 @@ const EMPTY_ALIYUN_STATUS: AliyunPlatformStatus = {
   },
 };
 
-export const DEFAULT_API_KEY_USAGE_LIMIT = 230_000;
-export const DEFAULT_API_KEY_WARNING_RATIO = 0.8;
-
 export function aliyunOAuthConfigurationDisplayState(input: {
   configured: boolean;
   applicationIdTail?: string | null;
@@ -248,13 +243,6 @@ export default function AdminPresales() {
     "idle" | "success" | "error"
   >("idle");
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
-  const [policyLimit, setPolicyLimit] = useState(
-    String(DEFAULT_API_KEY_USAGE_LIMIT),
-  );
-  const [policyWarningPercent, setPolicyWarningPercent] = useState(
-    String(DEFAULT_API_KEY_WARNING_RATIO * 100),
-  );
-  const [policyWindowDays, setPolicyWindowDays] = useState("30");
   const utils = trpc.useUtils();
 
   const isAdmin = isSystemAdminAccount(user);
@@ -287,21 +275,6 @@ export default function AdminPresales() {
     requiresReplacement: aliyunOAuthRequiresReplacement,
     usableForAuthorization: aliyunOAuthUsableForAuthorization,
   } = aliyunOAuthConfigurationDisplayState(aliyunStatus.oauth);
-  const policyOverviewQuery = (
-    trpc.admin as any
-  ).apiKeyUsageAlerts.overview.useQuery(undefined, {
-    enabled: isAdmin,
-    retry: false,
-    refetchOnWindowFocus: false,
-  });
-  const websitePolicy = useMemo(() => {
-    const items = Array.isArray(policyOverviewQuery.data?.items)
-      ? policyOverviewQuery.data.items
-      : [];
-    return (
-      items.find((item: any) => item?.scope === "website_frontend") ?? null
-    );
-  }, [policyOverviewQuery.data]);
   const usageWindowDays = 30;
   const usageQuery = trpc.admin.presales.usage.useQuery(
     { windowDays: usageWindowDays },
@@ -315,12 +288,6 @@ export default function AdminPresales() {
   const replaceMutation = trpc.admin.presales.replace.useMutation();
   const testMutation = trpc.admin.presales.test.useMutation();
   const deleteMutation = trpc.admin.presales.delete.useMutation();
-  const updatePolicyMutation = (
-    trpc.admin as any
-  ).apiKeyUsageAlerts.updatePolicy.useMutation();
-  const syncUsageMutation = (
-    trpc.admin as any
-  ).apiKeyUsageAlerts.sync.useMutation();
   const saving = setMutation.isPending || replaceMutation.isPending;
 
   const refreshAll = async () => {
@@ -328,7 +295,6 @@ export default function AdminPresales() {
     await utils.admin.presales.usage.invalidate();
     await utils.admin.presales.twentyFirst.status.invalidate();
     await utils.admin.presales.aliyun.status.invalidate();
-    await (utils.admin as any).apiKeyUsageAlerts.overview.invalidate();
   };
 
   useEffect(() => {
@@ -340,15 +306,6 @@ export default function AdminPresales() {
     setTwentyFirstConnectionState("idle");
     setTwentyFirstLatencyMs(null);
   }, [twentyFirstApiKey]);
-
-  useEffect(() => {
-    if (!websitePolicy) return;
-    setPolicyLimit(String(websitePolicy.limit));
-    setPolicyWarningPercent(
-      String(Math.round(Number(websitePolicy.warningRatio) * 100)),
-    );
-    setPolicyWindowDays("30");
-  }, [websitePolicy]);
 
   const maskedFingerprint = useMemo(() => {
     if (!status.fingerprint) return "尚未配置";
@@ -595,50 +552,6 @@ export default function AdminPresales() {
     }
   };
 
-  const handleSavePolicy = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!websitePolicy?.id) {
-      toast.error("官网前台 Key 的用量策略尚未就绪");
-      return;
-    }
-    const limit = Number(policyLimit);
-    const warningPercent = Number(policyWarningPercent);
-    const windowDays = Number(policyWindowDays);
-    if (!Number.isInteger(limit) || limit <= 0) {
-      toast.error("积分上限必须是大于 0 的整数");
-      return;
-    }
-    if (
-      !Number.isFinite(warningPercent) ||
-      warningPercent < 1 ||
-      warningPercent > 100
-    ) {
-      toast.error("预警比例必须在 1% 到 100% 之间");
-      return;
-    }
-    if (!Number.isInteger(windowDays) || windowDays < 1 || windowDays > 365) {
-      toast.error("统计周期必须是 1 到 365 天");
-      return;
-    }
-    try {
-      await updatePolicyMutation.mutateAsync({
-        policyId: websitePolicy.id,
-        limit,
-        warningRatio: warningPercent / 100,
-        windowDays,
-      });
-      if (status.configured) {
-        await syncUsageMutation.mutateAsync();
-      }
-      await refreshAll();
-      toast.success("官网前台 Key 的积分策略已更新");
-    } catch (error) {
-      toast.error("积分策略更新失败", {
-        description: error instanceof Error ? error.message : "请稍后重试",
-      });
-    }
-  };
-
   if (!isAdmin) {
     return (
       <main className="flex min-h-[100dvh] items-center justify-center bg-background p-4">
@@ -665,37 +578,8 @@ export default function AdminPresales() {
     );
   }
 
-  const recentWebsiteTasks = usageQuery.data?.recentWebsiteTasks ?? [];
-  const keyPoolTotalUsed = usageQuery.data?.keyPoolTotalUsed ?? null;
-  const rollingWebsiteUsed = usageQuery.data?.rollingWebsiteUsed ?? 0;
   const keyHealth = usageQuery.data?.keyHealth ?? "unconfigured";
   const nativeUsage = usageQuery.data?.nativeUsage;
-  const isZhipu =
-    status.provider === "zhipu" || nativeUsage?.provider === "zhipu";
-  const usageLimit = Math.max(
-    1,
-    Number(websitePolicy?.limit) || DEFAULT_API_KEY_USAGE_LIMIT,
-  );
-  const warningRatio = Math.min(
-    1,
-    Math.max(
-      0,
-      Number(websitePolicy?.warningRatio) || DEFAULT_API_KEY_WARNING_RATIO,
-    ),
-  );
-  const usageDisplay = presalesUsageDisplayState({
-    keyPoolTotalUsed,
-    rollingWebsiteUsed,
-    limit: usageLimit,
-  });
-  const usageTone =
-    keyPoolTotalUsed === null
-      ? "unavailable"
-      : keyPoolTotalUsed >= usageLimit
-        ? "critical"
-        : keyPoolTotalUsed >= usageLimit * warningRatio
-          ? "warning"
-          : "normal";
 
   return (
     <PortalShell
@@ -729,10 +613,10 @@ export default function AdminPresales() {
 
         <div className="mb-3">
           <h2 className="text-base font-semibold text-foreground">
-            官网任务与积分
+            官网任务与用量
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            管理现有官网任务专用 Key、近 30 天真实用量和积分预警策略。
+            管理官网任务专用智谱 Key 与近 30 天真实 Token 用量。
           </p>
         </div>
 
@@ -769,8 +653,8 @@ export default function AdminPresales() {
                       官网前台 API Key
                     </CardTitle>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      仅供官网任务使用，新凭据接入智谱 Managed Agents。
-                      个人账号及其他 Manus 功能继续使用各自凭据。
+                      官网任务统一使用智谱 Managed
+                      Agents，个人账号使用各自配置的智谱凭据。
                     </p>
                   </div>
                   <Badge
@@ -849,8 +733,8 @@ export default function AdminPresales() {
 
                   {status.configured && (
                     <p className="rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-                      更换 Key 不会清空本地近 30 天滚动用量；新 Key
-                      验证后会异步刷新连接状态和积分池总额。
+                      更换 Key 后继续保留本地近 30 天 Token 用量；新 Key
+                      验证后会异步刷新连接状态和 Token 用量。
                     </p>
                   )}
 
@@ -935,9 +819,8 @@ export default function AdminPresales() {
                   天任务用量
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  {isZhipu
-                    ? "智谱 Token 与历史 Manus 积分分别统计，保留原积分账本。"
-                    : "官网任务按本地账本滚动累计；当前 Key 的上游积分池总额与连接状态单独展示。"}
+                  按官网任务上报的原生 Token
+                  累计，输入、输出与缓存读取分别展示。
                 </p>
               </CardHeader>
               <CardContent className="p-5 sm:p-6">
@@ -977,196 +860,8 @@ export default function AdminPresales() {
                               : "当前 Key 同步失败；下方官网近 30 天自用仍按本地记录展示。"}
                       </div>
                     )}
-                    {isZhipu ? (
-                      <WebsiteNativeUsage usage={nativeUsage} />
-                    ) : (
-                      <div
-                        className={`rounded-2xl border p-5 ${
-                          usageTone === "critical"
-                            ? "border-red-200 bg-red-50/70"
-                            : usageTone === "warning"
-                              ? "border-amber-200 bg-amber-50/70"
-                              : usageTone === "unavailable"
-                                ? "border-slate-200 bg-slate-50/80"
-                                : "border-primary/10 bg-primary/[0.055]"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="fm-eyebrow text-muted-foreground">
-                            上游积分池近 30 天总使用 / 上限
-                          </p>
-                          <Badge
-                            variant="outline"
-                            className={
-                              usageTone === "critical"
-                                ? "border-red-200 bg-white text-red-700"
-                                : usageTone === "warning"
-                                  ? "border-amber-200 bg-white text-amber-700"
-                                  : usageTone === "unavailable"
-                                    ? "border-slate-300 bg-white text-slate-700"
-                                    : "border-emerald-200 bg-white text-emerald-700"
-                            }
-                          >
-                            {usageTone === "critical"
-                              ? "严重预警"
-                              : usageTone === "warning"
-                                ? "用量预警"
-                                : usageTone === "unavailable"
-                                  ? "统计不完整"
-                                  : "用量正常"}
-                          </Badge>
-                        </div>
-                        <div className="mt-2 flex items-end justify-between gap-3">
-                          <p className="text-3xl font-semibold tracking-tight text-primary">
-                            {usageDisplay.keyTotalLabel}
-                            <span className="ml-1 text-sm font-normal text-muted-foreground">
-                              / {usageLimit.toLocaleString()}
-                            </span>
-                          </p>
-                          <span className="pb-1 text-sm text-muted-foreground">
-                            {usageDisplay.percentageLabel}
-                          </span>
-                        </div>
-                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-                          <div
-                            className={`h-full rounded-full ${
-                              usageTone === "critical"
-                                ? "bg-red-600"
-                                : usageTone === "warning"
-                                  ? "bg-amber-500"
-                                  : "bg-primary"
-                            }`}
-                            style={{
-                              width: `${usageDisplay.progressPercentage}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="rounded-xl border border-border/60 bg-background/55 px-4 py-3">
-                      <p className="text-xs text-muted-foreground">
-                        {isZhipu
-                          ? "历史 Manus 官网任务近 30 天积分"
-                          : "官网前台近 30 天本地已记录积分"}
-                      </p>
-                      <p className="mt-1 text-2xl font-semibold text-foreground">
-                        {usageDisplay.websiteUsedLabel}
-                      </p>
-                    </div>
-
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="text-xs font-medium text-muted-foreground">
-                          {isZhipu ? "最近 Manus 历史任务积分" : "最近官网任务"}
-                        </p>
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {recentWebsiteTasks.length} 条
-                        </Badge>
-                      </div>
-                      {recentWebsiteTasks.length > 0 ? (
-                        <div className="custom-scrollbar max-h-[260px] divide-y divide-border/50 overflow-y-auto rounded-xl border border-border/60 bg-background/55 px-3">
-                          {recentWebsiteTasks.map((task) => (
-                            <div
-                              key={task.id}
-                              className="flex min-w-0 items-center gap-3 py-3"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-xs font-medium">
-                                  {task.title || "未命名任务"}
-                                </p>
-                                <p className="mt-0.5 text-xs text-muted-foreground">
-                                  {task.createdAt
-                                    ? formatWebsiteUsageTaskDate(
-                                        task.createdAt,
-                                        task.businessOwnerName,
-                                      )
-                                    : task.id.slice(0, 16)}
-                                </p>
-                              </div>
-                              <span className="shrink-0 font-mono text-xs text-primary">
-                                {task.creditUsage}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
-                          最近 {usageWindowDays} 天暂无官网任务积分消耗
-                        </div>
-                      )}
-                    </div>
+                    <WebsiteNativeUsage usage={nativeUsage} />
                   </div>
-                )}
-
-                {websitePolicy && !isZhipu && (
-                  <form
-                    className="mt-6 space-y-4 border-t border-border/60 pt-5"
-                    onSubmit={handleSavePolicy}
-                  >
-                    <div>
-                      <p className="text-sm font-medium">积分预警策略</p>
-                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        预警基于官网凭据所属的上游积分池总额；默认上限
-                        230,000，达到 80% 时预警。
-                      </p>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="website-credit-limit">积分上限</Label>
-                        <Input
-                          id="website-credit-limit"
-                          inputMode="numeric"
-                          value={policyLimit}
-                          onChange={(event) =>
-                            setPolicyLimit(event.target.value)
-                          }
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="website-warning-ratio">
-                          预警比例（%）
-                        </Label>
-                        <Input
-                          id="website-warning-ratio"
-                          inputMode="decimal"
-                          value={policyWarningPercent}
-                          onChange={(event) =>
-                            setPolicyWarningPercent(event.target.value)
-                          }
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="website-window-days">
-                          滚动周期（天）
-                        </Label>
-                        <Input
-                          id="website-window-days"
-                          inputMode="numeric"
-                          value={policyWindowDays}
-                          readOnly
-                          disabled
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          正式用量口径固定为精确滚动 30 天。
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      type="submit"
-                      variant="outline"
-                      disabled={
-                        updatePolicyMutation.isPending ||
-                        syncUsageMutation.isPending
-                      }
-                    >
-                      {(updatePolicyMutation.isPending ||
-                        syncUsageMutation.isPending) && (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      )}
-                      保存积分策略
-                    </Button>
-                  </form>
                 )}
               </CardContent>
             </Card>
@@ -1185,7 +880,7 @@ export default function AdminPresales() {
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
               21st 用于实时读取套餐内的完整官网 Template。连接验证只检查目录、
               下载权限和本地构建准备状态，不调用内容生成服务、发布或客户任务，
-              也不与官网任务积分混算。
+              也不与官网任务 Token 混算。
             </p>
           </div>
 
@@ -1420,7 +1115,7 @@ export default function AdminPresales() {
                     />
                   </div>
                   <div className="rounded-xl border border-border/60 bg-background/70 px-4 py-3 text-xs leading-5 text-muted-foreground">
-                    21st 用量与官网任务积分分开管理。供应商未提供 get_usage
+                    21st 用量与官网任务 Token 分开管理。供应商未提供 get_usage
                     时，本页不会推算或显示虚假额度。
                   </div>
                   {twentyFirstStatus.status !== null && (

@@ -279,12 +279,11 @@ describe("administrator channel navigation", () => {
     expect(source).toContain('confirmation: "REVOKE_API_KEY"');
     expect(source).toContain("迟到请求不会覆盖较新的 Key");
     expect(source).toContain("近 30 天自用");
-    expect(source).toContain("积分池总额");
+    expect(source).toContain("已记录任务");
     expect(source).not.toContain("Key 总额");
     expect(source).not.toContain("accountUsageComplete");
     expect(source).not.toContain("账号归因不完整");
-    expect(source).toContain("row.rolling30DayUsed");
-    expect(source).toContain("row.keyHealth");
+    expect(source).toContain("row.nativeUsage?.observedTasks");
     expect(source).toContain('value="frontmind-pro"');
     expect(source).toContain('value="frontmind-base"');
     expect(source).toContain("只读验收预览 · 近 30 天");
@@ -448,7 +447,7 @@ describe("administrator channel navigation", () => {
 
   it("separates identical key fingerprints across providers", () => {
     const rows = annotateSharedKeyAccountCounts([
-      { fingerprint: "shared", provider: "legacy" as const },
+      { fingerprint: "shared", provider: "unavailable" as const },
       { fingerprint: "shared", provider: "zhipu" as const },
       { fingerprint: "shared", provider: "zhipu" as const },
     ]);
@@ -473,8 +472,8 @@ describe("administrator channel navigation", () => {
       managedUsageDisplay({ provider: "zhipu", rolling30DayUsed: 900 }),
     ).toBe("暂无 Token 记录");
     expect(
-      managedUsageDisplay({ provider: "legacy", rolling30DayUsed: 900 }),
-    ).toBe("900 积分");
+      managedUsageDisplay({ provider: "unavailable", rolling30DayUsed: 900 }),
+    ).toBe("请配置智谱 Key");
     expect(
       normalizeAgentUsageFields({
         provider: "zhipu",

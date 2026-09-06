@@ -39,11 +39,15 @@ afterEach(async () => {
 });
 
 describe("Website task effort identity", () => {
-  it("defaults new Zhipu tasks to high and leaves Manus tasks unchanged", async () => {
-    const zhipu = await acquirePresalesV2Task(input);
+  it("defaults new tasks to Zhipu with high effort and rejects retired providers", async () => {
+    const zhipu = await acquirePresalesV2Task({
+      ...input,
+      provider: undefined,
+    });
     expect(zhipu).toMatchObject({
       state: "acquired",
       record: {
+        provider: "zhipu",
         providerRuntime: {
           revision: 1,
           model: "glm-5.3",
@@ -52,14 +56,16 @@ describe("Website task effort identity", () => {
         },
       },
     });
-    const manus = await acquirePresalesV2Task({
-      ...input,
-      idempotencyKey: "manus-task",
-      provider: "manus",
-    });
-    expect(manus.state).toBe("acquired");
-    if (manus.state !== "conflict")
-      expect(manus.record.providerRuntime).toBeUndefined();
+    await expect(
+      acquirePresalesV2Task({
+        ...input,
+        idempotencyKey: "manus-task",
+        provider: "manus",
+      }),
+    ).rejects.toThrow("PRESALES_V2_PROVIDER_RETIRED");
+    expect(
+      await acquirePresalesV2Task({ ...input, idempotencyKey: "manus-task" }),
+    ).toMatchObject({ state: "acquired", record: { provider: "zhipu" } });
   });
 
   it.each(["low", "high", "max"] as const)(

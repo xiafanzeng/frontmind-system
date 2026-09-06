@@ -53,16 +53,16 @@ describe("presalesUsageDisplayState", () => {
       expect(html).not.toContain("余额");
     }
   });
-  it("identifies Website provider without reclassifying historical Manus credentials", () => {
+  it("requires a Zhipu key for retired provider settings", () => {
     expect(websiteCredentialProviderLabel({ configured: false })).toBe(
       "等待配置",
     );
     expect(websiteCredentialProviderLabel({ configured: true })).toBe(
-      "Manus（历史凭据）",
+      "智谱 Managed Agents",
     );
     expect(
       websiteCredentialProviderLabel({ configured: true, provider: "manus" }),
-    ).toBe("Manus（历史凭据）");
+    ).toBe("请配置智谱 API Key");
     expect(
       websiteCredentialProviderLabel({ configured: true, provider: "zhipu" }),
     ).toBe("智谱 Managed Agents");
@@ -83,14 +83,14 @@ describe("presalesUsageDisplayState", () => {
       "utf8",
     );
     expect(source).toContain('title="官网任务与AI建站"');
-    expect(source).toContain("官网任务与积分");
+    expect(source).toContain("官网任务与用量");
     expect(source).toContain("AI建站（21st）");
     expect(source).toContain("search");
     expect(source).toContain("完整 Template 下载");
     expect(source).toContain("nativeTemplateReadiness");
     expect(source).toContain("get_component");
     expect(source).toContain("局部组件当作完整官网");
-    expect(source).toContain("不与官网任务积分混算");
+    expect(source).toContain("不与官网任务 Token 混算");
     expect(source).toContain("域名与发布平台");
     expect(source).toContain("阿里云 OAuth 与 ESA 发布");
   });

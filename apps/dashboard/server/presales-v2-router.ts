@@ -460,7 +460,7 @@ export function presalesV2PublicTask(record: PresalesV2TaskRecord) {
 
 async function requireActiveCredential() {
   const credential = await getActivePresalesCredential();
-  if (!credential) {
+  if (!credential || credential.provider !== "zhipu") {
     throw new PresalesV2HttpError("INVALID_CREDENTIAL", 428);
   }
   return credential;
@@ -912,7 +912,8 @@ async function dispatchPresalesV2Task(
       let inMemoryCandidateAttempts = candidateCount();
       let lastTransientFailure: unknown = null;
       let uploaded:
-        Awaited<ReturnType<PresalesV2DispatchClient["uploadFile"]>> | undefined;
+        | Awaited<ReturnType<PresalesV2DispatchClient["uploadFile"]>>
+        | undefined;
 
       const reserveFreshCandidateAttempt = async () => {
         if (!record.preparation) {
@@ -2116,7 +2117,10 @@ function presalesV2EventTypeCounts(events: ReadonlyArray<ManusV2MessageEvent>) {
 }
 
 type PresalesV2WaitingClassification =
-  "cascade" | "ask_user" | "other" | "missing";
+  | "cascade"
+  | "ask_user"
+  | "other"
+  | "missing";
 
 function classifyPresalesV2Waiting(
   waiting: ReturnType<typeof latestManusV2WaitingDetail>,
@@ -2865,8 +2869,8 @@ async function reconcileTask(
   const relevantEvents = presalesV2LatestOperationSegment(events);
   const state = latestManusV2TaskState(relevantEvents);
   let decodeConclusion:
-    PresalesV2StructuredResultDecode["kind"] | "not_applicable" =
-    "not_applicable";
+    | PresalesV2StructuredResultDecode["kind"]
+    | "not_applicable" = "not_applicable";
   let artifactConclusion: "missing" | "single" | "multiple" | "not_applicable" =
     "not_applicable";
 
@@ -3475,11 +3479,8 @@ router.post("/tasks", jsonParser, async (req, res) => {
       projectId: input.projectId ?? null,
       contract: input.contract,
       profile: contract.profile,
-      upstreamModel:
-        credential.provider === "zhipu"
-          ? "glm-5.3"
-          : managedAgentProfileModel(contract.profile),
-      provider: credential.provider ?? "manus",
+      upstreamModel: managedAgentProfileModel(contract.profile, "zhipu"),
+      provider: "zhipu",
       credentialId: credential.id,
       credentialVersion: credential.version,
       preparation: {

@@ -69,8 +69,6 @@ import {
 import { getDb } from "./db";
 import { isFileResourceContentExpired } from "./file-content-retention";
 import { removeStoredPresalesFile } from "./presales-file-store";
-import { getUpstreamBaseUrl } from "./upstream-config";
-import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
 import {
   ZhipuManagedClient,
   ZhipuManagedError,
@@ -229,6 +227,7 @@ export type KnowledgeBaseUploadReservationCredential = DecryptedCredential & {
 
 export type CredentialStatus = {
   configured: boolean;
+  requiresReplacement?: boolean;
   version: number;
   fingerprint: string | null;
   status: "active" | "retired" | "invalid" | null;
@@ -1198,30 +1197,14 @@ export async function discardManagedUploadProviderFileForRetirement(
       },
       executor,
     );
-    if (!credential) {
-      throw new Error("MANAGED_UPLOAD_RETIREMENT_CREDENTIAL_UNAVAILABLE");
-    }
+    if (!credential) return;
     try {
-      if (credential.provider === "zhipu") {
-        await new ZhipuManagedClient({
-          apiKey: credential.apiKey,
-          requestTimeoutMs: 5_000,
-        }).deleteFile(target.fileId);
-      } else {
-        await new ManusV2Client({
-          baseUrl: getUpstreamBaseUrl(),
-          apiKey: credential.apiKey,
-          timeoutMs: 5_000,
-        }).deleteFile(target.fileId);
-      }
+      await new ZhipuManagedClient({
+        apiKey: credential.apiKey,
+        requestTimeoutMs: 5_000,
+      }).deleteFile(target.fileId);
     } catch (error) {
-      if (
-        !(
-          (error instanceof ManusV2ApiError ||
-            error instanceof ZhipuManagedError) &&
-          error.status === 404
-        )
-      ) {
+      if (!(error instanceof ZhipuManagedError && error.status === 404)) {
         throw error;
       }
     }
@@ -1929,34 +1912,20 @@ export function decryptApiKey(
 }
 
 export async function validateUpstreamApiKey(apiKey: string) {
-  try {
-    await new ManusV2Client({
-      baseUrl: getUpstreamBaseUrl(),
-      apiKey,
-    }).probeCredential();
-  } catch (error) {
-    if (
-      error instanceof ManusV2ApiError &&
-      (error.status === 401 || error.status === 403)
-    ) {
-      throw new AuthServiceError(
-        "INVALID_CREDENTIAL",
-        "API credential is invalid",
-      );
-    }
-    throw new AuthServiceError(
-      "UPSTREAM_UNAVAILABLE",
-      "Unable to validate the API credential",
-    );
-  }
+  return validateManagedUpstreamApiKey(apiKey);
 }
 
-/** New managed-account keys use Zhipu; explicit historical keys retain their provider. */
+/** Every managed-account execution uses a verified Zhipu credential. */
 export async function validateManagedUpstreamApiKey(
   apiKey: string,
   provider: AgentProvider = "zhipu",
 ) {
-  if (provider === "manus") return validateUpstreamApiKey(apiKey);
+  if (provider !== "zhipu") {
+    throw new AuthServiceError(
+      "INVALID_CREDENTIAL",
+      "请在原设置入口更换为智谱 API Key",
+    );
+  }
   try {
     const result = await new ZhipuManagedClient({ apiKey }).request(
       "GET",
@@ -2028,6 +1997,11 @@ export function credentialProfileProjection(credential?: unknown) {
 function toCredentialStatus(
   credential?: ApiCredential | null,
 ): CredentialStatus {
+  const requiresReplacement = Boolean(
+    credential &&
+      credential.status === "active" &&
+      credential.provider !== "zhipu",
+  );
   const status =
     credential?.status === "deleted"
       ? null
@@ -2035,7 +2009,10 @@ function toCredentialStatus(
         ? "invalid"
         : (credential?.status ?? null);
   return {
-    configured: Boolean(credential && credential.status === "active"),
+    configured: Boolean(
+      credential && credential.status === "active" && !requiresReplacement,
+    ),
+    requiresReplacement,
     version: credential?.version ?? 0,
     fingerprint: credential?.fingerprint ?? null,
     status,
@@ -2699,7 +2676,12 @@ export async function getDecryptedCredentialForUser(
     .orderBy(desc(apiCredentials.version))
     .limit(1);
   const credential = rows[0];
-  if (!credential || credential.status === "deleted") return null;
+  if (
+    !credential ||
+    credential.status === "deleted" ||
+    credential.provider !== "zhipu"
+  )
+    return null;
 
   return {
     id: credential.id,
@@ -2738,7 +2720,12 @@ export async function getDecryptedCredentialForAccountById(
     )
     .limit(1);
   const credential = rows[0];
-  if (!credential || credential.status === "deleted") return null;
+  if (
+    !credential ||
+    credential.status === "deleted" ||
+    credential.provider !== "zhipu"
+  )
+    return null;
   return {
     id: credential.id,
     userId: credential.userId,
@@ -2784,6 +2771,7 @@ export async function getDecryptedCredentialForManagedUploadIntent(
   const credential = rows[0];
   if (
     !credential ||
+    credential.provider !== "zhipu" ||
     credential.id !== input.credentialId ||
     credential.userId !== input.credentialOwnerUserId ||
     credential.version !== input.credentialVersion ||
@@ -2833,6 +2821,7 @@ export async function getDecryptedCredentialForKnowledgeBaseReservation(
     )[0] as ApiCredential | undefined;
     if (
       !credential ||
+      credential.provider !== "zhipu" ||
       (credential.status !== "active" && credential.status !== "retired")
     ) {
       return null;
@@ -3102,6 +3091,7 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
     )[0] as ApiCredential | undefined;
     if (
       !credential ||
+      credential.provider !== "zhipu" ||
       (credential.status !== "active" && credential.status !== "retired")
     ) {
       return null;
@@ -3191,6 +3181,7 @@ export async function getCredentialForUpstreamResource(
     return null;
   }
 
+  if (row.credential.provider !== "zhipu") return null;
   return {
     id: row.credential.id,
     userId: row.credential.userId,
@@ -3249,7 +3240,12 @@ export async function discardUnboundUpstreamFileInTransaction(input: {
     ? row?.resource.projectAssignmentId === projectAssignmentId
     : row?.resource.userId === input.userId &&
       row?.resource.projectAssignmentId == null;
-  if (!row || !owned || row.credential.status === "deleted") {
+  if (
+    !row ||
+    !owned ||
+    row.credential.status === "deleted" ||
+    row.credential.provider !== "zhipu"
+  ) {
     return { discarded: false as const };
   }
   if (row.resource.conversationId) {

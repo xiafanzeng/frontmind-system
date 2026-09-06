@@ -78,7 +78,6 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import {
-  uploadUpstreamTaskAttachment,
   UpstreamTaskAttachmentContentProofError,
   UpstreamTaskAttachmentPendingError,
 } from "./upstream-task-attachment";
@@ -132,7 +131,6 @@ import {
   cancelIncompleteKnowledgeBaseRevision,
   claimKnowledgeBaseDeferredTurnDispatch,
   claimKnowledgeBaseTurnForRecovery,
-  completeKnowledgeBaseGeneratedAttachment,
   settleKnowledgeBaseManusV2ExplicitRejection,
   settleKnowledgeBasePreCreateFailureForApprovedReset,
   deferKnowledgeBaseTurnBeforeCreate,
@@ -156,8 +154,6 @@ import {
   deferKnowledgeBaseMaterializedProviderStatus,
   pauseKnowledgeBasePreCreateCredentialUnavailable,
   prepareKnowledgeBaseTurnDispatch,
-  promoteKnowledgeBaseGeneratedAttachmentReady,
-  replaceUnusableKnowledgeBaseGeneratedAttachment,
   reserveKnowledgeBaseGeneratedAttachment,
   reserveKnowledgeBaseStartBuild,
   reserveKnowledgeBaseTurn,
@@ -195,8 +191,7 @@ import {
   buildManusV2SendMessageBody,
   latestManusV2TaskState,
   ManusV2ApiError,
-  ManusV2Client,
-  manusV2EventsContainOperationToken,
+  type ManusV2Client,
   manusV2KnowledgeBaseStructuredResultForOperation,
   normalizeManusV2Output,
   orderManusV2EventsByProviderRank,
@@ -308,14 +303,8 @@ import {
   KnowledgeBaseUpstreamCreateError,
   KNOWLEDGE_BASE_UPSTREAM_CREATE_TIMEOUT_MS,
   type KnowledgeBaseUpstreamCreateFailureClass,
-  type KnowledgeBaseProviderReasonCategory,
 } from "./knowledge-base-api-errors";
-import {
-  checkUpstreamFilesReadiness,
-  waitForUpstreamFilesReady,
-  UpstreamFileReadinessError,
-  type UpstreamFilesReadiness,
-} from "./upstream-file-readiness";
+import { UpstreamFileReadinessError } from "./upstream-file-readiness";
 import {
   assertExpectedUpstreamTaskId,
   canonicalUpstreamTask,
@@ -956,13 +945,6 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
   if (
     credential.provider === "zhipu" &&
     credential.upstreamModel === "glm-5.3"
-  ) {
-    return credential.upstreamModel;
-  }
-  if (
-    (credential.provider === undefined || credential.provider === "manus") &&
-    (credential.upstreamModel === "manus-1.6" ||
-      credential.upstreamModel === "manus-1.6-max")
   ) {
     return credential.upstreamModel;
   }
@@ -2248,7 +2230,6 @@ type RecoveryCredential = NonNullable<
   Awaited<ReturnType<typeof getDecryptedCredentialForKnowledgeBaseReservation>>
 >;
 
-const KNOWLEDGE_BASE_READINESS_WAIT_MS = 5_000;
 const knowledgeBaseClaimReadinessTimings = new WeakMap<
   KnowledgeBaseRecoveryClaim,
   { startedAt: number; maxDelayMs: number }
@@ -2322,198 +2303,6 @@ function logKnowledgeBaseClaimDispatchPhase(
     createState: claim.turn.createAttemptState,
     ...overrides,
   });
-}
-
-function knowledgeBaseReadinessFailure(
-  error: unknown,
-  input: {
-    attachmentKind: "generated" | "user";
-    traceId?: string;
-    attachmentCount: number;
-  },
-) {
-  if (error instanceof UpstreamFileReadinessError && error.retryable) {
-    return new KnowledgeBaseAttachmentsProcessingError(
-      0,
-      input.attachmentCount,
-      5_000,
-      input.traceId,
-      { cause: error },
-    );
-  }
-  if (error instanceof UpstreamFileReadinessError) {
-    return new KnowledgeBaseLocalPreparationError(
-      input.attachmentKind === "user"
-        ? "KNOWLEDGE_BASE_USER_ATTACHMENT_INVALID"
-        : "KNOWLEDGE_BASE_GENERATED_ATTACHMENT_INVALID",
-      input.attachmentKind === "user"
-        ? "用户附件尚未通过上游可用性校验"
-        : "系统生成附件尚未通过上游可用性校验",
-      { cause: error },
-    );
-  }
-  return error;
-}
-
-function assertKnowledgeBaseReadinessComplete(
-  result: UpstreamFilesReadiness,
-  traceId?: string,
-) {
-  if (result.pending.length > 0) {
-    throw new KnowledgeBaseAttachmentsProcessingError(
-      result.ready.length,
-      result.pending.length,
-      5_000,
-      traceId,
-    );
-  }
-  return result.files.map((file) => ({
-    file_id: file.fileId,
-    filename: file.filename,
-  }));
-}
-
-async function waitForKnowledgeBaseAttachmentGroup(input: {
-  baseUrl: string;
-  apiKey: string;
-  attachments: Array<{ file_id: string; filename: string }>;
-  attachmentKind: "generated" | "user";
-  filenamePolicy?: "exact" | "provider_authoritative";
-  traceId?: string;
-  deadlineMs?: number;
-  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-}) {
-  if (input.attachments.length === 0) return [];
-  try {
-    const result = await waitForUpstreamFilesReady({
-      baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
-      files: input.attachments.map((attachment) => ({
-        fileId: attachment.file_id,
-        filename: attachment.filename,
-      })),
-      filenamePolicy: input.filenamePolicy,
-      deadlineMs: input.deadlineMs ?? KNOWLEDGE_BASE_READINESS_WAIT_MS,
-      sleep: input.sleep,
-    });
-    return assertKnowledgeBaseReadinessComplete(result, input.traceId);
-  } catch (error) {
-    throw knowledgeBaseReadinessFailure(error, {
-      attachmentKind: input.attachmentKind,
-      traceId: input.traceId,
-      attachmentCount: input.attachments.length,
-    });
-  }
-}
-
-async function checkKnowledgeBaseAttachmentGroup(input: {
-  baseUrl: string;
-  apiKey: string;
-  attachments: Array<{ file_id: string; filename: string }>;
-  attachmentKind: "generated" | "user";
-  traceId?: string;
-}) {
-  if (input.attachments.length === 0) return [];
-  try {
-    const result = await checkUpstreamFilesReadiness({
-      baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
-      files: input.attachments.map((attachment) => ({
-        fileId: attachment.file_id,
-        filename: attachment.filename,
-      })),
-      filenamePolicy: "exact",
-    });
-    return assertKnowledgeBaseReadinessComplete(result, input.traceId);
-  } catch (error) {
-    throw knowledgeBaseReadinessFailure(error, {
-      attachmentKind: input.attachmentKind,
-      traceId: input.traceId,
-      attachmentCount: input.attachments.length,
-    });
-  }
-}
-
-export async function waitForKnowledgeBaseDispatchAttachments(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  credential: RecoveryCredential;
-  baseUrl: string;
-  attachments: Array<{ file_id: string; filename: string }>;
-  readinessDeadlineMs?: number;
-  readinessSleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-}) {
-  beginKnowledgeBaseClaimReadinessTiming(input.claim);
-  const userIds = knowledgeBaseUserAttachmentIds(input.claim);
-  const generated = input.attachments.filter(
-    (attachment) => !userIds.has(attachment.file_id),
-  );
-  const user = input.attachments.filter((attachment) =>
-    userIds.has(attachment.file_id),
-  );
-  const traceId = knowledgeBaseClaimTraceId(input.claim);
-  const [readyGenerated, readyUser] = await Promise.all([
-    waitForKnowledgeBaseAttachmentGroup({
-      baseUrl: input.baseUrl,
-      apiKey: input.credential.apiKey,
-      attachments: generated,
-      attachmentKind: "generated",
-      filenamePolicy: "exact",
-      traceId,
-      deadlineMs: input.readinessDeadlineMs,
-      sleep: input.readinessSleep,
-    }),
-    waitForKnowledgeBaseAttachmentGroup({
-      baseUrl: input.baseUrl,
-      apiKey: input.credential.apiKey,
-      attachments: user,
-      attachmentKind: "user",
-      filenamePolicy: "provider_authoritative",
-      traceId,
-      deadlineMs: input.readinessDeadlineMs,
-      sleep: input.readinessSleep,
-    }),
-  ]);
-  knowledgeBaseClaimReadinessDelayMs(input.claim);
-  const canonicalById = new Map(
-    [...readyGenerated, ...readyUser].map((attachment) => [
-      attachment.file_id,
-      attachment,
-    ]),
-  );
-  return input.attachments.map(
-    (attachment) => canonicalById.get(attachment.file_id) || attachment,
-  );
-}
-
-export async function checkKnowledgeBasePreparedAttachments(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  credential: RecoveryCredential;
-  dispatch: KnowledgeBasePreparedDispatch;
-}) {
-  beginKnowledgeBaseClaimReadinessTiming(input.claim);
-  const userIds = knowledgeBaseUserAttachmentIds(input.claim);
-  const generated = input.dispatch.requestBody.attachments.filter(
-    (attachment) => !userIds.has(attachment.file_id),
-  );
-  const user = input.dispatch.requestBody.attachments.filter((attachment) =>
-    userIds.has(attachment.file_id),
-  );
-  const traceId = knowledgeBaseClaimTraceId(input.claim);
-  await checkKnowledgeBaseAttachmentGroup({
-    baseUrl: input.dispatch.baseUrl,
-    apiKey: input.credential.apiKey,
-    attachments: generated,
-    attachmentKind: "generated",
-    traceId,
-  });
-  await checkKnowledgeBaseAttachmentGroup({
-    baseUrl: input.dispatch.baseUrl,
-    apiKey: input.credential.apiKey,
-    attachments: user,
-    attachmentKind: "user",
-    traceId,
-  });
-  knowledgeBaseClaimReadinessDelayMs(input.claim);
 }
 
 async function uploadRecoverySkill(input: {
@@ -3227,15 +3016,7 @@ async function ensureKnowledgeBaseRecoveryDispatch(input: {
     // A v2 operation freezes this ordered source ledger, then the v2
     // attachment mapper uploads exclusively from Dashboard-retained bytes.
     // Historical v1 ids may be 404 and are not a v2 correctness dependency.
-    const readyAttachments =
-      claim.turn.providerProtocol === "manus_v2"
-        ? attachments
-        : await waitForKnowledgeBaseDispatchAttachments({
-            claim,
-            credential,
-            baseUrl,
-            attachments,
-          });
+    const readyAttachments = attachments;
     await freezeKnowledgeBaseTurnAttachments({
       userId: claim.turn.userId,
       turnId: claim.turn.id,
@@ -3505,15 +3286,7 @@ async function ensureKnowledgeBaseRecoveryDispatch(input: {
   const attachments = userFirstLedger
     ? [...userAttachments, ...generatedAttachments]
     : [...generatedAttachments, ...userAttachments];
-  const readyAttachments =
-    claim.turn.providerProtocol === "manus_v2"
-      ? attachments
-      : await waitForKnowledgeBaseDispatchAttachments({
-          claim,
-          credential,
-          baseUrl,
-          attachments,
-        });
+  const readyAttachments = attachments;
   await freezeKnowledgeBaseTurnAttachments({
     userId: claim.turn.userId,
     turnId: claim.turn.id,
@@ -5228,11 +5001,15 @@ async function uploadDurableKnowledgeBaseGeneratedAttachment(input: {
   reusableUpstreamFileId?: string | null;
   durable: DurableKnowledgeBaseGeneratedAttachment;
   providerProtocol?: "legacy_v1" | "manus_v2";
-  replacementAttempted?: boolean;
 }) {
-  const mimeType = input.mimeType || "application/zip";
-  // Install the exact generated bytes before the first provider file POST.
-  // Provider file ids can expire; this immutable source is the recovery fact.
+  if (input.providerProtocol !== "manus_v2") {
+    throw new KnowledgeBaseLocalPreparationError(
+      "RESET_REQUIRED",
+      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+    );
+  }
+  // Preserve the exact original bytes locally. The managed attachment mapper
+  // uploads them through the customer's Zhipu credential after the turn freezes.
   const localSource = await persistKnowledgeBaseGeneratedSource(input.bytes);
   const reservation = await reserveKnowledgeBaseGeneratedAttachment({
     userId: input.durable.userId,
@@ -5241,125 +5018,19 @@ async function uploadDurableKnowledgeBaseGeneratedAttachment(input: {
     role: input.durable.role,
     attachmentIndex: input.durable.attachmentIndex,
     filename: input.filename,
-    mimeType,
+    mimeType: input.mimeType || "application/zip",
     sizeBytes: input.bytes.length,
     contentSha256: localSource.contentSha256,
     localStorageKey: localSource.storageKey,
   });
-  if (input.providerProtocol === "manus_v2") {
-    // v2 task files must originate in /v2. This source id is only an ordered
-    // Dashboard ledger coordinate and is never sent to Manus. If a legacy
-    // migration already staged a v1 id in this exact slot, retain it solely
-    // as the frozen source coordinate so recovery does not rewrite history.
-    const localSourceId =
-      reservation.upstreamFileId ||
-      `kb-local-${reservation.requestHash.slice(0, 48)}`;
-    return {
-      attachment: { file_id: localSourceId, filename: input.filename },
-      fileId: localSourceId,
-      removeOrphan: async () => undefined,
-    };
-  }
-  const reusableUpstreamFileId = String(
-    input.reusableUpstreamFileId || "",
-  ).trim();
-  if (
-    reusableUpstreamFileId &&
-    reservation.upstreamFileId === reusableUpstreamFileId
-  ) {
-    await waitForKnowledgeBaseAttachmentGroup({
-      baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
-      attachments: [
-        { file_id: reusableUpstreamFileId, filename: input.filename },
-      ],
-      attachmentKind: "generated",
-      filenamePolicy: "exact",
-    });
-    await promoteKnowledgeBaseGeneratedAttachmentReady({
-      userId: input.durable.userId,
-      turnId: input.durable.turnId,
-      leaseToken: input.durable.leaseToken,
-      role: input.durable.role,
-      attachmentIndex: input.durable.attachmentIndex,
-      requestHash: reservation.requestHash,
-      upstreamFileId: reusableUpstreamFileId,
-    });
-    return {
-      attachment: {
-        file_id: reusableUpstreamFileId,
-        filename: input.filename,
-      },
-      fileId: reusableUpstreamFileId,
-      // The file belongs to an already completed turn and may be shared by
-      // later turns in this build. A failed continuation must never delete it.
-      removeOrphan: async () => undefined,
-    };
-  }
-  try {
-    // `uploadUpstreamTaskAttachment` resolves only after readiness (and, for
-    // recovered candidates, byte-for-byte content proof). Promote after it
-    // returns so a candidate can never leak into a task body prematurely.
-    const uploaded = await uploadUpstreamTaskAttachment({
-      baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
-      filename: input.filename,
-      bytes: input.bytes,
-      mimeType,
-      idempotencyKey: reservation.idempotencyKey,
-      readinessDeadlineMs: KNOWLEDGE_BASE_READINESS_WAIT_MS,
-      ...(reservation.upstreamFileId
-        ? { existingFileId: reservation.upstreamFileId }
-        : {}),
-      onFileResolved: async (upstreamFileId) => {
-        await completeKnowledgeBaseGeneratedAttachment({
-          userId: input.durable.userId,
-          turnId: input.durable.turnId,
-          leaseToken: input.durable.leaseToken,
-          role: input.durable.role,
-          attachmentIndex: input.durable.attachmentIndex,
-          requestHash: reservation.requestHash,
-          upstreamFileId,
-        });
-      },
-    });
-    await promoteKnowledgeBaseGeneratedAttachmentReady({
-      userId: input.durable.userId,
-      turnId: input.durable.turnId,
-      leaseToken: input.durable.leaseToken,
-      role: input.durable.role,
-      attachmentIndex: input.durable.attachmentIndex,
-      requestHash: reservation.requestHash,
-      upstreamFileId: uploaded.fileId,
-    });
-    return uploaded;
-  } catch (error) {
-    const definitelyUnusableCandidate =
-      reservation.upstreamFileId &&
-      ((error instanceof UpstreamFileReadinessError &&
-        !error.retryable &&
-        error.code === "UPSTREAM_FILE_UNUSABLE") ||
-        (error instanceof UpstreamTaskAttachmentContentProofError &&
-          !error.retryable &&
-          error.httpStatus === 404));
-    if (definitelyUnusableCandidate && !input.replacementAttempted) {
-      await replaceUnusableKnowledgeBaseGeneratedAttachment({
-        userId: input.durable.userId,
-        turnId: input.durable.turnId,
-        leaseToken: input.durable.leaseToken,
-        role: input.durable.role,
-        attachmentIndex: input.durable.attachmentIndex,
-        requestHash: reservation.requestHash,
-        upstreamFileId: reservation.upstreamFileId!,
-      });
-      return uploadDurableKnowledgeBaseGeneratedAttachment({
-        ...input,
-        reusableUpstreamFileId: null,
-        replacementAttempted: true,
-      });
-    }
-    throw knowledgeBaseGeneratedAttachmentFailureForPersistence(error);
-  }
+  const localSourceId =
+    reservation.upstreamFileId ||
+    `kb-local-${reservation.requestHash.slice(0, 48)}`;
+  return {
+    attachment: { file_id: localSourceId, filename: input.filename },
+    fileId: localSourceId,
+    removeOrphan: async () => undefined,
+  };
 }
 
 export async function uploadKnowledgeBaseSkillArchive({
@@ -5378,7 +5049,7 @@ export async function uploadKnowledgeBaseSkillArchive({
   skillContentHash?: string | null;
   archive?: Awaited<ReturnType<typeof ensureKnowledgeBaseBuildSkillArchivePin>>;
   reusableUpstreamFileId?: string | null;
-  durable?: Omit<DurableKnowledgeBaseGeneratedAttachment, "role">;
+  durable: Omit<DurableKnowledgeBaseGeneratedAttachment, "role">;
   providerProtocol?: "legacy_v1" | "manus_v2";
 }) {
   const archive =
@@ -5395,300 +5066,16 @@ export async function uploadKnowledgeBaseSkillArchive({
       "Pinned Skill archive does not match the logical build pin",
     );
   }
-  const uploaded = durable
-    ? await uploadDurableKnowledgeBaseGeneratedAttachment({
-        baseUrl,
-        apiKey,
-        filename: archive.filename,
-        bytes: archive.bytes,
-        reusableUpstreamFileId,
-        providerProtocol,
-        durable: { ...durable, role: "skill" },
-      })
-    : await uploadUpstreamTaskAttachment({
-        baseUrl,
-        apiKey,
-        filename: archive.filename,
-        bytes: archive.bytes,
-      });
+  const uploaded = await uploadDurableKnowledgeBaseGeneratedAttachment({
+    baseUrl,
+    apiKey,
+    filename: archive.filename,
+    bytes: archive.bytes,
+    reusableUpstreamFileId,
+    providerProtocol,
+    durable: { ...durable, role: "skill" },
+  });
   return { ...uploaded, contentHash: archive.contentHash };
-}
-
-export async function createFrontMindTask({
-  baseUrl,
-  apiKey,
-  prompt,
-  agentProfile,
-  attachments,
-  taskId: existingTaskId,
-  idempotencyKey,
-  requestBody,
-  traceId,
-}: {
-  baseUrl: string;
-  apiKey: string;
-  prompt?: string;
-  agentProfile?: "manus-1.6" | "manus-1.6-max";
-  attachments?: Array<{ file_id: string; filename: string }>;
-  taskId?: string;
-  idempotencyKey?: string;
-  /** Exact credential-free body persisted before the first POST. */
-  requestBody?: KnowledgeBasePreparedDispatch["requestBody"];
-  traceId?: string;
-}) {
-  if (!requestBody && !agentProfile) {
-    throw new KnowledgeBaseLocalPreparationError(
-      "KNOWLEDGE_BASE_CREDENTIAL_PROFILE_MISSING",
-      "创建知识库任务必须显式冻结 Base/Pro 模型配置",
-    );
-  }
-  const body =
-    requestBody ||
-    ({
-      prompt: String(prompt || ""),
-      agentProfile: agentProfile!,
-      attachments: attachments || [],
-    } satisfies KnowledgeBasePreparedDispatch["requestBody"]);
-  void existingTaskId;
-  assertUpstreamPromptBudget(body.prompt);
-  // Kept only as a frozen operation coordinate. Provider idempotency is
-  // reconciled through the durable v2 operation marker, never a blind retry.
-  void idempotencyKey;
-  let taskResponse: {
-    status: number;
-    headers: Record<string, string | undefined>;
-    data: Record<string, unknown> & {
-      request_id?: unknown;
-      code?: unknown;
-      message?: unknown;
-      error?: {
-        code?: unknown;
-        message?: unknown;
-        request_id?: unknown;
-      };
-    };
-  };
-  try {
-    const created = await new ManusV2Client({ baseUrl, apiKey }).createTask({
-      prompt: body.prompt,
-      attachments: body.attachments,
-      agentProfile: body.agentProfile,
-      locale: "zh-CN",
-      interactiveMode: false,
-    });
-    taskResponse = {
-      status: 200,
-      headers: {},
-      data: {
-        ok: true,
-        task_id: created.taskId,
-        task_url: created.taskUrl,
-        task_title: created.taskTitle,
-        status: "running",
-        output: [],
-        request_id: created.requestId,
-      },
-    };
-  } catch (error) {
-    if (
-      error instanceof ManusV2ApiError &&
-      !error.outcomeUnknown &&
-      error.status
-    ) {
-      taskResponse = {
-        status: error.status,
-        headers: {},
-        data: {
-          ok: false,
-          error: {
-            code: error.code,
-            message: error.message,
-            request_id: error.providerRequestId,
-          },
-        },
-      };
-    } else {
-      return {
-        ok: false as const,
-        status: 503,
-        detail: "Upstream task creation result is unknown",
-        failureClass: classifyKnowledgeBaseUpstreamCreateFailure({
-          transportError: true,
-        }),
-        failureCode: "UPSTREAM_CREATE_TRANSPORT_UNKNOWN" as const,
-        reasonCategory: "TRANSPORT_UNKNOWN" as const,
-        traceId,
-      };
-    }
-  }
-
-  const rawProviderRequestRef =
-    taskResponse.headers?.["x-request-id"] ??
-    taskResponse.headers?.["request-id"] ??
-    taskResponse.headers?.["x-amzn-requestid"] ??
-    taskResponse.data?.request_id ??
-    taskResponse.data?.error?.request_id;
-  const normalizedProviderRequestRef = String(rawProviderRequestRef || "")
-    .trim()
-    .slice(0, 512);
-  const providerRequestRef = normalizedProviderRequestRef
-    ? `sha256:${createHash("sha256")
-        .update(normalizedProviderRequestRef)
-        .digest("hex")
-        .slice(0, 24)}`
-    : undefined;
-
-  if (taskResponse.status < 200 || taskResponse.status >= 300) {
-    const upstreamErrorCode =
-      taskResponse.data?.error?.code || taskResponse.data?.code;
-    const providerCodeCandidate = knowledgeBaseUpstreamString(
-      upstreamErrorCode,
-      7,
-    );
-    const safeNumericProviderCode =
-      providerCodeCandidate && /^[0-9]{1,6}$/u.test(providerCodeCandidate)
-        ? providerCodeCandidate
-        : undefined;
-    const providerText = String(
-      taskResponse.data?.error?.message || taskResponse.data?.message || "",
-    ).toUpperCase();
-    const providerCode = String(upstreamErrorCode || "").toUpperCase();
-    const reasonCategory: KnowledgeBaseProviderReasonCategory =
-      taskResponse.status === 401 || taskResponse.status === 403
-        ? "CREDENTIAL_REJECTED"
-        : taskResponse.status === 402 ||
-            /(?:QUOTA|CREDIT|BALANCE)/u.test(providerCode + providerText)
-          ? "QUOTA_REJECTED"
-          : /(?:ATTACHMENT|FILE)/u.test(providerCode + providerText)
-            ? "ATTACHMENT_INVALID"
-            : /(?:PROFILE|AGENT_PROFILE)/u.test(providerCode + providerText)
-              ? "PROFILE_INVALID"
-              : taskResponse.status === 400 || taskResponse.status === 422
-                ? providerCode === "3" ||
-                  /(?:INVALID_ARGUMENT)/u.test(providerCode + providerText)
-                  ? "UNKNOWN_INVALID_ARGUMENT"
-                  : "PAYLOAD_INVALID"
-                : taskResponse.status >= 500
-                  ? "UPSTREAM_UNAVAILABLE"
-                  : "UNKNOWN_PROVIDER_REJECTION";
-    return {
-      ok: false as const,
-      status: taskResponse.status,
-      detail: "Upstream task creation was rejected",
-      failureClass: classifyKnowledgeBaseUpstreamCreateFailure({
-        status: taskResponse.status,
-        code: upstreamErrorCode,
-      }),
-      failureCode: safeNumericProviderCode
-        ? `UPSTREAM_CREATE_${safeNumericProviderCode}`
-        : `UPSTREAM_CREATE_HTTP_${taskResponse.status}`,
-      reasonCategory,
-      providerRequestRef,
-      traceId,
-    };
-  }
-
-  let taskData: Record<string, unknown>;
-  let taskId: string | null;
-  try {
-    taskData = canonicalKnowledgeBaseUpstreamTask(taskResponse.data);
-    taskId = upstreamTaskId(taskData, false);
-  } catch {
-    taskData = {};
-    taskId = null;
-  }
-  if (!taskId) {
-    return {
-      ok: false as const,
-      status: 502,
-      detail: "Upstream task creation result is missing its task id",
-      failureClass: classifyKnowledgeBaseUpstreamCreateFailure({
-        missingTaskId: true,
-      }),
-      failureCode: "UPSTREAM_TASK_ID_MISSING" as const,
-      reasonCategory: "TASK_ID_MISSING" as const,
-      providerRequestRef,
-      traceId,
-    };
-  }
-
-  const taskMetadata = knowledgeBaseUpstreamRecord(taskData.metadata) || {};
-  const rawStatus = knowledgeBaseUpstreamString(taskData.status, 64);
-  return {
-    ok: true as const,
-    status: taskResponse.status,
-    task: {
-      id: taskId,
-      status: rawStatus === "failed" ? "error" : rawStatus || "running",
-      taskUrl: knowledgeBaseUpstreamString(
-        taskData.task_url ?? taskMetadata.task_url,
-        2_048,
-      ),
-      title: knowledgeBaseUpstreamString(
-        taskData.task_title ?? taskMetadata.task_title,
-        255,
-      ),
-      output: normalizeRecoveredTaskOutput(taskData),
-    },
-    providerRequestRef,
-    traceId,
-  };
-}
-
-function logKnowledgeBaseTaskCreateDiagnostic(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  dispatch: KnowledgeBasePreparedDispatch;
-  result: Awaited<ReturnType<typeof createFrontMindTask>>;
-}) {
-  const safeIdentifier = (value: unknown) => {
-    const normalized = String(value || "");
-    return normalized.length <= 255 && /^[A-Za-z0-9._:-]+$/u.test(normalized)
-      ? normalized
-      : undefined;
-  };
-  const traceId = safeIdentifier(knowledgeBaseClaimTraceId(input.claim));
-  const reasonCategory = safeIdentifier(
-    input.result.ok ? "ACKNOWLEDGED" : input.result.reasonCategory,
-  );
-  const failureCode = input.result.ok
-    ? undefined
-    : safeIdentifier(input.result.failureCode);
-  const providerRequestRef = safeIdentifier(input.result.providerRequestRef);
-  console[input.result.ok ? "info" : "warn"](
-    "[KnowledgeBaseTaskCreate] result",
-    JSON.stringify({
-      buildId: safeIdentifier(input.claim.turn.buildId),
-      turnId: safeIdentifier(input.claim.turn.id),
-      ...(traceId ? { traceId } : {}),
-      schemaVersion: input.dispatch.schemaVersion,
-      bodySha256: input.dispatch.bodySha256,
-      attachmentCount: input.dispatch.requestBody.attachments.length,
-      readyCount: input.dispatch.requestBody.attachments.length,
-      pendingCount: 0,
-      errorCount: 0,
-      maxReadinessDelayMs: knowledgeBaseClaimReadinessDelayMs(input.claim),
-      status: input.result.status,
-      ...(reasonCategory ? { reasonCategory } : {}),
-      ...(failureCode ? { failureCode } : {}),
-      ...(providerRequestRef ? { providerRequestRef } : {}),
-    }),
-  );
-}
-
-function knowledgeBaseUpstreamCreateError(
-  failure: Extract<
-    Awaited<ReturnType<typeof createFrontMindTask>>,
-    { ok: false }
-  >,
-) {
-  return new KnowledgeBaseUpstreamCreateError(
-    failure.failureClass,
-    failure.failureCode,
-    failure.status,
-    failure.reasonCategory,
-    failure.providerRequestRef,
-    failure.traceId,
-  );
 }
 
 function deterministicKnowledgeBaseCreateFailureMessage(

@@ -1,4 +1,3 @@
-import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +8,20 @@ import {
   publicBrandQuestionTask,
 } from "./brand-question-portfolio-api";
 import { BrandQuestionTaskContextError } from "./brand-question-task-context";
+
+const transport = vi.hoisted(() => ({ createTask: vi.fn() }));
+vi.mock("./credential-agent-client", () => ({
+  createCredentialAgentClient: () => transport,
+}));
+const credential = {
+  id: "credential-42",
+  userId: 42,
+  version: 1,
+  provider: "zhipu" as const,
+  apiKey: "synthetic-test-key",
+  upstreamModel: "glm-5.3",
+  upstreamEffort: "high" as const,
+};
 
 describe("brand question public task boundary", () => {
   afterEach(() => {
@@ -87,39 +100,24 @@ describe("brand question public task boundary", () => {
       }),
     ).toMatch(/^[a-f0-9]{64}$/);
 
-    const post = vi.spyOn(axios.Axios.prototype, "post").mockResolvedValue({
-      status: 200,
-      data: {
-        ok: true,
-        request_id: "request-brand-idempotent",
-        task_id: "task-brand-idempotent",
-      },
+    const post = transport.createTask.mockResolvedValue({
+      taskId: "task-brand-idempotent",
+      requestId: "request-brand-idempotent",
     });
     await createBrandQuestionUpstreamTask({
-      baseUrl: "https://api.example.test",
+      credential,
+      baseUrl: "https://agent-api.bigmodel.cn/api/agent/managed",
       apiKey: "secret-test-key",
       prompt: "bounded prompt",
       attachments: [],
       idempotencyKey: taskIdempotencyKey,
     });
     expect(post).toHaveBeenCalledWith(
-      "https://api.example.test/v2/task.create",
       expect.objectContaining({
-        message: expect.objectContaining({
-          content: expect.arrayContaining([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("bounded prompt"),
-            }),
-          ]),
-        }),
-        structured_output_schema: expect.objectContaining({
+        prompt: expect.stringContaining("bounded prompt"),
+        attachments: [],
+        structuredOutputSchema: expect.objectContaining({
           required: ["payload"],
-        }),
-      }),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          "Content-Type": "application/json",
         }),
       }),
     );
@@ -127,7 +125,8 @@ describe("brand question public task boundary", () => {
     post.mockClear();
     await expect(
       createBrandQuestionUpstreamTask({
-        baseUrl: "https://api.example.test",
+        credential,
+        baseUrl: "https://agent-api.bigmodel.cn/api/agent/managed",
         apiKey: "secret-test-key",
         prompt: "界".repeat(3_001),
         attachments: [],

@@ -51,16 +51,13 @@ import type {
 } from "../shared/service-portal";
 import {
   AuthServiceError,
-  decryptApiKey,
   deleteActiveApiCredential,
   getEffectiveDecryptedCredentialForAccount,
   getEffectiveApiCredentialStatus,
-  getOwnedUpstreamResourceIds,
   replaceApiCredential,
   type AuthenticatedUser,
 } from "./auth-service";
 import { getDb } from "./db";
-import { getUpstreamBaseUrl } from "./upstream-config";
 import {
   deriveEffectiveServiceStatus,
   getServicePortal,
@@ -72,24 +69,8 @@ import {
   hasSystemAdminAccess,
   writeWorkspaceAuditEvent,
 } from "./admin-control-plane-service";
-import {
-  claimUsageCredentialCoverage,
-  hasCompleteExpectedTaskSet,
-  loadTerminalUsageTaskProofs,
-  loadUsageCoverage,
-  isUsageTaskTerminal,
-  markUsageCredentialCoverage,
-  readManagedUsageLedger,
-  recordUsageLedgerEntries,
-  selectPhysicalCredentialRows,
-  usageCoverageSupportsRetiredCredential,
-} from "./api-usage-ledger";
+import { readRollingManagedUsageByAccounts } from "./api-usage-ledger";
 import { usagePageReachedCutoff } from "./upstream-task-usage";
-import { getManusRollingCreditUsage } from "./manus-usage-service";
-import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
-
-const CREDIT_PAGE_LIMIT = 100;
-const CREDIT_MAX_PAGES = 100;
 
 export class DashboardEnterpriseMismatchError extends AuthServiceError {
   constructor() {
@@ -1982,6 +1963,7 @@ export function projectManagedAgentUsageRows(
   return { expectedTaskIdsByCredential, ownerByTask, unsettledCredentialIds };
 }
 
+/** Compatibility response for existing administration callers; no remote credit scan. */
 export async function getSharedKeyMonthlyCreditUsageForAccounts(input: {
   credentialOwnerId?: number;
   credentialOwnerIds?: number[];
@@ -1994,504 +1976,37 @@ export async function getSharedKeyMonthlyCreditUsageForAccounts(input: {
     input.windowDays,
     input.now ?? Date.now(),
   );
-  const uniqueAccountIds = [...new Set(input.accountIds)];
-  const accountIdSet = new Set(uniqueAccountIds);
-  const accounts = new Map<
-    number,
-    {
-      accountUsed: number;
-      recentTasks: Array<{
-        id: string;
-        title: string;
-        creditUsage: number;
-        createdAt?: string;
-      }>;
-    }
-  >(
-    uniqueAccountIds.map((accountId) => [
+  const accountIds = [...new Set(input.accountIds)];
+  const ledger = await readRollingManagedUsageByAccounts({
+    executor: await requireDb(),
+    accountIds,
+    startAt: period.startAt,
+    endAt: period.endAt,
+  });
+  const accounts = new Map(
+    accountIds.map((accountId) => [
       accountId,
-      { accountUsed: 0, recentTasks: [] },
+      {
+        accountUsed: ledger.get(accountId)?.used ?? 0,
+        recentTasks: [] as Array<{
+          id: string;
+          title: string;
+          creditUsage: number;
+          createdAt?: string;
+        }>,
+      },
     ]),
   );
-  const db = await requireDb();
-  const credentialOwnerIds = [
-    ...new Set(
-      [input.credentialOwnerId, ...(input.credentialOwnerIds ?? [])].filter(
-        (ownerId): ownerId is number =>
-          Number.isInteger(ownerId) && Number(ownerId) > 0,
-      ),
-    ),
-  ];
-  if (credentialOwnerIds.length === 0) {
-    return {
-      totalUsed: 0,
-      accounts,
-      fetchedAt: input.now ?? Date.now(),
-      fingerprint: null,
-      period,
-      complete: true,
-      attributionComplete: true,
-    };
-  }
-  const allCredentialRows = await db
-    .select()
-    .from(apiCredentials)
-    .where(
-      and(
-        inArray(apiCredentials.status, ["active", "retired"]),
-        or(
-          inArray(apiCredentials.userId, credentialOwnerIds),
-          ...(input.poolFingerprint
-            ? [eq(apiCredentials.fingerprint, input.poolFingerprint)]
-            : []),
-          ...(uniqueAccountIds.length > 0
-            ? [
-                inArray(
-                  apiCredentials.id,
-                  db
-                    .select({
-                      apiCredentialId: upstreamResources.apiCredentialId,
-                    })
-                    .from(upstreamResources)
-                    .where(
-                      and(
-                        eq(upstreamResources.kind, "task"),
-                        inArray(upstreamResources.userId, uniqueAccountIds),
-                      ),
-                    ),
-                ),
-              ]
-            : []),
-        ),
-      ),
-    )
-    .orderBy(desc(apiCredentials.version));
-  const credentialRows = allCredentialRows.filter(
-    (credential) => credential.provider !== "zhipu",
-  );
-  if (credentialRows.length === 0) {
-    return {
-      totalUsed: 0,
-      accounts,
-      fetchedAt: Date.now(),
-      fingerprint: null,
-      period,
-      complete: true,
-      attributionComplete: true,
-    };
-  }
-  // The same physical Key may be inherited, copied to another account, or
-  // replaced with the same value. Query it once across all credential rows;
-  // task ids are additionally deduplicated across genuinely different Key
-  // versions below.
-  const credentialByFingerprint = new Map<
-    string,
-    {
-      apiKey: string;
-      id: string;
-      fingerprint: string;
-      status: "active" | "retired";
-      retiredAt: Date | null;
-    }
-  >();
-  for (const credential of selectPhysicalCredentialRows(credentialRows)) {
-    if (!credentialByFingerprint.has(credential.fingerprint)) {
-      credentialByFingerprint.set(credential.fingerprint, {
-        apiKey: decryptApiKey(credential),
-        id: credential.id,
-        fingerprint: credential.fingerprint,
-        status: credential.status as "active" | "retired",
-        retiredAt: credential.retiredAt,
-      });
-    }
-  }
-  const credentials = [...credentialByFingerprint.values()];
-  const totalCredential = input.poolFingerprint
-    ? credentials.find(
-        (credential) => credential.fingerprint === input.poolFingerprint,
-      )
-    : credentials[0];
-  const authoritativePoolUsage = totalCredential
-    ? await getManusRollingCreditUsage({
-        apiKey: totalCredential.apiKey,
-        startAt: period.startAt,
-        endAt: period.endAt,
-      })
-    : { totalUsed: 0, complete: false };
-  const coverageByFingerprint = await loadUsageCoverage({
-    executor: db,
-    scope: "managed_user",
-    fingerprints: credentials.map((credential) => credential.fingerprint),
-  });
-  const fingerprintByCredentialId = new Map(
-    credentialRows.map((credential) => [credential.id, credential.fingerprint]),
-  );
-  const localTaskRows = await db
-    .select({
-      apiCredentialId: upstreamResources.apiCredentialId,
-      upstreamId: upstreamResources.upstreamId,
-    })
-    .from(upstreamResources)
-    .where(
-      and(
-        eq(upstreamResources.kind, "task"),
-        inArray(
-          upstreamResources.apiCredentialId,
-          credentialRows.map((credential) => credential.id),
-        ),
-        gte(upstreamResources.createdAt, new Date(period.startAt)),
-      ),
-    );
-  const managedAgentTaskRows = await db
-    .select({
-      providerTaskId: agentTasks.providerTaskId,
-      apiCredentialId: agentOperations.apiCredentialId,
-      accountUserId: agentOperations.accountUserId,
-      status: agentOperations.status,
-    })
-    .from(agentTasks)
-    .innerJoin(agentOperations, eq(agentTasks.operationId, agentOperations.id))
-    .where(
-      and(
-        eq(agentOperations.scope, "managed_user"),
-        inArray(
-          agentOperations.apiCredentialId,
-          credentialRows.map((credential) => credential.id),
-        ),
-        gte(agentOperations.createdAt, new Date(period.startAt)),
-      ),
-    );
-  const managedAgentUsage = projectManagedAgentUsageRows(managedAgentTaskRows);
-  const expectedTaskIdsByFingerprint = new Map<string, Set<string>>();
-  for (const row of localTaskRows) {
-    if (!row.apiCredentialId || !row.upstreamId) continue;
-    const fingerprint = fingerprintByCredentialId.get(row.apiCredentialId);
-    if (!fingerprint) continue;
-    const expected = expectedTaskIdsByFingerprint.get(fingerprint) ?? new Set();
-    expected.add(row.upstreamId);
-    expectedTaskIdsByFingerprint.set(fingerprint, expected);
-  }
-  for (const [
-    credentialId,
-    taskIds,
-  ] of managedAgentUsage.expectedTaskIdsByCredential) {
-    const fingerprint = fingerprintByCredentialId.get(credentialId);
-    if (!fingerprint) continue;
-    const expected = expectedTaskIdsByFingerprint.get(fingerprint) ?? new Set();
-    for (const taskId of taskIds) expected.add(taskId);
-    expectedTaskIdsByFingerprint.set(fingerprint, expected);
-  }
-  const terminalProofsByFingerprint = await loadTerminalUsageTaskProofs({
-    executor: db,
-    scope: "managed_user",
-    fingerprints: credentials.map((credential) => credential.fingerprint),
-    startAt: period.startAt,
-    endAt: period.endAt,
-  });
-  const [activeTurnRows, activeConversationRows] = await Promise.all([
-    db
-      .select({ apiCredentialId: conversationTurns.apiCredentialId })
-      .from(conversationTurns)
-      .where(
-        and(
-          inArray(
-            conversationTurns.apiCredentialId,
-            credentialRows.map((credential) => credential.id),
-          ),
-          inArray(conversationTurns.status, ["queued", "running"]),
-        ),
-      ),
-    db
-      .select({ apiCredentialId: conversations.apiCredentialId })
-      .from(conversations)
-      .where(
-        and(
-          inArray(
-            conversations.apiCredentialId,
-            credentialRows.map((credential) => credential.id),
-          ),
-          inArray(conversations.status, [
-            "running",
-            "pending",
-            "awaiting_input",
-          ]),
-        ),
-      ),
-  ]);
-  const unsettledFingerprints = new Set(
-    [...activeTurnRows, ...activeConversationRows]
-      .map((row) =>
-        row.apiCredentialId
-          ? fingerprintByCredentialId.get(row.apiCredentialId)
-          : null,
-      )
-      .filter((value): value is string => Boolean(value)),
-  );
-  for (const credentialId of managedAgentUsage.unsettledCredentialIds) {
-    const fingerprint = fingerprintByCredentialId.get(credentialId);
-    if (fingerprint) unsettledFingerprints.add(fingerprint);
-  }
-  const seen = new Set<string>();
-  let attributionComplete = true;
-  for (const credential of credentials) {
-    if (
-      credential.status === "retired" &&
-      credential.retiredAt &&
-      credential.retiredAt.getTime() <= period.startAt &&
-      !unsettledFingerprints.has(credential.fingerprint) &&
-      !expectedTaskIdsByFingerprint.get(credential.fingerprint)?.size
-    ) {
-      continue;
-    }
-    const existingCoverage = coverageByFingerprint.get(credential.fingerprint);
-    if (
-      credential.status === "retired" &&
-      !unsettledFingerprints.has(credential.fingerprint) &&
-      usageCoverageSupportsRetiredCredential({
-        coverage: existingCoverage,
-        periodStartMs: period.startAt,
-        credentialRetiredAtMs: credential.retiredAt?.getTime() ?? null,
-      })
-    ) {
-      continue;
-    }
-    const scanStartedAtMs = input.now ?? Date.now();
-    const scanToken = await claimUsageCredentialCoverage({
-      executor: db,
-      scope: "managed_user",
-      credentialFingerprint: credential.fingerprint,
-      coveredFromMs: period.startAt,
-      scanStartedAtMs,
-      credentialRetiredAtMs: credential.retiredAt?.getTime() ?? null,
-    });
-    let after: string | undefined;
-    let credentialComplete = true;
-    let allFirstPartyTasksSettled = !unsettledFingerprints.has(
-      credential.fingerprint,
-    );
-    const seenForCredential = new Set<string>();
-    const seenCursors = new Set<string>();
-    const usageClient = new ManusV2Client({
-      baseUrl: getUpstreamBaseUrl(),
-      apiKey: credential.apiKey,
-    });
-    for (let pageIndex = 0; pageIndex < CREDIT_MAX_PAGES; pageIndex += 1) {
-      let payload: Awaited<ReturnType<ManusV2Client["listTasksPage"]>>;
-      try {
-        payload = await usageClient.listTasksPage({
-          limit: CREDIT_PAGE_LIMIT,
-          order: "desc",
-          cursor: after,
-        });
-      } catch {
-        if (credential.status === "retired") {
-          credentialComplete = usageCoverageSupportsRetiredCredential({
-            coverage: coverageByFingerprint.get(credential.fingerprint),
-            periodStartMs: period.startAt,
-            credentialRetiredAtMs: credential.retiredAt?.getTime() ?? null,
-          });
-          break;
-        }
-        credentialComplete = false;
-        break;
-      }
-      const tasks = payload.data;
-      if (tasks.length === 0) {
-        if (payload.has_more) credentialComplete = false;
-        break;
-      }
-      const taskIds = tasks
-        .map((task: any) => String(task?.id ?? task?.task_id ?? ""))
-        .filter(Boolean);
-      const ownershipRows = taskIds.length
-        ? await db
-            .select({
-              upstreamId: upstreamResources.upstreamId,
-              userId: upstreamResources.userId,
-            })
-            .from(upstreamResources)
-            .where(
-              and(
-                eq(upstreamResources.kind, "task"),
-                inArray(upstreamResources.upstreamId, taskIds),
-              ),
-            )
-        : [];
-      const ownerByTask = new Map<string, number>(
-        ownershipRows.map((row) => [row.upstreamId, row.userId]),
-      );
-      for (const taskId of taskIds) {
-        const ownerId = managedAgentUsage.ownerByTask.get(taskId);
-        if (ownerId !== undefined) ownerByTask.set(taskId, ownerId);
-      }
-      let datedTaskCount = 0;
-      let expiredTaskCount = 0;
-      let pageComplete = true;
-      for (const task of tasks) {
-        const id = String(task?.id ?? task?.task_id ?? "");
-        if (!id) {
-          attributionComplete = false;
-          pageComplete = false;
-          continue;
-        }
-        seenForCredential.add(id);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const createdAtMs = parseCreatedAt(task?.created_at);
-        if (createdAtMs === null) {
-          attributionComplete = false;
-          pageComplete = false;
-          continue;
-        }
-        datedTaskCount += 1;
-        if (createdAtMs < period.startAt) {
-          expiredTaskCount += 1;
-          continue;
-        }
-        if (createdAtMs >= period.endAt) continue;
-        const creditUsage = Number(
-          task?.credit_usage ?? task?.metadata?.credit_usage ?? 0,
-        );
-        if (!Number.isFinite(creditUsage) || creditUsage < 0) {
-          attributionComplete = false;
-          pageComplete = false;
-          continue;
-        }
-        if (ownerByTask.has(id) && !isUsageTaskTerminal(task)) {
-          allFirstPartyTasksSettled = false;
-        }
-        if (creditUsage === 0) continue;
-        const ownerId = ownerByTask.get(id);
-        const contribution = usageContributionForCredential({
-          creditUsage,
-          credentialFingerprint: credential.fingerprint,
-          poolFingerprint: input.poolFingerprint,
-          ownerId,
-          accountIds: accountIdSet,
-        });
-        if (contribution.accountUsed <= 0 || ownerId === undefined) continue;
-        const account = accounts.get(ownerId)!;
-        account.accountUsed += contribution.accountUsed;
-        account.recentTasks.push({
-          id,
-          title:
-            String(task?.metadata?.task_title ?? "").trim() ||
-            String(task?.instructions ?? "").slice(0, 30) ||
-            id.slice(0, 12),
-          creditUsage,
-          createdAt: new Date(createdAtMs).toLocaleDateString("zh-CN", {
-            timeZone: "Asia/Shanghai",
-          }),
-        });
-      }
-      const pageReachedCutoff = usagePageReachedCutoff({
-        complete: pageComplete,
-        datedTaskCount,
-        expiredTaskCount,
-      });
-      const ledgerWrite = await recordUsageLedgerEntries({
-        executor: db,
-        scope: "managed_user",
-        credentialFingerprint: credential.fingerprint,
-        apiCredentialId: credential.id,
-        observedAt: new Date(input.now ?? Date.now()),
-        entries: tasks.flatMap((task: any) => {
-          const taskId = String(task?.id ?? task?.task_id ?? "");
-          const createdAtMs = parseCreatedAt(task?.created_at);
-          const creditUsage = Number(
-            task?.credit_usage ?? task?.metadata?.credit_usage ?? 0,
-          );
-          if (
-            !taskId ||
-            createdAtMs === null ||
-            !Number.isFinite(creditUsage) ||
-            creditUsage < 0
-          ) {
-            return [];
-          }
-          const ownerId = ownerByTask.get(taskId);
-          return [
-            {
-              upstreamTaskId: taskId,
-              accountUserId: ownerId ?? null,
-              isFirstParty: ownerId !== undefined,
-              taskCreatedAtMs: createdAtMs,
-              creditUsage,
-              isTerminal: isUsageTaskTerminal(task),
-            },
-          ];
-        }),
-      });
-      if (!ledgerWrite.complete) pageComplete = false;
-      if (!pageComplete) credentialComplete = false;
-      if (pageReachedCutoff) break;
-      after =
-        payload.next_cursor ??
-        (String(tasks[tasks.length - 1]?.id ?? "") || undefined);
-      if (payload.has_more && !after) {
-        credentialComplete = false;
-        break;
-      }
-      if (!payload.has_more) break;
-      if (seenCursors.has(String(after))) {
-        credentialComplete = false;
-        break;
-      }
-      seenCursors.add(String(after));
-      if (pageIndex === CREDIT_MAX_PAGES - 1) credentialComplete = false;
-    }
-    const expectedTaskIds =
-      expectedTaskIdsByFingerprint.get(credential.fingerprint) ?? new Set();
-    if (
-      !hasCompleteExpectedTaskSet(
-        expectedTaskIds,
-        seenForCredential,
-        terminalProofsByFingerprint.get(credential.fingerprint),
-      )
-    ) {
-      credentialComplete = false;
-    }
-    if (credentialComplete) {
-      const finalized = await markUsageCredentialCoverage({
-        executor: db,
-        scope: "managed_user",
-        credentialFingerprint: credential.fingerprint,
-        coveredFromMs: period.startAt,
-        fullScanAtMs: input.now ?? Date.now(),
-        credentialRetiredAtMs: credential.retiredAt?.getTime() ?? null,
-        allTasksSettled: allFirstPartyTasksSettled,
-        scanToken,
-      });
-      if (!finalized) credentialComplete = false;
-    }
-    if (!credentialComplete) {
-      attributionComplete = false;
-    }
-  }
-  const ledgerUsage = await readManagedUsageLedger({
-    executor: db,
-    poolFingerprint: input.poolFingerprint ?? credentials[0]?.fingerprint ?? "",
-    accountIds: uniqueAccountIds,
-    startAt: period.startAt,
-    endAt: period.endAt,
-  });
-  for (const accountId of uniqueAccountIds) {
-    const account = accounts.get(accountId)!;
-    account.accountUsed = ledgerUsage.accountUsed.get(accountId) ?? 0;
-  }
   return {
-    // v2 usage.list is the authoritative balance-change history. Unlike the
-    // deprecated task list it retains consumption for deleted sessions and
-    // lets refunds reduce the displayed net usage. The local task ledger is
-    // still the source of tenant-private per-account attribution.
-    totalUsed: authoritativePoolUsage.totalUsed,
+    totalUsed: 0,
+    creditUsageAvailable: false,
     accounts,
     fetchedAt: input.now ?? Date.now(),
-    fingerprint: input.poolFingerprint ?? credentials[0]?.fingerprint ?? null,
+    fingerprint: input.poolFingerprint ?? null,
     period,
-    complete: authoritativePoolUsage.complete,
-    issueCode: authoritativePoolUsage.issueCode,
-    attributionComplete,
+    complete: true,
+    issueCode: undefined,
+    attributionComplete: true,
   };
 }
 
@@ -2504,115 +2019,27 @@ async function getAccountCreditUsageBetween(
   },
 ) {
   const credential = await getEffectiveDecryptedCredentialForAccount(userId);
-  if (!credential)
-    return {
-      totalUsed: 0,
-      accountUsed: 0,
-      recentTasks: [],
-      fetchedAt: Date.now(),
-      fingerprint: null,
-      complete: true,
-      ...(input.period ? { period: input.period } : {}),
-    };
-  if (credential.provider === "zhipu") {
-    const native = await readManagedNativeUsageByAccounts({
-      executor: await requireDb(),
-      accountIds: [userId],
-      startAt: input.cutoff,
-      endAt: input.endExclusive ?? Date.now(),
-    });
-    return {
-      totalUsed: 0,
-      accountUsed: 0,
-      recentTasks: [],
-      fetchedAt: Date.now(),
-      fingerprint: credential.fingerprint,
-      complete: false,
-      provider: "zhipu" as const,
-      creditUsageAvailable: false,
-      nativeUsage: native.get(userId),
-      ...(input.period ? { period: input.period } : {}),
-    };
-  }
-  const recentTasks: Array<{
-    id: string;
-    title: string;
-    creditUsage: number;
-    createdAt?: string;
-  }> = [];
-  const seen = new Set<string>();
-  let totalUsed = 0;
-  let accountUsed = 0;
-  let after: string | undefined;
-  let reachedCutoff = false;
-  let complete = true;
-  const usageClient = new ManusV2Client({
-    baseUrl: getUpstreamBaseUrl(),
-    apiKey: credential.apiKey,
-    rateLimitScope: `managed-user:${userId}`,
+  const native = await readManagedNativeUsageByAccounts({
+    executor: await requireDb(),
+    accountIds: [userId],
+    startAt: input.cutoff,
+    endAt: input.endExclusive ?? Date.now(),
   });
-
-  for (
-    let pageIndex = 0;
-    pageIndex < CREDIT_MAX_PAGES && !reachedCutoff;
-    pageIndex += 1
-  ) {
-    let payload: Awaited<ReturnType<ManusV2Client["listTasksPage"]>>;
-    try {
-      payload = await usageClient.listTasksPage({
-        limit: CREDIT_PAGE_LIMIT,
-        order: "desc",
-        cursor: after,
-      });
-    } catch (error) {
-      throw new AuthServiceError(
-        error instanceof ManusV2ApiError &&
-        (error.status === 401 || error.status === 403)
-          ? "INVALID_CREDENTIAL"
-          : "UPSTREAM_UNAVAILABLE",
-        "暂时无法读取该用户的积分使用情况",
-      );
-    }
-    const tasks = payload.data;
-    if (tasks.length === 0) break;
-    const taskIds = tasks
-      .map((task: any) => String(task?.id ?? task?.task_id ?? ""))
-      .filter(Boolean);
-    const ownedTaskIds = await getOwnedUpstreamResourceIds(
-      userId,
-      "task",
-      taskIds,
-    );
-    const pageResult = aggregateSharedKeyCreditUsagePage({
-      tasks,
-      ownedTaskIds,
-      cutoff: input.cutoff,
-      endExclusive: input.endExclusive,
-      seenTaskIds: seen,
-    });
-    totalUsed += pageResult.totalUsed;
-    accountUsed += pageResult.accountUsed;
-    recentTasks.push(...pageResult.recentTasks);
-    reachedCutoff = pageResult.reachedCutoff;
-    if (!pageResult.complete) complete = false;
-    after = payload.next_cursor ?? tasks[tasks.length - 1]?.id ?? undefined;
-    if (
-      pageIndex === CREDIT_MAX_PAGES - 1 &&
-      payload.has_more &&
-      after &&
-      !reachedCutoff
-    ) {
-      complete = false;
-    }
-    if (!payload.has_more || !after) break;
-  }
   return {
-    totalUsed,
-    accountUsed,
-    recentTasks,
+    totalUsed: 0,
+    accountUsed: 0,
+    recentTasks: [] as Array<{
+      id: string;
+      title: string;
+      creditUsage: number;
+      createdAt?: string;
+    }>,
     fetchedAt: Date.now(),
-    fingerprint: credential.fingerprint,
-    complete,
+    fingerprint: credential?.fingerprint ?? null,
+    complete: true,
+    provider: "zhipu" as const,
+    creditUsageAvailable: false,
+    nativeUsage: native.get(userId),
     ...(input.period ? { period: input.period } : {}),
   };
 }

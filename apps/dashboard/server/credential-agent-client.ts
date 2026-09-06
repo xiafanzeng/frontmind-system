@@ -1,9 +1,7 @@
 import type { DecryptedCredential } from "./auth-service";
 import { createDashboardAgentClient } from "./providers/dashboard-agent-provider";
-import { getUpstreamBaseUrl } from "./upstream-config";
 
-/** Select the provider from the exact credential generation already authorized
- * by the repository. Never re-resolve the account's current key here. */
+/** Use the already authorized Zhipu credential for this account. */
 export function createCredentialAgentClient(
   credential: DecryptedCredential,
   options: {
@@ -18,7 +16,7 @@ export function createCredentialAgentClient(
   } = {},
 ) {
   return createDashboardAgentClient({
-    provider: credential.provider ?? "manus",
+    provider: credential.provider ?? "zhipu",
     accountUserId: options.accountUserId ?? credential.userId,
     credentialId: credential.id,
     credentialOwnerUserId: credential.userId,
@@ -30,7 +28,6 @@ export function createCredentialAgentClient(
           effort: credential.upstreamEffort ?? undefined,
         }
       : {}),
-    baseUrl: getUpstreamBaseUrl(),
     rateLimitScope: `managed-user:${options.accountUserId ?? credential.userId}`,
     ...Object.fromEntries(
       Object.entries(options).filter(([, value]) => value !== undefined),

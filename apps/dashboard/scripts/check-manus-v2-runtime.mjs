@@ -55,13 +55,10 @@ const failures = [];
 const reachable = await productionServerGraph();
 const reachablePaths = new Set([...reachable].map(toRepositoryPath));
 
-// These two files retain offline incident/audit code, but the production entry
-// must never import them. Keeping the assertion here prevents an old v1 client
+// This file retains offline incident/audit code, but the production entry
+// must never import it. Keeping the assertion here prevents an old v1 client
 // from becoming reachable through an innocent-looking router registration.
-for (const legacyModule of [
-  "server/presales-proxy.ts",
-  "server/knowledge-base-live-preview-api.ts",
-]) {
+for (const legacyModule of ["server/presales-proxy.ts"]) {
   if (reachablePaths.has(legacyModule)) {
     failures.push(`LEGACY_V1_MODULE_BECAME_REACHABLE:${legacyModule}`);
   }
@@ -107,31 +104,11 @@ const mountedLegacyRouter = await readFile(
   "utf8",
 );
 if (
-  !/function\s+legacyBlindProviderProxyDisabled\(\)\s*\{\s*return true;\s*\}/u.test(
-    mountedLegacyRouter,
-  )
-) {
-  failures.push("LEGACY_BLIND_PROXY_KILL_SWITCH_NOT_CONSTANT_TRUE");
-}
-if (
   /(?:axios\s*\(\s*axiosConfig|axios\.request\s*\(\s*axiosConfig|fetch\s*\(\s*targetUrl)/u.test(
     mountedLegacyRouter,
   )
 ) {
   failures.push("LEGACY_BLIND_PROXY_NETWORK_DISPATCH_PRESENT");
-}
-
-const smokePath = path.join(
-  repositoryRoot,
-  "scripts/smoke-response-logic-pro.ts",
-);
-const smoke = await readFile(smokePath, "utf8");
-if (
-  !smoke.includes("ManusV2Client") ||
-  !smoke.includes("structuredOutputSchema") ||
-  v1Endpoint.test(smoke)
-) {
-  failures.push("RESPONSE_LOGIC_SMOKE_NOT_V2_ONLY");
 }
 
 // Knowledge-base runtime is v5 materialized-only. Historical columns and

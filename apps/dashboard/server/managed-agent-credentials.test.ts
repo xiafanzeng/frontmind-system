@@ -86,6 +86,15 @@ describe("versioned managed provider credentials", () => {
     ).toBe(false);
   });
 
+  it("rejects a retired provider before making any credential request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      validateManagedUpstreamApiKey("fixture-not-a-real-key", "manus"),
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIAL" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("probes the Zhipu read endpoint without creating tasks", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({ data: [] }));
     vi.stubGlobal("fetch", fetchMock);

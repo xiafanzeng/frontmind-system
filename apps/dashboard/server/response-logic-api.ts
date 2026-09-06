@@ -72,9 +72,7 @@ import {
   classifyManusV2StructuredResultEnvelope,
   latestManusV2TaskState,
   ManusV2ApiError,
-  ManusV2Client,
   manusV2EventOperationToken,
-  manusV2EventsContainOperationToken,
   orderManusV2EventsByProviderRank,
   type ManusV2MessageEvent,
 } from "./manus-v2-client";
@@ -1033,18 +1031,20 @@ export async function createResponseLogicTask(input: {
   const prompt = assertUpstreamPromptBudget(
     `${input.prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken })}`,
   );
-  const client = input.credential
-    ? createCredentialAgentClient(input.credential, {
-        baseUrl: input.baseUrl,
-        accountUserId: input.accountUserId,
-        intentId: operationToken,
-        rateLimitScope: input.rateLimitScope,
-      })
-    : new ManusV2Client({
-        baseUrl: input.baseUrl,
-        apiKey: input.apiKey,
-        rateLimitScope: input.rateLimitScope,
-      });
+  if (!input.credential || !input.accountUserId) {
+    throw new ManusV2ApiError(
+      "task.create",
+      409,
+      "ZHIPU_CREDENTIAL_CONTEXT_REQUIRED",
+      false,
+      false,
+    );
+  }
+  const client = createCredentialAgentClient(input.credential, {
+    accountUserId: input.accountUserId,
+    intentId: operationToken,
+    rateLimitScope: input.rateLimitScope,
+  });
   const attachments = input.attachments.map(({ file_id, filename }) => ({
     file_id,
     filename,
@@ -1053,70 +1053,26 @@ export async function createResponseLogicTask(input: {
     let taskId: string;
     let raw: Record<string, unknown>;
     if (input.taskId) {
-      try {
-        const sent = await client.sendMessage({
-          taskId: input.taskId,
-          prompt,
-          attachments,
-          structuredOutputSchema: RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA,
-        });
-        taskId = sent.taskId;
-        raw = sent.raw;
-      } catch (error) {
-        if (!(error instanceof ManusV2ApiError) || !error.outcomeUnknown) {
-          throw error;
-        }
-        let events: ManusV2MessageEvent[];
-        try {
-          events = await client.listAllMessages({
-            taskId: input.taskId,
-            order: "desc",
-            stopAfterOperationToken: operationToken,
-          });
-        } catch {
-          // A failed reconciliation read cannot make the original message
-          // side effect safe to repeat. Preserve the outcome-unknown error.
-          throw error;
-        }
-        if (!manusV2EventsContainOperationToken(events, operationToken)) {
-          throw error;
-        }
-        taskId = input.taskId;
-        raw = { ok: true, task_id: taskId, reconciled: true };
-      }
+      const sent = await client.sendMessage({
+        taskId: input.taskId,
+        prompt,
+        attachments,
+        structuredOutputSchema: RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA,
+      });
+      taskId = sent.taskId;
+      raw = sent.raw;
     } else {
-      const title = `FrontMind response logic ${operationToken.slice(0, 24)}`;
-      try {
-        const created = await client.createTask({
-          prompt,
-          attachments,
-          title,
-          agentProfile: input.agentProfile,
-          locale: "zh-CN",
-          interactiveMode: false,
-          structuredOutputSchema: RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA,
-        });
-        taskId = created.taskId;
-        raw = created.raw;
-      } catch (error) {
-        if (!(error instanceof ManusV2ApiError) || !error.outcomeUnknown) {
-          throw error;
-        }
-        let reconciled: Awaited<ReturnType<ManusV2Client["findCreatedTask"]>>;
-        try {
-          reconciled = await client.findCreatedTask({
-            title,
-            operationToken,
-          });
-        } catch {
-          // Never let a secondary read failure replace an ambiguous task
-          // creation. Only a unique token match proves the original success.
-          throw error;
-        }
-        if (!reconciled.unique) throw error;
-        taskId = reconciled.unique.id;
-        raw = { ok: true, task_id: taskId, reconciled: true };
-      }
+      const created = await client.createTask({
+        prompt,
+        attachments,
+        title: `FrontMind response logic ${operationToken.slice(0, 24)}`,
+        agentProfile: input.agentProfile,
+        locale: "zh-CN",
+        interactiveMode: false,
+        structuredOutputSchema: RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA,
+      });
+      taskId = created.taskId;
+      raw = created.raw;
     }
     return {
       ok: true as const,

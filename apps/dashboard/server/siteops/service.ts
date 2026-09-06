@@ -98,7 +98,6 @@ import {
 } from "../../shared/siteops-workflow";
 import {
   managedAgentProfileSchema,
-  managedAgentProfileModel,
   managedAgentProfileEffort,
   normalizeManagedAgentProfile,
   type ManagedAgentProfile,
@@ -3842,6 +3841,7 @@ async function ensureActiveCustomerAiCredential(tx: any, userId: number) {
     .where(
       and(
         eq(apiCredentials.userId, userId),
+        eq(apiCredentials.provider, "zhipu"),
         eq(apiCredentials.status, "active"),
         eq(apiCredentials.validationStatus, "verified"),
         isNotNull(apiCredentials.verifiedAt),
@@ -3897,22 +3897,24 @@ export function freezeSiteOpsCustomerAiCredential(input: {
     credentialDefault: input.credential.agentProfile,
   });
   const credential = credentialProfileProjection(input.credential);
+  if (credential.provider !== "zhipu") {
+    throw new SiteOpsServiceError(
+      "PROVIDER_NOT_CONFIGURED",
+      "当前账号尚未配置有效的智谱 AI 建站 API Key。",
+      412,
+    );
+  }
   return {
     manusCredentialId: input.credential.id,
     manusCredentialVersion: input.credential.version,
     credentialScope: "customer" as const,
     agentProfile: profile,
-    provider: credential.provider,
-    upstreamModel:
-      credential.provider === "zhipu"
-        ? credential.upstreamModel
-        : managedAgentProfileModel(profile),
+    provider: "zhipu" as const,
+    upstreamModel: credential.upstreamModel,
     upstreamEffort:
-      credential.provider === "zhipu"
-        ? profile === credential.agentProfile
-          ? credential.upstreamEffort
-          : managedAgentProfileEffort(profile)
-        : null,
+      profile === credential.agentProfile
+        ? credential.upstreamEffort
+        : managedAgentProfileEffort(profile),
   };
 }
 

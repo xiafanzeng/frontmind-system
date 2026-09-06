@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 
-import {
-  decryptCredentialSecret,
-  encryptCredentialSecret,
-  type DecryptedCredential,
-} from "./auth-service";
+import { type DecryptedCredential } from "./auth-service";
 import {
   KnowledgeBaseAttachmentsProcessingError,
   KnowledgeBaseLocalPreparationError,
@@ -28,7 +24,7 @@ import {
 import { readKnowledgeBasePinnedSkillArchiveAttachment } from "./knowledge-base-skill-runtime";
 import {
   ManusV2ApiError,
-  ManusV2Client,
+  type ManusV2Client,
   classifyManusV2ProviderFileMime,
   isManusV2ProviderFileMimeUsable,
   type ManusV2Attachment,
@@ -60,10 +56,6 @@ type LocalAttachmentSource = {
   mimeType: string;
   bytes: Buffer;
 };
-
-type SealedUploadCapability = NonNullable<
-  KnowledgeBaseManusV2AttachmentAttempt["uploadCapability"]
->;
 
 function localPreparationError(message: string, cause?: unknown) {
   return new KnowledgeBaseLocalPreparationError(
@@ -464,80 +456,6 @@ function mappingKey(input: {
   return `g${input.claim.turn.buildGeneration}:${input.attachmentIndex}:${input.source.contentSha256}:${input.source.sizeBytes}`;
 }
 
-function uploadCapabilityAad(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  mappingKey: string;
-  providerGeneration: number;
-  upstreamFileId: string;
-}) {
-  return [
-    "frontmind-kb-manus-v2-upload-capability:v1",
-    input.claim.turn.userId,
-    input.claim.turn.id,
-    input.mappingKey,
-    input.providerGeneration,
-    input.upstreamFileId,
-  ].join(":");
-}
-
-function sealUploadCapability(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  mappingKey: string;
-  providerGeneration: number;
-  file: ManusV2CreatedFile;
-}): SealedUploadCapability {
-  const sealed = encryptCredentialSecret(
-    uploadCapabilityAad({
-      ...input,
-      upstreamFileId: input.file.fileId,
-    }),
-    input.file.uploadUrl,
-  );
-  return {
-    schemaVersion: 1,
-    encryptionVersion: 1,
-    ciphertext: sealed.encryptedKey,
-    iv: sealed.encryptionIv,
-    authTag: sealed.encryptionAuthTag,
-  };
-}
-
-function openUploadCapability(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  attempt: KnowledgeBaseManusV2AttachmentAttempt;
-}) {
-  const capability = input.attempt.uploadCapability;
-  if (!capability || !input.attempt.upstreamFileId) {
-    throw localPreparationError(
-      "FrontMind 附件的耐久上传能力缺失，无法安全恢复明确未受理的 PUT",
-    );
-  }
-  const uploadUrl = decryptCredentialSecret(
-    uploadCapabilityAad({
-      claim: input.claim,
-      mappingKey: input.attempt.mappingKey,
-      providerGeneration: input.attempt.providerGeneration,
-      upstreamFileId: input.attempt.upstreamFileId,
-    }),
-    {
-      encryptionVersion: capability.encryptionVersion,
-      encryptedKey: capability.ciphertext,
-      encryptionIv: capability.iv,
-      encryptionAuthTag: capability.authTag,
-    },
-  );
-  const target = new URL(uploadUrl);
-  if (
-    target.protocol !== "https:" ||
-    target.username ||
-    target.password ||
-    uploadUrl.length > 8_192
-  ) {
-    throw localPreparationError("FrontMind 附件的耐久上传能力无效");
-  }
-  return uploadUrl;
-}
-
 function existingMapping(input: {
   claim: KnowledgeBaseRecoveryClaim;
   attachmentIndex: number;
@@ -566,7 +484,6 @@ function attachmentAttempt(input: {
   code?: string | null;
   rejectionCount?: number;
   nextRetryAt?: string | null;
-  uploadCapability?: SealedUploadCapability | null;
   mimeEvidence?: KnowledgeBaseManusV2AttachmentMimeEvidence;
 }): KnowledgeBaseManusV2AttachmentAttempt {
   return {
@@ -584,9 +501,6 @@ function attachmentAttempt(input: {
     state: input.state,
     upstreamFileId: input.file?.fileId ?? null,
     uploadExpiresAt: input.file?.uploadExpiresAt ?? null,
-    ...(input.uploadCapability === undefined
-      ? {}
-      : { uploadCapability: input.uploadCapability }),
     code: input.code ?? null,
     ...(input.rejectionCount === undefined
       ? {}
@@ -1101,15 +1015,13 @@ export async function ensureKnowledgeBaseZhipuMapping(input: {
   if (!["creating", "complete_upload_outcome_unknown"].includes(attempt.state))
     throw localPreparationError("FrontMind 完整上传状态不兼容冻结提供方");
   try {
-    const uploaded = await input
-      .clientForGeneration(generation)
-      .uploadFile({
-        filename: input.source.filename,
-        bytes: input.source.bytes,
-        contentType: input.source.mimeType,
-        minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
-        confirmationPolicy: "kb_frozen_source_advisory",
-      });
+    const uploaded = await input.clientForGeneration(generation).uploadFile({
+      filename: input.source.filename,
+      bytes: input.source.bytes,
+      contentType: input.source.mimeType,
+      minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
+      confirmationPolicy: "kb_frozen_source_advisory",
+    });
     if (uploaded.uploadUrl)
       throw attachmentIntegrityError("完整字节上传不能包含签名 PUT 地址");
     const accepted = attachmentAttempt({
@@ -1208,635 +1120,10 @@ export async function ensureKnowledgeBaseZhipuMapping(input: {
   }
 }
 
-async function ensureOneMapping(input: {
-  claim: KnowledgeBaseRecoveryClaim;
-  client: DashboardAgentClient;
-  source: LocalAttachmentSource;
-  attachmentIndex: number;
-}) {
-  await renewKnowledgeBaseTurnLease({
-    userId: input.claim.turn.userId,
-    turnId: input.claim.turn.id,
-    leaseToken: input.claim.leaseToken,
-  });
-  const existing = existingMapping(input);
-  const key = mappingKey(input);
-  let attempt = existingAttempt(input);
-  let retryingCreateSameGeneration = false;
-  let retryingPutSameCandidate = false;
-  const minimumExpirySeconds =
-    Math.floor(Date.now() / 1_000) + ENSURE_MINIMUM_USABLE_SECONDS;
-  if (attempt?.state === "put_retry_wait") {
-    const nextRetryAt = Date.parse(String(attempt.nextRetryAt || ""));
-    if (!Number.isFinite(nextRetryAt)) {
-      throw localPreparationError(
-        `FrontMind 附件“${input.source.filename}”的 PUT 重试时间无效`,
-      );
-    }
-    if (Date.now() < nextRetryAt) {
-      throw new KnowledgeBaseAttachmentsProcessingError(
-        0,
-        1,
-        Math.max(250, Math.min(60_000, nextRetryAt - Date.now())),
-        attempt.code || undefined,
-      );
-    }
-    if (
-      !attempt.uploadExpiresAt ||
-      attempt.uploadExpiresAt * 1_000 - 5_000 <= Date.now()
-    ) {
-      const unusable = attachmentAttempt({
-        ...input,
-        providerGeneration: attempt.providerGeneration,
-        state: "unusable",
-        file: {
-          fileId: attempt.upstreamFileId!,
-          filename: attempt.filename,
-          uploadUrl: "https://redacted.invalid/",
-          uploadExpiresAt: attempt.uploadExpiresAt!,
-          requestId: null,
-        },
-        code: "MANUS_V2_FILE_UPLOAD_URL_EXPIRED",
-        uploadCapability: null,
-      });
-      await persistAttempt({ claim: input.claim, attempt: unusable });
-      attempt = unusable;
-    } else {
-      // A retryable HTTP response proves that the PUT was not accepted. The
-      // exact signed capability was sealed before the first PUT, so a process
-      // restart can safely resume this one file id without file.create or a
-      // replacement generation.
-      openUploadCapability({ claim: input.claim, attempt });
-      retryingPutSameCandidate = true;
-    }
-  } else if (
-    attempt?.state === "candidate_created" &&
-    attempt.uploadCapability &&
-    attempt.uploadExpiresAt &&
-    attempt.uploadExpiresAt * 1_000 - 5_000 > Date.now()
-  ) {
-    // `onCandidateCreated` is durably committed before `onPutStarted` is
-    // invoked. Therefore this exact state proves that no PUT body was sent.
-    // Resume the sealed signed capability with rejection count zero instead
-    // of consuming the one bounded replacement generation.
-    openUploadCapability({ claim: input.claim, attempt });
-    retryingPutSameCandidate = true;
-  } else if (attempt?.state === "create_retry_wait") {
-    const nextRetryAt = Date.parse(String(attempt.nextRetryAt || ""));
-    if (!Number.isFinite(nextRetryAt)) {
-      throw localPreparationError(
-        `FrontMind 附件“${input.source.filename}”的重试时间无效`,
-      );
-    }
-    if (Date.now() < nextRetryAt) {
-      throw new KnowledgeBaseAttachmentsProcessingError(
-        0,
-        1,
-        Math.max(250, Math.min(60_000, nextRetryAt - Date.now())),
-        attempt.code || undefined,
-      );
-    }
-    const retrying = attachmentAttempt({
-      ...input,
-      providerGeneration: attempt.providerGeneration,
-      state: "creating",
-      code: attempt.code,
-      rejectionCount: attempt.rejectionCount,
-    });
-    await persistAttempt({ claim: input.claim, attempt: retrying });
-    attempt = retrying;
-    retryingCreateSameGeneration = true;
-  } else if (attempt?.state === "creating") {
-    // Crash after file.create returned but before its id was journaled is
-    // indistinguishable from create response loss. Consume the one bounded
-    // replacement generation; never replay an unbounded POST loop.
-    const unknown = attachmentAttempt({
-      ...input,
-      providerGeneration: attempt.providerGeneration,
-      state: "create_outcome_unknown",
-      code: "MANUS_V2_FILE_CREATE_CRASH_OUTCOME_UNKNOWN",
-    });
-    await persistAttempt({ claim: input.claim, attempt: unknown });
-    attempt = unknown;
-  }
-  if (
-    existing &&
-    shouldInspectReadyMappingBeforeAttachmentAttempt({
-      mappingProviderGeneration: existing.providerGeneration,
-      attemptProviderGeneration: attempt?.providerGeneration ?? null,
-    })
-  ) {
-    const inspectionAttempt =
-      attempt &&
-      attempt.providerGeneration === existing.providerGeneration &&
-      attempt.upstreamFileId === existing.upstreamFileId
-        ? attempt
-        : attachmentAttempt({
-            ...input,
-            providerGeneration: existing.providerGeneration,
-            state: "put_accepted",
-            file: {
-              fileId: existing.upstreamFileId,
-              filename: existing.filename,
-              uploadUrl: "https://redacted.invalid/",
-              uploadExpiresAt: existing.expiresAt,
-              requestId: null,
-            },
-          });
-    const inspection = await inspectCandidate({
-      client: input.client,
-      attempt: inspectionAttempt,
-      minimumExpirySeconds,
-    });
-    if (inspection.state === "ready") {
-      const refreshed: KnowledgeBaseManusV2AttachmentMapping = {
-        ...existing,
-        expiresAt: inspection.detail.expiresAt,
-        verifiedAt: new Date().toISOString(),
-        mimeEvidence: inspection.mimeEvidence,
-      };
-      await persistReadyMapping({ claim: input.claim, mapping: refreshed });
-      return refreshed;
-    }
-    if (inspection.state === "unresolved") {
-      throw unresolvedCandidateError({
-        filename: input.source.filename,
-        code: inspection.code,
-      });
-    }
-    if (inspection.state === "integrity_conflict") {
-      if (inspection.mimeEvidence) {
-        logProviderMimeDecision({
-          attempt: inspectionAttempt,
-          evidence: inspection.mimeEvidence,
-          decision: "integrity_conflict",
-        });
-      }
-      if (attempt?.state !== "unusable") {
-        attempt = attachmentAttempt({
-          ...input,
-          providerGeneration: existing.providerGeneration,
-          state: "unusable",
-          file: {
-            fileId: existing.upstreamFileId,
-            filename: existing.filename,
-            uploadUrl: "https://redacted.invalid/",
-            uploadExpiresAt: existing.expiresAt,
-            requestId: null,
-          },
-          code: inspection.code,
-          mimeEvidence: inspection.mimeEvidence,
-        });
-        await persistAttempt({ claim: input.claim, attempt });
-      }
-      throw attachmentIntegrityError(
-        `FrontMind 附件“${input.source.filename}”的 Provider 身份证明与冻结源不一致（${inspection.code}）`,
-      );
-    }
-    if (existing.providerGeneration >= 2) {
-      throw attachmentLifecycleExhaustedError(
-        `FrontMind 附件“${input.source.filename}”两次失效，当前构建已局部隔离`,
-      );
-    }
-    // Older ready-only ledgers had no candidate lifecycle row. A definitely
-    // unusable ready id is still an authoritative first generation.
-    if (attempt?.state !== "unusable") {
-      attempt = attachmentAttempt({
-        ...input,
-        providerGeneration: existing.providerGeneration,
-        state: "unusable",
-        file: {
-          fileId: existing.upstreamFileId,
-          filename: existing.filename,
-          uploadUrl: "https://redacted.invalid/",
-          uploadExpiresAt: existing.expiresAt,
-          requestId: null,
-        },
-        code: inspection.code,
-        mimeEvidence: inspection.mimeEvidence,
-      });
-      await persistAttempt({ claim: input.claim, attempt });
-    }
-  }
-  if (
-    attempt &&
-    !retryingCreateSameGeneration &&
-    !retryingPutSameCandidate &&
-    attempt.state !== "unusable" &&
-    attempt.state !== "create_rejected" &&
-    attempt.state !== "create_outcome_unknown"
-  ) {
-    if (attempt.state === "creating" || !attempt.upstreamFileId) {
-      throw unresolvedCandidateError({
-        filename: input.source.filename,
-        code: "MANUS_V2_FILE_CREATE_OUTCOME_UNKNOWN",
-      });
-    }
-    if (attempt.state === "put_sending") {
-      // The signed PUT may not have reached Manus. There is no safe second PUT
-      // contract for an ambiguous body upload; detail remains the only read.
-      const inspection = await inspectCandidate({
-        client: input.client,
-        attempt,
-        minimumExpirySeconds,
-      });
-      if (inspection.state === "ready") {
-        const mapping = mappingFromCandidate({
-          attempt,
-          detail: inspection.detail,
-          mimeEvidence: inspection.mimeEvidence,
-        });
-        await persistReadyMapping({ claim: input.claim, mapping });
-        return mapping;
-      }
-      if (
-        inspection.state === "replaceable_unusable" ||
-        inspection.state === "integrity_conflict"
-      ) {
-        attempt = attachmentAttempt({
-          ...input,
-          providerGeneration: attempt.providerGeneration,
-          state: "unusable",
-          file: {
-            fileId: attempt.upstreamFileId,
-            filename: attempt.filename,
-            uploadUrl: "https://redacted.invalid/",
-            uploadExpiresAt: attempt.uploadExpiresAt!,
-            requestId: null,
-          },
-          code: inspection.code,
-          mimeEvidence: inspection.mimeEvidence,
-        });
-        await persistAttempt({ claim: input.claim, attempt });
-        if (inspection.state === "integrity_conflict") {
-          throw attachmentIntegrityError(
-            `FrontMind 附件“${input.source.filename}”的 Provider 身份证明与冻结源不一致（${inspection.code}）`,
-          );
-        }
-      } else {
-        throw unresolvedCandidateError({
-          filename: input.source.filename,
-          code: inspection.code,
-        });
-      }
-    } else if (attempt.state === "candidate_created") {
-      // Historical candidate rows predate durable sealed upload capabilities.
-      // No PUT was attempted, so a missing or expired capability may consume
-      // the one bounded replacement generation without duplicating a body.
-      attempt = attachmentAttempt({
-        ...input,
-        providerGeneration: attempt.providerGeneration,
-        state: "unusable",
-        file: {
-          fileId: attempt.upstreamFileId,
-          filename: attempt.filename,
-          uploadUrl: "https://redacted.invalid/",
-          uploadExpiresAt: attempt.uploadExpiresAt!,
-          requestId: null,
-        },
-        code:
-          attempt.uploadExpiresAt! * 1_000 - 5_000 <= Date.now()
-            ? "MANUS_V2_FILE_UPLOAD_URL_EXPIRED"
-            : "MANUS_V2_FILE_UPLOAD_URL_NOT_RETAINED",
-      });
-      await persistAttempt({ claim: input.claim, attempt });
-    } else {
-      const inspection = await inspectCandidate({
-        client: input.client,
-        attempt,
-        minimumExpirySeconds,
-      });
-      if (inspection.state === "ready") {
-        const mapping = mappingFromCandidate({
-          attempt,
-          detail: inspection.detail,
-          mimeEvidence: inspection.mimeEvidence,
-        });
-        await persistReadyMapping({ claim: input.claim, mapping });
-        return mapping;
-      }
-      if (inspection.state === "unresolved") {
-        throw unresolvedCandidateError({
-          filename: input.source.filename,
-          code: inspection.code,
-        });
-      }
-      attempt = attachmentAttempt({
-        ...input,
-        providerGeneration: attempt.providerGeneration,
-        state: "unusable",
-        file: {
-          fileId: attempt.upstreamFileId,
-          filename: attempt.filename,
-          uploadUrl: "https://redacted.invalid/",
-          uploadExpiresAt: attempt.uploadExpiresAt!,
-          requestId: null,
-        },
-        code: inspection.code,
-        mimeEvidence: inspection.mimeEvidence,
-      });
-      await persistAttempt({ claim: input.claim, attempt });
-      if (inspection.state === "integrity_conflict") {
-        throw attachmentIntegrityError(
-          `FrontMind 附件“${input.source.filename}”的 Provider 身份证明与冻结源不一致（${inspection.code}）`,
-        );
-      }
-    }
-  }
-  const providerGeneration = retryingPutSameCandidate
-    ? attempt!.providerGeneration
-    : retryingCreateSameGeneration
-      ? attempt!.providerGeneration
-      : nextKnowledgeBaseManusV2FileCreateGeneration(attempt || null);
-  if (providerGeneration === null) {
-    if (
-      attempt?.state === "unusable" &&
-      [
-        "KB_ATTACHMENT_IDENTITY_CONFLICT",
-        "KB_ATTACHMENT_BYTES_CONFLICT",
-      ].includes(String(attempt.code || ""))
-    ) {
-      throw attachmentIntegrityError(
-        `FrontMind 附件“${input.source.filename}”的 Provider 身份证明与冻结源不一致（${attempt.code}）`,
-      );
-    }
-    if (attempt?.state === "unusable") {
-      throw attachmentLifecycleExhaustedError(
-        `FrontMind 附件“${input.source.filename}”两次失效，当前构建已局部隔离`,
-      );
-    }
-    throw localPreparationError(
-      `FrontMind 附件“${input.source.filename}”没有可继续使用的 Provider 文件创建权限`,
-    );
-  }
-  const creating = retryingPutSameCandidate
-    ? attempt!
-    : retryingCreateSameGeneration
-      ? attempt!
-      : attachmentAttempt({
-          ...input,
-          providerGeneration,
-          state: "creating",
-          rejectionCount: attempt?.rejectionCount,
-        });
-  if (!retryingCreateSameGeneration && !retryingPutSameCandidate) {
-    await persistAttempt({ claim: input.claim, attempt: creating });
-  }
-  let currentAttempt = creating;
-  const candidateFor = (
-    file: ManusV2CreatedFile,
-    state: KnowledgeBaseManusV2AttachmentAttempt["state"],
-    code?: string | null,
-  ) =>
-    attachmentAttempt({
-      ...input,
-      providerGeneration,
-      state,
-      file,
-      code,
-    });
-  let uploaded: Awaited<ReturnType<ManusV2Client["uploadFile"]>>;
-  try {
-    const resumedUploadUrl = retryingPutSameCandidate
-      ? openUploadCapability({ claim: input.claim, attempt: currentAttempt })
-      : null;
-    uploaded = await input.client.uploadFile({
-      filename: input.source.filename,
-      bytes: input.source.bytes,
-      contentType: input.source.mimeType,
-      confirmationPolicy: "kb_frozen_source_advisory",
-      minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
-      ...(retryingPutSameCandidate
-        ? {
-            existingCandidate: {
-              fileId: currentAttempt.upstreamFileId!,
-              filename: currentAttempt.filename,
-              uploadUrl: resumedUploadUrl!,
-              uploadExpiresAt: currentAttempt.uploadExpiresAt!,
-              resumePutRejectionCount: currentAttempt.rejectionCount ?? 0,
-            },
-          }
-        : {}),
-      observer: {
-        onCandidateCreated: async (file) => {
-          currentAttempt = attachmentAttempt({
-            ...input,
-            providerGeneration,
-            state: "candidate_created",
-            file,
-            uploadCapability: sealUploadCapability({
-              claim: input.claim,
-              mappingKey: key,
-              providerGeneration,
-              file,
-            }),
-          });
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-        onPutStarted: async (file) => {
-          currentAttempt = attachmentAttempt({
-            ...input,
-            providerGeneration,
-            state: "put_sending",
-            file,
-            rejectionCount: currentAttempt.rejectionCount,
-            uploadCapability: currentAttempt.uploadCapability ?? null,
-          });
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-        onPutRetryWait: async (file, rejection) => {
-          currentAttempt = attachmentAttempt({
-            ...input,
-            providerGeneration,
-            state: "put_retry_wait",
-            file,
-            code: `MANUS_V2_FILE_PUT_${rejection.code}`.slice(0, 128),
-            rejectionCount: rejection.rejectionCount,
-            nextRetryAt: rejection.nextRetryAt,
-            uploadCapability: currentAttempt.uploadCapability ?? null,
-          });
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-        onPutAccepted: async (file) => {
-          currentAttempt = candidateFor(file, "put_accepted");
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-        onPutRejected: async (file, rejection) => {
-          currentAttempt = candidateFor(
-            file,
-            "unusable",
-            `MANUS_V2_FILE_PUT_${rejection.code}`.slice(0, 128),
-          );
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-        onPutOutcomeUnknown: async (file) => {
-          currentAttempt = candidateFor(
-            file,
-            "put_outcome_unknown",
-            "MANUS_V2_FILE_PUT_OUTCOME_UNKNOWN",
-          );
-          await persistAttempt({ claim: input.claim, attempt: currentAttempt });
-        },
-      },
-    });
-  } catch (error) {
-    // createFile may fail before the observer receives a provider id. The
-    // precommitted creating fence is intentionally terminal for automatic
-    // recreation: without a provider lookup contract absence is unprovable.
-    if (currentAttempt.state === "creating") {
-      const explicitCreateRejection =
-        error instanceof ManusV2ApiError &&
-        error.operation === "file.upload" &&
-        !error.outcomeUnknown;
-      const previousRejectionCount = Number.isSafeInteger(
-        currentAttempt.rejectionCount,
-      )
-        ? Number(currentAttempt.rejectionCount)
-        : 0;
-      const nextRejectionCount = previousRejectionCount + 1;
-      const retryableCreateRejection =
-        explicitCreateRejection &&
-        error instanceof ManusV2ApiError &&
-        error.retryable &&
-        nextRejectionCount <= MAX_EXPLICIT_FILE_REJECTION_RETRIES;
-      const retryDelayMs =
-        retryableCreateRejection && error instanceof ManusV2ApiError
-          ? knowledgeBaseManusV2FileRejectionRetryDelay({
-              mappingKey: key,
-              rejectionCount: nextRejectionCount,
-              providerRetryAfterMs: error.retryAfterMs,
-            })
-          : null;
-      const settled = attachmentAttempt({
-        ...input,
-        providerGeneration,
-        state: retryableCreateRejection
-          ? "create_retry_wait"
-          : explicitCreateRejection
-            ? "create_rejected"
-            : "create_outcome_unknown",
-        code:
-          error instanceof ManusV2ApiError
-            ? `MANUS_V2_FILE_CREATE_${error.code}`.slice(0, 128)
-            : "MANUS_V2_FILE_CREATE_OUTCOME_UNKNOWN",
-        rejectionCount: explicitCreateRejection
-          ? nextRejectionCount
-          : undefined,
-        nextRetryAt:
-          retryDelayMs === null
-            ? undefined
-            : new Date(Date.now() + retryDelayMs).toISOString(),
-      });
-      await persistAttempt({ claim: input.claim, attempt: settled });
-      if (retryableCreateRejection && retryDelayMs !== null) {
-        throw new KnowledgeBaseAttachmentsProcessingError(
-          0,
-          1,
-          Math.max(250, retryDelayMs),
-          settled.code || undefined,
-        );
-      }
-      if (explicitCreateRejection) {
-        throw localPreparationError(
-          `FrontMind 附件“${input.source.filename}”创建请求被明确拒绝`,
-          error,
-        );
-      }
-    }
-    // Explicitly unusable detail after a known PUT may use the one bounded
-    // replacement on the next recovery. Ambiguous/pending detail leaves the
-    // same provider id intact for read-only reconciliation.
-    if (
-      currentAttempt.upstreamFileId &&
-      currentAttempt.state !== "unusable" &&
-      error instanceof ManusV2ApiError &&
-      !error.outcomeUnknown &&
-      !error.retryable &&
-      [
-        "FILE_UNUSABLE",
-        "FILE_EXPIRING",
-        "FILE_ID_CONFLICT",
-        "FILE_IDENTITY_CONFLICT",
-        "FILE_BYTES_CONFLICT",
-      ].includes(error.code)
-    ) {
-      const integrityConflict = [
-        "FILE_ID_CONFLICT",
-        "FILE_IDENTITY_CONFLICT",
-        "FILE_BYTES_CONFLICT",
-      ].includes(error.code);
-      const unusable = attachmentAttempt({
-        ...input,
-        providerGeneration,
-        state: "unusable",
-        file: {
-          fileId: currentAttempt.upstreamFileId,
-          filename: currentAttempt.filename,
-          uploadUrl: "https://redacted.invalid/",
-          uploadExpiresAt: currentAttempt.uploadExpiresAt!,
-          requestId: null,
-        },
-        code: integrityConflict
-          ? error.code === "FILE_BYTES_CONFLICT"
-            ? "KB_ATTACHMENT_BYTES_CONFLICT"
-            : "KB_ATTACHMENT_IDENTITY_CONFLICT"
-          : "KB_ATTACHMENT_LIFECYCLE_UNUSABLE",
-      });
-      await persistAttempt({ claim: input.claim, attempt: unusable });
-      currentAttempt = unusable;
-      if (integrityConflict) {
-        throw attachmentIntegrityError(
-          `FrontMind 附件“${input.source.filename}”的 Provider 身份证明与冻结源不一致（${unusable.code}）`,
-          error,
-        );
-      }
-      if (providerGeneration >= 2) {
-        throw attachmentLifecycleExhaustedError(
-          `FrontMind 附件“${input.source.filename}”两次失效，当前构建已局部隔离`,
-          error,
-        );
-      }
-    }
-    if (currentAttempt.state === "unusable") {
-      throw unresolvedCandidateError({
-        filename: input.source.filename,
-        code: currentAttempt.code || "MANUS_V2_FILE_EXPLICITLY_UNUSABLE",
-      });
-    }
-    throw error;
-  }
-  const mapping: KnowledgeBaseManusV2AttachmentMapping = {
-    schemaVersion: 1,
-    providerProtocol: "manus_v2",
-    mappingKey: key,
-    buildGeneration: input.claim.turn.buildGeneration,
-    attachmentIndex: input.attachmentIndex,
-    sourceFileId: input.source.sourceFileId,
-    localStorageKey: input.source.localStorageKey,
-    contentSha256: input.source.contentSha256,
-    sizeBytes: input.source.sizeBytes,
-    filename: input.source.filename,
-    mimeType: input.source.mimeType,
-    upstreamFileId: uploaded.fileId,
-    status: "ready",
-    expiresAt: uploaded.detail.expiresAt,
-    providerGeneration,
-    verifiedAt: new Date().toISOString(),
-    mimeEvidence: providerMimeEvidence({
-      filename: input.source.filename,
-      expectedContentType: input.source.mimeType,
-      detail: uploaded.detail,
-    }),
-  };
-  await persistReadyMapping({ claim: input.claim, mapping });
-  return mapping;
-}
-
 /**
- * Materialize a frozen operation's attachment set as Manus v2 inputs. Small,
- * server-owned Skill/Instructions bytes use the provider's inline data form;
- * every other attachment keeps the durable file mapping/recovery contract.
- * This never returns prepared/v1 ids.
+ * Materialize a frozen operation's original attachment bytes for Zhipu. Small
+ * server-owned Skill/Instructions bytes remain inline until the managed client
+ * uploads them; customer files retain tenant-owned durable mappings.
  */
 export async function ensureKnowledgeBaseManusV2Attachments(input: {
   claim: KnowledgeBaseRecoveryClaim;
@@ -1871,8 +1158,14 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       "FrontMind 附件映射的用户、credential 或 frozen turn 所有权不一致",
     );
   }
+  if (input.credential.provider !== "zhipu") {
+    throw new KnowledgeBaseLocalPreparationError(
+      "RESET_REQUIRED",
+      "请配置智谱凭证，批准重置后重新上传资料并开始新构建",
+    );
+  }
   const client = createDashboardAgentClient({
-    provider: input.credential.provider ?? "manus",
+    provider: "zhipu",
     apiKey: input.credential.apiKey,
     credentialId: input.credential.id,
     credentialVersion: input.credential.version,
@@ -1889,23 +1182,21 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
     source: LocalAttachmentSource;
     attachmentIndex: number;
   }) =>
-    input.credential.provider === "zhipu"
-      ? ensureKnowledgeBaseZhipuMapping({
-          ...entry,
-          clientForGeneration: (generation) =>
-            createDashboardAgentClient({
-              provider: "zhipu",
-              apiKey: input.credential.apiKey,
-              credentialId: input.credential.id,
-              credentialVersion: input.credential.version,
-              accountUserId: claim.turn.userId,
-              credentialOwnerUserId: input.credential.userId,
-              intentId: `${claim.turn.id}:attachment:${entry.attachmentIndex}:generation:${generation}`,
-              upstreamModel: input.credential.upstreamModel,
-              upstreamEffort: input.credential.upstreamEffort,
-            }),
-        })
-      : ensureOneMapping(entry);
+    ensureKnowledgeBaseZhipuMapping({
+      ...entry,
+      clientForGeneration: (generation) =>
+        createDashboardAgentClient({
+          provider: "zhipu",
+          apiKey: input.credential.apiKey,
+          credentialId: input.credential.id,
+          credentialVersion: input.credential.version,
+          accountUserId: claim.turn.userId,
+          credentialOwnerUserId: input.credential.userId,
+          intentId: `${claim.turn.id}:attachment:${entry.attachmentIndex}:generation:${generation}`,
+          upstreamModel: input.credential.upstreamModel,
+          upstreamEffort: input.credential.upstreamEffort,
+        }),
+    });
   const sources = await resolveLocalSources(claim);
   const mappings: Array<KnowledgeBaseManusV2AttachmentMapping | null> = [];
   const inlineAttachments = new Map<
@@ -1972,11 +1263,11 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
               attachmentIndex,
               source,
               providerGeneration: mapping.providerGeneration,
-              state: "put_accepted",
+              state: "complete_upload_accepted",
               file: {
                 fileId: mapping.upstreamFileId,
                 filename: mapping.filename,
-                uploadUrl: "https://redacted.invalid/",
+                uploadUrl: "",
                 uploadExpiresAt: mapping.expiresAt,
                 requestId: null,
               },
@@ -2020,7 +1311,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
               file: {
                 fileId: mapping.upstreamFileId,
                 filename: mapping.filename,
-                uploadUrl: "https://redacted.invalid/",
+                uploadUrl: "",
                 uploadExpiresAt: mapping.expiresAt,
                 requestId: null,
               },
@@ -2053,7 +1344,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
               file: {
                 fileId: mapping.upstreamFileId,
                 filename: mapping.filename,
-                uploadUrl: "https://redacted.invalid/",
+                uploadUrl: "",
                 uploadExpiresAt: mapping.expiresAt,
                 requestId: null,
               },

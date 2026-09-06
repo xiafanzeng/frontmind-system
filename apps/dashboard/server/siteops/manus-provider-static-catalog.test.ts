@@ -421,13 +421,16 @@ async function createProviderHarness(input: {
     inputHash: "d".repeat(64),
     input: {
       credentialScope: "customer",
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
       buildId: "30000000-0000-4000-8000-000000000003",
       manusCredentialId: "40000000-0000-4000-8000-000000000004",
       manusCredentialVersion: 9,
       agentProfile: "frontmind-base",
       ...(input.feedback ? { feedback: input.feedback } : {}),
     },
-    provider: "manus",
+    provider: "zhipu",
     providerOperationId: null,
     providerTaskId: null,
     leaseOwner: "lease-static-template",
@@ -637,8 +640,11 @@ async function createProviderHarness(input: {
       userId: operation.userId,
       version: operation.input.manusCredentialVersion,
       apiKey: "customer-personal-key",
+      provider: "zhipu" as const,
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high" as const,
     }),
-    createClient: () => client as never,
+    createClient: () => ({ ...client }) as never,
     readSnapshotArchive: async () => snapshotBytes,
     readArtifact: async (artifactInput) => {
       const extra = input.extraArtifacts?.get(artifactInput.localAssetId);
@@ -1596,7 +1602,7 @@ describe("V7 static Template Manus source", () => {
     expect(result.result).not.toHaveProperty("nativeInputProviderFile");
   });
 
-  it("reconciles create outcome-unknown without creating a second task", async () => {
+  it("requires approved reset after unknown create without searching for or creating a task", async () => {
     const sourceBytes = Buffer.from("verified-inline-static-template", "utf8");
     const root = await mkdtemp(
       path.join(os.tmpdir(), "frontmind-v7-create-unknown-"),
@@ -1636,15 +1642,12 @@ describe("V7 static Template Manus source", () => {
     });
 
     expect(reconciled).toMatchObject({
-      status: "pending",
-      providerTaskId: "static-manus-task",
-      result: {
-        stage: "native_source_pending",
-        taskId: "static-manus-task",
-      },
+      status: "attention_required",
+      code: "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
+      message: expect.stringContaining("申请重置"),
     });
     expect(harness.createTask).toHaveBeenCalledTimes(1);
-    expect(harness.client.findCreatedTask).toHaveBeenCalledTimes(1);
+    expect(harness.client.findCreatedTask).not.toHaveBeenCalled();
     expect(harness.client.sendMessage).not.toHaveBeenCalled();
     expect(harness.client.taskDetail).not.toHaveBeenCalled();
     expect(harness.client.listAllMessages).not.toHaveBeenCalled();

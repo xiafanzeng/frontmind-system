@@ -267,6 +267,7 @@ describe("API credential encryption", () => {
       id: credentialId,
       userId: 7,
       version: 3,
+      provider: "zhipu",
       ...encrypted,
       fingerprint: getApiKeyFingerprint(apiKey),
       status: "retired",
@@ -336,6 +337,21 @@ describe("API credential encryption", () => {
     ).resolves.toMatchObject({ id: credentialId, userId: 7, apiKey });
     expect(lockOrder).toEqual(["credential", "build", "turn"]);
 
+    credential.provider = "manus";
+    await expect(
+      getDecryptedCredentialForKnowledgeBaseReservation(
+        {
+          userId: 42,
+          turnId,
+          buildId,
+          buildGeneration: 2,
+          apiCredentialId: credentialId,
+        },
+        executor,
+      ),
+    ).resolves.toBeNull();
+    credential.provider = "zhipu";
+
     build.activeTurnId = randomUUID();
     await expect(
       getDecryptedCredentialForKnowledgeBaseReservation(
@@ -373,6 +389,7 @@ describe("API credential encryption", () => {
       id: credentialId,
       userId: 7,
       version: 3,
+      provider: "zhipu",
       ...encrypted,
       fingerprint: getApiKeyFingerprint(apiKey),
       status: "retired",
@@ -409,6 +426,15 @@ describe("API credential encryption", () => {
       status: "retired",
     });
     expect(select).toHaveBeenCalledTimes(1);
+
+    credential.provider = "manus";
+    await expect(
+      getDecryptedCredentialForManagedUploadIntent(
+        { credentialId, credentialOwnerUserId: 7, credentialVersion: 3 },
+        executor,
+      ),
+    ).resolves.toBeNull();
+    credential.provider = "zhipu";
 
     credential.userId = 8;
     await expect(
@@ -1111,6 +1137,19 @@ describe("API credential encryption", () => {
         }),
       };
       const discard = vi.fn().mockResolvedValue(undefined);
+      if (provider !== "zhipu") {
+        await expect(
+          discardUnboundUpstreamFileInTransaction({
+            executor,
+            userId: 42,
+            fileId: "file-unbound",
+            discard,
+          }),
+        ).resolves.toEqual({ discarded: false });
+        expect(discard).not.toHaveBeenCalled();
+        expect(deleteWhere).not.toHaveBeenCalled();
+        return;
+      }
 
       await expect(
         discardUnboundUpstreamFileInTransaction({
@@ -1176,6 +1215,7 @@ describe("API credential encryption", () => {
           userId: 42,
           version: 1,
           status: "active",
+          provider: "zhipu",
           ...encrypted,
         },
       };

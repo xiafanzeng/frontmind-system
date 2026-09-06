@@ -63,13 +63,16 @@ const operation = {
   inputHash: "a".repeat(64),
   input: {
     credentialScope: "customer",
+    provider: "zhipu",
+    upstreamModel: "glm-5.3",
+    upstreamEffort: "high",
     buildId: "30000000-0000-4000-8000-000000000003",
     manusCredentialId: "40000000-0000-4000-8000-000000000004",
     manusCredentialVersion: 9,
     agentProfile: "frontmind-pro",
     feedback: "保持事实不变并调整页面表达。".repeat(200),
   },
-  provider: "manus",
+  provider: "zhipu",
   providerOperationId: null,
   providerTaskId: null,
   leaseOwner: "lease",
@@ -1010,8 +1013,11 @@ describe("Manus SiteOps provider boundary", () => {
           userId: operation.userId,
           version: operation.input.manusCredentialVersion,
           apiKey: "secret-key",
+          provider: "zhipu" as const,
+          upstreamModel: "glm-5.3",
+          upstreamEffort: "high" as const,
         }) as never,
-      createClient: () => client as never,
+      createClient: () => ({ ...client }) as never,
       readSnapshotArchive: async () => Buffer.from("x"),
       readArtifact: readArtifact as never,
     });
@@ -1036,9 +1042,7 @@ describe("Manus SiteOps provider boundary", () => {
       },
     });
     expect(createTask).toHaveBeenCalledTimes(1);
-    expect(createTask.mock.calls[0]![0]).toMatchObject({
-      agentProfile: "manus-1.6-max",
-    });
+    expect(createTask.mock.calls[0]![0]).not.toHaveProperty("agentProfile");
     expect(createTask.mock.calls[0]![0].attachments).toHaveLength(5);
     expect(createTask.mock.calls[0]![0].attachments[2]).toMatchObject({
       filename: "selected-visual.png",
@@ -1291,6 +1295,45 @@ describe("Manus SiteOps provider boundary", () => {
     expect(safeLogs).not.toContain("files.example.test");
   });
 
+  it.each(["manus", undefined] as const)(
+    "rejects a retired %s client before allocating transport",
+    (provider) => {
+      const createClient = vi.fn();
+      expect(() =>
+        createSiteOpsAgentClient(
+          { provider, apiKey: "retired" } as never,
+          createClient,
+        ),
+      ).toThrow("请配置智谱凭证");
+      expect(createClient).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires the original reset flow for a retired operation without reading credentials or creating a client", async () => {
+    const getCredential = vi.fn();
+    const createClient = vi.fn();
+    const handler = createManusSiteOpsProviderHandler({
+      getDb: async () => ({}) as never,
+      getCredential,
+      createClient,
+    });
+    const result = await handler({
+      operation: {
+        ...operation,
+        provider: "manus",
+        input: { ...operation.input, provider: "manus" },
+      } as never,
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({
+      status: "attention_required",
+      code: "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+      message: expect.stringContaining("批准重置"),
+    });
+    expect(getCredential).not.toHaveBeenCalled();
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
   it("uses each original stage token for a distinct replayable Zhipu command", async () => {
     const sendMessage = vi.fn(async () => ({ taskId: "session_1" }));
     const createClient = vi.fn(() => ({ sendMessage }) as never);
@@ -1409,7 +1452,7 @@ describe("Manus SiteOps provider boundary", () => {
             provider: "zhipu",
             upstreamModel: "glm-5.3",
             ...(mismatch === "missing-effort"
-              ? {}
+              ? { upstreamEffort: undefined }
               : { upstreamEffort: "high" }),
           },
         } as never,
@@ -1430,11 +1473,13 @@ describe("Manus SiteOps provider boundary", () => {
       userId: operation.userId,
       version: 10,
       apiKey: "secret-key",
+      provider: "zhipu" as const,
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high" as const,
       fingerprint: "fingerprint",
       status: "active" as const,
       verifiedAt: new Date(),
       agentProfile: "frontmind-pro" as const,
-      upstreamModel: "manus-1.6-max" as const,
     }));
     const handler = createManusSiteOpsProviderHandler({
       getDb: async () => ({}) as never,

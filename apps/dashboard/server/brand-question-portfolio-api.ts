@@ -225,47 +225,25 @@ export async function createBrandQuestionUpstreamTask(input: {
   agentProfile?: string;
   rateLimitScope?: string;
 }) {
-  const client = input.credential
-    ? createCredentialAgentClient(input.credential, {
-        accountUserId: input.accountUserId,
-        intentId: input.idempotencyKey,
-        baseUrl: input.baseUrl,
-      })
-    : new ManusV2Client({
-        baseUrl: input.baseUrl,
-        apiKey: input.apiKey,
-        rateLimitScope: input.rateLimitScope,
-      });
+  if (!input.credential) throw new Error("ZHIPU_CREDENTIAL_REQUIRED");
+  const client = createCredentialAgentClient(input.credential, {
+    accountUserId: input.accountUserId,
+    intentId: input.idempotencyKey,
+  });
   const operationToken = input.idempotencyKey;
   const title = `FrontMind brand questions ${operationToken.slice(0, 24)}`;
   const prompt = assertUpstreamPromptBudget(
     `${input.prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken })}`,
   );
-  try {
-    return await client.createTask({
-      prompt,
-      attachments: input.attachments,
-      title,
-      agentProfile: input.agentProfile,
-      locale: "zh-CN",
-      interactiveMode: false,
-      structuredOutputSchema: BRAND_QUESTION_STRUCTURED_OUTPUT_SCHEMA,
-    });
-  } catch (error) {
-    if (!(error instanceof ManusV2ApiError) || !error.outcomeUnknown) {
-      throw error;
-    }
-    const reconciled = await client.findCreatedTask({
-      title,
-      operationToken,
-    });
-    if (!reconciled.unique) throw error;
-    return {
-      taskId: reconciled.unique.id,
-      requestId: error.providerRequestId,
-      raw: { ok: true, task_id: reconciled.unique.id, reconciled: true },
-    };
-  }
+  return client.createTask({
+    prompt,
+    attachments: input.attachments,
+    title,
+    agentProfile: input.agentProfile,
+    locale: "zh-CN",
+    interactiveMode: false,
+    structuredOutputSchema: BRAND_QUESTION_STRUCTURED_OUTPUT_SCHEMA,
+  });
 }
 
 router.post("/start", async (req, res) => {

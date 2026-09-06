@@ -214,6 +214,9 @@ function serviceDatabaseFixture() {
     userId: 7,
     version: 6,
     agentProfile: "frontmind-pro",
+    provider: "zhipu",
+    upstreamModel: "glm-5.3",
+    upstreamEffort: "max",
     status: "active",
     validationStatus: "verified",
     verifiedAt: now,
@@ -1575,7 +1578,7 @@ describe("SiteOps visual selection and current-task revisions", () => {
     ).toMatchObject({
       buildId: expect.any(String),
       kind: "site_build",
-      provider: "manus",
+      provider: "zhipu",
     });
   });
 
@@ -1623,7 +1626,7 @@ describe("SiteOps visual selection and current-task revisions", () => {
     expect(operationInsert?.values).toMatchObject({
       kind: "build_revision",
       status: "queued",
-      provider: "manus",
+      provider: "zhipu",
       buildId: buildInsert?.values.id,
       input: expect.objectContaining({
         parentBuildId: "30000000-0000-4000-8000-000000000003",

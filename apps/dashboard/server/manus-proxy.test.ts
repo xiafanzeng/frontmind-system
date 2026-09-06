@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
-import https from "node:https";
+import * as credentialAgentClient from "./credential-agent-client";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +8,7 @@ import { Readable } from "node:stream";
 import axios from "axios";
 import { DrizzleQueryError } from "drizzle-orm";
 import express from "express";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const authMocks = vi.hoisted(() => ({
   discardUnboundUpstreamFile: vi.fn(),
@@ -50,9 +49,6 @@ vi.mock("./file-content-retention", async () => {
 });
 
 import manusProxy, {
-  CAPTURED_UPLOAD_MAX_ATTEMPTS,
-  CAPTURED_UPLOAD_METADATA_TIMEOUT_MS,
-  CAPTURED_UPLOAD_PROVIDER_PUT_TIMEOUT_MS,
   MAX_EXTERNAL_DOWNLOAD_BYTES,
   assertManagedUploadRequestComplete,
   boundedFileDownloadTokenExpiry,
@@ -66,7 +62,6 @@ import manusProxy, {
   readBoundedExternalDownload,
   runManagedUploadOperation,
   sanitizeFileBuffer,
-  uploadCapturedStage,
 } from "./manus-proxy";
 import {
   readStoredPresalesFile,
@@ -74,101 +69,6 @@ import {
 } from "./presales-file-store";
 import { AuthServiceError } from "./auth-service";
 import { preparedFileService } from "./prepared-file-service";
-import {
-  createManagedUploadTicket,
-  openManagedUploadTicket,
-} from "./managed-upload-ticket";
-import { MANAGED_UPLOAD_POST_INGRESS_TIMEOUT_MS } from "./managed-upload-provider";
-
-beforeEach(() => {
-  vi.spyOn(axios, "create").mockImplementation(((
-    defaults: { headers?: Record<string, string> } = {},
-  ) => ({
-    get: async (
-      url: string,
-      options: { params?: Record<string, unknown>; headers?: object } = {},
-    ) => {
-      if (url.endsWith("/v2/file.detail")) {
-        const fileId = String(options.params?.file_id ?? "");
-        const response = await axios.get(
-          `${url.slice(0, -"/v2/file.detail".length)}/v1/files/${encodeURIComponent(fileId)}`,
-          {
-            ...options,
-            headers: { ...defaults.headers, ...options.headers },
-          },
-        );
-        if (response.status < 200 || response.status >= 300) {
-          return {
-            ...response,
-            data: {
-              ok: false,
-              error: { code: `HTTP_${response.status}` },
-            },
-          };
-        }
-        const data =
-          response.data &&
-          typeof response.data === "object" &&
-          !Array.isArray(response.data)
-            ? (response.data as Record<string, unknown>)
-            : {};
-        return {
-          ...response,
-          data: {
-            ok: true,
-            file: {
-              id: data.id ?? fileId,
-              filename: data.filename ?? "provider-document.pdf",
-              status: data.status ?? "uploaded",
-              bytes:
-                data.bytes ??
-                data.size ??
-                data.size_bytes ??
-                data.sizeBytes ??
-                null,
-              expires_at: 2_000_000_000,
-              content_type:
-                data.mime_type ?? data.content_type ?? "application/pdf",
-            },
-          },
-        };
-      }
-      return axios.get(url, {
-        ...options,
-        headers: { ...defaults.headers, ...options.headers },
-      });
-    },
-    post: async (
-      url: string,
-      body: Record<string, unknown>,
-      options: { headers?: object } = {},
-    ) => {
-      if (url.endsWith("/v2/file.delete")) {
-        const fileId = String(body.file_id ?? "");
-        const response = await axios.delete(
-          `${url.slice(0, -"/v2/file.delete".length)}/v1/files/${encodeURIComponent(fileId)}`,
-          {
-            ...options,
-            headers: { ...defaults.headers, ...options.headers },
-          },
-        );
-        return response.status === 404
-          ? {
-              ...response,
-              data: { ok: false, error: { code: "NOT_FOUND" } },
-            }
-          : {
-              ...response,
-              data: { ok: true, file: { id: fileId } },
-            };
-      }
-      return axios.post(url, body, {
-        ...options,
-        headers: { ...defaults.headers, ...options.headers },
-      });
-    },
-  })) as typeof axios.create);
-});
 
 async function withManusProxyServer(
   run: (baseUrl: string) => Promise<void>,
@@ -198,6 +98,7 @@ async function withManusProxyServer(
           userId,
           version: options.activeCredentialVersion ?? 1,
           apiKey: "test-only-credential",
+          provider: "zhipu",
         };
       }
       if (options.projectAssignmentId) {
@@ -233,40 +134,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function readAll(stream: NodeJS.ReadableStream) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
-
-async function rawProxyUpload(input: {
-  url: string;
-  headers: Record<string, string>;
-  body?: Buffer;
-}) {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
-    const request = httpRequest(
-      input.url,
-      { method: "PUT", headers: input.headers },
-      async (response) => {
-        try {
-          resolve({
-            status: response.statusCode ?? 0,
-            body: (await readAll(response)).toString("utf8"),
-          });
-        } catch (error) {
-          reject(error);
-        }
-      },
-    );
-    request.once("error", reject);
-    if (input.body) request.write(input.body);
-    request.end();
-  });
-}
-
 async function withCaptureAssetDirectory(
   run: (assetDirectory: string) => Promise<void>,
 ) {
@@ -301,39 +168,6 @@ async function withManagedUploadKey(run: () => Promise<void>) {
       process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY = previous;
     }
   }
-}
-
-function managedUploadTarget(label: string) {
-  return `https://uploads.example.test/${encodeURIComponent(label)}?X-Amz-Date=20990101T000000Z&X-Amz-Expires=180&X-Amz-Signature=test-only`;
-}
-
-function managedUploadTicket(input: {
-  fileId: string;
-  filename: string;
-  target?: string;
-  credentialId?: string;
-}) {
-  return createManagedUploadTicket({
-    fileId: input.fileId,
-    ownerUserId: 42,
-    credentialId: input.credentialId ?? "credential-record-owner",
-    projectAssignmentId: null,
-    providerFilename: input.filename,
-    target: input.target ?? managedUploadTarget(input.fileId),
-    upstreamExpiresAt: Date.now() + 5 * 60_000,
-  });
-}
-
-function boundUploadCredential(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "credential-record-owner",
-    apiKey: "bound-record-credential",
-    resource: {
-      projectAssignmentId: null,
-      createdAt: new Date("2026-08-11T00:00:00Z"),
-    },
-    ...overrides,
-  };
 }
 
 describe("isPrivateUpstreamCollectionRequest", () => {
@@ -1055,1245 +889,44 @@ describe("proxy upload", () => {
     expect(neverStarted).not.toHaveBeenCalled();
   });
 
-  it("keeps the bounded provider recovery budget below the client completion watchdog", () => {
-    const clientCompletionWatchdogMs = 6 * 60_000;
-    const maximumProviderRecoveryMs =
-      CAPTURED_UPLOAD_MAX_ATTEMPTS *
-      (CAPTURED_UPLOAD_METADATA_TIMEOUT_MS +
-        CAPTURED_UPLOAD_PROVIDER_PUT_TIMEOUT_MS);
-
-    expect(CAPTURED_UPLOAD_MAX_ATTEMPTS).toBe(2);
-    expect(CAPTURED_UPLOAD_PROVIDER_PUT_TIMEOUT_MS).toBe(120_000);
-    expect(maximumProviderRecoveryMs).toBeLessThan(clientCompletionWatchdogMs);
-    expect(MANAGED_UPLOAD_POST_INGRESS_TIMEOUT_MS).toBeLessThanOrEqual(330_000);
-    expect(MANAGED_UPLOAD_POST_INGRESS_TIMEOUT_MS).toBeLessThan(
-      clientCompletionWatchdogMs,
-    );
+  it("fails closed when the HTTP parser did not complete the managed request", () => {
+    expect(() =>
+      assertManagedUploadRequestComplete({ complete: false } as any),
+    ).toThrow();
+    expect(() =>
+      assertManagedUploadRequestComplete({ complete: true } as any),
+    ).not.toThrow();
   });
 
-  it("forwards the complete signed URL and never exposes upstream XML errors", async () => {
-    const signedUrl =
-      "https://uploads.example.test/object.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE%2F20260730%2Fcn-north-1%2Fs3%2Faws4_request&X-Amz-Signature=abcdef0123456789";
-    const put = vi.spyOn(axios, "put").mockResolvedValue({
-      status: 400,
-      data: '<?xml version="1.0"?><Error><Code>AuthorizationQueryParametersError</Code></Error>',
-    });
-
-    await withManusProxyServer(async (baseUrl) => {
-      const response = await fetch(
-        `${baseUrl}/proxy-upload?target=${encodeURIComponent(signedUrl)}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Original-Content-Type": "image/png",
-          },
-          body: new Uint8Array([1, 2, 3]),
-        },
+  it.each([
+    ["PUT", "/proxy-upload"],
+    ["POST", "/v1/files/old-file/upload-recovery"],
+  ])(
+    "directs %s %s to the current uploader without provider work",
+    async (method, route) => {
+      const provider = vi.spyOn(
+        credentialAgentClient,
+        "createCredentialAgentClient",
       );
-      const responseText = await response.text();
-
-      expect(response.status).toBe(400);
-      expect(responseText).toContain("上传地址无效或已失效");
-      expect(responseText).not.toContain("AuthorizationQueryParametersError");
-    });
-
-    expect(put).toHaveBeenCalledWith(
-      signedUrl,
-      expect.anything(),
-      expect.objectContaining({
-        maxRedirects: 0,
-        headers: expect.objectContaining({ "Content-Type": "image/png" }),
-      }),
-    );
-  });
-
-  describe("managed upload ticket and official provider schema", () => {
-    it("uses a fixed allowlist for managed storage failures with hostile paths and identifiers", async () => {
-      const fileId = "file-managed-storage-private";
-      const filename = "private-storage-name.pdf";
-      const apiKey = "test-only-credential";
-      const filesystemPath =
-        "/private/customer/file-managed-storage-private/private-storage-name.pdf";
-      const error = Object.assign(
-        new Error(`EACCES ${filesystemPath} ${fileId} ${filename} ${apiKey}`),
-        { code: "EACCES", path: filesystemPath },
-      );
-      authMocks.getCredentialForUpstreamResource.mockRejectedValueOnce(error);
-      const logs: unknown[][] = [];
-      vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-        logs.push(args);
-      });
-
+      const upstream = vi.spyOn(axios, "request");
       await withManusProxyServer(
         async (baseUrl) => {
-          const response = await fetch(
-            `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-            {
-              method: "PUT",
-              headers: {
-                "X-Original-Content-Type": "application/pdf",
-                "X-FrontMind-Capture-Filename-UTF8": filename,
-                "X-FrontMind-Provider-Filename-UTF8": filename,
-              },
-              body: Buffer.from("unread managed body"),
+          const response = await fetch(`${baseUrl}${route}`, { method });
+          expect(response.status).toBe(410);
+          expect(await response.json()).toMatchObject({
+            error: {
+              code: "UPLOAD_RECREATE_REQUIRED",
+              recreateRequired: true,
+              message: expect.stringContaining("重新选择文件"),
             },
-          );
-          expect(response.status).toBe(507);
+          });
         },
         { authenticated: true },
       );
-
-      const serialized = JSON.stringify(logs);
-      expect(serialized).toContain("MANAGED_UPLOAD_RUNTIME_ERROR");
-      for (const secret of [fileId, filename, apiKey, filesystemPath]) {
-        expect(serialized).not.toContain(secret);
-      }
-      expect(serialized).not.toContain("EACCES");
-    });
-
-    it("rejects missing, empty, and oversized managed lengths before metadata or upload", async () => {
-      const fileId = "file-managed-length-preflight";
-      const filename = "length.pdf";
-      authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-        boundUploadCredential(),
-      );
-      const get = vi.spyOn(axios, "get");
-      const put = vi.spyOn(axios, "put");
-
-      await withManusProxyServer(
-        async (baseUrl) => {
-          const commonHeaders = {
-            "Content-Type": "application/octet-stream",
-            "X-Original-Content-Type": "application/pdf",
-            "X-FrontMind-Capture-Filename-UTF8": filename,
-            "X-FrontMind-Provider-Filename-UTF8": filename,
-          };
-          const cases = [
-            {
-              headers: {
-                ...commonHeaders,
-                "Transfer-Encoding": "chunked",
-              },
-              body: Buffer.from("chunked"),
-              status: 411,
-              code: "UPLOAD_LENGTH_REQUIRED",
-            },
-            {
-              headers: { ...commonHeaders, "Content-Length": "0" },
-              status: 400,
-              code: "FILE_EMPTY",
-            },
-            {
-              headers: {
-                ...commonHeaders,
-                "Content-Length": String(100 * 1024 * 1024 + 1),
-              },
-              status: 413,
-              code: "FILE_TOO_LARGE",
-            },
-          ] as const;
-
-          for (const testCase of cases) {
-            const response = await rawProxyUpload({
-              url: `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-              headers: testCase.headers,
-              body: testCase.body,
-            });
-            expect(response.status).toBe(testCase.status);
-            expect(JSON.parse(response.body)).toMatchObject({
-              error: {
-                code: testCase.code,
-                fileId,
-                traceId: expect.any(String),
-              },
-            });
-          }
-        },
-        { authenticated: true },
-      );
-
-      expect(get).not.toHaveBeenCalled();
-      expect(put).not.toHaveBeenCalled();
-    });
-
-    it("returns the same safe busy contract for managed PUT and upload recovery without starting new work", async () => {
-      await withCaptureAssetDirectory(async (assetDirectory) => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-managed-busy-contract";
-          const filename = "busy-private-name.pdf";
-          const source = Buffer.from("browser body held at provider preflight");
-          const target = managedUploadTarget(fileId);
-          const handle = managedUploadTicket({ fileId, filename, target });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          let resolvePreflight!: (value: {
-            status: number;
-            data: Record<string, unknown>;
-          }) => void;
-          const get = vi
-            .spyOn(axios, "get")
-            .mockImplementationOnce(
-              () =>
-                new Promise((resolve) => {
-                  resolvePreflight = resolve;
-                }),
-            )
-            .mockResolvedValue({
-              status: 200,
-              data: { id: fileId, filename, status: "uploaded" },
-            });
-          const put = vi
-            .spyOn(axios, "put")
-            .mockImplementation(async (_target, body) => {
-              await readAll(body as NodeJS.ReadableStream);
-              return { status: 200, data: "" };
-            });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const activeUpload = fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              await vi.waitFor(() => {
-                expect(resolvePreflight).toBeTypeOf("function");
-              });
-
-              const filesBeforeBusy = await readdir(
-                path.join(assetDirectory, "presales-files"),
-              ).catch(() => []);
-              expect(filesBeforeBusy).toEqual([]);
-              expect(get).toHaveBeenCalledOnce();
-              expect(put).not.toHaveBeenCalled();
-              expect(
-                retentionMocks.markUploadedFileRetention,
-              ).not.toHaveBeenCalled();
-
-              // Deliberately omit a body, length, and ticket. The busy guard
-              // must answer before request-body validation or upload work.
-              const busyUpload = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                { method: "PUT" },
-              );
-              expect(busyUpload.status).toBe(409);
-              expect(busyUpload.headers.get("retry-after")).toBe("3");
-              const busyUploadBody = await busyUpload.json();
-              expect(busyUploadBody).toEqual({
-                error: {
-                  message: "该文件仍在上传处理中，请稍后重试",
-                  code: "UPLOAD_IN_PROGRESS",
-                  retryable: true,
-                  recoveryAction: "check_status",
-                  fileId,
-                  traceId: expect.any(String),
-                  recreateRequired: false,
-                  retryAfterMs: 3_000,
-                },
-              });
-
-              const busyRecovery = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(busyRecovery.status).toBe(409);
-              expect(busyRecovery.headers.get("retry-after")).toBe("3");
-              const busyRecoveryBody = await busyRecovery.json();
-              expect(busyRecoveryBody).toEqual({
-                error: {
-                  message: "该文件仍在上传处理中，请稍后重试",
-                  code: "UPLOAD_IN_PROGRESS",
-                  retryable: true,
-                  recoveryAction: "check_status",
-                  fileId,
-                  traceId: expect.any(String),
-                  recreateRequired: false,
-                  retryAfterMs: 3_000,
-                },
-              });
-
-              for (const responseBody of [busyUploadBody, busyRecoveryBody]) {
-                const serialized = JSON.stringify(responseBody);
-                expect(serialized).not.toContain(filename);
-                expect(serialized).not.toContain(handle.ticket);
-                expect(serialized).not.toContain(target);
-                expect(serialized).not.toContain("test-only-credential");
-                expect(serialized).not.toContain("bound-record-credential");
-              }
-              expect(get).toHaveBeenCalledOnce();
-              expect(put).not.toHaveBeenCalled();
-              expect(
-                retentionMocks.markUploadedFileRetention,
-              ).not.toHaveBeenCalled();
-              expect(
-                await readdir(
-                  path.join(assetDirectory, "presales-files"),
-                ).catch(() => []),
-              ).toEqual([]);
-
-              resolvePreflight({
-                status: 200,
-                data: { id: fileId, filename, status: "uploaded" },
-              });
-              expect((await activeUpload).status).toBe(409);
-            },
-            { authenticated: true },
-          );
-        });
-      });
-    });
-
-    it("fails closed when the HTTP parser did not complete the managed request", () => {
-      expect(() =>
-        assertManagedUploadRequestComplete({ complete: false }),
-      ).toThrowError(
-        expect.objectContaining({ code: "UPLOAD_CONTENT_LENGTH_MISMATCH" }),
-      );
-      expect(() =>
-        assertManagedUploadRequestComplete({ complete: true }),
-      ).not.toThrow();
-    });
-
-    it("cancels and cleans a truncated browser body before allowing the same fileId again", async () => {
-      await withCaptureAssetDirectory(async (assetDirectory) => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-truncated-browser-body";
-          const filename = "truncated.pdf";
-          const source = Buffer.from("complete body after reconnect");
-          const handle = managedUploadTicket({ fileId, filename });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          const get = vi
-            .spyOn(axios, "get")
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValue({
-              status: 200,
-              data: { id: fileId, filename, status: "uploaded" },
-            });
-          vi.spyOn(axios, "put").mockImplementation(async (_target, body) => {
-            await readAll(body as NodeJS.ReadableStream);
-            return { status: 200, data: "" };
-          });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              await new Promise<void>((resolve) => {
-                const request = httpRequest(
-                  `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                  {
-                    method: "PUT",
-                    headers: {
-                      "Content-Type": "application/octet-stream",
-                      "Content-Length": String(source.length + 10),
-                      "X-Original-Content-Type": "application/pdf",
-                      "X-FrontMind-Capture-Filename-UTF8": filename,
-                      "X-FrontMind-Provider-Filename-UTF8": filename,
-                      "X-FrontMind-Upload-Ticket": handle.ticket,
-                    },
-                  },
-                );
-                request.once("error", () => resolve());
-                request.write(source.subarray(0, 8));
-                setTimeout(() => request.destroy(), 30).unref?.();
-              });
-
-              await vi.waitFor(async () => {
-                const entries = await readdir(
-                  path.join(assetDirectory, "presales-files"),
-                ).catch(() => []);
-                expect(
-                  entries.some((name) => name.endsWith(".upload.tmp")),
-                ).toBe(false);
-              });
-              expect(await readStoredPresalesFile(fileId)).toBeNull();
-
-              const retry = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              expect(retry.status).toBe(200);
-            },
-            { authenticated: true },
-          );
-          expect(get).toHaveBeenCalled();
-        });
-      });
-    });
-
-    it("rejects legacy blind file creation without contacting the Provider", async () => {
-      await withManagedUploadKey(async () => {
-        const fileId = "file-create-managed-handle";
-        const providerFilename = "Manus 品牌资料.pdf";
-        const target = managedUploadTarget(fileId);
-        authMocks.recordUpstreamResource.mockResolvedValue(undefined);
-        vi.spyOn(axios, "request").mockResolvedValue({
-          status: 200,
-          data: {
-            id: fileId,
-            filename: providerFilename,
-            status: "pending",
-            upload_url: target,
-            upload_expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-          },
-          headers: { "content-type": "application/json" },
-        });
-
-        await withManusProxyServer(
-          async (baseUrl) => {
-            const response = await fetch(`${baseUrl}/v1/files`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ filename: providerFilename }),
-            });
-            expect(response.status).toBe(410);
-            const payload = await response.json();
-            expect(payload).toMatchObject({
-              error: {
-                code: "LEGACY_MANUS_V1_REMOVED",
-                resetRequired: true,
-              },
-            });
-            expect(axios.request).not.toHaveBeenCalled();
-          },
-          { authenticated: true },
-        );
-      });
-    });
-
-    it("accepts provider-authoritative filename changes after official pending metadata", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-opaque-managed";
-          const filename = "Manus 企业原始资料.pdf";
-          const providerCanonicalFilename = "provider-canonical-name.pdf";
-          const publicFilename = "FrontMind 企业原始资料.pdf";
-          const source = Buffer.from("one browser body, staged and replayed");
-          const target = managedUploadTarget("opaque-managed");
-          const handle = managedUploadTicket({ fileId, filename, target });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          const get = vi
-            .spyOn(axios, "get")
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValueOnce({
-              status: 200,
-              data: {
-                id: fileId,
-                filename: providerCanonicalFilename,
-                status: "pending",
-              },
-            })
-            .mockResolvedValue({
-              status: 200,
-              data: {
-                id: fileId,
-                filename: providerCanonicalFilename,
-                status: "uploaded",
-              },
-            });
-          let replayed = Buffer.alloc(0);
-          const put = vi
-            .spyOn(axios, "put")
-            .mockImplementation(async (_target, body) => {
-              replayed = await readAll(body as NodeJS.ReadableStream);
-              return { status: 200, data: "" };
-            });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${encodeURIComponent(fileId)}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8":
-                      encodeURIComponent(filename),
-                    "X-FrontMind-Provider-Filename-UTF8":
-                      encodeURIComponent(publicFilename),
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              expect(response.status).toBe(200);
-              expect(await response.json()).toMatchObject({
-                state: "uploaded",
-                fileId,
-                sizeBytes: source.length,
-                providerReadyAt: expect.any(Number),
-                replayed: true,
-                recovered: false,
-              });
-            },
-            { authenticated: true },
-          );
-
-          expect(get).toHaveBeenCalledTimes(3);
-          expect(
-            get.mock.calls.every(
-              ([, config]) =>
-                (
-                  config as {
-                    headers?: { "x-manus-api-key"?: string };
-                  }
-                ).headers?.["x-manus-api-key"] === "bound-record-credential",
-            ),
-          ).toBe(true);
-          expect(
-            get.mock.calls.every(
-              ([, config]) =>
-                !(config as { headers?: Record<string, string> }).headers
-                  ?.Authorization,
-            ),
-          ).toBe(true);
-          expect(put).toHaveBeenCalledOnce();
-          expect(replayed).toEqual(source);
-          expect((await readStoredPresalesFile(fileId))?.sizeBytes).toBe(
-            source.length,
-          );
-        });
-      });
-    });
-
-    it("recovers without another PUT when processing canonicalizes the provider filename", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-provider-processing";
-          const filename = "processing.pdf";
-          const source = Buffer.from("browser body is sent exactly once");
-          const handle = managedUploadTicket({ fileId, filename });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          let providerStatus: "pending" | "uploaded" | "deleted" = "pending";
-          let providerMetadataId = fileId;
-          let providerMetadataFilename = filename;
-          let metadataHttpStatus = 200;
-          const get = vi.spyOn(axios, "get").mockImplementation(async () => ({
-            status: metadataHttpStatus,
-            data: {
-              id: providerMetadataId,
-              filename: providerMetadataFilename,
-              status: providerStatus,
-            },
-          }));
-          const put = vi
-            .spyOn(axios, "put")
-            .mockImplementation(async (_target, body) => {
-              expect(await readAll(body as NodeJS.ReadableStream)).toEqual(
-                source,
-              );
-              return { status: 200, data: "" };
-            });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const uploaded = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              expect(uploaded.status).toBe(202);
-              expect(await uploaded.json()).toMatchObject({
-                state: "processing",
-                fileId,
-                sizeBytes: source.length,
-                uploadedAt: expect.any(Number),
-                expiresAt: expect.any(Number),
-                retryAfterMs: 3_000,
-                traceId: expect.any(String),
-              });
-              expect(put).toHaveBeenCalledOnce();
-
-              metadataHttpStatus = 503;
-              const temporarilyUnavailable = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(temporarilyUnavailable.status).toBe(202);
-              expect(await temporarilyUnavailable.json()).toMatchObject({
-                state: "processing",
-                fileId,
-              });
-              metadataHttpStatus = 200;
-
-              const stillPending = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(stillPending.status).toBe(202);
-              expect(await stillPending.json()).toMatchObject({
-                state: "processing",
-                fileId,
-                retryAfterMs: 3_000,
-              });
-              expect(put).toHaveBeenCalledOnce();
-
-              providerStatus = "uploaded";
-              providerMetadataFilename = "provider-canonical-processing.pdf";
-              vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60_000);
-              expect(handle.expiresAt).toBeLessThan(Date.now());
-              const ready = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(ready.status).toBe(200);
-              expect(await ready.json()).toMatchObject({
-                state: "uploaded",
-                fileId,
-                providerReadyAt: expect.any(Number),
-                recovered: true,
-              });
-              expect(put).toHaveBeenCalledOnce();
-              expect(
-                authMocks.discardUnboundUpstreamFile,
-              ).not.toHaveBeenCalled();
-              expect(authMocks.recordUpstreamResource).not.toHaveBeenCalled();
-
-              providerStatus = "deleted";
-              const unusable = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(unusable.status).toBe(409);
-              expect(await unusable.json()).toMatchObject({
-                error: {
-                  code: "UPLOAD_PROVIDER_RECORD_UNUSABLE",
-                  recoveryAction: "discard_and_recreate",
-                },
-              });
-
-              providerStatus = "uploaded";
-              providerMetadataId = "different-provider-file";
-              const mismatchedIdentity = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(mismatchedIdentity.status).toBe(409);
-              expect(await mismatchedIdentity.json()).toMatchObject({
-                error: {
-                  code: "UPLOAD_PROVIDER_IDENTITY_MISMATCH",
-                  recoveryAction: "contact_admin",
-                },
-              });
-            },
-            { authenticated: true },
-          );
-          expect(get.mock.calls.length).toBeGreaterThanOrEqual(5);
-        });
-      });
-    });
-
-    it("never starts a provider PUT when official preflight already says uploaded", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-provider-already-uploaded";
-          const filename = "already.pdf";
-          const handle = managedUploadTicket({ fileId, filename });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          vi.spyOn(axios, "get").mockResolvedValue({
-            status: 200,
-            data: { id: fileId, filename, status: "uploaded" },
-          });
-          const stagedReplay = vi.spyOn(axios, "put");
-          const nativePut = vi.spyOn(https, "request");
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: Buffer.from("must not reach provider"),
-                },
-              );
-              expect(response.status).toBe(409);
-              expect(await response.json()).toMatchObject({
-                error: {
-                  code: "UPLOAD_RECOVERY_REQUIRED",
-                  recoveryAction: "check_status",
-                  fileId,
-                  recreateRequired: false,
-                },
-              });
-            },
-            { authenticated: true },
-          );
-          expect(nativePut).not.toHaveBeenCalled();
-          expect(stagedReplay).not.toHaveBeenCalled();
-        });
-      });
-    });
-
-    it("fails closed when v2 metadata cannot prove the uploaded byte count", async () => {
-      await withCaptureAssetDirectory(async () => {
-        const fileId = "file-content-proof";
-        const filename = "proof.pdf";
-        const source = Buffer.from("provider content proof bytes");
-        const staged = await stagePresalesFileContent({
-          fileId,
-          stream: Readable.from([source]),
-          maxBytes: 1_024,
-        });
-        const get = vi
-          .spyOn(axios, "get")
-          .mockResolvedValueOnce({
-            status: 200,
-            data: { id: fileId, filename, status: "uploaded" },
-          })
-          .mockResolvedValueOnce({
-            status: 200,
-            data: Readable.from([source]),
-          });
-
-        await expect(
-          uploadCapturedStage({
-            baseUrl: "https://api.example.test",
-            apiKey: "bound-key",
-            fileId,
-            providerFilename: filename,
-            mimeType: "application/pdf",
-            target: managedUploadTarget(fileId),
-            ticketExpiresAt: Date.now() + 120_000,
-            staged,
-            initialProvider: {
-              status: 200,
-              errorCode: null,
-              providerPutMs: 1,
-              bytesForwarded: 0,
-              requestBodyComplete: false,
-              requestCreatedAtOffsetMs: 0,
-              providerStartedAtOffsetMs: 1,
-            },
-            requestStartedAt: Date.now(),
-            signal: new AbortController().signal,
-            traceId: "trace-content-proof",
-            ingressMs: 1,
-          }),
-        ).rejects.toMatchObject({
-          code: "UPLOAD_PROVIDER_IDENTITY_MISMATCH",
-          recoveryAction: "discard_and_recreate",
-        });
-        expect(get).toHaveBeenCalledTimes(2);
-        await staged.discard();
-      });
-    });
-
-    it("fails closed when streamed provider content does not match the staged body", async () => {
-      await withCaptureAssetDirectory(async () => {
-        const fileId = "file-content-proof-mismatch";
-        const filename = "proof.pdf";
-        const staged = await stagePresalesFileContent({
-          fileId,
-          stream: Readable.from(["expected bytes"]),
-          maxBytes: 1_024,
-        });
-        vi.spyOn(axios, "get")
-          .mockResolvedValueOnce({
-            status: 200,
-            data: { id: fileId, filename, status: "uploaded" },
-          })
-          .mockResolvedValueOnce({
-            status: 200,
-            data: Readable.from(["different bytes"]),
-          });
-
-        await expect(
-          uploadCapturedStage({
-            baseUrl: "https://api.example.test",
-            apiKey: "bound-key",
-            fileId,
-            providerFilename: filename,
-            mimeType: "application/pdf",
-            target: managedUploadTarget(fileId),
-            ticketExpiresAt: Date.now() + 120_000,
-            staged,
-            initialProvider: {
-              status: 200,
-              errorCode: null,
-              providerPutMs: 1,
-              bytesForwarded: 0,
-              requestBodyComplete: false,
-              requestCreatedAtOffsetMs: 0,
-              providerStartedAtOffsetMs: 1,
-            },
-            requestStartedAt: Date.now(),
-            signal: new AbortController().signal,
-            traceId: "trace-content-mismatch",
-            ingressMs: 1,
-          }),
-        ).rejects.toMatchObject({
-          code: "UPLOAD_PROVIDER_IDENTITY_MISMATCH",
-          recoveryAction: "discard_and_recreate",
-        });
-        await staged.discard();
-      });
-    });
-
-    it("maps no-body recovery to discard/recreate for pending or unverified uploaded state", async () => {
-      await withManagedUploadKey(async () => {
-        for (const [status, code] of [
-          ["pending", "UPLOAD_CAPABILITY_EXPIRED_RECREATE_REQUIRED"],
-          ["uploaded", "UPLOAD_RECOVERY_UNVERIFIED"],
-        ] as const) {
-          const fileId = `file-recovery-${status}`;
-          const filename = `${status}.pdf`;
-          authMocks.getCredentialForUpstreamResource.mockResolvedValueOnce(
-            boundUploadCredential(),
-          );
-          const get = vi.spyOn(axios, "get").mockResolvedValueOnce({
-            status: 200,
-            data: { id: fileId, filename, status },
-          });
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: 12,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(response.status).toBe(409);
-              expect(await response.json()).toMatchObject({
-                error: {
-                  code,
-                  recoveryAction: "discard_and_recreate",
-                  fileId,
-                  recreateRequired: true,
-                },
-              });
-            },
-            { authenticated: true },
-          );
-          get.mockRestore();
-        }
-      });
-    });
-
-    it("recovers a first retention-registration failure from the immutable local receipt", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-retention-recovery";
-          const filename = "retention raw.pdf";
-          const captureFilename = "kb-normalized-retention.pdf";
-          const source = Buffer.from("retained browser body");
-          const handle = managedUploadTicket({ fileId, filename });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          vi.spyOn(axios, "get")
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValueOnce({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            })
-            .mockResolvedValue({
-              status: 200,
-              data: { id: fileId, filename, status: "uploaded" },
-            });
-          vi.spyOn(axios, "put").mockImplementation(async (_target, body) => {
-            await readAll(body as NodeJS.ReadableStream);
-            return { status: 200, data: "" };
-          });
-          retentionMocks.markUploadedFileRetention
-            .mockRejectedValueOnce(new Error("db temporarily unavailable"))
-            .mockResolvedValue({
-              uploadedAt: new Date("2026-08-11T01:00:00Z"),
-              contentExpiresAt: new Date("2026-09-10T01:00:00Z"),
-              contentDeletedAt: null,
-            });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const uploaded = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": captureFilename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              expect(uploaded.status).toBe(503);
-              expect(await uploaded.json()).toMatchObject({
-                error: { code: "FILE_RETENTION_MARK_FAILED" },
-              });
-
-              const recovered = await fetch(
-                `${baseUrl}/v1/files/${fileId}/upload-recovery`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    filename,
-                    sizeBytes: source.length,
-                    mimeType: "application/pdf",
-                  }),
-                },
-              );
-              expect(recovered.status).toBe(200);
-              expect(await recovered.json()).toMatchObject({
-                fileId,
-                state: "uploaded",
-                sizeBytes: source.length,
-                uploadedAt: Date.parse("2026-08-11T01:00:00Z"),
-                providerReadyAt: expect.any(Number),
-                expiresAt: Date.parse("2026-09-10T01:00:00Z"),
-                recovered: true,
-              });
-            },
-            { authenticated: true },
-          );
-          expect(
-            retentionMocks.markUploadedFileRetention,
-          ).toHaveBeenCalledTimes(2);
-          expect((await readStoredPresalesFile(fileId))?.filename).toBe(
-            captureFilename,
-          );
-        });
-      });
-    });
-
-    it("drops hostile Drizzle params from managed retention failure logs", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-managed-drizzle-private";
-          const filename = "private-drizzle-name.pdf";
-          const apiKey = "private-bound-api-key";
-          const filesystemPath =
-            "/private/customer/file-managed-drizzle-private/private-drizzle-name.pdf";
-          const source = Buffer.from("browser body retained before DB failure");
-          const handle = managedUploadTicket({ fileId, filename });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential({ apiKey }),
-          );
-          vi.spyOn(axios, "get").mockResolvedValue({
-            status: 200,
-            data: { id: fileId, filename, status: "pending" },
-          });
-          vi.spyOn(axios, "put").mockImplementation(async (_target, body) => {
-            await readAll(body as NodeJS.ReadableStream);
-            return { status: 200, data: "" };
-          });
-          retentionMocks.markUploadedFileRetention.mockRejectedValueOnce(
-            new DrizzleQueryError(
-              "UPDATE upstream_resources SET uploaded_at = ? WHERE upstream_id = ?",
-              [filesystemPath, fileId, filename, apiKey],
-              Object.assign(
-                new Error(
-                  `database failure ${filesystemPath} ${fileId} ${filename} ${apiKey}`,
-                ),
-                { code: "ER_QUERY_INTERRUPTED", path: filesystemPath },
-              ),
-            ),
-          );
-          const logs: unknown[][] = [];
-          vi.spyOn(console, "error").mockImplementation(
-            (...args: unknown[]) => {
-              logs.push(args);
-            },
-          );
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-              expect(response.status).toBe(503);
-              expect(await response.json()).toMatchObject({
-                error: { code: "FILE_RETENTION_MARK_FAILED", fileId },
-              });
-            },
-            { authenticated: true },
-          );
-
-          const serialized = JSON.stringify(logs);
-          expect(serialized).toContain("MANAGED_UPLOAD_RUNTIME_ERROR");
-          for (const secret of [
-            fileId,
-            filename,
-            apiKey,
-            filesystemPath,
-            "ER_QUERY_INTERRUPTED",
-          ]) {
-            expect(serialized).not.toContain(secret);
-          }
-          expect(serialized).not.toContain("UPDATE upstream_resources");
-        });
-      });
-    });
-
-    it("returns a structured storage recovery error when local commit fails after provider success", async () => {
-      await withCaptureAssetDirectory(async (assetDirectory) => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-local-commit-failure";
-          const filename = "commit.pdf";
-          const source = Buffer.from("provider accepted, local commit fails");
-          const handle = managedUploadTicket({ fileId, filename });
-          const conflictingContentPath = path.join(
-            assetDirectory,
-            "presales-files",
-            `${createHash("sha256").update(fileId).digest("hex")}.content`,
-          );
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential(),
-          );
-          vi.spyOn(axios, "get").mockResolvedValue({
-            status: 200,
-            data: { id: fileId, filename, status: "pending" },
-          });
-          vi.spyOn(axios, "put").mockImplementation(async (_target, body) => {
-            await readAll(body as NodeJS.ReadableStream);
-            await mkdir(conflictingContentPath, { recursive: true });
-            return { status: 200, data: "" };
-          });
-
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: source,
-                },
-              );
-
-              expect(response.status).toBe(507);
-              expect(await response.json()).toMatchObject({
-                error: {
-                  code: "UPLOAD_STORAGE_UNAVAILABLE",
-                  retryable: true,
-                  recoveryAction: "check_status",
-                  fileId,
-                  traceId: expect.any(String),
-                  recreateRequired: false,
-                },
-              });
-            },
-            { authenticated: true },
-          );
-          expect(retentionMocks.markUploadedFileRetention).toHaveBeenCalledWith(
-            expect.objectContaining({ userId: 42, fileId }),
-          );
-          expect(
-            (await readdir(path.dirname(conflictingContentPath))).some((name) =>
-              name.endsWith(".upload.tmp"),
-            ),
-          ).toBe(false);
-          await rm(conflictingContentPath, { recursive: true, force: true });
-          expect(await readStoredPresalesFile(fileId)).toBeNull();
-        });
-      });
-    });
-
-    it("never logs or returns managed tickets, signed targets, credentials, provider XML, or filenames", async () => {
-      await withCaptureAssetDirectory(async () => {
-        await withManagedUploadKey(async () => {
-          const fileId = "file-managed-redaction";
-          const filename = "sentinel-private-filename.pdf";
-          const apiKey = "sentinel-bound-api-key";
-          const signature = "sentinel-private-signature";
-          const providerXml =
-            "<Error><Message>sentinel-provider-private-xml</Message></Error>";
-          const target = `https://uploads.example.test/redaction?X-Amz-Date=20990101T000000Z&X-Amz-Expires=180&X-Amz-Signature=${signature}`;
-          const handle = managedUploadTicket({ fileId, filename, target });
-          authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-            boundUploadCredential({ apiKey }),
-          );
-          vi.spyOn(axios, "get").mockResolvedValue({
-            status: 200,
-            data: { id: fileId, filename, status: "pending" },
-          });
-          vi.spyOn(axios, "put").mockResolvedValue({
-            status: 403,
-            data: providerXml,
-          });
-          const logs: unknown[][] = [];
-          for (const method of ["log", "info", "warn", "error"] as const) {
-            vi.spyOn(console, method).mockImplementation(
-              (...args: unknown[]) => {
-                logs.push(args);
-              },
-            );
-          }
-
-          let responseBody = "";
-          await withManusProxyServer(
-            async (baseUrl) => {
-              const response = await fetch(
-                `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-                {
-                  method: "PUT",
-                  headers: {
-                    "X-Original-Content-Type": "application/pdf",
-                    "X-FrontMind-Capture-Filename-UTF8": filename,
-                    "X-FrontMind-Provider-Filename-UTF8": filename,
-                    "X-FrontMind-Upload-Ticket": handle.ticket,
-                  },
-                  body: Buffer.from("redaction body"),
-                },
-              );
-              expect(response.status).toBe(502);
-              responseBody = await response.text();
-              expect(JSON.parse(responseBody)).toMatchObject({
-                error: {
-                  code: "UPSTREAM_UPLOAD_REJECTED",
-                  fileId,
-                  traceId: expect.any(String),
-                },
-              });
-            },
-            { authenticated: true },
-          );
-
-          const observable = `${JSON.stringify(logs)}\n${responseBody}`;
-          for (const secret of [
-            handle.ticket,
-            target,
-            signature,
-            apiKey,
-            providerXml,
-            "sentinel-provider-private-xml",
-            filename,
-          ]) {
-            expect(observable).not.toContain(secret);
-          }
-        });
-      });
-    });
-  });
+      expect(provider).not.toHaveBeenCalled();
+      expect(upstream).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("discard unbound upload", () => {
@@ -2371,17 +1004,17 @@ describe("discard unbound upload", () => {
               id: "credential-before-rotation",
               userId: 42,
               version: 1,
-              provider: "manus",
+              provider: "zhipu",
               apiKey: "bound-key-before-rotation",
             },
           });
           return { discarded: true };
         },
       );
-      const removeProvider = vi.spyOn(axios, "delete").mockResolvedValue({
-        status: 204,
-        data: "",
-      });
+      const removeProvider = vi.fn().mockResolvedValue(undefined);
+      const factory = vi
+        .spyOn(credentialAgentClient, "createCredentialAgentClient")
+        .mockReturnValue({ deleteFile: removeProvider } as any);
       const removePrepared = vi
         .spyOn(preparedFileService, "deleteByOwnedFileSource")
         .mockResolvedValue(1);
@@ -2398,14 +1031,14 @@ describe("discard unbound upload", () => {
         { authenticated: true },
       );
 
-      expect(removeProvider).toHaveBeenCalledWith(
-        expect.stringMatching(`/v1/files/${fileId}$`),
+      expect(removeProvider).toHaveBeenCalledWith(fileId);
+      expect(factory).toHaveBeenCalledWith(
         expect.objectContaining({
-          headers: {
-            "Content-Type": "application/json",
-            "x-manus-api-key": "bound-key-before-rotation",
-          },
+          provider: "zhipu",
+          id: "credential-before-rotation",
+          apiKey: "bound-key-before-rotation",
         }),
+        expect.objectContaining({ accountUserId: 42 }),
       );
       expect(removePrepared).toHaveBeenCalledWith({
         ownerUserId: 42,
@@ -2424,7 +1057,10 @@ describe("discard unbound upload", () => {
         "UPLOAD_ALREADY_BOUND: live turn reference",
       ),
     );
-    const removeProvider = vi.spyOn(axios, "delete");
+    const removeProvider = vi.spyOn(
+      credentialAgentClient,
+      "createCredentialAgentClient",
+    );
 
     await withManusProxyServer(
       async (baseUrl) => {
@@ -2475,17 +1111,21 @@ describe("discard unbound upload", () => {
               id: "credential-record-owner",
               userId: 42,
               version: 1,
-              provider: "manus",
+              provider: "zhipu",
               apiKey: "bound-record-credential",
             },
           });
           return { discarded: true };
         },
       );
-      vi.spyOn(axios, "delete").mockResolvedValue({
-        status: 503,
-        data: "unavailable",
-      });
+      vi.spyOn(
+        credentialAgentClient,
+        "createCredentialAgentClient",
+      ).mockReturnValue({
+        deleteFile: vi
+          .fn()
+          .mockRejectedValue(new Error("provider unavailable")),
+      } as any);
       const removePrepared = vi.spyOn(
         preparedFileService,
         "deleteByOwnedFileSource",
@@ -2507,84 +1147,6 @@ describe("discard unbound upload", () => {
 
       expect(removePrepared).not.toHaveBeenCalled();
       expect(await readStoredPresalesFile(fileId)).not.toBeNull();
-    });
-  });
-
-  it("refuses discard while the same managed fileId is active", async () => {
-    await withCaptureAssetDirectory(async () => {
-      await withManagedUploadKey(async () => {
-        const fileId = "file-active-upload-discard-race";
-        const filename = "active.pdf";
-        const bytes = Buffer.from("active captured bytes");
-        const handle = managedUploadTicket({ fileId, filename });
-        authMocks.getCredentialForUpstreamResource.mockResolvedValue(
-          boundUploadCredential(),
-        );
-        let resolvePreflight!: (value: {
-          status: number;
-          data: Record<string, unknown>;
-        }) => void;
-        vi.spyOn(axios, "get")
-          .mockImplementationOnce(
-            () =>
-              new Promise((resolve) => {
-                resolvePreflight = resolve;
-              }),
-          )
-          .mockResolvedValueOnce({
-            status: 200,
-            data: { id: fileId, filename, status: "pending" },
-          })
-          .mockResolvedValue({
-            status: 200,
-            data: { id: fileId, filename, status: "uploaded" },
-          });
-        vi.spyOn(axios, "put").mockImplementation(async (_target, body) => {
-          await readAll(body as NodeJS.ReadableStream);
-          return { status: 200, data: "" };
-        });
-
-        await withManusProxyServer(
-          async (baseUrl) => {
-            const uploadPromise = fetch(
-              `${baseUrl}/proxy-upload?capture_file_id=${fileId}`,
-              {
-                method: "PUT",
-                headers: {
-                  "X-Original-Content-Type": "application/pdf",
-                  "X-FrontMind-Capture-Filename-UTF8": filename,
-                  "X-FrontMind-Provider-Filename-UTF8": filename,
-                  "X-FrontMind-Upload-Ticket": handle.ticket,
-                },
-                body: bytes,
-              },
-            );
-            await vi.waitFor(() => {
-              expect(resolvePreflight).toBeTypeOf("function");
-            });
-
-            const discardResponse = await fetch(
-              `${baseUrl}/v1/files/${fileId}/discard`,
-              { method: "DELETE" },
-            );
-            expect(discardResponse.status).toBe(409);
-            expect(await discardResponse.json()).toMatchObject({
-              error: {
-                code: "UPLOAD_IN_PROGRESS",
-                traceId: expect.any(String),
-              },
-            });
-            expect(authMocks.discardUnboundUpstreamFile).not.toHaveBeenCalled();
-
-            resolvePreflight({
-              status: 200,
-              data: { id: fileId, filename, status: "pending" },
-            });
-            expect((await uploadPromise).status).toBe(200);
-          },
-          { authenticated: true },
-        );
-      });
     });
   });
 });

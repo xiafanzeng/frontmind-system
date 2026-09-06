@@ -12,7 +12,6 @@ import {
   previewAdminWorkspaceHref,
 } from "@/lib/preview-navigation";
 import AdminDashboard from "@/pages/AdminDashboard";
-import KnowledgeBaseLivePreview from "@/pages/KnowledgeBaseLivePreview";
 import KnowledgeBaseProductionAcceptance from "@/pages/KnowledgeBaseProductionAcceptance";
 import {
   PreviewAdminAccounts,
@@ -56,7 +55,7 @@ export default function DevelopmentPreviewRouter({
     case "/preview/knowledge-base-live":
       return <KnowledgeBaseProductionAcceptance />;
     case "/preview/knowledge-base-upstream-probe":
-      return <KnowledgeBaseLivePreview />;
+      return <KnowledgeBaseProductionAcceptance />;
     case "/preview/user":
       return <PreviewUserRoute />;
     case "/preview/user/basic":

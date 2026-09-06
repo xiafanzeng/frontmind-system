@@ -29,13 +29,14 @@ describe("upstream base URL readiness", () => {
     );
   });
 
-  it("pins production to the exact official Manus origin", () => {
+  it("pins production to the exact official Zhipu Managed Agents endpoint", () => {
     expect(
       configuredUpstreamBaseUrl({
         NODE_ENV: "production",
-        FRONTMIND_UPSTREAM_BASE_URL: "https://api.manus.ai/",
+        FRONTMIND_UPSTREAM_BASE_URL:
+          "https://agent-api.bigmodel.cn/api/agent/managed/",
       }),
-    ).toBe("https://api.manus.ai");
+    ).toBe("https://agent-api.bigmodel.cn/api/agent/managed");
     for (const value of [
       "https://api.manus.ai/custom",
       "https://api.manus.ai:444",

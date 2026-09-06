@@ -138,7 +138,11 @@ export type PresalesV2TaskRecord = {
     expiresAt: number;
     providerRequestId: string | null;
     uploadState:
-      "reserved" | "uploading" | "uploaded" | "failed" | "outcome_unknown";
+      | "reserved"
+      | "uploading"
+      | "uploaded"
+      | "failed"
+      | "outcome_unknown";
   }>;
   status: PresalesV2TaskStatus;
   safeEvents: PresalesV2SafeEvent[];
@@ -162,7 +166,10 @@ export type PresalesV2TaskRecord = {
   repair?: PresalesV2RepairRecord | null;
   providerDeleteAt?: string | null;
   providerCleanupDisposition?:
-    "completed" | "terminal_unavailable" | "outcome_unknown" | null;
+    | "completed"
+    | "terminal_unavailable"
+    | "outcome_unknown"
+    | null;
   providerCleanupErrorCode?: string | null;
   projectCleanupAt?: string | null;
   /** Optional so pre-existing revision-3 records keep their frozen behavior. */
@@ -505,6 +512,9 @@ export async function acquirePresalesV2Task(input: {
       if (!record) throw new Error("PRESALES_V2_TASK_INDEX_DANGLING");
       return { state: "existing", record };
     }
+    if (input.provider != null && input.provider !== "zhipu") {
+      throw new Error("PRESALES_V2_PROVIDER_RETIRED");
+    }
     const now = new Date().toISOString();
     const localTaskId = randomUUID();
     const operationId = randomUUID();
@@ -518,10 +528,8 @@ export async function acquirePresalesV2Task(input: {
       contract: input.contract,
       profile: input.profile,
       upstreamModel: input.upstreamModel,
-      provider: input.provider ?? "manus",
-      ...(input.provider === "zhipu"
-        ? { providerRuntime: newWebsiteZhipuRuntime() }
-        : {}),
+      provider: "zhipu",
+      providerRuntime: newWebsiteZhipuRuntime(),
       operationToken: operationId,
       operationMarker: `FRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: operationId, operationId, contractName: input.contract.name, contractRevision: input.contract.revision, schemaHash: input.contract.schemaHash })}`,
       providerTitle: `FrontMind Website ${input.contract.name} ${operationId}`,

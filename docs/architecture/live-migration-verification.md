@@ -406,3 +406,37 @@ four outputs remained ready and the original KB download was byte-identical:
 `07b3b30b8e558ec04f86de9a6272f0d90201ee23fb8aa5f25e6e040af73805d6`.
 These are real original-project results, superseding the funding blocker
 described in the historical validation section above.
+
+## Zhipu-only execution and healthy long-running KB — 2026-09-06
+
+The user retired historical Manus tasks and superseded the earlier retention
+requirement above. Active Dashboard and Website AI execution now uses Zhipu;
+unknown task creation does not search or reconstruct old conversations. The
+existing approved reset starts a fresh upload and task. Ordinary acknowledged
+session continuation and original business parsers remain.
+
+A new knowledge-base task on 26cec6d uploaded the original 25,943-byte Skill
+and 2,798-byte UTF-8 instructions with both frozen hashes matching. Dashboard
+settled it as unavailable at 03:03:56 UTC, after 15 minutes of running, although
+Zhipu was still executing. Zhipu delivered the 232,481-byte ZIP at 03:11:39 and
+ended the turn at 03:11:58. The downloaded ZIP passed the existing materialized
+knowledge-base validator locally. No failed local conversation was rebuilt.
+The running-time reset rule has been removed; actual terminal and interrupted
+provider states continue through the existing workflow. Fresh production
+acceptance follows the next deployment.
+
+The adapter no longer performs a second AJV schema check before the existing
+business validator. It extracts usable JSON and preserves output attachments,
+including when the last public message is only a closing sentence. Old Manus
+proxy, signed PUT recovery, title-based task reconstruction and unused live
+preview execution paths were removed. Original Skill ZIPs, inputs, user
+confirmation, ownership checks and private download boundaries remain.
+
+Code validation covered 4,216 backend/shared/script tests and 1,232 client
+checks, with 58 and 7 existing skips. The final backend run passed 4,215 and
+exposed one stale expectation that still permitted a Manus model; the corrected
+consumer suite passed 4/4. The full client run had two timing-sensitive
+interaction failures; both affected suites then passed all 57 checks without
+application changes. TypeScript, test partition/source checks, and frozen-lock
+validation passed. This is code validation, not the pending fresh production
+workflow acceptance.

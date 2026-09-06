@@ -33,14 +33,14 @@ beforeEach(() => {
   } as unknown as PresalesV2TaskRecord;
 });
 describe("Website provider compatibility", () => {
-  it("keeps historical tasks on Manus despite new defaults", () => {
+  it("always uses Zhipu for the current Website task", () => {
     expect(
       createWebsiteAgentClient(
         "test",
         { ...state.record, provider: undefined },
         update,
       ),
-    ).toBeInstanceOf(ManusV2Client);
+    ).toBeInstanceOf(ZhipuWebsiteAgentProvider);
     expect(
       createWebsiteAgentClient("test", state.record, update),
     ).toBeInstanceOf(ZhipuWebsiteAgentProvider);
@@ -356,11 +356,10 @@ it("preserves the original task and stricter skill constraints with the frozen t
     true,
   );
   expect(JSON.parse(prompt.split("\n").at(-1)!)).toEqual(schema);
-  expect(prompt).toContain("defines the transport shape only");
+  expect(prompt).toContain("Preserve the original Skill and its instructions.");
   expect(prompt).toContain(
-    "wherever the original skill is stricter, its stricter constraint still applies",
+    "The existing business interface expects this result shape:",
   );
-  expect(prompt).toContain("Do not invent evidence to satisfy either schema.");
 });
 
 it("retries a definite 429 rejection once while never replaying an unknown outcome", async () => {

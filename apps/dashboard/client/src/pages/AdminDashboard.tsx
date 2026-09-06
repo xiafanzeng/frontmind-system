@@ -85,7 +85,7 @@ export type ApiUsageSyncIssueCode =
 type ManagedAgentProfile = "frontmind-base" | "frontmind-pro";
 
 type AgentUsageFields = {
-  provider?: "legacy" | "zhipu";
+  provider?: "unavailable" | "zhipu";
   nativeUsage?: {
     unit: "tokens";
     inputTokens: number;
@@ -99,7 +99,7 @@ export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
   if (!value || typeof value !== "object") return {};
   const row = value as Record<string, any>;
   if (row.provider !== "zhipu")
-    return typeof row.provider === "string" ? { provider: "legacy" } : {};
+    return typeof row.provider === "string" ? { provider: "unavailable" } : {};
   const usage = row.nativeUsage;
   const count = (value: unknown) =>
     typeof value === "number" && Number.isSafeInteger(value) && value >= 0
@@ -124,8 +124,7 @@ export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
 export function managedUsageDisplay(
   value: AgentUsageFields & { rolling30DayUsed: number },
 ) {
-  if (value.provider !== "zhipu")
-    return `${value.rolling30DayUsed.toLocaleString()} 积分`;
+  if (value.provider === "unavailable") return "请配置智谱 Key";
   if (!value.nativeUsage?.observedTasks) return "暂无 Token 记录";
   return `${(value.nativeUsage.inputTokens + value.nativeUsage.outputTokens).toLocaleString()} Token`;
 }
@@ -1062,13 +1061,13 @@ export function annotateSharedKeyAccountCounts<
   const counts = new Map<string, number>();
   for (const row of rows) {
     if (!row.fingerprint) continue;
-    const key = `${row.provider ?? "legacy"}:${row.fingerprint}`;
+    const key = `${row.provider ?? "unavailable"}:${row.fingerprint}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return rows.map((row) => ({
     ...row,
     sharedKeyAccountCount: row.fingerprint
-      ? (counts.get(`${row.provider ?? "legacy"}:${row.fingerprint}`) ?? 1)
+      ? (counts.get(`${row.provider ?? "unavailable"}:${row.fingerprint}`) ?? 1)
       : 0,
   }));
 }
@@ -2845,7 +2844,7 @@ export default function AdminDashboard({
                         <span>归属范围</span>
                         <span>Key 状态</span>
                         <span>近 30 天自用量</span>
-                        <span>积分池总额</span>
+                        <span>已记录任务</span>
                         <span>操作</span>
                       </div>
                       {visibleKeyManagementRows.map((row) => (
@@ -2907,41 +2906,11 @@ export default function AdminDashboard({
                             <p className="text-sm font-semibold text-[#5b2a86]">
                               {managedUsageDisplay(row)}
                             </p>
-                            {row.provider === "zhipu" &&
-                              row.rolling30DayUsed > 0 && (
-                                <p className="mt-1 text-xs text-[#857e91]">
-                                  历史用量{" "}
-                                  {row.rolling30DayUsed.toLocaleString()} 积分
-                                </p>
-                              )}
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-[#332842]">
-                              {row.provider === "zhipu"
-                                ? "不提供积分池"
-                                : (row.keyPoolTotalUsed?.toLocaleString() ??
-                                  "—")}
+                              {row.nativeUsage?.observedTasks ?? 0} 个
                             </p>
-                            {row.keyHealth !== "connected" ? (
-                              <>
-                                <p className="mt-1 text-xs text-[#946800]">
-                                  {apiUsageSyncStatusCopy({
-                                    keyHealth: row.keyHealth,
-                                    issueCode: row.syncIssueCode,
-                                  })}
-                                </p>
-                                {row.keyPoolTotalUsed !== null &&
-                                  formatApiUsageLastSuccess(row.fetchedAt) && (
-                                    <p className="mt-1 text-xs text-[#857e91]">
-                                      {`截至 ${formatApiUsageLastSuccess(row.fetchedAt)}，最新同步待恢复`}
-                                    </p>
-                                  )}
-                              </>
-                            ) : row.keyPoolStale ? (
-                              <p className="mt-1 text-xs text-[#857e91]">
-                                上次成功值，等待每日刷新
-                              </p>
-                            ) : null}
                           </div>
                           <Button
                             type="button"
@@ -2995,7 +2964,7 @@ export default function AdminDashboard({
               <h2 className="font-semibold text-[#171321]">工程师状态</h2>
               <p className="mt-1 text-sm text-[#716a80]">
                 {systemAdmin
-                  ? "按人员查看岗位、项目和近 30 天用量。智谱按 Token 展示，历史积分单独保留。"
+                  ? "按人员查看岗位、项目和近 30 天用量。统一展示智谱 Token 用量。"
                   : "按人员查看专业岗位、负责项目和当前工作状态；项目岗位缺员请前往客户项目团队处理。"}
               </p>
             </div>
@@ -3096,10 +3065,9 @@ export default function AdminDashboard({
                                 </span>
                               </p>
                               <p>
-                                积分池总额{" "}
+                                已记录任务{" "}
                                 <span className="font-semibold text-[#332842]">
-                                  {engineer.keyPoolTotalUsed?.toLocaleString() ??
-                                    "—"}
+                                  {engineer.nativeUsage?.observedTasks ?? 0} 个
                                 </span>
                               </p>
                               {engineer.keyHealth !== "connected" && (

@@ -2125,6 +2125,9 @@ describe("SiteOps core contracts", () => {
           id: "20000000-0000-4000-8000-000000000002",
           version: 8,
           agentProfile: "frontmind-pro",
+          provider: "zhipu",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: "max",
         },
         parentOperationInput: {
           agentProfile: "frontmind-base",
@@ -2136,9 +2139,9 @@ describe("SiteOps core contracts", () => {
       manusCredentialId: "20000000-0000-4000-8000-000000000002",
       manusCredentialVersion: 8,
       agentProfile: "frontmind-base",
-      provider: "manus",
-      upstreamModel: "manus-1.6",
-      upstreamEffort: null,
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
     });
   });
 
@@ -2181,6 +2184,22 @@ describe("SiteOps core contracts", () => {
       upstreamEffort: "high",
     });
   });
+
+  it.each(["manus", undefined] as const)(
+    "does not freeze a retired %s credential into a new SiteOps task",
+    (provider) => {
+      expect(() =>
+        freezeSiteOpsCustomerAiCredential({
+          credential: {
+            id: "20000000-0000-4000-8000-000000000002",
+            version: 1,
+            provider,
+            agentProfile: "frontmind-pro",
+          },
+        }),
+      ).toThrow("智谱");
+    },
+  );
 
   it("accepts only a selected Aliyun domain and normalizes its IDN identity", () => {
     expect(

@@ -1094,7 +1094,7 @@ async function reserveOperation(input: {
       schemaHash,
       apiCredentialId: input.credential.id,
       credentialVersion: input.credential.version,
-      provider: input.credential.provider ?? "manus",
+      provider: input.credential.provider ?? "zhipu",
       publicProfile: input.credential.agentProfile,
       upstreamModel: input.credential.upstreamModel,
       status: "queued",

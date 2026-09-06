@@ -2575,7 +2575,7 @@ describe("Manus v2 canonical task writer fence", () => {
     ).not.toHaveProperty("statusDeadlineAt");
   });
 
-  it("makes a healthy materialized task resettable after fifteen minutes without machine-contract progress", async () => {
+  it("keeps a healthy long-running task active until the provider delivers its bundle", async () => {
     const leaseToken = "materialized-completion-no-progress-lease";
     const activeTurn = turn({
       operationType: "start",
@@ -2640,35 +2640,19 @@ describe("Manus v2 canonical task writer fence", () => {
           turnId: activeTurn.id,
           leaseToken,
           status: "running",
-          now: new Date("2026-08-01T00:15:00.000Z"),
+          now: new Date("2026-08-01T00:23:00.000Z"),
         },
         harness.executor,
       ),
     ).resolves.toMatchObject({
-      state: "unavailable",
-      turn: {
-        status: "failed",
-        providerAttemptState: "result_rejected",
-        recoveryAction: "approve_reset",
-      },
+      state: "deferred",
+      ledger: { activeRunningMs: 23 * 60_000, lastStatus: "running" },
     });
-    expect(harness.store.turns[0]).toMatchObject({
-      status: "failed",
-      errorCode: "KNOWLEDGE_BASE_MATERIALIZED_RESULT_UNAVAILABLE",
-      metadata: {
-        canRegenerate: false,
-        materializedCompletion: {
-          activeRunningMs: 15 * 60_000,
-          lastStatus: "running",
-        },
-      },
-    });
-    expect(harness.store.build).toMatchObject({
-      status: "protocol_error",
-      activeTurnId: null,
-      canonicalTaskState: "attention_required",
-      protocolErrorCode: "KNOWLEDGE_BASE_MATERIALIZED_RESULT_UNAVAILABLE",
-    });
+    expect(harness.store.turns[0]).toMatchObject({ status: "running" });
+    expect(harness.store.build).toMatchObject({ status: "researching" });
+    expect(
+      (harness.store.turns[0]?.metadata as any).materializedCompletion,
+    ).not.toHaveProperty("statusDeadlineAt");
   });
 
   it("retains one 24-hour interruption window for waiting to exact quota and clears a lost candidate", async () => {

@@ -55,8 +55,6 @@
     "siteops:template-catalog:ready": "node dist/seed-static-template-catalog.js --check-active"
   },
   "dependencies": {
-    "ajv": "8.20.0",
-    "ajv-formats": "3.0.1",
     "@aws-sdk/client-s3": "^3.1095.0",
     "@aws-sdk/s3-request-presigner": "^3.1095.0",
     "@hookform/resolvers": "5.2.2",

@@ -1,7 +1,7 @@
 import type { Request } from "express";
 
-const UPSTREAM_VENDOR = ["ma", "nus"].join("");
-const DEFAULT_UPSTREAM_BASE_URL = `https://api.${UPSTREAM_VENDOR}.ai`;
+const DEFAULT_UPSTREAM_BASE_URL =
+  "https://agent-api.bigmodel.cn/api/agent/managed";
 
 export function configuredUpstreamBaseUrl(
   env: NodeJS.ProcessEnv = process.env,
@@ -29,7 +29,7 @@ export function configuredUpstreamBaseUrl(
 
   if (
     env.NODE_ENV === "production" &&
-    (parsed.origin !== DEFAULT_UPSTREAM_BASE_URL || parsed.pathname !== "/")
+    parsed.toString().replace(/\/+$/, "") !== DEFAULT_UPSTREAM_BASE_URL
   ) {
     return null;
   }
@@ -49,7 +49,7 @@ export function assertUpstreamBaseUrlConfigured(
   const configured = configuredUpstreamBaseUrl(env);
   if (!configured) {
     throw new Error(
-      "FRONTMIND_UPSTREAM_BASE_URL must be an allowed HTTPS Manus origin without credentials, path, query, or fragment in production",
+      "FRONTMIND_UPSTREAM_BASE_URL must be the Zhipu Managed Agents HTTPS endpoint in production",
     );
   }
   return configured;
@@ -73,13 +73,11 @@ export function getFrontMindCredentials(req: Request) {
 export function toUpstreamAgentProfile(agentProfile?: string) {
   switch (agentProfile) {
     case "frontmind-lite":
-      return `${UPSTREAM_VENDOR}-1.6-lite`;
     case "frontmind-base":
-      return `${UPSTREAM_VENDOR}-1.6`;
     case "frontmind-pro":
     case undefined:
     case "":
-      return `${UPSTREAM_VENDOR}-1.6-max`;
+      return "glm-5.3";
     default:
       return agentProfile;
   }

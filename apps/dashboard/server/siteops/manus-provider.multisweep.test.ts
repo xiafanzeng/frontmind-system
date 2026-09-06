@@ -215,12 +215,15 @@ const baseOperation = {
   inputHash: "a".repeat(64),
   input: {
     credentialScope: "customer",
+    provider: "zhipu",
+    upstreamModel: "glm-5.3",
+    upstreamEffort: "high",
     buildId: "30000000-0000-4000-8000-000000000003",
     manusCredentialId: "40000000-0000-4000-8000-000000000004",
     manusCredentialVersion: 9,
     agentProfile: "frontmind-base",
   },
-  provider: "manus",
+  provider: "zhipu",
   providerOperationId: null,
   providerTaskId: null,
   leaseOwner: "lease-multisweep",
@@ -636,9 +639,12 @@ describe("SiteOps personal-key build multi-sweep integration", () => {
         userId: baseOperation.userId,
         version: baseOperation.input.manusCredentialVersion,
         apiKey: "customer-personal-key",
+        provider: "zhipu" as const,
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "high" as const,
       };
     });
-    const createClient = vi.fn(() => client as never);
+    const createClient = vi.fn(() => ({ ...client }) as never);
     const assertLeaseActive = vi.fn(async () => {
       timeline.push("lease");
     });
@@ -754,9 +760,7 @@ describe("SiteOps personal-key build multi-sweep integration", () => {
       },
     });
     expect(createTask).toHaveBeenCalledTimes(1);
-    expect(createTask.mock.calls[0]![0]).toMatchObject({
-      agentProfile: "manus-1.6",
-    });
+    expect(createTask.mock.calls[0]![0]).not.toHaveProperty("agentProfile");
     expect(createTask.mock.calls[0]![0].prompt).toContain(
       "SiteContentPatchWireV1",
     );
@@ -1263,8 +1267,11 @@ describe("SiteOps personal-key build multi-sweep integration", () => {
       userId: baseOperation.userId,
       version: baseOperation.input.manusCredentialVersion,
       apiKey: "customer-personal-key",
+      provider: "zhipu" as const,
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high" as const,
     }));
-    const createClient = vi.fn(() => client as never);
+    const createClient = vi.fn(() => ({ ...client }) as never);
     const handler = createManusSiteOpsProviderHandler({
       getDb: async () => db as never,
       getCredential: getCredential as never,

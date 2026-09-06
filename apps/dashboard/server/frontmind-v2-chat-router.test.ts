@@ -86,7 +86,7 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
 
   it("maps and freezes the public create-only model profile", () => {
     expect(serverSource).toMatch(
-      /upstreamModel:\s*generalAgentModelProfileModel\(\s*input\.value\.modelProfile,\s*input\.credential\.provider,?\s*\)/u,
+      /upstreamModel:\s*generalAgentModelProfileModel\(\s*input\.value\.modelProfile,\s*input\.credential\.provider \?\? "zhipu",?\s*\)/u,
     );
     expect(serverSource).toContain("modelProfile: input.value.modelProfile");
     expect(serverSource).toContain(

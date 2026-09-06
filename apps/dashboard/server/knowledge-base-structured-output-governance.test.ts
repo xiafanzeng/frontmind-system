@@ -9,7 +9,6 @@ const trustedAssistantConsumers = [
   "server/knowledge-base-api.ts",
   "server/knowledge-base-progress.ts",
   "server/knowledge-base-progress-service.ts",
-  "server/knowledge-base-live-preview-api.ts",
   "server/knowledge-base-finalization.ts",
   "server/knowledge-base-finalization-supplement.ts",
   "server/knowledge-base-artifact-binding-service.ts",

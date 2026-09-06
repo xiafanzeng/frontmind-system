@@ -423,10 +423,10 @@ export function loadWorkerConfig(
         "PUBLISHER_REQUEST_TIMEOUT_MS",
         20_000,
       ),
-      maxGetAttempts: publisherPositiveInteger("PUBLISHER_GET_MAX_ATTEMPTS", 3),
+      maxGetAttempts: publisherPositiveInteger("PUBLISHER_GET_MAX_ATTEMPTS", 5),
       getRetryBaseMs: publisherPositiveInteger(
         "PUBLISHER_GET_RETRY_BASE_MS",
-        300,
+        1_000,
       ),
       concurrency: publisherPositiveInteger("PUBLISHER_WORKER_CONCURRENCY", 8),
       importConcurrency: publisherPositiveInteger(

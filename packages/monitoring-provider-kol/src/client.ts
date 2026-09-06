@@ -53,12 +53,12 @@ export class KolClient implements KolProviderPort {
     );
     this.maxGetAttempts = positiveInteger(
       options.maxGetAttempts,
-      3,
+      5,
       "maxGetAttempts",
     );
     this.getRetryBaseMs = positiveInteger(
       options.getRetryBaseMs,
-      300,
+      1_000,
       "getRetryBaseMs",
     );
     this.maxResponseBytes = positiveInteger(
@@ -467,6 +467,13 @@ export class KolClient implements KolProviderPort {
           return { response, body: undefined };
         }
         const body = await readJson(response, this.maxResponseBytes);
+        if (body === undefined && response.ok) {
+          throw new KolProviderError(
+            "upstream_unavailable",
+            "KOL GET returned an empty response",
+            { operation, httpStatus: response.status, retryable: true },
+          );
+        }
         const envelope = kolErrorEnvelopeSchema.safeParse(body);
         const businessStatus = envelope.success
           ? envelope.data.status
@@ -483,6 +490,7 @@ export class KolClient implements KolProviderPort {
         return { response, body };
       } catch (cause) {
         if (signal?.aborted) throw cause;
+        if (cause instanceof KolProviderError && !cause.retryable) throw cause;
         if (attempt < this.maxGetAttempts) {
           await this.sleep(backoff(attempt, this.getRetryBaseMs));
           continue;
@@ -603,7 +611,11 @@ async function readJson(
     throw new KolProviderError(
       "invalid_response",
       "KOL response is not valid JSON",
-      { operation: "read_response", httpStatus: response.status },
+      {
+        operation: "read_response",
+        httpStatus: response.status,
+        retryable: response.ok || retryableStatus(response.status),
+      },
       { cause },
     );
   }
@@ -676,7 +688,8 @@ function retryDelay(
   attempt: number,
   baseMs: number,
 ): number {
-  const seconds = Number(response.headers.get("retry-after"));
+  const value = response.headers.get("retry-after")?.trim();
+  const seconds = value ? Number(value) : Number.NaN;
   return Number.isFinite(seconds) && seconds >= 0
     ? Math.min(seconds * 1_000, 10_000)
     : backoff(attempt, baseMs);

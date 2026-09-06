@@ -1,6 +1,6 @@
 # CN migration verification — 2026-09-06
 
-## Verified production snapshot — 2026-09-06 18:00 Beijing
+## Verified production snapshot — 2026-09-06 22:23 Beijing
 
 The table records the verified runtime after the customer-workspace release.
 Public `/readyz` reported this build SHA and image digest at verification time.
@@ -10,8 +10,8 @@ retain the outcomes and identities of their own stages.
 
 | Service | Runtime source revision | Runtime image digest |
 | --- | --- | --- |
-| Dashboard | `f7fac4a874671cab33fbb4638ff25a82082f8092` | `sha256:be7cd6c82f83e726b93d95e056539971be4039770d92d9c085545219f0c76580` |
-| Monitoring worker | `f7fac4a874671cab33fbb4638ff25a82082f8092` | `sha256:813c804c83cacec91ee165e5e8c12aa6a5286cc55fa43fb56266b42496315618` |
+| Dashboard | `3a1bd8a5b50103cbd368cca7bb529131ec7b875b` | `sha256:5858bd5aa994735e8005c7dee7900dcb1199091931191af874f76e9241ead6a3` |
+| Monitoring worker | `5f1d8a35bfc0076411a3e838f3072f16f8cd5c55` | `sha256:3dd4a19c37a528f2358f7c952e011eebb0fe6523b690f4419944bc8c02345812` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
 | Area | Current acceptance result |
@@ -26,6 +26,8 @@ retain the outcomes and identities of their own stages.
 | Dashboard response logic | Complete: direct question selection, binding, initial generation/save, same-session continuation/save and confirmation passed. Confirmed revision 6/version 1 and all four original fields matched independent API/DB readback after the `70fa85f` restart. |
 | Original Website knowledge base, assessment and forecast | Complete: the original KB ZIP and both perspectives' assessments and forecasts survived reload. Its monitoring runs remain at exactly ten successful answers, with no additional attempts. |
 | Website execution-log presentation | Complete: only standalone generic tool messages are hidden; detailed events, errors and absolute timers are preserved. |
+| Content production | Complete for real P0 and single-article acceptance: original v4.11 Runner, five native article confirmations, full current-Job restoration across turns, actual draft/edit/20 titles/delivery, customer downloads and DOCX/HTML visual checks. Original research test-input provenance and zero accepted external examples remain recorded below. |
+| KOL resource catalog | Complete: 91,831 valid resources (10,787 news, 81,044 self-media); authoritative page and customer pagination checks passed. The original sync remains unique and successful; no publishing orders were submitted. |
 | Website and Dashboard HTTPS | Complete: public/authoritative DNS, ACME issuance, dedicated SNI certificates and normal trust-chain/hostname validation passed. See the certificate section below. |
 | Website building, template work and preview-dependent social acceptance | Outside scope by user instruction. WeChat/Xiaohongshu acceptance is paused because the original UI requires a website preview snapshot; no SiteOps or social mutation was submitted. |
 
@@ -55,6 +57,100 @@ unnecessary Vault integration is removed. Deployment and live verification of
 this correction are recorded separately; prior browser checks do not prove
 full article delivery. KOL authentication and catalog status are documented in
 `docs/architecture/monitoring-runtime.md`; no mock catalog or real order is used.
+
+On `3583844a`, the v4.11 mobile modal fix passed real desktop and 390 px mobile
+hit testing and visual inspection: navigation no longer covers its controls,
+and the bottom buttons remain reachable. The read-only check allowed only the
+current P0 task, issued no writes and saw no failed API reads or browser errors.
+Dashboard and SiteOps passed exact image/build readiness; the new monitoring
+worker passed its post-start database heartbeat. No migration was needed.
+
+Real customer P0 task `a0296584-495a-4b86-9b54-f2c2def74bbf` completed using
+glm-5.3/Max/standard, with original Reference Pack, P0 route and blueprint
+confirmations. Native tools verified actual draft, edit, titles and delivery;
+the original Runner ended at `p0_ready`, `offline_fixture=false`, with no pending
+action or native session error. All five customer downloads returned 200.
+Standalone Markdown, HTML, DOCX and title JSON match the v2 Pack members byte
+for byte; its 20 titles are unique and split 10/10. The Pack retains identity
+`rp_8e0f2ab6b23d350e`, advances version 1 to 2 and passes the original validator.
+The original DOCX rendered to four pages, all visually checked without missing
+glyphs, overlap, clipping or blank pages. Its original HTML displayed six H2
+sections and 29 paragraphs without overflow or resource/browser errors. The
+checks did not edit or re-export either deliverable.
+The source Pack was existing real-model test input, not approved customer
+publication material; no external publication occurred. No actual network
+request was attempted in this P0 run, and original zero-example routing was
+used. This run does not validate external example discovery or the later work
+directory change. See the High/Max findings for the observed old-path loss.
+
+The subsequent article task `1cdea530-2897-4392-9f8f-5c0b71acf74d`
+on `6bbbee1` confirmed that `/mnt/session/work/frontmind` also disappears
+between native agent turns. Its first-turn Job and preflight were real, but
+the second turn found only uploads and outputs below `/mnt/session`.
+Changing the working path alone therefore did not fix persistence. A new
+task must verify complete current-Job snapshots across the original pauses;
+this earlier incomplete attempt is not treated as a persistence pass.
+
+New task `bd6e0751-e48d-426c-b25d-2c35bd1a9ecc`, native Session
+`sess_01a07702-9cf6-7572-8c47-351779cdd921`, has verified the complete-Job
+transport across real turns. Its first snapshot contained the actual four Job
+files; subsequent snapshots contained 42, 49 and 55 files, including binary
+ZIP, DOCX and HTML plus provider handoffs. Independent downloads validated ZIP
+and state hashes. Native tools restored every archived member's bytes and
+permissions, reused Job `job_0c8d9be59cf3`, and continued with revisions 1, 2,
+3 and 4. Existing files retained their hashes except for changes made by the
+original Runner; no prior research or conversation was reconstructed.
+Both originally supplied answer files were passed on initial start and retained
+their test-input source notices, without a duplicate answer-input pause.
+
+The real customer DTO/chat did not expose transport file names, IDs or links.
+Requests for the actual internal artifact IDs returned 404; ordinary review
+and customer Pack downloads returned 200 with the database's exact sizes and
+hashes. The upload-timeout release `3a1bd8a` was deployed at the original r4
+pause; the saved login and same task then continued to article blueprint.
+Website and monitoring-worker container identities were unchanged. Final
+article delivery and the export-only follow-up also completed in that same
+Session. Final snapshots grew to 61 and 79 files with no loss of earlier
+files. The original Runner performed analysis, positioning, blueprint,
+draft, full edit, titles and delivery, ending at `completed/E10`, revision 5,
+with no pending action and `offline_fixture=false`.
+
+All four original article downloads returned 200 and matched both the native
+Files API bytes and the final Job deliverables. The Markdown has 2,190
+characters, one H1 and six H2 sections; its complete bytes equal the original
+edited-article result. All 20 titles are unique, with 10 decision-search and
+10 media titles. The original DOCX rendered to three pages and passed page
+inspection; HTML passed desktop and mobile inspection without clipping,
+overflow, missing glyphs or resource/browser errors. Neither original file
+was modified by these checks.
+
+The article Runner's documented terminal delivery consists of four article
+files. E1 had separately created a real updated Pack via
+`metadata.question_research_pack_delivery`. One final customer chat request
+exported this existing v3 ZIP from the unchanged Job; it did not rerun the
+Runner, generate another article, or rebuild the Pack. Its customer download
+returned 200, 640,312 bytes, SHA256
+`e177f01af293578216b3db5c8df7f29dbe3b72ea1c0b82dec04213effebc37a5`,
+matching the original Job ZIP. The original Pack validator passed with no
+errors or warnings: same Pack ID, parent v2 to v3, P0 ready, and question
+`q000001` ready. All five prior P0 files remain byte-identical. The new article
+files are separate from this question-research Pack.
+
+Final customer isolation checks covered all 12 actual internal state/snapshot
+artifact IDs (404), all 16 public output files plus the original customer
+Pack (17 downloads, all 200 and hash-matched), and the completed E10 state
+with five retained confirmations. Actual customer-page reload also preserved
+login and the completed lane. The final Dashboard release is `3a1bd8a`;
+95 workflow/provider/router/Markdown tests, 23 transport tests and Dashboard
+type checking passed before publication.
+
+This is a workflow acceptance using the author's existing GLM-generated test
+answers and a real P0 test Pack, not newly sampled answers from two external
+platforms or approved publication material. The article task made real
+network requests and obtained search responses, but accepted zero external
+full-text examples; it followed the original zero-example branch. No article
+was externally published. These boundaries do not invalidate the file
+persistence and original production-flow checks.
 
 ## Historical production baseline restoration
 
@@ -120,9 +216,12 @@ Zhipu funding is now usable. The original Website project recovered through
 its normal controls and completed both real assessments and forecasts; see
 the recharge recovery results below.
 
-KOL formal API credentials and logo-search configuration were absent from the
-source runtime. Real publishing is disabled; draft management and private DOCX
-processing are available. No mock media or provider orders were created.
+KOL authentication was subsequently completed using the user's supplied account
+and the documented API fields. Server-only token/login configuration is present;
+authenticated full-catalog synchronization and its final counts are recorded
+in `monitoring-runtime.md`. Logo lookup and real publishing remain disabled;
+draft management and private DOCX processing are available. No mock media or
+provider orders were created.
 
 Aliyun OAuth application configuration is corrected: the original `.net`
 callback remains allowed, the CN callback

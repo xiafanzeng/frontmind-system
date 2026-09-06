@@ -112,24 +112,55 @@ silently switches to login. When all six login fields are explicitly configured
 alongside a token, the client first reuses that token; an actual safe GET 401
 permits one login refresh and one retry of that GET. A 403 or incomplete login
 configuration does not trigger that fallback. Reissuing a paid order is
-never an automatic authentication retry. On 2026-09-06 the user supplied the
+never an automatic authentication retry. Safe GETs recover a temporary network,
+HTTP, non-JSON or empty-response failure on the same page, with five attempts
+and a one-second exponential-backoff base by default. Missing or empty
+`Retry-After` uses that backoff; permanent HTTP, response-size and schema
+rejections do not trigger repeated same-page requests. The existing
+`PUBLISHER_GET_MAX_ATTEMPTS` and `PUBLISHER_GET_RETRY_BASE_MS` overrides remain
+available. This does not retry order POSTs or change the 401/403 rules.
+
+The production monitoring worker now runs commit
+`5f1d8a35bfc0076411a3e838f3072f16f8cd5c55`. Its loaded runtime configuration
+was verified as `maxGetAttempts=5` and `getRetryBaseMs=1000`; no legacy
+environment override replaces these values.
+
+On 2026-09-06 the user supplied the
 KOL account credentials explicitly. One authentication from the production
 host succeeded with HTTP/status 200, using the document's `api_key` example
 and its three `advertiser` values; no separate API-key application was needed.
 The issued token and original login inputs are held only in root-readable
 server configuration/private files. The first authenticated resource page
 returned 50 real name/`price` records and reported 91,832 resources across
-1,837 pages. That is a provider pagination observation, not a completed-sync
-count: the full catalog synchronization is being enabled and verified. A real
-page later contained one resource with `name=null`; this previously rejected
+1,837 pages. A real page later contained one resource with `name=null`; this previously rejected
 the entire page and prevented catalog activation. The provider now preserves
 page counts while normalization/staging excludes individual rows with no usable
 name or customer price. A fully fetched catalog activates its usable rows and
 retains the invalid-row count; missing pages and inconsistent totals still
-cannot become an active catalog. No publication order was submitted. A signed-in browser session is not a
-configured worker API credential. Final live inventory counts must come from
-the completed authenticated sync, never from documentation examples or preview
-fixtures.
+cannot become an active catalog.
+
+The original catalog job completed successfully at **2026-09-06 13:15:45 UTC**
+after fetching all **1,837 pages / 91,832 records**. It activated **91,831 usable
+resources: 10,787 news and 81,044 self-media resources**, with one missing-name
+record excluded and no duplicate identities. The runtime is `live`, credentials
+are healthy and both categories are complete. A non-JSON response failure
+caused one full retry before completion; the original failed response body and
+HTTP status were not retained, so their exact contents are unknown. The same-page
+retry improvement above reduces this disruption without adding a new sync job.
+After the worker update, the original job
+`a63472f2-0ec4-4f3d-9e1c-d9ecae07f4b3` remained the only catalog-sync job and
+was still `succeeded`; its run `b6f11c0b-a5ee-5a6d-ac0b-6cde914f9fd5` remained
+`success`, with all active category counts unchanged.
+
+Database verification found no empty names or nonpositive active prices and
+matched all 50 original first-page names, categories and customer `price` values.
+The existing customer account independently verified both category totals and
+the first and final API pages, then rendered both media tables with real names
+and market unit prices. No supplier-price or credential fields appeared in those
+customer responses. Publication remains disabled; publication batches, order
+items and submission attempts were all verified as zero after the worker
+update. Logo downloads remain disabled independently of this usable
+catalog. A signed-in browser session is not a configured worker API credential.
 
 Customer publication history is part of the publishing workbench at
 `/publishing?tab=records`. It retains the original search, media-type/status/date

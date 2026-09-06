@@ -83,6 +83,7 @@ import {
   KnowledgeBaseLocalPreparationError,
 } from "./knowledge-base-api-errors";
 import { KnowledgeBaseTurnReservationError } from "./knowledge-base-turn-service";
+import * as knowledgeBaseTurnService from "./knowledge-base-turn-service";
 import { KnowledgeBaseArtifactBindingError } from "./knowledge-base-artifact-binding-service";
 import { KnowledgeBaseBuildError } from "./knowledge-base-progress-service";
 import { knowledgeBaseLogoRepairFileIsOwned } from "./knowledge-base-logo-provenance-api";
@@ -617,6 +618,56 @@ describe("knowledge-base turn HTTP outcomes", () => {
       code: "MANUS_V2_BIND_PERSISTENCE_UNKNOWN",
       recoveryDelayMs: 1_000,
     });
+    expect(persistCreateFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "INLINE_FILE_INVALID",
+    "INLINE_FILE_TOO_LARGE",
+    "ATTACHMENT_FILENAME_CONFLICT",
+  ])("settles the explicit local input rejection %s without an unknown create", async (code) => {
+    const settleRejection = vi
+      .spyOn(knowledgeBaseTurnService, "settleKnowledgeBaseManusV2ExplicitRejection")
+      .mockResolvedValue({ retryScheduled: false } as any);
+    const markManusV2OutcomeUnknown = vi.fn();
+    const persistCreateFailure = vi.fn();
+    const claim = {
+      turn: {
+        id: "turn-local-input-rejection",
+        userId: 7,
+        providerProtocol: "manus_v2",
+        providerMethod: "task.create",
+        providerAttemptState: "sending",
+        createAttemptState: "not_sent",
+        upstreamTaskId: null,
+      },
+      leaseToken: "lease-local-input-rejection",
+    } as any;
+
+    await expect(
+      persistKnowledgeBaseDispatchFailure(
+        {
+          claim,
+          error: new ManusV2ApiError("task.create", 400, code, false, false),
+          outcomeUnknownCode: "MANUS_V2_CREATE_OUTCOME_UNKNOWN",
+        },
+        { markManusV2OutcomeUnknown, persistCreateFailure },
+      ),
+    ).resolves.toBe("deterministic");
+
+    expect(settleRejection).toHaveBeenCalledOnce();
+    expect(settleRejection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 7,
+        turnId: claim.turn.id,
+        leaseToken: claim.leaseToken,
+        code: "MANUS_V2_CREATE_REJECTED",
+        retryable: false,
+        providerCode: code,
+        providerStatus: 400,
+      }),
+    );
+    expect(markManusV2OutcomeUnknown).not.toHaveBeenCalled();
     expect(persistCreateFailure).not.toHaveBeenCalled();
   });
 

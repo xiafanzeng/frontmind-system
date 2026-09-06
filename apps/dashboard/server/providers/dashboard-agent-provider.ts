@@ -498,17 +498,19 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       validFilename(attachment.filename);
       let id = attachment.file_id;
       if (!id) {
-        const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(
+        // Original generated instructions include MIME parameters such as
+        // `text/plain; charset=utf-8`; retain that full type and exact bytes.
+        const match = /^data:([^,\r\n]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(
           attachment.file_data ?? "",
         );
         if (
           !match ||
           match[1].toLowerCase() !== attachment.mime_type?.toLowerCase()
         )
-          throw new Error("INLINE_FILE_INVALID");
+          fail("task.create", "INLINE_FILE_INVALID", false, 400);
         const bytes = Buffer.from(match[2], "base64");
         if (!bytes.length || bytes.length > 20 * 1024 * 1024)
-          throw new Error("INLINE_FILE_TOO_LARGE");
+          fail("task.create", "INLINE_FILE_TOO_LARGE", false, 400);
         id = (
           await this.uploadFile({
             filename: attachment.filename,
@@ -529,7 +531,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       files.push(file);
     }
     if (new Set(files.map((f) => f.filename)).size !== files.length)
-      throw new Error("ATTACHMENT_FILENAME_CONFLICT");
+      fail("task.create", "ATTACHMENT_FILENAME_CONFLICT", false, 400);
     await this.change(record, (runtime) => ({
       ...runtime,
       files: [

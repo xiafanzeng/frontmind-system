@@ -362,6 +362,79 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
     });
     expect(f.calls.some((c) => c.method === "PUT")).toBe(false);
   });
+  it("preserves the original knowledge workflow ZIP and charset-qualified instructions", async () => {
+    const f = fixture();
+    const originals = [
+      {
+        filename: "socratic-kb-builder-v5.skill.zip",
+        mime: "application/zip",
+        bytes: Buffer.from("original ZIP bytes"),
+      },
+      {
+        filename: "frontmind-kb-server-instructions.txt",
+        mime: "text/plain; charset=utf-8",
+        bytes: Buffer.from("原始企业信息与输出合同\n不可改变", "utf8"),
+      },
+    ];
+    const input = {
+      ...request,
+      attachments: originals.map(({ filename, mime, bytes }) => ({
+        filename,
+        mime_type: mime,
+        file_data: `data:${mime};base64,${bytes.toString("base64")}`,
+      })),
+    };
+    await f.client().createTask(input);
+    await f.client().createTask(input);
+    expect(f.files.size).toBe(2);
+    const record = [...f.rows.values()][0];
+    for (const original of originals) {
+      const file = [...f.files.values()].find(
+        (item) => item.filename === original.filename,
+      )!;
+      expect(file.bytes).toEqual(original.bytes);
+      expect(file.mime_type).toBe(original.mime);
+      expect(
+        record.runtime.files.find(
+          (item) => item.filename === original.filename,
+        ),
+      ).toMatchObject({
+        bytes: original.bytes.length,
+        sha256: digest(original.bytes),
+        contentType: original.mime,
+      });
+    }
+    expect(
+      f.calls.filter(
+        (item) => item.method === "POST" && item.path === "/v1/sessions",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.calls.filter(
+        (item) => item.method === "POST" && item.path.endsWith("/events"),
+      ),
+    ).toHaveLength(1);
+  });
+  it("classifies a mismatched inline MIME as an explicit pre-session rejection", async () => {
+    const f = fixture();
+    await expect(
+      f.client().createTask({
+        ...request,
+        attachments: [
+          {
+            filename: "instructions.txt",
+            mime_type: "text/plain; charset=utf-8",
+            file_data: `data:text/html; charset=utf-8;base64,${Buffer.from("original").toString("base64")}`,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: "INLINE_FILE_INVALID",
+      outcomeUnknown: false,
+      status: 400,
+    });
+    expect(f.calls.filter((item) => item.method === "POST")).toHaveLength(0);
+  });
   it("continues the same session with new original files and does not settle from an earlier end_turn", async () => {
     const f = fixture();
     await f.client().createTask(request);

@@ -347,6 +347,16 @@ when the same customer's original knowledge-build entitlement passes. Other
 modules, ownership, inactive-account restrictions and full-dashboard editing
 retain their original authorization.
 
+The original knowledge-base first turn exposed an adapter defect before any
+Agent, Environment, Session or user-message mutation: its generated instructions
+use `text/plain; charset=utf-8`, which the inline data-URL parser rejected.
+The parser now preserves MIME parameters and exact attachment bytes. Invalid
+inline attachments return an explicit local rejection rather than an unknown
+provider outcome. A transport regression covers both the original ZIP and
+charset-qualified UTF-8 instructions, exact hashes and single-session replay.
+The failed acceptance turn is retained and recovery uses the original reset
+workflow; this finding does not count as completed KB business acceptance.
+
 ## Website funding recovery completed — 2026-09-06
 
 Each original perspective used its normal “重新评估” control once. Both

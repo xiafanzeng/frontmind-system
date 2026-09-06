@@ -369,8 +369,38 @@
   margin-top: 11px;
   flex-wrap: wrap;
 }
-.cp-title-count {
-  max-width: 110px;
+.cp-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #476057;
+}
+.cp-check input {
+  accent-color: #365a3e;
+}
+.cp-revision {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e0e9d6;
+  font-size: 12px;
+}
+.cp-revision summary {
+  cursor: pointer;
+  color: #476057;
+}
+.cp-revision p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #7c8b70;
+}
+.cp-confirmation {
+  max-height: 44vh;
+  overflow-y: auto;
+  flex: none;
+}
+.cp-native-choices {
+  color: #526d46 !important;
 }
 .cp-modal-backdrop {
   position: fixed;

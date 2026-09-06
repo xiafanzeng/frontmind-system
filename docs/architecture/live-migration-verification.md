@@ -45,14 +45,16 @@ completed with Max, one upstream command, the customer's own credential and the
 frozen 55-document KB; its enterprise name, legal entity and two document citations
 matched the original knowledge. Details are in `docs/zhipu-high-max-findings.md`.
 
-The original content Workflow ZIP is present in the running image with SHA256
-`9b5fc88cf4d8589540f3e1233580eae0058424b8f2f39ba8a853b14df2926b8e`.
-Content-production state/actions and transport have focused automated coverage,
-but full article delivery remains unverified because the original E9 XTY service
-credential is absent. No stage is silently skipped. KOL real catalog sync also
-remains incomplete: the official API returned 401 and no valid credentials were
-found. The worker supports all catalog pages and no longer requires logos; no
-mock media or real publication order was introduced.
+The former content-workspace release selected obsolete v2.3.0. Its E9 credential
+blocker was an integration error, not a dependency of the user's requested release.
+The replacement uses the exact v4.11.0 expression-refinement archive, SHA256
+`fc73c4334d57dc7b4382cc6a0be3d9ffe498aa168273032b9d0d8a7fba462bcb`,
+29,222,014 bytes. Active Runtime 4.11 uses Provider v4, Pack 4.1, 14 native pauses,
+real P0 create/import jobs, and draft/edit/titles/deliver with 20 titles. The
+unnecessary Vault integration is removed. Deployment and live verification of
+this correction are recorded separately; prior browser checks do not prove
+full article delivery. KOL authentication and catalog status are documented in
+`docs/architecture/monitoring-runtime.md`; no mock catalog or real order is used.
 
 ## Historical production baseline restoration
 

@@ -53,7 +53,10 @@ describe("purpose-bound durable dispatch", () => {
     expect(
       generalChatDispatchSchema.safeParse({
         ...continuation,
-        contentProductionAction: { kind: "confirm_pack" },
+        contentProductionAction: {
+          kind: "confirm_core_positioning",
+          revision: 4,
+        },
       }).success,
     ).toBe(true);
     expect(
@@ -65,7 +68,10 @@ describe("purpose-bound durable dispatch", () => {
     expect(
       generalChatDispatchSchema.safeParse({
         ...newTask,
-        contentProductionAction: { kind: "confirm_pack" },
+        contentProductionAction: {
+          kind: "confirm_core_positioning",
+          revision: 4,
+        },
       }).success,
     ).toBe(false);
   });

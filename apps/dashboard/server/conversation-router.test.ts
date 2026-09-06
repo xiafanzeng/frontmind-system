@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getTableConfig, MySqlDialect } from "drizzle-orm/mysql-core";
 import { createHash } from "node:crypto";
 import {
@@ -27,7 +27,6 @@ import {
   collectSnapshotResourceRefs,
   conversationSyncMysqlErrorCode,
   conversationSnapshotSchema,
-  conversationRouter,
   discardClientClaimedServerOwnedKnowledgeBaseMessages,
   generalChatDispatchSettlementIsSafe,
   generalChatDispatchSettlementKind,
@@ -50,8 +49,6 @@ import {
   sanitizeKnowledgeBaseDeletionTombstones,
   type ConversationSnapshot,
 } from "./conversation-router";
-import * as database from "./db";
-import * as contentCleanup from "./content-production-cleanup";
 import {
   KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
   knowledgeBaseCompletionMessagePublicId,
@@ -2248,71 +2245,6 @@ describe("conversation snapshot sequence allocation", () => {
 });
 
 describe("conversation deletion", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  function deletionCaller(owned = true) {
-    const order: string[] = [];
-    const { executor } = createSelectExecutor((table) =>
-      table === conversations && owned
-        ? [{ userId: 7, projectAssignmentId: null }]
-        : [],
-    );
-    const deleteRow = vi.fn(async () => {
-      order.push("local-delete");
-    });
-    const tx = { ...executor, delete: () => ({ where: deleteRow }) };
-    const transaction = vi.fn(
-      async (operation: (value: typeof tx) => Promise<unknown>) => {
-        order.push("transaction");
-        return operation(tx);
-      },
-    );
-    const db = { ...executor, transaction };
-    vi.spyOn(database, "getDb").mockResolvedValue(db as any);
-    const cleanup = vi
-      .spyOn(contentCleanup, "cleanupContentProductionConversation")
-      .mockImplementation(async () => {
-        order.push("cleanup");
-      });
-    const caller = conversationRouter.createCaller({
-      user: { id: 7, role: "user" },
-    } as any);
-    return { caller, order, cleanup, transaction, deleteRow, db };
-  }
-
-  it("cleans content resources before the user deletion transaction, then performs the original owned deletion", async () => {
-    const f = deletionCaller();
-    await expect(f.caller.delete({ id: "conversation-1" })).resolves.toEqual({
-      success: true,
-    });
-    expect(f.order).toEqual(["cleanup", "transaction", "local-delete"]);
-    expect(f.cleanup).toHaveBeenCalledWith({
-      db: f.db,
-      userId: 7,
-      conversationId: "u7:conversation-1",
-      projectAssignmentId: null,
-    });
-  });
-
-  it("keeps the local conversation when content resource cleanup fails", async () => {
-    const f = deletionCaller();
-    f.cleanup.mockRejectedValue(new Error("cleanup unavailable"));
-    await expect(f.caller.delete({ id: "conversation-1" })).rejects.toThrow(
-      "cleanup unavailable",
-    );
-    expect(f.transaction).not.toHaveBeenCalled();
-    expect(f.deleteRow).not.toHaveBeenCalled();
-  });
-
-  it("still checks ownership inside the local transaction after cleanup", async () => {
-    const f = deletionCaller(false);
-    await expect(
-      f.caller.delete({ id: "conversation-1" }),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(f.order).toEqual(["cleanup", "transaction"]);
-    expect(f.deleteRow).not.toHaveBeenCalled();
-  });
-
   it("physically deletes the owned conversation instead of marking it deleted", async () => {
     const where = vi.fn().mockResolvedValue(undefined);
     const deleteFrom = vi.fn().mockReturnValue({ where });

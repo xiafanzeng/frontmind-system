@@ -27,7 +27,7 @@ COPY --from=build --chown=10001:10001 /app/apps/dashboard/node_modules ./node_mo
 COPY --from=build --chown=10001:10001 /app/node_modules/.pnpm /app/node_modules/.pnpm
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/dist ./dist
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/drizzle ./drizzle
-COPY --from=build --chown=10001:10001 /app/apps/dashboard/FrontMind_Content_Workflow_v2.3.0_Final_Clean_Copy_2.zip ./FrontMind_Content_Workflow_v2.3.0_Final_Clean_Copy_2.zip
+COPY --from=build --chown=10001:10001 /app/apps/dashboard/FrontMind_Content_Workflow_v4.11.0_Final.zip ./FrontMind_Content_Workflow_v4.11.0_Final.zip
 COPY --from=build --chown=10001:10001 /app/apps/dashboard/scripts/validate-production-runtime.mjs ./scripts/validate-production-runtime.mjs
 COPY --from=build --chown=10001:10001 /ms-playwright /ms-playwright
 COPY --from=build --chown=10001:10001 /app/packages /app/packages

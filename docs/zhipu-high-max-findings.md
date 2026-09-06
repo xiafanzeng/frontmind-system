@@ -55,7 +55,7 @@
 | Dashboard 应答逻辑 | 跟随客户 Key；客户 3 当前 Max（v5） | 原同会话两轮、保存和确认已验收 |
 | Dashboard 通用 Agent（客户 / 交付管理员） | 跟随操作者 Key；客户 3 为 Max（v5），交付管理员 4 为 Max（v1） | 之前验收的 High 会话继续 High，新入口不会把旧会话改成 Max |
 | Dashboard 企业问答智能体 | 跟随客户 Key；客户 3 当前 Max（v5） | 已用真实客户页面完成一次 Max 短问答；原生会话正常完成，回答的企业名称、注册主体及两处引用与 55 篇已发布知识原文一致 |
-| Dashboard 内容制作 | 跟随客户 Key；客户 3 当前 Max（v5） | 本轮接入原 v2.3 ZIP；E9 另调用原 ZIP 的专用 XTY 服务，并非 Zhipu effort 设置；缺少 E9 专用密钥，未验收完整产物 |
+| Dashboard 内容制作 | 跟随客户 Key；客户 3 当前 Max（v5） | 已纠正为用户指定的 v4.11.0 表达修订版（Runtime 4.11 / Pack 4.1）；活动流程无 HarnessGEO/XTY/E9 密钥依赖。原发行作者使用 High 做过实测，Dashboard 仍遵循账号 High/Max 设置；本次完整产物验收另记 |
 | Dashboard 官网制作 / 官网修订 | 跟随客户 Key；客户 3 当前 Max（v5） | SiteOps 冻结设置；本次按用户要求不验收建站；生产运行记录为 0 |
 | Dashboard 公众号 / 小红书制作 | 跟随客户 Key；客户 3 当前 Max（v5） | SiteOps 后续任务优先继承父任务冻结设置；无本轮实际运行记录 |
 | 问题监控、媒体发布、原 Jenova 跟踪、非 AI 管理操作 | 不适用 | 分别沿用 Moli、KOL、Jenova 等原服务，不使用 Zhipu High/Max |
@@ -64,10 +64,14 @@ Website 的生产 `WEBSITE_ZHIPU_EFFORT=high` 由 Dashboard 代理在创建时�
 
 企业问答补充验收：`f1513870-add6-4506-8f87-b799c48fd448`，`glm-5.3 / max / standard`，一次原 UI 提交、一次上游指令、无重试新建。知识库 v1 的 55 篇资料以冻结附件提供；引用 `0001.md`《企业概况》和 `0002.md`《注册主体与经营资质》与原文一致。此简单问答成功不能替代 160 条研究任务的稳定性结论。
 
-内容制作的 E9 补充：服务器上的密钥不会自动进入远端 Runner，适配器现补齐官方 Vault 接入路径。配置正式 `FRONTMIND_HARNESSGEO_API_KEY` 后，新内容任务以原冻结 Zhipu 身份创建专用 Vault，仅向 `api.xty.app` 请求头注入；普通通用 Agent 和企业问答不挂载该凭据。原 ZIP、E9 模型和阶段保持不变。目前生产仍缺少正式 E9 密钥，完整文章交付未验收，不能把凭据接入测试当作 High/Max 业务成功。
-
 代码依据：Website `server/geo/broker.ts` 的六类任务，Dashboard `presales-v2-store.ts` / `providers/website-agent-provider.ts` 的 Website 冻结参数；`credential-agent-client.ts` 和 `general-agent-runtime.ts` 的账号 Key 及历史 profile；`siteops/service.ts` 的 SiteOps 凭据继承；`providers/dashboard-agent-provider.ts` 的 `speed: standard`。生产只读记录未导出密钥。
 
 [官方 OpenAPI](https://docs.bigmodel.cn/openapi/openapi-managed-agents.json) 定义 `model.effort` 为 `low / high / max`，`model.speed` 为 `standard`。省略 effort 时，`glm-5.3` 默认 Max；它们是推理档位，不是旧 Manus 的 Base/Pro 套餐。
 
 [官方 FAQ](https://docs.bigmodel.cn/cn/managed-agents/faq.md)；[Agent 配置](https://docs.bigmodel.cn/cn/managed-agents/agent-setup.md)。后续若更换上游，应保留原知识库、Skill、业务解析和可用结果接收方式，并以同一任务的实际完整产物比较；不要仅以某一次 API 返回成功判断替换方案可用。
+
+## 内容制作版本纠正
+
+先前接入仓库中 v2.3.0 ZIP 是版本选择错误，把 E9 专用密钥当作最新流程阻塞也不正确。现以用户指定任务的 v4.11.0 表达修订版为准：原 ZIP SHA256 `fc73c4334d57dc7b4382cc6a0be3d9ffe498aa168273032b9d0d8a7fba462bcb`，29,222,014 字节。适配实际 `job_kind`、`stage`、`revision` 和 14 个原生暂停；P0 创建/导入都是 Runner Job，正文按 draft → edit → titles → deliver，固定 20 个标题。已撤掉误加的 Vault 集成。
+
+当前 Dashboard 源码不存在 WeKnora 配置或调用入口。企业问答、通用 Agent、内容制作与知识库均使用账号统一 Key；管理员“官网管理”的 Website 专用 Key 仍服务独立官网任务，不是重复企业问答配置。

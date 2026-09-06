@@ -83,10 +83,48 @@ the current names-and-prices requirement.
 The supplied source document is **软文街API接口文档2.0_已整合订单列表.docx**.
 It documents authentication, resource pagination, order submission, order
 queries, and result callbacks. `is_zimeiti=2` means news and `=1` self media.
-Its credential examples contain placeholders, so the document alone cannot
-authenticate a live sync. A signed-in website session is not a worker API
-credential. Live inventory counts must come from a completed authenticated
-sync, never from the documentation's example count or preview fixtures.
+Its authentication endpoint is `POST https://api.kol.cn/api/auth/authenticate`.
+All six request fields are required: `mobile`, `password`, `identity`,
+`captcha_token`, `captcha`, and `api_key`. Only the account and password examples
+are explicitly placeholders ("实际登录账号" and "实际登录密码"). The document
+supplies `advertiser` for the identity and both captcha examples, and a complete
+32-character hexadecimal `api_key` example; do not reproduce that value in
+source, logs, or customer output. The document does not establish whether these
+examples are universal or account-specific, explain a captcha acquisition
+endpoint, or require a separately requested API key. Do not claim that an extra
+API-key application is necessary before trying the documented flow with
+legitimately supplied KOL account credentials.
+
+The input `api_key` and the returned `data.token` are distinct fields. A
+successful authentication returns the token used for resource and order APIs;
+those subsequent requests do not require the six login fields again. The
+document explicitly says "token 接口只需获取一次，并且全局有效。" and
+"调用其他接口时，如返回 status=401，需要重新获取 token。" Thus a token is reused
+across subsequent API calls; the same text does not promise permanent validity
+or cross-account access. No fixed lifetime is specified. If authentication
+sets a `User-Agent`, subsequent calls must use the same value, as the document
+also specifies.
+
+The client supports either six-field login with a cached token and one safe GET
+refresh on authentication rejection, or a supplied server-only access token.
+It respects a token's JWT `exp` when present. A supplied token alone never
+silently switches to login. When all six login fields are explicitly configured
+alongside a token, the client first reuses that token; an actual safe GET 401
+permits one login refresh and one retry of that GET. A 403 or incomplete login
+configuration does not trigger that fallback. Reissuing a paid order is
+never an automatic authentication retry. On 2026-09-06 the user supplied the
+KOL account credentials explicitly. One authentication from the production
+host succeeded with HTTP/status 200, using the document's `api_key` example
+and its three `advertiser` values; no separate API-key application was needed.
+The issued token and original login inputs are held only in root-readable
+server configuration/private files. The first authenticated resource page
+returned 50 real name/`price` records and reported 91,832 resources across
+1,837 pages. That is a provider pagination observation, not a completed-sync
+count: the full catalog synchronization is being enabled and verified. No
+publication order was submitted. A signed-in browser session is not a
+configured worker API credential. Final live inventory counts must come from
+the completed authenticated sync, never from documentation examples or preview
+fixtures.
 
 Customer publication history is part of the publishing workbench at
 `/publishing?tab=records`. It retains the original search, media-type/status/date

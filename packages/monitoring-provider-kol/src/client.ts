@@ -36,7 +36,11 @@ export class KolClient implements KolProviderPort {
   private readonly userAgent: string;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly tokenCache: KolTokenCache;
-  private readonly authenticationMode: "access_token" | "login";
+  private readonly authenticationMode:
+    | "access_token"
+    | "access_token_with_login"
+    | "login";
+  private accessTokenRejected = false;
 
   constructor(private readonly options: KolClientOptions) {
     this.mode = options.mode;
@@ -68,8 +72,14 @@ export class KolClient implements KolProviderPort {
       options.sleep ??
       ((milliseconds) =>
         new Promise((resolve) => setTimeout(resolve, milliseconds)));
+    const hasLoginCredentials = [
+      options.apiKey, options.mobile, options.password,
+      options.identity, options.captcha, options.captchaToken,
+    ].every((value) => value?.trim());
     this.authenticationMode = options.accessToken?.trim()
-      ? "access_token"
+      ? hasLoginCredentials
+        ? "access_token_with_login"
+        : "access_token"
       : "login";
     this.tokenCache = new KolTokenCache((signal) => this.authenticate(signal), {
       refreshSkewMs: options.tokenRefreshSkewMs ?? 60_000,
@@ -278,7 +288,9 @@ export class KolClient implements KolProviderPort {
 
   private async authenticate(signal?: AbortSignal): Promise<string> {
     const accessToken = this.options.accessToken?.trim();
-    if (accessToken) return accessToken;
+    // Prefer the supplied token until an actual safe GET rejects it. JWT age
+    // alone must not turn a configured token into an unsolicited login.
+    if (accessToken && !this.accessTokenRejected) return accessToken;
     const credentials = {
       apiKey: this.options.apiKey?.trim(),
       mobile: this.options.mobile?.trim(),
@@ -389,8 +401,11 @@ export class KolClient implements KolProviderPort {
       if (
         authenticationRejected &&
         authAttempt === 0 &&
-        this.authenticationMode === "login"
+        (this.authenticationMode === "login" ||
+          (this.authenticationMode === "access_token_with_login" &&
+            authenticationStatus(response.status, status) === 401))
       ) {
+        this.accessTokenRejected = true;
         this.tokenCache.invalidate();
         continue;
       }
@@ -398,7 +413,7 @@ export class KolClient implements KolProviderPort {
         this.tokenCache.block();
         throw new KolProviderError(
           "authentication_blocked",
-          this.authenticationMode === "access_token"
+          this.authenticationMode !== "login" && !this.accessTokenRejected
             ? "KOL Worker access token was rejected; automatic login fallback is forbidden"
             : "KOL authentication failed after a safe GET token refresh",
           {

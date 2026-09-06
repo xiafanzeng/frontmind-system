@@ -379,6 +379,7 @@ function clientFor(
   operation?: AgentOperation,
   task?: AgentTask,
   intentId?: string,
+  contentProductionAction?: ContentProductionAction,
 ) {
   const purpose = task ? frozenGeneralAgentPurpose(task, accountUserId) : null;
   return createCredentialAgentClient(credential, {
@@ -391,10 +392,14 @@ function clientFor(
       : {}),
     ...(purpose?.purpose === "content_production"
       ? {
-          contentProduction: true,
           systemContext: contentProductionSystemContext(purpose),
           systemAttachments: contentProductionSystemAttachments(purpose),
           recoverableStatusArtifact: isContentWorkflowStateFilename,
+          ...(contentProductionAction
+            ? {
+                turnContext: `The customer submitted this contentProductionAction for the current Runner revision: ${JSON.stringify(contentProductionAction)}. Apply only this original business action with its attached user material; preserve the original user text above.`,
+              }
+            : {}),
         }
       : {}),
     ...(operation
@@ -3363,6 +3368,7 @@ async function reservePersistedGeneralChatTurn(input: {
   contentProduction?: ContentProductionInput;
   contentProductionAction?: ContentProductionAction;
   availableContentActions?: ContentProductionAction["kind"][];
+  contentRunnerRevision?: number | null;
 }) {
   const persistedConversationId = persistedConversationResourceId(
     input.userId,
@@ -3557,7 +3563,10 @@ async function reservePersistedGeneralChatTurn(input: {
   const turnId = randomUUID();
   if (
     input.contentProductionAction &&
-    !input.availableContentActions?.includes(input.contentProductionAction.kind)
+    (!input.availableContentActions?.includes(
+      input.contentProductionAction.kind,
+    ) ||
+      input.contentProductionAction.revision !== input.contentRunnerRevision)
   ) {
     throw new ChatV2HttpError("CONTENT_PRODUCTION_CONFIRMATION_CONFLICT", 409);
   }
@@ -3987,6 +3996,7 @@ async function sendProviderMessage(input: {
     input.operation,
     input.task,
     input.turnId,
+    input.contentProductionAction,
   );
   const reconcileReservedSend = async (evidence: Record<string, unknown>) => {
     if (evidence.status === "acknowledged") return true;
@@ -5231,6 +5241,7 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
         purpose: purpose?.purpose,
         contentProductionAction: value.contentProductionAction,
         availableContentActions: contentProduction?.availableActions,
+        contentRunnerRevision: contentProduction?.runnerRevision,
         continuation: true,
       }),
     );

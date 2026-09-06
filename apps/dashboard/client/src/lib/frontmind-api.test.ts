@@ -1740,11 +1740,11 @@ describe("ordinary chat local v2 contract", () => {
     await createTask([{ role: "user", content: "确认资料包" }], {
       ...options,
       taskId: "production-task",
-      contentProductionAction: { kind: "confirm_pack" },
+      contentProductionAction: { kind: "confirm_core_positioning", revision: 7 },
     });
     const body = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(body).toMatchObject({
-      contentProductionAction: { kind: "confirm_pack" },
+      contentProductionAction: { kind: "confirm_core_positioning", revision: 7 },
     });
     expect(body).not.toHaveProperty("purpose");
     expect(body).not.toHaveProperty("contentProduction");

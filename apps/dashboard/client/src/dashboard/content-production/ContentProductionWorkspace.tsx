@@ -22,11 +22,12 @@ import {
   type TaskResponse,
 } from "@/lib/frontmind-api";
 import type {
-  ContentProductionAction,
   ContentProductionDto,
   ContentProductionInput,
+  ContentProductionJobKind,
   ContentProductionMode,
 } from "@shared/content-production";
+import ContentProductionConfirmation from "./ContentProductionConfirmation";
 import "./content-production.css";
 
 export const CONTENT_MODES: {
@@ -45,14 +46,9 @@ export const CONTENT_MODES: {
     description: "在已有资料包基础上，更新市场信息、品牌定位与表达。",
   },
   {
-    value: "foundation_article",
-    title: "创建 P0 品牌文章",
-    description: "以企业资料为依据，完成品牌基础文章的蓝图、正文和交付。",
-  },
-  {
-    value: "import_foundation",
-    title: "导入 P0 品牌文章",
-    description: "接入已有品牌底稿，整理为后续内容制作可用的材料。",
+    value: "p0",
+    title: "创建或导入 P0",
+    description: "确认资料包后，选择新建品牌深度文章或接入已有 P0。",
   },
   {
     value: "single_article",
@@ -62,62 +58,96 @@ export const CONTENT_MODES: {
 ];
 
 type LaneStep = { title: string; detail: string; position: number };
-export function contentProductionLane(mode: ContentProductionMode): LaneStep[] {
-  if (mode === "import_foundation")
-    return [
-      {
-        title: "导入已有底稿",
-        detail: "整理上传的 P0 文章，作为后续内容制作的参考",
-        position: 1,
-      },
-    ];
+export function contentProductionLane(
+  mode: ContentProductionMode,
+  jobKind?: ContentProductionJobKind | null,
+): LaneStep[] {
+  const packSteps = [
+    { title: "企业资料", detail: "接入企业材料，明确品牌与任务", position: 1 },
+    { title: "市场研究", detail: "研究市场与可比较的选择", position: 3 },
+    {
+      title: "确认比较对象",
+      detail: "区分比较对象、同类举例与不纳入的对象",
+      position: 4,
+    },
+    {
+      title: "确认核心定位",
+      detail: "按确认的范围综合定位与选择理由",
+      position: 5,
+    },
+    {
+      title: "交付 Reference Pack",
+      detail: "导出定位已确认的新版本资料包",
+      position: 7,
+    },
+  ];
   if (mode === "new_reference_pack" || mode === "refresh_reference_pack")
+    return packSteps;
+  const routeSteps = [
+    {
+      title: "选择 Reference Pack",
+      detail: "明确使用已有资料包或先创建新资料包",
+      position: 1,
+    },
+    ...(["reference_pack", "reference_pack_refresh"].includes(jobKind ?? "")
+      ? packSteps.slice(1)
+      : []),
+  ];
+  if (
+    mode === "p0" ||
+    mode === "foundation_article" ||
+    mode === "import_foundation"
+  )
     return [
-      { title: "企业资料", detail: "接入知识库或已有材料", position: 1 },
+      ...routeSteps,
       {
-        title: "研究与品牌定位",
-        detail: "市场、事实、表达与视觉",
-        position: 3,
+        title: "创建或导入 P0",
+        detail: "使用已确认的定位与比较范围",
+        position: 8,
       },
-      { title: "确认资料摘要", detail: "确认品牌重点与写作方向", position: 8 },
       {
-        title: "交付 Reference Pack",
-        detail: "保存可复用的企业资料包",
+        title: "选择例文",
+        detail: "选择例文文风或工作流写作规范",
         position: 9,
+      },
+      {
+        title: "确认 P0 蓝图",
+        detail: "确认结构、材料与已有文章的编辑方案",
+        position: 10,
+      },
+      { title: "正文与编辑", detail: "完成品牌文章和 20 个标题", position: 11 },
+      {
+        title: "交付 P0 与资料包",
+        detail: "Markdown、HTML、DOCX 和新版 Reference Pack",
+        position: 12,
       },
     ];
   return [
+    ...routeSteps,
     {
-      title: "资料与正式问题",
-      detail:
-        mode === "foundation_article"
-          ? "品牌基础文章 · P14"
-          : "企业材料、监控答案与信源",
-      position: 10,
+      title: "正式问题与应答要求",
+      detail: "本题的两篇 AI 答案、企业要求与品牌认知",
+      position: 13,
     },
-    ...(mode === "single_article"
-      ? [
-          {
-            title: "研究与文章类型",
-            detail: "根据研究选择推荐或备选",
-            position: 11,
-          },
-        ]
-      : []),
-    { title: "确认文章蓝图", detail: "结构、品牌角度与视觉计划", position: 13 },
-    { title: "正文与编辑", detail: "整篇写作、事实修订与视觉", position: 14 },
-    { title: "候选优化", detail: "比较候选，保留稳定的正本", position: 18 },
-    { title: "标题与最终交付", detail: "标题集、DOCX 和 HTML", position: 19 },
+    {
+      title: "选择文章类型",
+      detail: "阅读分析后，明确选择 P01–P06",
+      position: 15,
+    },
+    { title: "选择例文", detail: "确认文章文风与内容参考", position: 16 },
+    {
+      title: "问题定位",
+      detail: "P01 / P02 确认本题的差异化定位",
+      position: 17,
+    },
+    { title: "确认文章蓝图", detail: "结构、品牌角度与材料使用", position: 18 },
+    {
+      title: "正文与最终交付",
+      detail: "正文、编辑、20 个标题、DOCX 和 HTML",
+      position: 19,
+    },
   ];
 }
-
-const ACTION_LABELS: Record<ContentProductionAction["kind"], string> = {
-  confirm_pack: "确认摘要，生成资料包",
-  provide_research_inputs: "提交监控答案与信源",
-  confirm_pattern: "确认文章类型",
-  confirm_blueprint: "确认蓝图，开始正文",
-  set_title_count: "生成标题并完成交付",
-};
 
 function fileList(files: File[]) {
   return files.map((file) => file.name).join("、");
@@ -128,13 +158,12 @@ function ContentProductionInner() {
     useConversation();
   const { sendMessage } = useSendMessage();
   const [showCreate, setShowCreate] = useState(false);
-  const [mode, setMode] = useState<ContentProductionMode>("new_reference_pack");
+  const [mode, setMode] = useState<ContentProductionMode | null>(null);
   const [enterpriseName, setEnterpriseName] = useState("");
   const [knowledgeSource, setKnowledgeSource] = useState<"published" | "files">(
     "published",
   );
-  const [entry, setEntry] =
-    useState<NonNullable<ContentProductionInput["entry"]>>("product_scenario");
+  const [questionId, setQuestionId] = useState("");
   const [question, setQuestion] = useState("");
   const [materials, setMaterials] = useState<File[]>([]);
   const [pendingStart, setPendingStart] = useState<{
@@ -150,12 +179,6 @@ function ContentProductionInner() {
   const [task, setTask] = useState<TaskResponse | null>(null);
   const [notice, setNotice] = useState("");
   const [refreshing, setRefreshing] = useState(false);
-  const [actionPending, setActionPending] = useState(false);
-  const [selectedPattern, setSelectedPattern] = useState("");
-  const [blueprintEdits, setBlueprintEdits] = useState("");
-  const [titleCount, setTitleCount] = useState(5);
-  const [answers, setAnswers] = useState<File[]>([]);
-  const [sources, setSources] = useState<File[]>([]);
   const currentId = useRef(activeConversation?.id);
   const refreshSequence = useRef(0);
   currentId.current = activeConversation?.id;
@@ -166,10 +189,12 @@ function ContentProductionInner() {
     : undefined;
   const activeMode = progress?.mode ?? input?.mode ?? "new_reference_pack";
   const modeLabel = CONTENT_MODES.find(
-    (item) => item.value === activeMode,
+    (item) =>
+      item.value === activeMode ||
+      (item.value === "p0" &&
+        ["foundation_article", "import_foundation"].includes(activeMode)),
   )?.title;
   const busy =
-    actionPending ||
     Boolean(pendingStart) ||
     ["running", "pending"].includes(activeConversation?.status ?? "");
 
@@ -212,10 +237,6 @@ function ContentProductionInner() {
   useEffect(() => {
     setTask(null);
     setNotice("");
-    setSelectedPattern("");
-    setBlueprintEdits("");
-    setAnswers([]);
-    setSources([]);
   }, [activeConversation?.id]);
   useEffect(() => {
     void refresh();
@@ -242,20 +263,14 @@ function ContentProductionInner() {
   function startTask(event: React.FormEvent) {
     event.preventDefault();
     const name = enterpriseName.trim();
-    if (!name || (mode === "single_article" && !question.trim())) return;
-    if (knowledgeSource === "files" && materials.length === 0) {
-      setNotice("请选择本次使用的企业资料或 Reference Pack。");
-      return;
-    }
     if (
-      ["refresh_reference_pack", "import_foundation"].includes(mode) &&
-      materials.length === 0
-    ) {
-      setNotice(
-        mode === "import_foundation"
-          ? "请选择要导入的 P0 品牌文章。"
-          : "请选择需要刷新的已有 Reference Pack。",
-      );
+      !mode ||
+      !name ||
+      (mode === "single_article" && !question.trim() && !questionId.trim())
+    )
+      return;
+    if (mode === "refresh_reference_pack" && materials.length === 0) {
+      setNotice("请选择需要刷新的已有 Reference Pack。");
       return;
     }
     const config: ContentProductionInput = {
@@ -264,7 +279,10 @@ function ContentProductionInner() {
       knowledgeSource,
       monitoringAnswerAssetIds: [],
       ...(mode === "single_article"
-        ? { entry, question: question.trim() }
+        ? {
+            question: question.trim(),
+            ...(questionId.trim() ? { questionId: questionId.trim() } : {}),
+          }
         : {}),
     };
     const action = CONTENT_MODES.find((item) => item.value === mode)!.title;
@@ -273,8 +291,15 @@ function ContentProductionInner() {
       `本次任务：${action}`,
       knowledgeSource === "published"
         ? "使用我的已发布企业知识库。"
-        : "使用本次上传的企业材料。",
-      question.trim() && `正式问题：${question.trim()}`,
+        : materials.length
+          ? "使用本次上传的企业材料。"
+          : "企业材料或 Reference Pack 将在后续原流程要求时上传，请先展示本任务的原始路由或资料输入步骤。",
+      mode === "single_article" &&
+        question.trim() &&
+        `正式问题：${question.trim()}`,
+      mode === "single_article" &&
+        questionId.trim() &&
+        `问题编号：${questionId.trim()}`,
       materials.length > 0 && `附件：${fileList(materials)}`,
       "请按内容制作流程开始，在需要我确认的内容阶段展示结果。",
     ]
@@ -292,68 +317,10 @@ function ContentProductionInner() {
     setMaterials([]);
   }
 
-  async function confirm(kind: ContentProductionAction["kind"]) {
-    let action: ContentProductionAction;
-    let prompt: string;
-    let files: File[] = [];
-    if (kind === "confirm_pack") {
-      action = { kind };
-      prompt = "我确认当前资料摘要，请生成 Reference Pack。";
-    } else if (kind === "provide_research_inputs") {
-      if (!answers.length || !sources.length) {
-        setNotice("请分别选择本题的监控答案和引用信源文件。");
-        return;
-      }
-      action = { kind };
-      files = [...answers, ...sources];
-      prompt = `本题的监控答案文件：${fileList(answers)}\n引用信源文件：${fileList(sources)}\n请读取这些资料，继续本题研究。`;
-    } else if (kind === "confirm_pattern") {
-      const pattern = selectedPattern.trim().toUpperCase();
-      if (pattern && !/^P\d{2}$/.test(pattern)) {
-        setNotice(
-          "请填写研究结果提供的文章类型编号，例如 P02；留空则接受推荐。",
-        );
-        return;
-      }
-      action = { kind, ...(pattern ? { selectedPattern: pattern } : {}) };
-      prompt = pattern
-        ? `我选择研究结果中的 ${pattern}，请继续形成文章蓝图。`
-        : "我接受研究结果推荐的文章类型，请继续形成文章蓝图。";
-    } else if (kind === "confirm_blueprint") {
-      action = {
-        kind,
-        ...(blueprintEdits.trim()
-          ? { blueprintEdits: blueprintEdits.trim() }
-          : {}),
-      };
-      prompt = blueprintEdits.trim()
-        ? `请按这些调整确认文章蓝图并继续正文：\n${blueprintEdits.trim()}`
-        : "我确认当前文章蓝图，请继续正文制作。";
-    } else {
-      action = { kind, titleCount };
-      prompt = `请基于最终正文生成 ${titleCount} 个不同角度的标题，并完成最终交付。`;
-    }
-    setActionPending(true);
-    setNotice("");
-    try {
-      await sendMessage(prompt, files, { contentProductionAction: action });
-      setAnswers([]);
-      setSources([]);
-    } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "提交未完成，请查看任务回复。",
-      );
-    } finally {
-      setActionPending(false);
-    }
-  }
-
-  const steps = contentProductionLane(activeMode);
+  const steps = contentProductionLane(activeMode, progress?.jobKind);
   const position = progress?.progressPosition ?? 0;
   const finished = position >= 20;
-  const importMode = activeMode === "import_foundation";
   const turnFailed = ["error", "failed"].includes(task?.status ?? "");
-  const importTurnComplete = importMode && task?.status === "completed";
   const currentStep =
     position === 0
       ? 0
@@ -374,6 +341,7 @@ function ContentProductionInner() {
           className="cp-primary"
           onClick={() => {
             setNotice("");
+            setMode(null);
             setShowCreate(true);
           }}
           disabled={!hydrated}
@@ -415,7 +383,7 @@ function ContentProductionInner() {
               {progress?.knowledgeBase
                 ? `企业知识库 v${progress.knowledgeBase.version} · ${progress.knowledgeBase.documentCount} 份资料`
                 : input?.knowledgeSource === "files"
-                  ? "使用本次上传材料"
+                  ? "使用上传材料，可在对话中继续补充"
                   : "资料随任务保存，后续步骤继续使用。"}
             </p>
           </div>
@@ -443,11 +411,9 @@ function ContentProductionInner() {
                             ? "本轮执行失败，请查看回复"
                             : busy
                               ? "正在执行"
-                              : importTurnComplete
-                                ? "本轮整理已结束，请查看回复与附件"
-                                : progress?.source === "runner_job_state"
-                                  ? "当前阶段"
-                                  : "准备开始"}
+                              : progress?.source === "runner_job_state"
+                                ? "当前阶段"
+                                : "准备开始"}
                       </span>
                     )}
                   </div>
@@ -459,13 +425,7 @@ function ContentProductionInner() {
             })}
           </ol>
           <div className="cp-rail-footer">
-            <span>
-              {importMode
-                ? "导入已有底稿作为后续参考"
-                : finished
-                  ? "本次任务已完成"
-                  : "阶段依次向下推进"}
-            </span>
+            <span>{finished ? "本次任务已完成" : "阶段依次向下推进"}</span>
             <button
               aria-label="刷新制作阶段"
               onClick={() => void refresh()}
@@ -496,93 +456,20 @@ function ContentProductionInner() {
               {notice}
             </div>
           )}
-          {progress?.availableActions.length ? (
-            <div className="cp-confirmation">
-              <strong>确认后继续下一步</strong>
-              <p>先阅读下方回复；需要调整时，可以直接在对话中说明。</p>
-              {progress.availableActions.includes(
-                "provide_research_inputs",
-              ) && (
-                <div className="cp-file-grid">
-                  <label className="cp-field">
-                    本题监控答案
-                    <input
-                      type="file"
-                      multiple
-                      accept=".xlsx,.csv,.json"
-                      onChange={(event) =>
-                        setAnswers(Array.from(event.target.files ?? []))
-                      }
-                    />
-                  </label>
-                  <label className="cp-field">
-                    引用信源文件
-                    <input
-                      type="file"
-                      multiple
-                      accept=".xlsx,.csv,.json"
-                      onChange={(event) =>
-                        setSources(Array.from(event.target.files ?? []))
-                      }
-                    />
-                  </label>
-                </div>
-              )}
-              {progress.availableActions.includes("confirm_pattern") && (
-                <label className="cp-field">
-                  采用回复中的备选（可选）
-                  <input
-                    value={selectedPattern}
-                    onChange={(event) => setSelectedPattern(event.target.value)}
-                    placeholder="留空采用推荐；或填写 P02 等合法备选"
-                  />
-                </label>
-              )}
-              {progress.availableActions.includes("confirm_blueprint") && (
-                <label className="cp-field">
-                  蓝图调整（可选）
-                  <textarea
-                    value={blueprintEdits}
-                    onChange={(event) => setBlueprintEdits(event.target.value)}
-                    placeholder="章节顺序、品牌角度或其他具体调整"
-                    rows={2}
-                  />
-                </label>
-              )}
-              {progress.availableActions.includes("set_title_count") && (
-                <label className="cp-field cp-title-count">
-                  标题数量
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={titleCount}
-                    onChange={(event) =>
-                      setTitleCount(
-                        Math.min(
-                          20,
-                          Math.max(1, Number(event.target.value) || 1),
-                        ),
-                      )
-                    }
-                  />
-                </label>
-              )}
-              <div className="cp-confirm-actions">
-                {progress.availableActions.map((kind) => (
-                  <button
-                    key={kind}
-                    className="cp-primary"
-                    disabled={busy}
-                    onClick={() => void confirm(kind)}
-                  >
-                    {busy && <Loader2 size={14} className="animate-spin" />}
-                    {ACTION_LABELS[kind]}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          {progress && (
+            <ContentProductionConfirmation
+              key={`${activeConversation?.id}:${progress.runnerRevision}:${progress.confirmation}`}
+              progress={progress}
+              busy={busy}
+              onAction={async (prompt, files, action) => {
+                setNotice("");
+                await sendMessage(prompt, files, {
+                  contentProductionAction: action,
+                });
+              }}
+              onNotice={setNotice}
+            />
+          )}
           {activeConversation ? (
             <div className="cp-chat">
               <Home
@@ -606,7 +493,10 @@ function ContentProductionInner() {
               </p>
               <button
                 className="cp-primary"
-                onClick={() => setShowCreate(true)}
+                onClick={() => {
+                  setMode(null);
+                  setShowCreate(true);
+                }}
                 disabled={!hydrated}
               >
                 新建内容任务
@@ -636,17 +526,6 @@ function ContentProductionInner() {
               </button>
             </header>
             <form onSubmit={startTask}>
-              <label className="cp-field">
-                企业名称
-                <input
-                  autoFocus
-                  required
-                  maxLength={200}
-                  value={enterpriseName}
-                  onChange={(event) => setEnterpriseName(event.target.value)}
-                  placeholder="输入本次任务的企业或品牌名称"
-                />
-              </label>
               <fieldset className="cp-mode-list">
                 <legend>本次要完成什么？</legend>
                 {CONTENT_MODES.map((item) => (
@@ -669,6 +548,17 @@ function ContentProductionInner() {
                 ))}
               </fieldset>
               <label className="cp-field">
+                企业名称
+                <input
+                  autoFocus
+                  required
+                  maxLength={200}
+                  value={enterpriseName}
+                  onChange={(event) => setEnterpriseName(event.target.value)}
+                  placeholder="输入本次任务的企业或品牌名称"
+                />
+              </label>
+              <label className="cp-field">
                 企业资料来源
                 <select
                   value={knowledgeSource}
@@ -679,15 +569,13 @@ function ContentProductionInner() {
                   }
                 >
                   <option value="published">使用我的已发布企业知识库</option>
-                  <option value="files">使用本次上传的材料</option>
+                  <option value="files">上传材料（也可在后续步骤补充）</option>
                 </select>
               </label>
               <label className="cp-field">
-                {mode === "import_foundation"
-                  ? "上传已有 P0 品牌文章"
-                  : mode === "refresh_reference_pack"
-                    ? "上传已有 Reference Pack 与补充资料"
-                    : "上传材料（可选）"}
+                {mode === "refresh_reference_pack"
+                  ? "上传已有 Reference Pack 与补充资料"
+                  : "上传材料或 Reference Pack（可选）"}
                 <input
                   type="file"
                   multiple
@@ -703,7 +591,7 @@ function ContentProductionInner() {
                   <label className="cp-field">
                     正式问题
                     <textarea
-                      required
+                      required={!questionId.trim()}
                       rows={2}
                       value={question}
                       onChange={(event) => setQuestion(event.target.value)}
@@ -711,18 +599,12 @@ function ContentProductionInner() {
                     />
                   </label>
                   <label className="cp-field">
-                    内容入口
-                    <select
-                      value={entry}
-                      onChange={(event) =>
-                        setEntry(event.target.value as typeof entry)
-                      }
-                    >
-                      <option value="product_scenario">产品场景</option>
-                      <option value="industry_ranking">行业排名</option>
-                      <option value="competitor_comparison">竞品对比</option>
-                      <option value="reputation">美誉舆情</option>
-                    </select>
+                    问题编号（可选）
+                    <input
+                      value={questionId}
+                      onChange={(event) => setQuestionId(event.target.value)}
+                      placeholder="已有资料包中的问题编号；没有可留空"
+                    />
                   </label>
                 </>
               )}
@@ -742,7 +624,7 @@ function ContentProductionInner() {
                 <button
                   className="cp-primary"
                   type="submit"
-                  disabled={Boolean(pendingStart)}
+                  disabled={!mode || Boolean(pendingStart)}
                 >
                   创建并开始
                 </button>

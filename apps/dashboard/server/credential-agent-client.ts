@@ -14,8 +14,8 @@ export function createCredentialAgentClient(
     baseUrl?: string;
     rateLimitScope?: string;
     systemContext?: string;
+    turnContext?: string;
     systemAttachments?: import("./manus-v2-client").ManusV2Attachment[];
-    contentProduction?: boolean;
     recoverableStatusArtifact?: (filename: string) => boolean;
   } = {},
 ) {

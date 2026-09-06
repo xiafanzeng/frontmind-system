@@ -270,11 +270,20 @@ export function loadWorkerConfig(
   const publisherKolAccessToken = publisherProviderSecret(
     "PUBLISHER_KOL_ACCESS_TOKEN",
   );
+  // Preserve complete account configuration for one safe-GET refresh. A token
+  // still works by itself when older templates contain incomplete placeholders.
+  const hasPublisherLoginCredentials = publisherProviderEnabled &&
+    publisherMode !== "mock" &&
+    ["API_KEY", "MOBILE", "PASSWORD", "IDENTITY", "CAPTCHA", "CAPTCHA_TOKEN"]
+      .every((suffix) => {
+        const value = env[`PUBLISHER_KOL_${suffix}`]?.trim() ?? env[`KOL_${suffix}`]?.trim();
+        return Boolean(value && !/^replace(?:[-_]|$)/iu.test(value));
+      });
   const publisherLoginSecret = (
     primaryKey: string,
     legacyKey: string,
   ): string | undefined =>
-    publisherKolAccessToken
+    publisherKolAccessToken && !hasPublisherLoginCredentials
       ? undefined
       : (publisherProviderSecret(primaryKey) ??
         publisherProviderSecret(legacyKey));

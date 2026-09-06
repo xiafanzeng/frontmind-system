@@ -38,8 +38,6 @@ type NativeMethods =
   | "deleteFile"
   | "probeCredential";
 export type DashboardAgentClient = Pick<ManusV2Client, NativeMethods> & {
-  /** Revoke this existing content task's dedicated Vault, including pre-session failures. */
-  deleteContentProductionResources?(): Promise<void>;
   downloadArtifact?(fileId: string): Promise<{
     status: number;
     headers: Record<string, string>;
@@ -60,10 +58,10 @@ export type DashboardAgentClientOptions = DashboardProviderIdentity & {
   rateLimitScope?: string;
   /** Frozen server-owned purpose context, never supplied directly by the browser. */
   systemContext?: string;
+  /** Server-validated action for this turn, separate from original user text. */
+  turnContext?: string;
   /** Server-owned workflow inputs mount in the same session, outside user-turn evidence. */
   systemAttachments?: readonly ManusV2Attachment[];
-  /** Server-owned content Workflow purpose; enables its dedicated E9 Vault only. */
-  contentProduction?: boolean;
   /** Server-approved small operational status files may survive a native error; they never settle the task. */
   recoverableStatusArtifact?: (filename: string) => boolean;
   timeoutMs?: number;
@@ -308,8 +306,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     let acknowledged: string | undefined;
     const requestHash = sha(JSON.stringify(request));
     await this.change(record, (runtime) => {
-      if (operation === "task.create" && runtime.deleted)
-        fail(operation, "TASK_NOT_FOUND", false, 404);
       const prior = runtime.mutations[key];
       if (prior) {
         if (prior.requestHash !== requestHash)
@@ -381,71 +377,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       }).catch(() => undefined);
       compat(error, operation);
     }
-  }
-  private async contentProductionVaultIds(record: DashboardRuntimeRecord) {
-    if (!this.options.contentProduction) return [];
-    const vaultMutation = record.runtime.mutations["content-workflow-vault"];
-    const credentialMutation =
-      record.runtime.mutations["content-workflow-credential"];
-    if (
-      credentialMutation?.state === "acknowledged" &&
-      credentialMutation.resourceId
-    ) {
-      // Keep the originally acknowledged credential when deployment keys rotate
-      // or are removed. The raw credential never enters persisted runtime.
-      if (vaultMutation?.state !== "acknowledged" || !vaultMutation.resourceId)
-        fail("task.create", "CONTENT_WORKFLOW_VAULT_BINDING_INVALID");
-      return [vaultMutation.resourceId];
-    }
-    // A session already attempted without a Vault keeps that original binding.
-    // Configuring E9 later applies to newly created content-production tasks.
-    if (!vaultMutation && record.runtime.mutations.session) return [];
-    const apiKey = process.env.FRONTMIND_HARNESSGEO_API_KEY?.trim();
-    if (!apiKey) {
-      if (vaultMutation || credentialMutation)
-        fail(
-          "task.create",
-          "CONTENT_WORKFLOW_CREDENTIAL_UNAVAILABLE",
-          false,
-          503,
-        );
-      return [];
-    }
-    if (/[\r\n]/u.test(apiKey))
-      fail("task.create", "CONTENT_WORKFLOW_CREDENTIAL_INVALID", false, 503);
-    const vaultBody = { display_name: `FrontMind E9 ${record.operationId}` };
-    const vaultId = await this.once(
-      record,
-      "content-workflow-vault",
-      "task.create",
-      vaultBody,
-      async () =>
-        zhipuResourceId(await this.api.create("/v1/vaults", vaultBody)),
-    );
-    const credentialBody = {
-      display_name: "FrontMind HarnessGEO",
-      auth: {
-        type: "environment_variable",
-        secret_name: "FRONTMIND_HARNESSGEO_API_KEY",
-        secret_value: apiKey,
-        networking: { type: "limited", allowed_hosts: ["api.xty.app"] },
-        injection_location: { header: true, body: false },
-      },
-    };
-    await this.once(
-      record,
-      "content-workflow-credential",
-      "task.create",
-      { vaultId, ...credentialBody },
-      async () =>
-        zhipuResourceId(
-          await this.api.create(
-            `/v1/vaults/${vaultId}/credentials`,
-            credentialBody,
-          ),
-        ),
-    );
-    return [vaultId];
   }
   async uploadFile(
     input: Parameters<ManusV2Client["uploadFile"]>[0],
@@ -603,6 +534,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
   private async attachments(
     input: readonly ManusV2Attachment[],
     record: DashboardRuntimeRecord,
+    serverOwned = false,
   ) {
     const files: DashboardManagedFile[] = [];
     for (const attachment of input) {
@@ -620,7 +552,10 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         )
           fail("task.create", "INLINE_FILE_INVALID", false, 400);
         const bytes = Buffer.from(match[2], "base64");
-        if (!bytes.length || bytes.length > 20 * 1024 * 1024)
+        if (
+          !bytes.length ||
+          bytes.length > (serverOwned ? MAX_FILE_BYTES : 20 * 1024 * 1024)
+        )
           fail("task.create", "INLINE_FILE_TOO_LARGE", false, 400);
         id = (
           await this.uploadFile({
@@ -667,14 +602,13 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     if (input.taskReferences?.length)
       fail("task.create", "ZHIPU_TASK_REFERENCES_UNSUPPORTED");
     const record = await this.reserve();
-    if (record.runtime.deleted)
-      fail("task.create", "TASK_NOT_FOUND", false, 404);
     if (record.runtime.intentId !== this.intent())
       fail("task.create", "PROVIDER_INITIAL_INTENT_CONFLICT");
     const files = await this.attachments(input.attachments ?? [], record);
     const systemFiles = await this.attachments(
       this.options.systemAttachments ?? [],
       record,
+      true,
     );
     const mountedFiles = [...files, ...systemFiles];
     if (
@@ -733,7 +667,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         ),
       (runtime, id) => ({ ...runtime, environmentId: id }),
     );
-    const vaultIds = await this.contentProductionVaultIds(record);
     const body = {
       agent: { type: "agent", id: agent, version: 1 },
       environment_id: environment,
@@ -747,7 +680,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         file_id: f.id,
         mount_path: `/input/${f.filename}`,
       })),
-      ...(vaultIds.length ? { vault_ids: vaultIds } : {}),
     };
     const sessionId = await this.once(
       record,
@@ -902,7 +834,10 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     const intentId = this.intent();
     const key = initial ? "initial" : `turn:${sha(intentId)}`;
     const sessionId = record.runtime.sessionId!;
-    const providerPrompt = zhipuTaskPrompt(input);
+    const originalProviderPrompt = zhipuTaskPrompt(input);
+    const providerPrompt = this.options.turnContext
+      ? `${originalProviderPrompt}\n\n${this.options.turnContext}`
+      : originalProviderPrompt;
     const request = {
       sessionId,
       prompt: providerPrompt,
@@ -1471,52 +1406,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       },
       (runtime) => ({ ...runtime, deleted: true }),
     );
-    await this.deleteContentWorkflowVault(record);
     return { taskId, requestId: null };
-  }
-  private async deleteContentWorkflowVault(record: DashboardRuntimeRecord) {
-    const vault = record.runtime.mutations["content-workflow-vault"];
-    if (vault?.state === "acknowledged" && vault.resourceId) {
-      const vaultId = validId(vault.resourceId);
-      await this.once(
-        record,
-        "delete-content-workflow-vault",
-        "task.delete",
-        { vaultId },
-        async () => {
-          await this.api.request(
-            "DELETE",
-            `/v1/vaults/${vaultId}`,
-            undefined,
-            (result) => {
-              if (result.id !== vaultId || result.type !== "vault_deleted")
-                throw new Error("INVALID_VAULT_DELETE_ACK");
-            },
-          );
-          return vaultId;
-        },
-      );
-    }
-  }
-  async deleteContentProductionResources(): Promise<void> {
-    const record = await this.store.findByIntent(this.identity, this.intent());
-    if (!record) return;
-    if (
-      (this.options.localTaskId &&
-        record.localTaskId !== this.options.localTaskId) ||
-      (this.options.operationId &&
-        record.operationId !== this.options.operationId)
-    )
-      fail("task.delete", "TASK_NOT_FOUND", false, 404);
-    if (!record.runtime.mutations["content-workflow-vault"]) return;
-    if (record.runtime.sessionId) {
-      await this.deleteTask(record.runtime.sessionId);
-      return;
-    }
-    // Explicit task deletion also revokes a known Vault after session creation
-    // failed or returned an unknown outcome; never recreate/search that session.
-    await this.change(record, (runtime) => ({ ...runtime, deleted: true }));
-    await this.deleteContentWorkflowVault(record);
   }
   async confirmAction(
     input: Parameters<ManusV2Client["confirmAction"]>[0],

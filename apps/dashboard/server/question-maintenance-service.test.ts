@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const dependencies = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -16,6 +18,7 @@ import {
 import {
   applyQuestionMaintenance,
   applyQuestionMaintenanceSchema,
+  questionMaintenanceOperationId,
 } from "./question-maintenance-service";
 const customer = { id: 7, role: "user", username: "customer" } as any;
 const question = {
@@ -140,6 +143,79 @@ describe("direct customer question maintenance", () => {
       sourceQuestionId: question.id,
     });
     expect(h.inserts).toHaveLength(2);
+  });
+  it("generates UUID-valid replacement IDs while retaining the existing audit replay key", () => {
+    const originalHash = createHash("sha256")
+      .update(`question-maintenance:7:${request.clientRequestId}:operation`)
+      .digest("hex");
+    const originalKey = `${originalHash.slice(0, 8)}-${originalHash.slice(8, 12)}-${originalHash.slice(12, 16)}-${originalHash.slice(16, 20)}-${originalHash.slice(20, 32)}`;
+    expect(questionMaintenanceOperationId(7, request.clientRequestId)).toBe(
+      originalKey,
+    );
+    const first = questionMaintenanceOperationId(
+      7,
+      request.clientRequestId,
+      "replacement",
+    );
+    expect(z.string().uuid().parse(first)).toBe(first);
+    expect(first).toMatch(
+      /^[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,
+    );
+    expect(
+      questionMaintenanceOperationId(7, request.clientRequestId, "replacement"),
+    ).toBe(first);
+    expect(
+      questionMaintenanceOperationId(8, request.clientRequestId, "replacement"),
+    ).not.toBe(first);
+    expect(
+      questionMaintenanceOperationId(
+        7,
+        "10000000-0000-4000-8000-000000000003",
+        "replacement",
+      ),
+    ).not.toBe(first);
+  });
+  it("allows the replacement returned by modify to be deleted through the same strict customer API", async () => {
+    const modified = harness();
+    const result = await applyQuestionMaintenance({
+      actor: customer,
+      value: { ...request, action: "modify", proposedQuestion: "新的产品问题" },
+    });
+    const replacement = modified.inserts.find(
+      (row) => row.table === workspaceQuestions,
+    ).value;
+    expect(result.replacementQuestionId).toBe(replacement.id);
+    const deletion = applyQuestionMaintenanceSchema.parse({
+      action: "delete",
+      clientRequestId: "10000000-0000-4000-8000-000000000004",
+      questionId: result.replacementQuestionId,
+      expectedRevision: replacement.revision,
+    });
+    dependencies.assertServiceWriteAccess.mockResolvedValue({
+      purchasedQuestions: [replacement],
+    });
+    const deleted = harness({ question: replacement });
+    await expect(
+      applyQuestionMaintenance({ actor: customer, value: deletion }),
+    ).resolves.toEqual({
+      action: "delete",
+      questionId: replacement.id,
+      replacementQuestionId: null,
+    });
+    expect(deleted.updates[0].value).toMatchObject({
+      status: "archived",
+      locked: false,
+    });
+    expect(deleted.deletes).toEqual([]);
+  });
+  it("keeps rejecting non-RFC UUID question IDs without broadening the customer input schema", () => {
+    expect(
+      applyQuestionMaintenanceSchema.safeParse({
+        ...request,
+        action: "delete",
+        questionId: "249febf6-65dd-243a-7074-c79bf54b6ce6",
+      }).success,
+    ).toBe(false);
   });
   it("archives a deleted question without deleting historical responses", async () => {
     const h = harness();

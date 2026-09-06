@@ -49,6 +49,12 @@ export function questionMaintenanceOperationId(
   const hash = createHash("sha256")
     .update(`question-maintenance:${userId}:${clientRequestId}:${scope}`)
     .digest("hex");
+  // Existing audit keys are the persisted replay boundary and must stay stable.
+  // Question IDs cross UUID-validated APIs; SHA-256-derived custom UUIDs use v8.
+  if (scope === "replacement") {
+    const variant = ((Number.parseInt(hash[16]!, 16) & 0x3) | 0x8).toString(16);
+    return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-8${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+  }
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
 

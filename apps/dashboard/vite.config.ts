@@ -198,6 +198,10 @@ function vitePluginReleasePublicAssets(
       output: "assets/frontmind-wordmark.svg",
     },
     {
+      source: "assets/frontmind-mark.svg",
+      output: "assets/frontmind-mark.svg",
+    },
+    {
       source: "assets/cuhksz-emblem.png",
       output: "assets/cuhksz-emblem.png",
     },

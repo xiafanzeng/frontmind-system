@@ -1196,7 +1196,9 @@ describe("ResponseLogicWorkspace", () => {
     expect(
       screen.getByRole("heading", { name: "确认当前应答逻辑？" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/不能直接修改/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/重置应答逻辑.*重新编辑和确认/),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认并锁定" }));
 
     await waitFor(() => {

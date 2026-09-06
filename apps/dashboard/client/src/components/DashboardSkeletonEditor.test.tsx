@@ -226,6 +226,140 @@ describe("DashboardSkeletonEditor", () => {
     }));
   });
 
+  it("initializes a new customer's empty R0 dashboard through the existing profile import flow", async () => {
+    const onWorkspaceChanged = vi.fn();
+    const empty = createDefaultDashboardPayload("新客户");
+    const published = {
+      ...empty,
+      brandName: "新客户正式名称",
+      headline: "新客户的品牌工作台",
+      summary: "已确认的企业介绍",
+    };
+    const fileHash = "b".repeat(64);
+    const token = "signed-r0-profile-preflight";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            kind: "dashboard-module-preview",
+            preview: {
+              mode: "dashboard-module",
+              module: "profile",
+              sourceName: "profile.json",
+              fileHash,
+              templateRevision: 0,
+              preflightToken: token,
+              preflightExpiresAt: "2099-07-28T00:00:00.000Z",
+              summary: ["企业名称与页面抬头将初始化。"],
+              recordStats: [],
+              changedFields: [],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            kind: "dashboard",
+            module: "profile",
+            dashboard: {
+              payload: published,
+              revision: 1,
+              enterpriseIdentityBoundAt: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DashboardSkeletonEditor
+        customerMode
+        userId={42}
+        workspace={{
+          payload: null,
+          revision: 0,
+          enterpriseName: "新客户",
+          enterpriseIdentityBoundAt: null,
+        }}
+        onWorkspaceChanged={onWorkspaceChanged}
+      />,
+    );
+    expect(screen.queryByText("正在载入看板内容…")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "服务首页" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const profileActions = screen.getByText("页面抬头").parentElement!;
+    expect(
+      within(profileActions).getByRole("button", { name: "下载当前数据" }),
+    ).toBeEnabled();
+    expect(
+      within(profileActions).getByRole("button", { name: "上传修改" }),
+    ).toBeEnabled();
+    const template = currentModuleTemplate({
+      module: "profile",
+      revision: 0,
+      payload: published,
+      responseLogicRecords: [],
+    });
+    const file = new File([JSON.stringify(template)], "profile.json", {
+      type: "application/json",
+    });
+    fireEvent.change(
+      profileActions.querySelector<HTMLInputElement>('input[type="file"]')!,
+      { target: { files: [file] } },
+    );
+    await screen.findByRole("heading", { name: "模块文件预检与差异确认" });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/dashboard/import/42");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PUT",
+      credentials: "include",
+      body: file,
+      headers: {
+        "X-Dashboard-Module": "profile",
+        "X-Dashboard-Revision": "0",
+        "X-Import-Preview": "true",
+      },
+    });
+    expect(onWorkspaceChanged).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    await waitFor(() => expect(onWorkspaceChanged).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({
+      body: file,
+      headers: {
+        "X-Dashboard-Revision": "0",
+        "X-Import-File-Hash": fileHash,
+        "X-Import-Preflight-Token": token,
+      },
+    });
+    expect(
+      fetchMock.mock.calls[1][1].headers["X-Import-Preview"],
+    ).toBeUndefined();
+    expect(screen.getAllByText("新客户正式名称").length).toBeGreaterThan(0);
+    expect(mocks.toastSuccess).toHaveBeenCalledWith(
+      "板块内容已发布",
+      expect.any(Object),
+    );
+    expect(Object.keys(template)).not.toContain("contentAssets");
+  });
+
+  it("does not invent an empty editing payload when an existing dashboard is unavailable", () => {
+    render(
+      <DashboardSkeletonEditor
+        customerMode
+        userId={42}
+        workspace={{ payload: null, revision: 3, enterpriseName: "现有客户" }}
+      />,
+    );
+    expect(
+      screen.queryByRole("tab", { name: "服务首页" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("页面抬头")).not.toBeInTheDocument();
+  });
+
   it("builds revision-bound current-content JSON templates for every module", () => {
     const responseLogicRecords = [
       {

@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
   invalidate: vi.fn(),
   questionRevision: 7,
+  portalData: null as Record<string, unknown> | null,
+  portfolioRead: vi.fn(),
 }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
@@ -15,10 +17,11 @@ vi.mock("@/lib/trpc", () => ({
       },
     }),
     workspace: {
-      questionPortfolio: {
+      questionPortfolio: { useQuery: mocks.portfolioRead },
+      portal: {
         useQuery: () => ({
-          data: {
-            questions: [
+          data: mocks.portalData ?? {
+            purchasedQuestions: [
               { id: "question-1", revision: mocks.questionRevision },
               { id: "question-2", revision: mocks.questionRevision },
             ],
@@ -37,6 +40,8 @@ import QuestionActionDialog from "./QuestionActionDialog";
 const target = { id: "question-1", question: "原问题" };
 beforeEach(() => {
   mocks.questionRevision = 7;
+  mocks.portalData = null;
+  mocks.portfolioRead.mockReset();
   mocks.execute.mockReset().mockResolvedValue({ questionId: target.id });
   mocks.invalidate.mockReset().mockResolvedValue(undefined);
 });
@@ -142,4 +147,102 @@ describe("customer question actions", () => {
       ),
     );
   });
+  it.each(["modify", "delete", "response_logic_reset"] as const)(
+    "allows %s for an earlier Basic purchase that is still in the current portal",
+    async (action) => {
+      const earlier = {
+        id: "earlier-basic-question",
+        question: "较早购买仍在服务的问题",
+        revision: 4,
+      };
+      const later = {
+        id: "latest-basic-question",
+        question: "最近购买的问题",
+        revision: 1,
+      };
+      // The public portal aggregates both active Basic purchases, while the legacy
+      // portfolio would only expose the quota period selected as the current one.
+      mocks.portalData = {
+        service: { planCode: "basic" },
+        quotas: { periodId: "latest-basic-period" },
+        purchasedQuestions: [earlier, later],
+        historicalQuestions: [],
+      };
+      mocks.portfolioRead.mockReturnValue({ data: { questions: [later] } });
+      const reset = action === "response_logic_reset";
+      render(
+        <QuestionActionDialog
+          mode={reset ? "response_logic" : "question"}
+          questions={[earlier, later]}
+          selectedQuestionId={earlier.id}
+          fixedAction={reset ? undefined : action}
+          expectedResponseLogicRevision={9}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: reset
+            ? "重置应答逻辑"
+            : action === "modify"
+              ? "修改问题"
+              : "删除问题",
+        }),
+      );
+      if (action === "modify")
+        fireEvent.change(screen.getByLabelText("修改后的问题"), {
+          target: { value: "较早购买问题的新内容" },
+        });
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: reset
+            ? "确认重置应答逻辑"
+            : action === "modify"
+              ? "保存修改"
+              : "确认删除问题",
+        }),
+      );
+      await waitFor(() =>
+        expect(mocks.execute).toHaveBeenCalledWith({
+          clientRequestId: expect.any(String),
+          questionId: earlier.id,
+          expectedRevision: 4,
+          action,
+          ...(action === "modify"
+            ? { proposedQuestion: "较早购买问题的新内容" }
+            : {}),
+          ...(reset ? { expectedResponseLogicRevision: 9 } : {}),
+        }),
+      );
+      expect(mocks.portfolioRead).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["expired-question", "another-users-question"])(
+    "does not authorize %s from caller props",
+    (questionId) => {
+      const unavailable = {
+        id: questionId,
+        question: "不属于当前服务的问题",
+        revision: 2,
+      };
+      mocks.portalData = {
+        purchasedQuestions: [target],
+        historicalQuestions:
+          questionId === "expired-question" ? [unavailable] : [],
+      };
+      render(
+        <QuestionActionDialog
+          mode="question"
+          questions={[unavailable]}
+          fixedAction="delete"
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "删除问题" }));
+      expect(screen.getByRole("alert")).toHaveTextContent("该问题已更新或移除");
+      expect(
+        screen.getByRole("button", { name: "确认删除问题" }),
+      ).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "确认删除问题" }));
+      expect(mocks.execute).not.toHaveBeenCalled();
+    },
+  );
 });

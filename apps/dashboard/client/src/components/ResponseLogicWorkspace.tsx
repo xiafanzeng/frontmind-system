@@ -1809,7 +1809,7 @@ function ResponseLogicWorkspaceContent({
             <AlertDialogTitle>确认当前应答逻辑？</AlertDialogTitle>
             <AlertDialogDescription>
               确认后将作为“{selectedEntry.question.question}
-              ”的正式应答逻辑，不能直接修改；如需调整，请提交应答逻辑修改需求。
+              ”的正式应答逻辑。如需调整，可点击“重置应答逻辑”后重新编辑和确认。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

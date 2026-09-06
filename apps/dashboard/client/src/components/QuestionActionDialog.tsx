@@ -62,7 +62,9 @@ function ActiveQuestionActionDialog({
   const intent = useRef<{ fingerprint: string; id: string } | null>(null);
   const submitting = useRef(false);
   const utils = trpc.useUtils();
-  const portfolio = trpc.workspace.questionPortfolio.useQuery(undefined, {
+  // The portal includes every still-active purchase, including stacked Basic periods.
+  // It is also the scope used by the server mutation to authorize current questions.
+  const portal = trpc.workspace.portal.useQuery(undefined, {
     enabled: open,
     retry: false,
   });
@@ -71,7 +73,7 @@ function ActiveQuestionActionDialog({
     questions.find((question) => question.id === selectedQuestionId) ||
     questions[0];
   const target = open ? openedQuestion : selectedQuestion;
-  const current = portfolio.data?.questions.find(
+  const current = portal.data?.purchasedQuestions?.find(
     (question) => question.id === target?.id,
   );
   useEffect(() => {
@@ -202,12 +204,12 @@ function ActiveQuestionActionDialog({
               />
             </label>
           )}
-          {portfolio.error && (
+          {portal.error && (
             <p role="alert" className="text-sm text-destructive">
-              {portfolio.error.message}
+              {portal.error.message}
             </p>
           )}
-          {!portfolio.isLoading && !portfolio.error && !current && (
+          {!portal.isLoading && !portal.error && !current && (
             <p role="alert">该问题已更新或移除，请刷新页面。</p>
           )}
           <DialogFooter>

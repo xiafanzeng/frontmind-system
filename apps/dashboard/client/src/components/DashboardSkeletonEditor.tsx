@@ -36,6 +36,7 @@ import CustomerDashboardMirror, {
 } from "@/components/CustomerDashboardMirror";
 import { trpc } from "@/lib/trpc";
 import {
+  createDefaultDashboardPayload,
   createDashboardModuleTemplateMetadata,
   createDashboardOptimizationReportTemplate,
   dashboardModuleImportPreviewSchema,
@@ -58,7 +59,8 @@ type DashboardImportModule =
   | "optimization-report";
 
 export type DashboardWorkspaceSnapshot = {
-  payload: DashboardPayload;
+  payload: DashboardPayload | null;
+  enterpriseName?: string | null;
   revision?: number;
   sourceName?: string | null;
   enterpriseIdentityBoundAt?: number | null;
@@ -593,9 +595,16 @@ export default function DashboardSkeletonEditor({
   authoritativeQuestionsError = null,
   onWorkspaceChanged,
 }: DashboardSkeletonEditorProps) {
-  const [draft, setDraft] = useState<DashboardPayload | null>(
-    workspace?.payload ? clonePayload(workspace.payload) : null,
-  );
+  const editablePayload = () => {
+    if (workspace?.payload) return clonePayload(workspace.payload);
+    if (customerMode && workspace?.revision === 0) {
+      return createDefaultDashboardPayload(
+        workspace.enterpriseName || "企业知识中枢",
+      );
+    }
+    return null;
+  };
+  const [draft, setDraft] = useState<DashboardPayload | null>(editablePayload);
   const [dirty, setDirty] = useState(false);
   const [publishReason, setPublishReason] = useState("");
   const [importingKey, setImportingKey] = useState("");
@@ -631,13 +640,19 @@ export default function DashboardSkeletonEditor({
     responseLogicRecords ?? responseLogicQuery.data?.records ?? [];
 
   useEffect(() => {
-    setDraft(workspace?.payload ? clonePayload(workspace.payload) : null);
+    setDraft(editablePayload());
     setDirty(false);
     setPublishReason("");
     setPendingMonitoringImport(null);
     setPendingOptimizationReportImport(null);
     setPendingDashboardModuleImport(null);
-  }, [userId, workspace?.payload, workspace?.revision]);
+  }, [
+    userId,
+    workspace?.payload,
+    workspace?.revision,
+    workspace?.enterpriseName,
+    customerMode,
+  ]);
 
   const revision = workspace?.revision ?? 0;
   const busy =

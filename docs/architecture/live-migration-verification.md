@@ -357,6 +357,15 @@ charset-qualified UTF-8 instructions, exact hashes and single-session replay.
 The failed acceptance turn is retained and recovery uses the original reset
 workflow; this finding does not count as completed KB business acceptance.
 
+Two independent newly created accounts reproduced an immediate-login failure:
+their first session's database `createdAt` was one second earlier than
+`passwordChangedAt`, although it was issued after password verification. The
+application/database clocks agreed. MySQL `TIMESTAMP(0)` rounded explicit Date
+values but truncated `DEFAULT NOW()` for session creation. Sessions now write
+an explicit creation timestamp from the same clock as their other timestamps.
+The strict password-change fence and locked login transaction remain intact;
+regressions cover both sides of the half-second boundary.
+
 ## Website funding recovery completed — 2026-09-06
 
 Each original perspective used its normal “重新评估” control once. Both

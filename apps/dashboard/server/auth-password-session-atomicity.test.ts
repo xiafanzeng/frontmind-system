@@ -118,6 +118,7 @@ describe("password/session atomicity", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
     await fs.rm(assetDirectory, { recursive: true, force: true });
   });
@@ -461,63 +462,79 @@ describe("password/session atomicity", () => {
     },
   );
 
-  it("locks password verification and session creation into the same login transaction", async () => {
-    const passwordHash = await hashPassword("current-password");
-    const insertedSessions: Array<Record<string, unknown>> = [];
-    const user = {
-      id: 23,
-      openId: null,
-      username: "customer",
-      passwordHash,
-      displayName: "Customer",
-      name: null,
-      email: null,
-      loginMethod: "password",
-      role: "user",
-      adminAccessLevel: null,
-      engineerRoleType: null,
-      marketEdition: "domestic",
-      isActive: true,
-      passwordChangedAt: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      lastSignedIn: null,
-    };
-    const tx = {
-      select: () => lockedSelect([user]),
-      update: (table: unknown) => ({
-        set: () => ({
-          where: async () => {
-            expect(table).toBe(users);
+  it.each([250, 750])(
+    "keeps a same-second login valid at %i ms within the locked password transaction",
+    async (milliseconds) => {
+      const passwordHash = await hashPassword("current-password");
+      const now = Date.parse("2026-09-06T02:32:00.000Z") + milliseconds;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const mysqlTimestamp = (value: Date) =>
+        new Date(Math.round(value.getTime() / 1000) * 1000);
+      const insertedSessions: Array<Record<string, unknown>> = [];
+      const user = {
+        id: 23,
+        openId: null,
+        username: "customer",
+        passwordHash,
+        displayName: "Customer",
+        name: null,
+        email: null,
+        loginMethod: "password",
+        role: "user",
+        adminAccessLevel: null,
+        engineerRoleType: null,
+        marketEdition: "domestic",
+        isActive: true,
+        passwordChangedAt: mysqlTimestamp(new Date(now - 100)),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastSignedIn: null,
+      };
+      const tx = {
+        select: () => lockedSelect([user]),
+        update: (table: unknown) => ({
+          set: () => ({
+            where: async () => {
+              expect(table).toBe(users);
+            },
+          }),
+        }),
+        insert: (table: unknown) => ({
+          values: async (value: Record<string, unknown>) => {
+            expect(table).toBe(sessions);
+            insertedSessions.push(value);
           },
         }),
-      }),
-      insert: (table: unknown) => ({
-        values: async (value: Record<string, unknown>) => {
-          expect(table).toBe(sessions);
-          insertedSessions.push(value);
-        },
-      }),
-    };
-    const db = {
-      update: vi.fn(),
-      insert: vi.fn(),
-      transaction: (callback: (value: typeof tx) => Promise<unknown>) =>
-        callback(tx),
-    };
-    databaseMock.getDb.mockResolvedValue(db);
+      };
+      const db = {
+        update: vi.fn(),
+        insert: vi.fn(),
+        transaction: (callback: (value: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      };
+      databaseMock.getDb.mockResolvedValue(db);
 
-    await expect(
-      loginWithPassword("customer", "current-password", "127.0.0.1"),
-    ).resolves.toMatchObject({
-      user: { id: 23, username: "customer" },
-      token: expect.any(String),
-    });
-    expect(insertedSessions).toHaveLength(1);
-    expect(insertedSessions[0]).toMatchObject({ userId: 23 });
-    expect(db.update).not.toHaveBeenCalled();
-    expect(db.insert).not.toHaveBeenCalled();
-  });
+      await expect(
+        loginWithPassword("customer", "current-password", "127.0.0.1"),
+      ).resolves.toMatchObject({
+        user: { id: 23, username: "customer" },
+        token: expect.any(String),
+      });
+      expect(insertedSessions).toHaveLength(1);
+      expect(insertedSessions[0]).toMatchObject({ userId: 23 });
+      // DEFAULT NOW() on a TIMESTAMP(0) column truncates fractional seconds;
+      // explicit Date values use the same rounding as the stored password date.
+      const storedCreatedAt =
+        insertedSessions[0].createdAt instanceof Date
+          ? mysqlTimestamp(insertedSessions[0].createdAt)
+          : new Date(Math.floor(now / 1000) * 1000);
+      expect(
+        sessionPredatesPasswordChange(storedCreatedAt, user.passwordChangedAt),
+      ).toBe(false);
+      expect(db.update).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("password version session fence", () => {

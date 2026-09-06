@@ -389,6 +389,10 @@ async function createSessionInExecutor(executor: any, userId: number) {
     tokenHash: hashSessionToken(token),
     expiresAt: new Date(now + SESSION_DURATION_MS),
     lastSeenAt: new Date(now),
+    // Match the explicit timestamp precision used for passwordChangedAt.
+    // MySQL rounds Date inputs to TIMESTAMP(0), while DEFAULT NOW() truncates;
+    // mixing them can make a fresh same-second login predate its password.
+    createdAt: new Date(now),
   };
 
   await executor.insert(sessions).values(session);

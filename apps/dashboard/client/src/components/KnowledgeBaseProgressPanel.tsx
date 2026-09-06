@@ -200,13 +200,13 @@ export default function KnowledgeBaseProgressPanel({
       ? KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE
       : hasDisplayableContent || contentAvailabilityIsLegacyUnknown
         ? "系统不会自动重发。已完成内容不受影响。"
-        : "系统不会自动重发；请申请重置后重新上传资料。";
+        : "系统不会自动重发；请重置后重新上传资料。";
   const resetMessage = taskWasNotCreated
     ? `${
         retainedCustomerAttachmentCount > 0
           ? `${retainedCustomerAttachmentCount}/${retainedCustomerAttachmentCount} 个附件已保留，`
           : ""
-      }知识库任务未创建。请申请重置后重新上传资料。`
+      }知识库任务未创建。请重置后重新上传资料。`
     : KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE;
   const currentLeaf = progress.branches
     .flatMap((branch) => branch.leaves)
@@ -323,7 +323,7 @@ export default function KnowledgeBaseProgressPanel({
             </strong>
             <span>
               {coverageIncomplete ? (
-                "节点内容已保留，但研究覆盖信息不完整，暂不能确认、修订、打包或发布；请申请重置后重新生成。"
+                "节点内容已保留，但研究覆盖信息不完整，暂不能确认、修订、打包或发布；请重置后重新生成。"
               ) : (
                 <>
                   当前保留{" "}

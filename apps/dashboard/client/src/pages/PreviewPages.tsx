@@ -25,7 +25,6 @@ import {
 import { toast } from "sonner";
 
 import KnowledgeBaseViewer from "@/components/KnowledgeBaseViewer";
-import AdminDeliveryTicketWorkspace from "@/components/AdminDeliveryTicketWorkspace";
 import CustomerDashboardMirror, {
   type CustomerDashboardMirrorSection,
 } from "@/components/CustomerDashboardMirror";
@@ -46,7 +45,6 @@ import {
   previewKnowledgeProgress,
   previewKnowledgeSnapshot,
 } from "@/lib/preview-data";
-import { adminDeliveryTicketPreviewFixtures } from "@/lib/development-preview-fixtures";
 import {
   getRoleScopedPreviewAdminNav,
   previewUserNav,
@@ -790,16 +788,6 @@ export function PreviewAdminUsers({
                 }))
               }
             />
-            <AdminDeliveryTicketWorkspace
-              key={selectedUser.id}
-              userId={selectedUser.id}
-              enterpriseName={selectedUser.name}
-              customerUsername={selectedUser.username}
-              canAdjustQuota={systemAdmin}
-              canExecuteDelivery={systemAdmin}
-              preview
-              previewFixtures={adminDeliveryTicketPreviewFixtures}
-            />
             <PreviewDeliveryControl
               userName={selectedUser.name}
               onOpenCustomerDashboard={openCustomerDashboard}
@@ -891,94 +879,6 @@ export function PreviewAdminDeliveryRoles({
           </PortalCard>
         ))}
       </div>
-    </PortalShell>
-  );
-}
-
-const previewManagementTickets = [
-  {
-    id: "ticket-1",
-    customer: "验收企业",
-    title: "企业知识库构建异常处理",
-    role: "AI 运维工程师",
-    engineer: "林哲",
-    status: "待处理",
-  },
-  {
-    id: "ticket-2",
-    customer: "验收企业 B",
-    title: "配置品牌词库",
-    role: "AI 监控与优化工程师",
-    engineer: "许薇",
-    status: "待处理",
-  },
-  {
-    id: "ticket-3",
-    customer: "验收企业",
-    title: "官网企业事实内容发布",
-    role: "AI 内容制作工程师",
-    engineer: "何川",
-    status: "已完成",
-  },
-] as const;
-
-export function PreviewAdminDispatch({
-  previewAccessLevel = "system_admin",
-}: {
-  previewAccessLevel?: PreviewAdminAccessLevel;
-}) {
-  const systemAdmin = previewAccessLevel === "system_admin";
-  const pending = previewManagementTickets.filter(
-    (ticket) => ticket.status === "待处理",
-  );
-  const completed = previewManagementTickets.filter(
-    (ticket) => ticket.status === "已完成",
-  );
-  return (
-    <PortalShell
-      eyebrow="管理中心 · 客户与服务"
-      title="需求"
-      navItems={getRoleScopedPreviewAdminNav(previewAccessLevel)}
-      accountLabel={`${systemAdmin ? "系统管理员" : "交付管理员"}验收账号`}
-      roleLabel={`${systemAdmin ? "系统管理员" : "交付管理员"} · 验收预览`}
-    >
-      <div className="mb-5 grid gap-3 sm:grid-cols-2">
-        <PortalCard className="p-4">
-          <p className="text-xs text-muted-foreground">待处理</p>
-          <p className="mt-1 text-2xl font-semibold">{pending.length}</p>
-        </PortalCard>
-        <PortalCard className="p-4">
-          <p className="text-xs text-muted-foreground">已完成</p>
-          <p className="mt-1 text-2xl font-semibold">{completed.length}</p>
-        </PortalCard>
-      </div>
-      {(
-        [
-          ["待处理", pending],
-          ["已完成", completed],
-        ] as const
-      ).map(([label, tickets]) => (
-        <PortalCard key={label} className="mb-5 overflow-hidden">
-          <div className="border-b border-[#eee8f2] px-5 py-4">
-            <h2 className="font-semibold text-[#171321]">{label}</h2>
-          </div>
-          <div className="divide-y divide-[#eee8f2] px-5">
-            {tickets.map((ticket) => (
-              <article key={ticket.id} className="py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-[#332842]">{ticket.title}</p>
-                    <p className="mt-1 text-sm text-[#716a80]">
-                      {ticket.customer} · {ticket.role} · {ticket.engineer}
-                    </p>
-                  </div>
-                  <Badge variant="outline">{ticket.status}</Badge>
-                </div>
-              </article>
-            ))}
-          </div>
-        </PortalCard>
-      ))}
     </PortalShell>
   );
 }

@@ -15,8 +15,6 @@ const mocks = vi.hoisted(() => ({
   confirmWorkspaceBrandKeywordSelection: vi.fn(),
   confirmWorkspaceQuestionIntent: vi.fn(),
   assertServiceCapability: vi.fn(),
-  completeQuestionReviewRequest: vi.fn(),
-  reconcileInitialMonitoringAfterQuestionSelection: vi.fn(),
 }));
 
 vi.mock("./dashboard-service", async (importOriginal) => {
@@ -38,25 +36,6 @@ vi.mock("./service-entitlement", async (importOriginal) => {
       mocks.confirmWorkspaceBrandKeywordSelection,
     confirmWorkspaceQuestionIntent: mocks.confirmWorkspaceQuestionIntent,
     assertServiceCapability: mocks.assertServiceCapability,
-  };
-});
-
-vi.mock("./delivery-role-service", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./delivery-role-service")>();
-  return {
-    ...actual,
-    reconcileInitialMonitoringAfterQuestionSelection:
-      mocks.reconcileInitialMonitoringAfterQuestionSelection,
-  };
-});
-
-vi.mock("./question-maintenance-service", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./question-maintenance-service")>();
-  return {
-    ...actual,
-    completeQuestionReviewRequest: mocks.completeQuestionReviewRequest,
   };
 });
 
@@ -150,11 +129,6 @@ describe("user workspace question DTO boundary", () => {
     mocks.confirmWorkspaceBrandKeywordSelection.mockResolvedValue(question);
     mocks.confirmWorkspaceQuestionIntent.mockResolvedValue(question);
     mocks.assertServiceCapability.mockResolvedValue(undefined);
-    mocks.completeQuestionReviewRequest.mockResolvedValue(undefined);
-    mocks.reconcileInitialMonitoringAfterQuestionSelection.mockResolvedValue({
-      id: "initial-monitoring-ticket",
-      created: true,
-    });
   });
 
   it("loads only the current quota period and strips its internal linkage", async () => {
@@ -193,7 +167,7 @@ describe("user workspace question DTO boundary", () => {
     const requested = await caller.requestQuestionSelection({
       mode: "direct",
       question: "如何选择适合企业的产品方案？",
-      classificationVersion: 2,
+      category: "product_scenario",
     });
     const confirmed = await caller.confirmQuestionIntent({
       questionId: question.id,
@@ -209,15 +183,12 @@ describe("user workspace question DTO boundary", () => {
       expect(value).not.toHaveProperty("contractId");
       expect(value).not.toHaveProperty("quotaPeriodId");
     }
-    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith(
-      {
-        userId: 7,
-        actorUserId: 7,
-        question: "如何选择适合企业的产品方案？",
-        classificationVersion: 2,
-      },
-      { afterWrite: expect.any(Function) },
-    );
+    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith({
+      userId: 7,
+      actorUserId: 7,
+      question: "如何选择适合企业的产品方案？",
+      category: "product_scenario",
+    });
   });
 
   it("resolves a brand keyword row on the server before confirming it", async () => {
@@ -229,11 +200,8 @@ describe("user workspace question DTO boundary", () => {
       status: "selected",
       selectionApprovalStatus: "approved",
     };
-    mocks.confirmWorkspaceBrandKeywordSelection.mockImplementationOnce(
-      async (_input, options) => {
-        await options?.afterWrite?.("transaction", selectedQuestion);
-        return selectedQuestion;
-      },
+    mocks.confirmWorkspaceBrandKeywordSelection.mockResolvedValueOnce(
+      selectedQuestion,
     );
     const caller = workspaceRouter.createCaller(userContext());
 
@@ -245,35 +213,18 @@ describe("user workspace question DTO boundary", () => {
     });
 
     expect(mocks.getDashboardWorkspace).toHaveBeenCalledWith(7);
-    expect(mocks.confirmWorkspaceBrandKeywordSelection).toHaveBeenCalledWith(
-      {
-        userId: 7,
-        actorUserId: 7,
-        dashboardRevision: 5,
-        tableId: "global-keywords",
-        rowIndex: 0,
-        expectedQuestion: "测试品牌与竞品相比有什么优势？",
-        expectedCategory: "competitor_comparison",
-      },
-      { afterWrite: expect.any(Function) },
-    );
-    expect(mocks.completeQuestionReviewRequest).toHaveBeenCalledWith({
-      executor: "transaction",
+    expect(mocks.confirmWorkspaceBrandKeywordSelection).toHaveBeenCalledWith({
       userId: 7,
-      questionId: selectedQuestion.id,
       actorUserId: 7,
-      actorRole: "user",
-      message: "该自主填写问题已从正式品牌词库确认并进入当前服务。",
-    });
-    expect(
-      mocks.reconcileInitialMonitoringAfterQuestionSelection,
-    ).toHaveBeenCalledWith({
-      question: selectedQuestion,
-      actorUserId: 7,
+      dashboardRevision: 5,
+      tableId: "global-keywords",
+      rowIndex: 0,
+      expectedQuestion: "测试品牌与竞品相比有什么优势？",
+      expectedCategory: "competitor_comparison",
     });
   });
 
-  it("keeps the legacy direct-question payload compatible during deployment", async () => {
+  it("accepts an explicit customer question category", async () => {
     const caller = workspaceRouter.createCaller(userContext());
 
     await caller.requestQuestionSelection({
@@ -282,50 +233,50 @@ describe("user workspace question DTO boundary", () => {
       category: "product_scenario",
     });
 
-    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith(
-      {
-        userId: 7,
-        actorUserId: 7,
-        question: "如何选择适合企业的产品方案？",
-        category: "product_scenario",
-      },
-      { afterWrite: expect.any(Function) },
-    );
+    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith({
+      userId: 7,
+      actorUserId: 7,
+      question: "如何选择适合企业的产品方案？",
+      category: "product_scenario",
+    });
   });
 
-  it("routes v2 direct questions for engineer classification", async () => {
+  it("routes direct questions immediately to the quota transaction", async () => {
     const caller = workspaceRouter.createCaller(userContext());
 
     await caller.requestQuestionSelection({
       mode: "direct",
       question: "如何选择适合企业的产品方案？",
-      classificationVersion: 2,
+      category: "product_scenario",
     });
 
     expect(mocks.assertServiceCapability).toHaveBeenCalledWith(
       7,
       "questionSelection",
     );
-    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith(
-      {
-        userId: 7,
-        actorUserId: 7,
-        question: "如何选择适合企业的产品方案？",
-        classificationVersion: 2,
-      },
-      { afterWrite: expect.any(Function) },
-    );
+    expect(mocks.requestWorkspaceQuestionSelection).toHaveBeenCalledWith({
+      userId: 7,
+      actorUserId: 7,
+      question: "如何选择适合企业的产品方案？",
+      category: "product_scenario",
+    });
   });
 
-  it("does not let the v2 customer path assign its own category", async () => {
+  it("requires an explicit category without accepting a customer user id", async () => {
     const caller = workspaceRouter.createCaller(userContext());
-
+    await expect(
+      caller.requestQuestionSelection({
+        mode: "direct",
+        question: "如何选择适合企业的产品方案？",
+        classificationVersion: 2,
+      } as never),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(
       caller.requestQuestionSelection({
         mode: "direct",
         question: "如何选择适合企业的产品方案？",
         category: "product_scenario",
-        classificationVersion: 2,
+        userId: 8,
       } as never),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(mocks.requestWorkspaceQuestionSelection).not.toHaveBeenCalled();

@@ -184,8 +184,6 @@ function staticCatalogObservation(): SiteOpsObservationV1 {
     socialPackages: [],
     rebuildRequest: {
       allowed: false,
-      ticketId: null,
-      status: null,
       resetApplied: false,
       resetPending: false,
       resetSourceBuildId: null,

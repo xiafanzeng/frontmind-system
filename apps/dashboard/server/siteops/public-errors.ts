@@ -7,7 +7,7 @@ const VENDOR_CODE = /(?:^|_)MANUS(?:_|$)/iu;
 const INFRASTRUCTURE_TERM =
   /(?:\bESA\b|AliDNS|\bDNS\b|RecordId|\bCNAME\b|\bTXT\b|\bTLS\b|(?:access|refresh)\s*token|\bUID\b|record\s*tuple|remark\s*marker|provider)/iu;
 const FRESH_RESET_MESSAGE =
-  "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。";
+  "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。";
 
 const PUBLIC_BUILD_ERROR_COPY: Readonly<Record<string, string>> = {
   FRONTMIND_BUILD_REQUEST_INVALID: FRESH_RESET_MESSAGE,
@@ -21,16 +21,16 @@ const PUBLIC_BUILD_ERROR_COPY: Readonly<Record<string, string>> = {
   FRONTMIND_BUILD_CONFIGURATION_ERROR:
     "FrontMind AI 建站服务配置暂不可用，系统已停止继续创建任务。",
   FRONTMIND_BUILD_RUNTIME_UNAVAILABLE:
-    "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可申请重置，批准后全新开始。",
+    "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可以重置后全新开始。",
   FRONTMIND_BUILD_SERVICE_UNAVAILABLE:
     "FrontMind AI 建站服务暂时不可用，请稍后重试。",
   FRONTMIND_BUILD_RECONCILIATION_REQUIRED:
-    "FrontMind 基础预览已保留；自动结果同步已经结束，可申请重置后全新开始。",
+    "FrontMind 基础预览已保留；自动结果同步已经结束，可重置后全新开始。",
 };
 
 export function sanitizeFrontMindPublicText(value: string) {
   if (VENDOR_NAME.test(value)) {
-    return "FrontMind AI 建站任务未能完成，请提交工单获取协助。";
+    return "FrontMind AI 建站任务未能完成，可以重新开始制作。";
   }
   if (
     /(?:API\s*Key|frontmind-(?:base|pro)|\bBase\b|\bPro\b|已随官网版本锁定|个人(?:建站)?凭据)/iu.test(
@@ -63,7 +63,7 @@ export function sanitizeFrontMindPublicText(value: string) {
   ) {
     return "FrontMind 正在自动完成网站配置，请稍后查看。";
   }
-  return "FrontMind 暂未完成网站配置，请稍后重试或提交工单获取协助。";
+  return "FrontMind 暂未完成网站配置，请检查设置后重试。";
 }
 
 export type SiteOpsCustomerDomainIssue =
@@ -156,7 +156,7 @@ export function publicSiteOpsErrorProjection(input: {
     return {
       code,
       message:
-        "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可申请重置，批准后全新开始。",
+        "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可以重置后全新开始。",
     };
   }
   if (code === "FRONTMIND_BUILD_OUTPUT_INVALID") {
@@ -169,7 +169,7 @@ export function publicSiteOpsErrorProjection(input: {
     return {
       code: "FRONTMIND_BUILD_OUTPUT_INVALID",
       message:
-        "返回源码未通过安全、格式或任务绑定校验；如已有成功预览将继续保留，否则可申请重置后重新开始。",
+        "返回源码未通过安全、格式或任务绑定校验；如已有成功预览将继续保留，否则可重置后重新开始。",
     };
   }
   if (
@@ -180,7 +180,7 @@ export function publicSiteOpsErrorProjection(input: {
     return {
       code: "FRONTMIND_BUILD_OUTPUT_INVALID",
       message:
-        "冻结的视觉参考未通过完整性或任务绑定校验；如已有成功预览将继续保留，否则可申请重置后重新开始。",
+        "冻结的视觉参考未通过完整性或任务绑定校验；如已有成功预览将继续保留，否则可重置后重新开始。",
     };
   }
   if (

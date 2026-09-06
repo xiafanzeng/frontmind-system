@@ -133,10 +133,10 @@ import {
   SiteOpsQuotaError,
 } from "./quota-service";
 import {
-  createSiteOpsRebuildTicket,
-  loadSiteOpsRebuildRequest,
-  SiteOpsRebuildTicketError,
-} from "./rebuild-ticket";
+  restartSiteOpsProject,
+  siteOpsRestartState,
+  SiteOpsRestartError,
+} from "./restart-service";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility";
 import { siteOpsTrustedFallbackPreviewFromResult } from "./trusted-fallback";
 import {
@@ -197,18 +197,6 @@ export function siteOpsServiceErrorFromQuota(error: SiteOpsQuotaError) {
     error.message,
     error.statusCode,
   );
-}
-
-export function requireAcceptedSiteOpsRebuild(input: {
-  acceptedForCurrentCycle: boolean;
-}) {
-  if (!input.acceptedForCurrentCycle) {
-    throw new SiteOpsServiceError(
-      "STATE_CONFLICT",
-      "请先提交官网重制需求并等待 FrontMind 通过重置。",
-      409,
-    );
-  }
 }
 
 export function siteOpsBuildWorkflowCoordinates(
@@ -2492,16 +2480,16 @@ async function projectObservationOnce(
         .orderBy(desc(visualCandidatePools.createdAt))
         .limit(1),
     () =>
-      loadSiteOpsRebuildRequest(executor, {
-        userId: input.userId,
-        projectId: input.project.id,
-        currentBuildId: input.project.currentBuildId,
-        hasWorkflowProgress: Boolean(
-          input.project.currentBuildId ||
-            input.project.currentKnowledgeSnapshotId ||
-            input.project.status !== "draft",
-        ),
-      }),
+      Promise.resolve(
+        siteOpsRestartState({
+          currentBuildId: input.project.currentBuildId,
+          hasWorkflowProgress: Boolean(
+            input.project.currentBuildId ||
+              input.project.currentKnowledgeSnapshotId ||
+              input.project.status !== "draft",
+          ),
+        }),
+      ),
   ])) as any[];
 
   const {
@@ -3015,8 +3003,6 @@ async function projectObservationOnce(
     ),
     rebuildRequest: {
       allowed: rebuildRequest.allowed,
-      ticketId: rebuildRequest.ticketId,
-      status: rebuildRequest.status,
       resetApplied: rebuildRequest.resetApplied,
       resetPending: rebuildRequest.resetPending,
       resetSourceBuildId: rebuildRequest.resetSourceBuildId,
@@ -4220,46 +4206,16 @@ async function handleRequestRebuild(
     payload: { reason?: string };
   },
 ) {
-  const now = new Date();
-  let created: {
-    ticketId: string;
-    buildId: string | null;
-    resubmitted: boolean;
-  };
+  let restarted;
   try {
-    created = await createSiteOpsRebuildTicket(tx, {
-      userId: input.actor.id,
-      projectId: input.project.id,
-      currentBuildId: input.project.currentBuildId,
-      clientRequestId: input.requestId,
-      reason: input.payload.reason,
-      quotaPeriodIds: Array.from(
-        new Set([
-          ...siteOpsQuotaPeriodIds(
-            input.entitlement,
-            "website_content_publish",
-          ),
-          ...siteOpsQuotaPeriodIds(input.entitlement, "content_asset_publish"),
-        ]),
-      ),
-      now,
+    restarted = await restartSiteOpsProject(tx, {
+      project: input.project,
+      requestId: input.requestId,
+      now: new Date(),
     });
   } catch (error) {
-    if (error instanceof SiteOpsQuotaError) {
-      throw siteOpsServiceErrorFromQuota(error);
-    }
-    if (error instanceof SiteOpsRebuildTicketError) {
-      throw new SiteOpsServiceError(
-        error.code === "DELIVERY_OWNER_NOT_ASSIGNED" ||
-        error.code === "ENTITLEMENT_NOT_FOUND"
-          ? "FORBIDDEN"
-          : "STATE_CONFLICT",
-        error.message,
-        error.code === "DELIVERY_OWNER_NOT_ASSIGNED" ||
-        error.code === "ENTITLEMENT_NOT_FOUND"
-          ? 412
-          : 409,
-      );
+    if (error instanceof SiteOpsRestartError) {
+      throw new SiteOpsServiceError("STATE_CONFLICT", error.message, 409);
     }
     throw error;
   }
@@ -4269,30 +4225,9 @@ async function handleRequestRebuild(
     turnId: input.turnId,
     clientRequestId: input.requestId,
     requestHash: input.requestHash,
-    payload: {
-      action: "request_rebuild",
-      ticketId: created.ticketId,
-      ...(created.buildId ? { sourceBuildId: created.buildId } : {}),
-    },
+    payload: { action: "request_rebuild", revision: restarted.revision },
     kind: "brief_message",
-    ...(created.buildId ? { buildId: created.buildId } : {}),
     status: "succeeded",
-  });
-  await appendMessage(tx, {
-    conversationId: input.project.conversationId,
-    userId: input.actor.id,
-    role: "assistant",
-    turnId: input.turnId,
-    content: created.resubmitted
-      ? "官网重制需求已再次提交。当前制作流程暂不受影响，FrontMind 通过后会重新开启全新流程。"
-      : "官网重制需求已提交。当前制作流程暂不受影响，FrontMind 通过后会重新开启全新流程。",
-    siteOps: {
-      kind: "build_progress",
-      subjectId: created.ticketId,
-      revision: input.project.revision,
-      status: "resolved",
-      payload: { rebuildTicketId: created.ticketId, status: "submitted" },
-    },
   });
 }
 
@@ -4920,7 +4855,7 @@ async function selectVisualSample(
     turnId: string;
     requestId: string;
     requestHash: string;
-    rebuildRequest: Awaited<ReturnType<typeof loadSiteOpsRebuildRequest>>;
+    rebuildRequest: ReturnType<typeof siteOpsRestartState>;
     sampleId?: string;
     batchId?: string;
     delegated: boolean;
@@ -5295,9 +5230,6 @@ async function selectVisualSample(
     credential: aiCredential,
   });
   const parentBuildId = input.project.currentBuildId;
-  if (parentBuildId) {
-    requireAcceptedSiteOpsRebuild(input.rebuildRequest);
-  }
   const quotaPeriodId = await reserveSiteOpsDeliveryQuota(tx, {
     userId: input.actor.id,
     portal: input.entitlement,
@@ -6297,7 +6229,7 @@ async function handleDomainSync(
   if (!sameDomain && hasExistingDomainState) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前项目已接入其他域名，请先申请重置并完成安全下线。",
+      "当前项目已接入其他域名，请先解除原域名绑定。",
       409,
     );
   }
@@ -6427,12 +6359,12 @@ export async function actOnSiteOpsFast(
       throw new SiteOpsServiceError("NOT_FOUND", "AI 建站会话不存在。", 404);
     }
     visualSelectionProjectId = project.id;
-    const resetGate = await loadSiteOpsRebuildRequest(tx, {
-      userId: actor.id,
-      projectId: project.id,
-      currentBuildId: project.currentBuildId,
-      hasWorkflowProgress: true,
-    });
+    const resetGate = await Promise.resolve(
+      siteOpsRestartState({
+        currentBuildId: project.currentBuildId,
+        hasWorkflowProgress: true,
+      }),
+    );
     if (
       resetGate.resetPending &&
       siteOpsResetPendingBlocksAction(input.action)

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, like, lt, max, or } from "drizzle-orm";
 import {
-  deliveryTickets,
   localAssets,
   messages,
   siteBuilds,
@@ -28,17 +27,7 @@ import {
 } from "./providers";
 import { siteOpsQuotaStateForProviderResult } from "./quota-service";
 import { publicSiteOpsProviderResult } from "./public-errors";
-import {
-  activateOneDeferredApprovedSiteOpsReset,
-  advanceApprovedSiteOpsResetAfterDnsRollback,
-  finalizeApprovedSiteOpsReset,
-  parseApprovedResetUnpublishInput,
-  siteOpsRebuildResetFencesExternalOperation,
-} from "./rebuild-ticket";
-import {
-  approvedResetHasNoUnresolvedExternalExposure,
-  parseApprovedResetSafeNoExposureProof,
-} from "./esa-provider";
+import { parseApprovedResetUnpublishInput } from "./reset-coordinates";
 import {
   siteOpsTrustedFallbackPreviewFromResult,
   type SiteOpsTrustedFallbackPreview,
@@ -226,62 +215,6 @@ const APPROVED_RESET_AUTO_RECOVERY_CODES = new Set([
   "PROVIDER_NOT_CONFIGURED",
 ]);
 
-function pendingApprovedResetTicketNote(value: string | null | undefined) {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const allowedKeys = new Set([
-      "schemaVersion",
-      "kind",
-      "projectId",
-      "sourceBuildId",
-      "knowledgeSnapshotId",
-      "resetIntent",
-      "resetOperationId",
-      "resetApprovedAt",
-      "resetExpectedProjectRevision",
-      "minimumKnowledgeSnapshotVersion",
-      "resetAppliedAt",
-      "resetAppliedProjectRevision",
-      "freshRootApplied",
-      "unpublishOperationId",
-      "resetEpochDecoupled",
-      "frozenReset",
-      "externalCleanupCompletedAt",
-    ]);
-    if (
-      Object.keys(parsed).some((key) => !allowedKeys.has(key)) ||
-      parsed.schemaVersion !== 4 ||
-      parsed.kind !== "frontmind.siteops-rebuild.v1" ||
-      typeof parsed.projectId !== "string" ||
-      (parsed.sourceBuildId !== null &&
-        typeof parsed.sourceBuildId !== "string") ||
-      (parsed.knowledgeSnapshotId !== null &&
-        typeof parsed.knowledgeSnapshotId !== "string") ||
-      parsed.resetIntent !== "approved_reset_unpublish" ||
-      typeof parsed.resetOperationId !== "string" ||
-      typeof parsed.resetApprovedAt !== "string" ||
-      !Number.isInteger(parsed.resetExpectedProjectRevision) ||
-      Number(parsed.resetExpectedProjectRevision) < 1 ||
-      !Number.isInteger(parsed.minimumKnowledgeSnapshotVersion) ||
-      Number(parsed.minimumKnowledgeSnapshotVersion) < 1 ||
-      (parsed.resetEpochDecoupled === true &&
-        (typeof parsed.resetAppliedAt !== "string" ||
-          !Number.isInteger(parsed.resetAppliedProjectRevision) ||
-          Number(parsed.resetAppliedProjectRevision) < 1 ||
-          parsed.freshRootApplied !== true ||
-          parsed.unpublishOperationId !== parsed.resetOperationId ||
-          !parseApprovedResetUnpublishInput(parsed.frozenReset) ||
-          parsed.externalCleanupCompletedAt !== undefined))
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 export function siteOpsApprovedResetMayAutoRecover(
   operation: typeof siteOperations.$inferSelect,
 ) {
@@ -424,7 +357,7 @@ export function knownSiteOpsBuildFailure(
     message:
       error instanceof Error && error.message.trim()
         ? error.message
-        : "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+        : "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
   };
 }
 
@@ -574,156 +507,6 @@ async function claimOne(db: any): Promise<Claimed | null> {
   });
 }
 
-async function requeueOneSafeApprovedReset(db: any) {
-  const candidates = await db
-    .select()
-    .from(siteOperations)
-    .where(
-      and(
-        eq(siteOperations.kind, "rollback"),
-        eq(siteOperations.provider, "aliyun_esa"),
-        eq(siteOperations.status, "attention_required"),
-        inArray(
-          siteOperations.errorCode,
-          Array.from(APPROVED_RESET_AUTO_RECOVERY_CODES),
-        ),
-        isNull(siteOperations.result),
-        isNull(siteOperations.providerOperationId),
-        isNull(siteOperations.providerTaskId),
-      ),
-    )
-    .orderBy(siteOperations.updatedAt)
-    // Scan a bounded but wide window. A four-row window allowed a handful of
-    // genuinely exposed projects to starve every later safe no-exposure reset
-    // forever because those blocked rows never leave attention_required.
-    .limit(128);
-  for (const candidate of candidates) {
-    if (!siteOpsApprovedResetMayAutoRecover(candidate)) continue;
-    const recoveryErrorCode = candidate.errorCode;
-    const requeued = await db.transaction(async (tx: any) => {
-      const operationRows = await tx
-        .select()
-        .from(siteOperations)
-        .where(eq(siteOperations.id, candidate.id))
-        .limit(1)
-        .for("update");
-      const operation = operationRows[0];
-      if (!operation || !siteOpsApprovedResetMayAutoRecover(operation)) {
-        return false;
-      }
-      const reset = parseApprovedResetUnpublishInput(operation.input);
-      if (!reset) return false;
-      const ticketRows = await tx
-        .select()
-        .from(deliveryTickets)
-        .where(
-          and(
-            eq(deliveryTickets.id, reset.rebuildTicketId),
-            eq(deliveryTickets.userId, operation.userId),
-            eq(deliveryTickets.operation, "site_rebuild"),
-          ),
-        )
-        .limit(1)
-        .for("update");
-      const ticket = ticketRows[0];
-      const note = pendingApprovedResetTicketNote(ticket?.internalNote);
-      if (
-        !ticket ||
-        !["scheduled", "in_progress"].includes(ticket.status) ||
-        !note ||
-        note.projectId !== operation.projectId ||
-        note.resetOperationId !== operation.id ||
-        note.resetExpectedProjectRevision !== reset.expectedProjectRevision
-      ) {
-        return false;
-      }
-      let safe: Awaited<
-        ReturnType<typeof approvedResetHasNoUnresolvedExternalExposure>
-      > = null;
-      try {
-        safe = await approvedResetHasNoUnresolvedExternalExposure({
-          db: tx,
-          operation,
-          reset,
-          // A residual hostname alone is not a control-plane mutation
-          // boundary. Requeueing is safe because the disabled-runtime
-          // provider performs only the pinned 404/410 marker check.
-          allowCanonicalHostname: true,
-          allowMigration0065RevisionDrift: true,
-        });
-      } catch (error) {
-        const code =
-          error && typeof error === "object"
-            ? (error as { code?: unknown }).code
-            : null;
-        if (code !== "SITEOPS_RESET_INVALIDATED") throw error;
-        // The helper validates the frozen project coordinates before any
-        // provider call. Persist that terminal classification on the same
-        // operation so the ticket projection can leave "处理中" without ever
-        // invoking ESA or creating a replacement operation.
-        const invalidatedUpdate = await tx
-          .update(siteOperations)
-          .set({
-            status: "failed",
-            errorCode: "SITEOPS_RESET_INVALIDATED",
-            errorMessage: "官网重置坐标已变化，未执行外部下线操作。",
-            leaseOwner: null,
-            leaseExpiresAt: null,
-            completedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(siteOperations.id, operation.id),
-              eq(siteOperations.status, "attention_required"),
-              eq(siteOperations.errorCode, operation.errorCode!),
-              eq(siteOperations.attempt, operation.attempt),
-              isNull(siteOperations.result),
-              isNull(siteOperations.providerOperationId),
-              isNull(siteOperations.providerTaskId),
-            ),
-          );
-        if (affectedRows(invalidatedUpdate) !== 1) return false;
-        return false;
-      }
-      if (!safe) return false;
-      const updated = await tx
-        .update(siteOperations)
-        .set({
-          status: "queued",
-          leaseOwner: null,
-          leaseExpiresAt: null,
-          errorCode: null,
-          errorMessage: null,
-          completedAt: null,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(siteOperations.id, operation.id),
-            eq(siteOperations.status, "attention_required"),
-            eq(siteOperations.errorCode, operation.errorCode!),
-            eq(siteOperations.attempt, operation.attempt),
-            isNull(siteOperations.result),
-            isNull(siteOperations.providerOperationId),
-            isNull(siteOperations.providerTaskId),
-          ),
-        );
-      return affectedRows(updated) === 1;
-    });
-    if (requeued) {
-      console.info("[SiteOpsWorker] approved_reset_requeued", {
-        event: "siteops_approved_reset_requeued",
-        operationId: candidate.id,
-        projectId: candidate.projectId,
-        errorCode: recoveryErrorCode,
-      });
-      return true;
-    }
-  }
-  return false;
-}
-
 function failureResult<
   TStatus extends "failed" | "attention_required" | "outcome_unknown",
 >(
@@ -753,24 +536,12 @@ export function siteOpsExternalOperationPredatesResetEpoch(input: {
   >;
   currentTaskStartedAt: Date;
   projectRevision?: number;
-  pendingResetNotes?: Array<string | null>;
 }) {
-  const exactResetFence =
-    input.projectRevision !== undefined &&
-    input.pendingResetNotes?.some((note) =>
-      siteOpsRebuildResetFencesExternalOperation(note, {
-        projectId: input.operation.projectId,
-        operationId: input.operation.id,
-        projectRevision: input.projectRevision!,
-        currentTaskStartedAt: input.currentTaskStartedAt,
-      }),
-    );
   return Boolean(
     isAliyunExternalWriteOperation(input.operation) &&
       !approvedResetFromOperationInput(input.operation.input) &&
-      (input.operation.createdAt.getTime() <
-        input.currentTaskStartedAt.getTime() ||
-        exactResetFence),
+      input.operation.createdAt.getTime() <
+        input.currentTaskStartedAt.getTime(),
   );
 }
 
@@ -799,30 +570,7 @@ async function operationPredatesCurrentResetEpoch(tx: any, operation: Claimed) {
   if (!resetEpoch) return false;
   if (operation.createdAt.getTime() < resetEpoch.getTime()) return true;
   if (operation.createdAt.getTime() !== resetEpoch.getTime()) return false;
-  const pendingTicketRows = await tx
-    .select({ internalNote: deliveryTickets.internalNote })
-    .from(deliveryTickets)
-    .where(
-      and(
-        eq(deliveryTickets.userId, operation.userId),
-        eq(deliveryTickets.operation, "site_rebuild"),
-        inArray(deliveryTickets.status, ["scheduled", "in_progress"]),
-        like(deliveryTickets.internalNote, `%${operation.id}%`),
-      ),
-    )
-    .orderBy(desc(deliveryTickets.updatedAt))
-    .limit(8);
-  return Boolean(
-    project &&
-      siteOpsExternalOperationPredatesResetEpoch({
-        operation,
-        currentTaskStartedAt: resetEpoch,
-        projectRevision: project.revision,
-        pendingResetNotes: pendingTicketRows.map(
-          (ticket: { internalNote: string | null }) => ticket.internalNote,
-        ),
-      }),
-  );
+  return false;
 }
 
 async function assertClaimLeaseActive(db: any, operation: Claimed) {
@@ -1131,11 +879,6 @@ export async function enqueueAutomaticDomainSuccessor(
       kind: "rollback",
       provider: "aliyun_esa",
       payload: approvedReset,
-    });
-    await advanceApprovedSiteOpsResetAfterDnsRollback(tx, {
-      operation,
-      successorOperationId: successorId,
-      now,
     });
   }
 }
@@ -1790,63 +1533,6 @@ async function finalize(
         );
       return result.status;
     }
-    const approvedReset = parseApprovedResetUnpublishInput(locked.input);
-    if (approvedReset) {
-      let resetResult: Exclude<SiteOpsProviderResult, { status: "pending" }> =
-        result;
-      if (result.status === "succeeded") {
-        const safeNoExposureProof = parseApprovedResetSafeNoExposureProof(
-          result.result?.safeNoExposureProof,
-        );
-        const resetFinalization = await finalizeApprovedSiteOpsReset(tx, {
-          operation: locked,
-          now,
-          safeNoExposureProof: safeNoExposureProof ?? undefined,
-        });
-        if (resetFinalization.status !== "applied") {
-          resetResult = failureResult(
-            "failed",
-            "SITEOPS_RESET_INVALIDATED",
-            "官网重置坐标已变化，系统未清除当前流程。",
-          );
-        } else {
-          // Persist the permanent fresh-root floor on the immutable reset
-          // operation as well as the delivery ticket. Terminal tickets may be
-          // removed by retention, while this audit result remains the trusted
-          // source that prevents an old knowledge snapshot from reappearing.
-          resetResult = {
-            ...result,
-            result: resetFinalization.operationResult,
-          };
-        }
-      }
-      const resetTerminalUpdate = await tx
-        .update(siteOperations)
-        .set({
-          status: resetResult.status,
-          ...terminalSiteOpsOperationProjection(locked, resetResult),
-          errorCode:
-            resetResult.status === "succeeded" ? null : resetResult.code,
-          errorMessage:
-            resetResult.status === "succeeded" ? null : resetResult.message,
-          leaseOwner: null,
-          leaseExpiresAt: null,
-          completedAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(siteOperations.id, locked.id),
-            eq(siteOperations.leaseOwner, operation.leaseOwner),
-          ),
-        );
-      if (affectedRows(resetTerminalUpdate) !== 1) {
-        throw new Error("SITEOPS_RESET_OPERATION_CAS_CONFLICT");
-      }
-      // This operation has no site_deployments reservation. Its project and
-      // ticket writes are owned exclusively by finalizeApprovedSiteOpsReset.
-      return resetResult.status;
-    }
     const terminalStatus = result.status;
     const preservedTerminalState = terminalSiteOpsOperationProjection(
       locked,
@@ -1873,10 +1559,8 @@ async function finalize(
     void terminalUpdate;
 
     if (await operationPredatesCurrentResetEpoch(tx, locked as Claimed)) {
-      // Approval freezes this old Aliyun operation in the reset ticket. Its
-      // terminal evidence is retained for deferred cleanup activation, while
-      // automatic publish/DNS successors and every project/head write are
-      // fenced from the new epoch.
+      // Keep an old operation's terminal result without allowing it to alter
+      // the current generation cycle or enqueue publication/DNS successors.
       return result.status;
     }
 
@@ -2315,8 +1999,6 @@ export async function runSiteOpsWorkerSweep(options?: { max?: number }) {
     attentionRequired: 0,
     failed: 0,
   };
-  await activateOneDeferredApprovedSiteOpsReset(db);
-  await requeueOneSafeApprovedReset(db);
   for (let index = 0; index < limit; index += 1) {
     const operation = await claimOne(db);
     if (!operation) break;

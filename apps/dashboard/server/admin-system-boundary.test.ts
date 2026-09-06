@@ -57,17 +57,17 @@ function nonAdminContext(role: "user" | "delivery_member"): TrpcContext {
 
 describe("system administrator boundary", () => {
   it.each(["delivery_member", "user"] as const)(
-    "forbids %s accounts from permanently deleting customer demands",
+    "does not expose the retired demand deletion endpoint to %s accounts",
     async (role) => {
       const caller = adminRouter.createCaller(nonAdminContext(role));
       await expect(
-        caller.deliveryTickets.delete({
+        (caller as any).deliveryTickets.delete({
           userId: 7,
           ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
           expectedRevision: 1,
           confirmation: "DELETE_TICKET",
         }),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     },
   );
 
@@ -120,44 +120,6 @@ describe("system administrator boundary", () => {
           signedAt: Date.parse("2026-07-26T08:00:00.000Z"),
           signatoryId: "enterprise-legal-entity",
           signingEvidence: { verifiedBy: "system-admin" },
-        }),
-    ],
-    [
-      "complete a customer delivery ticket",
-      (caller: ReturnType<typeof adminRouter.createCaller>) =>
-        caller.deliveryTickets.update({
-          userId: 7,
-          ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
-          expectedRevision: 1,
-          status: "completed",
-          publicSummary: "已完成并核对交付结果。",
-        }),
-    ],
-    [
-      "permanently delete a customer demand",
-      (caller: ReturnType<typeof adminRouter.createCaller>) =>
-        caller.deliveryTickets.delete({
-          userId: 7,
-          ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
-          expectedRevision: 1,
-          confirmation: "DELETE_TICKET",
-        }),
-    ],
-    [
-      "record a customer delivery operation",
-      (caller: ReturnType<typeof adminRouter.createCaller>) =>
-        caller.deliveryTickets.recordDelivery({
-          userId: 7,
-          ticketId: "4a67e445-37bb-45ed-9268-4ca9437e4d71",
-          expectedRevision: 1,
-          clientRequestId: "cc2dfdc7-50e1-4bba-a593-fc38a6254d4d",
-          result: {
-            platform: "FrontMind",
-            targetUrl: "https://example.com/delivery-result",
-            executedAt: Date.parse("2026-07-26T08:00:00.000Z"),
-            resultStatus: "success",
-          },
-          attachments: [],
         }),
     ],
     [

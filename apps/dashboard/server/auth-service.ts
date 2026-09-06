@@ -1079,34 +1079,16 @@ export async function setManagedUserActive(userId: number, isActive: boolean) {
       }
     }
     if (!isActive && user.isActive && user.role === "delivery_member") {
-      const [assignmentRows, ticketRows] = await Promise.all([
-        tx
-          .select({ id: deliveryProjectAssignments.id })
-          .from(deliveryProjectAssignments)
-          .where(eq(deliveryProjectAssignments.engineerUserId, userId))
-          .limit(1)
-          .for("update"),
-        tx
-          .select({ id: deliveryTickets.id })
-          .from(deliveryTickets)
-          .where(
-            and(
-              eq(deliveryTickets.assignedMemberId, userId),
-              inArray(deliveryTickets.status, [
-                "submitted",
-                "needs_information",
-                "scheduled",
-                "in_progress",
-              ]),
-            ),
-          )
-          .limit(1)
-          .for("update"),
-      ]);
-      if (assignmentRows[0] || ticketRows[0]) {
+      const assignmentRows = await tx
+        .select({ id: deliveryProjectAssignments.id })
+        .from(deliveryProjectAssignments)
+        .where(eq(deliveryProjectAssignments.engineerUserId, userId))
+        .limit(1)
+        .for("update");
+      if (assignmentRows[0]) {
         throw new AuthServiceError(
           "CONFLICT",
-          "该工程师仍负责客户项目或未结束需求，请先完成转交",
+          "该工程师仍负责客户项目，请先完成转交",
         );
       }
     }
@@ -1445,63 +1427,43 @@ export async function deleteManagedUser(
           );
         }
         if (user.role === "delivery_member") {
-          const [
-            assignmentRows,
-            ticketRows,
-            projectResourceRows,
-            projectConversationRows,
-          ] = await Promise.all([
-            tx
-              .select({ id: deliveryProjectAssignments.id })
-              .from(deliveryProjectAssignments)
-              .where(
-                eq(deliveryProjectAssignments.engineerUserId, targetUserId),
-              )
-              .limit(1)
-              .for("update"),
-            tx
-              .select({ id: deliveryTickets.id })
-              .from(deliveryTickets)
-              .where(
-                and(
-                  eq(deliveryTickets.assignedMemberId, targetUserId),
-                  inArray(deliveryTickets.status, [
-                    "submitted",
-                    "needs_information",
-                    "scheduled",
-                    "in_progress",
-                  ]),
-                ),
-              )
-              .limit(1)
-              .for("update"),
-            tx
-              .select({ id: upstreamResources.id })
-              .from(upstreamResources)
-              .where(
-                and(
-                  eq(upstreamResources.userId, targetUserId),
-                  isNotNull(upstreamResources.projectAssignmentId),
-                ),
-              )
-              .limit(1)
-              .for("update"),
-            tx
-              .select({ id: conversations.id })
-              .from(conversations)
-              .where(
-                and(
-                  eq(conversations.userId, targetUserId),
-                  isNotNull(conversations.projectAssignmentId),
-                ),
-              )
-              .limit(1)
-              .for("update"),
-          ]);
-          if (assignmentRows[0] || ticketRows[0]) {
+          const [assignmentRows, projectResourceRows, projectConversationRows] =
+            await Promise.all([
+              tx
+                .select({ id: deliveryProjectAssignments.id })
+                .from(deliveryProjectAssignments)
+                .where(
+                  eq(deliveryProjectAssignments.engineerUserId, targetUserId),
+                )
+                .limit(1)
+                .for("update"),
+              tx
+                .select({ id: upstreamResources.id })
+                .from(upstreamResources)
+                .where(
+                  and(
+                    eq(upstreamResources.userId, targetUserId),
+                    isNotNull(upstreamResources.projectAssignmentId),
+                  ),
+                )
+                .limit(1)
+                .for("update"),
+              tx
+                .select({ id: conversations.id })
+                .from(conversations)
+                .where(
+                  and(
+                    eq(conversations.userId, targetUserId),
+                    isNotNull(conversations.projectAssignmentId),
+                  ),
+                )
+                .limit(1)
+                .for("update"),
+            ]);
+          if (assignmentRows[0]) {
             throw new AuthServiceError(
               "CONFLICT",
-              "该工程师仍负责客户项目或未结束需求，请先完成转交",
+              "该工程师仍负责客户项目，请先完成转交",
             );
           }
           if (projectResourceRows[0] || projectConversationRows[0]) {
@@ -3286,31 +3248,12 @@ export async function discardUnboundUpstreamFileInTransaction(input: {
     );
   }
 
-  const deliveryAttachmentReferences = await input.executor
-    .select({ id: deliveryTicketAttachments.id })
-    .from(deliveryTicketAttachments)
-    .where(eq(deliveryTicketAttachments.upstreamFileId, input.fileId))
+  const knowledgeBuildReferences = await input.executor
+    .select({ id: knowledgeBaseBuilds.id })
+    .from(knowledgeBaseBuilds)
+    .where(eq(knowledgeBaseBuilds.packageFileId, input.fileId))
     .limit(1);
-  const redirectPreviewReferences = deliveryAttachmentReferences[0]
-    ? []
-    : await input.executor
-        .select({ id: deliveryRedirectPreviews.id })
-        .from(deliveryRedirectPreviews)
-        .where(eq(deliveryRedirectPreviews.upstreamFileId, input.fileId))
-        .limit(1);
-  const knowledgeBuildReferences =
-    deliveryAttachmentReferences[0] || redirectPreviewReferences[0]
-      ? []
-      : await input.executor
-          .select({ id: knowledgeBaseBuilds.id })
-          .from(knowledgeBaseBuilds)
-          .where(eq(knowledgeBaseBuilds.packageFileId, input.fileId))
-          .limit(1);
-  if (
-    deliveryAttachmentReferences[0] ||
-    redirectPreviewReferences[0] ||
-    knowledgeBuildReferences[0]
-  ) {
+  if (knowledgeBuildReferences[0]) {
     throw new AuthServiceError(
       "CONFLICT",
       "UPLOAD_ALREADY_BOUND: file has a durable workspace reference",

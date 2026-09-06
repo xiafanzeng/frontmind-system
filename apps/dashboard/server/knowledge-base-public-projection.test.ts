@@ -123,7 +123,7 @@ describe("knowledge-base customer public projection", () => {
     [
       "approve_reset",
       "FRONTMIND_KB_RESET_REQUIRED",
-      "任务已结束，但知识库文件未通过完整性校验。系统不会自动重试；请申请重置后重新上传资料。",
+      "任务已结束，但知识库文件未通过完整性校验。系统不会自动重试；请重置后重新上传资料。",
     ],
     [
       "regenerate_turn",
@@ -277,7 +277,7 @@ describe("knowledge-base customer public projection", () => {
 
     expect(payload.notice).toMatchObject({
       code: "FRONTMIND_KB_RESET_REQUIRED",
-      message: "本次分析任务尚未创建；请申请重置后重新选择全部资料。",
+      message: "本次分析任务尚未创建；请重置后重新选择全部资料。",
       recoveryAction: "approve_reset",
       retryable: false,
     });
@@ -298,7 +298,7 @@ describe("knowledge-base customer public projection", () => {
     expect(payload.notice).toMatchObject({
       code: "FRONTMIND_KB_RESET_REQUIRED",
       message:
-        "本轮补充资料尚未完成，任务尚未派发；请申请重置后重新上传全部资料。",
+        "本轮补充资料尚未完成，任务尚未派发；请重置后重新上传全部资料。",
       recoveryAction: "approve_reset",
       retryable: false,
     });

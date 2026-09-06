@@ -884,7 +884,7 @@ const NATIVE_TEMPLATE_FAILURE_CONTRACT = {
   insufficient_live_templates: {
     code: "NATIVE_TEMPLATE_BUILD_POOL_INSUFFICIENT",
     message:
-      "本次实时目录的兼容候选少于 9 个，重复重试不会改变结果；请申请重置后使用固定 Template 目录。",
+      "本次实时目录的兼容候选少于 9 个，重复重试不会改变结果；请重置后使用固定 Template 目录。",
   },
 } as const satisfies Record<
   SiteOpsNativeTemplateFailureCategory,
@@ -1785,7 +1785,7 @@ async function searchFamilyRound(input: {
     if (input.signal.aborted) {
       throw new TwentyFirstProviderFailure(
         "VISUAL_SEARCH_TIMEOUT",
-        "视觉检索已超时；可申请重置，批准后可从当前企业知识库重新开始。",
+        "视觉检索已超时；可以重新开始制作，继续使用当前企业知识库。",
       );
     }
     const composedQuery = composeFamilySearchQuery({
@@ -2159,7 +2159,7 @@ async function mirrorCandidates(input: {
     if (input.signal.aborted) {
       throw new TwentyFirstProviderFailure(
         "VISUAL_SEARCH_TIMEOUT",
-        "视觉预览镜像已超时；可申请重置，批准后可从当前企业知识库重新开始。",
+        "视觉预览镜像已超时；可以重新开始制作，继续使用当前企业知识库。",
       );
     }
     const batch = input.candidates.slice(offset, offset + MIRROR_CONCURRENCY);
@@ -2178,7 +2178,7 @@ async function mirrorCandidates(input: {
           if (input.signal.aborted) {
             throw new TwentyFirstProviderFailure(
               "VISUAL_SEARCH_TIMEOUT",
-              "视觉预览镜像已超时；可申请重置，批准后可从当前企业知识库重新开始。",
+              "视觉预览镜像已超时；可以重新开始制作，继续使用当前企业知识库。",
             );
           }
           rejectDiagnostic(input.diagnostics, previewRejectionReason(error));

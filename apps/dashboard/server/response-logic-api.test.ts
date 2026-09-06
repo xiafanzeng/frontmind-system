@@ -123,7 +123,7 @@ describe("response logic execution contract", () => {
       status: 502,
       error: {
         code: "RESPONSE_LOGIC_START_OUTCOME_UNKNOWN",
-        message: "附件处理结果无法确认，请申请重置后重新开始",
+        message: "附件处理结果无法确认，请重置后重新开始",
         retryable: false,
         resetRequired: true,
         stage: "file_upload_intent",
@@ -138,7 +138,7 @@ describe("response logic execution contract", () => {
         status: 502,
         error: {
           code: "RESPONSE_LOGIC_TASK_BINDING_PENDING",
-          message: "上游任务已创建，但本地绑定未完成；请申请重置后重新开始",
+          message: "上游任务已创建，但本地绑定未完成；请重置后重新开始",
           retryable: false,
           resetRequired: true,
           stage: "task_binding",

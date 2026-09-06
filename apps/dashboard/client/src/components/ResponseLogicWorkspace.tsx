@@ -36,8 +36,7 @@ import Home from "@/pages/Home";
 import FilePreview from "@/components/FilePreview";
 import ImagePreview from "@/components/ImagePreview";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
-import QuestionMaintenanceRequestDialog from "@/components/QuestionMaintenanceRequestDialog";
-import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
+import QuestionActionDialog from "@/components/QuestionActionDialog";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -1227,7 +1226,6 @@ function ResponseLogicWorkspaceContent({
   const syncedRecordIdsRef = useRef<Set<string> | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
-  const [requestHistoryOpen, setRequestHistoryOpen] = useState(false);
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
 
   useEffect(() => {
@@ -1719,17 +1717,7 @@ function ResponseLogicWorkspaceContent({
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="rl-page-header-action"
-            onClick={() => setRequestHistoryOpen(true)}
-          >
-            <FileClock className="h-4 w-4" aria-hidden="true" />
-            需求记录
-          </Button>
-          <QuestionMaintenanceRequestDialog
+          <QuestionActionDialog
             mode="response_logic"
             questions={
               resetAvailable
@@ -1742,23 +1730,15 @@ function ResponseLogicWorkspaceContent({
                 : []
             }
             selectedQuestionId={resetAvailable ? activeQuestionId : null}
-            triggerLabel="申请重置应答逻辑"
+            triggerLabel="重置应答逻辑"
+            expectedResponseLogicRevision={persistedRecord?.revision}
+            onSubmitted={async () => {
+              await persistence?.refresh?.();
+            }}
             disabled={!resetAvailable}
           />
         </div>
       </header>
-
-      <CustomerRequestHistoryDialog
-        open={requestHistoryOpen}
-        onOpenChange={setRequestHistoryOpen}
-        title="应答逻辑需求记录"
-        description="显示草稿、启动失败、处理中或已确认应答逻辑的重置申请。"
-        type="knowledge_base"
-        surface="response_logic_management"
-        preview={preview}
-        {...(preview ? { tickets: [] } : {})}
-        emptyText="暂无应答逻辑修改需求。"
-      />
 
       {updateNotice && (
         <div className="rl-update-notice" role="status">
@@ -2570,7 +2550,7 @@ function RealResponseLogicDialogue({
           <span className="mt-1 block">
             {scopedStartFailure.message}
             {scopedStartFailure.resetRequired
-              ? " 请先申请重置；批准后将以全新会话和全新任务重新开始。"
+              ? " 请先重置，然后以全新会话和全新任务重新开始。"
               : scopedStartFailure.retryable
                 ? " 当前输入和附件仍保留，可稍后直接重新发送。"
                 : " 请根据提示处理后重新发送。"}
@@ -2776,7 +2756,7 @@ function LogicEditor({
             <h3>应答参考草稿</h3>
             <p>
               {readOnly
-                ? "当前版本已经正式确认，如需修改请提交需求。"
+                ? "当前版本已经正式确认，可直接重置后重新编辑。"
                 : "预填内容可修改；确认前不会进入问题优化正式展示。"}
             </p>
           </div>

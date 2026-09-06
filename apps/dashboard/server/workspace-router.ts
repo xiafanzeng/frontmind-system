@@ -1,13 +1,19 @@
+import {
+  assertDashboardUpdateCapability,
+  mergeCustomerDashboardPayload,
+  projectUserDashboardPayload,
+} from "./dashboard-editing";
 import { protectedProcedure, router } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { toTrpcError } from "./auth-router";
 import { runtimeErrorForLog } from "./_core/runtime-error-log";
 import {
+  assertDashboardEnterpriseIdentity,
+  updateDashboardWorkspace,
   getDashboardQuestion,
   getDashboardWorkspace,
   getLatestKnowledgeSnapshot,
-  toPublicDashboardPayload,
 } from "./dashboard-service";
 import { getKnowledgeBaseProgress } from "./knowledge-base-progress-service";
 import { toKnowledgeBasePublicPayload } from "./knowledge-base-public-projection";
@@ -34,6 +40,7 @@ import {
 } from "./monitoring-service";
 import {
   assertServiceCapability,
+  assertServiceWriteAccess,
   confirmWorkspaceBrandKeywordSelection,
   confirmWorkspaceQuestionIntent,
   getServicePortal,
@@ -44,7 +51,6 @@ import {
 } from "./service-entitlement";
 import { resolveBrandKeywordSelection } from "./brand-keyword-selection";
 import {
-  QUESTION_CLASSIFICATION_V2_WRITES_ENABLED,
   toPublicServicePortal,
   toPublicServicePortalQuestion,
 } from "../shared/service-portal";
@@ -53,40 +59,15 @@ import {
   PurchaseProvisioningError,
 } from "./provisioning-v2-service";
 import { getHistoricalQuestionResults } from "./historical-results-service";
-import {
-  addDeliveryTicketMessageSchema,
-  createDeliveryTicketSchema,
-  deliveryTicketDetailInputSchema,
-  deliveryTicketListInputSchema,
-} from "../shared/delivery-ticket";
-import {
-  addDeliveryTicketMessage,
-  createDeliveryTicket,
-  DeliveryTicketError,
-  getDeliveryTicketWorkspace,
-  getPublicDeliveryTicketDetail,
-  getPublicDeliveryTicketWorkspaceMetadata,
-  listWorkspaceDeliveryTickets,
-  requestWebsiteStyleRevision,
-  selectWebsiteStyleSample,
-  toPublicDeliveryTicketCreationResult,
-} from "./delivery-ticket-service";
-import type { DashboardPayload } from "../shared/dashboard";
-import { knowledgeResetReasonSchema } from "../shared/delivery-roles";
+import { dashboardPayloadSchema } from "../shared/dashboard";
 import {
   getKnowledgeResetStatus,
-  submitKnowledgeReset,
+  resetKnowledgeBase,
 } from "./knowledge-base-reset-service";
 import {
-  submitQuestionMaintenance,
-  submitQuestionMaintenanceSchema,
-  completeQuestionReviewRequest,
-  ensureQuestionReviewRequest,
+  applyQuestionMaintenance,
+  applyQuestionMaintenanceSchema,
 } from "./question-maintenance-service";
-import {
-  reconcileInitialMonitoringAfterQuestionSelection,
-  type InitialMonitoringQuestionSelection,
-} from "./delivery-role-service";
 import {
   getJenovaBrandTrackingOverview,
   getJenovaBrandTrackingSession,
@@ -118,27 +99,7 @@ import {
   startBrandQuestionUniverse,
 } from "./brand-question-universe-service";
 
-export function projectUserDashboardPayload(input: {
-  payload: DashboardPayload;
-  configured: boolean;
-  contentAssetsAllowed: boolean;
-}) {
-  if (!input.configured) return null;
-  const payload = toPublicDashboardPayload(input.payload);
-  if (input.contentAssetsAllowed) return payload;
-  return {
-    ...payload,
-    metrics: [],
-    keywordTables: [],
-    questions: [],
-    monitoringAnswers: [],
-    citations: [],
-    contentAssets: [],
-    optimizationReport: null,
-    progressReports: [],
-    sections: [],
-  };
-}
+export { projectUserDashboardPayload } from "./dashboard-editing";
 
 function toServiceError(error: unknown): never {
   if (error instanceof BrandQuestionUniverseServiceError) {
@@ -159,22 +120,6 @@ function toServiceError(error: unknown): never {
                     ? "BAD_GATEWAY"
                     : "CONFLICT";
     throw new TRPCError({ code, message: error.message, cause: error });
-  }
-  if (error instanceof DeliveryTicketError) {
-    throw new TRPCError({
-      code:
-        error.statusCode === 404
-          ? "NOT_FOUND"
-          : error.statusCode === 403
-            ? "FORBIDDEN"
-            : error.statusCode === 400
-              ? "BAD_REQUEST"
-              : error.statusCode === 503
-                ? "INTERNAL_SERVER_ERROR"
-                : "CONFLICT",
-      message: error.message,
-      cause: error,
-    });
   }
   if (error instanceof ServiceEntitlementError) {
     throw new TRPCError({
@@ -398,11 +343,11 @@ export const workspaceRouter = router({
       }),
   }),
   questionMaintenance: router({
-    submit: protectedProcedure
-      .input(submitQuestionMaintenanceSchema)
+    execute: protectedProcedure
+      .input(applyQuestionMaintenanceSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          return await submitQuestionMaintenance({
+          return await applyQuestionMaintenance({
             actor: ctx.user,
             value: input,
           });
@@ -419,19 +364,13 @@ export const workspaceRouter = router({
         toServiceError(error);
       }
     }),
-    submit: protectedProcedure
+    reset: protectedProcedure
       .input(
-        z.object({
-          reasonCode: knowledgeResetReasonSchema,
-          reasonNote: z.string().trim().max(2_000).optional(),
-        }),
+        z.object({ expectedRevision: z.number().int().nonnegative() }).strict(),
       )
       .mutation(async ({ ctx, input }) => {
         try {
-          return await submitKnowledgeReset({
-            actor: ctx.user,
-            ...input,
-          });
+          return await resetKnowledgeBase({ actor: ctx.user, ...input });
         } catch (error) {
           toServiceError(error);
         }
@@ -439,132 +378,70 @@ export const workspaceRouter = router({
   }),
   portal: protectedProcedure.query(async ({ ctx }) => {
     try {
-      const [portal, delivery] = await Promise.all([
-        getServicePortal(ctx.user.id),
-        getPublicDeliveryTicketWorkspaceMetadata(ctx.user.id),
-      ]);
-      return {
-        ...toPublicServicePortal(portal),
-        delivery,
-      };
+      return toPublicServicePortal(await getServicePortal(ctx.user.id));
     } catch (error) {
       toServiceError(error);
     }
   }),
-
-  deliveryTickets: router({
-    workspace: protectedProcedure.query(async ({ ctx }) => {
+  saveDashboard: protectedProcedure
+    .input(
+      z
+        .object({
+          expectedRevision: z.number().int().nonnegative(),
+          payload: dashboardPayloadSchema,
+          sourceName: z.string().trim().min(1).max(512).optional(),
+          reason: z.string().trim().max(2_000).optional(),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.role !== "user")
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "只有客户可以修改自己的看板",
+        });
       try {
-        return await getDeliveryTicketWorkspace(ctx.user.id);
+        const portal = await assertServiceWriteAccess(ctx.user.id);
+        const existing = await getDashboardWorkspace(ctx.user.id);
+        const contentAssetsVisible =
+          portal.capabilities.contentAssets.allowed &&
+          servicePortalHasRequiredKnowledge(portal);
+        const payload = mergeCustomerDashboardPayload({
+          existing: existing.payload,
+          submitted: input.payload,
+          contentAssetsVisible,
+        });
+        await assertDashboardUpdateCapability({
+          userId: ctx.user.id,
+          existing,
+          next: payload,
+          portal,
+        });
+        assertDashboardEnterpriseIdentity(existing, payload);
+        const updated = await updateDashboardWorkspace({
+          userId: ctx.user.id,
+          actorUserId: ctx.user.id,
+          payload,
+          sourceName: input.sourceName || existing.sourceName || "用户编辑",
+          reason: input.reason,
+          expectedRevision: input.expectedRevision,
+          bindEnterpriseIdentity: true,
+        });
+        const configured = updated.revision > 0;
+        return {
+          ...updated,
+          configured,
+          enterpriseName: updated.payload.brandName,
+          payload: projectUserDashboardPayload({
+            payload: updated.payload,
+            configured,
+            contentAssetsAllowed: contentAssetsVisible,
+          })!,
+        };
       } catch (error) {
         toServiceError(error);
       }
     }),
-    overview: protectedProcedure.query(async ({ ctx }) => {
-      try {
-        return await getDeliveryTicketWorkspace(ctx.user.id);
-      } catch (error) {
-        toServiceError(error);
-      }
-    }),
-    list: protectedProcedure
-      .input(deliveryTicketListInputSchema.optional())
-      .query(async ({ ctx, input }) => {
-        try {
-          return await listWorkspaceDeliveryTickets({
-            userId: ctx.user.id,
-            value: input,
-          });
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-    detail: protectedProcedure
-      .input(deliveryTicketDetailInputSchema)
-      .query(async ({ ctx, input }) => {
-        try {
-          return await getPublicDeliveryTicketDetail({
-            userId: ctx.user.id,
-            ticketId: input.ticketId,
-          });
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-    create: protectedProcedure
-      .input(createDeliveryTicketSchema)
-      .mutation(async ({ ctx, input }) => {
-        if (ctx.user.role !== "user") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "只有当前用户可以提交交付需求。",
-          });
-        }
-        try {
-          return toPublicDeliveryTicketCreationResult(
-            await createDeliveryTicket({
-              userId: ctx.user.id,
-              value: input,
-            }),
-          );
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-    selectWebsiteStyle: protectedProcedure
-      .input(
-        z.object({
-          sampleId: z.string().uuid(),
-          expectedRevision: z.number().int().positive(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) => {
-        try {
-          return await selectWebsiteStyleSample({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-    requestWebsiteStyleRevision: protectedProcedure
-      .input(
-        z.object({
-          reason: z.string().trim().min(1).max(2_000),
-          expectedRevision: z.number().int().positive(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) => {
-        try {
-          return await requestWebsiteStyleRevision({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-    addMessage: protectedProcedure
-      .input(addDeliveryTicketMessageSchema)
-      .mutation(async ({ ctx, input }) => {
-        if (ctx.user.role !== "user") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "只有当前用户可以补充需求资料。",
-          });
-        }
-        try {
-          return await addDeliveryTicketMessage({
-            actor: ctx.user,
-            workspaceUserId: ctx.user.id,
-            value: input,
-          });
-        } catch (error) {
-          toServiceError(error);
-        }
-      }),
-  }),
 
   questionPortfolio: protectedProcedure.query(async ({ ctx }) => {
     try {
@@ -652,28 +529,13 @@ export const workspaceRouter = router({
         z
           .object({
             mode: z.literal("direct"),
-            question: z
-              .string()
-              .trim()
-              .min(2, "目标问题至少需要 2 个字符")
-              .max(4_000, "目标问题不能超过 4000 个字符"),
+            question: z.string().trim().min(2).max(4_000),
             category: z.enum([
               "industry",
               "competitor_comparison",
               "reputation",
               "product_scenario",
             ]),
-          })
-          .strict(),
-        z
-          .object({
-            mode: z.literal("direct"),
-            question: z
-              .string()
-              .trim()
-              .min(2, "目标问题至少需要 2 个字符")
-              .max(4_000, "目标问题不能超过 4000 个字符"),
-            classificationVersion: z.literal(2),
           })
           .strict(),
         z
@@ -687,52 +549,15 @@ export const workspaceRouter = router({
       ]),
     )
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.role !== "user") {
+      if (ctx.user.role !== "user")
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "只有当前用户可以提交目标问题。",
+          message: "只有客户可以选择自己的目标问题",
         });
-      }
-      if (
-        input.mode === "direct" &&
-        "classificationVersion" in input &&
-        !QUESTION_CLASSIFICATION_V2_WRITES_ENABLED
-      ) {
-        throw new TRPCError({
-          code: "SERVICE_UNAVAILABLE",
-          message: "问题分类能力正在升级，请稍后重试。",
-        });
-      }
       try {
         await assertServiceCapability(ctx.user.id, "questionSelection");
         let question;
-        if (input.mode === "candidate") {
-          question = await requestWorkspaceQuestionSelection({
-            userId: ctx.user.id,
-            actorUserId: ctx.user.id,
-            questionId: input.questionId,
-            expectedRevision: input.expectedRevision,
-          });
-        } else if (input.mode === "direct") {
-          question = await requestWorkspaceQuestionSelection(
-            {
-              userId: ctx.user.id,
-              actorUserId: ctx.user.id,
-              question: input.question,
-              ...("category" in input
-                ? { category: input.category }
-                : { classificationVersion: 2 as const }),
-            },
-            {
-              afterWrite: (executor, pendingQuestion) =>
-                ensureQuestionReviewRequest({
-                  executor,
-                  question: pendingQuestion,
-                  actorUserId: ctx.user.id,
-                }),
-            },
-          );
-        } else {
+        if (input.mode === "brand_keyword_library") {
           const dashboard = await getDashboardWorkspace(ctx.user.id);
           const reference = {
             dashboardRevision: input.dashboardRevision,
@@ -743,51 +568,31 @@ export const workspaceRouter = router({
             workspace: dashboard,
             reference,
           });
-          if (!resolved.ok) {
+          if (!resolved.ok)
             throw new ServiceEntitlementError(
               "QUESTION_NOT_CURRENT",
               resolved.message,
             );
-          }
-          const reconcileState: {
-            question: InitialMonitoringQuestionSelection | null;
-          } = { question: null };
-          question = await confirmWorkspaceBrandKeywordSelection(
-            {
-              userId: ctx.user.id,
-              actorUserId: ctx.user.id,
-              ...reference,
-              expectedQuestion: resolved.selection.question,
-              expectedCategory: resolved.selection.category,
-            },
-            {
-              afterWrite: async (executor, selectedQuestion) => {
-                reconcileState.question = selectedQuestion;
-                await completeQuestionReviewRequest({
-                  executor,
-                  userId: selectedQuestion.userId,
-                  questionId: selectedQuestion.id,
-                  actorUserId: ctx.user.id,
-                  actorRole: "user",
-                  message: "该自主填写问题已从正式品牌词库确认并进入当前服务。",
-                });
-              },
-            },
-          );
-          if (!reconcileState.question) {
-            throw new ServiceEntitlementError(
-              "QUESTION_NOT_CURRENT",
-              "品牌词库选题结果缺少当前服务范围。",
-            );
-          }
-          await reconcileInitialMonitoringAfterQuestionSelection({
-            question: reconcileState.question,
+          question = await confirmWorkspaceBrandKeywordSelection({
+            userId: ctx.user.id,
             actorUserId: ctx.user.id,
+            ...reference,
+            expectedQuestion: resolved.selection.question,
+            expectedCategory: resolved.selection.category,
+          });
+        } else {
+          question = await requestWorkspaceQuestionSelection({
+            userId: ctx.user.id,
+            actorUserId: ctx.user.id,
+            ...(input.mode === "candidate"
+              ? {
+                  questionId: input.questionId,
+                  expectedRevision: input.expectedRevision,
+                }
+              : { question: input.question, category: input.category }),
           });
         }
-        return {
-          question: toPublicServicePortalQuestion(question),
-        };
+        return { question: toPublicServicePortalQuestion(question) };
       } catch (error) {
         toServiceError(error);
       }

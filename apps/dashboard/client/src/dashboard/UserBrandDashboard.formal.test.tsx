@@ -16,7 +16,7 @@ const {
   questionPortfolioUseQuery,
   requestQuestionSelectionUseMutation,
   requestQuestionSelectionMutateAsync,
-  questionMaintenanceSubmitUseMutation,
+  questionMaintenanceExecuteUseMutation,
   purchaseIntentMutateAsync,
   purchaseIntentUseMutation,
   changePasswordUseMutation,
@@ -24,23 +24,9 @@ const {
   monitoringSamplesUseQuery,
   monitoringSampleCitationsUseQuery,
   monitoringCitationSummaryUseQuery,
-  deliveryWorkspaceUseQuery,
-  deliveryIcpChecklistUseQuery,
-  deliveryListUseInfiniteQuery,
-  deliveryListFetchNextPage,
-  deliveryCreateUseMutation,
-  deliveryCreateMutateAsync,
-  deliverySelectWebsiteStyleUseMutation,
-  deliveryRequestWebsiteStyleRevisionUseMutation,
-  deliveryDetailUseQuery,
-  deliveryAddMessageUseMutation,
-  deliveryAddMessageMutateAsync,
-  deliveryCancelUseMutation,
-  deliveryCancelMutateAsync,
   brandQuestionUniverseObserveUseQuery,
   brandQuestionUniverseStartUseMutation,
   trpcUtils,
-  uploadFileMock,
   authState,
 } = vi.hoisted(() => ({
   dashboardUseQuery: vi.fn(),
@@ -49,7 +35,7 @@ const {
   questionPortfolioUseQuery: vi.fn(),
   requestQuestionSelectionUseMutation: vi.fn(),
   requestQuestionSelectionMutateAsync: vi.fn(),
-  questionMaintenanceSubmitUseMutation: vi.fn(() => ({
+  questionMaintenanceExecuteUseMutation: vi.fn(() => ({
     mutateAsync: vi.fn(),
     isPending: false,
   })),
@@ -60,44 +46,21 @@ const {
   monitoringSamplesUseQuery: vi.fn(),
   monitoringSampleCitationsUseQuery: vi.fn(),
   monitoringCitationSummaryUseQuery: vi.fn(),
-  deliveryWorkspaceUseQuery: vi.fn(),
-  deliveryIcpChecklistUseQuery: vi.fn(),
-  deliveryListUseInfiniteQuery: vi.fn(),
-  deliveryListFetchNextPage: vi.fn(),
-  deliveryCreateUseMutation: vi.fn(),
-  deliveryCreateMutateAsync: vi.fn(),
-  deliverySelectWebsiteStyleUseMutation: vi.fn(() => ({
-    mutateAsync: vi.fn(),
-  })),
-  deliveryRequestWebsiteStyleRevisionUseMutation: vi.fn(() => ({
-    mutateAsync: vi.fn(),
-  })),
-  deliveryDetailUseQuery: vi.fn(),
-  deliveryAddMessageUseMutation: vi.fn(),
-  deliveryAddMessageMutateAsync: vi.fn(),
-  deliveryCancelUseMutation: vi.fn(),
-  deliveryCancelMutateAsync: vi.fn(),
   brandQuestionUniverseObserveUseQuery: vi.fn(),
   brandQuestionUniverseStartUseMutation: vi.fn(),
   trpcUtils: {
     workspace: {
       brandQuestionUniverse: { observe: { invalidate: vi.fn() } },
       dashboard: { invalidate: vi.fn() },
+      questionPortfolio: { invalidate: vi.fn() },
+      portal: { invalidate: vi.fn() },
+      responseLogic: { invalidate: vi.fn() },
     },
   },
-  uploadFileMock: vi.fn(),
   authState: {
     marketEdition: "domestic" as "domestic" | "overseas",
   },
 }));
-
-vi.mock("@/lib/frontmind-api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/frontmind-api")>();
-  return {
-    ...actual,
-    uploadFile: (...args: unknown[]) => uploadFileMock(...args),
-  };
-});
 
 vi.mock("./siteops/ConnectedSiteOpsConversationPanel", () => ({
   default: () => (
@@ -142,41 +105,12 @@ vi.mock("@/lib/trpc", () => ({
         useMutation: requestQuestionSelectionUseMutation,
       },
       questionMaintenance: {
-        submit: {
-          useMutation: questionMaintenanceSubmitUseMutation,
+        execute: {
+          useMutation: questionMaintenanceExecuteUseMutation,
         },
       },
       purchaseIntent: {
         useMutation: purchaseIntentUseMutation,
-      },
-      deliveryTickets: {
-        workspace: {
-          useQuery: deliveryWorkspaceUseQuery,
-        },
-        icpChecklist: {
-          useQuery: deliveryIcpChecklistUseQuery,
-        },
-        list: {
-          useInfiniteQuery: deliveryListUseInfiniteQuery,
-        },
-        create: {
-          useMutation: deliveryCreateUseMutation,
-        },
-        selectWebsiteStyle: {
-          useMutation: deliverySelectWebsiteStyleUseMutation,
-        },
-        requestWebsiteStyleRevision: {
-          useMutation: deliveryRequestWebsiteStyleRevisionUseMutation,
-        },
-        detail: {
-          useQuery: deliveryDetailUseQuery,
-        },
-        addMessage: {
-          useMutation: deliveryAddMessageUseMutation,
-        },
-        cancel: {
-          useMutation: deliveryCancelUseMutation,
-        },
       },
       monitoring: {
         filters: {
@@ -419,20 +353,8 @@ describe("UserBrandDashboard formal workspace", () => {
     monitoringSamplesUseQuery.mockReset();
     monitoringSampleCitationsUseQuery.mockReset();
     monitoringCitationSummaryUseQuery.mockReset();
-    deliveryWorkspaceUseQuery.mockReset();
-    deliveryIcpChecklistUseQuery.mockReset();
-    deliveryListUseInfiniteQuery.mockReset();
-    deliveryListFetchNextPage.mockReset();
-    deliveryCreateUseMutation.mockReset();
-    deliveryCreateMutateAsync.mockReset();
-    deliveryDetailUseQuery.mockReset();
-    deliveryAddMessageUseMutation.mockReset();
-    deliveryAddMessageMutateAsync.mockReset();
-    deliveryCancelUseMutation.mockReset();
-    deliveryCancelMutateAsync.mockReset();
     brandQuestionUniverseObserveUseQuery.mockReset();
     brandQuestionUniverseStartUseMutation.mockReset();
-    uploadFileMock.mockReset();
     requestQuestionSelectionUseMutation.mockReset();
     requestQuestionSelectionMutateAsync.mockReset();
     responseLogicUseQuery.mockReturnValue({
@@ -507,113 +429,6 @@ describe("UserBrandDashboard formal workspace", () => {
       isPending: false,
       error: null,
     });
-    deliveryWorkspaceUseQuery.mockReturnValue({
-      data: {
-        siteProfile: null,
-        siteChecks: [],
-        contentAssetCatalog: [
-          {
-            id: "A1",
-            group: "A 类：GEO 优化文章",
-            name: "品牌聚合榜单",
-            description: "多品牌介绍与选型指南",
-          },
-          {
-            id: "D1",
-            group: "D 类：问答内容",
-            name: "知乎问答",
-            description: "专业问答内容",
-          },
-        ],
-        websiteContentCatalog: [
-          { value: "company_facts", label: "企业资料与品牌事实" },
-          { value: "product_case_docs", label: "产品案例与文档" },
-          { value: "industry_news", label: "行业新闻与观察" },
-          { value: "company_news", label: "企业新闻与动态" },
-          { value: "faq_content", label: "FAQ 与问答页面" },
-        ],
-        websiteWorkflow: {
-          domainStatus: "completed",
-          icpStatus: "completed",
-          canSubmitIcp: false,
-          canSubmitContent: true,
-        },
-        quotas: {
-          content_asset_publish: {
-            type: "content_asset_publish",
-            allowed: true,
-            used: 0,
-            reserved: 0,
-            consumed: 0,
-            limit: 20,
-            remaining: 20,
-            periodId: "formal-period",
-            validFrom: null,
-            validUntil: null,
-            reason: null,
-          },
-          website_content_publish: {
-            type: "website_content_publish",
-            allowed: true,
-            used: 0,
-            reserved: 0,
-            consumed: 0,
-            limit: 100,
-            remaining: 100,
-            periodId: "formal-period",
-            validFrom: null,
-            validUntil: null,
-            reason: null,
-          },
-        },
-        tickets: [],
-      },
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    deliveryIcpChecklistUseQuery.mockReturnValue({
-      data: null,
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    deliveryListUseInfiniteQuery.mockReturnValue({
-      data: {
-        pages: [{ tickets: [], nextCursor: null, hasMore: false }],
-      },
-      isLoading: false,
-      isError: false,
-      error: null,
-      hasNextPage: false,
-      isFetchingNextPage: false,
-      fetchNextPage: deliveryListFetchNextPage,
-      refetch: vi.fn(),
-    });
-    deliveryCreateUseMutation.mockReturnValue({
-      mutateAsync: deliveryCreateMutateAsync,
-      isPending: false,
-    });
-    deliveryDetailUseQuery.mockReturnValue({
-      data: null,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    deliveryAddMessageUseMutation.mockReturnValue({
-      mutateAsync: deliveryAddMessageMutateAsync,
-      isPending: false,
-    });
-    deliveryCancelUseMutation.mockReturnValue({
-      mutateAsync: deliveryCancelMutateAsync,
-      isPending: false,
-    });
-    uploadFileMock.mockResolvedValue({
-      fileId: "uploaded-delivery-file",
-      filename: "企业资料.pdf",
-    });
     dashboardUseQuery.mockReturnValue({
       data: { payload: managedPayload, revision: 7 },
       isLoading: false,
@@ -648,22 +463,6 @@ describe("UserBrandDashboard formal workspace", () => {
         refetchIntervalInBackground: false,
       }),
     );
-    expect(deliveryListUseInfiniteQuery).toHaveBeenCalledWith(
-      { type: "content_asset", limit: 20 },
-      expect.objectContaining({
-        getNextPageParam: expect.any(Function),
-      }),
-    );
-    expect(deliveryListUseInfiniteQuery).toHaveBeenCalledWith(
-      {
-        type: "website_operation",
-        surface: "website_management",
-        limit: 20,
-      },
-      expect.objectContaining({
-        getNextPageParam: expect.any(Function),
-      }),
-    );
     expect(screen.queryByText("欢迎回来，新企业")).toBeNull();
     expect(
       screen.queryByText(
@@ -678,7 +477,7 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText(/港中大/)).toBeNull();
   });
 
-  it("does not mount semantic assets but keeps delivery history available before knowledge publication", () => {
+  it("does not mount semantic assets before knowledge publication", () => {
     const knowledgeReason =
       "请先在知识库智能体中完成全部节点并发布当前服务的认证知识库；知识库展示完成后解锁 AI 友好内容资产。";
     portalUseQuery.mockReturnValue({
@@ -744,11 +543,7 @@ describe("UserBrandDashboard formal workspace", () => {
     ).not.toBeInTheDocument();
     expect(dashboardUseQuery).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ enabled: false }),
-    );
-    expect(deliveryWorkspaceUseQuery).toHaveBeenCalledWith(
-      undefined,
-      expect.objectContaining({ enabled: true }),
+      expect.objectContaining({ retry: false }),
     );
   });
 
@@ -846,16 +641,13 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });
 
-  it("combines the standardized request taxonomy with administrator-published assets", () => {
+  it("shows published content assets with direct editing", () => {
     render(<UserBrandDashboard />);
 
     fireEvent.click(screen.getByRole("button", { name: "内容资产运营" }));
 
-    expect(screen.getAllByText("品牌聚合榜单").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("知乎问答").length).toBeGreaterThan(0);
-    expect(screen.getByText("多品牌介绍与选型指南")).toBeInTheDocument();
-    expect(screen.getByText("专业问答内容")).toBeInTheDocument();
-    expect(screen.queryByText("媒体稿件与权威信源")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑内容资产" })).toBeEnabled();
+    expect(screen.queryByText("提交内容需求")).not.toBeInTheDocument();
     expect(screen.getByText("首个企业资产")).toBeInTheDocument();
     expect(screen.getByText("管理员发布的文章")).toBeInTheDocument();
     expect(
@@ -863,106 +655,6 @@ describe("UserBrandDashboard formal workspace", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("影响力")).toBeNull();
     expect(screen.queryByText("3,500-6,000")).toBeNull();
-  });
-
-  it("uploads content files before creating a real delivery ticket", async () => {
-    const sourceFile = new File(["facts"], "企业资料.pdf", {
-      type: "application/pdf",
-    });
-    deliveryCreateMutateAsync.mockResolvedValue({ id: "ticket-1" });
-    render(<UserBrandDashboard />);
-
-    fireEvent.click(screen.getByRole("button", { name: "内容资产运营" }));
-    fireEvent.click(screen.getByRole("button", { name: "选择品牌聚合榜单" }));
-    fireEvent.change(screen.getByRole("textbox", { name: /话题方向/ }), {
-      target: { value: "高端制造客户成功故事" },
-    });
-    fireEvent.change(screen.getByLabelText("意向媒体"), {
-      target: { value: "新浪" },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "参考链接" }), {
-      target: { value: "https://example.com/customer-story" },
-    });
-    const fileInput = document.querySelector(
-      "#content-request-files",
-    ) as HTMLInputElement;
-    fireEvent.change(fileInput, { target: { files: [sourceFile] } });
-    fireEvent.click(screen.getByRole("button", { name: "提交给管理员" }));
-
-    await waitFor(() =>
-      expect(uploadFileMock).toHaveBeenCalledWith(sourceFile),
-    );
-    await waitFor(() =>
-      expect(deliveryCreateMutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          clientRequestId: expect.any(String),
-          type: "content_asset",
-          category: "A1",
-          topic: "高端制造客户成功故事",
-          title: "品牌聚合榜单",
-          preferredMedia: "新浪",
-          materialUrls: ["https://example.com/customer-story"],
-          attachments: [
-            expect.objectContaining({
-              fileId: "uploaded-delivery-file",
-              filename: "企业资料.pdf",
-              mimeType: "application/pdf",
-              sizeBytes: sourceFile.size,
-            }),
-          ],
-        }),
-      ),
-    );
-  });
-
-  it("loads formal content-ticket history through the cursor endpoint", async () => {
-    const fetchContentNextPage = vi.fn().mockResolvedValue(undefined);
-    deliveryListUseInfiniteQuery.mockImplementation(
-      (input: { type: "content_asset" | "website_operation" }) => ({
-        data: {
-          pages:
-            input.type === "content_asset"
-              ? [
-                  {
-                    tickets: [
-                      {
-                        id: "content-ticket-page-1",
-                        type: "content_asset",
-                        category: "B3",
-                        title: "用户案例与成功故事",
-                        topic: "第一批真实内容需求",
-                        status: "in_progress",
-                        revision: 1,
-                        submittedAt: "2026-07-27T08:00:00+08:00",
-                      },
-                    ],
-                    nextCursor: "opaque-next-page",
-                    hasMore: true,
-                  },
-                ]
-              : [{ tickets: [], nextCursor: null, hasMore: false }],
-        },
-        isLoading: false,
-        isError: false,
-        error: null,
-        hasNextPage: input.type === "content_asset",
-        isFetchingNextPage: false,
-        fetchNextPage:
-          input.type === "content_asset"
-            ? fetchContentNextPage
-            : deliveryListFetchNextPage,
-        refetch: vi.fn(),
-      }),
-    );
-    render(<UserBrandDashboard />);
-
-    fireEvent.click(screen.getByRole("button", { name: "内容资产运营" }));
-    fireEvent.click(screen.getAllByRole("button", { name: /^选择/ })[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "需求记录" }));
-    expect(screen.getByText("第一批真实内容需求")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-
-    expect(fetchContentNextPage).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose the retired content-system entry", () => {
@@ -1215,38 +907,6 @@ describe("UserBrandDashboard formal workspace", () => {
   });
 
   it("replaces the submitted ticket workspace with the published customer word bank", () => {
-    deliveryListUseInfiniteQuery.mockImplementation((input) => ({
-      data: {
-        pages: [
-          {
-            tickets:
-              input?.type === "website_operation"
-                ? [
-                    {
-                      id: "bd6251d8-991a-4b79-a2d7-7cfd82a12a4e",
-                      type: "website_operation",
-                      category: "question_catalog",
-                      categoryLabel: "品牌词库与问题目录",
-                      topic: "配置品牌词库与问题目录",
-                      publicStatus: "pending",
-                      publicStatusLabel: "待处理",
-                      publicSummary: null,
-                    },
-                  ]
-                : [],
-            nextCursor: null,
-            hasMore: false,
-          },
-        ],
-      },
-      isLoading: false,
-      isError: false,
-      error: null,
-      hasNextPage: false,
-      isFetchingNextPage: false,
-      fetchNextPage: deliveryListFetchNextPage,
-      refetch: vi.fn(),
-    }));
     render(<UserBrandDashboard />);
 
     expect(
@@ -1355,7 +1015,7 @@ describe("UserBrandDashboard formal workspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "确认优化问题" }));
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "确认后开启进度将不可修改。",
+      "确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。",
     );
     expect(requestQuestionSelectionMutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
@@ -1368,7 +1028,11 @@ describe("UserBrandDashboard formal workspace", () => {
         rowIndex: 0,
       }),
     );
-    expect(refetch).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        trpcUtils.workspace.questionPortfolio.invalidate,
+      ).toHaveBeenCalled(),
+    );
   });
 
   it("keeps the word-bank warning open when confirmation fails", async () => {
@@ -1386,18 +1050,18 @@ describe("UserBrandDashboard formal workspace", () => {
       expect(requestQuestionSelectionMutateAsync).toHaveBeenCalledTimes(1),
     );
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
-      "确认后开启进度将不可修改。",
+      "确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。",
     );
     expect(screen.getByRole("alertdialog")).toHaveTextContent(
       "如何选择新企业？",
     );
   });
 
-  it("submits a directly entered target question for administrator confirmation", async () => {
+  it("immediately selects a directly entered question with its category", async () => {
     requestQuestionSelectionMutateAsync.mockResolvedValue({
       question: {
         id: "direct-question-1",
-        selectionApprovalStatus: "pending",
+        selectionApprovalStatus: "approved",
       },
     });
     render(<UserBrandDashboard />);
@@ -1407,23 +1071,27 @@ describe("UserBrandDashboard formal workspace", () => {
       "自主填写",
     );
     expect(
-      screen.queryByRole("combobox", { name: "问题类别" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("combobox", { name: "问题类别" }),
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "目标问题" }), {
       target: { value: "新企业如何验证产品交付能力？" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交专业审核" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "问题类别" }), {
+      target: { value: "industry" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "确认优化问题" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
 
     await waitFor(() =>
       expect(requestQuestionSelectionMutateAsync).toHaveBeenCalledWith({
         mode: "direct",
         question: "新企业如何验证产品交付能力？",
-        classificationVersion: 2,
+        category: "industry",
       }),
     );
   });
 
-  it("keeps the single question history entry available when selection is disabled and no service question exists", () => {
+  it("shows the authoritative reason when question selection is disabled", () => {
     portalUseQuery.mockReturnValue({
       data: {
         portal: {
@@ -1447,40 +1115,10 @@ describe("UserBrandDashboard formal workspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "问题优化" }));
 
-    expect(screen.getAllByRole("button", { name: "需求记录" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "需求记录" }));
+    expect(screen.getByText("本期新增问题已锁定。")).toBeInTheDocument();
     expect(
-      screen.getByRole("dialog", { name: "问题需求记录" }),
-    ).toBeInTheDocument();
-  });
-
-  it("blocks another submission when pending reviews reserve every remaining total slot", () => {
-    questionPortfolioUseQuery.mockReturnValue({
-      data: {
-        quotaPeriodId: "formal-period",
-        questions: Array.from({ length: 23 }, (_, index) => ({
-          id: `pending-question-${index}`,
-          question: `等待分类的问题 ${index + 1}`,
-          category: null,
-          source: "user",
-          status: "candidate",
-          selectionApprovalStatus: "pending",
-        })),
-      },
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    });
-    render(<UserBrandDashboard />);
-
-    fireEvent.click(screen.getByRole("button", { name: "问题优化" }));
-
-    expect(screen.getByRole("button", { name: "提交专业审核" })).toBeDisabled();
-    expect(
-      screen.getByText(
-        "当前服务的问题额度已用满，请联系服务管理员调整当前服务问题。",
-      ),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "需求记录" }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps new questions disabled until the next authoritative luxury unlock", () => {
@@ -1681,14 +1319,16 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.getByText("不使用无法核验的行业第一表述"),
     ).toBeInTheDocument();
     expect(screen.getByAltText("官网事实证据")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "申请修改" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "申请删除" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "修改问题" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "删除问题" })).toBeEnabled();
     expect(
       screen.queryByRole("button", {
         name: `查看“${question.question}”的需求记录`,
       }),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "需求记录" })).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: "需求记录" }),
+    ).not.toBeInTheDocument();
 
     for (const redundantCopy of [
       "建议的优化方向",

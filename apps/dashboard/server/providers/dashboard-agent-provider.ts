@@ -117,10 +117,48 @@ function validFilename(filename: string) {
     throw new Error("INVALID_PROVIDER_FILENAME");
   return filename;
 }
+function sessionErrorIsRetrying(event: ZhipuRecord) {
+  const error = object(event.error);
+  return (
+    object(error.retry_status).type === "retrying" ||
+    error.retry_status === "retrying"
+  );
+}
+
+/** An idle notification ends the transport turn; it does not erase the
+ * preceding provider failure. A new execution or user command starts afresh. */
+function terminalSessionError(raw: ZhipuRecord[]) {
+  for (let index = raw.length - 1; index >= 0; index -= 1) {
+    const event = raw[index];
+    if (
+      [
+        "user.message",
+        "session.status_running",
+        "session.status_rescheduled",
+      ].includes(String(event.type))
+    )
+      return null;
+    if (event.type === "session.error" && !sessionErrorIsRetrying(event))
+      return event;
+  }
+  return null;
+}
+
+function sessionFailureStatus(event: ZhipuRecord) {
+  const error = object(event.error);
+  return {
+    agent_status: "error",
+    error_type: typeof error.type === "string" ? error.type : "PROVIDER_ERROR",
+    error_content:
+      typeof error.message === "string" ? error.message : "上游执行异常。",
+  };
+}
+
 function normalizedSessionStatus(session: ZhipuRecord, raw: ZhipuRecord[]) {
   if (session.status === "running" || session.status === "rescheduling")
     return "running";
   if (session.status === "terminated") return "cancelled";
+  if (terminalSessionError(raw)) return "error";
   const tail = [...raw]
     .reverse()
     .find((e) =>
@@ -130,7 +168,8 @@ function normalizedSessionStatus(session: ZhipuRecord, raw: ZhipuRecord[]) {
         "session.status_terminated",
       ].includes(String(e.type)),
     );
-  if (tail?.type === "session.error") return "error";
+  if (tail?.type === "session.error")
+    return sessionErrorIsRetrying(tail) ? "running" : "error";
   if (tail?.type === "session.status_terminated") return "cancelled";
   const reason = object(tail?.stop_reason).type;
   return reason === "end_turn"
@@ -1019,6 +1058,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       if (!terminal || object(terminal.stop_reason).type !== "end_turn")
         continue;
       const terminalIndex = scoped.indexOf(terminal);
+      if (terminalSessionError(scoped.slice(0, terminalIndex + 1))) continue;
       if (
         scoped
           .slice(terminalIndex + 1)
@@ -1402,29 +1442,25 @@ export function normalizeDashboardZhipuEvents(
         },
       ];
     if (event.type === "session.error") {
-      const error = object(event.error);
-      if (
-        object(error.retry_status).type === "retrying" ||
-        error.retry_status === "retrying"
-      )
-        return [];
+      if (sessionErrorIsRetrying(event)) return [];
       return [
         {
           ...base,
           type: "status_update",
-          status_update: {
-            agent_status: "error",
-            error_type:
-              typeof error.type === "string" ? error.type : "PROVIDER_ERROR",
-            error_content:
-              typeof error.message === "string"
-                ? error.message
-                : "上游执行异常。",
-          },
+          status_update: sessionFailureStatus(event),
         },
       ];
     }
     if (event.type === "session.status_idle") {
+      const failure = terminalSessionError(raw.slice(0, rank));
+      if (failure)
+        return [
+          {
+            ...base,
+            type: "status_update",
+            status_update: sessionFailureStatus(failure),
+          },
+        ];
       const reason = object(event.stop_reason);
       if (reason.type === "requires_action")
         return [

@@ -46,7 +46,7 @@ import {
   approvedResetUnpublishProjectMatches,
   parseApprovedResetUnpublishInput,
   type ApprovedResetUnpublishInput,
-} from "./rebuild-ticket";
+} from "./reset-coordinates";
 import {
   registerSiteOpsProviderHandler,
   type SiteOpsProviderHandler,

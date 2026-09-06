@@ -1,3 +1,4 @@
+import { assertDashboardUpdateCapability } from "./dashboard-editing";
 import { z } from "zod";
 import { managedAgentProfileSchema } from "../shared/manus-agent-profile";
 import { adminProcedure, router } from "./_core/trpc";
@@ -73,7 +74,6 @@ import {
   updateWorkspaceQuestionBySystemAdmin,
   upsertServiceContract,
 } from "./service-entitlement";
-import { completeQuestionReviewRequest } from "./question-maintenance-service";
 import {
   decideWebsitePurchase,
   listPendingWebsitePurchases,
@@ -102,31 +102,6 @@ import {
 } from "./admin-delivery-service";
 import { setManagedAdminAccessLevel } from "./admin-access-management-service";
 import {
-  adjustDeliveryTicketQuotaSchema,
-  adminAddDeliveryTicketMessageSchema,
-  adminDeliveryTicketListInputSchema,
-  confirmRedirectWorkbookSchema,
-  deleteDeliveryTicketInputSchema,
-  deliveryTicketDetailInputSchema,
-  previewRedirectWorkbookSchema,
-  recordDeliveryOperationSchema,
-  updateDeliveryTicketSchema,
-  updateWorkspaceSiteProfileSchema,
-  upsertWorkspaceSiteCheckSchema,
-} from "../shared/delivery-ticket";
-import {
-  addDeliveryTicketMessage,
-  deleteManagedDeliveryTicket,
-  DeliveryTicketError,
-  getDeliveryTicketDetail,
-  getDeliveryTicketWorkspaceMetadata,
-  listManagedDeliveryTickets,
-  recordManagedDeliveryOperation,
-  updateManagedDeliveryTicket,
-  updateWorkspaceSiteProfile,
-  upsertWorkspaceSiteCheck,
-} from "./delivery-ticket-service";
-import {
   bulkReplaceManagedApiKeyTargets,
   getAdminApiUsageHierarchy,
   getApiUsageAlertOverview,
@@ -135,11 +110,6 @@ import {
   syncApiUsageSnapshots,
   updateApiUsagePolicy,
 } from "./api-usage-snapshot-service";
-import { adjustDeliveryTicketQuota } from "./delivery-ticket-quota-service";
-import {
-  confirmRedirectWorkbook,
-  previewRedirectWorkbook,
-} from "./delivery-redirect-service";
 import {
   provisionableServicePlanCodeSchema,
   servicePlanCodeSchema,
@@ -151,11 +121,7 @@ import {
 } from "../shared/service-portal";
 import { accountMarketEditionSchema } from "../shared/account-edition";
 import { deliveryRoleTypeSchema } from "../shared/delivery-roles";
-import {
-  createDeliveryEngineer,
-  reconcileInitialMonitoringAfterQuestionSelection,
-  type InitialMonitoringQuestionSelection,
-} from "./delivery-role-service";
+import { createDeliveryEngineer } from "./delivery-role-service";
 import {
   completeManagedServiceUserProvisioning,
   createManagedServiceUser,
@@ -181,16 +147,6 @@ function requireSystemAdmin(user: Parameters<typeof isSystemAdmin>[0]) {
   }
 }
 
-async function assertDashboardUpdateCapability(input: {
-  userId: number;
-  existing: Awaited<ReturnType<typeof getDashboardWorkspace>>;
-  next: z.infer<typeof dashboardPayloadSchema>;
-}) {
-  const portal = await getServicePortal(input.userId);
-  if (portal.capabilities.contentAssets.allowed) return;
-  await assertServiceCapability(input.userId, "contentAssets");
-}
-
 export function adminWorkspaceServiceValue(
   actor: Parameters<typeof isSystemAdmin>[0],
   portal: ServicePortal,
@@ -211,15 +167,12 @@ function throwServiceAdminError(error: unknown): never {
   if (
     error instanceof ServiceEntitlementError ||
     error instanceof PurchaseProvisioningError ||
-    error instanceof ManualServiceOrderError ||
-    error instanceof DeliveryTicketError
+    error instanceof ManualServiceOrderError
   ) {
     const status =
       error instanceof ServiceEntitlementError
         ? error.statusCode
-        : error instanceof DeliveryTicketError
-          ? error.statusCode
-          : error.status;
+        : error.status;
     throw new TRPCError({
       code:
         status === 404
@@ -281,7 +234,6 @@ const managedApiKeyReplaceShape = {
   expectedVersion: z.number().int().nonnegative(),
   reason: z.string().trim().min(1).max(2_000),
   confirmation: z.literal("REPLACE_API_KEY"),
-  relatedTicketId: z.string().uuid().optional(),
 } as const;
 
 export const adminUpdateServiceSchema = z
@@ -352,7 +304,6 @@ export const adminRouter = router({
           .object({
             userId: z.number().int().positive(),
             apiKey: presalesApiKeySchema,
-            relatedTicketId: z.string().uuid().optional(),
           })
           .strict(),
       )
@@ -543,7 +494,6 @@ export const adminRouter = router({
               input.kind === "customer" ? input.agentProfile : undefined,
             expectedVersion: input.expectedVersion,
             reason: input.reason,
-            relatedTicketId: input.relatedTicketId,
           });
         } catch (error) {
           throw toTrpcError(error);
@@ -596,200 +546,6 @@ export const adminRouter = router({
         }
       }),
   }),
-  deliveryTickets: router({
-    overview: adminProcedure.query(async ({ ctx }) => {
-      try {
-        return await listManagedDeliveryTickets({ actor: ctx.user });
-      } catch (error) {
-        throwServiceAdminError(error);
-      }
-    }),
-    list: adminProcedure
-      .input(adminDeliveryTicketListInputSchema.optional())
-      .query(async ({ ctx, input }) => {
-        try {
-          const result = await listManagedDeliveryTickets({
-            actor: ctx.user,
-            userId: input?.userId,
-            assignedAdminId: input?.assignedAdminId,
-            query: input?.query,
-            type: input?.type,
-            status: input?.status,
-            publicStatus: input?.publicStatus,
-            quotaPeriodId: input?.quotaPeriodId,
-            limit: input?.limit,
-            cursor: input?.cursor,
-            order: input?.order,
-          });
-          const workspace = input?.userId
-            ? await getDeliveryTicketWorkspaceMetadata(input.userId)
-            : null;
-          return {
-            ...result,
-            ...(workspace
-              ? {
-                  quotas: workspace.quotas,
-                  siteProfile: workspace.siteProfile,
-                  websiteWorkflow: workspace.websiteWorkflow,
-                  contentAssetCatalog: workspace.contentAssetCatalog,
-                  websiteContentCatalog: workspace.websiteContentCatalog,
-                  marketEdition: workspace.marketEdition,
-                  preferredMediaOptions: workspace.preferredMediaOptions,
-                }
-              : {}),
-          };
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    adjustQuota: adminProcedure
-      .input(adjustDeliveryTicketQuotaSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await adjustDeliveryTicketQuota({
-            actor: ctx.user,
-            value: input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    detail: adminProcedure
-      .input(
-        deliveryTicketDetailInputSchema.safeExtend({
-          userId: z.number().int().positive(),
-        }),
-      )
-      .query(async ({ ctx, input }) => {
-        try {
-          await getManagedCredentialStatus(ctx.user, input.userId);
-          return await getDeliveryTicketDetail({
-            userId: input.userId,
-            ticketId: input.ticketId,
-            includeInternal: true,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    delete: adminProcedure
-      .input(deleteDeliveryTicketInputSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await deleteManagedDeliveryTicket({
-            actor: ctx.user,
-            userId: input.userId,
-            ticketId: input.ticketId,
-            expectedRevision: input.expectedRevision,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    update: adminProcedure
-      .input(
-        updateDeliveryTicketSchema.extend({
-          userId: z.number().int().positive(),
-        }),
-      )
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          const { userId, ...value } = input;
-          return await updateManagedDeliveryTicket({
-            actor: ctx.user,
-            userId,
-            value,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    addMessage: adminProcedure
-      .input(adminAddDeliveryTicketMessageSchema)
-      .mutation(async ({ ctx, input }) => {
-        try {
-          const { userId, visibility, attachmentKind, ...value } = input;
-          return await addDeliveryTicketMessage({
-            actor: ctx.user,
-            workspaceUserId: userId,
-            value,
-            visibility,
-            attachmentKind,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    recordDelivery: adminProcedure
-      .input(recordDeliveryOperationSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await recordManagedDeliveryOperation({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    previewRedirects: adminProcedure
-      .input(previewRedirectWorkbookSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await previewRedirectWorkbook({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    confirmRedirects: adminProcedure
-      .input(confirmRedirectWorkbookSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await confirmRedirectWorkbook({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    updateSiteProfile: adminProcedure
-      .input(updateWorkspaceSiteProfileSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await updateWorkspaceSiteProfile({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-    upsertSiteCheck: adminProcedure
-      .input(upsertWorkspaceSiteCheckSchema)
-      .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
-        try {
-          return await upsertWorkspaceSiteCheck({
-            actor: ctx.user,
-            ...input,
-          });
-        } catch (error) {
-          throwServiceAdminError(error);
-        }
-      }),
-  }),
-
   controlPlane: router({
     overview: adminProcedure.query(async ({ ctx }) => {
       try {
@@ -1040,36 +796,8 @@ export const adminRouter = router({
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           await assertServiceCapability(input.userId, "questionSelection");
-          const reconcileState: {
-            question: InitialMonitoringQuestionSelection | null;
-          } = { question: null };
-          const question = await approveWorkspaceQuestionSelection(
-            {
-              ...input,
-              actorUserId: ctx.user.id,
-            },
-            {
-              afterWrite: async (executor, approvedQuestion) => {
-                reconcileState.question = approvedQuestion;
-                await completeQuestionReviewRequest({
-                  executor,
-                  userId: input.userId,
-                  questionId: approvedQuestion.id,
-                  actorUserId: ctx.user.id,
-                  actorRole: "admin",
-                  message: "自主填写问题已完成专业审核。",
-                });
-              },
-            },
-          );
-          if (!reconcileState.question) {
-            throw new ServiceEntitlementError(
-              "QUESTION_NOT_CURRENT",
-              "问题审核结果缺少当前服务范围。",
-            );
-          }
-          await reconcileInitialMonitoringAfterQuestionSelection({
-            question: reconcileState.question,
+          const question = await approveWorkspaceQuestionSelection({
+            ...input,
             actorUserId: ctx.user.id,
           });
           await writeWorkspaceAuditEvent({

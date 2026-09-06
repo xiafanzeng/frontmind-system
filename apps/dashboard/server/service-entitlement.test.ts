@@ -29,7 +29,6 @@ import {
   isOperationalServiceQuotaPeriod,
   isServiceQuestionQuotaAnchor,
   isMissingServicePortalTableError,
-  isBlockingQuestionWorkflowTicketStatus,
   isReplaceableModelCandidate,
   isSamePlanOverlappingServiceCorrection,
   isWorkspaceQuestionIntentExplicitlyConfirmed,
@@ -650,76 +649,6 @@ describe("service contract in-flight lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it("guards same-plan overlap corrections but never traps an explicit cancellation", () => {
-    const source = contract("luxury", {
-      planVersion: 2,
-      endsAt: new Date("2027-07-01T00:00:00.000Z"),
-    });
-    const base = {
-      targetPlanCode: "luxury" as const,
-      targetPlanVersion: 2,
-      startsAt: new Date("2027-06-15T00:00:00.000Z"),
-      sourceContracts: [source],
-    };
-    expect(
-      isSamePlanOverlappingServiceCorrection({
-        ...base,
-        targetStatus: "active",
-      }),
-    ).toBe(true);
-    expect(
-      isSamePlanOverlappingServiceCorrection({
-        ...base,
-        targetStatus: "cancelled",
-      }),
-    ).toBe(false);
-    expect(
-      isSamePlanOverlappingServiceCorrection({
-        ...base,
-        startsAt: source.endsAt,
-        targetStatus: "scheduled",
-      }),
-    ).toBe(false);
-    expect(
-      isSamePlanOverlappingServiceCorrection({
-        ...base,
-        targetPlanCode: "advanced",
-        targetPlanVersion: 1,
-        targetStatus: "active",
-      }),
-    ).toBe(false);
-    for (const status of [
-      "submitted",
-      "needs_information",
-      "scheduled",
-      "in_progress",
-    ]) {
-      expect(isBlockingQuestionWorkflowTicketStatus(status)).toBe(true);
-    }
-    for (const status of ["completed", "rejected", "cancelled"]) {
-      expect(isBlockingQuestionWorkflowTicketStatus(status)).toBe(false);
-    }
-    expect(() =>
-      assertServiceContractCancellationTiming({
-        status: "cancelled",
-        startsAt: new Date("2027-06-15T00:00:00.000Z"),
-        now: new Date("2027-06-15T00:00:00.000Z"),
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertServiceContractCancellationTiming({
-        status: "cancelled",
-        startsAt: new Date("2027-06-15T00:00:00.001Z"),
-        now: new Date("2027-06-15T00:00:00.000Z"),
-      }),
-    ).toThrowError(
-      expect.objectContaining({
-        code: "UPGRADE_RECONCILIATION_REQUIRED",
-        message: "服务取消必须立即生效，不能预约未来日期。",
-      }),
-    );
-  });
-
   it("atomically terminates source question work for an immediate cancellation", async () => {
     const fixture = renewalLifecycleExecutorFixture();
     await expect(
@@ -731,14 +660,13 @@ describe("service contract in-flight lifecycle", () => {
       }),
     ).resolves.toEqual({
       archivedPendingQuestionCount: 1,
-      cancelledQuestionWorkflowTicketCount: 4,
     });
     expect(fixture.source.status).toBe("active");
     expect(fixture.questions[0]?.status).toBe("archived");
     expect(
       fixture.tickets.find((ticket) => ticket.id === "ticket-content")?.status,
     ).toBe("submitted");
-    expect(fixture.events).toHaveLength(4);
+    expect(fixture.events).toHaveLength(0);
     await expect(
       terminateCancelledServiceContractQuestionWork({
         executor: fixture.executor,
@@ -748,9 +676,8 @@ describe("service contract in-flight lifecycle", () => {
       }),
     ).resolves.toEqual({
       archivedPendingQuestionCount: 0,
-      cancelledQuestionWorkflowTicketCount: 0,
     });
-    expect(fixture.events).toHaveLength(4);
+    expect(fixture.events).toHaveLength(0);
   });
 
   it("maps only database lock contention to a stable retry error", async () => {
@@ -864,7 +791,6 @@ describe("service contract in-flight lifecycle", () => {
       reconciledContractCount: 1,
       supersededSourceContractCount: 1,
       archivedPendingQuestionCount: 1,
-      cancelledQuestionWorkflowTicketCount: 4,
     });
     expect(fixture.source.status).toBe("superseded");
     expect(fixture.target.status).toBe("active");
@@ -878,7 +804,7 @@ describe("service contract in-flight lifecycle", () => {
     expect(
       fixture.tickets.find((ticket) => ticket.id === "ticket-content")?.status,
     ).toBe("submitted");
-    expect(fixture.events).toHaveLength(4);
+    expect(fixture.events).toHaveLength(0);
 
     const second = await reconcileActivatedProgressiveLuxuryRenewal({
       executor: fixture.executor,
@@ -891,9 +817,8 @@ describe("service contract in-flight lifecycle", () => {
       reconciledContractCount: 0,
       supersededSourceContractCount: 0,
       archivedPendingQuestionCount: 0,
-      cancelledQuestionWorkflowTicketCount: 0,
     });
-    expect(fixture.events).toHaveLength(4);
+    expect(fixture.events).toHaveLength(0);
   });
 
   it("does not freeze a scheduled renewal early or reconcile an overlap correction", async () => {
@@ -940,7 +865,6 @@ describe("service contract in-flight lifecycle", () => {
         reconciledContractCount: 0,
         supersededSourceContractCount: 0,
         archivedPendingQuestionCount: 0,
-        cancelledQuestionWorkflowTicketCount: 0,
       };
     });
     const stop = startServiceContractLifecycleReconciliationScheduler({

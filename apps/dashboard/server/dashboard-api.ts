@@ -9,9 +9,12 @@ import ExcelJS from "exceljs";
 import express from "express";
 import JSZip from "jszip";
 import { z } from "zod";
+import {
+  mergeCustomerDashboardPayload,
+  projectUserDashboardPayload,
+} from "./dashboard-editing";
 
 import {
-  deliveryTickets,
   knowledgeBaseBuildNodes,
   userDashboardContents,
 } from "../drizzle/schema";
@@ -63,6 +66,7 @@ import {
 } from "./auth-service";
 import {
   assertDashboardEnterpriseIdentity,
+  toPublicDashboardPayload,
   assertWorkspaceAccess,
   createKnowledgeSnapshot,
   DashboardEnterpriseMismatchError,
@@ -92,6 +96,7 @@ import {
 } from "./knowledge-base-archive-contract";
 import {
   assertServiceCapability,
+  servicePortalHasRequiredKnowledge,
   ServiceEntitlementError,
   updateWorkspaceQuestionsByAdminBatch,
 } from "./service-entitlement";
@@ -114,11 +119,7 @@ import {
 import { getUpstreamBaseUrl } from "./upstream-config";
 import { getDb } from "./db";
 import { writeWorkspaceAuditEvent } from "./admin-control-plane-service";
-import { assertKnowledgeMaintenanceTicketForUpload } from "./delivery-ticket-service";
-import {
-  assertDeliveryProjectContext,
-  createKnowledgeMonitoringHandoff,
-} from "./delivery-role-service";
+import { assertDeliveryProjectContext } from "./delivery-role-service";
 import type { DeliveryRoleType } from "../shared/delivery-roles";
 import {
   consumeDashboardImportPreflight,
@@ -225,7 +226,7 @@ async function assertRoleScopedWorkspaceExecution(input: {
   assertNotDeliveryAdministratorExecution(actor);
   if (
     actor.role === "user" &&
-    (!input.allowCustomerSelf || actor.id !== input.targetUserId)
+    (input.allowCustomerSelf === false || actor.id !== input.targetUserId)
   ) {
     throw new Error("当前账号不能执行该交付操作");
   }
@@ -234,42 +235,28 @@ async function assertRoleScopedWorkspaceExecution(input: {
 }
 
 const DELIVERY_IMPORT_MODULE_ACCESS: Partial<
-  Record<
-    DashboardAdminImportModule,
-    { roleType: DeliveryRoleType; operations: string[] }
-  >
+  Record<DashboardAdminImportModule, { roleType: DeliveryRoleType }>
 > = {
   keywords: {
     roleType: "monitoring_optimization_engineer",
-    operations: ["question_catalog"],
   },
   monitoring: {
     roleType: "monitoring_optimization_engineer",
-    operations: [
-      "initial_monitoring",
-      "monitoring_import",
-      "monitoring_retest",
-    ],
   },
   metrics: {
     roleType: "monitoring_optimization_engineer",
-    operations: ["stage_report"],
   },
   "optimization-report": {
     roleType: "monitoring_optimization_engineer",
-    operations: ["stage_report"],
   },
   "response-logic": {
     roleType: "content_distribution_engineer",
-    operations: ["response_logic"],
   },
   "content-assets": {
     roleType: "content_distribution_engineer",
-    operations: ["content_asset_publish"],
   },
   sections: {
     roleType: "content_distribution_engineer",
-    operations: ["content_asset_publish"],
   },
 };
 
@@ -282,46 +269,12 @@ async function assertDeliveryModuleImport(input: {
   if (!access) {
     throw new Error("当前模块不属于工程师工作台");
   }
-  const role = await assertRoleScopedWorkspaceExecution({
+  await assertRoleScopedWorkspaceExecution({
     req: input.req,
     targetUserId: input.targetUserId,
     expectedRoleType: access.roleType,
-    requirePrimaryCustomerAssignment: false,
+    allowCustomerSelf: true,
   });
-  const ticketId = String(
-    input.req.header("x-delivery-ticket-id") || "",
-  ).trim();
-  if (!ticketId || !role) {
-    throw new Error("缺少当前交付需求标识");
-  }
-  const db = await getDb();
-  if (!db) throw new Error("数据库暂时不可用");
-  const rows = await db
-    .select({ id: deliveryTickets.id })
-    .from(deliveryTickets)
-    .where(
-      and(
-        eq(deliveryTickets.id, ticketId),
-        eq(deliveryTickets.userId, input.targetUserId),
-        eq(deliveryTickets.workflowDomain, role.roleType),
-        eq(
-          deliveryTickets.assignedProjectAssignmentId,
-          role.projectAssignmentId,
-        ),
-        eq(deliveryTickets.assignedMemberId, input.req.frontmindUser!.id),
-        inArray(deliveryTickets.operation, access.operations),
-        inArray(deliveryTickets.status, [
-          "submitted",
-          "needs_information",
-          "scheduled",
-          "in_progress",
-        ]),
-      ),
-    )
-    .limit(1);
-  if (!rows[0]) {
-    throw new Error("当前需求无权发布该业务模块");
-  }
 }
 const MAX_UNPACKED_BYTES = 220 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
@@ -7230,11 +7183,6 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       totalBytes: downloaded.buffer.length,
     });
     snapshotCommitted = true;
-    await createKnowledgeMonitoringHandoff({
-      userId: targetUserId,
-      actorUserId: actor.id,
-      knowledgeSnapshotId: snapshot?.id ?? snapshotId,
-    });
     res.json({ kind: "knowledge", snapshot });
   } catch (error) {
     await removeUncommittedStoredKnowledgeAssets({
@@ -7331,8 +7279,6 @@ router.put(
             targetUserId,
             importModule,
           });
-        } else if (actor.role !== "admin") {
-          throw new Error("用户账号不能直接发布看板数据");
         }
         const existing = await getDashboardWorkspace(targetUserId);
         assertDashboardImportRevision({
@@ -7365,6 +7311,21 @@ router.put(
           targetUserId,
           importModule,
         );
+        const publicImportWorkspace = (
+          dashboard: Awaited<ReturnType<typeof getDashboardWorkspace>>,
+        ) =>
+          actor.role === "user"
+            ? {
+                ...dashboard,
+                payload: projectUserDashboardPayload({
+                  payload: dashboard.payload,
+                  configured: dashboard.revision > 0,
+                  contentAssetsAllowed:
+                    servicePortal.capabilities.contentAssets.allowed &&
+                    servicePortalHasRequiredKnowledge(servicePortal),
+                }),
+              }
+            : dashboard;
         if (![".csv", ".json", ".xlsx"].includes(extension)) {
           throw new Error("看板板块仅支持 CSV、XLSX 或 JSON");
         }
@@ -7760,7 +7721,11 @@ router.put(
               sectionId,
             }),
           });
-          res.json({ kind: "dashboard", module: importModule, dashboard });
+          res.json({
+            kind: "dashboard",
+            module: importModule,
+            dashboard: publicImportWorkspace(dashboard),
+          });
           return;
         }
         let payload: DashboardPayload;
@@ -8006,6 +7971,19 @@ router.put(
           res.json({ kind: "monitoring", module: importModule, batch });
           return;
         }
+        if (actor.role === "user") {
+          payload = mergeCustomerDashboardPayload({
+            existing: existing.payload,
+            submitted: payload,
+            contentAssetsVisible: true,
+          });
+        }
+        const previewCurrentPayload =
+          actor.role === "user"
+            ? toPublicDashboardPayload(existing.payload)
+            : existing.payload;
+        const previewIncomingPayload =
+          actor.role === "user" ? toPublicDashboardPayload(payload) : payload;
         if (
           payload.optimizationReport &&
           (importModule === "optimization-report" ||
@@ -8034,8 +8012,8 @@ router.put(
             kind: "optimization-report-preview",
             preview: {
               ...buildOptimizationReportImportPreview({
-                current: existing.payload.optimizationReport,
-                incoming: payload.optimizationReport,
+                current: previewCurrentPayload.optimizationReport,
+                incoming: previewIncomingPayload.optimizationReport!,
                 fileHash,
                 sourceName: sourceFileName,
                 templateRevision: existing.revision,
@@ -8061,8 +8039,8 @@ router.put(
             preview: {
               ...buildDashboardModuleImportPreview({
                 module: importModule,
-                current: existing.payload,
-                incoming: payload,
+                current: previewCurrentPayload,
+                incoming: previewIncomingPayload,
                 sourceName: sourceFileName,
                 fileHash,
                 templateRevision: existing.revision,
@@ -8096,15 +8074,14 @@ router.put(
             sourceFileName,
           }),
         });
-        res.json({ kind: "dashboard", module: importModule, dashboard });
+        res.json({
+          kind: "dashboard",
+          module: importModule,
+          dashboard: publicImportWorkspace(dashboard),
+        });
         return;
       }
 
-      if (actor.role === "user") {
-        throw new Error(
-          "用户知识库只能通过“更新知识库”发布已绑定任务的最终版本",
-        );
-      }
       await assertRoleScopedWorkspaceExecution({
         req,
         targetUserId,
@@ -8112,21 +8089,7 @@ router.put(
       });
       await assertKnowledgeBaseWritable(targetUserId);
       await assertServiceCapability(targetUserId, "knowledgeDisplay");
-      const maintenanceTicketId =
-        req.header("x-maintenance-ticket-id")?.trim() || undefined;
       const existingSnapshot = await getLatestKnowledgeSnapshot(targetUserId);
-      if (existingSnapshot && !maintenanceTicketId) {
-        throw new KnowledgeArchiveValidationError(
-          "structure",
-          "已发布知识库只能通过开放的维护需求替换",
-        );
-      }
-      if (maintenanceTicketId) {
-        await assertKnowledgeMaintenanceTicketForUpload({
-          userId: targetUserId,
-          ticketId: maintenanceTicketId,
-        });
-      }
 
       let sourceBuildId: string | undefined;
 
@@ -8135,7 +8098,7 @@ router.put(
         buffer,
         sourceFileName,
         snapshotId,
-        maintenanceTicketId
+        existingSnapshot
           ? {
               validationProfile: "dashboard-enterprise-v1",
               archiveContractVersions: [2, 3],
@@ -8173,7 +8136,6 @@ router.put(
           sourceFileName,
           sourceConversationId,
           sourceBuildId,
-          maintenanceTicketId,
           archiveHash,
           documents: parsed.documents,
           assets: parsed.assets,
@@ -8181,15 +8143,6 @@ router.put(
         });
         snapshotCommitted = true;
         await runCommittedKnowledgeSnapshotSideEffects([
-          {
-            name: "monitoring handoff",
-            run: () =>
-              createKnowledgeMonitoringHandoff({
-                userId: targetUserId,
-                actorUserId: actor.id,
-                knowledgeSnapshotId: snapshot?.id ?? snapshotId,
-              }),
-          },
           {
             name: "publication audit",
             run: () =>
@@ -8203,7 +8156,6 @@ router.put(
                   sourceName: sourceFileName,
                   sourceConversationId,
                   sourceBuildId,
-                  maintenanceTicketId,
                   documentCount:
                     snapshot?.documentCount ?? parsed.documents.length,
                   imageCount: snapshot?.imageCount ?? parsed.assets.length,

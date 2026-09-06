@@ -9,7 +9,7 @@ import {
   workspaceQuestions,
 } from "../drizzle/schema";
 import { SERVICE_PLAN_CATALOG } from "../shared/service-portal";
-import { DELIVERY_TICKET_LIMITS } from "../shared/delivery-ticket";
+import { CONTENT_QUOTA_LIMITS } from "../shared/content-quota";
 import { getServiceContractTermEnd } from "./service-entitlement";
 
 export async function provisionBasicEntitlement(
@@ -98,9 +98,9 @@ export async function provisionBasicEntitlement(
     endsAt,
     ...SERVICE_PLAN_CATALOG.basic.limits,
     contentAssetPublishLimit:
-      DELIVERY_TICKET_LIMITS.basic.content_asset_publish,
+      CONTENT_QUOTA_LIMITS.basic.content_asset_publish,
     websiteContentPublishLimit:
-      DELIVERY_TICKET_LIMITS.basic.website_content_publish,
+      CONTENT_QUOTA_LIMITS.basic.website_content_publish,
     revision: 1,
     createdAt: now,
     updatedAt: now,

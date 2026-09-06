@@ -1117,11 +1117,7 @@ describe("API credential encryption", () => {
                 })),
               };
             }
-            if (
-              table === deliveryTicketAttachments ||
-              table === deliveryRedirectPreviews ||
-              table === knowledgeBaseBuilds
-            ) {
+            if (table === knowledgeBaseBuilds) {
               return {
                 where: vi.fn(() => ({
                   limit: vi.fn().mockResolvedValue([]),
@@ -1176,7 +1172,16 @@ describe("API credential encryption", () => {
         }),
       });
       expect(deleteWhere).toHaveBeenCalledTimes(1);
-      expect(executor.select).toHaveBeenCalledTimes(6);
+      expect(
+        executor.select.mock.results.map(
+          ({ value }) => value.from.mock.calls[0]?.[0],
+        ),
+      ).toEqual([
+        upstreamResources,
+        attachments,
+        conversationTurns,
+        knowledgeBaseBuilds,
+      ]);
     },
   );
 

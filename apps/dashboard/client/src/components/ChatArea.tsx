@@ -254,7 +254,7 @@ export function knowledgeBaseNoticeRetryLabel(
       : knowledgeBaseNoticeRecoveryMode(notice) === "logo_repair"
         ? "重新上传 Logo 原图"
         : knowledgeBaseNoticeRecoveryMode(notice) === "reset"
-          ? "申请重置知识库"
+          ? "重置知识库"
           : knowledgeBaseNoticeRecoveryMode(notice) === "canonical_recovery"
             ? "创建新任务继续"
             : knowledgeBaseNoticeRecoveryMode(notice) === "regenerate"
@@ -1731,11 +1731,11 @@ export default function ChatArea({
     activeConversation.knowledgeBase?.contentAvailability === "partial" ||
     activeConversation.knowledgeBase?.contentAvailability === "complete";
   const knowledgeBaseNoticeDisplayMessage = knowledgeBaseTaskNotCreated
-    ? "附件未能完成任务创建前的登记，请申请重置后重新上传资料。"
+    ? "附件未能完成任务创建前的登记，请重置后重新上传资料。"
     : activeConversation.knowledgeBase?.operationState === "reset_required"
       ? knowledgeBaseHasDisplayableContent
         ? "本轮需要重置，已完成内容不受影响。"
-        : "本轮需要重置，请申请重置后重新上传资料。"
+        : "本轮需要重置，请重置后重新上传资料。"
       : activeConversation.knowledgeBase?.notice?.message;
 
   return (

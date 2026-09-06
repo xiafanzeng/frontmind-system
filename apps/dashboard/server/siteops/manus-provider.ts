@@ -1200,7 +1200,7 @@ function publicMaterializationFailure(
     return {
       status: "failed",
       code: "BUILD_FALLBACK_RENDER_FAILED",
-      message: "主渲染与可信基础模板均未能完成，请申请重置并全新开始。",
+      message: "主渲染与可信基础模板均未能完成，请重置并全新开始。",
       providerTaskId: taskId,
       result: diagnostics,
     };
@@ -1209,7 +1209,7 @@ function publicMaterializationFailure(
     return {
       status: "failed",
       code: "BUILD_INPUT_UNSAFE",
-      message: "冻结输入包含无法安全发布的资产，请申请重置并全新开始。",
+      message: "冻结输入包含无法安全发布的资产，请重置并全新开始。",
       providerTaskId: taskId,
       result: diagnostics,
     };
@@ -1218,7 +1218,7 @@ function publicMaterializationFailure(
     return {
       status: "failed",
       code: "BUILD_FALLBACK_RENDER_FAILED",
-      message: "主渲染与可信基础模板均未能完成，请申请重置并全新开始。",
+      message: "主渲染与可信基础模板均未能完成，请重置并全新开始。",
       providerTaskId: taskId,
       result: diagnostics,
     };
@@ -1230,7 +1230,7 @@ function publicMaterializationFailure(
       code: bindingFailure
         ? "BUILD_ARTIFACT_BINDING_FAILED"
         : "BUILD_ARTIFACT_PERSIST_FAILED",
-      message: "预览产物保存或摘要校验失败，请申请重置并全新开始。",
+      message: "预览产物保存或摘要校验失败，请重置并全新开始。",
       providerTaskId: taskId,
       result: diagnostics,
     };
@@ -1238,7 +1238,7 @@ function publicMaterializationFailure(
   return {
     status: "failed",
     code: "BUILD_INPUT_UNSAFE",
-    message: "冻结输入未通过安全校验，请申请重置并全新开始。",
+    message: "冻结输入未通过安全校验，请重置并全新开始。",
     providerTaskId: taskId,
     result: diagnostics,
   };
@@ -5848,7 +5848,7 @@ async function handleNativeReactSiteBuild(input: {
       if (!nativeSourceRuntime) {
         throw new SiteOpsManusFailure(
           "FRONTMIND_BUILD_NATIVE_RUNTIME_REPLAY_UNAVAILABLE",
-          "本次 AI 建站任务冻结的运行时合同已不可用；请申请重置后从当前企业知识库重新开始。",
+          "本次 AI 建站任务冻结的运行时合同已不可用；请重置后从当前企业知识库重新开始。",
           "failed",
           providerStateV2(currentState),
         );
@@ -5856,7 +5856,7 @@ async function handleNativeReactSiteBuild(input: {
     } else if (taskId || input.state?.stage === "create_unknown") {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_NATIVE_RUNTIME_REPLAY_UNAVAILABLE",
-        "本次 AI 建站任务缺少可重放的运行时坐标；请申请重置后从当前企业知识库重新开始。",
+        "本次 AI 建站任务缺少可重放的运行时坐标；请重置后从当前企业知识库重新开始。",
         "failed",
         providerStateV2(currentState),
       );
@@ -6104,7 +6104,7 @@ async function handleNativeReactSiteBuild(input: {
       if (currentState?.stage === "create_unknown") {
         throw new SiteOpsManusFailure(
           "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-          "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+          "AI 任务创建结果无法确认；请重新开始制作，使用当前企业知识库创建新任务。",
           "attention_required",
           currentState ?? undefined,
         );
@@ -7270,7 +7270,7 @@ async function handleNativeReactSiteBuild(input: {
     if (input.state?.stage === "create_unknown") {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-        "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+        "AI 任务创建结果无法确认；请重新开始制作，使用当前企业知识库创建新任务。",
         "attention_required",
         currentState ?? undefined,
       );
@@ -7494,7 +7494,7 @@ async function handleNativeReactSiteBuild(input: {
     if (!nextToken || readyState.nativeRepairAttempt !== repair.attempt) {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_NATIVE_REPAIR_REPLAY_UNAVAILABLE",
-        "AI 建站修复轮次缺少可重放坐标；请申请重置后从当前企业知识库重新开始。",
+        "AI 建站修复轮次缺少可重放坐标；请重置后从当前企业知识库重新开始。",
         "failed",
         readyState,
       );
@@ -7631,7 +7631,7 @@ async function handleNativeReactSiteBuild(input: {
     ) {
       throw new SiteOpsManusFailure(
         "FRONTMIND_BUILD_NATIVE_REPAIR_REPLAY_UNAVAILABLE",
-        "AI 建站修复轮次缺少可重放输入；请申请重置后从当前企业知识库重新开始。",
+        "AI 建站修复轮次缺少可重放输入；请重置后从当前企业知识库重新开始。",
         "failed",
         currentState,
       );
@@ -8611,7 +8611,7 @@ async function handleNativeReactSiteBuild(input: {
         if (fallback) return fallback;
         throw new SiteOpsManusFailure(
           "BUILD_PRIMARY_RENDER_FAILED",
-          "原生 21st 源码连续未能编译，请申请重置后重新生成。",
+          "原生 21st 源码连续未能编译，请重置后重新生成。",
           "failed",
         );
       }
@@ -9489,7 +9489,7 @@ export function resultFailure(error: unknown): SiteOpsProviderResult {
         status: "failed",
         code: "FRONTMIND_BUILD_REQUEST_INVALID",
         message:
-          "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+          "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
         result: {
           schemaVersion: 1,
           stage:
@@ -9525,7 +9525,7 @@ export function resultFailure(error: unknown): SiteOpsProviderResult {
     status: "failed",
     code: "FRONTMIND_BUILD_FAILED",
     message:
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
   };
 }
 
@@ -9761,7 +9761,7 @@ export function createManusSiteOpsProviderHandler(
           if (state?.stage === "create_unknown") {
             throw new SiteOpsManusFailure(
               "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-              "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+              "AI 任务创建结果无法确认；请重新开始制作，使用当前企业知识库创建新任务。",
               "attention_required",
               state ?? undefined,
             );
@@ -10783,7 +10783,7 @@ export function createManusSiteOpsProviderHandler(
         if (state?.stage === "create_unknown") {
           throw new SiteOpsManusFailure(
             "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-            "AI 任务创建结果无法确认；请申请重置，批准后从当前企业知识库开始新任务。",
+            "AI 任务创建结果无法确认；请重新开始制作，使用当前企业知识库创建新任务。",
             "attention_required",
             state ?? undefined,
           );
@@ -12149,7 +12149,7 @@ export function createManusSiteOpsProviderHandler(
         if (hostCanonicalContent) {
           throw new SiteOpsManusFailure(
             "BUILD_CANONICALIZATION_FAILED",
-            "冻结知识资料无法形成安全预览，请申请重置后从当前企业知识库重新开始。",
+            "冻结知识资料无法形成安全预览，请重置后从当前企业知识库重新开始。",
             "failed",
           );
         }
@@ -12256,7 +12256,7 @@ export function createManusSiteOpsProviderHandler(
           if (hostCanonicalContent) {
             throw new SiteOpsManusFailure(
               "BUILD_CANONICALIZATION_FAILED",
-              "冻结知识资料无法形成安全预览，请申请重置后从当前企业知识库重新开始。",
+              "冻结知识资料无法形成安全预览，请重置后从当前企业知识库重新开始。",
               "failed",
             );
           }

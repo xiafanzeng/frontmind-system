@@ -17,8 +17,6 @@ import {
   knowledgeBaseBuilds,
   knowledgeBaseSnapshots,
   knowledgeImportReceipts,
-  deliveryTicketEvents,
-  deliveryTickets,
   monitoringBatches,
   monitoringCitationRecords,
   monitoringSamples,
@@ -51,7 +49,7 @@ import {
   type ServiceQuotaUsage,
   type WorkspaceQuestionCategory,
 } from "../shared/service-portal";
-import { DELIVERY_TICKET_LIMITS } from "../shared/delivery-ticket";
+import { CONTENT_QUOTA_LIMITS } from "../shared/content-quota";
 import { dashboardPayloadSchema } from "../shared/dashboard";
 import {
   resolveBrandKeywordSelection,
@@ -393,9 +391,9 @@ export function serviceQuotaWindowDeliveryLimits(
   }
   return {
     contentAssetPublishLimit:
-      DELIVERY_TICKET_LIMITS[planCode].content_asset_publish,
+      CONTENT_QUOTA_LIMITS[planCode].content_asset_publish,
     websiteContentPublishLimit:
-      DELIVERY_TICKET_LIMITS[planCode].website_content_publish,
+      CONTENT_QUOTA_LIMITS[planCode].website_content_publish,
   };
 }
 
@@ -2089,7 +2087,6 @@ export type ServiceContractLifecycleReconciliationResult = {
   reconciledContractCount: number;
   supersededSourceContractCount: number;
   archivedPendingQuestionCount: number;
-  cancelledQuestionWorkflowTicketCount: number;
 };
 
 const EMPTY_SERVICE_CONTRACT_LIFECYCLE_RESULT =
@@ -2098,7 +2095,6 @@ const EMPTY_SERVICE_CONTRACT_LIFECYCLE_RESULT =
     reconciledContractCount: 0,
     supersededSourceContractCount: 0,
     archivedPendingQuestionCount: 0,
-    cancelledQuestionWorkflowTicketCount: 0,
   });
 
 function addServiceContractLifecycleResult(
@@ -2109,14 +2105,12 @@ function addServiceContractLifecycleResult(
   target.reconciledContractCount += value.reconciledContractCount;
   target.supersededSourceContractCount += value.supersededSourceContractCount;
   target.archivedPendingQuestionCount += value.archivedPendingQuestionCount;
-  target.cancelledQuestionWorkflowTicketCount +=
-    value.cancelledQuestionWorkflowTicketCount;
 }
 
 /**
  * Activates one due annual Luxury v2 renewal and terminates only source-year
  * work that cannot legally cross the annual cohort boundary. The user row and
- * target contract serialize duplicate workers. Ticket/question locks skip an
+ * target contract serialize duplicate workers. Question locks skip an
  * already-running terminal decision; a later sweep then observes its terminal
  * result. Every write predicate is terminal-state aware, so reruns are no-ops.
  */
@@ -2189,8 +2183,6 @@ export async function reconcileActivatedProgressiveLuxuryRenewal(input: {
   });
   result.archivedPendingQuestionCount =
     terminatedQuestionWork.archivedPendingQuestionCount;
-  result.cancelledQuestionWorkflowTicketCount =
-    terminatedQuestionWork.cancelledQuestionWorkflowTicketCount;
 
   const sourceContractsToSupersede = renewalSources.filter((source) =>
     (
@@ -2237,7 +2229,6 @@ export async function reconcileActivatedProgressiveLuxuryRenewal(input: {
   result.reconciledContractCount =
     result.supersededSourceContractCount ||
     result.archivedPendingQuestionCount ||
-    result.cancelledQuestionWorkflowTicketCount ||
     target.status === "scheduled"
       ? 1
       : 0;
@@ -2337,33 +2328,17 @@ export async function reconcileActivatedProgressiveLuxuryRenewals(
     })
     .from(serviceContracts)
     .where(inArray(serviceContracts.id, replacedContractIds));
-  const [activeQuestionWorkflowRows, pendingQuestionRows] = await Promise.all([
-    db
-      .select({ contractId: deliveryTickets.contractId })
-      .from(deliveryTickets)
-      .where(
-        and(
-          inArray(deliveryTickets.contractId, replacedContractIds),
-          questionWorkflowTicketCondition(),
-          inArray(
-            deliveryTickets.status,
-            ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES,
-          ),
-        ),
+  const pendingQuestionRows = await db
+    .select({ contractId: workspaceQuestions.contractId })
+    .from(workspaceQuestions)
+    .where(
+      and(
+        inArray(workspaceQuestions.contractId, replacedContractIds),
+        inArray(workspaceQuestions.status, ["candidate", "selected"]),
+        eq(workspaceQuestions.selectionApprovalStatus, "pending"),
       ),
-    db
-      .select({ contractId: workspaceQuestions.contractId })
-      .from(workspaceQuestions)
-      .where(
-        and(
-          inArray(workspaceQuestions.contractId, replacedContractIds),
-          inArray(workspaceQuestions.status, ["candidate", "selected"]),
-          eq(workspaceQuestions.selectionApprovalStatus, "pending"),
-        ),
-      ),
-  ]);
+    );
   const sourceContractIdsWithOutstandingQuestionWork = new Set([
-    ...activeQuestionWorkflowRows.map((row) => row.contractId),
     ...pendingQuestionRows.map((row) => row.contractId),
   ]);
   const dueAnnualRenewals = selectDueProgressiveLuxuryRenewalCandidates({
@@ -2689,28 +2664,6 @@ export function isProgressiveLuxuryRenewal(input: {
   );
 }
 
-const ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES = [
-  "submitted",
-  "needs_information",
-  "scheduled",
-  "in_progress",
-] as const;
-const CONTRACT_SCOPED_QUESTION_WORKFLOW_OPERATIONS = [
-  "question_catalog",
-  "initial_monitoring",
-  "monitoring_import",
-] as const;
-
-function questionWorkflowTicketCondition() {
-  return or(
-    isNotNull(deliveryTickets.sourceQuestionId),
-    inArray(
-      deliveryTickets.operation,
-      CONTRACT_SCOPED_QUESTION_WORKFLOW_OPERATIONS,
-    ),
-  );
-}
-
 /**
  * A same-plan overlapping replacement is an administrative correction, not a
  * new entitlement cohort. It must preserve the source question workflow. A
@@ -2733,12 +2686,6 @@ export function isSamePlanOverlappingServiceCorrection(input: {
       contract.planVersion === input.targetPlanVersion &&
       epoch(input.startsAt) < epoch(contract.endsAt),
   );
-}
-
-export function isBlockingQuestionWorkflowTicketStatus(status: string) {
-  return (
-    ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES as readonly string[]
-  ).includes(status);
 }
 
 export function assertServiceContractCancellationTiming(input: {
@@ -2797,7 +2744,6 @@ async function withServiceContractLifecycleNoWaitLock<T>(
 
 type TerminateContractQuestionWorkResult = {
   archivedPendingQuestionCount: number;
-  cancelledQuestionWorkflowTicketCount: number;
 };
 
 async function terminateContractQuestionWork(input: {
@@ -2811,29 +2757,8 @@ async function terminateContractQuestionWork(input: {
   if (!input.contractIds.length) {
     return {
       archivedPendingQuestionCount: 0,
-      cancelledQuestionWorkflowTicketCount: 0,
     };
   }
-  const ticketQuery = input.executor
-    .select()
-    .from(deliveryTickets)
-    .where(
-      and(
-        eq(deliveryTickets.userId, input.userId),
-        inArray(deliveryTickets.contractId, input.contractIds),
-        questionWorkflowTicketCondition(),
-        inArray(
-          deliveryTickets.status,
-          ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES,
-        ),
-      ),
-    );
-  const activeQuestionWorkflowRows =
-    input.lockMode === "skip_locked"
-      ? await ticketQuery.for("update", { skipLocked: true })
-      : await withServiceContractLifecycleNoWaitLock(() =>
-          ticketQuery.for("update", { noWait: true }),
-        );
   const questionQuery = input.executor
     .select({ id: workspaceQuestions.id })
     .from(workspaceQuestions)
@@ -2852,51 +2777,6 @@ async function terminateContractQuestionWork(input: {
           questionQuery.for("update", { noWait: true }),
         );
 
-  if (activeQuestionWorkflowRows.length) {
-    const ticketIds = activeQuestionWorkflowRows.map(
-      (ticket: { id: string }) => ticket.id,
-    );
-    await input.executor
-      .update(deliveryTickets)
-      .set({
-        status: "cancelled",
-        publicSummary: input.message,
-        technicalDedupeKey: null,
-        resolvedAt: input.now,
-        revision: sql`${deliveryTickets.revision} + 1`,
-        updatedByUserId: null,
-        updatedAt: input.now,
-      })
-      .where(
-        and(
-          inArray(deliveryTickets.id, ticketIds),
-          inArray(
-            deliveryTickets.status,
-            ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES,
-          ),
-        ),
-      );
-    await input.executor.insert(deliveryTicketEvents).values(
-      activeQuestionWorkflowRows.map(
-        (ticket: {
-          id: string;
-          status: (typeof ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES)[number];
-        }) => ({
-          id: randomUUID(),
-          ticketId: ticket.id,
-          userId: input.userId,
-          actorUserId: null,
-          actorRole: "system" as const,
-          kind: "status_change" as const,
-          visibility: "customer" as const,
-          message: input.message,
-          fromStatus: ticket.status,
-          toStatus: "cancelled" as const,
-          createdAt: input.now,
-        }),
-      ),
-    );
-  }
   if (pendingQuestionRows.length) {
     await input.executor
       .update(workspaceQuestions)
@@ -2921,7 +2801,6 @@ async function terminateContractQuestionWork(input: {
   }
   return {
     archivedPendingQuestionCount: pendingQuestionRows.length,
-    cancelledQuestionWorkflowTicketCount: activeQuestionWorkflowRows.length,
   };
 }
 
@@ -3067,57 +2946,6 @@ export async function upsertServiceContract(
       startsAt,
       sourceContracts: sourceContracts as ServicePortalContractRecord[],
     });
-    const samePlanOverlappingCorrection =
-      isSamePlanOverlappingServiceCorrection({
-        targetPlanCode: planCode,
-        targetPlanVersion,
-        targetStatus: input.status ?? "active",
-        startsAt,
-        sourceContracts: sourceContracts as ServicePortalContractRecord[],
-      });
-    if (samePlanOverlappingCorrection && sourceContractIds.length) {
-      const pendingSourceQuestionRows =
-        await withServiceContractLifecycleNoWaitLock(() =>
-          tx
-            .select({ id: workspaceQuestions.id })
-            .from(workspaceQuestions)
-            .where(
-              and(
-                eq(workspaceQuestions.userId, input.userId),
-                inArray(workspaceQuestions.contractId, sourceContractIds),
-                inArray(workspaceQuestions.status, ["candidate", "selected"]),
-                eq(workspaceQuestions.selectionApprovalStatus, "pending"),
-              ),
-            )
-            .limit(1)
-            .for("update", { noWait: true }),
-        );
-      const activeQuestionWorkflowRows =
-        await withServiceContractLifecycleNoWaitLock(() =>
-          tx
-            .select({ id: deliveryTickets.id })
-            .from(deliveryTickets)
-            .where(
-              and(
-                eq(deliveryTickets.userId, input.userId),
-                inArray(deliveryTickets.contractId, sourceContractIds),
-                questionWorkflowTicketCondition(),
-                inArray(
-                  deliveryTickets.status,
-                  ACTIVE_QUESTION_WORKFLOW_TICKET_STATUSES,
-                ),
-              ),
-            )
-            .limit(1)
-            .for("update", { noWait: true }),
-        );
-      if (pendingSourceQuestionRows[0] || activeQuestionWorkflowRows[0]) {
-        throw new ServiceEntitlementError(
-          "UPGRADE_RECONCILIATION_REQUIRED",
-          "来源合同仍有待审核问题或正在处理的问题工作流，请先完成或取消后再更正服务合同。",
-        );
-      }
-    }
     const endsAt = getServiceContractTermEnd(planCode, startsAt, {
       planVersion: targetPlanVersion,
     });
@@ -4466,7 +4294,6 @@ type WorkspaceQuestionSelectionRequest =
       expectedRevision: number;
       question?: never;
       category?: never;
-      classificationVersion?: never;
       now?: Date;
     }
   | {
@@ -4474,17 +4301,6 @@ type WorkspaceQuestionSelectionRequest =
       actorUserId: number;
       question: string;
       category: WorkspaceQuestionCategory;
-      classificationVersion?: never;
-      questionId?: never;
-      expectedRevision?: never;
-      now?: Date;
-    }
-  | {
-      userId: number;
-      actorUserId: number;
-      question: string;
-      classificationVersion: 2;
-      category?: never;
       questionId?: never;
       expectedRevision?: never;
       now?: Date;
@@ -4598,26 +4414,13 @@ function assertQuestionSelectionWithinTotalQuota(input: {
 }
 
 /**
- * Records a user's choice without consuming the authoritative service quota.
- * Pending requests are soft-reserved so concurrent submissions cannot exceed
- * the purchased limits. Only an assigned administrator's later approval moves
- * the row to selected+approved and makes it count in portal quota usage.
+ * Applies the customer's choice immediately within the authoritative quota
+ * transaction. User, period and question locks serialize concurrent selection.
  */
 export async function requestWorkspaceQuestionSelection(
   input: WorkspaceQuestionSelectionRequest,
   options?: { afterWrite?: WorkspaceQuestionTransactionHook },
 ): Promise<ServicePortalQuestion> {
-  if (
-    "question" in input &&
-    input.classificationVersion === 2 &&
-    !QUESTION_CLASSIFICATION_V2_WRITES_ENABLED
-  ) {
-    throw new ServiceEntitlementError(
-      "QUESTION_NOT_CURRENT",
-      "问题分类能力正在升级，请稍后重试。",
-      503,
-    );
-  }
   const now = input.now ?? new Date();
   const portal = await assertServiceCapability(
     input.userId,
@@ -4635,8 +4438,6 @@ export async function requestWorkspaceQuestionSelection(
 
   const db = await requireServiceDb();
   return db.transaction(async (tx) => {
-    const pendingClassificationV2 =
-      "question" in input && input.classificationVersion === 2;
     const targetUsers = await tx
       .select({ id: users.id })
       .from(users)
@@ -4748,10 +4549,6 @@ export async function requestWorkspaceQuestionSelection(
       if (question.status === "selected") {
         return toPublicWorkspaceQuestion(question);
       }
-      if (question.selectionApprovalStatus === "pending") {
-        await options?.afterWrite?.(tx, question);
-        return toPublicWorkspaceQuestion(question);
-      }
       if (question.revision !== input.expectedRevision) {
         throw new ServiceEntitlementError(
           "QUESTION_REVISION_CONFLICT",
@@ -4780,13 +4577,6 @@ export async function requestWorkspaceQuestionSelection(
       if (duplicate?.status === "selected") {
         return toPublicWorkspaceQuestion(duplicate);
       }
-      if (
-        duplicate?.selectionApprovalStatus === "pending" &&
-        duplicate.source === "user"
-      ) {
-        await options?.afterWrite?.(tx, duplicate);
-        return toPublicWorkspaceQuestion(duplicate);
-      }
       if (duplicate) {
         question = duplicate;
       } else {
@@ -4797,12 +4587,8 @@ export async function requestWorkspaceQuestionSelection(
           quotaPeriodId: questionStoragePeriod.id,
           externalQuestionId: null,
           sourceQuestionId: null,
-          candidateKey: pendingClassificationV2
-            ? UNCLASSIFIED_QUESTION_CANDIDATE_KEY
-            : null,
-          category: pendingClassificationV2
-            ? UNCLASSIFIED_QUESTION_STORAGE_CATEGORY
-            : workspaceQuestionCategorySchema.parse(input.category),
+          candidateKey: null,
+          category: workspaceQuestionCategorySchema.parse(input.category),
           question: normalizedQuestion,
           intent: null,
           intentRevision: 1,
@@ -4851,109 +4637,67 @@ export async function requestWorkspaceQuestionSelection(
           isProgressiveLuxuryContract(contract),
       },
     );
-    if ("questionId" in input) {
-      const category = workspaceQuestionCategorySchema.parse(question.category);
-      assertQuestionSelectionWithinQuota({
-        limits,
-        usage: reservedUsage,
-        category,
-      });
-    } else if (pendingClassificationV2) {
-      assertQuestionSelectionWithinTotalQuota({ limits, usage: reservedUsage });
-      if (isProgressiveLuxuryContract(contract)) {
-        for (const category of [
-          "industry",
-          "competitor_comparison",
-          "reputation",
-          "product_scenario",
-        ] as const) {
-          assertQuestionSelectionWithinQuota({
-            limits,
-            usage: reservedUsage,
-            category,
-          });
-        }
-      }
-    } else {
-      assertQuestionSelectionWithinQuota({
-        limits,
-        usage: reservedUsage,
-        category: workspaceQuestionCategorySchema.parse(input.category),
-      });
+    const category = workspaceQuestionCategorySchema.parse(
+      "questionId" in input ? question.category : input.category,
+    );
+    if (
+      "questionId" in input &&
+      isUserQuestionPendingClassification(question)
+    ) {
+      throw new ServiceEntitlementError(
+        "QUESTION_SELECTION_CONFIRMATION_REQUIRED",
+        "请选择问题类型后再确认。",
+        409,
+      );
     }
-
+    assertQuestionSelectionWithinQuota({
+      limits,
+      usage: reservedUsage,
+      category,
+    });
+    const selected: WorkspaceQuestion = {
+      ...question,
+      candidateKey: null,
+      category,
+      ...("question" in input
+        ? {
+            question: normalizeCandidateText(
+              input.question!,
+              "目标问题",
+              4_000,
+            ),
+            source: "user" as const,
+          }
+        : {}),
+      status: "selected",
+      selectionApprovalStatus: "approved",
+      selectionRequestedAt: now,
+      selectionRequestedByUserId: input.actorUserId,
+      selectionApprovedAt: now,
+      selectionApprovedByUserId: input.actorUserId,
+      selectedAt: now,
+      locked: true,
+      revision: questionAlreadyExists
+        ? question.revision + 1
+        : question.revision,
+      updatedAt: now,
+    };
     if (questionAlreadyExists) {
-      const revision = question.revision + 1;
       await tx
         .update(workspaceQuestions)
-        .set({
-          ...("question" in input
-            ? {
-                candidateKey: pendingClassificationV2
-                  ? UNCLASSIFIED_QUESTION_CANDIDATE_KEY
-                  : null,
-                category: pendingClassificationV2
-                  ? UNCLASSIFIED_QUESTION_STORAGE_CATEGORY
-                  : workspaceQuestionCategorySchema.parse(input.category),
-                question: normalizeCandidateText(
-                  input.question!,
-                  "目标问题",
-                  4_000,
-                ),
-                source: "user" as const,
-              }
-            : {}),
-          selectionApprovalStatus: "pending",
-          selectionRequestedAt: now,
-          selectionRequestedByUserId: input.actorUserId,
-          selectionApprovedAt: null,
-          selectionApprovedByUserId: null,
-          revision,
-          updatedAt: now,
-        })
+        .set(selected)
         .where(
           and(
             eq(workspaceQuestions.id, question.id),
+            eq(workspaceQuestions.userId, input.userId),
             eq(workspaceQuestions.revision, question.revision),
           ),
         );
-      const updatedQuestion: WorkspaceQuestion = {
-        ...question,
-        ...("question" in input
-          ? {
-              candidateKey: pendingClassificationV2
-                ? UNCLASSIFIED_QUESTION_CANDIDATE_KEY
-                : null,
-              category: pendingClassificationV2
-                ? UNCLASSIFIED_QUESTION_STORAGE_CATEGORY
-                : workspaceQuestionCategorySchema.parse(input.category),
-              question: normalizeCandidateText(
-                input.question!,
-                "目标问题",
-                4_000,
-              ),
-              source: "user" as const,
-            }
-          : {}),
-        selectionApprovalStatus: "pending",
-        selectionRequestedAt: now,
-        selectionRequestedByUserId: input.actorUserId,
-        revision,
-        updatedAt: now,
-      };
-      await options?.afterWrite?.(tx, updatedQuestion);
-      return toPublicWorkspaceQuestion(updatedQuestion);
+    } else {
+      await tx.insert(workspaceQuestions).values(selected);
     }
-
-    const pendingQuestion: WorkspaceQuestion = {
-      ...question,
-      selectionApprovalStatus: "pending",
-      selectionRequestedAt: now,
-      selectionRequestedByUserId: input.actorUserId,
-    };
-    await tx.insert(workspaceQuestions).values(pendingQuestion);
-    await options?.afterWrite?.(tx, pendingQuestion);
-    return toPublicWorkspaceQuestion(pendingQuestion);
+    await options?.afterWrite?.(tx, selected);
+    return toPublicWorkspaceQuestion(selected);
   });
 }
 

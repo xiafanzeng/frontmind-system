@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { serviceQuotaPeriods } from "../../drizzle/schema";
-import type { DeliveryTicketQuotaPool } from "../../shared/delivery-ticket";
+import type { ContentQuotaPool } from "../../shared/content-quota";
 import type { ServicePortal } from "../../shared/service-portal";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "../../shared/siteops-branding";
 import {
@@ -47,8 +47,7 @@ export function assertSiteOpsServiceEntitlement(portal: ServicePortal) {
   }
   throw new SiteOpsQuotaError(
     "SITEOPS_ENTITLEMENT_REQUIRED",
-    portal.service.status === "expired" ||
-      portal.service.status === "cancelled"
+    portal.service.status === "expired" || portal.service.status === "cancelled"
       ? `当前${SITEOPS_CUSTOMER_DISPLAY_NAME}已到期，请续费后继续使用。`
       : `当前服务版本不包含${SITEOPS_CUSTOMER_DISPLAY_NAME}，请升级进阶版或豪华版。`,
     403,
@@ -57,7 +56,7 @@ export function assertSiteOpsServiceEntitlement(portal: ServicePortal) {
 
 export function siteOpsQuotaPeriodIds(
   portal: ServicePortal,
-  _quotaPool: DeliveryTicketQuotaPool,
+  _quotaPool: ContentQuotaPool,
 ) {
   assertSiteOpsServiceEntitlement(portal);
   const periodIds = [
@@ -83,7 +82,7 @@ export function siteOpsQuotaPeriodIds(
 
 function archivedUsage(
   period: typeof serviceQuotaPeriods.$inferSelect,
-  quotaPool: DeliveryTicketQuotaPool,
+  quotaPool: ContentQuotaPool,
 ) {
   return Number(
     quotaPool === "content_asset_publish"
@@ -94,7 +93,7 @@ function archivedUsage(
 
 export function selectSiteOpsQuotaPeriod(input: {
   periods: Array<typeof serviceQuotaPeriods.$inferSelect>;
-  quotaPool: DeliveryTicketQuotaPool;
+  quotaPool: ContentQuotaPool;
   activeCounts: ReadonlyMap<string, number>;
 }) {
   return (
@@ -114,14 +113,14 @@ export function selectSiteOpsQuotaPeriod(input: {
 
 /**
  * Caller runs inside the same transaction that creates the immutable SiteOps
- * delivery row. Lock ordering matches delivery-ticket creation, so a ticket
- * and a SiteOps request cannot both allocate the final slot.
+ * delivery row. Lock quota periods so concurrent requests cannot both allocate
+ * the final slot.
  */
 export async function reserveSiteOpsQuota(
   tx: any,
   input: {
     userId: number;
-    quotaPool: DeliveryTicketQuotaPool;
+    quotaPool: ContentQuotaPool;
     quotaPeriodIds: string[];
   },
 ) {

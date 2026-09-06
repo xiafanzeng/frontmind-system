@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/components/QuestionMaintenanceRequestDialog", () => ({
   default: ({ disabled }: { disabled?: boolean }) => (
     <button type="button" disabled={disabled}>
-      提交应答逻辑修改需求
+      重置应答逻辑
     </button>
   ),
 }));
@@ -1090,10 +1090,8 @@ describe("ResponseLogicWorkspace", () => {
     expect(
       screen.getByRole("heading", { name: "应答逻辑智能体" }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "需求记录" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "提交应答逻辑修改需求" }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "需求记录" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重置应答逻辑" })).toBeTruthy();
     expect(screen.getByText("待优化问题")).toBeTruthy();
     expect(container.querySelector(".rl-question-nav")).toBe(questionNavigator);
     expect(container.querySelector(".rl-question-context")).toBe(

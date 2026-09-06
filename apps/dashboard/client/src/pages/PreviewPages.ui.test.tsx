@@ -31,26 +31,6 @@ vi.mock("@/components/PortalShell", () => ({
   }) => <section className={className}>{children}</section>,
 }));
 
-vi.mock("@/components/AdminDeliveryTicketWorkspace", () => ({
-  default: ({
-    enterpriseName,
-    canAdjustQuota,
-    canExecuteDelivery,
-  }: {
-    enterpriseName?: string;
-    canAdjustQuota?: boolean;
-    canExecuteDelivery?: boolean;
-  }) => (
-    <section
-      data-testid="admin-delivery-ticket-workspace"
-      data-can-adjust-quota={String(Boolean(canAdjustQuota))}
-      data-can-execute-delivery={String(Boolean(canExecuteDelivery))}
-    >
-      <h2>{enterpriseName}需求记录</h2>
-    </section>
-  ),
-}));
-
 vi.mock("@/components/CustomerDashboardMirror", () => ({
   default: ({
     layout,
@@ -77,7 +57,6 @@ vi.mock("@/components/CustomerDashboardMirror", () => ({
 import {
   PreviewAdminAccounts,
   PreviewAdminDeliveryRoles,
-  PreviewAdminDispatch,
   PreviewCreateAccountDialog,
   PreviewDeliveryControl,
   PreviewAdminUsers,
@@ -91,16 +70,6 @@ describe("role-scoped administrator previews", () => {
     expect(screen.getByText("验收企业")).toBeInTheDocument();
     expect(screen.getByText("验收企业 B")).toBeInTheDocument();
     expect(screen.queryByText("验收企业 C")).not.toBeInTheDocument();
-  });
-
-  it("uses only the two public management statuses in the ticket preview", () => {
-    render(<PreviewAdminDispatch previewAccessLevel="delivery_admin" />);
-
-    expect(screen.getAllByText("待处理").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("已完成").length).toBeGreaterThan(0);
-    expect(screen.queryByText("处理中")).not.toBeInTheDocument();
-    expect(screen.queryByText("待领取")).not.toBeInTheDocument();
-    expect(screen.queryByText("等客户补充")).not.toBeInTheDocument();
   });
 
   it("keeps delivery administrator account management role-scoped", () => {
@@ -213,7 +182,7 @@ describe("preview account creation form", () => {
       screen.getByRole("button", { name: "进入客户看板" }),
     ).toBeInTheDocument();
     expect(screen.getByText("套餐与服务周期")).toBeInTheDocument();
-    expect(screen.getByText("验收企业需求记录")).toBeInTheDocument();
+    expect(screen.queryByText("验收企业需求记录")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "上传并校验" })).toHaveLength(
       7,
     );
@@ -266,12 +235,6 @@ describe("preview account creation form", () => {
     expect(
       screen.queryByRole("button", { name: "编辑分配" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId("admin-delivery-ticket-workspace"),
-    ).toHaveAttribute("data-can-adjust-quota", "false");
-    expect(
-      screen.getByTestId("admin-delivery-ticket-workspace"),
-    ).toHaveAttribute("data-can-execute-delivery", "false");
   });
 
   it("keeps account creation out of the system customer workspace", () => {
@@ -291,12 +254,6 @@ describe("preview account creation form", () => {
     expect(screen.queryByText("API Key 与积分")).not.toBeInTheDocument();
     expect(screen.queryByText(/API Key 已配置/)).not.toBeInTheDocument();
     expect(screen.queryByText(/API Key 待配置/)).not.toBeInTheDocument();
-    expect(
-      screen.getByTestId("admin-delivery-ticket-workspace"),
-    ).toHaveAttribute("data-can-adjust-quota", "true");
-    expect(
-      screen.getByTestId("admin-delivery-ticket-workspace"),
-    ).toHaveAttribute("data-can-execute-delivery", "true");
     expect(
       Array.from(
         container.querySelectorAll(

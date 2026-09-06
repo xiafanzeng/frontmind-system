@@ -16,7 +16,6 @@ import {
   getDashboardWorkspace,
   getKnowledgeSnapshotById,
 } from "./dashboard-service";
-import { createKnowledgeMonitoringHandoff } from "./delivery-role-service";
 import { assertKnowledgeBaseWritable } from "./knowledge-base-reset-service";
 import { getDb } from "./db";
 import {
@@ -663,21 +662,6 @@ export async function importWebsiteKnowledgeArtifact(input: {
       snapshotId: reservation.snapshotId,
     });
     if (!snapshot) throw incompleteReceiptError();
-    // Snapshot + receipt commit atomically, while the monitoring handoff is a
-    // post-commit side effect. A worker can exit in that narrow interval, so
-    // every completed-receipt replay must also repair the handoff. The handoff
-    // service is snapshot-keyed/idempotent; failure remains non-fatal because
-    // the knowledge snapshot is already durable and a later replay can retry.
-    await createKnowledgeMonitoringHandoff({
-      userId: provision.userId,
-      actorUserId: provision.userId,
-      knowledgeSnapshotId: reservation.snapshotId,
-    }).catch((handoffError) => {
-      console.error(
-        "[KnowledgeImport] Completed receipt replay could not ensure monitoring handoff",
-        handoffError,
-      );
-    });
     return {
       status: "completed" as const,
       replayed: true,
@@ -800,11 +784,6 @@ export async function importWebsiteKnowledgeArtifact(input: {
     committedSnapshot = snapshot;
     committedSnapshotId = snapshot?.id ?? snapshotId;
     snapshotCommitted = true;
-    await createKnowledgeMonitoringHandoff({
-      userId: provision.userId,
-      actorUserId: provision.userId,
-      knowledgeSnapshotId: snapshot?.id ?? snapshotId,
-    });
     return {
       status: "completed" as const,
       replayed: false,
@@ -838,16 +817,6 @@ export async function importWebsiteKnowledgeArtifact(input: {
             );
           }
         }
-        await createKnowledgeMonitoringHandoff({
-          userId: provision.userId,
-          actorUserId: provision.userId,
-          knowledgeSnapshotId: receiptState.snapshotId,
-        }).catch((handoffError) => {
-          console.error(
-            "[KnowledgeImport] Replayed committed snapshot but monitoring handoff failed",
-            handoffError,
-          );
-        });
         return {
           status: "completed" as const,
           replayed: true,
@@ -866,16 +835,6 @@ export async function importWebsiteKnowledgeArtifact(input: {
       }
     }
     if (snapshotCommitted) {
-      await createKnowledgeMonitoringHandoff({
-        userId: provision.userId,
-        actorUserId: provision.userId,
-        knowledgeSnapshotId: committedSnapshotId,
-      }).catch((handoffError) => {
-        console.error(
-          "[KnowledgeImport] Snapshot committed but monitoring handoff retry failed",
-          handoffError,
-        );
-      });
       console.warn(
         "[KnowledgeImport] Returning committed snapshot after a non-fatal post-commit failure",
         error,

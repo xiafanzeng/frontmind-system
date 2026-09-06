@@ -1644,7 +1644,7 @@ describe("V7 static Template Manus source", () => {
     expect(reconciled).toMatchObject({
       status: "attention_required",
       code: "FRONTMIND_BUILD_PROVIDER_SYNC_ATTENTION",
-      message: expect.stringContaining("申请重置"),
+      message: expect.stringContaining("重新开始制作"),
     });
     expect(harness.createTask).toHaveBeenCalledTimes(1);
     expect(harness.client.findCreatedTask).not.toHaveBeenCalled();

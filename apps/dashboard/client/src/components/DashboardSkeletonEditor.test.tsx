@@ -22,6 +22,22 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/trpc", () => ({
   trpc: {
+    workspace: {
+      saveDashboard: {
+        useMutation: () => ({
+          mutateAsync: mocks.mutateAsync,
+          isPending: false,
+        }),
+      },
+      responseLogic: {
+        useQuery: () => ({
+          data: { records: [] },
+          isLoading: false,
+          error: null,
+          refetch: mocks.responseLogicRefetch,
+        }),
+      },
+    },
     admin: {
       workspace: {
         updateDashboard: {
@@ -746,28 +762,56 @@ describe("DashboardSkeletonEditor", () => {
     );
   });
 
-  it.each([
-    {
-      module: "questions",
-      title: "问题目录",
-      recordLabel: "问题目录",
-      section: "问题优化",
-    },
-    {
-      module: "response-logic",
-      title: "应答逻辑确认稿",
-      recordLabel: "应答逻辑",
-      section: "应答逻辑智能体",
-    },
-    {
-      module: "content-assets",
-      title: "AI 友好内容资产",
-      recordLabel: "内容资产",
-      section: "内容资产运营",
-    },
-  ] as const)(
-    "preflights and publishes the $module current-content template through the shared module contract",
-    async ({ module, title, recordLabel, section }) => {
+  it.each(
+    [
+      {
+        module: "questions",
+        title: "问题目录",
+        recordLabel: "问题目录",
+        section: "问题优化",
+      },
+      {
+        module: "response-logic",
+        title: "应答逻辑确认稿",
+        recordLabel: "应答逻辑",
+        section: "应答逻辑智能体",
+      },
+      {
+        module: "content-assets",
+        title: "AI 友好内容资产",
+        recordLabel: "内容资产",
+        section: "内容资产运营",
+      },
+    ].flatMap((module) => [
+      {
+        ...module,
+        customerMode: false,
+        projectAssignmentId: undefined,
+        actor: "administrator",
+      },
+      {
+        ...module,
+        customerMode: true,
+        projectAssignmentId: undefined,
+        actor: "customer",
+      },
+      {
+        ...module,
+        customerMode: false,
+        projectAssignmentId: "assignment-42",
+        actor: "assigned engineer",
+      },
+    ]),
+  )(
+    "preflights and publishes the $module current-content template as $actor",
+    async ({
+      module,
+      title,
+      recordLabel,
+      section,
+      customerMode,
+      projectAssignmentId,
+    }) => {
       const fileHash = "a".repeat(64);
       const preflightToken = `signed-${module}-preflight-token`;
       const onWorkspaceChanged = vi.fn();
@@ -832,6 +876,8 @@ describe("DashboardSkeletonEditor", () => {
       render(
         <DashboardSkeletonEditor
           userId={42}
+          customerMode={customerMode}
+          projectAssignmentId={projectAssignmentId}
           workspace={{
             payload: payloadWithReport,
             revision: 3,
@@ -869,6 +915,12 @@ describe("DashboardSkeletonEditor", () => {
         string,
         string
       >;
+      expect(fetchMock.mock.calls[0]![0]).toBe("/api/dashboard/import/42");
+      expect(fetchMock.mock.calls[0]![1].credentials).toBe("include");
+      expect(previewHeaders["X-Delivery-Project-Assignment-Id"]).toBe(
+        projectAssignmentId,
+      );
+      expect(previewHeaders["X-Delivery-Ticket-Id"]).toBeUndefined();
       expect(previewHeaders["X-Dashboard-Module"]).toBe(module);
       expect(previewHeaders["X-Dashboard-Revision"]).toBe("3");
       expect(previewHeaders["X-Import-Preview"]).toBe("true");
@@ -880,6 +932,10 @@ describe("DashboardSkeletonEditor", () => {
         string,
         string
       >;
+      expect(publishHeaders["X-Delivery-Project-Assignment-Id"]).toBe(
+        projectAssignmentId,
+      );
+      expect(publishHeaders["X-Delivery-Ticket-Id"]).toBeUndefined();
       expect(publishHeaders["X-Import-Preview"]).toBeUndefined();
       expect(publishHeaders["X-Import-File-Hash"]).toBe(fileHash);
       expect(publishHeaders["X-Import-Preflight-Token"]).toBe(preflightToken);

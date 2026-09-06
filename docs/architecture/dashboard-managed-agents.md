@@ -12,7 +12,7 @@ remain in Dashboard; Website keeps its existing server boundary.
 | Knowledge base | `knowledge-base-api.ts` | Original materialized v5 turn topology, frozen Skill/input bytes, archive validation and activation |
 | Response logic | `response-logic-api.ts` | Original task continuation, Skill/evidence archives, structured schema and business validators |
 | Brand questions | `brand-question-portfolio-api.ts`, `brand-question-universe-service.ts` | Original operation token, schemas, repair limits and confirmation flow |
-| Site building and social | `siteops/manus-provider.ts` | Original persisted operation and stage tokens, input archives, strict JSON/ZIP readers and business quotas |
+| Existing site building and social implementation (outside current acceptance) | `siteops/manus-provider.ts` | Original persisted operation and stage tokens, input archives, strict JSON/ZIP readers and business quotas; no build, template or preview-dependent social acceptance in this task |
 | Browser uploads | `managed-upload-intent.ts` | Original sealed local ingress, ownership, deletion fences and retention; complete-byte multipart upload for Zhipu |
 
 `credential-agent-client.ts` uses the already authorized, frozen Zhipu
@@ -28,7 +28,7 @@ original task; other workflows receive transport records tied to their existing
 durable intent.
 
 Each mutation is persisted before dispatch. Unknown outcomes do not resend or
-search old conversations: use the existing approved reset, new upload and new
+search old conversations: use customer self-service reset, new upload and new
 task flow. Ordinary continuation keeps the acknowledged session and uses its
 own stable turn identity.
 Current-turn event boundaries prevent an old idle event or old file from
@@ -61,14 +61,43 @@ meaning and are not relabeled.
 
 Existing key and usage controls display Zhipu native tokens. No
 token-to-credit or token-to-currency conversion is invented. Existing service,
-site and social quotas continue to govern their original business operations.
+site and social quotas continue to govern their original business operations;
+retaining these controls does not include site building or social generation in
+the current acceptance scope.
 No new Dashboard execution-log interface is introduced.
 
 A knowledge-base research task remains active while the provider reports it
 as running. The old 15-minute reset rule rejected a healthy 23-minute task
 before its ZIP existed; it has been removed. The downloaded ZIP from that
-incident passed the original materialized validator. Fresh-run acceptance is
-required after deployment; the failed historical conversation is not rebuilt.
+incident passed the original materialized validator. Fresh-run acceptance on
+the deployed `c6b8f74` release remains pending; the failed historical
+conversation is not rebuilt. That fresh task subsequently produced an original
+ZIP accepted as 55 leaves and 129 evidence files. Its node-modification task
+then failed with a native Zhipu `session.error` (service unavailable, retries
+exhausted), so formal publication is still pending. The adapter now preserves
+that terminal error across the following idle event instead of reporting a
+successful completion with an invalid archive.
+
+## Customer self-service
+
+Customer actions no longer create delivery tickets. Customers directly reset
+their own knowledge base, modify/delete current questions, reset saved response
+logic and edit Dashboard content. Direct question selection includes the chosen
+category and becomes selected immediately. Existing ownership, service access,
+quota and optimistic revision checks remain. Reset uses the original cleanup
+queue and fixed resource credentials, then starts a new upload and task.
+
+Customer ticket history, engineer processing/approval controls, administrator
+dispatch and ticket endpoints are removed. Engineers retain assigned projects,
+quota controls and original content import. Historical database tables are left
+compatible with already applied migrations; account deletion still removes
+historical rows.
+
+The existing SiteOps restart action now resets the local generation cycle
+directly. It preserves existing live deployment and hostname pointers, releases
+reserved generation quota and prevents an active publication/domain operation
+from being reset mid-flight. This dependency removal does not expand the task
+into building, template, social-generation or publication acceptance.
 
 ## Database and release
 
@@ -78,7 +107,36 @@ nullable upstream effort. All previous migrations and all pre-existing schema
 fields remain unchanged. The adapter
 no longer directly depends on AJV. Existing dependency versions are preserved.
 
-Implementation verification is in progress. Production identities and real
-workflow acceptance results are recorded in `live-migration-verification.md`
-after deployment; passing mocked transport tests alone is not production
-acceptance.
+The `c6b8f7465d0a5a09bd5d7bef422afc2bb50ef0b7` release is deployed. Dashboard
+readiness reports the expected revision and exact migration/schema state, with
+no degraded builds or violations. Website remains on
+`f1dc5182819574aea32dbc50a2f715c414d50e41`.
+
+## Current acceptance scope and status
+
+The deployed release passed read-only browser checks for system administrator,
+customer and engineer accounts: eight pages and twelve reloads retained their
+authenticated identities without page errors. The original Dashboard navigation
+and settings remain available, including Zhipu Token, 21st and Aliyun controls.
+Customer navigation adds 问题监控 and 媒体发布 under 监控与发布; the system
+administrator has a separate 监控与发布管理 section. The original general-agent
+two-turn conversation and both JSON downloads were also reverified on this
+release.
+
+Dashboard's fresh formal knowledge-base publication is still pending. Brand
+universe and response-logic acceptance depend on that snapshot and are also
+pending. A historical ZIP passing its local validator is not a published
+knowledge snapshot. Website's completed knowledge base, assessments and
+forecasts are separate results and do not satisfy Dashboard acceptance.
+
+The user excluded website building and template work from this task. WeChat
+and Xiaohongshu generation have no independent original UI entry: their
+buttons require a website snapshot at `preview_ready`, `approved` or `live`.
+Their dependent acceptance is paused and outside the current scope. No SiteOps
+or social mutation was submitted for that acceptance, and it is not a blocker
+to the remaining knowledge-base, brand and response-logic work.
+
+Exact production identities, test outcomes and completed versus pending
+business checks are recorded in
+[`live-migration-verification.md`](live-migration-verification.md). Passing
+transport tests alone is not production business acceptance.

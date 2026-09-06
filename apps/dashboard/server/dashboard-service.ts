@@ -1126,7 +1126,6 @@ export async function createKnowledgeSnapshot(input: {
   sourceTaskId?: string;
   sourceArtifactHash?: string;
   archiveHash?: string;
-  maintenanceTicketId?: string;
   documents: KnowledgeDocumentRecord[];
   assets: KnowledgeAssetRecord[];
   totalBytes: number;
@@ -1283,7 +1282,6 @@ export async function createKnowledgeSnapshot(input: {
       siteOpsKnowledgeInputEpochId: null,
       sourceArtifactHash: input.sourceArtifactHash,
       archiveHash: input.archiveHash,
-      maintenanceTicketId: input.maintenanceTicketId,
       documents: input.documents,
       assets: input.assets,
       documentCount: input.documents.length,

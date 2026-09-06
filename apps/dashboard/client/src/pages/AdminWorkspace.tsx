@@ -13,7 +13,6 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardSkeletonEditor from "@/components/DashboardSkeletonEditor";
 import DashboardVersionHistory from "@/components/DashboardVersionHistory";
-import AdminDeliveryTicketWorkspace from "@/components/AdminDeliveryTicketWorkspace";
 import CustomerDashboardMirror from "@/components/CustomerDashboardMirror";
 import ManagerAssignmentEditor from "@/components/ManagerAssignmentEditor";
 import PortalShell, { PortalCard } from "@/components/PortalShell";
@@ -294,40 +293,6 @@ export default function AdminWorkspace({
       retry: false,
     },
   );
-  const deliveryPreviewQuery = (
-    trpc.admin.deliveryTickets as any
-  ).list.useInfiniteQuery(
-    { userId: selectedUserId || 1, limit: 100 },
-    {
-      enabled: Boolean(selectedUser),
-      retry: false,
-      getNextPageParam: (lastPage: any) => lastPage?.nextCursor || undefined,
-    },
-  );
-  const deliveryPreviewPages = deliveryPreviewQuery.data?.pages ?? [];
-  const deliveryPreviewMetadata = deliveryPreviewPages[0] ?? null;
-  const websiteWorkspacePreview = deliveryPreviewMetadata
-    ? {
-        quotas: deliveryPreviewMetadata.quotas,
-        contentAssetCatalog: deliveryPreviewMetadata.contentAssetCatalog ?? [],
-        websiteContentCatalog:
-          deliveryPreviewMetadata.websiteContentCatalog ?? [],
-        marketEdition: deliveryPreviewMetadata.marketEdition ?? "domestic",
-        preferredMediaOptions:
-          deliveryPreviewMetadata.preferredMediaOptions ?? [],
-        deliveryOwners: {
-          aiOperations: true,
-          monitoringOptimization: true,
-          contentDistribution: true,
-        },
-        websiteWorkflow: deliveryPreviewMetadata.websiteWorkflow ?? null,
-        siteOpsProjectActive:
-          deliveryPreviewMetadata.siteOpsProjectActive === true,
-        tickets: deliveryPreviewPages.flatMap(
-          (page: any) => page?.tickets ?? page?.items ?? [],
-        ),
-      }
-    : null;
   const questionPortfolioQuery = (
     trpc.admin.workspace as any
   ).questionPortfolio.useQuery(queryInput, {
@@ -491,7 +456,6 @@ export default function AdminWorkspace({
       workspaceQuery.refetch(),
       serviceQuery.refetch(),
       questionPortfolioQuery.refetch(),
-      deliveryPreviewQuery.refetch(),
     ]);
   };
   const brandTrackingManagement =
@@ -550,7 +514,6 @@ export default function AdminWorkspace({
             brandTrackingManagement={brandTrackingManagement}
             onExitDashboard={() => setDashboardOpen(false)}
             knowledgePreview={customerKnowledgePreview}
-            websiteWorkspace={websiteWorkspacePreview}
             servicePortal={serviceQuery.data}
             servicePortalLoading={serviceQuery.isLoading}
             servicePortalError={serviceQuery.isError}
@@ -574,7 +537,6 @@ export default function AdminWorkspace({
           <CustomerDashboardMirror
             layout="workspace"
             payload={dashboardQuery.data.payload}
-            websiteWorkspace={websiteWorkspacePreview}
             servicePortal={serviceQuery.data}
             servicePortalLoading={serviceQuery.isLoading}
             servicePortalError={serviceQuery.isError}
@@ -1195,20 +1157,6 @@ export default function AdminWorkspace({
             </>
 
             <>
-              <AdminDeliveryTicketWorkspace
-                key={selectedUser.id}
-                userId={selectedUser.id}
-                enterpriseName={
-                  selectedUser.enterpriseName ||
-                  selectedUser.displayName ||
-                  selectedUser.username
-                }
-                customerUsername={selectedUser.username}
-                servicePlanCode={selectedUser.service?.planCode}
-                serviceStatus={selectedUser.service?.status}
-                canAdjustQuota={isSystemAdmin}
-                canExecuteDelivery={isSystemAdmin}
-              />
               {isSystemAdmin && (
                 <DashboardVersionHistory
                   userId={selectedUser.id}

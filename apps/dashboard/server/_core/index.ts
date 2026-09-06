@@ -55,8 +55,6 @@ import {
   reconcileManagedUploadAccountDeletionFencesOnStartup,
 } from "../auth-service";
 import { getDb } from "../db";
-import deliveryTicketAttachmentRouter from "../delivery-ticket-attachment-router";
-import { startDeliveryTicketRetentionScheduler } from "../delivery-ticket-retention";
 import { startConversationRetentionScheduler } from "../conversation-retention";
 import {
   cleanupExpiredFileContent,
@@ -80,7 +78,6 @@ import {
   assertDashboardImportPreflightConfigured,
   startDashboardImportPreflightCleanupScheduler,
 } from "../dashboard-import-preflight-service";
-import websiteContentTemplateApi from "../website-content-template-api";
 import { assertAdminAccessLevelsBackfilled } from "../admin-control-plane-service";
 import { assertUpstreamBaseUrlConfigured } from "../upstream-config";
 import { createPaymentReceiptLedgerService } from "../payment-receipt-ledger-service";
@@ -412,12 +409,6 @@ async function startServer() {
 
   // FrontMind API proxy - avoids CORS issues while keeping upstream details server-side.
   app.use(
-    "/api/delivery-ticket-attachments",
-    requireExpressAuth,
-    enforceDeliveryProjectContext,
-    deliveryTicketAttachmentRouter,
-  );
-  app.use(
     "/api/frontmind/assets",
     requireExpressAuth,
     enforceDeliveryProjectContext,
@@ -474,9 +465,6 @@ async function startServer() {
   app.use("/api/brand-tracking", requireExpressAuth, brandTrackingApi);
   // Durable user dashboard content and final knowledge-base snapshot imports.
   app.use("/api/dashboard", dashboardApi);
-  // Revision-bound, preview-first bulk completion for the five formal website
-  // content ticket categories. Domain/ICP prerequisites are not in this API.
-  app.use("/api/website-content-template", websiteContentTemplateApi);
   // Tenant-bound SiteOps build previews and immutable download artifacts.
   // Authentication precedes every wildcard path so cross-tenant misses stay
   // indistinguishable from absent artifacts.
@@ -559,7 +547,6 @@ async function startServer() {
       }
       if (runtimeRoleServesWeb(runtimeRole)) {
         startWebsiteAgentRecoveryScheduler();
-        startDeliveryTicketRetentionScheduler();
         startConversationRetentionScheduler();
         startJenovaBrandTrackingRecoveryScheduler();
         startServiceContractLifecycleReconciliationScheduler();

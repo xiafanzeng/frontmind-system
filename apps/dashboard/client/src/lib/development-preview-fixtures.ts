@@ -11,7 +11,6 @@ import {
   previewKnowledgeSnapshot,
 } from "@/lib/preview-data";
 import { buildPreviewHistoricalResults } from "@/lib/preview-historical-results";
-import type { AdminDeliveryTicketPreviewFixtures } from "@/components/AdminDeliveryTicketWorkspace";
 
 const overview = {
   brand: "验收企业",
@@ -367,59 +366,6 @@ export const userPreviewFixtures = {
 export const adminDashboardPreviewFixtures = {
   managedAdminId: "101",
   managedUserIds: [1, 2],
-  ticketOverview: {
-    counts: {
-      pending: 2,
-      completed: 18,
-    },
-    tickets: [
-      {
-        id: "preview-admin-ticket-1",
-        userId: 1,
-        enterpriseName: "验收企业 A",
-        assignedAdminId: 101,
-        assignedAdminName: "FrontMind Admin",
-        type: "content_asset",
-        title: "用户案例与成功故事",
-        topic: "骑行装备产品应用案例",
-        status: "submitted",
-        publicStatus: "pending",
-        revision: 2,
-        createdAt: "2026-07-26T09:30:00+08:00",
-        updatedAt: "2026-07-27T10:10:00+08:00",
-      },
-      {
-        id: "preview-admin-ticket-2",
-        userId: 2,
-        enterpriseName: "验收企业 B",
-        assignedAdminId: 103,
-        assignedAdminName: "陈悦",
-        type: "website_operation",
-        category: "product_case_docs",
-        title: "产品案例与文档",
-        topic: "骑行装备产品资料更新",
-        status: "submitted",
-        publicStatus: "pending",
-        revision: 4,
-        createdAt: "2026-07-26T10:05:00+08:00",
-        updatedAt: "2026-07-27T09:05:00+08:00",
-      },
-      {
-        id: "preview-admin-ticket-3",
-        userId: 1,
-        enterpriseName: "验收企业 A",
-        assignedAdminId: 101,
-        assignedAdminName: "FrontMind Admin",
-        type: "website_operation",
-        title: "企业新闻与动态",
-        status: "completed",
-        publicStatus: "completed",
-        revision: 3,
-        createdAt: "2026-07-25T17:40:00+08:00",
-        updatedAt: "2026-07-26T17:40:00+08:00",
-      },
-    ],
-  },
   usageAlerts: [
     {
       id: "preview-website-key",
@@ -448,89 +394,3 @@ export const adminDashboardPreviewFixtures = {
     },
   ],
 };
-
-export const adminDeliveryTicketPreviewFixtures: AdminDeliveryTicketPreviewFixtures =
-  {
-    tickets: [
-      {
-        id: "preview-ticket-knowledge-reset",
-        userId: 1,
-        enterpriseName: "验收企业 A",
-        type: "knowledge_base",
-        category: "knowledge_reset",
-        title: "知识库重置申请",
-        status: "completed",
-        publicStatus: "completed",
-        publicSummary: "知识库已清空，可以重新开始首次构建。",
-        revision: 2,
-        createdAt: "2026-07-30T22:43:00+08:00",
-        updatedAt: "2026-07-30T22:43:00+08:00",
-      },
-      {
-        id: "preview-ticket-1",
-        userId: 1,
-        enterpriseName: "验收企业 A",
-        type: "content_asset",
-        category: "case_study",
-        title: "用户案例与成功故事",
-        topic: "骑行装备在城市通勤场景中的产品应用案例",
-        description:
-          "希望基于已确认客户素材，整理一篇可供行业媒体核验的案例稿。",
-        status: "submitted",
-        quotaPool: "content_asset_publish",
-        quotaState: "reserved",
-        revision: 3,
-        createdAt: "2026-07-26T09:30:00+08:00",
-        updatedAt: "2026-07-27T10:10:00+08:00",
-      },
-      {
-        id: "preview-ticket-2",
-        userId: 1,
-        enterpriseName: "验收企业 A",
-        type: "website_operation",
-        category: "product_case_docs",
-        title: "产品案例与文档",
-        topic: "补充骑行装备产品资料与适用场景",
-        status: "submitted",
-        quotaPool: "website_content_publish",
-        quotaState: "reserved",
-        revision: 5,
-        createdAt: "2026-07-23T15:10:00+08:00",
-        updatedAt: "2026-07-27T08:45:00+08:00",
-      },
-    ],
-    events: [
-      {
-        id: "event-1",
-        visibility: "customer",
-        eventType: "status_change",
-        actorLabel: "用户",
-        statusTo: "submitted",
-        message: "客户提交知识库重置申请，知识库已进入只读锁定。",
-        createdAt: "2026-07-30T22:43:00+08:00",
-      },
-      {
-        id: "event-2",
-        visibility: "customer",
-        eventType: "status_change",
-        actorLabel: "工程师",
-        statusTo: "completed",
-        message: "知识库重置已批准并完成清理，可以重新开始首次构建。",
-        createdAt: "2026-07-30T22:43:00+08:00",
-      },
-    ],
-    periodId: "preview-luxury-period",
-    revision: 1,
-    contentAssetQuota: {
-      used: 7,
-      reserved: 1,
-      consumed: 6,
-      limit: 20,
-    },
-    websiteContentQuota: {
-      used: 31,
-      reserved: 2,
-      consumed: 29,
-      limit: 100,
-    },
-  };

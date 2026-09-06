@@ -387,7 +387,7 @@ describe("knowledge-base notice recovery", () => {
     ).toBe("none");
   });
 
-  it("routes a rejected materialized result to the reset approval UI", () => {
+  it("routes a rejected materialized result to the direct reset UI", () => {
     const notice = {
       code: "FRONTMIND_KB_RESET_REQUIRED",
       recoveryAction: "approve_reset" as const,
@@ -399,7 +399,7 @@ describe("knowledge-base notice recovery", () => {
     });
 
     expect(knowledgeBaseNoticeRecoveryMode(notice)).toBe("reset");
-    expect(knowledgeBaseNoticeRetryLabel(notice)).toBe("申请重置知识库");
+    expect(knowledgeBaseNoticeRetryLabel(notice)).toBe("重置知识库");
     expect(knowledgeBaseNoticeHasRecoveryAction(notice)).toBe(true);
     requestKnowledgeBaseReset();
     expect(requested).toHaveBeenCalledOnce();

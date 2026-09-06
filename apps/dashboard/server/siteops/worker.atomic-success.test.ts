@@ -4,12 +4,7 @@ const dependencies = vi.hoisted(() => ({
   getDb: vi.fn(),
   getProvider: vi.fn(),
   finalizeCredentialRevocations: vi.fn(async () => undefined),
-  completeRebuildTicket: vi.fn(async () => null),
   parseApprovedReset: vi.fn(() => null as Record<string, unknown> | null),
-  finalizeApprovedReset: vi.fn(async () => ({
-    status: "not_applicable" as const,
-  })),
-  activateDeferredReset: vi.fn(async () => ({ status: "idle" as const })),
   safeNoExposure: vi.fn(async () => false),
   parseSafeNoExposureProof: vi.fn(() => null),
 }));
@@ -22,11 +17,8 @@ vi.mock("../twenty-first-service", () => ({
   finalizePendingTwentyFirstCredentialRevocations:
     dependencies.finalizeCredentialRevocations,
 }));
-vi.mock("./rebuild-ticket", () => ({
-  activateOneDeferredApprovedSiteOpsReset: dependencies.activateDeferredReset,
-  completeSiteOpsRebuildTicket: dependencies.completeRebuildTicket,
+vi.mock("./reset-coordinates", () => ({
   parseApprovedResetUnpublishInput: dependencies.parseApprovedReset,
-  finalizeApprovedSiteOpsReset: dependencies.finalizeApprovedReset,
 }));
 vi.mock("./esa-provider", () => ({
   approvedResetHasNoUnresolvedExternalExposure: dependencies.safeNoExposure,
@@ -322,15 +314,8 @@ function addFormalArtifactSet(fixture: ReturnType<typeof databaseFixture>) {
 beforeEach(() => {
   dependencies.getDb.mockReset();
   dependencies.getProvider.mockReset();
-  dependencies.completeRebuildTicket.mockClear();
   dependencies.finalizeCredentialRevocations.mockClear();
   dependencies.parseApprovedReset.mockReset().mockReturnValue(null);
-  dependencies.finalizeApprovedReset
-    .mockReset()
-    .mockResolvedValue({ status: "not_applicable" });
-  dependencies.activateDeferredReset
-    .mockReset()
-    .mockResolvedValue({ status: "idle" });
   dependencies.safeNoExposure.mockReset().mockResolvedValue(false);
   dependencies.parseSafeNoExposureProof.mockReset().mockReturnValue(null);
 });
@@ -382,8 +367,6 @@ describe("SiteOps React/QA terminal transaction", () => {
       succeeded: 1,
       attentionRequired: 0,
     });
-
-    expect(dependencies.activateDeferredReset).toHaveBeenCalledWith(fixture.db);
     expect(provider).not.toHaveBeenCalled();
     expect(fixture.operation).toMatchObject({
       status: "succeeded",
@@ -977,7 +960,6 @@ describe("SiteOps React/QA terminal transaction", () => {
     });
     expect(fixture.project.status).toBe("approved");
     expect(fixture.project.currentBuildId).toBe(fixture.build.id);
-    expect(dependencies.completeRebuildTicket).not.toHaveBeenCalled();
   });
 
   it("consumes the reserved quota for a successful root website build", async () => {
@@ -1006,293 +988,6 @@ describe("SiteOps React/QA terminal transaction", () => {
     expect(fixture.project).toMatchObject({
       status: "approved",
       currentBuildId: fixture.build.id,
-    });
-  });
-
-  it("finalizes an approved reset without entering the generic rollback finalizer", async () => {
-    const fixture = databaseFixture();
-    const reset = {
-      schemaVersion: 1,
-      intent: "approved_reset_unpublish",
-      rebuildTicketId: "60000000-0000-4000-8000-000000000006",
-      expectedProjectRevision: 4,
-      expectedCurrentBuildId: fixture.project.currentBuildId,
-      expectedKnowledgeSnapshotId: null,
-      expectedGlobalLiveDeploymentId: null,
-      expectedMainlandLiveDeploymentId: null,
-      expectedCanonicalHostname: null,
-    };
-    fixture.operation.kind = "rollback";
-    fixture.operation.provider = "aliyun_esa";
-    fixture.operation.input = reset;
-    dependencies.parseApprovedReset.mockReturnValue(reset);
-    dependencies.finalizeApprovedReset.mockResolvedValue({
-      status: "applied",
-      projectRevision: 5,
-      internalNote: "safe-marker",
-      operationResult: {
-        schemaVersion: 2,
-        intent: "approved_reset_unpublish",
-        stage: "exposure_removed",
-        resetOperationId: fixture.operation.id,
-        projectId: fixture.project.id,
-        freshRootApplied: true,
-        minimumKnowledgeSnapshotVersion: 8,
-        resetAppliedProjectRevision: 5,
-      },
-    });
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.getProvider.mockReturnValue(
-      vi.fn(async () => ({
-        status: "succeeded",
-        result: {
-          schemaVersion: 1,
-          intent: "approved_reset_unpublish",
-          stage: "exposure_removed",
-        },
-        message: "旧网站已下线。",
-      })),
-    );
-
-    await expect(runSiteOpsWorkerSweep({ max: 1 })).resolves.toEqual({
-      claimed: 1,
-      succeeded: 1,
-      deferred: 0,
-      attentionRequired: 0,
-      failed: 0,
-    });
-
-    expect(dependencies.finalizeApprovedReset).toHaveBeenCalledTimes(1);
-    expect(dependencies.finalizeApprovedReset).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        operation: expect.objectContaining({
-          id: fixture.operation.id,
-          kind: "rollback",
-        }),
-      }),
-    );
-    expect(fixture.operation.status).toBe("succeeded");
-    expect(fixture.operation.result).toMatchObject({
-      schemaVersion: 2,
-      resetOperationId: fixture.operation.id,
-      projectId: fixture.project.id,
-      minimumKnowledgeSnapshotVersion: 8,
-      resetAppliedProjectRevision: 5,
-    });
-    const terminalWrites = fixture.writes.filter(
-      (write) => write.transactionId === 2,
-    );
-    expect(
-      terminalWrites.some(
-        (write) => write.table === siteBuilds || write.table === siteProjects,
-      ),
-    ).toBe(false);
-  });
-
-  it("automatically requeues the same safe pre-mutation reset operation and finalizes it", async () => {
-    const fixture = databaseFixture();
-    const reset = {
-      schemaVersion: 1,
-      intent: "approved_reset_unpublish",
-      rebuildTicketId: fixture.ticket.id,
-      expectedProjectRevision: 4,
-      expectedCurrentBuildId: fixture.project.currentBuildId,
-      expectedKnowledgeSnapshotId: null,
-      expectedGlobalLiveDeploymentId: null,
-      expectedMainlandLiveDeploymentId: null,
-      expectedCanonicalHostname: null,
-    };
-    fixture.operation.kind = "rollback";
-    fixture.operation.provider = "aliyun_esa";
-    fixture.operation.status = "attention_required";
-    fixture.operation.input = reset;
-    fixture.operation.result = null;
-    fixture.operation.providerOperationId = null;
-    fixture.operation.providerTaskId = null;
-    fixture.operation.errorCode = "ESA_RUNTIME_DISABLED";
-    fixture.operation.attempt = 7;
-    fixture.operation.completedAt = new Date("2026-08-26T00:00:00.000Z");
-    fixture.ticket.internalNote = JSON.stringify({
-      schemaVersion: 4,
-      kind: "frontmind.siteops-rebuild.v1",
-      projectId: fixture.project.id,
-      sourceBuildId: fixture.project.currentBuildId,
-      knowledgeSnapshotId: null,
-      resetIntent: "approved_reset_unpublish",
-      resetOperationId: fixture.operation.id,
-      resetApprovedAt: "2026-08-26T00:00:00.000Z",
-      resetExpectedProjectRevision: 4,
-      minimumKnowledgeSnapshotVersion: 8,
-    });
-    const migrationProof = {
-      schemaVersion: 1 as const,
-      classification: "safe_no_exposure" as const,
-      source: "migration_0065_revision_only" as const,
-      resetOperationId: fixture.operation.id,
-      projectId: fixture.project.id,
-      expectedProjectRevision: 4,
-      observedProjectRevision: 5,
-      observedProjectUpdatedAt: "2026-08-26T01:00:00.000Z",
-    };
-    dependencies.parseApprovedReset.mockReturnValue(reset);
-    dependencies.safeNoExposure.mockResolvedValue(migrationProof);
-    dependencies.parseSafeNoExposureProof.mockReturnValue(migrationProof);
-    dependencies.finalizeApprovedReset.mockResolvedValue({
-      status: "applied",
-      projectRevision: 5,
-      internalNote: "safe-marker",
-      operationResult: {
-        schemaVersion: 2,
-        intent: "approved_reset_unpublish",
-        stage: "exposure_removed",
-        resetOperationId: fixture.operation.id,
-        projectId: fixture.project.id,
-        freshRootApplied: true,
-        minimumKnowledgeSnapshotVersion: 8,
-        resetAppliedProjectRevision: 5,
-      },
-    });
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.getProvider.mockReturnValue(
-      vi.fn(async () => ({
-        status: "succeeded",
-        result: {
-          schemaVersion: 1,
-          intent: "approved_reset_unpublish",
-          stage: "exposure_removed",
-          safeNoExposureProof: migrationProof,
-        },
-        message: "无需执行 ESA 下线。",
-      })),
-    );
-
-    await expect(runSiteOpsWorkerSweep({ max: 1 })).resolves.toEqual({
-      claimed: 1,
-      succeeded: 1,
-      deferred: 0,
-      attentionRequired: 0,
-      failed: 0,
-    });
-
-    expect(dependencies.safeNoExposure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        operation: expect.objectContaining({ id: fixture.operation.id }),
-        reset,
-        allowCanonicalHostname: true,
-        allowMigration0065RevisionDrift: true,
-      }),
-    );
-    expect(dependencies.finalizeApprovedReset).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ safeNoExposureProof: migrationProof }),
-    );
-    expect(dependencies.getProvider).toHaveBeenCalledOnce();
-    expect(fixture.operation.id).toBe("10000000-0000-4000-8000-000000000001");
-    expect(fixture.operation.status).toBe("succeeded");
-    expect(fixture.operation.attempt).toBe(8);
-  });
-
-  it("leaves an unsafe attention-required reset terminal and does not invoke a provider", async () => {
-    const fixture = databaseFixture();
-    const reset = {
-      schemaVersion: 1,
-      intent: "approved_reset_unpublish",
-      rebuildTicketId: fixture.ticket.id,
-      expectedProjectRevision: 4,
-      expectedCurrentBuildId: fixture.project.currentBuildId,
-      expectedKnowledgeSnapshotId: null,
-      expectedGlobalLiveDeploymentId: null,
-      expectedMainlandLiveDeploymentId: null,
-      expectedCanonicalHostname: null,
-    };
-    fixture.operation.kind = "rollback";
-    fixture.operation.provider = "aliyun_esa";
-    fixture.operation.status = "attention_required";
-    fixture.operation.input = reset;
-    fixture.operation.result = null;
-    fixture.operation.errorCode = "ESA_RUNTIME_DISABLED";
-    fixture.ticket.internalNote = JSON.stringify({
-      schemaVersion: 4,
-      kind: "frontmind.siteops-rebuild.v1",
-      projectId: fixture.project.id,
-      sourceBuildId: fixture.project.currentBuildId,
-      knowledgeSnapshotId: null,
-      resetIntent: "approved_reset_unpublish",
-      resetOperationId: fixture.operation.id,
-      resetApprovedAt: "2026-08-26T00:00:00.000Z",
-      resetExpectedProjectRevision: 4,
-      minimumKnowledgeSnapshotVersion: 8,
-    });
-    dependencies.parseApprovedReset.mockReturnValue(reset);
-    dependencies.safeNoExposure.mockResolvedValue(false);
-    dependencies.getDb.mockResolvedValue(fixture.db);
-
-    await expect(runSiteOpsWorkerSweep({ max: 1 })).resolves.toEqual({
-      claimed: 0,
-      succeeded: 0,
-      deferred: 0,
-      attentionRequired: 0,
-      failed: 0,
-    });
-
-    expect(dependencies.getProvider).not.toHaveBeenCalled();
-    expect(fixture.operation.status).toBe("attention_required");
-  });
-
-  it("terminalizes stale auto-recovery coordinates without aborting the sweep", async () => {
-    const fixture = databaseFixture();
-    const reset = {
-      schemaVersion: 1,
-      intent: "approved_reset_unpublish",
-      rebuildTicketId: fixture.ticket.id,
-      expectedProjectRevision: 4,
-      expectedCurrentBuildId: fixture.project.currentBuildId,
-      expectedKnowledgeSnapshotId: null,
-      expectedGlobalLiveDeploymentId: null,
-      expectedMainlandLiveDeploymentId: null,
-      expectedCanonicalHostname: null,
-    };
-    fixture.operation.kind = "rollback";
-    fixture.operation.provider = "aliyun_esa";
-    fixture.operation.status = "attention_required";
-    fixture.operation.input = reset;
-    fixture.operation.result = null;
-    fixture.operation.providerOperationId = null;
-    fixture.operation.providerTaskId = null;
-    fixture.operation.errorCode = "ESA_RUNTIME_DISABLED";
-    fixture.ticket.internalNote = JSON.stringify({
-      schemaVersion: 4,
-      kind: "frontmind.siteops-rebuild.v1",
-      projectId: fixture.project.id,
-      sourceBuildId: fixture.project.currentBuildId,
-      knowledgeSnapshotId: null,
-      resetIntent: "approved_reset_unpublish",
-      resetOperationId: fixture.operation.id,
-      resetApprovedAt: "2026-08-26T00:00:00.000Z",
-      resetExpectedProjectRevision: 4,
-      minimumKnowledgeSnapshotVersion: 8,
-    });
-    dependencies.parseApprovedReset.mockReturnValue(reset);
-    dependencies.safeNoExposure.mockRejectedValue({
-      code: "SITEOPS_RESET_INVALIDATED",
-    });
-    dependencies.getDb.mockResolvedValue(fixture.db);
-
-    await expect(runSiteOpsWorkerSweep({ max: 1 })).resolves.toEqual({
-      claimed: 0,
-      succeeded: 0,
-      deferred: 0,
-      attentionRequired: 0,
-      failed: 0,
-    });
-
-    expect(dependencies.getProvider).not.toHaveBeenCalled();
-    expect(fixture.operation).toMatchObject({
-      status: "failed",
-      errorCode: "SITEOPS_RESET_INVALIDATED",
-      leaseOwner: null,
-      leaseExpiresAt: null,
     });
   });
 

@@ -4,7 +4,6 @@ const dependencies = vi.hoisted(() => ({
   getDb: vi.fn(),
   getServicePortal: vi.fn(async () => ({})),
   reserveQuota: vi.fn(async () => "50000000-0000-4000-8000-000000000005"),
-  loadRebuild: vi.fn(),
   getTwentyFirstCredentialStatus: vi.fn(async () => ({
     configured: true,
     version: 3,
@@ -29,10 +28,6 @@ vi.mock("./quota-service", async (importOriginal) => {
     siteOpsQuotaPeriodIds: () => ["50000000-0000-4000-8000-000000000005"],
     reserveSiteOpsQuota: dependencies.reserveQuota,
   };
-});
-vi.mock("./rebuild-ticket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./rebuild-ticket")>();
-  return { ...actual, loadSiteOpsRebuildRequest: dependencies.loadRebuild };
 });
 vi.mock("./providers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./providers")>();
@@ -444,17 +439,6 @@ function staticVisualInput(fixture: ReturnType<typeof serviceDatabaseFixture>) {
 beforeEach(() => {
   dependencies.getDb.mockReset();
   dependencies.reserveQuota.mockClear();
-  dependencies.loadRebuild.mockReset();
-  dependencies.loadRebuild.mockResolvedValue({
-    allowed: false,
-    ticketId: null,
-    status: null,
-    resetApplied: false,
-    resetPending: false,
-    minimumKnowledgeSnapshotVersion: null,
-    resetSourceBuildId: null,
-    acceptedForCurrentCycle: false,
-  });
   dependencies.getServicePortal.mockClear();
   dependencies.getTwentyFirstCredentialStatus.mockClear();
 });
@@ -1326,7 +1310,6 @@ describe("SiteOps visual selection and current-task revisions", () => {
     );
     // One transaction-local read enforces resetPending before reserving quota;
     // the second read projects the committed observation.
-    expect(dependencies.loadRebuild).toHaveBeenCalledTimes(2);
     expect(dependencies.reserveQuota).toHaveBeenCalledOnce();
     expect(buildInsert?.values).toMatchObject({
       parentBuildId: null,
@@ -1549,19 +1532,9 @@ describe("SiteOps visual selection and current-task revisions", () => {
     }
   });
 
-  it("starts a new visual root while the old external reset boundary is still reconciling", async () => {
+  it("starts a new visual root after a direct local restart", async () => {
     const fixture = serviceDatabaseFixture();
     fixture.project.currentBuildId = null;
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: false,
-      ticketId: "46000000-0000-4000-8000-000000000004",
-      status: "in_progress",
-      resetApplied: true,
-      resetPending: true,
-      minimumKnowledgeSnapshotVersion: null,
-      resetSourceBuildId: "30000000-0000-4000-8000-000000000003",
-      acceptedForCurrentCycle: false,
-    });
     dependencies.getDb.mockResolvedValue(fixture.db);
 
     await actOnSiteOps(
@@ -1582,19 +1555,9 @@ describe("SiteOps visual selection and current-task revisions", () => {
     });
   });
 
-  it("creates one reserved child build and build_revision only after site_rebuild is in progress", async () => {
+  it("directly creates one reserved child build and build_revision for the current project", async () => {
     const fixture = serviceDatabaseFixture();
     dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: false,
-      ticketId: "46000000-0000-4000-8000-000000000004",
-      status: "in_progress",
-      resetApplied: true,
-      resetPending: false,
-      minimumKnowledgeSnapshotVersion: null,
-      resetSourceBuildId: fixture.project.currentBuildId,
-      acceptedForCurrentCycle: true,
-    });
 
     await actOnSiteOps(
       actor as never,
@@ -1641,124 +1604,5 @@ describe("SiteOps visual selection and current-task revisions", () => {
       status: "building",
       revision: 9,
     });
-  });
-
-  it("does not reserve quota or create a child build while site_rebuild is only submitted", async () => {
-    const fixture = serviceDatabaseFixture();
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: false,
-      ticketId: "46000000-0000-4000-8000-000000000004",
-      status: "submitted",
-      resetApplied: false,
-      resetSourceBuildId: fixture.project.currentBuildId,
-      acceptedForCurrentCycle: false,
-    });
-
-    await expect(
-      actOnSiteOps(
-        actor as never,
-        selectVisualInput(fixture.project.revision, fixture.sample.id),
-      ),
-    ).rejects.toMatchObject({ code: "STATE_CONFLICT", statusCode: 409 });
-
-    expect(dependencies.reserveQuota).not.toHaveBeenCalled();
-    expect(fixture.inserts.some((entry) => entry.table === siteBuilds)).toBe(
-      false,
-    );
-    expect(
-      fixture.inserts.some(
-        (entry) =>
-          entry.table === siteOperations &&
-          entry.values.kind === "build_revision",
-      ),
-    ).toBe(false);
-  });
-
-  it("rejects a child build when the completed reset source is not the current parent", async () => {
-    const fixture = serviceDatabaseFixture();
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: true,
-      ticketId: null,
-      status: null,
-      resetApplied: true,
-      resetPending: false,
-      minimumKnowledgeSnapshotVersion: 1,
-      resetSourceBuildId: "39000000-0000-4000-8000-000000000009",
-      acceptedForCurrentCycle: false,
-    });
-
-    await expect(
-      actOnSiteOps(
-        actor as never,
-        selectVisualInput(fixture.project.revision, fixture.sample.id),
-      ),
-    ).rejects.toMatchObject({ code: "STATE_CONFLICT", statusCode: 409 });
-
-    expect(dependencies.reserveQuota).not.toHaveBeenCalled();
-    expect(fixture.inserts.some((entry) => entry.table === siteBuilds)).toBe(
-      false,
-    );
-  });
-
-  it("keeps the accepted rebuild cycle usable while a second reset request is submitted", async () => {
-    const fixture = serviceDatabaseFixture();
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: false,
-      ticketId: "46000000-0000-4000-8000-000000000004",
-      status: "submitted",
-      resetApplied: true,
-      resetSourceBuildId: fixture.project.currentBuildId,
-      acceptedForCurrentCycle: true,
-    });
-
-    await actOnSiteOps(
-      actor as never,
-      selectVisualInput(fixture.project.revision, fixture.sample.id),
-    );
-
-    expect(dependencies.reserveQuota).toHaveBeenCalledOnce();
-    expect(
-      fixture.inserts.some(
-        (entry) =>
-          entry.table === siteOperations &&
-          entry.values.kind === "build_revision",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not trust a legacy in-progress rebuild until the reset marker exists", async () => {
-    const fixture = serviceDatabaseFixture();
-    dependencies.getDb.mockResolvedValue(fixture.db);
-    dependencies.loadRebuild.mockResolvedValue({
-      allowed: false,
-      ticketId: "46000000-0000-4000-8000-000000000004",
-      status: "in_progress",
-      resetApplied: true,
-      resetPending: true,
-      minimumKnowledgeSnapshotVersion: 3,
-      resetSourceBuildId: fixture.project.currentBuildId,
-    });
-
-    await expect(
-      actOnSiteOps(
-        actor as never,
-        selectVisualInput(fixture.project.revision, fixture.sample.id),
-      ),
-    ).rejects.toMatchObject({ code: "STATE_CONFLICT", statusCode: 409 });
-
-    expect(dependencies.reserveQuota).not.toHaveBeenCalled();
-    expect(fixture.inserts.some((entry) => entry.table === siteBuilds)).toBe(
-      false,
-    );
-    expect(
-      fixture.inserts.some(
-        (entry) =>
-          entry.table === siteOperations &&
-          entry.values.kind === "build_revision",
-      ),
-    ).toBe(false);
   });
 });

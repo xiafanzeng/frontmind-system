@@ -12,7 +12,6 @@ import {
   channelDistributionUrl,
   filterApiKeyUsageForAdmin,
   filterPreviewApiKeyUsageForAdmin,
-  filterPreviewTicketsForAdmin,
   formatApiUsageLastSuccess,
   formatAdminBrandTrackingCredits,
   getAdminNav,
@@ -41,7 +40,6 @@ describe("administrator channel navigation", () => {
       credentialType: "managed_api",
       kind: "customer",
       userId: 42,
-      relatedTicketId: "00000000-0000-4000-8000-000000000001",
     });
     expect(
       parseCredentialManagementDeepLink(
@@ -60,7 +58,6 @@ describe("administrator channel navigation", () => {
       credentialType: "jenova_brand_tracking",
       kind: "customer",
       userId: 42,
-      relatedTicketId: "00000000-0000-4000-8000-000000000001",
     });
     expect(
       parseCredentialManagementDeepLink(
@@ -74,7 +71,7 @@ describe("administrator channel navigation", () => {
     ).toBeNull();
     expect(
       parseCredentialManagementDeepLink(
-        "?credentialUserId=42&credentialKind=customer&relatedTicketId=Jenova",
+        "?credentialUserId=42&credentialKind=invalid",
       ),
     ).toBeNull();
     expect(
@@ -95,7 +92,6 @@ describe("administrator channel navigation", () => {
         "官网任务与AI建站",
         "客户交付工作台",
         "客户项目团队",
-        "需求管理",
         "账号与权限",
         "问题监控",
         _name === "real" ? "媒体发布" : "渠道分发",
@@ -155,7 +151,6 @@ describe("administrator channel navigation", () => {
     expect(deliveryAdminNavigation.map((item) => item.label)).toEqual([
       "客户管理",
       "客户项目团队",
-      "需求",
       "FrontMind Agent",
       "账号与权限",
     ]);
@@ -191,7 +186,6 @@ describe("administrator channel navigation", () => {
     expect(deliveryNavigation.map((item) => item.label)).toEqual([
       "客户管理",
       "客户项目团队",
-      "需求",
       "FrontMind Agent",
       "账号与权限",
     ]);
@@ -221,12 +215,12 @@ describe("administrator channel navigation", () => {
     ).toBe(true);
   });
 
-  it("keeps workspace and ticket links in the current preview role", () => {
+  it("keeps workspace links in the current preview role", () => {
     expect(getPreviewAdminWorkspaceHref(false)).toBe(
       "/preview/admin/delivery/workspace",
     );
-    expect(getPreviewAdminWorkspaceHref(false, "?tab=tickets")).toBe(
-      "/preview/admin/delivery/workspace?tab=tickets",
+    expect(getPreviewAdminWorkspaceHref(false, "?customer=42")).toBe(
+      "/preview/admin/delivery/workspace?customer=42",
     );
     expect(getPreviewAdminWorkspaceHref(true)).toBe(
       "/preview/admin/system/workspace",
@@ -495,7 +489,7 @@ describe("administrator channel navigation", () => {
     });
   });
 
-  it("presents delivery workload as one status row per engineer", () => {
+  it("presents project assignments as one status row per engineer", () => {
     const rows = buildDeliveryEngineerStatusRows({
       engineers: [
         {
@@ -532,26 +526,20 @@ describe("administrator channel navigation", () => {
         { customerUserId: 102, engineerUserId: 11 },
         { customerUserId: 102, engineerUserId: 12 },
       ],
-      tickets: [
-        { assignedMemberId: 11, status: "in_progress" },
-        { assignedMemberId: 11, status: "needs_information" },
-        { assignedMemberId: 12, status: "needs_information" },
-      ],
     });
 
-    expect(rows.map((row) => row.id)).toEqual([11, 12, 13]);
-    expect(rows[0]).toMatchObject({
+    expect(rows.map((row) => row.id)).toEqual([12, 11, 13]);
+    expect(rows.find((row) => row.id === 11)).toMatchObject({
       projectNames: ["甲公司", "乙公司"],
       projectCount: 2,
-      activeTicketCount: 2,
-      workStatus: "processing",
-      workStatusLabel: "处理中 · 1 单",
+      workStatus: "available",
+      workStatusLabel: "已分配项目",
       apiKeyConfigured: true,
     });
-    expect(rows[1]).toMatchObject({
+    expect(rows.find((row) => row.id === 12)).toMatchObject({
       projectNames: ["乙公司"],
-      workStatus: "waiting_customer",
-      workStatusLabel: "等待客户 · 1 单",
+      workStatus: "available",
+      workStatusLabel: "已分配项目",
       apiKeyConfigured: false,
     });
     expect(rows[2]).toMatchObject({
@@ -579,7 +567,6 @@ describe("administrator channel navigation", () => {
       ],
       projects: [{ id: 201, displayName: "示例客户" }],
       assignments: [{ customerUserId: 201, engineerUserId: 22 }],
-      tickets: [],
     });
 
     expect(rows.map((row) => row.id)).toEqual([22, 21]);
@@ -743,35 +730,6 @@ describe("administrator channel navigation", () => {
       keyPoolTotalUsed: 1_000,
       rolling30DayUsed: 300,
     });
-  });
-
-  it("does not expose another manager's preview tickets to a delivery administrator", () => {
-    const tickets = [
-      {
-        id: "own",
-        assignedAdminId: 101,
-        assignedAdminName: "当前管理员",
-      },
-      {
-        id: "shared",
-        assignedAdmins: [
-          { id: 101, name: "当前管理员" },
-          { id: 102, name: "协作管理员" },
-        ],
-      },
-      {
-        id: "other",
-        assignedAdminId: 103,
-        assignedAdminName: "其他管理员",
-      },
-    ];
-
-    expect(
-      filterPreviewTicketsForAdmin(tickets, false, "101").map(
-        (ticket) => ticket.id,
-      ),
-    ).toEqual(["own", "shared"]);
-    expect(filterPreviewTicketsForAdmin(tickets, true, "101")).toEqual(tickets);
   });
 });
 

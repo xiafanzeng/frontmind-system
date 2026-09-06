@@ -307,7 +307,7 @@ class ResponseLogicPostDispatchBindingError extends Error {
   readonly incidentId = randomUUID();
 
   constructor(cause: unknown) {
-    super("上游任务已创建，但本地绑定未完成；请申请重置后重新开始", { cause });
+    super("上游任务已创建，但本地绑定未完成；请重置后重新开始", { cause });
     this.name = "ResponseLogicPostDispatchBindingError";
   }
 }
@@ -319,7 +319,7 @@ export function responseLogicPostDispatchBindingFailure(
     status: 502,
     error: {
       code: "RESPONSE_LOGIC_TASK_BINDING_PENDING",
-      message: "上游任务已创建，但本地绑定未完成；请申请重置后重新开始",
+      message: "上游任务已创建，但本地绑定未完成；请重置后重新开始",
       retryable: false,
       resetRequired: true,
       stage: "task_binding",
@@ -366,8 +366,8 @@ export function responseLogicStartFailureFromManusError(input: {
           stage === "file_upload_intent" ||
           stage === "file_upload_content" ||
           stage === "file_confirmation"
-            ? "附件处理结果无法确认，请申请重置后重新开始"
-            : "应答逻辑任务启动结果无法确认，请申请重置后重新开始",
+            ? "附件处理结果无法确认，请重置后重新开始"
+            : "应答逻辑任务启动结果无法确认，请重置后重新开始",
         retryable: false,
         resetRequired: true,
         stage,

@@ -693,4 +693,79 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
       f.calls.some((c) => c.path === "/v1/sessions" && c.method === "GET"),
     ).toBe(false);
   });
+  it("preserves an exhausted provider error across its following idle notification", async () => {
+    const f = fixture();
+    await f
+      .client()
+      .createTask({ ...request, structuredOutputSchema: { type: "object" } });
+    const archive = f.output("unfinished-result.zip");
+    f.events.push({
+      id: "provider-failed",
+      type: "session.error",
+      processed_at: f.now(),
+      error: {
+        type: "unknown_error",
+        message: "服务暂时不可用",
+        retry_status: { type: "exhausted" },
+      },
+    });
+    f.finish();
+    expect((await f.client().taskDetail("session_1")).status).toBe("error");
+    const events = await f.client().listAllMessages({ taskId: "session_1" });
+    expect(
+      events.filter((event) => event.type === "status_update").at(-1)
+        ?.status_update,
+    ).toMatchObject({
+      agent_status: "error",
+      error_type: "unknown_error",
+      error_content: "服务暂时不可用",
+    });
+    expect(
+      events.some((event) => event.type === "structured_output_result"),
+    ).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(`zhipu-file:${archive.id}`);
+  });
+
+  it("allows a retrying provider error to finish normally", async () => {
+    const f = fixture();
+    await f.client().createTask(request);
+    f.events.push({
+      id: "provider-retrying",
+      type: "session.error",
+      processed_at: f.now(),
+      error: {
+        type: "unknown_error",
+        message: "服务暂时不可用",
+        retry_status: { type: "retrying" },
+      },
+    });
+    expect((await f.client().taskDetail("session_1")).status).toBe("running");
+    f.finish();
+    expect((await f.client().taskDetail("session_1")).status).toBe("stopped");
+    const events = await f.client().listAllMessages({ taskId: "session_1" });
+    expect(
+      events.filter((event) => event.type === "status_update").at(-1)
+        ?.status_update,
+    ).toMatchObject({ agent_status: "stopped" });
+  });
+
+  it("does not apply an earlier execution error after a later running boundary", async () => {
+    const f = fixture();
+    await f.client().createTask(request);
+    f.events.push(
+      {
+        id: "old-error",
+        type: "session.error",
+        processed_at: f.now(),
+        error: { type: "unknown_error", retry_status: { type: "exhausted" } },
+      },
+      {
+        id: "resumed-running",
+        type: "session.status_running",
+        processed_at: f.now(),
+      },
+    );
+    f.finish();
+    expect((await f.client().taskDetail("session_1")).status).toBe("stopped");
+  });
 });

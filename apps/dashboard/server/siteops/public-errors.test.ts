@@ -16,7 +16,7 @@ describe("SiteOps public error projection", () => {
     expect(projected).toEqual({
       code: "FRONTMIND_BUILD_REQUEST_INVALID",
       message:
-        "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+        "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     });
     expect(JSON.stringify(projected)).not.toMatch(/manus|invalid_argument/iu);
   });
@@ -51,7 +51,7 @@ describe("SiteOps public error projection", () => {
 
   it("sanitizes historical server-owned message text", () => {
     expect(sanitizeFrontMindPublicText("Manus 暂时无法完成该任务")).toBe(
-      "FrontMind AI 建站任务未能完成，请提交工单获取协助。",
+      "FrontMind AI 建站任务未能完成，可以重新开始制作。",
     );
   });
 
@@ -73,7 +73,7 @@ describe("SiteOps public error projection", () => {
         errorCode: "invalid_argument",
       }),
     ).toBe(
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     );
   });
 
@@ -85,7 +85,7 @@ describe("SiteOps public error projection", () => {
         operationStatus: "attention_required",
       }),
     ).toBe(
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     );
   });
 
@@ -97,7 +97,7 @@ describe("SiteOps public error projection", () => {
         operationStatus: "attention_required",
       }),
     ).toBe(
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     );
   });
 
@@ -115,9 +115,7 @@ describe("SiteOps public error projection", () => {
     const projected = sanitizeFrontMindPublicText(
       "ESA 无法使用当前 AliDNS access token 验证 CNAME",
     );
-    expect(projected).toBe(
-      "FrontMind 暂未完成网站配置，请稍后重试或提交工单获取协助。",
-    );
+    expect(projected).toBe("FrontMind 暂未完成网站配置，请检查设置后重试。");
     expect(projected).not.toMatch(/ESA|AliDNS|access\s*token|CNAME/iu);
   });
 
@@ -130,7 +128,7 @@ describe("SiteOps public error projection", () => {
     expect(projected).toEqual({
       code: "FRONTMIND_BUILD_OUTPUT_INVALID",
       message:
-        "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+        "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     });
     expect(JSON.stringify(projected)).not.toMatch(/manus/iu);
   });
@@ -150,7 +148,7 @@ describe("SiteOps public error projection", () => {
     ).toEqual({
       code: "FRONTMIND_BUILD_OUTPUT_INVALID",
       message:
-        "返回源码未通过安全、格式或任务绑定校验；如已有成功预览将继续保留，否则可申请重置后重新开始。",
+        "返回源码未通过安全、格式或任务绑定校验；如已有成功预览将继续保留，否则可重置后重新开始。",
     });
   });
 
@@ -169,7 +167,7 @@ describe("SiteOps public error projection", () => {
     expect(projected).toEqual({
       code: "FRONTMIND_BUILD_OUTPUT_INVALID",
       message:
-        "冻结的视觉参考未通过完整性或任务绑定校验；如已有成功预览将继续保留，否则可申请重置后重新开始。",
+        "冻结的视觉参考未通过完整性或任务绑定校验；如已有成功预览将继续保留，否则可重置后重新开始。",
     });
     expect(projected.code).not.toBe("FRONTMIND_BUILD_SERVICE_UNAVAILABLE");
   });
@@ -257,7 +255,7 @@ describe("SiteOps public error projection", () => {
     ).toEqual({
       code: "FRONTMIND_BUILD_QA_FAILED",
       message:
-        "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+        "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     });
     expect(
       publicSiteOpsErrorProjection({
@@ -275,15 +273,15 @@ describe("SiteOps public error projection", () => {
   it.each([
     [
       "FRONTMIND_BUILD_ASSET_CONFLICT",
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     ],
     [
       "FRONTMIND_BUILD_COMPILE_FAILED",
-      "本次没有生成可安全展示的版本；可申请重置，批准后可从当前企业知识库重新开始。",
+      "本次没有生成可安全展示的版本；可以重新开始制作，继续使用当前企业知识库。",
     ],
     [
       "FRONTMIND_BUILD_RUNTIME_UNAVAILABLE",
-      "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可申请重置，批准后全新开始。",
+      "FrontMind AI 建站运行环境暂时不可用；若任务已经结束，可以重置后全新开始。",
     ],
   ] as const)("keeps %s as a distinct FrontMind error", (code, message) => {
     expect(

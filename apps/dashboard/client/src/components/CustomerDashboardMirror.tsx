@@ -23,7 +23,6 @@ import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
 } from "@/components/KnowledgeBaseViewer";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
-import AiWebsiteManagementWorkspace from "@/dashboard/AiWebsiteManagementWorkspace";
 import ProgressReportWorkspace from "@/dashboard/ProgressReportWorkspace";
 import QuestionMonitoringWorkspace from "@/dashboard/QuestionMonitoringWorkspace";
 import {
@@ -45,10 +44,6 @@ import {
 } from "@/dashboard/UserBrandDashboard";
 import type { DashboardPayload } from "@shared/dashboard";
 import type { ResponseLogicRecordDto } from "@shared/response-logic";
-import type {
-  PublicDeliveryTicketSummary,
-  PublicDeliveryTicketWorkspaceMetadata,
-} from "@shared/delivery-ticket";
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
 import { keywordCategoryKey } from "@shared/keyword-categories";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "@shared/siteops-branding";
@@ -242,11 +237,6 @@ function CustomerMirrorNavButton({
 type CustomerDashboardMirrorProps = {
   payload: DashboardPayload;
   layout?: "embedded" | "workspace";
-  websiteWorkspace?:
-    | (PublicDeliveryTicketWorkspaceMetadata & {
-        tickets: PublicDeliveryTicketSummary[];
-      })
-    | null;
   knowledgePreview?: CustomerKnowledgePreview | null;
   servicePortal?: unknown;
   servicePortalLoading?: boolean;
@@ -312,7 +302,6 @@ export type CustomerKnowledgePreview = {
 export default function CustomerDashboardMirror({
   payload,
   layout = "embedded",
-  websiteWorkspace = null,
   knowledgePreview = null,
   servicePortal,
   servicePortalLoading = false,
@@ -502,7 +491,6 @@ export default function CustomerDashboardMirror({
           <CustomerDashboardSection
             section={activeSection}
             payload={payload}
-            websiteWorkspace={websiteWorkspace}
             knowledgePreview={knowledgePreview}
             servicePortal={usesServicePortal ? normalizedServicePortal : null}
             servicePortalLoading={servicePortalLoading}
@@ -523,7 +511,6 @@ export default function CustomerDashboardMirror({
 function CustomerDashboardSection({
   section,
   payload,
-  websiteWorkspace,
   knowledgePreview,
   servicePortal,
   servicePortalLoading,
@@ -537,7 +524,6 @@ function CustomerDashboardSection({
 }: {
   section: CustomerDashboardMirrorSection;
   payload: DashboardPayload;
-  websiteWorkspace: CustomerDashboardMirrorProps["websiteWorkspace"];
   knowledgePreview: CustomerDashboardMirrorProps["knowledgePreview"];
   servicePortal: ServicePortalView | null;
   servicePortalLoading: boolean;
@@ -638,20 +624,11 @@ function CustomerDashboardSection({
   }
 
   if (section === "website") {
-    return websiteWorkspace ? (
-      <AiWebsiteManagementWorkspace
-        planCode={servicePortal?.plan.code ?? "advanced"}
-        marketEdition={websiteWorkspace.marketEdition}
-        websiteWorkflow={websiteWorkspace.websiteWorkflow}
-        contentCatalog={websiteWorkspace.websiteContentCatalog}
-        quota={websiteWorkspace.quotas.website_content_publish}
-        tickets={websiteWorkspace.tickets.filter(
-          (ticket) => ticket.type === "website_operation",
-        )}
-        readOnlyPreview
-      />
-    ) : (
-      <MirrorEmpty title={SITEOPS_CUSTOMER_DISPLAY_NAME} />
+    return (
+      <section className="page-shell">
+        <h2>{SITEOPS_CUSTOMER_DISPLAY_NAME}</h2>
+        <PublishedContentAssets assets={payload.contentAssets || []} />
+      </section>
     );
   }
 
@@ -863,10 +840,10 @@ function KnowledgeActivityPanel({
         retainedCustomerAttachmentCount > 0
           ? `${retainedCustomerAttachmentCount}/${retainedCustomerAttachmentCount} 个附件已保留，`
           : ""
-      }知识库任务未创建。请申请重置后重新上传资料。`
+      }知识库任务未创建。请重置后重新上传资料。`
     : hasDisplayableContent
       ? "本轮需要重置，已完成内容不受影响。"
-      : "本轮需要重置，请申请重置后重新上传资料。";
+      : "本轮需要重置，请重置后重新上传资料。";
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[#e5ddea] bg-white">

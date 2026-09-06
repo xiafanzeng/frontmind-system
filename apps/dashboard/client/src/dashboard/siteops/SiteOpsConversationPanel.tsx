@@ -96,10 +96,6 @@ export type SiteOpsConversationPanelProps = {
   aliyunDomainsError?: string | null;
   onRefreshAliyunDomains?: () => Promise<void> | void;
   onDisconnectAliyun?: () => Promise<void> | void;
-  onSubmitIcpFiling?: (input: {
-    domain: string;
-    icpNumber: string;
-  }) => Promise<void> | void;
 };
 
 const BUILD_STATUS_LABELS: Record<string, string> = {
@@ -353,9 +349,9 @@ function customerFacingMessage(content: string) {
       sanitized,
     )
   ) {
-    return "FrontMind 正在处理当前任务；如长时间未完成，请提交工单获取协助。";
+    return "FrontMind 正在处理当前任务，请稍后刷新状态。";
   }
-  return sanitized || "任务需要协助，请稍后重试或提交工单。";
+  return sanitized || "任务暂时未完成，请稍后重试。";
 }
 
 const SITEOPS_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
@@ -671,9 +667,9 @@ export default function SiteOpsConversationPanel({
   aliyunDomainsError = null,
   onRefreshAliyunDomains,
   onDisconnectAliyun,
-  onSubmitIcpFiling,
 }: SiteOpsConversationPanelProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [restartOpen, setRestartOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [aliyunConnectionError, setAliyunConnectionError] = useState<
     string | null
@@ -684,14 +680,10 @@ export default function SiteOpsConversationPanel({
   const [aliyunFlowPhase, setAliyunFlowPhase] =
     useState<AliyunFlowPhase>("idle");
   const [previewOpenError, setPreviewOpenError] = useState<string | null>(null);
-  const [rebuildDialogOpen, setRebuildDialogOpen] = useState(false);
-  const [rebuildReason, setRebuildReason] = useState("");
-  const [rebuildError, setRebuildError] = useState<string | null>(null);
   const [selectedAliyunDomain, setSelectedAliyunDomain] = useState("");
   const [failedAutomaticDomainKey, setFailedAutomaticDomainKey] = useState<
     string | null
   >(null);
-  const [icpNumber, setIcpNumber] = useState("");
   const [activeVisualPage, setActiveVisualPage] = useState(1);
   const [revisionText, setRevisionText] = useState("");
   const [revisionFiles, setRevisionFiles] = useState<File[]>([]);
@@ -967,39 +959,6 @@ export default function SiteOpsConversationPanel({
     }
   }
 
-  async function requestRebuild() {
-    if (
-      !onAction ||
-      busyAction ||
-      interactionPending ||
-      !observation?.rebuildRequest.allowed
-    ) {
-      return;
-    }
-    setBusyAction("request_rebuild");
-    setLocalError(null);
-    setRebuildError(null);
-    try {
-      await onAction({
-        action: "request_rebuild",
-        input: {
-          ...(rebuildReason.trim() ? { reason: rebuildReason.trim() } : {}),
-        },
-      });
-      setRebuildReason("");
-      setRebuildDialogOpen(false);
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error
-          ? customerFacingMessage(requestError.message)
-          : "重置申请没有提交成功，请稍后重试。";
-      setRebuildError(message);
-      setLocalError(message);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   function setAliyunPhase(phase: AliyunFlowPhase) {
     aliyunFlowPhaseRef.current = phase;
     setAliyunFlowPhase(phase);
@@ -1165,35 +1124,6 @@ export default function SiteOpsConversationPanel({
     }
   }
 
-  async function submitIcpFiling(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const domain = observation?.domainState?.domain;
-    const number = icpNumber.trim();
-    if (
-      !domain ||
-      !number ||
-      !onSubmitIcpFiling ||
-      busyAction ||
-      interactionPending
-    ) {
-      return;
-    }
-    setBusyAction("icp_filing");
-    setLocalError(null);
-    try {
-      await onSubmitIcpFiling({ domain, icpNumber: number });
-      setIcpNumber("");
-    } catch (filingError) {
-      setLocalError(
-        filingError instanceof Error
-          ? customerFacingMessage(filingError.message)
-          : "ICP 备案结果工单没有提交成功。",
-      );
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   completeAliyunOAuthRef.current = () => {
     const authorizationWindow = aliyunAuthorizationWindow.current;
     if (!authorizationWindow) return;
@@ -1207,7 +1137,7 @@ export default function SiteOpsConversationPanel({
   function syncOnlyAliyunDomain(domain: string, key: string) {
     if (
       !observation ||
-      observation.rebuildRequest.resetPending ||
+      false ||
       !onAction ||
       interactionPending ||
       busyAction
@@ -1293,7 +1223,7 @@ export default function SiteOpsConversationPanel({
       observation.aliyunConnection.status !== "active" ||
       observation.domainState?.domain ||
       aliyunDomains.length !== 1 ||
-      observation.rebuildRequest.resetPending ||
+      false ||
       !onAction ||
       interactionPending ||
       busyAction
@@ -1363,7 +1293,7 @@ export default function SiteOpsConversationPanel({
     selectVisual &&
       ["submitting", "observing", "polling"].includes(selectVisual.phase),
   );
-  const externalResetPending = observation.rebuildRequest.resetPending;
+  const externalResetPending = false;
   const visualGeneration = observation.visualGeneration ?? {
     status: "idle" as const,
     targetPage: null,
@@ -1451,28 +1381,6 @@ export default function SiteOpsConversationPanel({
   const dnsReady = observation.domainState?.dnsStatus === "active";
   const mainlandReady =
     dnsReady && observation.domainState?.icpStatus === "approved";
-  const rebuildRequestActive = Boolean(
-    observation.rebuildRequest.ticketId &&
-      observation.rebuildRequest.status &&
-      !["completed", "rejected", "cancelled"].includes(
-        observation.rebuildRequest.status,
-      ),
-  );
-  const rebuildRequestPending = Boolean(
-    rebuildRequestActive && !observation.rebuildRequest.allowed,
-  );
-  const rebuildRequestLabel = observation.rebuildRequest.resetPending
-    ? "正在下线旧官网"
-    : rebuildRequestPending
-      ? "重置申请处理中"
-      : rebuildRequestActive && observation.rebuildRequest.resetApplied
-        ? "重置已批准，可从当前知识库重新开始"
-        : "申请重置并全新开始";
-  const hideExistingBuildDuringActiveRebuild = Boolean(
-    rebuildRequestActive &&
-      observation.rebuildRequest.resetApplied &&
-      latestBuild?.id === observation.rebuildRequest.resetSourceBuildId,
-  );
   return (
     <section className="siteops-panel" aria-labelledby="siteops-panel-title">
       <header className="siteops-panel-header">
@@ -1502,23 +1410,15 @@ export default function SiteOpsConversationPanel({
                 />
               </button>
             )}
-            {(observation.rebuildRequest.allowed || rebuildRequestActive) && (
+            {observation.rebuildRequest.allowed && (
               <button
                 type="button"
-                className="siteops-icon-button"
-                aria-label={rebuildRequestLabel}
-                disabled={Boolean(
-                  busyAction ||
-                    interactionPending ||
-                    !observation.rebuildRequest.allowed,
-                )}
-                title={rebuildRequestLabel}
-                onClick={() => {
-                  setRebuildError(null);
-                  setRebuildDialogOpen(true);
-                }}
+                className="siteops-secondary-button"
+                disabled={Boolean(busyAction || interactionPending)}
+                onClick={() => setRestartOpen(true)}
               >
-                <Wrench size={17} aria-hidden="true" />
+                <Wrench size={15} aria-hidden="true" />
+                重新开始制作
               </button>
             )}
           </div>
@@ -1526,62 +1426,44 @@ export default function SiteOpsConversationPanel({
       </header>
 
       <AlertDialog
-        open={rebuildDialogOpen}
+        open={restartOpen}
         onOpenChange={(open) => {
-          if (busyAction === "request_rebuild") return;
-          setRebuildDialogOpen(open);
-          if (open) setRebuildError(null);
+          if (busyAction !== "request_rebuild") setRestartOpen(open);
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{rebuildRequestLabel}</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="siteops-reset-description">
-                <p>提交后将由 FrontMind 人工受理；受理前不会改动当前官网。</p>
-                <ul>
-                  <li>批准后，当前线上官网会进入下线流程。</li>
-                  <li>当前企业知识库会保留，并作为全新建站的资料来源。</li>
-                  <li>旧视觉方案和生成任务不会继续使用。</li>
-                  <li>域名、备案和阿里云连接会保留。</li>
-                </ul>
-              </div>
+            <AlertDialogTitle>重新开始制作</AlertDialogTitle>
+            <AlertDialogDescription>
+              清理当前制作任务并从本账号的知识库重新开始。已经发布的网站继续运行，后续可正常发布新版本；域名、备案和阿里云连接保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <label className="siteops-rebuild-reason">
-            <span>重置原因与期望（选填）</span>
-            <textarea
-              value={rebuildReason}
-              maxLength={2_000}
-              rows={5}
-              placeholder="例如：希望保留当前企业知识库并重新生成官网。"
-              onChange={(event) => setRebuildReason(event.target.value)}
-            />
-          </label>
-          {rebuildError && (
-            <p className="siteops-reset-error" role="alert">
-              {rebuildError}
-            </p>
-          )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busyAction === "request_rebuild"}>
               取消
             </AlertDialogCancel>
             <AlertDialogAction
-              disabled={interactionPending || busyAction === "request_rebuild"}
-              onClick={(event) => {
+              disabled={Boolean(busyAction || interactionPending)}
+              onClick={async (event) => {
                 event.preventDefault();
-                void requestRebuild();
+                if (!onAction) return;
+                setBusyAction("request_rebuild");
+                setLocalError(null);
+                try {
+                  await onAction({ action: "request_rebuild", input: {} });
+                  setRestartOpen(false);
+                } catch (error) {
+                  setLocalError(
+                    error instanceof Error
+                      ? customerFacingMessage(error.message)
+                      : "重新开始未完成，请重试。",
+                  );
+                } finally {
+                  setBusyAction(null);
+                }
               }}
             >
-              {busyAction === "request_rebuild" && (
-                <Loader2
-                  className="siteops-spin"
-                  size={15}
-                  aria-hidden="true"
-                />
-              )}
-              提交重置申请
+              {busyAction === "request_rebuild" ? "正在处理…" : "确认重新开始"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2059,32 +1941,26 @@ export default function SiteOpsConversationPanel({
         </section>
       )}
 
-      {!hideExistingBuildDuringActiveRebuild &&
-        latestAttempt?.recoverable &&
-        latestBuild?.id !== latestAttempt.id && (
-          <div className="siteops-notice warning" role="status">
-            <AlertCircle size={18} aria-hidden="true" />
-            <span>
-              {latestAttempt.previewWarning ?? "新版本仍在同一任务内安全恢复。"}
-              上一版成功预览仍可继续查看和使用。
-            </span>
-          </div>
-        )}
+      {latestAttempt?.recoverable && latestBuild?.id !== latestAttempt.id && (
+        <div className="siteops-notice warning" role="status">
+          <AlertCircle size={18} aria-hidden="true" />
+          <span>
+            {latestAttempt.previewWarning ?? "新版本仍在同一任务内安全恢复。"}
+            上一版成功预览仍可继续查看和使用。
+          </span>
+        </div>
+      )}
 
-      {!hideExistingBuildDuringActiveRebuild &&
-        latestAttempt?.needsHelp &&
+      {latestAttempt?.needsHelp &&
         !latestAttempt.recoverable &&
         latestBuild?.id !== latestAttempt.id && (
           <div className="siteops-notice warning" role="status">
             <AlertCircle size={18} aria-hidden="true" />
-            <span>
-              重置申请尚未完成；在批准并执行下线前，当前官网仍可继续预览和使用。
-            </span>
+            <span>当前版本未完成，原官网仍可继续预览和使用。</span>
           </div>
         )}
 
-      {!hideExistingBuildDuringActiveRebuild &&
-        latestAttempt &&
+      {latestAttempt &&
         latestBuild?.previewUrl &&
         latestAttempt.id !== latestBuild.id &&
         ["preparing", "design_compiling", "building", "qa_running"].includes(
@@ -2096,7 +1972,7 @@ export default function SiteOpsConversationPanel({
           </div>
         )}
 
-      {latestBuild && !hideExistingBuildDuringActiveRebuild && (
+      {latestBuild && (
         <section
           className="siteops-build-card"
           aria-labelledby="siteops-build-title"
@@ -2131,9 +2007,7 @@ export default function SiteOpsConversationPanel({
             {latestBuild.needsHelp &&
               !latestBuild.recoverable &&
               !latestBuild.previewUrl && (
-                <p>
-                  本次没有生成可安全展示的版本。可以申请重置；批准并完成旧站下线后，可从当前企业知识库重新开始建站。
-                </p>
+                <p>本次没有生成可展示的版本，请刷新状态后重试。</p>
               )}
           </div>
           <div className="siteops-build-actions">
@@ -2153,44 +2027,6 @@ export default function SiteOpsConversationPanel({
                 下载网站源码
               </a>
             )}
-            {hasSuccessfulBuild && !latestAttempt?.recoverable && (
-              <button
-                type="button"
-                className="siteops-secondary-button"
-                disabled={Boolean(
-                  busyAction ||
-                    interactionPending ||
-                    !observation.rebuildRequest.allowed,
-                )}
-                onClick={() => {
-                  setRebuildError(null);
-                  setRebuildDialogOpen(true);
-                }}
-              >
-                <Wrench size={15} aria-hidden="true" />
-                {rebuildRequestLabel}
-              </button>
-            )}
-            {latestBuild.needsHelp &&
-              !latestBuild.recoverable &&
-              !latestBuild.previewUrl && (
-                <button
-                  type="button"
-                  className="siteops-primary-button"
-                  disabled={Boolean(
-                    busyAction ||
-                      interactionPending ||
-                      !observation.rebuildRequest.allowed,
-                  )}
-                  onClick={() => {
-                    setRebuildError(null);
-                    setRebuildDialogOpen(true);
-                  }}
-                >
-                  <Wrench size={15} aria-hidden="true" />
-                  {rebuildRequestLabel}
-                </button>
-              )}
             {["preview_ready", "approved"].includes(latestBuild.status) && (
               <button
                 type="button"
@@ -2808,29 +2644,6 @@ export default function SiteOpsConversationPanel({
                   前往阿里云 ICP 备案系统
                   <ExternalLink size={14} aria-hidden="true" />
                 </a>
-                <form onSubmit={submitIcpFiling}>
-                  <label>
-                    <span>当前域名版本的 ICP 主体备案号</span>
-                    <input
-                      value={icpNumber}
-                      maxLength={128}
-                      placeholder="例如 京ICP备12345678号"
-                      required
-                      onChange={(event) => setIcpNumber(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="submit"
-                    className="siteops-secondary-button"
-                    disabled={
-                      !onSubmitIcpFiling ||
-                      !icpNumber.trim() ||
-                      Boolean(busyAction)
-                    }
-                  >
-                    提交现有 ICP 核验工单
-                  </button>
-                </form>
               </div>
             )}
           </div>

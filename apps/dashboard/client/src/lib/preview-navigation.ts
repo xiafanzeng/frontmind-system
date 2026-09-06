@@ -51,12 +51,6 @@ export const previewAdminNav: PortalNavItem[] = [
     group: "客户与服务",
   },
   {
-    label: "需求管理",
-    href: "/preview/admin/dispatch",
-    icon: ClipboardList,
-    group: "客户与服务",
-  },
-  {
     label: "账号与权限",
     href: "/preview/admin/accounts",
     icon: Users,
@@ -94,12 +88,6 @@ const previewDeliveryAdminNav: PortalNavItem[] = [
     group: "交付管理",
   },
   {
-    label: "需求",
-    href: "/preview/admin/dispatch",
-    icon: ClipboardList,
-    group: "交付管理",
-  },
-  {
     label: "FrontMind Agent",
     href: "/preview/admin/agent",
     icon: Bot,
@@ -129,13 +117,7 @@ export function previewAdminWorkspaceHref(
 
 export function previewAdminPageHref(
   accessLevel: PreviewAdminAccessLevel,
-  page:
-    | "workspace"
-    | "delivery-roles"
-    | "dispatch"
-    | "agent"
-    | "presales"
-    | "accounts",
+  page: "workspace" | "delivery-roles" | "agent" | "presales" | "accounts",
 ): string {
   return `${previewAdminRootHref(accessLevel)}/${page}`;
 }
@@ -161,7 +143,6 @@ export function getRoleScopedPreviewAdminNav(
       accessLevel,
       "delivery-roles",
     ),
-    "/preview/admin/dispatch": previewAdminPageHref(accessLevel, "dispatch"),
     "/preview/admin/agent": previewAdminPageHref(accessLevel, "agent"),
     "/preview/admin/presales": previewAdminPageHref(accessLevel, "presales"),
     "/preview/admin/accounts": previewAdminPageHref(accessLevel, "accounts"),

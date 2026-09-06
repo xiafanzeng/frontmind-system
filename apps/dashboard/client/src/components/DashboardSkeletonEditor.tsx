@@ -1,3 +1,4 @@
+import type { ResponseLogicRecordDto } from "@shared/response-logic";
 import {
   ArrowLeft,
   BarChart3,
@@ -42,10 +43,6 @@ import {
   type DashboardModuleImportPreview,
   type DashboardPayload,
 } from "@shared/dashboard";
-import type {
-  PublicDeliveryTicketSummary,
-  PublicDeliveryTicketWorkspaceMetadata,
-} from "@shared/delivery-ticket";
 import OptimizationReportEditor from "./OptimizationReportEditor";
 
 type DashboardImportModule =
@@ -70,6 +67,13 @@ export type DashboardWorkspaceSnapshot = {
 
 type DashboardSkeletonEditorProps = {
   userId: number;
+  customerMode?: boolean;
+  projectAssignmentId?: string;
+  allowedSections?: readonly CustomerDashboardMirrorSection[];
+  renderSectionWorkspace?: (
+    section: CustomerDashboardMirrorSection,
+  ) => ReactNode;
+  responseLogicRecords?: ResponseLogicRecordDto[];
   workspace?: DashboardWorkspaceSnapshot;
   loading?: boolean;
   dashboardLayout?: "embedded" | "workspace";
@@ -82,18 +86,13 @@ type DashboardSkeletonEditorProps = {
   servicePortalLoading?: boolean;
   servicePortalError?: boolean;
   onRefreshServicePortal?: () => void;
-  websiteWorkspace?:
-    | (PublicDeliveryTicketWorkspaceMetadata & {
-        tickets: PublicDeliveryTicketSummary[];
-      })
-    | null;
   knowledgeUploading?: boolean;
   onUploadKnowledge?: (file: File) => void | Promise<void>;
   onOpenWebsiteWorkspace?: () => void;
   authoritativeQuestions?: readonly AuthoritativeQuestionTemplateSource[];
   authoritativeQuestionsLoading?: boolean;
   authoritativeQuestionsError?: string | null;
-  onWorkspaceChanged?: () => void | Promise<void>;
+  onWorkspaceChanged?: () => unknown | Promise<unknown>;
 };
 
 type AuthoritativeQuestionTemplateSource = {
@@ -347,9 +346,15 @@ function downloadModuleTemplate(input: {
   URL.revokeObjectURL(url);
 }
 
-async function downloadMonitoringCurrentTemplate(userId: number) {
+async function downloadMonitoringCurrentTemplate(
+  userId: number,
+  projectAssignmentId?: string,
+) {
   const response = await fetch(`/api/dashboard/monitoring-template/${userId}`, {
     credentials: "include",
+    headers: projectAssignmentId
+      ? { "X-Delivery-Project-Assignment-Id": projectAssignmentId }
+      : undefined,
   });
   if (!response.ok) throw new Error(await readImportError(response));
   const blob = await response.blob();
@@ -563,6 +568,11 @@ function preflightCredentialUsable(input: {
 
 export default function DashboardSkeletonEditor({
   userId,
+  customerMode = false,
+  projectAssignmentId,
+  allowedSections,
+  renderSectionWorkspace,
+  responseLogicRecords,
   workspace,
   loading = false,
   dashboardLayout = "embedded",
@@ -575,7 +585,6 @@ export default function DashboardSkeletonEditor({
   servicePortalLoading = false,
   servicePortalError = false,
   onRefreshServicePortal,
-  websiteWorkspace = null,
   knowledgeUploading = false,
   onUploadKnowledge,
   onOpenWebsiteWorkspace,
@@ -597,13 +606,29 @@ export default function DashboardSkeletonEditor({
   const [pendingDashboardModuleImport, setPendingDashboardModuleImport] =
     useState<PendingDashboardModuleImport | null>(null);
   const updateMutation = trpc.admin.workspace.updateDashboard.useMutation();
-  const responseLogicQuery = trpc.admin.workspace.responseLogic.useQuery(
+  const customerUpdateMutation = trpc.workspace.saveDashboard.useMutation();
+  const adminResponseLogicQuery = trpc.admin.workspace.responseLogic.useQuery(
     { userId },
     {
-      enabled: Boolean(workspace?.enterpriseIdentityBoundAt),
+      enabled:
+        !customerMode &&
+        !projectAssignmentId &&
+        Boolean(workspace?.enterpriseIdentityBoundAt),
       retry: false,
     },
   );
+  const customerResponseLogicQuery = trpc.workspace.responseLogic.useQuery(
+    undefined,
+    {
+      enabled: customerMode && Boolean(workspace?.enterpriseIdentityBoundAt),
+      retry: false,
+    },
+  );
+  const responseLogicQuery = customerMode
+    ? customerResponseLogicQuery
+    : adminResponseLogicQuery;
+  const currentResponseLogicRecords =
+    responseLogicRecords ?? responseLogicQuery.data?.records ?? [];
 
   useEffect(() => {
     setDraft(workspace?.payload ? clonePayload(workspace.payload) : null);
@@ -615,7 +640,10 @@ export default function DashboardSkeletonEditor({
   }, [userId, workspace?.payload, workspace?.revision]);
 
   const revision = workspace?.revision ?? 0;
-  const busy = updateMutation.isPending || Boolean(importingKey);
+  const busy =
+    updateMutation.isPending ||
+    customerUpdateMutation.isPending ||
+    Boolean(importingKey);
   const enterpriseIdentityBound = Boolean(workspace?.enterpriseIdentityBoundAt);
 
   const patchDraft = (
@@ -651,24 +679,26 @@ export default function DashboardSkeletonEditor({
       return;
     }
     try {
-      const updated = await updateMutation.mutateAsync({
-        userId,
+      const input = {
         payload: validated.data,
         expectedRevision: revision,
         reason: publishReason.trim() || undefined,
-      });
+      };
+      const updated = customerMode
+        ? await customerUpdateMutation.mutateAsync(input)
+        : await updateMutation.mutateAsync({ ...input, userId });
       setDraft(clonePayload(updated.payload));
       setDirty(false);
       setPublishReason("");
       await onWorkspaceChanged?.();
-      toast.success("交付内容与进度已更新", {
+      toast.success("看板内容与进度已更新", {
         description: `当前版本 R${updated.revision ?? revision + 1}`,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "请稍后重试";
       toast.error(
         /版本|revision|conflict/i.test(message)
-          ? "内容已被其他管理员更新"
+          ? "内容已被更新"
           : "看板保存失败",
         {
           description: /版本|revision|conflict/i.test(message)
@@ -702,6 +732,9 @@ export default function DashboardSkeletonEditor({
       "X-Import-Mode": "dashboard",
       "X-Dashboard-Module": module,
       "X-Dashboard-Revision": String(revision),
+      ...(projectAssignmentId
+        ? { "X-Delivery-Project-Assignment-Id": projectAssignmentId }
+        : {}),
     };
     if (sectionId) headers["X-Dashboard-Section-Id"] = sectionId;
     if (preview) headers["X-Import-Preview"] = "true";
@@ -988,7 +1021,7 @@ export default function DashboardSkeletonEditor({
 
   const downloadCurrentModule = (card: ImportCardDefinition) => {
     if (card.module === "monitoring") {
-      void downloadMonitoringCurrentTemplate(userId)
+      void downloadMonitoringCurrentTemplate(userId, projectAssignmentId)
         .then(() => toast.success("当前问题监控模板已下载"))
         .catch((error) =>
           toast.error("问题监控模板下载失败", {
@@ -1028,7 +1061,7 @@ export default function DashboardSkeletonEditor({
       module: card.module,
       revision,
       payload: workspace?.payload ?? draft!,
-      responseLogicRecords: responseLogicQuery.data?.records ?? [],
+      responseLogicRecords: currentResponseLogicRecords,
       authoritativeQuestions,
     });
   };
@@ -1057,7 +1090,7 @@ export default function DashboardSkeletonEditor({
         <PortalCard className="grid min-h-[420px] flex-1 place-items-center p-8 text-sm text-[#716a80]">
           <div className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" />
-            正在载入交付内容…
+            正在载入看板内容…
           </div>
         </PortalCard>
       </div>
@@ -1070,6 +1103,8 @@ export default function DashboardSkeletonEditor({
         payload={draft}
         layout={dashboardLayout}
         initialSection={initialSection}
+        allowedSections={allowedSections}
+        renderSectionWorkspace={renderSectionWorkspace}
         marketEdition={marketEdition}
         allowBrandTrackingManagement={Boolean(brandTrackingManagement)}
         brandTrackingManagement={brandTrackingManagement}
@@ -1078,8 +1113,7 @@ export default function DashboardSkeletonEditor({
         servicePortalLoading={servicePortalLoading}
         servicePortalError={servicePortalError}
         onRefreshServicePortal={onRefreshServicePortal}
-        websiteWorkspace={websiteWorkspace}
-        responseLogicRecords={responseLogicQuery.data?.records ?? []}
+        responseLogicRecords={currentResponseLogicRecords}
         editActions={
           <>
             {onExitDashboard && (
@@ -1123,7 +1157,7 @@ export default function DashboardSkeletonEditor({
                 className="bg-[#5b2a86] hover:bg-[#49216c]"
                 onClick={onOpenWebsiteWorkspace}
               >
-                打开官网交付
+                打开官网管理
               </Button>
             );
           }
@@ -2275,6 +2309,6 @@ function dashboardModulesForSection(
   if (section === "response-logic") return ["response-logic"];
   if (section === "monitoring") return ["monitoring"];
   if (section === "report") return ["optimization-report"];
-  if (section === "content") return ["content-assets"];
+  if (section === "content" || section === "website") return ["content-assets"];
   return [];
 }

@@ -68,11 +68,6 @@ const DeliveryMemberAgent = lazy(() =>
     default: component,
   })),
 );
-const AdminDeliveryDispatch = lazy(() =>
-  import("./pages/AdminDeliveryDispatch").then(({ default: component }) => ({
-    default: component,
-  })),
-);
 
 const MonitoringModule = lazy(() => import("./monitoring/Workspace"));
 
@@ -247,11 +242,6 @@ function Router() {
       <Route path={"/admin/delivery-roles"}>
         <AdminOnly>
           <AdminDeliveryRoles />
-        </AdminOnly>
-      </Route>
-      <Route path={"/admin/dispatch"}>
-        <AdminOnly>
-          <AdminDeliveryDispatch />
         </AdminOnly>
       </Route>
       <Route path={"/admin/delivery-workbench"}>

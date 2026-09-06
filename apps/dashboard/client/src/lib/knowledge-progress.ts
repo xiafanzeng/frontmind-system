@@ -592,7 +592,7 @@ export async function getKnowledgeBaseTurnProtocolReminder(
       return [
         "[知识库状态协议]",
         `当前知识库已完成，服务端 revision=${progress.build.revision}。不得重开节点、复用旧 ZIP 或重建知识树。`,
-        "发布后的修改统一进入维护需求，本对话不再生成状态协议信封。",
+        "发布后可由用户重置并重新构建，本对话不再生成状态协议信封。",
       ].join("\n");
     }
     return [

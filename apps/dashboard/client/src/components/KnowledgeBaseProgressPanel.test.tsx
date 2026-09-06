@@ -242,7 +242,7 @@ describe("KnowledgeBaseProgressPanel", () => {
     expect(screen.getByText("知识库任务未创建")).toBeTruthy();
     expect(
       screen.getByText(
-        "9/9 个附件已保留，知识库任务未创建。请申请重置后重新上传资料。",
+        "9/9 个附件已保留，知识库任务未创建。请重置后重新上传资料。",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("本轮已停止")).toBeNull();
@@ -403,7 +403,7 @@ describe("KnowledgeBaseProgressPanel", () => {
     const warning = screen.getByTestId("knowledge-result-quality-partial");
     expect(warning.textContent).toContain("研究覆盖信息不完整");
     expect(warning.textContent).toContain(
-      "节点内容已保留，但研究覆盖信息不完整，暂不能确认、修订、打包或发布；请申请重置后重新生成。",
+      "节点内容已保留，但研究覆盖信息不完整，暂不能确认、修订、打包或发布；请重置后重新生成。",
     );
     expect(warning.textContent).not.toContain("当前保留 54 个安全节点");
   });

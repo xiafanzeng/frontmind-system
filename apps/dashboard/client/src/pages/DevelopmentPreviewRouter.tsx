@@ -17,7 +17,6 @@ import {
   PreviewAdminAccounts,
   PreviewAdminAgent,
   PreviewAdminDeliveryRoles,
-  PreviewAdminDispatch,
   PreviewAdminPresales,
   PreviewAdminUsers,
 } from "@/pages/PreviewPages";
@@ -84,10 +83,6 @@ export default function DevelopmentPreviewRouter({
       return <PreviewAdminDeliveryRoles previewAccessLevel="delivery_admin" />;
     case previewAdminPageHref("system_admin", "delivery-roles"):
       return <PreviewAdminDeliveryRoles previewAccessLevel="system_admin" />;
-    case previewAdminPageHref("delivery_admin", "dispatch"):
-      return <PreviewAdminDispatch previewAccessLevel="delivery_admin" />;
-    case previewAdminPageHref("system_admin", "dispatch"):
-      return <PreviewAdminDispatch previewAccessLevel="system_admin" />;
     case previewAdminPageHref("delivery_admin", "agent"):
       return <PreviewAdminAgent previewAccessLevel="delivery_admin" />;
     case previewAdminPageHref("system_admin", "agent"):
@@ -110,8 +105,6 @@ export default function DevelopmentPreviewRouter({
       return (
         <Redirect to={previewAdminPageHref("system_admin", "delivery-roles")} />
       );
-    case "/preview/admin/dispatch":
-      return <Redirect to={previewAdminPageHref("system_admin", "dispatch")} />;
     case "/preview/admin/accounts":
       return <Redirect to={previewAdminPageHref("system_admin", "accounts")} />;
     default:

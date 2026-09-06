@@ -166,7 +166,7 @@ describe("connected SiteOps request identity", () => {
     expect(newestSiteOpsObservation(building, old)).toBe(building);
   });
 
-  it("keeps polling while an approved reset is unpublishing the old site", () => {
+  it("keeps polling while a direct restart is pending", () => {
     expect(
       shouldPollSiteOpsObservation({
         interactionState: "attention_required",
@@ -179,27 +179,24 @@ describe("connected SiteOps request identity", () => {
     ).toBe(true);
   });
 
-  it.each(["submitted", "scheduled", "in_progress"] as const)(
-    "keeps polling while rebuild request status is %s",
-    (status) => {
-      expect(
-        shouldPollSiteOpsObservation({
-          interactionState: "attention_required",
-          rebuildRequest: { status, resetPending: false },
-          visualGeneration: { status: "idle" },
-          deployments: [],
-          domainState: null,
-          socialPackages: [],
-        } as never),
-      ).toBe(true);
-    },
-  );
+  it("stops polling once a direct restart has completed", () => {
+    expect(
+      shouldPollSiteOpsObservation({
+        interactionState: "attention_required",
+        rebuildRequest: { resetPending: false, resetApplied: true },
+        visualGeneration: { status: "idle" },
+        deployments: [],
+        domainState: null,
+        socialPackages: [],
+      } as never),
+    ).toBe(false);
+  });
 
   it("polls the initial domain sync from the current customer-facing card", () => {
     const pending = {
       interactionState: "approved",
       project: { revision: 9 },
-      rebuildRequest: { status: null, resetPending: false },
+      rebuildRequest: { resetPending: false },
       visualGeneration: { status: "idle" },
       deployments: [],
       messages: [
@@ -228,20 +225,19 @@ describe("connected SiteOps request identity", () => {
   });
 
   it("accepts only forward rebuild transitions at an equal cursor", () => {
-    const observation = (status: "submitted" | "scheduled" | "in_progress") =>
+    const observation = (status: "idle" | "pending" | "applied") =>
       ({
         project: { revision: 8 },
         latestSequence: 12,
         rebuildRequest: {
-          status,
-          resetPending: status !== "submitted",
-          resetApplied: false,
+          resetPending: status === "pending",
+          resetApplied: status === "applied",
         },
         visualGeneration: { status: "idle" },
       }) as never;
-    const submitted = observation("submitted");
-    const scheduled = observation("scheduled");
-    const running = observation("in_progress");
+    const submitted = observation("idle");
+    const scheduled = observation("pending");
+    const running = observation("applied");
 
     expect(newestSiteOpsObservation(submitted, scheduled)).toBe(scheduled);
     expect(newestSiteOpsObservation(scheduled, running)).toBe(running);
@@ -251,7 +247,7 @@ describe("connected SiteOps request identity", () => {
   it("backs active polling off progressively and reconciles fallback at one minute", () => {
     const active = {
       interactionState: "building",
-      rebuildRequest: { status: null, resetPending: false },
+      rebuildRequest: { resetPending: false },
       visualGeneration: { status: "idle" },
       builds: [],
       deployments: [],
@@ -303,7 +299,6 @@ describe("connected SiteOps request identity", () => {
       latestSequence: 12,
       interactionState: "building",
       rebuildRequest: {
-        status: null,
         resetPending: false,
         resetApplied: false,
       },

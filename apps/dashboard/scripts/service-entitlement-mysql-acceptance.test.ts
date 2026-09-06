@@ -13,8 +13,6 @@ import mysql, {
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
-  deliveryTicketEvents,
-  deliveryTickets,
   knowledgeBaseBuilds,
   knowledgeBaseSnapshots,
   responseLogicEntries,
@@ -23,7 +21,7 @@ import {
   userDashboardContents,
   workspaceQuestions,
 } from "../drizzle/schema";
-import { DELIVERY_TICKET_LIMITS } from "../shared/delivery-ticket";
+import { CONTENT_QUOTA_LIMITS } from "../shared/content-quota";
 
 const dependencies = vi.hoisted(() => ({ getDb: vi.fn() }));
 
@@ -212,11 +210,10 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
        WHERE table_schema = DATABASE()
          AND table_name IN (
            'service_contracts', 'service_quota_periods',
-           'workspace_questions', 'delivery_tickets',
-           'delivery_ticket_events'
+           'workspace_questions'
          )`,
     );
-    expect(engineRows).toHaveLength(5);
+    expect(engineRows).toHaveLength(3);
     expect(engineRows.every((row) => row.engine === "InnoDB")).toBe(true);
   }, 300_000);
 
@@ -258,9 +255,9 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
         endsAt: window.endsAt,
         ...window.limits,
         contentAssetPublishLimit:
-          DELIVERY_TICKET_LIMITS.luxury.content_asset_publish,
+          CONTENT_QUOTA_LIMITS.luxury.content_asset_publish,
         websiteContentPublishLimit:
-          DELIVERY_TICKET_LIMITS.luxury.website_content_publish,
+          CONTENT_QUOTA_LIMITS.luxury.website_content_publish,
       })),
     );
 
@@ -331,9 +328,9 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
       operationalPeriods.every(
         (period) =>
           period.contentAssetPublishLimit ===
-            DELIVERY_TICKET_LIMITS.luxury.content_asset_publish &&
+            CONTENT_QUOTA_LIMITS.luxury.content_asset_publish &&
           period.websiteContentPublishLimit ===
-            DELIVERY_TICKET_LIMITS.luxury.website_content_publish,
+            CONTENT_QUOTA_LIMITS.luxury.website_content_publish,
       ),
     ).toBe(true);
     expect(operationalPeriods[0]!.startsAt.getTime()).toBe(
@@ -531,22 +528,6 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
       locked: false,
       sourceTaskId: `renewal-${runId}`,
     });
-    const ticketId = randomUUID();
-    await executor.insert(deliveryTickets).values({
-      id: ticketId,
-      userId,
-      contractId: source.id,
-      quotaPeriodId: sourceOperationalPeriod!.id,
-      type: "knowledge_base",
-      ordinal: 1,
-      clientRequestId: randomUUID(),
-      operation: "question_catalog",
-      title: "Source-year question workflow",
-      status: "submitted",
-      quotaState: "reserved",
-      technicalDedupeKey: `renewal:${runId}`,
-    });
-
     let readyCount = 0;
     let releaseWorkers!: () => void;
     const bothWorkersReady = new Promise<void>((resolve) => {
@@ -569,7 +550,6 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
       "reconciledContractCount",
       "supersededSourceContractCount",
       "archivedPendingQuestionCount",
-      "cancelledQuestionWorkflowTicketCount",
     ] as const) {
       expect(results.reduce((sum, value) => sum + value[key], 0)).toBe(1);
     }
@@ -601,33 +581,6 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
     expect(persistedQuestion?.archivedAt?.getTime()).toBe(
       source.endsAt.getTime(),
     );
-    const [persistedTicket] = await executor
-      .select()
-      .from(deliveryTickets)
-      .where(eq(deliveryTickets.id, ticketId));
-    expect(persistedTicket).toMatchObject({
-      status: "cancelled",
-      revision: 2,
-      technicalDedupeKey: null,
-    });
-    expect(persistedTicket?.resolvedAt?.getTime()).toBe(
-      source.endsAt.getTime(),
-    );
-    const events = await executor
-      .select()
-      .from(deliveryTicketEvents)
-      .where(eq(deliveryTicketEvents.ticketId, ticketId));
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      userId,
-      actorUserId: null,
-      actorRole: "system",
-      kind: "status_change",
-      visibility: "customer",
-      fromStatus: "submitted",
-      toStatus: "cancelled",
-    });
-
     await expect(
       executor.transaction((tx) =>
         reconcileActivatedProgressiveLuxuryRenewal({
@@ -642,13 +595,7 @@ mysqlDescribe("service-entitlement real MySQL 8.4 acceptance", () => {
       reconciledContractCount: 0,
       supersededSourceContractCount: 0,
       archivedPendingQuestionCount: 0,
-      cancelledQuestionWorkflowTicketCount: 0,
     });
-    const repeatedEvents = await executor
-      .select()
-      .from(deliveryTicketEvents)
-      .where(eq(deliveryTicketEvents.ticketId, ticketId));
-    expect(repeatedEvents).toHaveLength(1);
   }, 60_000);
 
   it("retires archived brand-keyword generations and creates one clean replacement", async () => {

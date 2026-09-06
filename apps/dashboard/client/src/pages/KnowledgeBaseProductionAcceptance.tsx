@@ -49,7 +49,6 @@ function ProductionAcceptanceWorkspace() {
           page={page}
           onPageChange={setPage}
           mode="workspace"
-          knowledgeEngineerAssigned
         />
       </div>
     </main>
@@ -73,7 +72,9 @@ export default function KnowledgeBaseProductionAcceptance() {
           <Database className="mx-auto h-8 w-8 text-emerald-700" />
           <h1 className="mt-4 text-lg font-semibold">需要本地测试用户会话</h1>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            生产契约必须验证 user/build/generation/turn 的数据库归属，不能用无账号探针替代。请先登录本地测试用户并通过一次性输入配置轮换后的测试 Key。
+            生产契约必须验证 user/build/generation/turn
+            的数据库归属，不能用无账号探针替代。请先登录本地测试用户并通过一次性输入配置轮换后的测试
+            Key。
           </p>
           <div className="mt-5 flex justify-center gap-2">
             <Button asChild>

@@ -290,8 +290,6 @@ export const issueMonitorUrl = "/admin/monitoring/accounts";
 export const channelDistributionUrl =
   "/admin/monitoring/media-publishing/integration";
 
-type AssignedTicketManager = { id: string; name: string };
-
 type DeliveryEngineerStatusSource = {
   engineers?: Array<{
     id: number;
@@ -311,10 +309,6 @@ type DeliveryEngineerStatusSource = {
     username?: string | null;
     displayName?: string | null;
   }>;
-  tickets?: Array<{
-    assignedMemberId?: number | null;
-    status?: string | null;
-  }>;
 };
 
 export type DeliveryEngineerStatusRow = AgentUsageFields & {
@@ -324,13 +318,7 @@ export type DeliveryEngineerStatusRow = AgentUsageFields & {
   roleType: DeliveryRoleType | null;
   projectNames: string[];
   projectCount: number;
-  activeTicketCount: number;
-  workStatus:
-    | "processing"
-    | "waiting_customer"
-    | "available"
-    | "unassigned"
-    | "disabled";
+  workStatus: "available" | "unassigned" | "disabled";
   workStatusLabel: string;
   isActive: boolean;
   apiKeyConfigured: boolean;
@@ -352,13 +340,10 @@ export function buildDeliveryEngineerStatusRows(
     ]),
   );
   const assignments = source?.assignments ?? [];
-  const tickets = source?.tickets ?? [];
   const statusPriority: Record<
     DeliveryEngineerStatusRow["workStatus"],
     number
   > = {
-    processing: 0,
-    waiting_customer: 1,
     available: 2,
     unassigned: 3,
     disabled: 4,
@@ -378,17 +363,6 @@ export function buildDeliveryEngineerStatusRows(
           ),
         ),
       );
-      const engineerTickets = tickets.filter(
-        (ticket) => ticket.assignedMemberId === engineer.id,
-      );
-      const processingTicketCount = engineerTickets.filter((ticket) =>
-        ["submitted", "scheduled", "in_progress"].includes(
-          String(ticket.status || ""),
-        ),
-      ).length;
-      const waitingTicketCount = engineerTickets.filter(
-        (ticket) => ticket.status === "needs_information",
-      ).length;
       const isActive = Boolean(engineer.isActive);
       let workStatus: DeliveryEngineerStatusRow["workStatus"];
       let workStatusLabel: string;
@@ -396,18 +370,12 @@ export function buildDeliveryEngineerStatusRows(
       if (!isActive) {
         workStatus = "disabled";
         workStatusLabel = "账号已停用";
-      } else if (processingTicketCount > 0) {
-        workStatus = "processing";
-        workStatusLabel = `处理中 · ${processingTicketCount} 单`;
-      } else if (waitingTicketCount > 0) {
-        workStatus = "waiting_customer";
-        workStatusLabel = `等待客户 · ${waitingTicketCount} 单`;
       } else if (projectNames.length === 0) {
         workStatus = "unassigned";
         workStatusLabel = "未分配项目";
       } else {
         workStatus = "available";
-        workStatusLabel = "当前空闲";
+        workStatusLabel = "已分配项目";
       }
 
       return {
@@ -419,7 +387,6 @@ export function buildDeliveryEngineerStatusRows(
         roleType: engineer.engineerRoleType ?? null,
         projectNames,
         projectCount: projectNames.length,
-        activeTicketCount: engineerTickets.length,
         workStatus,
         workStatusLabel,
         isActive,
@@ -436,41 +403,6 @@ export function buildDeliveryEngineerStatusRows(
       if (statusDifference !== 0) return statusDifference;
       return left.displayName.localeCompare(right.displayName, "zh-CN");
     });
-}
-
-function assignedManagersForTicket(ticket: any): AssignedTicketManager[] {
-  if (Array.isArray(ticket?.assignedAdmins) && ticket.assignedAdmins.length) {
-    return ticket.assignedAdmins
-      .map((manager: any) => ({
-        id: String(manager?.id ?? manager?.adminId ?? ""),
-        name:
-          String(manager?.name ?? manager?.displayName ?? "").trim() ||
-          `管理员 ${manager?.id ?? manager?.adminId ?? ""}`,
-      }))
-      .filter((manager: { id: string }) => manager.id);
-  }
-  const id = String(ticket?.assignedAdminId ?? ticket?.assignedAdminName ?? "");
-  return id
-    ? [
-        {
-          id,
-          name: ticket?.assignedAdminName || `管理员 ${id}`,
-        },
-      ]
-    : [];
-}
-
-export function filterPreviewTicketsForAdmin(
-  tickets: any[],
-  systemAdmin: boolean,
-  managedAdminId?: string | null,
-) {
-  if (systemAdmin) return tickets;
-  return tickets.filter((ticket) =>
-    assignedManagersForTicket(ticket).some(
-      (manager) => manager.id === managedAdminId,
-    ),
-  );
 }
 
 export const adminNav: PortalNavItem[] = [
@@ -492,12 +424,6 @@ export const adminNav: PortalNavItem[] = [
     label: "客户项目团队",
     href: "/admin/delivery-roles",
     icon: UsersRound,
-    group: "客户与服务",
-  },
-  {
-    label: "需求管理",
-    href: "/admin/dispatch",
-    icon: ClipboardList,
     group: "客户与服务",
   },
   {
@@ -534,12 +460,6 @@ export function getAdminNav(systemAdmin: boolean) {
       label: "客户项目团队",
       href: "/admin/delivery-roles",
       icon: UsersRound,
-      group: "交付管理",
-    },
-    {
-      label: "需求",
-      href: "/admin/dispatch",
-      icon: ClipboardList,
       group: "交付管理",
     },
     {
@@ -914,7 +834,6 @@ type OverviewApiKeyTarget = {
   configured: boolean;
   version: number;
   agentProfile?: ManagedAgentProfile;
-  relatedTicketId?: string;
 };
 
 export type BrandTrackingCredentialRow = {
@@ -999,7 +918,6 @@ export type CredentialManagementDeepLink = {
   credentialType: "managed_api" | "jenova_brand_tracking";
   kind: OverviewApiKeyTarget["kind"];
   userId: number;
-  relatedTicketId?: string;
 };
 
 export function parseCredentialManagementDeepLink(
@@ -1022,19 +940,11 @@ export function parseCredentialManagementDeepLink(
   ) {
     return null;
   }
-  const relatedTicketId = params.get("relatedTicketId")?.trim() || undefined;
-  if (
-    relatedTicketId &&
-    !/^[0-9a-f]{8}-[0-9a-f-]{27}$/iu.test(relatedTicketId)
-  ) {
-    return null;
-  }
   return {
     credentialType:
       credentialType as CredentialManagementDeepLink["credentialType"],
     kind: kind as OverviewApiKeyTarget["kind"],
     userId,
-    ...(relatedTicketId ? { relatedTicketId } : {}),
   };
 }
 
@@ -1161,9 +1071,6 @@ function AdminOverviewApiKeyDialog({
         expectedVersion: target.version,
         reason: "API与人员管理统一入口替换账号 API Key",
         confirmation: "REPLACE_API_KEY" as const,
-        ...(target.relatedTicketId
-          ? { relatedTicketId: target.relatedTicketId }
-          : {}),
       };
       await replaceTargetMutation.mutateAsync(
         target.kind === "customer"
@@ -1224,9 +1131,6 @@ function AdminOverviewApiKeyDialog({
             <DialogDescription>
               {target?.displayName} · @{target?.username}。Key
               仅在服务端加密保存，不会在页面返回明文。
-              {target?.relatedTicketId
-                ? " 配置并验证成功后，关联的历史工单会自动以非敏感结果关闭。"
-                : ""}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={requestSaveConfirmation}>
@@ -1852,7 +1756,7 @@ export function AdminBrandTrackingKeyManager({
   restrictedUserId,
 }: {
   previewMode: boolean;
-  deepLink?: Pick<CredentialManagementDeepLink, "userId" | "relatedTicketId">;
+  deepLink?: Pick<CredentialManagementDeepLink, "userId">;
   restrictedUserId?: number;
 }) {
   const listQuery = (trpc.admin as any).brandTrackingCredentials.list.useQuery(
@@ -2136,9 +2040,6 @@ export function AdminBrandTrackingKeyManager({
             <DialogDescription>
               {target?.displayName} · @{target?.username}。系统会验证
               brand-tracker Agent 和当前积分余额，明文 Key 不会返回浏览器。
-              {deepLink?.relatedTicketId
-                ? " 配置并验证成功后，关联的历史工单会自动以非敏感结果关闭。"
-                : ""}
             </DialogDescription>
           </DialogHeader>
           <form
@@ -2150,9 +2051,6 @@ export function AdminBrandTrackingKeyManager({
                 await configureMutation.mutateAsync({
                   userId: target.userId,
                   apiKey: apiKey.trim(),
-                  ...(deepLink?.relatedTicketId
-                    ? { relatedTicketId: deepLink.relatedTicketId }
-                    : {}),
                 });
                 await refresh();
                 toast.success("品牌追踪 Key 已配置");
@@ -2369,10 +2267,6 @@ export default function AdminDashboard({
   previewFixtures?: {
     managedAdminId: string;
     managedUserIds: number[];
-    ticketOverview: {
-      counts: Record<string, number>;
-      tickets: unknown[];
-    };
     usageAlerts: unknown[];
   };
 }) {
@@ -2646,9 +2540,6 @@ export default function AdminDashboard({
       configured: target.configured,
       version: target.version,
       ...(target.agentProfile ? { agentProfile: target.agentProfile } : {}),
-      ...(credentialDeepLink.relatedTicketId
-        ? { relatedTicketId: credentialDeepLink.relatedTicketId }
-        : {}),
     });
     setCredentialDeepLinkOpened(true);
   }, [
@@ -3005,15 +2896,11 @@ export default function AdminDashboard({
                   </div>
                   {deliveryEngineerStatusRows.map((engineer) => {
                     const statusTone =
-                      engineer.workStatus === "processing"
-                        ? "bg-[#f1e8f8] text-[#6a338f]"
-                        : engineer.workStatus === "waiting_customer"
-                          ? "bg-[#fff7e7] text-[#946800]"
-                          : engineer.workStatus === "available"
-                            ? "bg-[#eaf7f0] text-[#16794f]"
-                            : engineer.workStatus === "disabled"
-                              ? "bg-[#f2eff4] text-[#716a80]"
-                              : "bg-[#fff1f4] text-[#a02652]";
+                      engineer.workStatus === "available"
+                        ? "bg-[#eaf7f0] text-[#16794f]"
+                        : engineer.workStatus === "disabled"
+                          ? "bg-[#f2eff4] text-[#716a80]"
+                          : "bg-[#fff1f4] text-[#a02652]";
                     return (
                       <div
                         key={engineer.id}

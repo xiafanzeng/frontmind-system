@@ -83,7 +83,7 @@ function publicRecoveryCopy(action: KnowledgeBaseRecoveryAction): {
       return {
         code: "FRONTMIND_KB_RESET_REQUIRED",
         message:
-          "任务已结束，但知识库文件未通过完整性校验。系统不会自动重试；请申请重置后重新上传资料。",
+          "任务已结束，但知识库文件未通过完整性校验。系统不会自动重试；请重置后重新上传资料。",
       };
     case "regenerate_turn":
     case "create_new_canonical_from_snapshot":
@@ -121,14 +121,14 @@ function publicNotice(value: Record<string, unknown>): Record<string, unknown> {
     value.code === "KNOWLEDGE_BASE_START_INCOMPLETE"
       ? {
           code: "FRONTMIND_KB_RESET_REQUIRED",
-          message: "本次分析任务尚未创建；请申请重置后重新选择全部资料。",
+          message: "本次分析任务尚未创建；请重置后重新选择全部资料。",
         }
       : action === "approve_reset" &&
           value.code === "KNOWLEDGE_BASE_REVISION_UPLOAD_INCOMPLETE"
         ? {
             code: "FRONTMIND_KB_RESET_REQUIRED",
             message:
-              "本轮补充资料尚未完成，任务尚未派发；请申请重置后重新上传全部资料。",
+              "本轮补充资料尚未完成，任务尚未派发；请重置后重新上传全部资料。",
           }
         : action === "contact_support" &&
             value.code === "KNOWLEDGE_BASE_MATERIALIZED_PROVIDER_ATTENTION"

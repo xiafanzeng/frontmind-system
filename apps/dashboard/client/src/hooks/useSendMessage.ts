@@ -255,7 +255,7 @@ export function responseLogicStartFailureMessage(
 ) {
   const title = failure.resetRequired ? "任务创建结果无法确认" : "任务尚未创建";
   const recovery = failure.resetRequired
-    ? "请先申请重置；批准后系统会使用全新会话、全新资料和全新任务重新开始。"
+    ? "请先重置，然后使用全新会话、全新资料和全新任务重新开始。"
     : failure.retryable
       ? "当前输入和附件已保留，可以稍后直接重新发送。"
       : "请根据页面提示处理后重新发送。";

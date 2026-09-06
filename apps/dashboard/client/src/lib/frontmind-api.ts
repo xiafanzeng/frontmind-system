@@ -1352,8 +1352,8 @@ export async function createResponseLogicTask(
           code: "RESPONSE_LOGIC_START_OUTCOME_UNKNOWN",
           message:
             error instanceof DOMException && error.name === "AbortError"
-              ? "启动应答逻辑请求超时，任务创建结果无法确认；请申请重置后重新开始"
-              : "启动应答逻辑连接中断，任务创建结果无法确认；请申请重置后重新开始",
+              ? "启动应答逻辑请求超时，任务创建结果无法确认；请重置后重新开始"
+              : "启动应答逻辑连接中断，任务创建结果无法确认；请重置后重新开始",
           retryable: false,
           resetRequired: true,
           stage: "dashboard_transport",
@@ -1417,7 +1417,7 @@ export async function createResponseLogicTask(
         {
           code: "RESPONSE_LOGIC_START_RESPONSE_INVALID",
           message:
-            "任务创建响应未通过格式校验，创建结果无法确认；请申请重置后重新开始",
+            "任务创建响应未通过格式校验，创建结果无法确认；请重置后重新开始",
           retryable: false,
           resetRequired: true,
           stage: "response",
@@ -1431,8 +1431,7 @@ export async function createResponseLogicTask(
     if (!taskId) {
       throw new ResponseLogicTaskStartError({
         code: "RESPONSE_LOGIC_START_RESPONSE_INVALID",
-        message:
-          "任务创建响应缺少任务标识，创建结果无法确认；请申请重置后重新开始",
+        message: "任务创建响应缺少任务标识，创建结果无法确认；请重置后重新开始",
         retryable: false,
         resetRequired: true,
         stage: "response",
@@ -1443,8 +1442,7 @@ export async function createResponseLogicTask(
     if (!Number.isSafeInteger(operationRevision) || operationRevision < 1) {
       throw new ResponseLogicTaskStartError({
         code: "RESPONSE_LOGIC_START_RESPONSE_INVALID",
-        message:
-          "任务创建响应缺少有效轮次，创建结果无法确认；请申请重置后重新开始",
+        message: "任务创建响应缺少有效轮次，创建结果无法确认；请重置后重新开始",
         retryable: false,
         resetRequired: true,
         stage: "response",

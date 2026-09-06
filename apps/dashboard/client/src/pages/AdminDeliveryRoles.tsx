@@ -65,19 +65,10 @@ type ProjectTeamEngineer = {
   apiKeyManageReason?: string | null;
 };
 
-type ProjectTicket = {
-  id: string;
-  userId: number;
-  workflowDomain: DeliveryRoleType | null;
-  assignedProjectAssignmentId?: string | null;
-  assignedMemberId: number | null;
-};
-
 type ProjectTeamOverview = {
   projects: ProjectTeamProject[];
   assignments: ProjectTeamAssignment[];
   engineers: ProjectTeamEngineer[];
-  tickets: ProjectTicket[];
 };
 
 type TeamStatusFilter = "all" | "complete" | "incomplete";
@@ -115,7 +106,6 @@ export function summarizeProjectTeams(
       "customerUserId" | "roleType" | "engineerUserId"
     >
   >,
-  tickets: Array<Pick<ProjectTicket, "workflowDomain" | "assignedMemberId">>,
 ) {
   const missingByProject = projects.map((project) => ({
     managerMissing: project.managerId == null,
@@ -130,9 +120,6 @@ export function summarizeProjectTeams(
       (total, { roleTypes }) => total + roleTypes.length,
       0,
     ),
-    pendingTicketCount: tickets.filter(
-      (ticket) => ticket.workflowDomain && ticket.assignedMemberId == null,
-    ).length,
   };
 }
 
@@ -203,7 +190,6 @@ export default function AdminDeliveryRoles() {
   const projects = data?.projects ?? [];
   const assignments = data?.assignments ?? [];
   const engineers = data?.engineers ?? [];
-  const tickets = data?.tickets ?? [];
 
   const managers = useMemo(() => {
     const unique = new Map<
@@ -234,14 +220,11 @@ export default function AdminDeliveryRoles() {
     [assignments, managerId, planCode, projects, query, teamStatus],
   );
   const summary = useMemo(
-    () => summarizeProjectTeams(projects, assignments, tickets),
-    [assignments, projects, tickets],
+    () => summarizeProjectTeams(projects, assignments),
+    [assignments, projects],
   );
   const selectedProject =
     projects.find((project) => project.id === selectedProjectId) ?? null;
-  const firstPendingTicket = tickets.find(
-    (ticket) => ticket.workflowDomain && ticket.assignedMemberId == null,
-  );
 
   useEffect(() => {
     if (!data) return;
@@ -270,7 +253,7 @@ export default function AdminDeliveryRoles() {
       toast.success(
         input.engineerUserId == null
           ? "项目岗位已解除分配"
-          : "项目工程师已更新，未结束需求已按岗位同步转交",
+          : "项目工程师已更新",
       );
     } catch (error) {
       await refresh();
@@ -312,29 +295,6 @@ export default function AdminDeliveryRoles() {
             value={summary.missingRoleCount}
             tone={summary.missingRoleCount ? "warning" : "success"}
             icon={<UsersRound className="h-5 w-5" />}
-          />
-          <SummaryCard
-            label="待分配需求"
-            value={summary.pendingTicketCount}
-            tone={summary.pendingTicketCount ? "warning" : "success"}
-            icon={<AlertTriangle className="h-5 w-5" />}
-            onClick={
-              firstPendingTicket?.workflowDomain
-                ? () => {
-                    setSelectedProjectId(firstPendingTicket.userId);
-                    window.setTimeout(
-                      () =>
-                        document
-                          .getElementById("project-team-details")
-                          ?.scrollIntoView({
-                            behavior: "smooth",
-                            block: "start",
-                          }),
-                      0,
-                    );
-                  }
-                : undefined
-            }
           />
         </div>
 
@@ -419,13 +379,6 @@ export default function AdminDeliveryRoles() {
                     assignments,
                   );
                   const managerMissing = project.managerId == null;
-                  const pendingTicketRows = tickets.filter(
-                    (ticket) =>
-                      ticket.userId === project.id &&
-                      ticket.workflowDomain &&
-                      ticket.assignedMemberId == null,
-                  );
-                  const pendingTickets = pendingTicketRows.length;
                   return (
                     <button
                       key={project.id}
@@ -500,12 +453,6 @@ export default function AdminDeliveryRoles() {
                           {project.requiredRoleTypes.length} 岗
                         </span>
                       </div>
-                      {pendingTickets > 0 && (
-                        <p className="mt-3 flex items-center gap-1.5 border-t pt-3 text-xs font-medium text-amber-700">
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          {pendingTickets} 个待分配需求，点击配置缺失岗位
-                        </p>
-                      )}
                     </button>
                   );
                 })}
@@ -527,7 +474,6 @@ export default function AdminDeliveryRoles() {
                     project={selectedProject}
                     assignments={assignments}
                     engineers={engineers}
-                    tickets={tickets}
                     mutationPending={setProjectEngineer.isPending}
                     onUpdateEngineer={updateEngineer}
                   />
@@ -549,14 +495,12 @@ function ProjectDetails({
   project,
   assignments,
   engineers,
-  tickets,
   mutationPending,
   onUpdateEngineer,
 }: {
   project: ProjectTeamProject;
   assignments: ProjectTeamAssignment[];
   engineers: ProjectTeamEngineer[];
-  tickets: ProjectTicket[];
   mutationPending: boolean;
   onUpdateEngineer: (input: {
     customerUserId: number;
@@ -622,11 +566,6 @@ function ProjectDetails({
           const assignment = projectAssignments.find(
             (row) => row.roleType === roleType,
           );
-          const roleTickets = tickets.filter(
-            (ticket) =>
-              ticket.userId === project.id &&
-              ticket.workflowDomain === roleType,
-          );
           return (
             <ProjectRoleCard
               key={roleType}
@@ -634,7 +573,6 @@ function ProjectDetails({
               roleType={roleType}
               assignment={assignment}
               engineers={engineers}
-              activeTicketCount={roleTickets.length}
               mutationPending={mutationPending}
               onUpdateEngineer={onUpdateEngineer}
             />
@@ -650,7 +588,6 @@ function ProjectRoleCard({
   roleType,
   assignment,
   engineers,
-  activeTicketCount,
   mutationPending,
   onUpdateEngineer,
 }: {
@@ -658,7 +595,6 @@ function ProjectRoleCard({
   roleType: DeliveryRoleType;
   assignment?: ProjectTeamAssignment;
   engineers: ProjectTeamEngineer[];
-  activeTicketCount: number;
   mutationPending: boolean;
   onUpdateEngineer: (input: {
     customerUserId: number;
@@ -691,19 +627,13 @@ function ProjectRoleCard({
   const handleChange = async (rawValue: string) => {
     const engineerUserId = rawValue ? Number(rawValue) : null;
     if (engineerUserId === (assignment?.engineerUserId ?? null)) return;
-    if (engineerUserId == null && activeTicketCount > 0) {
-      toast.error(
-        `该岗位还有 ${activeTicketCount} 个未结束需求，只能更换负责人，不能解除分配。`,
-      );
-      return;
-    }
     if (assignment) {
       const confirmed = window.confirm(
         engineerUserId == null
           ? disabledRoleWithAssignment
             ? `确认解除已停用岗位 ${DELIVERY_ROLE_LABELS[roleType]} 的遗留负责人？`
             : `确认解除 ${DELIVERY_ROLE_LABELS[roleType]}？`
-          : `确认更换 ${DELIVERY_ROLE_LABELS[roleType]}？系统将同步转交 ${activeTicketCount} 个未结束需求及待处理知识库重置请求。`,
+          : `确认更换 ${DELIVERY_ROLE_LABELS[roleType]}？`,
       );
       if (!confirmed) return;
     }
@@ -755,14 +685,10 @@ function ProjectRoleCard({
           {(enabled || assigned) && (
             <p className="mt-1 text-xs text-muted-foreground">
               {!enabled
-                ? activeTicketCount
-                  ? `该岗位有 ${activeTicketCount} 个未结束需求，需先完成后才能解除遗留负责人。`
-                  : `当前负责人：${currentEngineerLabel}。该岗位已随套餐停用，可以解除遗留负责人。`
-                : activeTicketCount
-                  ? `${activeTicketCount} 个未结束需求将随负责人同步转交`
-                  : assigned
-                    ? `由${project.managerDisplayName || project.managerUsername || "项目交付管理员"}统一管理`
-                    : "当前没有未结束需求"}
+                ? `当前负责人：${currentEngineerLabel}。该岗位已随套餐停用，可以解除负责人。`
+                : assigned
+                  ? `由${project.managerDisplayName || project.managerUsername || "项目管理员"}统一管理`
+                  : "请分配负责人"}
             </p>
           )}
         </div>
@@ -785,7 +711,7 @@ function ProjectRoleCard({
           className="mt-3 h-10 w-full rounded-md border bg-background px-3 text-sm"
           aria-label={`${DELIVERY_ROLE_LABELS[roleType]}负责人`}
           value={assigned ? String(assignment.engineerUserId) : ""}
-          disabled={mutationPending || (!enabled && activeTicketCount > 0)}
+          disabled={mutationPending}
           onChange={(event) => void handleChange(event.target.value)}
         >
           <option value="">

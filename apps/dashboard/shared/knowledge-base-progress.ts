@@ -128,7 +128,7 @@ export function isKnowledgeBaseMaterializedResultFailureCode(
 }
 
 export const KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE =
-  "FrontMind AI 已完成，但返回的知识库文件未通过完整性校验。系统不会自动重试；请申请重置后重新上传资料。";
+  "FrontMind AI 已完成，但返回的知识库文件未通过完整性校验。系统不会自动重试；请重置后重新上传资料。";
 
 export const knowledgeBaseNoticeSeverities = [
   "info",

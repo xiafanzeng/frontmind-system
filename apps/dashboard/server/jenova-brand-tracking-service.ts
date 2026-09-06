@@ -15,8 +15,6 @@ import { z } from "zod";
 
 import {
   deliveryProjectAssignments,
-  deliveryTicketEvents,
-  deliveryTickets,
   jenovaBrandTrackingAssignments,
   jenovaBrandTrackingCredentials,
   jenovaBrandTrackingPolicies,
@@ -54,14 +52,6 @@ export const JENOVA_DEFAULT_ROLLING_LIMIT = "10.00000000";
 export const JENOVA_SESSION_CREATION_FEE = "0.01000000";
 export const JENOVA_ROLLING_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
 const ZERO = "0.00000000";
-const ACTIVE_CREDENTIAL_TICKET_STATUSES = [
-  "submitted",
-  "needs_information",
-  "scheduled",
-  "in_progress",
-] as const;
-const JENOVA_CREDENTIAL_COMPLETION_SUMMARY =
-  "Jenova 品牌追踪 API 密钥已由系统管理员配置并通过连接验证。";
 
 export type JenovaBrandTrackingErrorCode =
   | "UNAUTHORIZED"
@@ -876,57 +866,10 @@ async function assertOverseasTargets(executor: any, userIds: number[]) {
   }
 }
 
-type ActiveJenovaCredentialTicket = {
-  id: string;
-  userId: number;
-  credentialTargetUserId: number | null;
-  credentialRequestKind: string | null;
-  status: string;
-};
-
-export function resolveJenovaCredentialTicketsToComplete(input: {
-  userIds: number[];
-  activeTickets: ActiveJenovaCredentialTicket[];
-  relatedTicketId?: string;
-}) {
-  const ticketsByTarget = new Map<number, ActiveJenovaCredentialTicket[]>();
-  for (const ticket of input.activeTickets) {
-    if (ticket.credentialTargetUserId === null) continue;
-    const targetTickets =
-      ticketsByTarget.get(ticket.credentialTargetUserId) ?? [];
-    targetTickets.push(ticket);
-    ticketsByTarget.set(ticket.credentialTargetUserId, targetTickets);
-  }
-  for (const userId of input.userIds) {
-    if ((ticketsByTarget.get(userId)?.length ?? 0) > 1) {
-      throw new JenovaBrandTrackingError(
-        "CONFLICT",
-        "同一客户存在多个有效的 Jenova 品牌追踪凭据需求，请先清理重复工单",
-        409,
-      );
-    }
-  }
-  if (input.relatedTicketId) {
-    const exactTicket =
-      input.userIds.length === 1
-        ? ticketsByTarget.get(input.userIds[0]!)?.[0]
-        : undefined;
-    if (exactTicket?.id !== input.relatedTicketId) {
-      throw new JenovaBrandTrackingError(
-        "CONFLICT",
-        "关联品牌追踪凭据需求不存在、目标账号不匹配或已经关闭",
-        409,
-      );
-    }
-  }
-  return input.userIds.flatMap((userId) => ticketsByTarget.get(userId) ?? []);
-}
-
 async function configureCredentialForUsers(input: {
   actor: AuthenticatedUser;
   userIds: number[];
   apiKey: string;
-  relatedTicketId?: string;
   dependencies?: JenovaBrandTrackingDependencies;
 }) {
   assertJenovaBrandTrackingSystemAdmin(input.actor);
@@ -945,28 +888,6 @@ async function configureCredentialForUsers(input: {
   const now = resolved.now();
   await db.transaction(async (tx: any) => {
     await assertOverseasTargets(tx, userIds);
-    const activeCredentialTickets = (await tx
-      .select({
-        id: deliveryTickets.id,
-        userId: deliveryTickets.userId,
-        credentialTargetUserId: deliveryTickets.credentialTargetUserId,
-        credentialRequestKind: deliveryTickets.credentialRequestKind,
-        status: deliveryTickets.status,
-      })
-      .from(deliveryTickets)
-      .where(
-        and(
-          eq(deliveryTickets.credentialRequestKind, "jenova_brand_tracking"),
-          inArray(deliveryTickets.credentialTargetUserId, userIds),
-          inArray(deliveryTickets.status, ACTIVE_CREDENTIAL_TICKET_STATUSES),
-        ),
-      )
-      .for("update")) as ActiveJenovaCredentialTicket[];
-    const relatedTickets = resolveJenovaCredentialTicketsToComplete({
-      userIds,
-      activeTickets: activeCredentialTickets,
-      relatedTicketId: input.relatedTicketId,
-    });
     const oldAssignments = await tx
       .select({
         userId: jenovaBrandTrackingAssignments.userId,
@@ -1139,34 +1060,7 @@ async function configureCredentialForUsers(input: {
           .where(eq(jenovaBrandTrackingCredentials.id, replacedCredentialId));
       }
     }
-    for (const relatedTicket of relatedTickets) {
-      await tx
-        .update(deliveryTickets)
-        .set({
-          status: "completed",
-          quotaState: "consumed",
-          publicSummary: JENOVA_CREDENTIAL_COMPLETION_SUMMARY,
-          resolvedAt: now,
-          technicalDedupeKey: null,
-          revision: sql`${deliveryTickets.revision} + 1`,
-          updatedByUserId: input.actor.id,
-          updatedAt: now,
-        })
-        .where(eq(deliveryTickets.id, relatedTicket.id));
-      await tx.insert(deliveryTicketEvents).values({
-        id: resolved.randomId(),
-        ticketId: relatedTicket.id,
-        userId: relatedTicket.userId,
-        actorUserId: input.actor.id,
-        actorRole: "admin",
-        kind: "status_change",
-        visibility: "customer",
-        message: JENOVA_CREDENTIAL_COMPLETION_SUMMARY,
-        fromStatus: relatedTicket.status,
-        toStatus: "completed",
-        createdAt: now,
-      });
-    }
+
   });
   return { users: await listCredentialRows(db, now, userIds) };
 }
@@ -1175,7 +1069,6 @@ export async function configureJenovaBrandTrackingCredential(input: {
   actor: AuthenticatedUser;
   userId: number;
   apiKey: string;
-  relatedTicketId?: string;
   dependencies?: JenovaBrandTrackingDependencies;
 }) {
   return configureCredentialForUsers({ ...input, userIds: [input.userId] });

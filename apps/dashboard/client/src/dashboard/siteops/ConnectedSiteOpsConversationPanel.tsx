@@ -28,38 +28,6 @@ const PENDING_SOCIAL_PACKAGE_STATES = new Set([
   "qa_running",
 ]);
 
-const PENDING_REBUILD_REQUEST_STATES = new Set([
-  "submitted",
-  "scheduled",
-  "in_progress",
-]);
-
-const REBUILD_REQUEST_TRANSITIONS: Readonly<
-  Record<string, ReadonlySet<string>>
-> = {
-  submitted: new Set([
-    "needs_information",
-    "scheduled",
-    "in_progress",
-    "completed",
-    "rejected",
-    "cancelled",
-  ]),
-  needs_information: new Set([
-    "submitted",
-    "scheduled",
-    "in_progress",
-    "completed",
-    "rejected",
-    "cancelled",
-  ]),
-  scheduled: new Set(["in_progress", "completed", "rejected", "cancelled"]),
-  in_progress: new Set(["completed", "rejected", "cancelled"]),
-  completed: new Set(),
-  rejected: new Set(),
-  cancelled: new Set(),
-};
-
 const SITEOPS_PROGRESSIVE_POLL_INTERVALS = [
   { untilMs: 60_000, intervalMs: 5_000 },
   { untilMs: 5 * 60_000, intervalMs: 10_000 },
@@ -306,10 +274,6 @@ export function shouldPollSiteOpsObservation(
           fallbackReconciliationFinished
         )) ||
         observation.rebuildRequest.resetPending === true ||
-        (observation.rebuildRequest.status !== null &&
-          PENDING_REBUILD_REQUEST_STATES.has(
-            observation.rebuildRequest.status,
-          )) ||
         observation.visualGeneration.status === "generating" ||
         observation.deployments.some((item) =>
           PENDING_DEPLOYMENT_STATES.has(item.status),
@@ -354,9 +318,9 @@ export function newestSiteOpsObservation(
   const incomingVisualGenerating =
     incoming.visualGeneration.status === "generating";
   if (currentVisualGenerating && !incomingVisualGenerating) return incoming;
-  // Rebuild-ticket processing is updated by the administrative worker and
+  // Rebuild processing is updated by the application and
   // does not need to append a customer message or bump the project revision.
-  // At an equal cursor accept only forward ticket/reset transitions so a late
+  // At an equal cursor accept only forward reset transitions so a late
   // response cannot restore an earlier actionable state.
   const currentRebuild = current.rebuildRequest;
   const incomingRebuild = incoming.rebuildRequest;
@@ -376,21 +340,7 @@ export function newestSiteOpsObservation(
   ) {
     return current;
   }
-  if (currentRebuild.status !== incomingRebuild.status) {
-    if (currentRebuild.status === null && incomingRebuild.status !== null) {
-      return incoming;
-    }
-    if (
-      currentRebuild.status !== null &&
-      incomingRebuild.status !== null &&
-      REBUILD_REQUEST_TRANSITIONS[currentRebuild.status]?.has(
-        incomingRebuild.status,
-      )
-    ) {
-      return incoming;
-    }
-  }
-  // Build, fallback, deployment and repair-ticket updates are intentionally
+  // Build, fallback, deployment and repair updates are intentionally
   // allowed to advance without appending another chat message or bumping the
   // project revision. Prefer their database update coordinate at an equal
   // project/message cursor, then use monotonic phase ranks for MySQL's
@@ -425,14 +375,7 @@ export function newestSiteOpsObservation(
   return current;
 }
 
-export default function ConnectedSiteOpsConversationPanel({
-  onSubmitIcpFiling,
-}: {
-  onSubmitIcpFiling?: (input: {
-    domain: string;
-    icpNumber: string;
-  }) => Promise<void> | void;
-}) {
+export default function ConnectedSiteOpsConversationPanel() {
   const opened = useRef(false);
   const observationRef = useRef<SiteOpsObservationV1 | null>(null);
   const pendingActionAck = useRef<{
@@ -519,7 +462,7 @@ export default function ConnectedSiteOpsConversationPanel({
         observation.latestSequence,
         observation.interactionState,
         observation.builds[0]?.updatedAt ?? "no-build",
-        observation.rebuildRequest.status ?? "no-rebuild",
+        String(observation.rebuildRequest.resetApplied),
       ].join(":")
     : "idle";
   if (pollEpoch.current.coordinate !== pollCoordinate) {
@@ -953,15 +896,6 @@ export default function ConnectedSiteOpsConversationPanel({
         const refreshed = await observeQuery.refetch();
         if (refreshed.data) acceptObservation(refreshed.data);
       }}
-      onSubmitIcpFiling={
-        onSubmitIcpFiling
-          ? async (input) => {
-              await onSubmitIcpFiling(input);
-              const refreshed = await observeQuery.refetch();
-              if (refreshed.data) acceptObservation(refreshed.data);
-            }
-          : undefined
-      }
     />
   );
 }

@@ -35,7 +35,6 @@ import {
   normalizeJenovaBrandTrackingIdentity,
   projectedJenovaActiveCredentialCount,
   recoverJenovaBrandTrackingTurns,
-  resolveJenovaCredentialTicketsToComplete,
   startJenovaBrandTrackingSession,
   toJenovaBrandTrackingAuthError,
   updateJenovaBrandTrackingLimit,
@@ -273,77 +272,6 @@ describe("Jenova Brand Tracker service invariants", () => {
         }),
       ),
     ).toThrowError(expect.objectContaining({ code: "FORBIDDEN" }));
-  });
-
-  it("auto-closes each unique active Jenova credential ticket without title inference", () => {
-    const tickets = [
-      {
-        id: "ticket-7",
-        userId: 7,
-        credentialTargetUserId: 7,
-        credentialRequestKind: "jenova_brand_tracking",
-        status: "submitted",
-      },
-      {
-        id: "ticket-8",
-        userId: 8,
-        credentialTargetUserId: 8,
-        credentialRequestKind: "jenova_brand_tracking",
-        status: "in_progress",
-      },
-    ];
-
-    expect(
-      resolveJenovaCredentialTicketsToComplete({
-        userIds: [7],
-        activeTickets: tickets,
-      }),
-    ).toEqual([tickets[0]]);
-    expect(
-      resolveJenovaCredentialTicketsToComplete({
-        userIds: [7, 8],
-        activeTickets: tickets,
-      }),
-    ).toEqual(tickets);
-  });
-
-  it("requires an exact related ticket and rejects duplicate active tickets", () => {
-    const ticket = {
-      id: "ticket-7",
-      userId: 7,
-      credentialTargetUserId: 7,
-      credentialRequestKind: "jenova_brand_tracking",
-      status: "scheduled",
-    };
-    expect(
-      resolveJenovaCredentialTicketsToComplete({
-        userIds: [7],
-        activeTickets: [ticket],
-        relatedTicketId: ticket.id,
-      }),
-    ).toEqual([ticket]);
-    expect(() =>
-      resolveJenovaCredentialTicketsToComplete({
-        userIds: [7],
-        activeTickets: [ticket],
-        relatedTicketId: "different-ticket",
-      }),
-    ).toThrowError(
-      expect.objectContaining({ code: "CONFLICT", statusCode: 409 }),
-    );
-    expect(() =>
-      resolveJenovaCredentialTicketsToComplete({
-        userIds: [7],
-        activeTickets: [ticket, { ...ticket, id: "ticket-7-duplicate" }],
-      }),
-    ).toThrowError(
-      expect.objectContaining({ code: "CONFLICT", statusCode: 409 }),
-    );
-    expect(
-      toJenovaBrandTrackingAuthError(
-        new JenovaBrandTrackingError("CONFLICT", "存在重复工单", 409),
-      ),
-    ).toMatchObject({ code: "CONFLICT" });
   });
 
   it("updates only the Jenova policy when an engineer changes the limit", async () => {

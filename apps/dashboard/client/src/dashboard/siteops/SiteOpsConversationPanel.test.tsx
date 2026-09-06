@@ -123,8 +123,6 @@ function observation(
     socialPackages: [],
     rebuildRequest: {
       allowed: false,
-      ticketId: null,
-      status: null,
       resetApplied: false,
       resetSourceBuildId: null,
     },
@@ -488,87 +486,6 @@ describe("SiteOpsConversationPanel", () => {
     expect(screen.queryByText(/官网版本 1/u)).toBeNull();
   });
 
-  it("requires confirmation before submitting a fresh-root reset request", async () => {
-    const onAction = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "申请重置并全新开始" }));
-    expect(
-      screen.getByRole("alertdialog", { name: "申请重置并全新开始" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("批准后，当前线上官网会进入下线流程。"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("当前企业知识库会保留，并作为全新建站的资料来源。"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("旧视觉方案和生成任务不会继续使用。"),
-    ).toBeInTheDocument();
-    expect(onAction).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("alertdialog", {
-          name: "申请重置并全新开始",
-        }),
-      ).not.toBeInTheDocument(),
-    );
-    expect(onAction).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "申请重置并全新开始" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-    await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith({
-        action: "request_rebuild",
-        input: {},
-      }),
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("alertdialog", {
-          name: "申请重置并全新开始",
-        }),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
-  it("keeps a pending reset request visible and disabled", () => {
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          rebuildRequest: {
-            allowed: false,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "submitted",
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "重置申请处理中" }),
-    ).toBeDisabled();
-    expect(screen.queryByText("高级选项")).not.toBeInTheDocument();
-  });
-
   it("keeps the fresh local build action enabled while old external cleanup is pending", () => {
     render(
       <SiteOpsConversationPanel
@@ -580,8 +497,6 @@ describe("SiteOpsConversationPanel", () => {
           interactionState: "select_snapshot",
           rebuildRequest: {
             allowed: false,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "in_progress",
             resetApplied: true,
             resetPending: true,
             resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
@@ -595,45 +510,8 @@ describe("SiteOpsConversationPanel", () => {
       screen.getByRole("button", { name: "从知识库开始建站" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "正在下线旧官网" }),
-    ).toBeDisabled();
-  });
-
-  it("sanitizes technical reset request failures", async () => {
-    const onAction = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          "canonical hostname 的 RAM Role 与 global_excluding_cn 归档哈希不一致",
-        ),
-      );
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "申请重置并全新开始" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-    await waitFor(() =>
-      expect(
-        screen.getAllByText(
-          "FrontMind 正在处理当前任务；如长时间未完成，请提交工单获取协助。",
-        ).length,
-      ).toBeGreaterThan(0),
-    );
-    expect(document.body.textContent).not.toMatch(
-      /canonical hostname|RAM Role|global_excluding_cn|归档哈希/iu,
-    );
+      screen.queryByRole("button", { name: "正在下线旧官网" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides internal error codes and operation ids from customers", () => {
@@ -1235,8 +1113,6 @@ describe("SiteOpsConversationPanel", () => {
           },
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: false,
             resetSourceBuildId: null,
           },
@@ -1607,8 +1483,6 @@ describe("SiteOpsConversationPanel", () => {
           visualCandidates: [],
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: true,
             resetPending: false,
             resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
@@ -1662,8 +1536,6 @@ describe("SiteOpsConversationPanel", () => {
           ],
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: true,
             resetPending: false,
             resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
@@ -1962,8 +1834,6 @@ describe("SiteOpsConversationPanel", () => {
           ],
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: false,
             resetSourceBuildId: null,
           },
@@ -1974,9 +1844,7 @@ describe("SiteOpsConversationPanel", () => {
     );
 
     expect(
-      screen.getByText(
-        "重置申请尚未完成；在批准并执行下线前，当前官网仍可继续预览和使用。",
-      ),
+      screen.getByText("当前版本未完成，原官网仍可继续预览和使用。"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "在新标签页打开预览" }));
     expect(open).toHaveBeenCalledWith(
@@ -1985,102 +1853,6 @@ describe("SiteOpsConversationPanel", () => {
     );
     expect(replace).toHaveBeenCalledWith(currentPreview);
     open.mockRestore();
-  });
-
-  it("keeps a recoverable first build in progress and still offers a reset", () => {
-    const buildId = "33333333-3333-4333-8333-333333333333";
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: {
-            ...observation().project,
-            status: "attention_required",
-          },
-          interactionState: "attention_required",
-          builds: [
-            {
-              id: buildId,
-              ordinal: 1,
-              parentBuildId: null,
-              status: "attention_required",
-              previewUrl: null,
-              sourceUrl: null,
-              buildPhase: "provider_sync_delayed",
-              recoverable: true,
-              previewWarning:
-                "AI 建站结果正在同步，系统会继续读取同一任务，不会重复创建或重复计费。",
-              needsHelp: true,
-              createdAt: "2026-08-23T00:00:00.000Z",
-              updatedAt: "2026-08-23T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "正在同步建站结果" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/不会重复创建或重复计费/u)).toBeInTheDocument();
-    expect(screen.queryByText(/本次没有生成可安全展示的版本/u)).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "申请重置并全新开始" }),
-    ).toBeEnabled();
-  });
-
-  it("submits a fresh reset for a recoverable service-unavailable build", async () => {
-    const onAction = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: { ...observation().project, status: "failed" },
-          interactionState: "failed",
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 1,
-              parentBuildId: null,
-              status: "failed",
-              previewUrl: null,
-              sourceUrl: null,
-              buildPhase: "provider_sync_delayed",
-              recoverable: true,
-              previewWarning:
-                "AI 建站任务仍可恢复，但也可以申请重置后全新开始。",
-              needsHelp: true,
-              createdAt: "2026-08-23T00:00:00.000Z",
-              updatedAt: "2026-08-23T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "申请重置并全新开始" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-
-    await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith({
-        action: "request_rebuild",
-        input: {},
-      }),
-    );
   });
 
   it("shows the previous preview while a recoverable revision keeps reconciling", () => {
@@ -2119,8 +1891,6 @@ describe("SiteOpsConversationPanel", () => {
           ],
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: false,
             resetSourceBuildId: null,
           },
@@ -2136,60 +1906,7 @@ describe("SiteOpsConversationPanel", () => {
     expect(
       screen.getByRole("button", { name: "在新标签页打开预览" }),
     ).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: "申请重置并全新开始" }),
-    ).toBeEnabled();
-  });
-
-  it("offers only an approved fresh reset after a hard build failure", async () => {
-    const buildId = "33333333-3333-4333-8333-333333333333";
-    const onAction = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: { ...observation().project, status: "failed" },
-          interactionState: "failed",
-          builds: [
-            {
-              id: buildId,
-              ordinal: 1,
-              parentBuildId: null,
-              status: "failed",
-              previewUrl: null,
-              sourceUrl: null,
-              needsHelp: true,
-              createdAt: "2026-08-23T00:00:00.000Z",
-              updatedAt: "2026-08-23T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    expect(screen.getByText(/本次没有生成可安全展示的版本/u)).toHaveTextContent(
-      "可从当前企业知识库重新开始建站",
-    );
-    expect(screen.queryByRole("button", { name: "继续生成官网" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "重置建站流程" })).toBeNull();
-    const resetButtons = screen.getAllByRole("button", {
-      name: "申请重置并全新开始",
-    });
-    fireEvent.click(resetButtons.at(-1)!);
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-    await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith({
-        action: "request_rebuild",
-        input: {},
-      }),
-    );
+    expect(screen.getByRole("button", { name: "重新开始制作" })).toBeEnabled();
   });
 
   it("shows a trusted fallback preview as usable without exposing warning codes", () => {
@@ -2461,62 +2178,12 @@ describe("SiteOpsConversationPanel", () => {
     expect(screen.getByRole("button", { name: "发布大陆站点" })).toBeEnabled();
   });
 
-  it("submits a rebuild ticket instead of directly reselecting visuals", async () => {
-    const onAction = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 2,
-              parentBuildId: null,
-              status: "approved",
-              previewUrl: null,
-              sourceUrl: null,
-              needsHelp: false,
-              createdAt: "2026-08-22T00:00:00.000Z",
-              updatedAt: "2026-08-22T00:01:00.000Z",
-            },
-          ],
-          project: { ...observation().project, status: "live" },
-          interactionState: "live",
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "重置建站流程" })).toBeNull();
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "申请重置并全新开始" })[0]!,
-    );
-    fireEvent.change(screen.getByLabelText("重置原因与期望（选填）"), {
-      target: { value: "希望调整品牌风格" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-    await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith({
-        action: "request_rebuild",
-        input: { reason: "希望调整品牌风格" },
-      }),
-    );
-  });
-
   it("does not present a completed reset coordinate as an active reset", () => {
     render(
       <SiteOpsConversationPanel
         observation={observation({
           rebuildRequest: {
             allowed: true,
-            ticketId: null,
-            status: null,
             resetApplied: true,
             resetPending: false,
             resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
@@ -2526,320 +2193,12 @@ describe("SiteOpsConversationPanel", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("button", { name: "申请重置并全新开始" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重新开始制作" })).toBeEnabled();
     expect(
       screen.queryByRole("button", {
         name: "重置已批准，可从当前知识库重新开始",
       }),
     ).toBeNull();
-  });
-
-  it("hides the previous website surface after an approved rebuild reset", () => {
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: {
-            ...observation().project,
-            status: "draft",
-            currentKnowledgeSnapshotId: null,
-          },
-          knowledgeSnapshots: [],
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 2,
-              parentBuildId: null,
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/preview/",
-              sourceUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/source",
-              needsHelp: false,
-              createdAt: "2026-08-22T00:00:00.000Z",
-              updatedAt: "2026-08-22T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "in_progress",
-            resetApplied: true,
-            resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
-          },
-          interactionState: "select_snapshot",
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "从知识库开始建站" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("当前阶段")).not.toBeInTheDocument();
-    expect(screen.queryByText("官网版本 2")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "在新标签页打开预览" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "下载网站源码" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", {
-        name: "重置已批准，可从当前知识库重新开始",
-      }),
-    ).toBeEnabled();
-    expect(screen.queryByText("重置申请处理中")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", {
-        name: "发布博客与行业近况（即将上线）",
-      }),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByText("继续对话")).not.toBeInTheDocument();
-  });
-
-  it.each([
-    "visual_searching",
-    "awaiting_visual_selection",
-    "building",
-  ] as const)(
-    "allows a reset request while the first workflow is %s",
-    (status) => {
-      render(
-        <SiteOpsConversationPanel
-          observation={observation({
-            project: { ...observation().project, status },
-            builds:
-              status === "building"
-                ? [
-                    {
-                      id: "33333333-3333-4333-8333-333333333333",
-                      ordinal: 1,
-                      parentBuildId: null,
-                      status: "building",
-                      previewUrl: null,
-                      sourceUrl: null,
-                      needsHelp: false,
-                      createdAt: "2026-08-22T00:00:00.000Z",
-                      updatedAt: "2026-08-22T00:01:00.000Z",
-                    },
-                  ]
-                : [],
-            interactionState: status,
-            rebuildRequest: {
-              allowed: true,
-              ticketId: null,
-              status: null,
-              resetApplied: false,
-              resetSourceBuildId: null,
-            },
-          })}
-          onAction={vi.fn()}
-        />,
-      );
-
-      expect(
-        screen.getByRole("button", { name: "申请重置并全新开始" }),
-      ).toBeEnabled();
-    },
-  );
-
-  it("submits a reset request before a completed website exists", async () => {
-    const onAction = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          builds: [],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: null,
-            status: null,
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-        })}
-        onAction={onAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "申请重置并全新开始" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交重置申请" }));
-
-    await waitFor(() =>
-      expect(onAction).toHaveBeenCalledWith({
-        action: "request_rebuild",
-        input: {},
-      }),
-    );
-  });
-
-  it("keeps the existing website visible before a submitted rebuild is approved", () => {
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: { ...observation().project, status: "live" },
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 2,
-              parentBuildId: null,
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/preview/",
-              sourceUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/source",
-              needsHelp: false,
-              createdAt: "2026-08-22T00:00:00.000Z",
-              updatedAt: "2026-08-22T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: false,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "submitted",
-            resetApplied: false,
-            resetSourceBuildId: null,
-          },
-          interactionState: "live",
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText("官网版本 2")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "在新标签页打开预览" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "下载网站源码" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", {
-        name: "发布博客与行业近况（即将上线）",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "重置申请处理中" })).toEqual(
-      expect.arrayContaining([expect.any(HTMLButtonElement)]),
-    );
-    expect(
-      screen
-        .getAllByRole("button", { name: "重置申请处理中" })
-        .every((button) => button.hasAttribute("disabled")),
-    ).toBe(true);
-  });
-
-  it("keeps a newly completed replacement visible while a second reset request awaits approval", () => {
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: { ...observation().project, status: "approved" },
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 2,
-              parentBuildId: null,
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/preview/",
-              sourceUrl: null,
-              needsHelp: false,
-              createdAt: "2026-08-22T00:00:00.000Z",
-              updatedAt: "2026-08-22T00:01:00.000Z",
-            },
-            {
-              id: "44444444-4444-4444-8444-444444444444",
-              ordinal: 3,
-              parentBuildId: "33333333-3333-4333-8333-333333333333",
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/preview/",
-              sourceUrl:
-                "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/source",
-              needsHelp: false,
-              createdAt: "2026-08-23T00:00:00.000Z",
-              updatedAt: "2026-08-23T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: false,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "submitted",
-            resetApplied: true,
-            resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
-          },
-          interactionState: "approved",
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText("官网版本 3")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "在新标签页打开预览" }),
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "重置申请处理中" })).toEqual(
-      expect.arrayContaining([expect.any(HTMLButtonElement)]),
-    );
-  });
-
-  it("restores the completed replacement website after the rebuild ticket completes", () => {
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          project: { ...observation().project, status: "approved" },
-          builds: [
-            {
-              id: "33333333-3333-4333-8333-333333333333",
-              ordinal: 2,
-              parentBuildId: null,
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/33333333-3333-4333-8333-333333333333/preview/",
-              sourceUrl: null,
-              needsHelp: false,
-              createdAt: "2026-08-22T00:00:00.000Z",
-              updatedAt: "2026-08-22T00:01:00.000Z",
-            },
-            {
-              id: "44444444-4444-4444-8444-444444444444",
-              ordinal: 3,
-              parentBuildId: "33333333-3333-4333-8333-333333333333",
-              status: "approved",
-              previewUrl:
-                "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/preview/",
-              sourceUrl:
-                "/api/site-ops/builds/44444444-4444-4444-8444-444444444444/source",
-              needsHelp: false,
-              createdAt: "2026-08-23T00:00:00.000Z",
-              updatedAt: "2026-08-23T00:01:00.000Z",
-            },
-          ],
-          rebuildRequest: {
-            allowed: true,
-            ticketId: "77777777-7777-4777-8777-777777777777",
-            status: "completed",
-            resetApplied: true,
-            resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
-          },
-          interactionState: "approved",
-        })}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByText("官网版本 3")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "在新标签页打开预览" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "下载网站源码" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", {
-        name: "发布博客与行业近况（即将上线）",
-      }),
-    ).toBeInTheDocument();
   });
 
   it.each([
@@ -2872,8 +2231,6 @@ describe("SiteOpsConversationPanel", () => {
             ],
             rebuildRequest: {
               allowed: false,
-              ticketId: "77777777-7777-4777-8777-777777777777",
-              status: "in_progress",
               resetApplied: true,
               resetSourceBuildId: "33333333-3333-4333-8333-333333333333",
             },
@@ -3412,40 +2769,6 @@ describe("SiteOpsConversationPanel", () => {
     );
   });
 
-  it("submits the current domain through the existing ICP filing entry", async () => {
-    const onSubmitIcpFiling = vi.fn().mockResolvedValue(undefined);
-    render(
-      <SiteOpsConversationPanel
-        observation={observation({
-          domainState: {
-            domain: "example.com",
-            displayDomain: "example.com",
-            revision: 7,
-            ownershipStatus: "verified",
-            dnsStatus: "active",
-            icpStatus: "not_submitted",
-            icpDomainRevision: null,
-            icpVerifiedAt: null,
-          },
-        })}
-        onSubmitIcpFiling={onSubmitIcpFiling}
-      />,
-    );
-
-    fireEvent.change(screen.getByLabelText("当前域名版本的 ICP 主体备案号"), {
-      target: { value: "京ICP备12345678号" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "提交现有 ICP 核验工单" }),
-    );
-    await waitFor(() =>
-      expect(onSubmitIcpFiling).toHaveBeenCalledWith({
-        domain: "example.com",
-        icpNumber: "京ICP备12345678号",
-      }),
-    );
-  });
-
   it("keeps a failed 2.9 revision draft and retries text plus images", async () => {
     const onSubmitRevision = vi
       .fn()
@@ -3552,4 +2875,30 @@ describe("SiteOpsConversationPanel", () => {
       screen.getByText("修改版本正在生成；完成前继续保留并展示上一版预览。"),
     ).toBeInTheDocument();
   });
+});
+
+it("restarts website preparation directly while retaining the live website", async () => {
+  const onAction = vi.fn().mockResolvedValue(undefined);
+  render(
+    <SiteOpsConversationPanel
+      observation={observation({
+        rebuildRequest: {
+          allowed: true,
+          resetApplied: false,
+          resetSourceBuildId: null,
+        },
+      })}
+      onAction={onAction}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "重新开始制作" }));
+  expect(screen.getByText(/已经发布的网站继续运行/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "确认重新开始" }));
+  await waitFor(() =>
+    expect(onAction).toHaveBeenCalledWith({
+      action: "request_rebuild",
+      input: {},
+    }),
+  );
+  expect(screen.queryByText(/工单|审批|人工受理/)).not.toBeInTheDocument();
 });

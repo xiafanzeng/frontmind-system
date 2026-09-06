@@ -23,7 +23,7 @@ import {
   type SiteOperation,
   type SiteProviderConnection,
 } from "../../drizzle/schema";
-import { approvedResetUnpublishInputSchema } from "./rebuild-ticket";
+import { approvedResetUnpublishInputSchema } from "./reset-coordinates";
 import {
   AuthServiceError,
   decryptCredentialSecret,
@@ -186,7 +186,7 @@ export function assertAliyunDomainSelectionSafe(input: {
   if (!input.sameDomain && input.hasExistingDomainState) {
     throw new AliyunProviderError(
       "DOMAIN_SWITCH_REQUIRES_RESET",
-      "当前项目已接入其他域名，请先申请重置并完成安全下线。",
+      "当前项目已接入其他域名，请先解除原域名绑定。",
     );
   }
 }
@@ -842,7 +842,7 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
     if (changingAccount && hasPublishedDomainState) {
       throw new AliyunProviderError(
         "ALIYUN_ACCOUNT_CHANGE_REQUIRES_RESET",
-        "当前项目仍绑定原阿里云账号的域名，请先申请重置并完成安全下线。",
+        "当前项目仍绑定原阿里云账号的域名，请先解除原域名绑定。",
       );
     }
     const connectionId = existing?.id ?? randomUUID();

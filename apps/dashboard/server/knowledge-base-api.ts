@@ -1515,7 +1515,7 @@ export async function getKnowledgeBaseObservation(input: {
       ...observation.notice,
       code: "FRONTMIND_KB_RESET_REQUIRED",
       message:
-        "任务已结束，但本轮结果无法安全应用。系统不会自动重试；请申请重置后重新上传资料。",
+        "任务已结束，但本轮结果无法安全应用。系统不会自动重试；请重置后重新上传资料。",
       retryable: false,
       failureClass: "requires_user_fix",
       recoveryAction: "approve_reset",

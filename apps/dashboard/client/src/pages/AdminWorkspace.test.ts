@@ -77,7 +77,7 @@ describe("admin customer workspace", () => {
     expect(source).not.toContain("replaceCredential.useMutation");
   });
 
-  it("combines service and demand work without embedding the customer dashboard", () => {
+  it("combines service management with direct dashboard editing", () => {
     const source = readFileSync(
       resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"),
       "utf8",
@@ -87,7 +87,7 @@ describe("admin customer workspace", () => {
     expect(source).not.toContain("setTab(");
     expect(source).not.toContain('{tab === "service" &&');
     expect(source).not.toContain('{tab === "tickets" &&');
-    expect(source).toContain("<AdminDeliveryTicketWorkspace");
+    expect(source).not.toContain("AdminDeliveryTicketWorkspace");
     expect(source).toContain("<DashboardVersionHistory");
     expect(source).not.toContain("onOpenCustomerDashboard=");
     expect(source).toContain('mode="fullscreen"');
@@ -101,7 +101,7 @@ describe("admin customer workspace", () => {
     expect(source).not.toContain('heading="客户实际页面"');
     expect(source).not.toContain("这里与客户账号看到的完整看板一致。");
     expect(source).not.toContain("正式版本 R");
-    expect(source).toContain("websiteWorkspace={websiteWorkspacePreview}");
+    expect(source).not.toContain("websiteWorkspacePreview");
     expect(source).toContain("knowledgePreview={customerKnowledgePreview}");
     expect(source).toContain("activity: knowledgeActivityQuery.data");
     expect(source).not.toContain('{tab === "knowledge"');

@@ -204,40 +204,6 @@ describe("CustomerDashboardMirror", () => {
     expect(screen.queryByRole("tab", { name: "AI 友好内容" })).toBeNull();
   });
 
-  it("lets AI operations verify the formal website and knowledge views", () => {
-    render(
-      <CustomerDashboardMirror
-        payload={payload}
-        allowedSections={["website", "knowledge"]}
-        initialSection="website"
-        websiteWorkspace={
-          {
-            marketEdition: "domestic",
-            quotas: {
-              content_asset_publish: {},
-              website_content_publish: {},
-            },
-            contentAssetCatalog: [],
-            websiteContentCatalog: [],
-            preferredMediaOptions: [],
-            deliveryOwners: {},
-            websiteWorkflow: {},
-            tickets: [],
-          } as any
-        }
-        knowledgePreview={{
-          progress: {} as any,
-          snapshot: {} as any,
-        }}
-      />,
-    );
-
-    expect(screen.getByText("AI 友好官网用户页")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "知识库展示" }));
-    expect(screen.getByText("知识库展示用户页")).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "品牌建设" })).toBeNull();
-  });
-
   it("reserves the overseas brand-tracking section for usage-only delivery controls", () => {
     render(
       <CustomerDashboardMirror
@@ -335,7 +301,7 @@ describe("CustomerDashboardMirror", () => {
 
     expect(
       screen.getAllByText(
-        "9/9 个附件已保留，知识库任务未创建。请申请重置后重新上传资料。",
+        "9/9 个附件已保留，知识库任务未创建。请重置后重新上传资料。",
       ),
     ).toHaveLength(1);
     expect(screen.queryByText(/本轮已停止/)).toBeNull();
@@ -377,7 +343,7 @@ describe("CustomerDashboardMirror", () => {
 
     expect(
       screen.getByText(
-        "9/9 个附件已保留，知识库任务未创建。请申请重置后重新上传资料。",
+        "9/9 个附件已保留，知识库任务未创建。请重置后重新上传资料。",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/本轮已停止/)).toBeNull();

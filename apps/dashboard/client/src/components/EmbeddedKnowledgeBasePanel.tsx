@@ -1,20 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Download,
-  FileClock,
   Loader2,
   PanelRightOpen,
   RefreshCw,
   Send,
   Sparkles,
   Trash2,
-  Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useAuth } from "@/_core/hooks/useAuth";
 import KnowledgeBaseProgressPanel from "@/components/KnowledgeBaseProgressPanel";
-import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
 import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
 } from "@/components/KnowledgeBaseViewer";
@@ -135,7 +132,6 @@ export default function EmbeddedKnowledgeBasePanel({
   page,
   onPageChange,
   mode = "standard",
-  knowledgeEngineerAssigned = true,
 }: {
   preview?: boolean;
   previewData?: {
@@ -145,7 +141,6 @@ export default function EmbeddedKnowledgeBasePanel({
   page: "build" | "display";
   onPageChange: (page: "build" | "display") => void;
   mode?: "standard" | "workspace";
-  knowledgeEngineerAssigned?: boolean;
 }) {
   const previewMode = import.meta.env.DEV && preview && Boolean(previewData);
   const { user } = useAuth();
@@ -153,7 +148,6 @@ export default function EmbeddedKnowledgeBasePanel({
   const [previewProgress, setPreviewProgress] = useState(
     previewData?.progress ?? null,
   );
-  const [requestHistoryOpen, setRequestHistoryOpen] = useState(false);
   const knowledgeQuery = trpc.workspace.knowledge.useQuery(undefined, {
     enabled: !previewMode && user?.role === "user",
     retry: false,
@@ -167,9 +161,7 @@ export default function EmbeddedKnowledgeBasePanel({
     retry: false,
     refetchOnMount: "always",
     refetchInterval: (query) =>
-      query.state.data?.locked || !query.state.data?.hasKnowledge
-        ? 5_000
-        : 30_000,
+      !query.state.data?.hasKnowledge ? 5_000 : 30_000,
   });
   const {
     activeConversation,
@@ -211,7 +203,7 @@ export default function EmbeddedKnowledgeBasePanel({
           ? activeConversation?.id
           : undefined,
       );
-      // The approved revision is a hard local boundary: cancel every KB sync
+      // The completed reset revision is a hard local boundary: cancel every KB sync
       // lane/coordinator through the context discard, then remove both query
       // aliases before a single fresh RealBuildFlow is allowed to mount.
       trpcUtils.workspace.knowledge.setData(undefined, (current) =>
@@ -320,29 +312,15 @@ export default function EmbeddedKnowledgeBasePanel({
                 }}
               />
             ))}
-          {page === "build" && !previewMode && resetQuery.data && (
+          {!previewMode && resetQuery.data && (
             <KnowledgeResetButton
               status={resetQuery.data}
-              onSubmitted={() => resetQuery.refetch()}
+              onReset={async () => {
+                await resetQuery.refetch();
+                await knowledgeQuery.refetch();
+                onPageChange("build");
+              }}
             />
-          )}
-          {page === "display" && !previewMode && displayedSnapshot?.id && (
-            <KnowledgeMaintenanceTicketButton
-              snapshotId={displayedSnapshot.id}
-              enabled={knowledgeEngineerAssigned}
-              unavailableReason={resetQuery.data?.unavailableReason ?? null}
-            />
-          )}
-          {!previewMode && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-fit shrink-0"
-              onClick={() => setRequestHistoryOpen(true)}
-            >
-              <FileClock className="h-4 w-4" />
-              需求记录
-            </Button>
           )}
           {page === "display" &&
             displayedSnapshot &&
@@ -358,17 +336,6 @@ export default function EmbeddedKnowledgeBasePanel({
             )}
         </div>
       </header>
-
-      <CustomerRequestHistoryDialog
-        open={requestHistoryOpen}
-        onOpenChange={setRequestHistoryOpen}
-        title="知识库需求记录"
-        description="知识库重置申请与已发布知识库维护需求统一显示在这里。"
-        surface="knowledge_management"
-        preview={previewMode}
-        {...(previewMode ? { tickets: [] } : {})}
-        emptyText="暂无知识库重置或维护需求。"
-      />
 
       {page === "display" ? (
         <div
@@ -410,18 +377,6 @@ export default function EmbeddedKnowledgeBasePanel({
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
           正在确认知识库重置状态…
         </div>
-      ) : resetQuery.data?.locked ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-          <div className="max-w-lg rounded-2xl border bg-muted/30 p-7 text-center">
-            <Loader2 className="mx-auto h-7 w-7 animate-spin text-primary" />
-            <p className="mt-4 font-medium">知识库重置申请正在审批</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              需求 {resetQuery.data.pending?.ticketId} 已由
-              {resetQuery.data.pending?.engineerName}{" "}
-              负责。审批期间不能继续回复、上传、发布或启动新构建。
-            </p>
-          </div>
-        </div>
       ) : resetNeedsFreshConversation ? (
         <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -439,83 +394,42 @@ export default function EmbeddedKnowledgeBasePanel({
   );
 }
 
-const RESET_REASONS = [
-  ["stuck", "构建长时间卡住"],
-  ["upload_error", "文件上传错误"],
-  ["build_error", "构建内容错误"],
-  ["enterprise_materials", "企业资料需要重新整理"],
-  ["other", "其他"],
-] as const;
-
-export function knowledgeResetButtonLabel(status: {
-  locked: boolean;
-  engineer: { id: number; name: string } | null;
-}) {
-  return status.locked
-    ? "重置申请审批中"
-    : status.engineer === null
-      ? "请等待分配AI 运维工程师"
-      : "申请重置知识库";
-}
-
 function KnowledgeResetButton({
   status,
-  onSubmitted,
+  onReset,
 }: {
   status: {
-    locked: boolean;
-    canRequest: boolean;
+    revision: number;
+    canReset: boolean;
     unavailableReason: string | null;
-    engineer: { id: number; name: string } | null;
-    pending: { ticketId: string } | null;
   };
-  onSubmitted: () => Promise<unknown>;
+  onReset: () => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
-  const [reasonCode, setReasonCode] =
-    useState<(typeof RESET_REASONS)[number][0]>("stuck");
-  const [reasonNote, setReasonNote] = useState("");
+  const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
+  const resetMutation = trpc.workspace.knowledgeReset.reset.useMutation();
   const submittingRef = useRef(false);
-  const submitMutation = trpc.workspace.knowledgeReset.submit.useMutation();
   useEffect(() => {
-    const openResetRequest = () => {
-      if (status.canRequest) {
+    const openReset = () => {
+      if (status.canReset) {
+        setExpectedRevision(status.revision);
         setOpen(true);
-        return;
-      }
-      toast.info(status.unavailableReason || "当前暂时无法提交知识库重置申请");
+      } else toast.info(status.unavailableReason || "当前暂时无法重置知识库");
     };
-    window.addEventListener(
-      KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
-      openResetRequest,
-    );
+    window.addEventListener(KNOWLEDGE_BASE_RESET_REQUEST_EVENT, openReset);
     return () =>
-      window.removeEventListener(
-        KNOWLEDGE_BASE_RESET_REQUEST_EVENT,
-        openResetRequest,
-      );
-  }, [status.canRequest, status.unavailableReason]);
-  const submit = async () => {
-    if (submittingRef.current || submitMutation.isPending) return;
-    if (reasonCode === "other" && !reasonNote.trim()) {
-      toast.warning("请填写补充说明");
-      return;
-    }
+      window.removeEventListener(KNOWLEDGE_BASE_RESET_REQUEST_EVENT, openReset);
+  }, [status.canReset, status.revision, status.unavailableReason]);
+  const reset = async () => {
+    if (submittingRef.current || expectedRevision === null) return;
     submittingRef.current = true;
     try {
-      await submitMutation.mutateAsync({
-        reasonCode,
-        reasonNote: reasonNote.trim() || undefined,
-      });
-      await onSubmitted();
+      await resetMutation.mutateAsync({ expectedRevision });
+      await onReset();
       setOpen(false);
-      toast.success("知识库重置申请已提交", {
-        description: "知识库已进入只读锁定，等待负责工程师确认。",
-      });
+      toast.success("知识库已重置，可以重新上传资料");
     } catch (error) {
-      toast.error("重置申请提交失败", {
-        description: error instanceof Error ? error.message : "请稍后重试",
-      });
+      toast.error(error instanceof Error ? error.message : "知识库重置失败");
     } finally {
       submittingRef.current = false;
     }
@@ -525,65 +439,46 @@ function KnowledgeResetButton({
       <Button
         variant="outline"
         className="w-fit shrink-0 text-destructive"
-        disabled={!status.canRequest}
+        disabled={!status.canReset || resetMutation.isPending}
         title={status.unavailableReason || undefined}
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setExpectedRevision(status.revision);
+          setOpen(true);
+        }}
       >
         <Trash2 className="h-4 w-4" />
-        {knowledgeResetButtonLabel(status)}
+        重置知识库
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!resetMutation.isPending) setOpen(next);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>申请重置知识库</DialogTitle>
+            <DialogTitle>重置知识库</DialogTitle>
             <DialogDescription>
-              无需等到构建完成，处理中也可以提交。提交后知识库会立即只读锁定。负责该客户的
-              AI
-              运维工程师确认后，将清空全部知识库构建、版本、专属对话和附件；其他业务内容不会受影响。
+              重置将清空本账号的知识库构建、版本、专属对话和附件，随后可以重新上传资料。其他业务内容保留。此操作无法撤销。
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
-            <label className="grid gap-2 text-sm">
-              重置原因
-              <select
-                className="h-10 rounded-md border bg-background px-3"
-                value={reasonCode}
-                onChange={(event) =>
-                  setReasonCode(
-                    event.target.value as (typeof RESET_REASONS)[number][0],
-                  )
-                }
-              >
-                {RESET_REASONS.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm">
-              补充说明{reasonCode === "other" ? "（必填）" : "（可选）"}
-              <textarea
-                className="min-h-28 rounded-md border bg-background p-3"
-                maxLength={2_000}
-                value={reasonNote}
-                onChange={(event) => setReasonNote(event.target.value)}
-              />
-            </label>
-          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button
+              variant="outline"
+              disabled={resetMutation.isPending}
+              onClick={() => setOpen(false)}
+            >
               取消
             </Button>
             <Button
               variant="destructive"
-              onClick={() => void submit()}
-              disabled={submitMutation.isPending}
+              disabled={resetMutation.isPending}
+              onClick={() => void reset()}
             >
-              {submitMutation.isPending && (
+              {resetMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin" />
               )}
-              提交并锁定知识库
+              {resetMutation.isPending ? "正在重置…" : "确认重置"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -639,11 +534,7 @@ function ManualKnowledgeUpdateButton({
       });
       return;
     }
-    if (
-      !window.confirm(
-        "这是唯一一次直接更新。更新成功后当前会话和更新入口将永久锁定；后续修改需要提交维护需求。确认现在更新吗？",
-      )
-    ) {
+    if (!window.confirm("确认发布当前知识库吗？发布后可随时重置并重新构建。")) {
       return;
     }
 
@@ -684,8 +575,7 @@ function ManualKnowledgeUpdateButton({
   return (
     <div className="flex flex-col items-start gap-2">
       <p className="max-w-full whitespace-nowrap text-xs leading-5 text-amber-700">
-        知识库已达到
-        100%：这是唯一一次直接更新；更新成功后当前会话和入口将锁定，后续修改需提交维护需求。
+        知识库已达到 100%：可以发布当前知识库；后续可直接重置并重新构建。
       </p>
       <Button
         className="w-fit shrink-0 bg-[#5b2a86] hover:bg-[#49216c]"
@@ -700,108 +590,6 @@ function ManualKnowledgeUpdateButton({
         {updating ? "正在更新" : "更新知识库"}
       </Button>
     </div>
-  );
-}
-
-function KnowledgeMaintenanceTicketButton({
-  snapshotId,
-  enabled = true,
-  unavailableReason = null,
-}: {
-  snapshotId: string;
-  enabled?: boolean;
-  unavailableReason?: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const [description, setDescription] = useState("");
-  const deliveryTicketApi = (trpc.workspace as any).deliveryTickets;
-  const createMutation = deliveryTicketApi.create.useMutation();
-
-  const submit = async () => {
-    if (!enabled) return;
-    const request = description.trim();
-    if (!request) {
-      toast.warning("请填写需要维护或更新的知识库内容");
-      return;
-    }
-    try {
-      await createMutation.mutateAsync({
-        clientRequestId: crypto.randomUUID(),
-        type: "website_operation",
-        category: "knowledge_base_maintenance",
-        topic: "已发布知识库维护",
-        title: "知识库维护需求",
-        description: request,
-        knowledgeSnapshotId: snapshotId,
-        materialUrls: [],
-        attachments: [],
-      });
-      setDescription("");
-      setOpen(false);
-      toast.success("知识库维护需求已提交", {
-        description: "服务团队会在需求中处理后续知识库更新。",
-      });
-    } catch (error) {
-      toast.error("维护需求提交失败", {
-        description: error instanceof Error ? error.message : "请稍后重试",
-      });
-    }
-  };
-
-  return (
-    <>
-      <div className="flex max-w-sm flex-col items-start gap-1.5">
-        <Button
-          className="w-fit shrink-0 bg-[#5b2a86] hover:bg-[#49216c]"
-          disabled={!enabled}
-          onClick={() => enabled && setOpen(true)}
-        >
-          <Wrench className="h-4 w-4" />
-          提交维护需求
-        </Button>
-        {!enabled && (
-          <p className="text-xs leading-5 text-amber-700">
-            {unavailableReason || "尚未分配 AI 运维工程师，请联系交付管理员。"}
-          </p>
-        )}
-      </div>
-      <Dialog
-        open={enabled && open}
-        onOpenChange={(nextOpen) => enabled && setOpen(nextOpen)}
-      >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>提交知识库维护需求</DialogTitle>
-            <DialogDescription>
-              当前知识库已锁定。请说明需要补充、修订或替换的内容，服务团队将基于已发布版本处理。
-            </DialogDescription>
-          </DialogHeader>
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            rows={8}
-            maxLength={50_000}
-            className="min-h-40 w-full resize-y rounded-xl border border-[#ddd3e5] bg-white px-3 py-2 text-sm outline-none focus:border-[#5b2a86]"
-            placeholder="例如：更新产品参数、补充新案例、替换已过期资质……"
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              取消
-            </Button>
-            <Button
-              className="bg-[#5b2a86] hover:bg-[#49216c]"
-              disabled={createMutation.isPending}
-              onClick={() => void submit()}
-            >
-              {createMutation.isPending && (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              )}
-              提交需求
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 
@@ -1110,7 +898,7 @@ function RealBuildFlow({
       loading={progressRequestPending && !progressTimedOut}
       emptyMessage={
         progressTimedOut
-          ? "构建状态同步暂时没有响应。任务可继续在上游处理，请稍后重试或在需要时申请重置。"
+          ? "构建状态同步暂时没有响应。任务可继续在上游处理，请稍后重试或在需要时重置。"
           : undefined
       }
     />

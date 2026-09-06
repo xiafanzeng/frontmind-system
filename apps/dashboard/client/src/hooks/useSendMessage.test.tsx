@@ -1009,7 +1009,7 @@ describe("useSendMessage", () => {
   it("requires a reset for an ambiguous response-logic start and never hands it to a poller", async () => {
     mocks.createResponseLogicTask.mockRejectedValueOnce({
       code: "RESPONSE_LOGIC_START_OUTCOME_UNKNOWN",
-      message: "附件处理结果无法确认，请申请重置后重新开始",
+      message: "附件处理结果无法确认，请重置后重新开始",
       retryable: false,
       resetRequired: true,
       stage: "file_confirmation",
@@ -1054,7 +1054,7 @@ describe("useSendMessage", () => {
       "test-conv-id",
       expect.objectContaining({
         id: expect.stringMatching(/^msg-response-logic-reset-required-/u),
-        content: expect.stringContaining("请先申请重置"),
+        content: expect.stringContaining("请先重置"),
       }),
     );
   });
@@ -1062,7 +1062,7 @@ describe("useSendMessage", () => {
   it("treats a post-dispatch binding failure as reset-required and never polls", async () => {
     mocks.createResponseLogicTask.mockRejectedValueOnce({
       code: "RESPONSE_LOGIC_TASK_BINDING_PENDING",
-      message: "上游任务已创建，但本地绑定未完成；请申请重置后重新开始",
+      message: "上游任务已创建，但本地绑定未完成；请重置后重新开始",
       retryable: false,
       resetRequired: true,
       stage: "task_binding",
@@ -1113,7 +1113,7 @@ describe("useSendMessage", () => {
     expect(mocks.addMessage).toHaveBeenLastCalledWith(
       "test-conv-id",
       expect.objectContaining({
-        content: expect.stringContaining("请先申请重置"),
+        content: expect.stringContaining("请先重置"),
       }),
     );
   });

@@ -1,8 +1,15 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resetRefetch: vi.fn(),
+  resetMutation: vi.fn(),
   knowledgeRefetch: vi.fn(),
   deliveryTicketCreate: vi.fn(),
   progressRefetch: vi.fn(),
@@ -31,7 +38,7 @@ const mocks = vi.hoisted(() => ({
     revision: 0,
     hasKnowledge: false,
     locked: false,
-    canRequest: false,
+    canReset: false,
     unavailableReason: "当前没有可重置的知识库记录",
     pending: null,
   } as any,
@@ -132,9 +139,9 @@ vi.mock("@/lib/trpc", () => ({
             refetch: mocks.resetRefetch,
           }),
         },
-        submit: {
+        reset: {
           useMutation: () => ({
-            mutateAsync: vi.fn(),
+            mutateAsync: mocks.resetMutation,
             isPending: false,
           }),
         },
@@ -146,7 +153,6 @@ vi.mock("@/lib/trpc", () => ({
 import EmbeddedKnowledgeBasePanel, {
   KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS,
   isKnowledgeBaseProgressProjectionOlder,
-  knowledgeResetButtonLabel,
   shouldDiscardConversationAfterKnowledgeReset,
 } from "./EmbeddedKnowledgeBasePanel";
 
@@ -155,6 +161,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mocks.resetMutation
+    .mockReset()
+    .mockResolvedValue({ revision: 1, cleanup: {} });
   mocks.resetRefetch.mockReset().mockResolvedValue(undefined);
   mocks.knowledgeRefetch.mockReset().mockResolvedValue(undefined);
   mocks.deliveryTicketCreate.mockReset().mockResolvedValue(undefined);
@@ -190,7 +199,7 @@ beforeEach(() => {
     revision: 0,
     hasKnowledge: false,
     locked: false,
-    canRequest: false,
+    canReset: false,
     unavailableReason: "当前没有可重置的知识库记录",
     pending: null,
   };
@@ -234,20 +243,6 @@ describe("knowledge-base progress projection ordering", () => {
 });
 
 describe("EmbeddedKnowledgeBasePanel reset action", () => {
-  it("uses the exact disabled label while no engineer is assigned", () => {
-    expect(knowledgeResetButtonLabel({ locked: false, engineer: null })).toBe(
-      "请等待分配AI 运维工程师",
-    );
-    expect(
-      knowledgeResetButtonLabel({
-        locked: false,
-        engineer: { id: 9, name: "运维" },
-      }),
-    ).toBe("申请重置知识库");
-    expect(knowledgeResetButtonLabel({ locked: true, engineer: null })).toBe(
-      "重置申请审批中",
-    );
-  });
   it("does not mount the build flow before reset status is known", () => {
     mocks.resetStatus = undefined;
 
@@ -540,44 +535,13 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     expect(screen.queryByTestId("knowledge-home")).not.toBeInTheDocument();
   });
 
-  it("keeps reset on the build page only and refreshes it when build progress starts", () => {
-    mocks.progressIsError = true;
-    const { rerender } = render(
-      <EmbeddedKnowledgeBasePanel
-        page="build"
-        onPageChange={() => undefined}
-      />,
-    );
-
-    const resetButton = screen.getByRole("button", {
-      name: "申请重置知识库",
-    });
-    expect(resetButton).toBeDisabled();
-    expect(resetButton).toHaveAttribute("title", "当前没有可重置的知识库记录");
-
-    rerender(
-      <EmbeddedKnowledgeBasePanel
-        page="display"
-        onPageChange={() => undefined}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: "申请重置知识库" })).toBeNull();
-
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("frontmind:knowledge-progress-updated"),
-      );
-    });
-    expect(mocks.resetRefetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("opens the existing approval dialog from a failed build reset CTA", () => {
+  it("opens the direct reset dialog from a failed build reset CTA", () => {
     mocks.progressIsError = true;
     mocks.resetStatus = {
       revision: 0,
       hasKnowledge: true,
       locked: false,
-      canRequest: true,
+      canReset: true,
       unavailableReason: null,
       engineer: { id: 9, name: "运维" },
       pending: null,
@@ -596,70 +560,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     });
 
     expect(
-      screen.getByRole("dialog", { name: "申请重置知识库" }),
-    ).toBeInTheDocument();
-  });
-
-  it("shows only maintenance and ZIP actions on the published display page", () => {
-    mocks.knowledgeData = {
-      snapshot: {
-        id: "snapshot-1",
-        sourceFileName: "企业知识库.zip",
-        archiveHash: "a".repeat(64),
-        archiveAvailable: true,
-      },
-    };
-
-    render(
-      <EmbeddedKnowledgeBasePanel
-        page="display"
-        onPageChange={() => undefined}
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "提交维护需求" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "下载成品 ZIP" })).toHaveAttribute(
-      "href",
-      "/api/dashboard/knowledge/snapshots/snapshot-1/archive",
-    );
-    expect(screen.queryByRole("button", { name: "申请重置知识库" })).toBeNull();
-  });
-
-  it("does not replace a completed build action with a maintenance ticket", () => {
-    mocks.activeConversation = {
-      id: "knowledge-conversation",
-      status: "completed",
-    };
-    mocks.knowledgeData = {
-      snapshot: {
-        id: "snapshot-1",
-        sourceFileName: "企业知识库.zip",
-        archiveHash: null,
-        archiveAvailable: false,
-      },
-    };
-    mocks.progressData = {
-      progress: {
-        packageAllowed: true,
-        build: {
-          status: "published",
-          conversationId: "knowledge-conversation",
-        },
-      },
-    };
-
-    render(
-      <EmbeddedKnowledgeBasePanel
-        page="build"
-        onPageChange={() => undefined}
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "提交维护需求" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "申请重置知识库" }),
+      screen.getByRole("dialog", { name: "重置知识库" }),
     ).toBeInTheDocument();
   });
 
@@ -923,4 +824,28 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
       }),
     ).toBe(true);
   });
+});
+
+it("resets directly from the published page with the captured reset revision", async () => {
+  mocks.resetStatus = {
+    revision: 3,
+    hasKnowledge: true,
+    canReset: true,
+    unavailableReason: null,
+  };
+  const onPageChange = vi.fn();
+  const { rerender } = render(
+    <EmbeddedKnowledgeBasePanel page="display" onPageChange={onPageChange} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "重置知识库" }));
+  expect(screen.queryByText(/审批|分配.*工程师|工单/)).not.toBeInTheDocument();
+  mocks.resetStatus = { ...mocks.resetStatus, revision: 4 };
+  rerender(
+    <EmbeddedKnowledgeBasePanel page="display" onPageChange={onPageChange} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
+  await waitFor(() =>
+    expect(mocks.resetMutation).toHaveBeenCalledWith({ expectedRevision: 3 }),
+  );
+  await waitFor(() => expect(onPageChange).toHaveBeenCalledWith("build"));
 });

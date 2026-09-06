@@ -403,18 +403,6 @@ export const siteOpsObservationV1Schema = z
     rebuildRequest: z
       .object({
         allowed: z.boolean(),
-        ticketId: z.string().uuid().nullable(),
-        status: z
-          .enum([
-            "submitted",
-            "needs_information",
-            "scheduled",
-            "in_progress",
-            "completed",
-            "rejected",
-            "cancelled",
-          ])
-          .nullable(),
         resetApplied: z.boolean(),
         // Optional for one rolling-release window; the server always emits it
         // and older cached observations safely behave as `false`.

@@ -31,7 +31,6 @@
     "db:cleanup-expired-files": "tsx scripts/cleanup-expired-file-content.ts",
     "db:preflight-file-retention": "tsx scripts/preflight-file-retention.ts",
     "db:preflight-file-retention:ready": "tsx scripts/preflight-file-retention.ts --require-ready",
-    "db:cleanup-expired-tickets": "tsx scripts/cleanup-expired-delivery-tickets.ts",
     "kb:reset:siliconflow": "tsx scripts/reset-siliconflow-knowledge-base.ts",
     "admin:init": "tsx scripts/init-admin.ts",
     "migration:manifest": "node scripts/generate-migration-manifest.mjs --output dist/migration-manifest.json",

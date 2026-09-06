@@ -24,18 +24,13 @@ import {
   MessageSquareQuote,
   Layers3,
   ChartNoAxesColumnIncreasing,
-  FileClock,
   Radar,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { toast } from "sonner";
-import ContentAssetRequestDialog, {
-  type ContentAssetRequestPayload,
-} from "@/components/ContentAssetRequestDialog";
-import CustomerRequestHistoryDialog from "@/components/CustomerRequestHistoryDialog";
-import DeliveryTicketDetailDialog from "@/components/DeliveryTicketDetailDialog";
 import { Button } from "@/components/ui/button";
+
 import ResponseLogicWorkspace, {
   ResponseLogicConfirmationBoard,
   useResponseLogicWorkspaceState,
@@ -51,17 +46,14 @@ import QuestionIntakePanel, {
 } from "./QuestionIntakePanel";
 import ProgressReportWorkspace from "./ProgressReportWorkspace";
 import HistoricalResultsReadOnly from "./HistoricalResultsReadOnly";
-import AiWebsiteManagementWorkspace from "./AiWebsiteManagementWorkspace";
 import ConnectedSiteOpsConversationPanel from "./siteops/ConnectedSiteOpsConversationPanel";
 import { trpc } from "@/lib/trpc";
-import { uploadFile } from "@/lib/frontmind-api";
 import {
   KEYWORD_CATEGORY_OPTIONS,
   keywordCategoryKey,
   keywordCategoryLabel,
   keywordCategoryTone,
 } from "@shared/keyword-categories";
-import { WEBSITE_MANAGEMENT_HISTORY_CATEGORIES } from "@shared/delivery-ticket";
 import { SITEOPS_CUSTOMER_DISPLAY_NAME } from "@shared/siteops-branding";
 import {
   getCapability,
@@ -142,6 +134,10 @@ export function buildKeywordQuotaAvailability(portal) {
   );
 }
 
+const DashboardSkeletonEditor = lazy(
+  () => import("@/components/DashboardSkeletonEditor"),
+);
+
 const EmbeddedKnowledgeBasePanel = lazy(
   () => import("@/components/EmbeddedKnowledgeBasePanel"),
 );
@@ -155,53 +151,6 @@ const QuestionMonitoringWorkspace = lazy(
 );
 
 const FORMAL_QUERY_REFRESH_INTERVAL_MS = 30_000;
-
-export function getRouteRequestHistoryConfig(section, sub) {
-  if (section === "intent" && sub === "question-optimization") {
-    return {
-      title: "问题需求记录",
-      description: "自主填写问题审核、问题修改与问题删除记录统一显示在这里。",
-      type: "knowledge_base",
-      surface: "question_management",
-      emptyText: "暂无问题审核、修改或删除记录。",
-    };
-  }
-  if (section === "response-logic") {
-    return {
-      title: "应答逻辑需求记录",
-      description: "仅显示已确认应答逻辑的重置与重新编辑申请。",
-      type: "knowledge_base",
-      surface: "response_logic_management",
-      emptyText: "暂无应答逻辑修改需求。",
-    };
-  }
-  if (section === "knowledge-agent") {
-    return {
-      title: "知识库需求记录",
-      description: "知识库重置申请与已发布知识库维护需求统一显示在这里。",
-      surface: "knowledge_management",
-      emptyText: "暂无知识库重置或维护需求。",
-    };
-  }
-  if (section === "semantic" && sub === "website-management") {
-    return {
-      title: "官网需求记录",
-      description: "域名、备案、图片风格与官网内容需求统一显示在这里。",
-      type: "website_operation",
-      surface: "website_management",
-      emptyText: "暂无官网需求记录。",
-    };
-  }
-  if (section === "semantic" && sub === "content-assets") {
-    return {
-      title: "内容需求记录",
-      description: "当前页面提交的全部内容需求及公开交付结果统一显示在这里。",
-      type: "content_asset",
-      emptyText: "暂无内容需求记录。",
-    };
-  }
-  return null;
-}
 
 const geoIntentMeta = {
   basic: {
@@ -327,170 +276,6 @@ function previewDeliveryQuota(planCode, type, used = 0) {
     validUntil: null,
     reason: limit > 0 ? null : "当前版本不包含此项需求服务，历史记录仍可查看。",
   };
-}
-
-function getPreviewDeliveryWorkspace(
-  planCode,
-  contentUsage = 0,
-  contentAssetCatalog = [],
-) {
-  const unlocked = planCode === "advanced" || planCode === "luxury";
-  const domainCompleted = unlocked;
-  const icpCompleted = planCode === "luxury";
-  return {
-    marketEdition: "domestic",
-    contentAssetCatalog,
-    websiteContentCatalog: [
-      { value: "company_facts", label: "企业资料与品牌事实" },
-      { value: "product_case_docs", label: "产品案例与文档" },
-      { value: "industry_news", label: "行业新闻与观察" },
-      { value: "company_news", label: "企业新闻与动态" },
-      { value: "faq_content", label: "FAQ 与问答页面" },
-    ],
-    websiteWorkflow: {
-      domainStatus: domainCompleted ? "completed" : "not_started",
-      icpStatus: icpCompleted
-        ? "completed"
-        : domainCompleted
-          ? "not_started"
-          : "locked",
-      canSubmitDomain: !domainCompleted,
-      canSubmitIcp: domainCompleted && !icpCompleted,
-      canSubmitContent: icpCompleted,
-      styleState: icpCompleted ? "legacy_confirmed" : "locked",
-      styleRevision: icpCompleted ? 1 : 0,
-      styleBatch: null,
-      selectedStyleSampleId: null,
-      styleConfirmed: icpCompleted,
-      canSelectStyle: false,
-      canRequestStyleRevision: false,
-      lockReason: !icpCompleted
-        ? "请先购买并提交域名，领取备案服务码后完成 ICP 备案。"
-        : "",
-    },
-    quotas: {
-      content_asset_publish: previewDeliveryQuota(
-        planCode,
-        "content_asset_publish",
-        contentUsage,
-      ),
-      website_content_publish: previewDeliveryQuota(
-        planCode,
-        "website_content_publish",
-        0,
-      ),
-    },
-    tickets: [
-      {
-        id: "preview-content-ticket-pending",
-        type: "content_asset",
-        category: "A2",
-        title: "用户案例与成功故事",
-        topic: "整理客户交付案例",
-        preferredMedia: "新浪",
-        status: "in_progress",
-        revision: 2,
-        submittedAt: "2026-07-26T10:00:00+08:00",
-        updatedAt: "2026-07-27T10:00:00+08:00",
-      },
-      ...(unlocked
-        ? [
-            {
-              id: "preview-content-ticket-completed",
-              type: "content_asset",
-              category: "D1",
-              title: "知乎问答",
-              topic: "高端制造企业如何建立可核验的品牌事实体系",
-              preferredMedia: null,
-              status: "completed",
-              revision: 3,
-              submittedAt: "2026-07-20T10:00:00+08:00",
-              resolvedAt: "2026-07-26T15:00:00+08:00",
-              publicSummary:
-                "已围绕企业公开事实、产品能力与行业场景完成专业问答内容。",
-              deliveryLinks: [
-                {
-                  id: "preview-delivery-link",
-                  label: "知乎",
-                  url: "https://www.zhihu.com/",
-                },
-              ],
-            },
-          ]
-        : []),
-      {
-        id: "preview-domain-icp-ticket",
-        type: "website_operation",
-        category: "icp_filing",
-        title: "域名注册与 ICP 备案结果",
-        topic: "example.com",
-        status: icpCompleted ? "completed" : "submitted",
-        publicSummary: icpCompleted ? "域名与 ICP 主体备案号已确认。" : null,
-        revision: 1,
-        submittedAt: "2026-07-22T10:00:00+08:00",
-      },
-    ],
-  };
-}
-
-function normalizeContentAssetCatalog(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter(
-      (item) => item && typeof item === "object" && item.enabled !== false,
-    )
-    .map((item) => ({
-      id: safeText(item.id || item.code || item.value),
-      group: safeText(item.group || item.groupLabel || item.category),
-      name: safeText(item.name || item.label),
-      desc: safeText(item.description || item.desc),
-    }))
-    .filter((item) => item.id && item.group && item.name);
-}
-
-function createClientRequestId() {
-  if (
-    typeof globalThis.crypto !== "undefined" &&
-    typeof globalThis.crypto.randomUUID === "function"
-  ) {
-    return globalThis.crypto.randomUUID();
-  }
-  const values = new Uint8Array(16);
-  globalThis.crypto?.getRandomValues?.(values);
-  values[6] = (values[6] & 0x0f) | 0x40;
-  values[8] = (values[8] & 0x3f) | 0x80;
-  const hex = Array.from(values, (value) =>
-    value.toString(16).padStart(2, "0"),
-  );
-  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
-    .slice(6, 8)
-    .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
-}
-
-async function uploadDeliveryFiles(files, metadata = {}) {
-  return Promise.all(
-    (files || []).map(async (file) => {
-      const uploaded = await uploadFile(file);
-      return {
-        fileId: uploaded.fileId,
-        filename: uploaded.filename,
-        mimeType: file.type || undefined,
-        sizeBytes: file.size,
-        ...metadata,
-      };
-    }),
-  );
-}
-
-function flattenDeliveryTicketPages(data) {
-  const seen = new Set();
-  return (data?.pages || [])
-    .flatMap((page) => (Array.isArray(page?.tickets) ? page.tickets : []))
-    .filter((ticket) => {
-      if (!ticket?.id || seen.has(ticket.id)) return false;
-      seen.add(ticket.id);
-      return true;
-    });
 }
 
 const toneMap = {
@@ -657,24 +442,12 @@ export function buildServiceQuestionGroups(purchasedQuestions, managedGroups) {
 }
 
 // ==================== MAIN DASHBOARD ====================
-export default function UserBrandDashboard({
-  initialSection = "brand",
-  onSubmitContentRequest = undefined,
-}) {
-  return (
-    <PersistentUserBrandDashboard
-      initialSection={initialSection}
-      onSubmitContentRequest={onSubmitContentRequest}
-    />
-  );
+export default function UserBrandDashboard({ initialSection = "brand" }) {
+  return <PersistentUserBrandDashboard initialSection={initialSection} />;
 }
 
 type PreviewUserBrandDashboardProps = {
   initialSection?: string;
-  onSubmitContentRequest?: (
-    payload: ContentAssetRequestPayload,
-  ) => void | Promise<void>;
-  contentRequestUsage?: number;
   planCode?: "basic" | "advanced" | "luxury" | "unknown";
   fixtures?: {
     getServicePortal: (planCode: "basic" | "advanced" | "luxury") => unknown;
@@ -694,13 +467,9 @@ type PreviewUserBrandDashboardProps = {
 
 export function PreviewUserBrandDashboard({
   initialSection = "brand",
-  onSubmitContentRequest = undefined,
-  contentRequestUsage = undefined,
   planCode: previewPlanCode = undefined,
   fixtures,
 }: PreviewUserBrandDashboardProps) {
-  const [selectedDeliveryTicketId, setSelectedDeliveryTicketId] =
-    useState(null);
   const planCode =
     previewPlanCode ||
     getPreviewPlanCode(
@@ -720,69 +489,6 @@ export function PreviewUserBrandDashboard({
       </div>
     );
   }
-  const deliveryWorkspace = getPreviewDeliveryWorkspace(
-    planCode,
-    contentRequestUsage ?? 0,
-    fixtures.contentAssetCatalog,
-  );
-  const selectedTicket = deliveryWorkspace.tickets.find(
-    (ticket) => ticket.id === selectedDeliveryTicketId,
-  );
-  const ticketDetail = selectedTicket
-    ? {
-        ticket: {
-          ...selectedTicket,
-          revision: selectedTicket.revision || 1,
-          canReply: !["completed", "rejected", "cancelled"].includes(
-            selectedTicket.status,
-          ),
-          canAttach:
-            selectedTicket.type === "content_asset" ||
-            [
-              "company_facts",
-              "product_case_docs",
-              "industry_news",
-              "company_news",
-              "faq_content",
-            ].includes(selectedTicket.category || ""),
-          description:
-            "围绕已确认企业事实整理内容方案，并核验可公开的案例与图片素材。",
-          targetPage: null,
-          materialUrls: [],
-        },
-        events: [
-          {
-            id: `${selectedTicket.id}-created`,
-            visibility: "customer",
-            eventType: "created",
-            actorRole: "user",
-            actorLabel: "企业用户",
-            message: "需求已经提交，等待服务团队核验。",
-            toStatus: "submitted",
-            createdAt: selectedTicket.submittedAt,
-          },
-          {
-            id: `${selectedTicket.id}-reply`,
-            visibility: "customer",
-            eventType:
-              selectedTicket.status === "completed"
-                ? "delivery_result"
-                : "message",
-            actorRole: "admin",
-            actorLabel: "服务团队",
-            message:
-              selectedTicket.publicSummary ||
-              "服务团队会在需求详情中更新沟通与交付结果。",
-            fromStatus: "submitted",
-            toStatus: selectedTicket.status,
-            operationResult: null,
-            createdAt: selectedTicket.resolvedAt || selectedTicket.submittedAt,
-          },
-        ],
-        attachments: [],
-      }
-    : null;
-
   return (
     <UserBrandDashboardContent
       preview
@@ -798,14 +504,6 @@ export function PreviewUserBrandDashboard({
       managedRevision={0}
       dashboardLoading={false}
       dashboardError={false}
-      onSubmitContentRequest={onSubmitContentRequest}
-      deliveryWorkspacePayload={deliveryWorkspace}
-      deliveryWorkspaceLoading={false}
-      deliveryWorkspaceError={null}
-      selectedDeliveryTicketId={selectedDeliveryTicketId}
-      onOpenDeliveryTicket={setSelectedDeliveryTicketId}
-      onCloseDeliveryTicket={() => setSelectedDeliveryTicketId(null)}
-      deliveryTicketDetailPayload={ticketDetail}
       previewBrandName={fixtures.overview.brand}
       renderPreviewBrandSection={({
         sub,
@@ -846,210 +544,56 @@ export function PreviewUserBrandDashboard({
   );
 }
 
-function PersistentUserBrandDashboard({
-  initialSection,
-  onSubmitContentRequest,
-}) {
+function PersistentUserBrandDashboard({ initialSection }) {
   const { user } = useAuth();
-  const [selectedDeliveryTicketId, setSelectedDeliveryTicketId] =
-    useState(null);
-  // Keep this adapter isolated until the generated AppRouter type includes
-  // workspace.portal. The server remains authoritative for every entitlement.
-  const servicePortalQuery = (trpc.workspace as any).portal.useQuery(
-    undefined,
-    {
-      retry: false,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
-      refetchInterval: FORMAL_QUERY_REFRESH_INTERVAL_MS,
-      refetchIntervalInBackground: false,
-    },
-  );
-  const servicePortalView = normalizeServicePortal(servicePortalQuery.data);
-  const deliveryOperationsEnabled =
-    servicePortalView.capabilities.contentAssets.allowed;
-  const deliveryHistoryEnabled = servicePortalView.known;
-  const dashboardQuery = trpc.workspace.dashboard.useQuery(undefined, {
-    enabled: deliveryOperationsEnabled,
+  const [editingSection, setEditingSection] = useState(null);
+  const queryOptions = {
     retry: false,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
     refetchInterval: FORMAL_QUERY_REFRESH_INTERVAL_MS,
     refetchIntervalInBackground: false,
-  });
-  const deliveryTicketApi = (trpc.workspace as any).deliveryTickets;
-  const deliveryWorkspaceQuery = deliveryTicketApi.workspace.useQuery(
-    undefined,
-    {
-      enabled: deliveryHistoryEnabled,
-      retry: false,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
-      refetchInterval: FORMAL_QUERY_REFRESH_INTERVAL_MS,
-      refetchIntervalInBackground: false,
-    },
-  );
-  const contentDeliveryTicketsQuery = deliveryTicketApi.list.useInfiniteQuery(
-    { type: "content_asset", limit: 20 },
-    {
-      enabled: deliveryHistoryEnabled,
-      retry: false,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
-      refetchInterval: FORMAL_QUERY_REFRESH_INTERVAL_MS,
-      refetchIntervalInBackground: false,
-      getNextPageParam: (lastPage: any) => lastPage?.nextCursor ?? undefined,
-    },
-  );
-  const websiteDeliveryTicketsQuery = deliveryTicketApi.list.useInfiniteQuery(
-    {
-      type: "website_operation",
-      surface: "website_management",
-      limit: 20,
-    },
-    {
-      enabled: deliveryHistoryEnabled,
-      retry: false,
-      refetchOnMount: "always",
-      refetchOnWindowFocus: true,
-      refetchInterval: FORMAL_QUERY_REFRESH_INTERVAL_MS,
-      refetchIntervalInBackground: false,
-      getNextPageParam: (lastPage: any) => lastPage?.nextCursor ?? undefined,
-    },
-  );
-  const createDeliveryTicketMutation = deliveryTicketApi.create.useMutation();
-  const selectWebsiteStyleMutation =
-    deliveryTicketApi.selectWebsiteStyle.useMutation();
-  const requestWebsiteStyleRevisionMutation =
-    deliveryTicketApi.requestWebsiteStyleRevision.useMutation();
-  const deliveryTicketDetailQuery = deliveryTicketApi.detail.useQuery(
-    {
-      ticketId:
-        selectedDeliveryTicketId || "00000000-0000-4000-8000-000000000000",
-    },
-    {
-      enabled: deliveryHistoryEnabled && Boolean(selectedDeliveryTicketId),
-      retry: false,
-      refetchOnWindowFocus: true,
-      refetchInterval: selectedDeliveryTicketId
-        ? FORMAL_QUERY_REFRESH_INTERVAL_MS
-        : false,
-      refetchIntervalInBackground: false,
-    },
-  );
-  const addDeliveryTicketMessageMutation =
-    deliveryTicketApi.addMessage.useMutation();
-  const contentDeliveryTickets = useMemo(
-    () => flattenDeliveryTicketPages(contentDeliveryTicketsQuery.data),
-    [contentDeliveryTicketsQuery.data],
-  );
-  const websiteDeliveryTickets = useMemo(
-    () => flattenDeliveryTicketPages(websiteDeliveryTicketsQuery.data),
-    [websiteDeliveryTicketsQuery.data],
-  );
-  async function refreshDeliveryWorkspaceAndLists() {
-    await Promise.all([
-      deliveryWorkspaceQuery.refetch(),
-      contentDeliveryTicketsQuery.refetch(),
-      websiteDeliveryTicketsQuery.refetch(),
-    ]);
-  }
-
-  async function refreshSelectedDeliveryTicket() {
-    await Promise.all([
-      refreshDeliveryWorkspaceAndLists(),
-      selectedDeliveryTicketId
-        ? deliveryTicketDetailQuery.refetch()
-        : Promise.resolve(),
-    ]);
-  }
-
+  };
+  const portal = trpc.workspace.portal.useQuery(undefined, queryOptions);
+  const dashboard = trpc.workspace.dashboard.useQuery(undefined, queryOptions);
+  const refresh = async () => {
+    await Promise.all([portal.refetch(), dashboard.refetch()]);
+  };
+  if (editingSection && user)
+    return (
+      <DashboardSkeletonEditor
+        customerMode
+        userId={user.id}
+        initialSection={editingSection}
+        workspace={dashboard.data}
+        loading={dashboard.isLoading}
+        dashboardLayout="workspace"
+        marketEdition={user.marketEdition || "domestic"}
+        servicePortal={portal.data}
+        servicePortalLoading={portal.isLoading}
+        servicePortalError={portal.isError}
+        onRefreshServicePortal={refresh}
+        authoritativeQuestions={portal.data?.purchasedQuestions}
+        authoritativeQuestionsLoading={portal.isLoading}
+        authoritativeQuestionsError={portal.error?.message}
+        onExitDashboard={() => setEditingSection(null)}
+        onWorkspaceChanged={refresh}
+      />
+    );
   return (
     <UserBrandDashboardContent
       preview={false}
       marketEdition={user?.marketEdition || "domestic"}
       initialSection={initialSection}
-      servicePortalPayload={servicePortalQuery.data}
-      servicePortalLoading={servicePortalQuery.isLoading}
-      servicePortalError={servicePortalQuery.isError}
-      onRefreshServicePortal={() => servicePortalQuery.refetch()}
-      managedPayload={dashboardQuery.data?.payload}
-      managedRevision={dashboardQuery.data?.revision ?? null}
-      dashboardLoading={dashboardQuery.isLoading}
-      dashboardError={dashboardQuery.isError}
-      onSubmitContentRequest={onSubmitContentRequest}
-      deliveryWorkspacePayload={deliveryWorkspaceQuery.data}
-      deliveryWorkspaceLoading={deliveryWorkspaceQuery.isLoading}
-      deliveryWorkspaceError={
-        deliveryWorkspaceQuery.error?.message ||
-        (deliveryWorkspaceQuery.isError
-          ? "交付资料暂时无法载入，请稍后刷新。"
-          : null)
-      }
-      deliveryTicketLists={{
-        content_asset: {
-          tickets: contentDeliveryTickets,
-          loading: contentDeliveryTicketsQuery.isLoading,
-          loadingMore: contentDeliveryTicketsQuery.isFetchingNextPage,
-          hasMore: Boolean(contentDeliveryTicketsQuery.hasNextPage),
-          error:
-            contentDeliveryTicketsQuery.error?.message ||
-            (contentDeliveryTicketsQuery.isError
-              ? "内容需求暂时无法载入，请稍后刷新。"
-              : null),
-          onLoadMore: () => contentDeliveryTicketsQuery.fetchNextPage(),
-        },
-        website_operation: {
-          tickets: websiteDeliveryTickets,
-          loading: websiteDeliveryTicketsQuery.isLoading,
-          loadingMore: websiteDeliveryTicketsQuery.isFetchingNextPage,
-          hasMore: Boolean(websiteDeliveryTicketsQuery.hasNextPage),
-          error:
-            websiteDeliveryTicketsQuery.error?.message ||
-            (websiteDeliveryTicketsQuery.isError
-              ? "官网需求暂时无法载入，请稍后刷新。"
-              : null),
-          onLoadMore: () => websiteDeliveryTicketsQuery.fetchNextPage(),
-        },
-      }}
-      onRefreshDeliveryWorkspace={refreshDeliveryWorkspaceAndLists}
-      onCreateDeliveryTicket={(input) =>
-        createDeliveryTicketMutation.mutateAsync(input)
-      }
-      onSelectWebsiteStyle={async (input) => {
-        await selectWebsiteStyleMutation.mutateAsync(input);
-        await refreshDeliveryWorkspaceAndLists();
-      }}
-      onRequestWebsiteStyleRevision={async (input) => {
-        await requestWebsiteStyleRevisionMutation.mutateAsync(input);
-        await refreshDeliveryWorkspaceAndLists();
-      }}
-      selectedDeliveryTicketId={selectedDeliveryTicketId}
-      onOpenDeliveryTicket={setSelectedDeliveryTicketId}
-      onCloseDeliveryTicket={() => setSelectedDeliveryTicketId(null)}
-      deliveryTicketDetailPayload={deliveryTicketDetailQuery.data}
-      deliveryTicketDetailLoading={deliveryTicketDetailQuery.isLoading}
-      deliveryTicketDetailError={
-        deliveryTicketDetailQuery.error?.message ||
-        (deliveryTicketDetailQuery.isError
-          ? "需求详情暂时无法载入，请稍后重试。"
-          : null)
-      }
-      onRefreshDeliveryTicket={() => deliveryTicketDetailQuery.refetch()}
-      deliveryTicketMutationPending={addDeliveryTicketMessageMutation.isPending}
-      onAddDeliveryTicketMessage={async ({ message, attachmentFiles }) => {
-        if (!selectedDeliveryTicketId) return;
-        const attachments = await uploadDeliveryFiles(attachmentFiles, {
-          purpose: "需求补充资料",
-        });
-        await addDeliveryTicketMessageMutation.mutateAsync({
-          ticketId: selectedDeliveryTicketId,
-          clientRequestId: createClientRequestId(),
-          message,
-          attachments,
-        });
-        await refreshSelectedDeliveryTicket();
-      }}
+      servicePortalPayload={portal.data}
+      servicePortalLoading={portal.isLoading}
+      servicePortalError={portal.isError}
+      onRefreshServicePortal={refresh}
+      managedPayload={dashboard.data?.payload}
+      managedRevision={dashboard.data?.revision ?? null}
+      dashboardLoading={dashboard.isLoading}
+      dashboardError={dashboard.isError}
+      onEditDashboard={(section = "home") => setEditingSection(section)}
     />
   );
 }
@@ -1066,24 +610,7 @@ function UserBrandDashboardContent({
   managedRevision = null,
   dashboardLoading,
   dashboardError,
-  onSubmitContentRequest,
-  deliveryWorkspacePayload,
-  deliveryWorkspaceLoading = false,
-  deliveryWorkspaceError = null,
-  deliveryTicketLists = null,
-  onRefreshDeliveryWorkspace,
-  onCreateDeliveryTicket,
-  onSelectWebsiteStyle,
-  onRequestWebsiteStyleRevision,
-  selectedDeliveryTicketId = null,
-  onOpenDeliveryTicket,
-  onCloseDeliveryTicket,
-  deliveryTicketDetailPayload,
-  deliveryTicketDetailLoading = false,
-  deliveryTicketDetailError = null,
-  onRefreshDeliveryTicket,
-  deliveryTicketMutationPending = false,
-  onAddDeliveryTicketMessage,
+  onEditDashboard,
   previewBrandName = "企业看板",
   renderPreviewBrandSection = null,
   renderPreviewMonitoringWorkspace = null,
@@ -1099,8 +626,6 @@ function UserBrandDashboardContent({
   );
   const [accountOpen, setAccountOpen] = useState(false);
   const [salesAdvisorOpen, setSalesAdvisorOpen] = useState(false);
-  const [routeHistoryOpen, setRouteHistoryOpen] = useState(false);
-  const [selectedType, setSelectedType] = useState(null);
   const [responseQuestionId, setResponseQuestionId] = useState(null);
   const [questionIntakeDraft, setQuestionIntakeDraft] = useState(null);
   const servicePortal = useMemo(
@@ -1111,62 +636,6 @@ function UserBrandDashboardContent({
     () => buildKeywordQuotaAvailability(servicePortal),
     [servicePortal],
   );
-  const deliveryWorkspace = deliveryWorkspacePayload || {};
-  const contentAssetCatalog = useMemo(
-    () =>
-      normalizeContentAssetCatalog(
-        deliveryWorkspace.contentAssetCatalog ||
-          deliveryWorkspace.contentTypes ||
-          deliveryWorkspace.catalog?.contentAssets,
-      ),
-    [
-      deliveryWorkspace.catalog?.contentAssets,
-      deliveryWorkspace.contentAssetCatalog,
-      deliveryWorkspace.contentTypes,
-    ],
-  );
-  const deliveryQuotas = deliveryWorkspace.quotas || {};
-  const contentAssetQuota =
-    deliveryQuotas.content_asset_publish ||
-    deliveryQuotas.content_asset ||
-    null;
-  const websiteOperationQuota =
-    deliveryQuotas.website_content_publish ||
-    deliveryQuotas.website_operation ||
-    null;
-  const allDeliveryTickets = Array.isArray(deliveryWorkspace.tickets)
-    ? deliveryWorkspace.tickets
-    : [];
-  const contentTicketList = deliveryTicketLists?.content_asset || null;
-  const websiteTicketList = deliveryTicketLists?.website_operation || null;
-  const contentAssetTickets = contentTicketList
-    ? contentTicketList.tickets
-    : allDeliveryTickets.filter((ticket) => ticket?.type === "content_asset");
-  const websiteOperationTickets = (
-    websiteTicketList
-      ? websiteTicketList.tickets
-      : allDeliveryTickets.filter(
-          (ticket) => ticket?.type === "website_operation",
-        )
-  ).filter((ticket) =>
-    WEBSITE_MANAGEMENT_HISTORY_CATEGORIES.includes(ticket?.category),
-  );
-  // Production always uses the OAuth-only SiteOps workspace. Preview fixtures
-  // stay local and never create a real SiteOps project.
-  const useSiteOpsWebsiteFlow = !previewMode;
-  const selectedDeliveryTicketQuota =
-    deliveryTicketDetailPayload?.ticket?.type === "website_operation"
-      ? websiteOperationQuota
-      : deliveryTicketDetailPayload?.ticket?.type === "content_asset"
-        ? contentAssetQuota
-        : null;
-  const canMutateDeliveryTicket =
-    !previewMode &&
-    Boolean(
-      deliveryTicketDetailPayload?.ticket?.canReply ??
-        selectedDeliveryTicketQuota?.allowed ??
-        false,
-    );
   const managedQuestionGroups = useMemo(
     () => buildManagedQuestionGroups(managedPayload?.questions || []),
     [managedPayload?.questions],
@@ -1209,7 +678,6 @@ function UserBrandDashboardContent({
         ? { section: "progress", sub: "monitor" }
         : { section, sub },
     );
-    setRouteHistoryOpen(false);
     setMobileNavOpen(false);
   };
   const openResponseLogic = (questionId) => {
@@ -1244,86 +712,11 @@ function UserBrandDashboardContent({
     }
     navigate("intent", "question-optimization");
   };
-  const submitContentRequest = async (payload: ContentAssetRequestPayload) => {
-    if (onSubmitContentRequest) {
-      await onSubmitContentRequest(payload);
-    } else if (!previewMode) {
-      if (!onCreateDeliveryTicket) {
-        throw new Error("内容需求接口尚未连接，请稍后重试。");
-      }
-      const attachments = await uploadDeliveryFiles(payload.attachmentFiles, {
-        purpose: payload.imagePurpose || payload.attachmentNotes || undefined,
-        authorization: payload.copyrightAuthorization || undefined,
-        copyrightNote: payload.copyrightNote || undefined,
-      });
-      const description = [
-        payload.contentMaterials,
-        payload.attachmentNotes ? `附件说明：${payload.attachmentNotes}` : "",
-        payload.copyrightNote ? `版权补充说明：${payload.copyrightNote}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      await onCreateDeliveryTicket({
-        clientRequestId: createClientRequestId(),
-        type: "content_asset",
-        category: payload.assetTypeId,
-        topic: payload.topicDirection || undefined,
-        title: payload.assetTypeName,
-        description: description || undefined,
-        preferredMedia: payload.preferredMedia || undefined,
-        materialUrls: payload.materialUrls,
-        attachments,
-      });
-      await onRefreshDeliveryWorkspace?.();
-    }
-    toast.success(previewMode ? "预览需求已提交" : "内容需求已提交", {
-      description: "服务团队核对后会交由 AI 内容制作工程师执行。",
-    });
-  };
-  const submitWebsiteOperationRequest = async (payload) => {
-    if (previewMode) {
-      toast.success("预览需求已提交", {
-        description: "正式账号会先上传附件，再创建真实官网运营需求。",
-      });
-      return;
-    }
-    if (!onCreateDeliveryTicket) {
-      throw new Error("官网运营需求接口尚未连接，请稍后重试。");
-    }
-    const regularAttachments = await uploadDeliveryFiles(
-      payload.attachmentFiles,
-      {
-        purpose: "官网运营需求资料",
-      },
-    );
-    await onCreateDeliveryTicket({
-      clientRequestId: createClientRequestId(),
-      type: "website_operation",
-      category: payload.category || undefined,
-      topic: payload.topic,
-      title: undefined,
-      description: payload.description || undefined,
-      icpDeclarations: payload.icpDeclarations || undefined,
-      materialUrls: payload.materialUrls,
-      attachments: regularAttachments,
-    });
-    await onRefreshDeliveryWorkspace?.();
-    toast.success("官网运营需求已提交", {
-      description: "服务团队核对权限与资料后会交由 AI 运维工程师执行。",
-    });
-  };
   const capabilityKey = getRouteCapability(route.section, route.sub);
   const routeAccess = capabilityKey
     ? getCapability(servicePortal, capabilityKey)
     : null;
   const routeLocked = Boolean(routeAccess && !routeAccess.allowed);
-  useEffect(() => {
-    if (routeLocked) setRouteHistoryOpen(false);
-  }, [routeLocked]);
-  const routeRequestHistory = getRouteRequestHistoryConfig(
-    route.section,
-    route.sub,
-  );
   const knowledgeBuildWorkspace =
     route.section === "knowledge-agent" && route.sub !== "display";
   const brandTrackingWorkspace =
@@ -1408,6 +801,13 @@ function UserBrandDashboardContent({
               }
             />
           )}
+          {!immersiveAgentWorkspace && onEditDashboard && (
+            <div className="flex justify-end px-6 py-3">
+              <Button variant="outline" onClick={() => onEditDashboard("home")}>
+                编辑看板内容
+              </Button>
+            </div>
+          )}
           {route.section === "service" ? (
             <ServiceHome
               portal={servicePortal}
@@ -1488,7 +888,6 @@ function UserBrandDashboardContent({
                   intakeDraft={questionIntakeDraft}
                   onIntakeDraftChange={setQuestionIntakeDraft}
                   onPortalRefresh={onRefreshServicePortal}
-                  onOpenDeliveryTicket={onOpenDeliveryTicket}
                   questionGroups={activeQuestionGroups}
                   onOpenResponseLogic={openResponseLogic}
                   onOpenBrandQuestions={() =>
@@ -1510,17 +909,6 @@ function UserBrandDashboardContent({
                   <ManagedModuleEmpty
                     title="应答逻辑智能体"
                     description="当前账号没有已购问题。服务问题同步后，可在这里逐题对话、核验并确认应答逻辑。"
-                    action={
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setRouteHistoryOpen(true)}
-                      >
-                        <FileClock className="h-4 w-4" />
-                        需求记录
-                      </Button>
-                    }
                   />
                 ))}
               {route.section === "progress" &&
@@ -1548,76 +936,32 @@ function UserBrandDashboardContent({
                 ))}
               {route.section === "semantic" &&
                 (route.sub === "website-management" ? (
-                  <AiWebsiteManagementWorkspace
-                    planCode={servicePortal.plan.code}
-                    marketEdition={
-                      deliveryWorkspace.marketEdition || marketEdition
-                    }
-                    websiteWorkflow={
-                      deliveryWorkspace.websiteWorkflow ||
-                      deliveryWorkspace.workflowState ||
-                      null
-                    }
-                    contentCatalog={
-                      deliveryWorkspace.websiteContentCatalog || []
-                    }
-                    quota={websiteOperationQuota}
-                    tickets={websiteOperationTickets}
-                    loading={Boolean(
-                      websiteTicketList?.loading || deliveryWorkspaceLoading,
+                  <section className="page-shell">
+                    <PageHeader
+                      title={SITEOPS_CUSTOMER_DISPLAY_NAME}
+                      desc="管理官网及已发布内容。"
+                    />
+                    {!previewMode && <ConnectedSiteOpsConversationPanel />}
+                    {onEditDashboard && (
+                      <Button
+                        variant="outline"
+                        onClick={() => onEditDashboard("website")}
+                      >
+                        编辑官网内容
+                      </Button>
                     )}
-                    loadingMore={websiteTicketList?.loadingMore ?? false}
-                    hasMore={websiteTicketList?.hasMore ?? false}
-                    error={websiteTicketList?.error || deliveryWorkspaceError}
-                    onSubmit={submitWebsiteOperationRequest}
-                    onSelectStyle={onSelectWebsiteStyle}
-                    onRequestStyleRevision={onRequestWebsiteStyleRevision}
-                    onOpenTicket={onOpenDeliveryTicket}
-                    onRefresh={onRefreshDeliveryWorkspace}
-                    onLoadMore={websiteTicketList?.onLoadMore}
-                    onUpgrade={() => setAccountOpen(true)}
-                    onContactAdvisor={() => setSalesAdvisorOpen(true)}
-                    siteOpsMode={useSiteOpsWebsiteFlow}
-                    siteOpsPanel={
-                      useSiteOpsWebsiteFlow ? (
-                        <ConnectedSiteOpsConversationPanel
-                          onSubmitIcpFiling={async ({ domain, icpNumber }) => {
-                            await submitWebsiteOperationRequest({
-                              category: "icp_filing",
-                              topic: domain,
-                              description: "",
-                              targetPage: "",
-                              materialUrls: [],
-                              attachmentFiles: [],
-                              icpDeclarations: { icpNumber },
-                            });
-                          }}
-                        />
-                      ) : null
-                    }
-                  />
+                    <PublishedContentAssets
+                      assets={managedPayload?.contentAssets || []}
+                    />
+                  </section>
                 ) : (
                   <SemanticAssetSystem
-                    selectedType={selectedType}
-                    setSelectedType={setSelectedType}
-                    assetTypes={contentAssetCatalog}
                     publishedAssets={managedPayload?.contentAssets || []}
-                    planCode={servicePortal.plan.code}
-                    quota={contentAssetQuota}
-                    preferredMediaOptions={
-                      deliveryWorkspace.preferredMediaOptions
+                    onEdit={
+                      onEditDashboard
+                        ? () => onEditDashboard("content")
+                        : undefined
                     }
-                    tickets={contentAssetTickets}
-                    loading={Boolean(
-                      contentTicketList?.loading || deliveryWorkspaceLoading,
-                    )}
-                    loadingMore={contentTicketList?.loadingMore ?? false}
-                    hasMore={contentTicketList?.hasMore ?? false}
-                    error={contentTicketList?.error || deliveryWorkspaceError}
-                    onOpenTicket={onOpenDeliveryTicket}
-                    onRefresh={onRefreshDeliveryWorkspace}
-                    onLoadMore={contentTicketList?.onLoadMore}
-                    onSubmitRequest={submitContentRequest}
                   />
                 ))}
               {route.section === "knowledge-agent" && (
@@ -1635,10 +979,6 @@ function UserBrandDashboardContent({
                     page={route.sub === "display" ? "display" : "build"}
                     onPageChange={(page) => navigate("knowledge-agent", page)}
                     mode={route.sub === "display" ? "standard" : "workspace"}
-                    knowledgeEngineerAssigned={
-                      previewMode ||
-                      deliveryWorkspace.deliveryOwners?.aiOperations !== false
-                    }
                   />
                 </Suspense>
               )}
@@ -1664,40 +1004,6 @@ function UserBrandDashboardContent({
           )}
         </main>
       </div>
-      {!routeLocked && routeRequestHistory && (
-        <CustomerRequestHistoryDialog
-          open={routeHistoryOpen}
-          onOpenChange={setRouteHistoryOpen}
-          title={routeRequestHistory.title}
-          description={routeRequestHistory.description}
-          type={routeRequestHistory.type}
-          surface={routeRequestHistory.surface}
-          preview={previewMode}
-          {...(previewMode ? { tickets: [] } : {})}
-          emptyText={routeRequestHistory.emptyText}
-        />
-      )}
-      <DeliveryTicketDetailDialog
-        open={Boolean(selectedDeliveryTicketId)}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) onCloseDeliveryTicket?.();
-        }}
-        detail={deliveryTicketDetailPayload}
-        loading={deliveryTicketDetailLoading}
-        error={deliveryTicketDetailError}
-        canMutate={canMutateDeliveryTicket}
-        readOnlyReason={
-          previewMode
-            ? "当前为预览环境，需求交流仅在正式账号中生效。"
-            : !canMutateDeliveryTicket
-              ? selectedDeliveryTicketQuota?.reason ||
-                "当前服务不可继续补充此需求，历史记录仅供查看。"
-              : null
-        }
-        mutationPending={deliveryTicketMutationPending}
-        onRefresh={onRefreshDeliveryTicket}
-        onAddMessage={onAddDeliveryTicketMessage}
-      />
       <SalesAdvisorDialog
         open={salesAdvisorOpen}
         onOpenChange={setSalesAdvisorOpen}
@@ -1790,11 +1096,27 @@ function Sidebar({
           portal={portal}
         />
       </div>
-      {!preview && <div className="nav-group-card promise-card">
-        <div className="nav-group-head"><span>监控与发布</span></div>
-        <Link href="/monitoring-system" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"><Activity size={17} />问题监控</Link>
-        <Link href="/publishing" className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"><Database size={17} />媒体发布</Link>
-      </div>}
+      {!preview && (
+        <div className="nav-group-card promise-card">
+          <div className="nav-group-head">
+            <span>监控与发布</span>
+          </div>
+          <Link
+            href="/monitoring-system"
+            className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"
+          >
+            <Activity size={17} />
+            问题监控
+          </Link>
+          <Link
+            href="/publishing"
+            className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-white/75 hover:bg-white/10 hover:text-white"
+          >
+            <Database size={17} />
+            媒体发布
+          </Link>
+        </div>
+      )}
       <div className="mt-auto grid gap-2">
         <ServiceAccountDrawer
           portal={portal}
@@ -2637,7 +1959,6 @@ function ProblemOptimizationResults({
   intakeDraft,
   onIntakeDraftChange,
   onPortalRefresh,
-  onOpenDeliveryTicket,
   questionGroups,
   onOpenResponseLogic,
   onOpenBrandQuestions,
@@ -2718,7 +2039,6 @@ function ProblemOptimizationResults({
         onDraftChange={onIntakeDraftChange}
         onOpenBrandQuestions={onOpenBrandQuestions}
         onPortalRefresh={onPortalRefresh}
-        onOpenTicket={onOpenDeliveryTicket}
         onPreviewBrandConfirmed={(input) => {
           const category = input.category as PreviewQuestionCategory;
           if (!previewQuestionCategoryMeta[category]) return;
@@ -3745,123 +3065,25 @@ function OptimizationReport({ questionGroups, report }) {
 }
 
 // ==================== SEMANTIC ASSET SECTION (SaaS化：生产与分发流) ====================
-function SemanticAssetSystem({
-  selectedType,
-  setSelectedType,
-  assetTypes = [],
-  publishedAssets = [],
-  planCode = "unknown",
-  quota = null,
-  preferredMediaOptions,
-  tickets = [],
-  loading = false,
-  loadingMore = false,
-  hasMore = false,
-  error = null,
-  onOpenTicket,
-  onRefresh,
-  onLoadMore,
-  onSubmitRequest,
-}) {
-  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
-  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
-  const visibleAssetTypes = useMemo(() => assetTypes, [assetTypes]);
-  const selected =
-    visibleAssetTypes.find((item) => item.id === selectedType) ||
-    visibleAssetTypes[0];
-  const effectiveSelectedType = selectedType || "";
-  const requestsLocked = quota
-    ? !quota.allowed
-    : planCode === "basic" || planCode === "unknown";
-
-  if (!selected) {
-    return (
-      <ManagedModuleEmpty
-        title="内容资产运营"
-        description="当前没有可提交的内容类型，请联系管理员检查服务配置。"
-      />
-    );
-  }
-
+function SemanticAssetSystem({ publishedAssets = [], onEdit }) {
   return (
     <section className="page-shell semantic-page">
       <PageHeader
         eyebrow="MindPromise智诺 / AI 友好内容资产"
         title="内容资产运营"
-        desc="按业务目标选择内容类型并提交需求；交付管理员协调服务范围，AI 内容制作工程师负责内容制作与媒体分发并登记公开结果。"
+        desc="查看和编辑自己的内容资产，可下载原格式模板、导入并确认发布。"
       />
-
-      {requestsLocked ? (
-        <p className="content-request-access-note">
-          {quota?.reason || "当前账号暂未开放内容资产运营。"}
+      {onEdit && (
+        <Button variant="outline" onClick={onEdit}>
+          编辑内容资产
+        </Button>
+      )}
+      {!publishedAssets.length && (
+        <p className="mt-5 text-sm text-muted-foreground">
+          暂无内容资产，可从编辑入口导入内容。
         </p>
-      ) : quota ? (
-        <p
-          className="content-request-access-note content-request-quota"
-          role="status"
-        >
-          <span>本周期剩余额度</span>
-          <strong>{quota.remaining}</strong>
-          <span>次内容需求</span>
-        </p>
-      ) : null}
-
-      <div className="asset-results-grid">
-        {visibleAssetTypes.map((item) => (
-          <button
-            type="button"
-            className={`asset-result-card ${effectiveSelectedType === item.id ? "selected" : ""}`}
-            key={item.id}
-            aria-label={`选择${safeText(item.name)}`}
-            onClick={() => {
-              setSelectedType(item.id);
-              setRequestDialogOpen(true);
-            }}
-          >
-            <div className="asset-result-card-head">
-              <span className="asset-result-group">
-                {item.group.split("：")[0]}
-              </span>
-            </div>
-            <strong className="asset-result-name">{safeText(item.name)}</strong>
-            <small className="asset-result-desc">{safeText(item.desc)}</small>
-          </button>
-        ))}
-      </div>
-
-      <ContentAssetRequestDialog
-        open={requestDialogOpen}
-        onOpenChange={setRequestDialogOpen}
-        assetType={{
-          id: selected.id,
-          group: selected.group,
-          name: selected.name,
-          description: selected.desc,
-        }}
-        planCode={planCode}
-        quota={quota}
-        preferredMediaOptions={preferredMediaOptions}
-        onSubmit={onSubmitRequest}
-        onOpenHistory={() => setHistoryDialogOpen(true)}
-      />
+      )}
       <PublishedContentAssets assets={publishedAssets} />
-      <CustomerRequestHistoryDialog
-        open={historyDialogOpen}
-        onOpenChange={setHistoryDialogOpen}
-        title="内容需求记录"
-        description="当前页面提交的全部内容需求及公开交付结果统一显示在这里。"
-        tickets={tickets}
-        loading={loading}
-        refreshing={loading}
-        loadingMore={loadingMore}
-        hasMore={hasMore}
-        error={error}
-        onOpenTicket={onOpenTicket}
-        onRefresh={onRefresh}
-        onLoadMore={onLoadMore}
-        preview={!onOpenTicket}
-        emptyText="暂无内容需求记录。"
-      />
     </section>
   );
 }
@@ -3887,7 +3109,7 @@ export function PublishedContentAssets({ assets }) {
     >
       <div className="published-content-assets-heading">
         <h3 id="published-content-assets-title">已发布内容资产</h3>
-        <p>以下内容来自管理员最近一次确认发布的内容资产版本。</p>
+        <p>以下内容来自最近一次确认发布的内容资产版本。</p>
       </div>
       <div className="published-content-assets-list">
         {assets.map((asset) => (

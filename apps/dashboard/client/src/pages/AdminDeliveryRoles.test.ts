@@ -77,7 +77,7 @@ describe("customer project team helpers", () => {
     ).toEqual([]);
   });
 
-  it("summarizes incomplete projects, missing roles, and unassigned tickets", () => {
+  it("summarizes incomplete projects and missing roles", () => {
     const projects = [
       project({ id: 1 }),
       project({
@@ -91,23 +91,10 @@ describe("customer project team helpers", () => {
       ...allRoles.map((roleType) => assignment(2, roleType)),
     ];
 
-    expect(
-      summarizeProjectTeams(projects, assignments, [
-        {
-          workflowDomain: "ai_operations_engineer",
-          assignedMemberId: null,
-        },
-        {
-          workflowDomain: "content_distribution_engineer",
-          assignedMemberId: 100,
-        },
-        { workflowDomain: null, assignedMemberId: null },
-      ]),
-    ).toEqual({
+    expect(summarizeProjectTeams(projects, assignments)).toEqual({
       projectCount: 2,
       incompleteProjectCount: 1,
       missingRoleCount: 1,
-      pendingTicketCount: 1,
     });
   });
 
@@ -120,9 +107,7 @@ describe("customer project team helpers", () => {
       assignment(unownedProject.id, roleType),
     );
 
-    expect(
-      summarizeProjectTeams([unownedProject], assignments, []),
-    ).toMatchObject({
+    expect(summarizeProjectTeams([unownedProject], assignments)).toMatchObject({
       incompleteProjectCount: 1,
       missingRoleCount: 0,
     });
@@ -145,9 +130,7 @@ describe("customer project team helpers", () => {
     expect(getMissingProjectRoleTypes(basicProject, assignments)).toEqual([
       "monitoring_optimization_engineer",
     ]);
-    expect(
-      summarizeProjectTeams([basicProject], assignments, []),
-    ).toMatchObject({
+    expect(summarizeProjectTeams([basicProject], assignments)).toMatchObject({
       incompleteProjectCount: 1,
       missingRoleCount: 1,
     });
@@ -218,7 +201,8 @@ describe("customer project team helpers", () => {
       "utf8",
     );
 
-    expect(source).toContain("未结束需求已按岗位同步转交");
+    expect(source).toContain("项目工程师已更新");
+    expect(source).not.toContain("未结束需求");
     expect(source).toContain(
       "工程师加入后由该管理员负责项目协调；所有账号 API Key 均由系统管理员在“API 与人员管理”统一维护",
     );

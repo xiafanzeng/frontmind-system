@@ -78,6 +78,7 @@ export type OwnedFileContentResolverDependencies = {
   ) => Promise<{
     id: string;
     retainUntil: Date | string | number | null;
+    storageKey?: string;
   } | null>;
   /** @deprecated v2 keeps this only for source compatibility; never called. */
   stageStoredFile?: (input: {
@@ -160,7 +161,11 @@ async function getManagedLocalAsset(ownerUserId: number, fileId: string) {
   return (
     (
       await db
-        .select({ id: localAssets.id, retainUntil: localAssets.retainUntil })
+        .select({
+          id: localAssets.id,
+          retainUntil: localAssets.retainUntil,
+          storageKey: localAssets.storageKey,
+        })
         .from(localAssets)
         .where(
           and(
@@ -238,13 +243,17 @@ export class OwnedFileContentResolver {
         },
       );
     }
-    if (fileId.startsWith("asset_")) {
+    if (
+      input.expectedSourceKind === "managed_local_asset" ||
+      fileId.startsWith("asset_")
+    ) {
       const localAsset = await this.dependencies.getManagedLocalAsset?.(
         input.ownerUserId,
         fileId,
       );
       if (
         !localAsset ||
+        localAsset.id !== fileId ||
         (input.expectedSourceKind &&
           input.expectedSourceKind !== "managed_local_asset") ||
         (input.expectedSourceAuthorityId &&
@@ -262,7 +271,19 @@ export class OwnedFileContentResolver {
       }
       const expiresAt = timestampMillis(localAsset.retainUntil);
       const now = input.now ?? Date.now();
-      if (expiresAt === undefined || expiresAt <= now) {
+      // Brand result JSON/XLSX uses a UUID and permanent local retention.
+      // The owner/scope query above and server-owned storage key establish
+      // this provenance; a missing expiry alone never exempts an upload.
+      const brandResult =
+        /^brand-question-universe:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}:(?:json|xlsx):([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/u.exec(
+          localAsset.storageKey ?? "",
+        );
+      const permanentBrandResult =
+        localAsset.retainUntil === null && brandResult?.[1] === localAsset.id;
+      if (
+        !permanentBrandResult &&
+        (expiresAt === undefined || expiresAt <= now)
+      ) {
         throw new OwnedFileContentError(
           "SOURCE_EXPIRED",
           "文件已超过 30 天，请重新上传",
@@ -278,7 +299,7 @@ export class OwnedFileContentResolver {
         sourceKind: "managed_local_asset" as const,
         sourceAuthorityId: localAsset.id,
         expiresAt,
-        isTaskBoundAssistantOutput: false,
+        isTaskBoundAssistantOutput: permanentBrandResult,
       };
     }
     const credential = await this.dependencies.getCredential(

@@ -973,3 +973,29 @@ manual import. Cancelled tasks remain cancelled. The three focused suites
 passed 39 tests, including prior-round and foreign-session exclusion, invalid
 JSON and original 160-row validation. TypeScript, source governance and exact
 test partitions passed; no migration is required.
+
+Source `7f1f70f563978fa53b030f8100d6f3070b8d70c6` passed image publication
+run 34023034667 and the production bundle audit. Dashboard/SiteOps deployed
+digest `sha256:d6ba625cff995d35cf376fc657cce2458909114d69f4ca294b1cacdb1cdd5b1b`.
+Public health/readiness at 09:03:37 UTC returned 200 with that exact identity and
+exact schema; no migration ran, and Website/monitoring-worker container IDs and
+start times were preserved.
+
+The original customer observe then published the existing High result: operation
+`succeeded`, publication `published`, provider state still `error`, initial
+dispatch count one and repair count zero. At 09:07:07 UTC, all 160 persisted
+Dashboard rows matched the original native payload exactly at Dashboard revision
+4. Asset download acceptance exposed a separate existing mismatch: the brand
+service stores UUID local assets with persistent retention, while the generic
+download resolver recognized only `asset_` identifiers and upload expiry. The
+owner's JSON download returned `SOURCE_FORBIDDEN` 403; publication was not undone
+and no new research was submitted.
+
+The download correction resolves explicit local-asset requests by their existing
+owner/scope query without requiring an ID prefix. Null retention is accepted only
+for the original server-created brand JSON/XLSX storage key matching that asset
+ID; ordinary upload expiry, missing ownership and content-integrity checks remain.
+The resolver, retention and affected route suites passed 82 tests, including
+UUID result download, ordinary-upload expiry and cross-owner denial. TypeScript,
+source governance and exact test partitions passed. No migration or data rewrite
+is required.

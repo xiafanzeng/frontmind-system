@@ -70,6 +70,77 @@ function dependencies(input?: {
 }
 
 describe("OwnedFileContentResolver v2 local authority", () => {
+  it.each(["json", "xlsx"])(
+    "serves the owned permanent brand %s UUID without Provider credentials",
+    async (kind) => {
+      const fileId = "5e845dbe-3f0c-4b08-a95f-f03c7936ad1d";
+      const bytes = Buffer.from(`original ${kind} output`);
+      const { deps, request } = dependencies({ stored: storedFile(bytes) });
+      deps.getManagedLocalAsset = vi.fn(async (ownerUserId, requestedId) =>
+        ownerUserId === 3 && requestedId === fileId
+          ? {
+              id: fileId,
+              retainUntil: null,
+              storageKey: `brand-question-universe:3e5ecca0-ba72-41e7-a406-1717d463a741:${kind}:${fileId}`,
+            }
+          : null,
+      );
+      const resolved = await new OwnedFileContentResolver(deps).resolve({
+        ownerUserId: 3,
+        fileId,
+        expectedSourceKind: "managed_local_asset",
+        expectedSourceAuthorityId: fileId,
+      });
+      expect(resolved).toMatchObject({
+        sourceKind: "managed_local_asset",
+        sourceAuthorityId: fileId,
+        expiresAt: undefined,
+      });
+      expect(await readAll(resolved.stream)).toEqual(bytes);
+      expect(deps.getManagedLocalAsset).toHaveBeenCalledWith(3, fileId);
+      expect(deps.getCredential).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      vi.mocked(deps.readStoredFile).mockClear();
+      await expect(
+        new OwnedFileContentResolver(deps).resolve({
+          ownerUserId: 4,
+          fileId,
+          expectedSourceKind: "managed_local_asset",
+          expectedSourceAuthorityId: fileId,
+        }),
+      ).rejects.toMatchObject({ code: "SOURCE_FORBIDDEN", statusCode: 403 });
+      expect(deps.readStoredFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    undefined,
+    "ordinary-upload",
+    "brand-question-universe:3e5ecca0-ba72-41e7-a406-1717d463a741:json:6438c75c-b014-4ef3-aa7b-2e322acdf72b",
+  ])(
+    "does not exempt missing upload expiry without exact server brand provenance (%s)",
+    async (storageKey) => {
+      const fileId = "5e845dbe-3f0c-4b08-a95f-f03c7936ad1d";
+      const { deps } = dependencies({
+        stored: storedFile(Buffer.from("not authorized output")),
+      });
+      deps.getManagedLocalAsset = vi.fn(async () => ({
+        id: fileId,
+        retainUntil: null,
+        storageKey,
+      }));
+      await expect(
+        new OwnedFileContentResolver(deps).resolve({
+          ownerUserId: 3,
+          fileId,
+          expectedSourceKind: "managed_local_asset",
+          expectedSourceAuthorityId: fileId,
+        }),
+      ).rejects.toMatchObject({ code: "SOURCE_EXPIRED", statusCode: 410 });
+      expect(deps.readStoredFile).not.toHaveBeenCalled();
+      expect(deps.getCredential).not.toHaveBeenCalled();
+    },
+  );
   it("authorizes a managed local asset by owner and retainUntil without a Provider credential", async () => {
     const bytes = Buffer.from("managed local asset");
     const { deps } = dependencies({ stored: storedFile(bytes) });

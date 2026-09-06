@@ -299,7 +299,7 @@ function materializedBuild(
   ) {
     fail(
       "RESET_REQUIRED",
-      "此知识库不是完整物化的 v5 构建；请批准重置、重新上传并创建全新 v2 任务",
+      "此知识库不是完整物化的 v5 构建；请重置、重新上传并创建全新 v2 任务",
     );
   }
 }
@@ -792,7 +792,7 @@ export async function confirmMaterializedKnowledgeBaseNode(
     if (!isMaterializedBuildPublishable(build)) {
       fail(
         "INVALID_BUILD_STATE",
-        "当前知识库内容不完整，仅可查看；请批准重置后重新上传并创建全新任务",
+        "当前知识库内容不完整，仅可查看；请重置后重新上传并创建全新任务",
       );
     }
     const resetState = (
@@ -1163,7 +1163,7 @@ export async function bindMaterializedKnowledgeBaseOfficialLogoLocally(
       if (!isMaterializedBuildPublishable(build)) {
         fail(
           "INVALID_BUILD_STATE",
-          "当前知识库内容不完整，仅可查看；请批准重置后重新上传并创建全新任务",
+          "当前知识库内容不完整，仅可查看；请重置后重新上传并创建全新任务",
         );
       }
       if (
@@ -1703,7 +1703,7 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
   if (!isMaterializedBuildPublishable(build)) {
     fail(
       "INVALID_BUILD_STATE",
-      "当前知识库内容或研究覆盖不完整；可继续查看，但不能修订或发布，请批准重置后重跑",
+      "当前知识库内容或研究覆盖不完整；可继续查看，但不能修订或发布，请重置后重跑",
     );
   }
   const base = (

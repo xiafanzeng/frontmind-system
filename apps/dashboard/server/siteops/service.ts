@@ -3336,7 +3336,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   if (!project?.knowledgeInputEpochId) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前任务不支持带图片修改，请批准重置后重新生成官网。",
+      "当前任务不支持带图片修改，请重置后重新生成官网。",
       409,
     );
   }
@@ -3380,7 +3380,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前预览不支持带图片修改，请批准重置后重新生成官网。",
+      "当前预览不支持带图片修改，请重置后重新生成官网。",
       409,
     );
   }
@@ -4321,7 +4321,7 @@ async function handleSelectSnapshot(
   if (input.project.status !== "draft") {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前官网任务已经连接知识库；如需重新开始，请先提交官网重置申请。",
+      "当前官网任务已经连接知识库；如需重新开始，请先重置官网。",
       409,
     );
   }
@@ -5506,7 +5506,7 @@ async function handleRevision(
   if (!input.project.knowledgeInputEpochId) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前任务不支持对话修订，请批准重置后重新生成官网。",
+      "当前任务不支持对话修订，请重置后重新生成官网。",
       409,
     );
   }
@@ -5552,7 +5552,7 @@ async function handleRevision(
   ) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前预览缺少 2.9 修订源码或内容计划基线，请批准重置后重新生成官网。",
+      "当前预览缺少 2.9 修订源码或内容计划基线，请重置后重新生成官网。",
       409,
     );
   }
@@ -5595,7 +5595,7 @@ async function handleRevision(
   if (selectedWorkflowVersion !== SITEOPS_REVISION_WORKFLOW_VERSION) {
     throw new SiteOpsServiceError(
       "STATE_CONFLICT",
-      "当前视觉方案不支持连续修订，请批准重置后重新生成官网。",
+      "当前视觉方案不支持连续修订，请重置后重新生成官网。",
       409,
     );
   }

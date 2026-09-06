@@ -1780,7 +1780,7 @@ function buildDto(
       logoRequired: logoPolicy.logoRequired,
       logoAvailable: logoPolicy.logoAvailable,
       protocolError: resetRequired
-        ? "RESET_REQUIRED：旧知识库构建不再续跑；请批准重置并重新上传资料。"
+        ? "RESET_REQUIRED：旧知识库构建不再续跑；请重置并重新上传资料。"
         : isKnowledgeBaseMaterializedResultFailureCode(build.protocolErrorCode)
           ? KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE
           : build.protocolError
@@ -2043,7 +2043,7 @@ export async function createKnowledgeBaseBuild(input: {
       if (knowledgeBaseBuildRequiresApprovedReset(existing)) {
         throw new KnowledgeBaseBuildError(
           "RESET_REQUIRED",
-          "旧知识库构建不再续跑；请批准重置并重新上传资料",
+          "旧知识库构建不再续跑；请重置并重新上传资料",
         );
       }
       return existing;
@@ -3325,7 +3325,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       code: "RESET_REQUIRED",
       severity: "warning",
       message:
-        "旧知识库构建不再续跑。请批准重置后重新上传资料，系统将使用当前 Key 创建全新 v2 任务。",
+        "旧知识库构建不再续跑。请重置后重新上传资料，系统将使用当前 Key 创建全新 v2 任务。",
       retryable: false,
       failureClass: "requires_user_fix",
       recoveryAction: "approve_reset",
@@ -3350,7 +3350,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       code: "FRONTMIND_KB_RESET_REQUIRED",
       severity: "warning",
       message: preCreateFailure
-        ? `知识库任务未创建。${retainedCount}/${retainedCount} 份客户资料已保留，但${stageMessage}。请批准重置后重新上传资料。`
+        ? `知识库任务未创建。${retainedCount}/${retainedCount} 份客户资料已保留，但${stageMessage}。请重置后重新上传资料。`
         : KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE,
       retryable: false,
       failureClass: "requires_user_fix",
@@ -5687,7 +5687,7 @@ export async function assertKnowledgeBasePublishable(input: {
   ) {
     throw new KnowledgeBaseBuildError(
       "PUBLISH_BLOCKED",
-      "知识库内容或研究覆盖不完整；当前内容可以查看，但不能发布，请批准重置后重跑",
+      "知识库内容或研究覆盖不完整；当前内容可以查看，但不能发布，请重置后重跑",
     );
   }
   try {

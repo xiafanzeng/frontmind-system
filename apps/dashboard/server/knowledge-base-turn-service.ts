@@ -2403,7 +2403,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
     if (build.executionMode === "legacy_conversational") {
       throw new KnowledgeBaseTurnReservationError(
         "RESET_REQUIRED",
-        "旧知识库构建不再续跑；请批准重置并重新上传资料",
+        "旧知识库构建不再续跑；请重置并重新上传资料",
       );
     }
     if (build.activeTurnId !== sourceTurnId) {
@@ -4146,7 +4146,7 @@ async function reserveKnowledgeBaseTurnInTransaction(
     // or take over a turn on an older row and never upgrade that row here.
     throw new KnowledgeBaseTurnReservationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   const conversationId = await ensureConversation(
@@ -5382,7 +5382,7 @@ export async function reserveKnowledgeBaseStartBuild(
     ) {
       throw new KnowledgeBaseTurnReservationError(
         "RESET_REQUIRED",
-        "旧知识库构建不再续跑；请批准重置并重新上传资料",
+        "旧知识库构建不再续跑；请重置并重新上传资料",
       );
     }
     if (
@@ -8946,7 +8946,7 @@ export async function settleKnowledgeBaseManusV2ExplicitRejection(
       },
     };
     delete nextMetadata.leaseOwnerHash;
-    const customerMessage = "上游任务创建被拒绝；请批准重置并重新上传资料";
+    const customerMessage = "上游任务创建被拒绝；请重置并重新上传资料";
     await tx
       .update(conversationTurns)
       .set({
@@ -9034,7 +9034,7 @@ export async function beginKnowledgeBaseManusV2Dispatch(
     ) {
       throw new KnowledgeBaseTurnReservationError(
         "RESET_REQUIRED",
-        "旧知识库构建不再续跑；请批准重置并重新上传资料",
+        "旧知识库构建不再续跑；请重置并重新上传资料",
       );
     }
     if (turn.apiCredentialId === null) {
@@ -9061,7 +9061,7 @@ export async function beginKnowledgeBaseManusV2Dispatch(
     if (build.canonicalTaskId !== null) {
       throw new KnowledgeBaseTurnReservationError(
         "RESET_REQUIRED",
-        "旧会话任务锚点不可用于全新物化任务；请批准重置",
+        "旧会话任务锚点不可用于全新物化任务；请重置",
       );
     }
     const operationToken = normalizeRequiredId(
@@ -12021,8 +12021,8 @@ export async function settleKnowledgeBasePreCreateFailureForApprovedReset(
     const failureStage = input.failureStage ?? "provider_file_registration";
     const customerMessage =
       failureStage === "local_upload"
-        ? "知识库任务未创建；本地资料校验未完成。请批准重置后重新上传资料。"
-        : "知识库任务未创建；云端附件登记未完成。请批准重置后重新上传资料。";
+        ? "知识库任务未创建；本地资料校验未完成。请重置后重新上传资料。"
+        : "知识库任务未创建；云端附件登记未完成。请重置后重新上传资料。";
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
       createAttemptState: "not_sent",
@@ -12366,7 +12366,7 @@ async function settleLockedMaterializedCreateOutcomeUnknownForReset(input: {
     },
   };
   delete nextMetadata.leaseOwnerHash;
-  const customerMessage = "上游任务创建结果不确定；请批准重置并重新上传资料";
+  const customerMessage = "上游任务创建结果不确定；请重置并重新上传资料";
   const buildUpdated = await tx
     .update(knowledgeBaseBuilds)
     .set({

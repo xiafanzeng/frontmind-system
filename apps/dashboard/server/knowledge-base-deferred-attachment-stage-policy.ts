@@ -58,7 +58,7 @@ export async function requireKnowledgeBaseDeferredAttachmentStageBuild(
     throw new KnowledgeBaseTurnReservationError(
       build ? "RESET_REQUIRED" : "BUILD_NOT_FOUND",
       build
-        ? "旧知识库构建不再续跑；请批准重置并重新上传资料"
+        ? "旧知识库构建不再续跑；请重置并重新上传资料"
         : "知识库构建不存在",
     );
   }

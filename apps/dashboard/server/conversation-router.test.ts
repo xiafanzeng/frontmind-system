@@ -11,6 +11,7 @@ import {
   conversationTurns,
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
+  knowledgeBaseResetRequests,
   localAssets,
   messages,
   siteProjects,
@@ -218,17 +219,26 @@ function createSelectExecutor(rowsForTable: (table: unknown) => unknown[]) {
     return {
       from: (table: unknown) => {
         selectedTables.push(table);
-        const rows = rowsForTable(table);
+        let rows = rowsForTable(table);
         const query: {
           where: () => typeof query;
           orderBy: () => typeof query;
-          limit: () => Promise<unknown[]>;
+          limit: () => typeof query;
+          for: () => typeof query;
+          innerJoin: (table: unknown) => typeof query;
           then: Promise<unknown[]>["then"];
         } = {
           where: () => query,
           orderBy: () => query,
-          limit: async () => rows,
-          then: Promise.resolve(rows).then.bind(Promise.resolve(rows)),
+          limit: () => query,
+          for: () => query,
+          innerJoin: (joinedTable) => {
+            selectedTables.push(joinedTable);
+            rows = rowsForTable(joinedTable);
+            return query;
+          },
+          then: (resolve, reject) =>
+            Promise.resolve(rows).then(resolve, reject),
         };
         return query;
       },
@@ -236,6 +246,112 @@ function createSelectExecutor(rowsForTable: (table: unknown) => unknown[]) {
   });
   return { executor: { select }, selectedFields, selectedTables };
 }
+
+describe("self-service knowledge reset snapshot synchronization", () => {
+  const snapshot: ConversationSnapshot = {
+    id: "knowledge-conversation",
+    title: "知识库",
+    messages: [],
+    status: "awaiting_input",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  function executorWithLegacyPendingReset(ownerId: number) {
+    const pendingReset = {
+      id: "legacy-reset-request",
+      userId: 7,
+      status: "pending",
+    };
+    const row = {
+      id: "u7:knowledge-conversation",
+      userId: ownerId,
+      projectAssignmentId: null,
+      title: snapshot.title,
+      status: "awaiting_input",
+      apiCredentialId: null,
+      upstreamTaskId: null,
+      previousResponseId: null,
+      taskUrl: null,
+      createdAt: new Date(1),
+      updatedAt: new Date(1),
+      startedAt: null,
+      completedAt: null,
+      lastKnownOutputLength: 0,
+      deletedMessageIds: [],
+      version: 4,
+      deletedAt: null,
+    };
+    const harness = createSelectExecutor((table) => {
+      if (table === knowledgeBaseResetRequests) return [pendingReset];
+      if (table === knowledgeBaseBuilds) {
+        return [
+          {
+            id: "knowledge-build",
+            userId: 7,
+            conversationId: snapshot.id,
+            status: "confirming",
+            upstreamTaskId: null,
+            lastOutputLength: 0,
+            awaitingResponseSince: null,
+            completedAt: null,
+          },
+        ];
+      }
+      if (table === conversations) return [row];
+      return [];
+    });
+    const writes: Array<{
+      table: unknown;
+      value?: unknown;
+      predicate?: unknown;
+    }> = [];
+    const executor = {
+      ...harness.executor,
+      update: (table: unknown) => ({
+        set: (value: unknown) => ({
+          where: async (predicate: unknown) => {
+            writes.push({ table, value, predicate });
+          },
+        }),
+      }),
+      delete: (table: unknown) => ({
+        where: async (predicate: unknown) => {
+          writes.push({ table, predicate });
+        },
+      }),
+      insert: (table: unknown) => ({
+        values: async (value: unknown) => {
+          writes.push({ table, value });
+        },
+      }),
+    };
+    return { executor, writes, row, pendingReset };
+  }
+
+  it("synchronizes an owned snapshot despite a legacy pending reset request", async () => {
+    const harness = executorWithLegacyPendingReset(7);
+    await expect(persistSnapshot(harness.executor, 7, snapshot)).resolves.toBe(
+      "updated",
+    );
+    const update = harness.writes.find(
+      (write) => write.table === conversations,
+    );
+    expect(update?.value).toMatchObject({ userId: 7, version: 5 });
+    const query = new MySqlDialect().sqlToQuery(update?.predicate as any);
+    expect(query.sql).toContain("`conversations`.`userId` = ?");
+    expect(query.params).toContain(7);
+    expect(harness.pendingReset.status).toBe("pending");
+  });
+
+  it("still rejects another account's snapshot before any write", async () => {
+    const harness = executorWithLegacyPendingReset(8);
+    await expect(
+      persistSnapshot(harness.executor, 7, snapshot),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(harness.writes).toEqual([]);
+  });
+});
 
 describe("conversation multi-device merge", () => {
   it("reconstructs only customer upload chips from a durable knowledge-base turn", () => {
@@ -470,7 +586,9 @@ describe("conversation multi-device merge", () => {
       deletedMessageIds: [],
     };
     const uploadedAt = new Date(Date.now() - 24 * 60 * 60 * 1_000);
-    const contentExpiresAt = new Date(uploadedAt.getTime() + 30 * 24 * 60 * 60 * 1_000);
+    const contentExpiresAt = new Date(
+      uploadedAt.getTime() + 30 * 24 * 60 * 60 * 1_000,
+    );
     const rowsForTable = (table: unknown) => {
       if (table === conversations) return [conversation];
       if (table === messages) return [userMessage];

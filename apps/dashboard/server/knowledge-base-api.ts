@@ -922,7 +922,7 @@ async function requireMaterializedKnowledgeBaseBuild(input: {
   ) {
     throw new KnowledgeBaseTurnReservationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   return build;
@@ -1007,13 +1007,13 @@ export async function loadKnowledgeBaseTurnAuthority(
   ) {
     throw new KnowledgeBaseBuildError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   if (taskId) return { build, taskId, kind: "bound" };
   throw new KnowledgeBaseBuildError(
     "RESET_REQUIRED",
-    "未绑定上游任务的知识库构建不再重建；请批准重置并重新上传资料",
+    "未绑定上游任务的知识库构建不再重建；请重置并重新上传资料",
   );
 }
 
@@ -1191,7 +1191,7 @@ export function deriveKnowledgeBaseInteraction(
       canReply: false,
       canPublish: false,
       lockReason:
-        "知识库内容不完整，可查看当前安全内容，但不能确认、修订或发布；请批准重置后重跑",
+        "知识库内容不完整，可查看当前安全内容，但不能确认、修订或发布；请重置后重跑",
     };
   }
   if (progress?.build.status === "ready_to_publish") {
@@ -2529,7 +2529,7 @@ async function ensureKnowledgeBaseRecoveryDispatch(input: {
     // authority.
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   const skillArchive = await ensureKnowledgeBaseBuildSkillArchivePin({
@@ -3697,7 +3697,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   ) {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   if (
@@ -3715,7 +3715,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   ) {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   const prepared = await input.ensureDispatch({ claim, credential });
@@ -3838,7 +3838,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   } else if (!taskId) {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "上游任务创建结果不确定；请批准重置并重新上传资料",
+      "上游任务创建结果不确定；请重置并重新上传资料",
     );
   }
   if (!taskId) {
@@ -4429,7 +4429,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
     // allowed to reach attachment preparation or the Provider client.
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   return dispatchMaterializedKnowledgeBaseClaim({
@@ -5005,7 +5005,7 @@ async function uploadDurableKnowledgeBaseGeneratedAttachment(input: {
   if (input.providerProtocol !== "manus_v2") {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "旧知识库构建不再续跑；请批准重置并重新上传资料",
+      "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
   // Preserve the exact original bytes locally. The managed attachment mapper
@@ -5560,7 +5560,7 @@ router.post("/start/reserve", async (req, res) => {
         traceId: requestTraceId,
         error: {
           code: "RESET_REQUIRED",
-          message: "旧知识库构建不再续跑；请批准重置后重新上传资料",
+          message: "旧知识库构建不再续跑；请重置后重新上传资料",
         },
         reservationCreated: false,
       });
@@ -5769,7 +5769,7 @@ router.post("/start/recover", (_req, res) => {
   res.status(410).json({
     error: {
       code: "RESET_REQUIRED",
-      message: "请批准重置后重新上传完整资料并创建全新知识库任务",
+      message: "请重置后重新上传完整资料并创建全新知识库任务",
     },
   });
 });
@@ -5778,7 +5778,7 @@ router.post("/recovery/execute", (_req, res) => {
   res.status(410).json({
     error: {
       code: "RESET_REQUIRED",
-      message: "旧恢复操作已停用；请批准重置后重新上传完整资料",
+      message: "旧恢复操作已停用；请重置后重新上传完整资料",
     },
   });
 });
@@ -5787,7 +5787,7 @@ router.post("/canonical/recover-from-snapshot", (_req, res) => {
   res.status(410).json({
     error: {
       code: "RESET_REQUIRED",
-      message: "旧会话快照重建已停用；请批准重置后重新上传完整资料",
+      message: "旧会话快照重建已停用；请重置后重新上传完整资料",
     },
   });
 });
@@ -6688,7 +6688,7 @@ router.post("/turn/dispatch", async (req, res) => {
       throw new KnowledgeBaseTurnReservationError(
         build ? "RESET_REQUIRED" : "BUILD_NOT_FOUND",
         build
-          ? "旧知识库构建不再续跑；请批准重置并重新上传资料"
+          ? "旧知识库构建不再续跑；请重置并重新上传资料"
           : "知识库构建不存在",
       );
     }
@@ -7136,7 +7136,7 @@ router.post("/turn", async (req, res) => {
     if (!isMaterializedBuildPublishable(boundBuild)) {
       throw new KnowledgeBaseTurnReservationError(
         "RESET_REQUIRED",
-        "当前知识库内容或研究覆盖不完整；可继续查看，但不能创建修订任务，请批准重置后重跑",
+        "当前知识库内容或研究覆盖不完整；可继续查看，但不能创建修订任务，请重置后重跑",
       );
     }
     const attachments = normalizeKnowledgeBaseUserAttachments(body.attachments);
@@ -8146,7 +8146,7 @@ router.post("/turn/replace-attachments", (_req, res) => {
   res.status(410).json({
     error: {
       code: "RESET_REQUIRED",
-      message: "旧知识库轮次不再替换附件；请批准重置并重新上传资料",
+      message: "旧知识库轮次不再替换附件；请重置并重新上传资料",
     },
   });
 });
@@ -8155,7 +8155,7 @@ router.post("/retry", (_req, res) => {
   res.status(410).json({
     error: {
       code: "RESET_REQUIRED",
-      message: "旧知识库失败轮次不再重新生成；请批准重置并重新上传资料",
+      message: "旧知识库失败轮次不再重新生成；请重置并重新上传资料",
     },
   });
 });
@@ -8297,7 +8297,7 @@ router.post("/progress/reconcile", async (req, res) => {
     ) {
       throw new KnowledgeBaseBuildError(
         "RESET_REQUIRED",
-        "旧知识库任务不再回读；请批准重置并重新上传资料",
+        "旧知识库任务不再回读；请重置并重新上传资料",
       );
     }
     if (boundBuild.status === "published") {

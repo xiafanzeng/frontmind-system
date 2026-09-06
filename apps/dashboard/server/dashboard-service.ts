@@ -1234,7 +1234,7 @@ export async function createKnowledgeSnapshot(input: {
         !isMaterializedBuildPublishable(builds[0])
       ) {
         throw new Error(
-          "知识库内容或研究覆盖不完整；当前内容可以查看，但不能发布，请批准重置后重跑",
+          "知识库内容或研究覆盖不完整；当前内容可以查看，但不能发布，请重置后重跑",
         );
       }
       if (

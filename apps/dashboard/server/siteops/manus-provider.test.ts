@@ -1328,7 +1328,7 @@ describe("Manus SiteOps provider boundary", () => {
     expect(result).toMatchObject({
       status: "attention_required",
       code: "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
-      message: expect.stringContaining("批准重置"),
+      message: expect.stringContaining("重置"),
     });
     expect(getCredential).not.toHaveBeenCalled();
     expect(createClient).not.toHaveBeenCalled();

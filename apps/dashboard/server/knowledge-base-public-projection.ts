@@ -143,7 +143,10 @@ function publicNotice(value: Record<string, unknown>): Record<string, unknown> {
               value.message.includes("知识库任务未创建")
             ? {
                 code: "FRONTMIND_KB_RESET_REQUIRED",
-                message: sanitizeFrontMindPublicText(value.message),
+                message: sanitizeFrontMindPublicText(value.message).replace(
+                  /批准重置/gu,
+                  "重置",
+                ),
               }
             : publicRecoveryCopy(action);
   const createdAt = publicNoticeCreatedAt(value.createdAt);

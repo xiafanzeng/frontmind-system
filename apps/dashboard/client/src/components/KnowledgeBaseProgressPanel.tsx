@@ -328,7 +328,7 @@ export default function KnowledgeBaseProgressPanel({
                 <>
                   当前保留{" "}
                   {progress.resultQuality?.stats?.acceptedCount ?? total}{" "}
-                  个安全节点，但未达到完整发布条件。确认、修订、打包和发布均已锁定；请批准重置后重新上传资料并创建全新任务。
+                  个安全节点，但未达到完整发布条件。确认、修订、打包和发布均已锁定；请重置知识库后，重新上传资料并创建全新任务。
                 </>
               )}
             </span>

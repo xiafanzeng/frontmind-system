@@ -9593,7 +9593,7 @@ export function createSiteOpsAgentClient(
   if (options.provider !== "zhipu") {
     throw new SiteOpsManusFailure(
       "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
-      "请配置智谱凭证，批准重置后开始新的建站任务。",
+      "请配置智谱凭证，重置后开始新的建站任务。",
       "attention_required",
     );
   }
@@ -9672,7 +9672,7 @@ export function createManusSiteOpsProviderHandler(
       if (operation.provider !== "zhipu") {
         throw new SiteOpsManusFailure(
           "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
-          "请配置智谱凭证，批准重置后开始新的建站任务。",
+          "请配置智谱凭证，重置后开始新的建站任务。",
           "attention_required",
         );
       }

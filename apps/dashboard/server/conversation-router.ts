@@ -23,7 +23,6 @@ import {
   knowledgeBaseBuilds,
   knowledgeBaseConversationRetentionTombstones,
   knowledgeBaseConversationTombstones,
-  knowledgeBaseResetRequests,
   localAssets,
   messages,
   responseLogicEntries,
@@ -2726,30 +2725,6 @@ export async function persistSnapshot(
         .for("update")
     : [];
   const knowledgeBuild = knowledgeBuildRows[0];
-  const lockedKnowledgeBuilds = await executor
-    .select({ id: knowledgeBaseBuilds.id })
-    .from(knowledgeBaseBuilds)
-    .innerJoin(
-      knowledgeBaseResetRequests,
-      and(
-        eq(knowledgeBaseResetRequests.userId, knowledgeBaseBuilds.userId),
-        eq(knowledgeBaseResetRequests.status, "pending"),
-      ),
-    )
-    .where(
-      and(
-        eq(knowledgeBaseBuilds.userId, userId),
-        eq(knowledgeBaseBuilds.conversationId, snapshot.id),
-      ),
-    )
-    .limit(1);
-  if (lockedKnowledgeBuilds[0]) {
-    if (options.skipExisting) return "skipped";
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: "知识库重置需求正在审批，当前会话已只读锁定",
-    });
-  }
   const [tombstones, retainedTombstones] = await Promise.all([
     executor
       .select({ id: knowledgeBaseConversationTombstones.id })

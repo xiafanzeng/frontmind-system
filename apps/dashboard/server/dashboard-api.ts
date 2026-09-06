@@ -7008,7 +7008,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       sourceArtifactHash = knowledgeBasePublicationBindingHash(build)!;
     } else {
       throw new Error(
-        "旧知识库构建不再续跑或回读 Provider；请批准重置后使用 v2 全量物化重新构建",
+        "旧知识库构建不再续跑或回读 Provider；请重置后使用 v2 全量物化重新构建",
       );
     }
     const archiveHash = createHash("sha256")

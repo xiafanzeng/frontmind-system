@@ -333,7 +333,7 @@ describe("knowledge-base customer public projection", () => {
       notice: {
         code: "FRONTMIND_KB_RESET_REQUIRED",
         message:
-          "知识库任务未创建。9/9 份客户资料已保留，但云端附件登记未完成。请批准重置后重新上传资料。",
+          "知识库任务未创建。9/9 份客户资料已保留，但云端附件登记未完成。请重置后重新上传资料。",
         attachmentCount: 9,
       },
     });

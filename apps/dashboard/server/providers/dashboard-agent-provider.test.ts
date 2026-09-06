@@ -23,6 +23,8 @@ import {
   generalAgentRuntimeForCredential,
   generalAgentRuntimeForOperation,
 } from "../general-agent-runtime";
+import { contentProductionInputSchema } from "../../shared/content-production";
+import { contentProductionSystemContext } from "../content-production-runtime";
 
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -315,7 +317,18 @@ const request = {
 describe("tenant-owned Dashboard Managed Agents transport", () => {
   it("mounts frozen server context files without changing the original user turn or attachment evidence", async () => {
     const f = fixture();
-    const systemContext = "Frozen customer knowledge snapshot version 3";
+    const systemContext = contentProductionSystemContext({
+      revision: 1,
+      accountUserId: identity.accountUserId,
+      purpose: "content_production",
+      knowledgeBase: null,
+      knowledgeText: null,
+      contentProduction: contentProductionInputSchema.parse({
+        mode: "p0",
+        enterpriseName: "Brand",
+        knowledgeSource: "files",
+      }),
+    });
     const extra = {
       systemContext,
       systemAttachments: [
@@ -331,6 +344,18 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
       (call) => call.path === "/v1/agents" && call.method === "POST",
     )!;
     expect(agent.body.system).toContain(systemContext);
+    expect(agent.body.system).toContain("/mnt/session/work/frontmind/jobs");
+    expect(agent.body.system).not.toContain("/workspace/frontmind");
+    expect(agent.body.system).toContain(
+      "Internal Workflow and Job files stay outside /mnt/session/outputs",
+    );
+    expect(agent.body.system).toContain("curl, Python requests or Playwright");
+    expect(agent.body.tools).toEqual([{ type: "agent_toolset_20260601" }]);
+    expect(
+      f.calls.find(
+        (call) => call.path === "/v1/environments" && call.method === "POST",
+      )!.body.config.networking,
+    ).toEqual({ type: "unrestricted" });
     const session = f.calls.find(
       (call) => call.path === "/v1/sessions" && call.method === "POST",
     )!;

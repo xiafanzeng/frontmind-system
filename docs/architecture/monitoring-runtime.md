@@ -120,8 +120,13 @@ The issued token and original login inputs are held only in root-readable
 server configuration/private files. The first authenticated resource page
 returned 50 real name/`price` records and reported 91,832 resources across
 1,837 pages. That is a provider pagination observation, not a completed-sync
-count: the full catalog synchronization is being enabled and verified. No
-publication order was submitted. A signed-in browser session is not a
+count: the full catalog synchronization is being enabled and verified. A real
+page later contained one resource with `name=null`; this previously rejected
+the entire page and prevented catalog activation. The provider now preserves
+page counts while normalization/staging excludes individual rows with no usable
+name or customer price. A fully fetched catalog activates its usable rows and
+retains the invalid-row count; missing pages and inconsistent totals still
+cannot become an active catalog. No publication order was submitted. A signed-in browser session is not a
 configured worker API credential. Final live inventory counts must come from
 the completed authenticated sync, never from documentation examples or preview
 fixtures.

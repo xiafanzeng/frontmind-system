@@ -28,14 +28,18 @@ export const kolAuthenticationResponseSchema = z
 export const kolResourceSchema = z
   .object({
     id: z.coerce.number().int().positive(),
-    name: z.string().trim().min(1).max(500),
+    // A successful real catalog page may contain an unavailable unnamed row.
+    // Preserve the page length; staging counts and skips that row individually.
+    name: z.string().trim().max(500).nullish(),
     platform: nullableText,
     taxonomy: nullableText,
     media: nullableText,
     area: nullableText,
     case_url: nullableText,
     title_limit: nullableNumeric,
-    price: nullableNumeric,
+    // Only normalization decides whether a row has a usable customer price.
+    // An invalid price must not discard the other resources on this page.
+    price: z.unknown().optional(),
     pc_weight: nullableNumeric,
     m_weight: nullableNumeric,
     success_radio: nullableNumeric,

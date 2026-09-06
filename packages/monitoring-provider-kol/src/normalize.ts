@@ -27,7 +27,7 @@ export function normalizeResource(
   const kind = normalizeKolMediaKind(input.is_zimeiti);
   return {
     id: input.id,
-    name: input.name.trim(),
+    name: input.name?.trim() ?? "",
     platform: text(input.platform),
     taxonomy: text(input.taxonomy),
     mediaType: text(input.media),
@@ -35,7 +35,10 @@ export function normalizeResource(
     area: text(input.area),
     caseUrl: httpUrl(input.case_url),
     titleLimit: positiveInteger(input.title_limit),
-    price: decimal(input.price),
+    price:
+      typeof input.price === "string" || typeof input.price === "number"
+        ? decimal(input.price)
+        : undefined,
     pcWeight: decimal(input.pc_weight),
     mobileWeight: decimal(input.m_weight),
     successRate: percentage(input.success_radio),

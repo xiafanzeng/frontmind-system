@@ -1642,6 +1642,8 @@ export class PublisherWorkerRepository {
     const stagedRecords = staged?.records ?? 0;
     const expectedUniqueRecords =
       run.newsRecords + run.selfMediaRecords - run.duplicateRecords;
+    // Unavailable individual rows are excluded by staging and reconciled in
+    // invalidRecords below; they must not hide the remaining complete catalog.
     const incompleteReason =
       run.pagesExpected !== input.expectedLastPage ||
       run.pagesFetched !== input.expectedLastPage
@@ -1652,14 +1654,12 @@ export class PublisherWorkerRepository {
           ? "Catalog staging counters did not reconcile"
           : run.crossKindDuplicateRecords > 0
             ? "Catalog contains one resource id in multiple media categories"
-            : run.invalidRecords > 0
-              ? "One or more resources had no valid customer price or media kind"
-              : stagedRecords === 0
-                ? "Catalog sync returned no priced resources"
-                : (staged?.positiveNews ?? 0) === 0 ||
-                    (staged?.positiveSelfMedia ?? 0) === 0
-                  ? "Catalog does not contain positive-price news and self-media resources"
-                  : null;
+            : stagedRecords === 0
+              ? "Catalog sync returned no priced resources"
+              : (staged?.positiveNews ?? 0) === 0 ||
+                  (staged?.positiveSelfMedia ?? 0) === 0
+                ? "Catalog does not contain positive-price news and self-media resources"
+                : null;
     const revision = await this.catalogRevisionForStaging(input.runId);
     if (incompleteReason) {
       await this.db.transaction(async (tx) => {

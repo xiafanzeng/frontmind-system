@@ -54,13 +54,15 @@
 | Dashboard 品牌全域词库 | 跟随客户 Key；客户 3 当前 Max（v5） | 上表最后一次 High 使用 v4；可用的 160 条结果已发布，账号默认未因此改成 High |
 | Dashboard 应答逻辑 | 跟随客户 Key；客户 3 当前 Max（v5） | 原同会话两轮、保存和确认已验收 |
 | Dashboard 通用 Agent（客户 / 交付管理员） | 跟随操作者 Key；客户 3 为 Max（v5），交付管理员 4 为 Max（v1） | 之前验收的 High 会话继续 High，新入口不会把旧会话改成 Max |
-| Dashboard 企业问答智能体 | 跟随客户 Key；客户 3 当前 Max（v5） | 本轮接入已发布知识库和原 General 引擎；未发起新增付费问答验收 |
+| Dashboard 企业问答智能体 | 跟随客户 Key；客户 3 当前 Max（v5） | 已用真实客户页面完成一次 Max 短问答；原生会话正常完成，回答的企业名称、注册主体及两处引用与 55 篇已发布知识原文一致 |
 | Dashboard 内容制作 | 跟随客户 Key；客户 3 当前 Max（v5） | 本轮接入原 v2.3 ZIP；E9 另调用原 ZIP 的专用 XTY 服务，并非 Zhipu effort 设置；缺少 E9 专用密钥，未验收完整产物 |
 | Dashboard 官网制作 / 官网修订 | 跟随客户 Key；客户 3 当前 Max（v5） | SiteOps 冻结设置；本次按用户要求不验收建站；生产运行记录为 0 |
 | Dashboard 公众号 / 小红书制作 | 跟随客户 Key；客户 3 当前 Max（v5） | SiteOps 后续任务优先继承父任务冻结设置；无本轮实际运行记录 |
 | 问题监控、媒体发布、原 Jenova 跟踪、非 AI 管理操作 | 不适用 | 分别沿用 Moli、KOL、Jenova 等原服务，不使用 Zhipu High/Max |
 
 Website 的生产 `WEBSITE_ZHIPU_EFFORT=high` 由 Dashboard 代理在创建时冻结，Website 浏览器不直接指定 effort。管理员页面目前提供 High/Max；底层 API 支持 Low 不代表当前页面有 Low 选项，也不代表有 Low 的实测结果。系统管理员账号 1 仅保留历史 Manus 元数据，不据此认定它有正在执行的 Manus AI 入口。
+
+企业问答补充验收：`f1513870-add6-4506-8f87-b799c48fd448`，`glm-5.3 / max / standard`，一次原 UI 提交、一次上游指令、无重试新建。知识库 v1 的 55 篇资料以冻结附件提供；引用 `0001.md`《企业概况》和 `0002.md`《注册主体与经营资质》与原文一致。此简单问答成功不能替代 160 条研究任务的稳定性结论。
 
 代码依据：Website `server/geo/broker.ts` 的六类任务，Dashboard `presales-v2-store.ts` / `providers/website-agent-provider.ts` 的 Website 冻结参数；`credential-agent-client.ts` 和 `general-agent-runtime.ts` 的账号 Key 及历史 profile；`siteops/service.ts` 的 SiteOps 凭据继承；`providers/dashboard-agent-provider.ts` 的 `speed: standard`。生产只读记录未导出密钥。
 

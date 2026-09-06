@@ -1053,14 +1053,18 @@ export default function ChatInput({
                     : inputLocked
                       ? syncKnowledgeBaseSnapshot
                         ? "正在根据你的补充资料更新当前节点…"
-                        : "FrontMind 正在编排内容制作流程..."
+                        : purpose === "enterprise_qa"
+                          ? "FrontMind 正在查阅企业知识库并回答…"
+                          : "FrontMind 正在编排内容制作流程..."
                       : knowledgeBaseNotStarted
                         ? "请先点击上方“构建企业知识库”完成资料采集设置"
                         : officialLogoRequired
                           ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
                           : syncKnowledgeBaseSnapshot
                             ? "输入修改意见，或上传资料；提交后仍停留当前节点"
-                            : "输入你的内容需求，按 Enter 开始编排..."
+                            : purpose === "enterprise_qa"
+                              ? "输入企业相关问题，按 Enter 提问…"
+                              : "输入你的内容需求，按 Enter 开始编排..."
                 }
                 disabled={
                   inputLocked ||

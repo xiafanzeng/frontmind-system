@@ -48,8 +48,7 @@ import type { Conversation } from "@/contexts/ConversationContext";
 import AccountMenu from "@/components/AccountMenu";
 import { isSystemAdminAccount } from "@/lib/admin-access";
 
-const LOGO_ICON =
-  "https://d2xsxph8kpxj0f.cloudfront.net/310519663465762565/ZiWzJwHCXtKB4GziVKqKt6/fm-logo_cde8eb94.png";
+const LOGO_ICON = "/assets/frontmind-mark.svg";
 
 interface SidebarProps {
   collapsed: boolean;

@@ -1,17 +1,17 @@
 # CN migration verification — 2026-09-06
 
-## Current deployment and business acceptance status
+## Verified production snapshot — 2026-09-06 18:00 Beijing
 
-The table records the deployed runtime after the native-result and owned-download
-fixes. Public `/readyz` reports this build SHA and image digest.
+The table records the verified runtime after the customer-workspace release.
+Public `/readyz` reported this build SHA and image digest at verification time.
 Brand-universe business acceptance now passes using the final High task's valid
 output, while its native provider error remains recorded separately. Historical sections
 retain the outcomes and identities of their own stages.
 
 | Service | Runtime source revision | Runtime image digest |
 | --- | --- | --- |
-| Dashboard | `5be63244d6f52c94fd919fb0ac25cf92c0d66539` | `sha256:550c7566a1c08d6579972461be84592e9435a8125b9377642d5baf49cc84d395` |
-| Monitoring worker | `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` | `sha256:7134db0d9d3690533f470ce5af5a64e6876914021858368fdb926295187661a3` |
+| Dashboard | `f7fac4a874671cab33fbb4638ff25a82082f8092` | `sha256:be7cd6c82f83e726b93d95e056539971be4039770d92d9c085545219f0c76580` |
+| Monitoring worker | `f7fac4a874671cab33fbb4638ff25a82082f8092` | `sha256:813c804c83cacec91ee165e5e8c12aa6a5286cc55fa43fb56266b42496315618` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
 | Area | Current acceptance result |
@@ -34,6 +34,25 @@ Brand Tracker and monitoring/publishing providers retain their integrations.
 Historical Manus tasks were retired by the user and are not reconstructed. Original non-AI 21st/Aliyun credentials retain
 their meaning even where historical database metadata defaults to Manus.
 No further monitoring attempts or KOL orders are part of this acceptance.
+
+Customer workspaces on `f7fac4a` passed 14 browser checks using real server
+responses: General and enterprise QA routes, frozen KB source, content-production
+entry and all five creation modes without submitting them, common sidebar,
+removed content-operations and duplicate publication-history navigation, record
+filters and old-link redirects, and repeated authenticated reloads. No failed
+API reads or browser exceptions occurred. One additional real customer QA request
+completed with Max, one upstream command, the customer's own credential and the
+frozen 55-document KB; its enterprise name, legal entity and two document citations
+matched the original knowledge. Details are in `docs/zhipu-high-max-findings.md`.
+
+The original content Workflow ZIP is present in the running image with SHA256
+`9b5fc88cf4d8589540f3e1233580eae0058424b8f2f39ba8a853b14df2926b8e`.
+Content-production state/actions and transport have focused automated coverage,
+but full article delivery remains unverified because the original E9 XTY service
+credential is absent. No stage is silently skipped. KOL real catalog sync also
+remains incomplete: the official API returned 401 and no valid credentials were
+found. The worker supports all catalog pages and no longer requires logos; no
+mock media or real publication order was introduced.
 
 ## Historical production baseline restoration
 

@@ -127,6 +127,7 @@ import type {
 import {
   contentProductionSystemAttachments,
   contentProductionSystemContext,
+  isContentWorkflowInternalFilename,
   isContentWorkflowStateFilename,
   originalContentWorkflowArchive,
 } from "./content-production-runtime";
@@ -1937,6 +1938,14 @@ async function persistProviderEvents(input: {
   const isContentProduction =
     frozenGeneralAgentPurpose(input.task, input.operation.accountUserId!)
       ?.purpose === "content_production";
+  // Provider text and its file list can arrive as separate events.
+  const internalAttachments = isContentProduction
+    ? orderedEvents
+        .flatMap(assistantAttachments)
+        .filter((attachment) =>
+          isContentWorkflowInternalFilename(attachment.filename),
+        )
+    : [];
   for (const event of orderedEvents) {
     const providerEvidence = generalChatProviderEventEvidence(event);
     const providerErrorContent = providerEvidence.errorContent
@@ -1955,7 +1964,18 @@ async function persistProviderEvents(input: {
       bytes: number;
       sha256: string;
     }> = [];
-    const markdownBindings: GeneralChatAssistantArtifactBinding[] = [];
+    const markdownBindings: GeneralChatAssistantArtifactBinding[] =
+      internalAttachments.map((attachment) => ({
+        artifactId: artifactIdFor({
+          providerTaskId: input.task.providerTaskId ?? input.task.id,
+          eventId: attachment.eventId,
+          attachmentIndex: attachment.attachmentIndex,
+        }),
+        originalUrl: attachment.url,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        hidden: true,
+      }));
     for (const attachment of assistantAttachments(event)) {
       try {
         const artifact = await localizeArtifact({
@@ -1966,9 +1986,12 @@ async function persistProviderEvents(input: {
         if (artifact) {
           if (
             isContentProduction &&
-            isContentWorkflowStateFilename(artifact.filename)
+            isContentWorkflowInternalFilename(artifact.filename)
           ) {
-            if (artifact.sizeBytes <= 256 * 1024) {
+            if (
+              isContentWorkflowStateFilename(artifact.filename) &&
+              artifact.sizeBytes <= 256 * 1024
+            ) {
               const storedState = await readStoredPresalesFile(artifact.id);
               const state = storedState
                 ? parseContentRunnerState(
@@ -1988,7 +2011,8 @@ async function persistProviderEvents(input: {
                   sha256: artifact.contentSha256,
                 });
             }
-            // The added transport-only state copy drives progress; it is not a customer deliverable.
+            // Native state drives progress; the complete Job ZIP preserves current files.
+            // Both are private transport, not customer deliverables.
             continue;
           }
           localized.push({
@@ -5465,6 +5489,7 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
       )
         .select({
           artifact: artifacts,
+          task: agentTasks,
           turnId: conversationTurns.id,
           conversationId: conversations.id,
         })
@@ -5514,6 +5539,14 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
     const row = owned?.artifact;
     localTaskId = row?.taskId ?? null;
     projectOwnership = row ? "matched" : "denied_or_missing";
+    if (
+      owned &&
+      frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id)?.purpose ===
+        "content_production" &&
+      isContentWorkflowInternalFilename(owned.artifact.filename)
+    ) {
+      throw new ChatV2HttpError("ARTIFACT_NOT_FOUND", 404);
+    }
     const stored = row ? await readStoredPresalesFile(row.id) : null;
     contentPresent = Boolean(stored);
     if (!row || !stored) throw new ChatV2HttpError("ARTIFACT_NOT_FOUND", 404);

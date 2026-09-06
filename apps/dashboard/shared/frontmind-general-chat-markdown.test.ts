@@ -15,6 +15,42 @@ const imageBinding: GeneralChatAssistantArtifactBinding = {
 const localImageUrl = "/api/frontmind/v2/artifacts/artifact_image/content";
 
 describe("canonicalizeGeneralChatAssistantMarkdown", () => {
+  it("removes private transport links while preserving ordinary deliverables", () => {
+    const snapshot = {
+      artifactId: "artifact_private",
+      originalUrl: "zhipu-file:file-private",
+      filename:
+        "frontmind_workflow_job_snapshot_1788699900000_0123456789abcdef_fedcba9876543210.zip",
+      mimeType: "application/zip",
+      hidden: true,
+    };
+    const publicPack = {
+      artifactId: "artifact_pack",
+      originalUrl: "zhipu-file:file-pack",
+      filename: "Reference_Pack_v2.zip",
+      mimeType: "application/zip",
+    };
+    const source = `[内部](<${snapshot.originalUrl}>)\n[状态](/mnt/session/outputs/${snapshot.filename})\n[正文资料包](${publicPack.originalUrl})\n[官网](https://example.com)`;
+    const result = canonicalizeGeneralChatAssistantMarkdown(source, [
+      snapshot,
+      publicPack,
+    ]);
+    expect(result.text).not.toContain("内部");
+    expect(result.text).not.toContain("状态");
+    expect(result.text).not.toContain(snapshot.filename);
+    expect(result.text).toContain(
+      "[正文资料包](/api/frontmind/v2/artifacts/artifact_pack/content)",
+    );
+    expect(result.text).toContain("[官网](https://example.com)");
+    const ordinary = canonicalizeGeneralChatAssistantMarkdown(
+      `[客户文件](${snapshot.originalUrl})`,
+      [{ ...snapshot, hidden: false }],
+    );
+    expect(ordinary.text).toBe(
+      "[客户文件](/api/frontmind/v2/artifacts/artifact_private/content)",
+    );
+  });
+
   it.each([
     "/home/ubuntu/huang_guohua_business_card.png",
     "/mnt/data/huang_guohua_business_card.png",

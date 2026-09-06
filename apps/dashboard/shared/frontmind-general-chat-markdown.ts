@@ -4,6 +4,8 @@ export type GeneralChatAssistantArtifactBinding = {
   originalUrl: string;
   filename: string;
   mimeType: string;
+  /** Internal task transport; never a customer link or download. */
+  hidden?: boolean;
 };
 
 export type GeneralChatAssistantMarkdownPathKind =
@@ -112,6 +114,18 @@ export function canonicalizeGeneralChatAssistantMarkdown(
         (binding) => binding.originalUrl.trim() === destination,
       );
       const localKind = providerLocalPathKind(destination);
+      if (
+        exact.some((binding) => binding.hidden) ||
+        (localKind &&
+          bindings.some(
+            (binding) =>
+              binding.hidden &&
+              providerLocalBasename(binding.filename) ===
+                providerLocalBasename(destination),
+          ))
+      ) {
+        return "";
+      }
       let candidates = exact;
       let matchKind: GeneralChatAssistantMarkdownPathKind | null = null;
       if (exact.length > 0) {

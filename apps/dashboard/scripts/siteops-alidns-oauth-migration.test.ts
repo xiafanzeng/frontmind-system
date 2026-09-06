@@ -146,6 +146,7 @@ describe("unified SiteOps AliDNS OAuth migration", () => {
     ).toEqual([
       "0058_dashboard_production_parity",
       "0059_website_zhipu_provider",
+      "0060_dashboard_zhipu_provider",
     ]);
     expect(policy.migrations).not.toHaveProperty("0065_siteops_alidns_oauth");
   });

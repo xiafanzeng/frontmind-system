@@ -1,3 +1,5 @@
+import type { DecryptedCredential } from "./auth-service";
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash } from "node:crypto";
 
 import { Router } from "express";
@@ -213,6 +215,8 @@ export function createBrandQuestionFileIdempotencyKey(input: {
 }
 
 export async function createBrandQuestionUpstreamTask(input: {
+  credential?: DecryptedCredential;
+  accountUserId?: number;
   baseUrl: string;
   apiKey: string;
   prompt: string;
@@ -221,11 +225,17 @@ export async function createBrandQuestionUpstreamTask(input: {
   agentProfile?: string;
   rateLimitScope?: string;
 }) {
-  const client = new ManusV2Client({
-    baseUrl: input.baseUrl,
-    apiKey: input.apiKey,
-    rateLimitScope: input.rateLimitScope,
-  });
+  const client = input.credential
+    ? createCredentialAgentClient(input.credential, {
+        accountUserId: input.accountUserId,
+        intentId: input.idempotencyKey,
+        baseUrl: input.baseUrl,
+      })
+    : new ManusV2Client({
+        baseUrl: input.baseUrl,
+        apiKey: input.apiKey,
+        rateLimitScope: input.rateLimitScope,
+      });
   const operationToken = input.idempotencyKey;
   const title = `FrontMind brand questions ${operationToken.slice(0, 24)}`;
   const prompt = assertUpstreamPromptBudget(
@@ -282,11 +292,6 @@ router.post("/start", async (req, res) => {
     );
     const baseUrl = getUpstreamBaseUrl(req);
     const apiKey = req.frontmindCredential.apiKey;
-    const client = new ManusV2Client({
-      baseUrl,
-      apiKey,
-      rateLimitScope: `managed-user:${user.id}`,
-    });
     const [skillArchive, evidenceArchive, builtPrompt] = await Promise.all([
       buildBrandQuestionPortfolioSkillArchive(),
       buildBrandQuestionPortfolioEvidenceArchive(context),
@@ -298,6 +303,11 @@ router.post("/start", async (req, res) => {
       prompt,
       skillContentHash: skillArchive.contentHash,
       evidenceContentHash: evidenceArchive.contentHash,
+    });
+    const client = createCredentialAgentClient(req.frontmindCredential, {
+      accountUserId: user.id,
+      intentId: taskIdempotencyKey,
+      baseUrl,
     });
     const generatedAttachments: Array<{
       attachment: { file_id: string; filename: string };
@@ -342,6 +352,8 @@ router.post("/start", async (req, res) => {
       );
     }
     const created = await createBrandQuestionUpstreamTask({
+      credential: req.frontmindCredential,
+      accountUserId: user.id,
       baseUrl,
       apiKey,
       prompt,
@@ -446,10 +458,8 @@ router.post("/sync", async (req, res) => {
         candidateTargets: deriveBrandQuestionCandidateTargets(context),
       },
     });
-    const client = new ManusV2Client({
-      baseUrl: getUpstreamBaseUrl(req),
-      apiKey: credential.apiKey,
-      rateLimitScope: `managed-user:${user.id}`,
+    const client = createCredentialAgentClient(credential, {
+      accountUserId: user.id,
     });
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const taskStatus = latestManusV2TaskState(events);

@@ -5,7 +5,7 @@ import {
   AuthServiceError,
   getDecryptedCredentialForUser,
   getApiCredentialStatus,
-  validateUpstreamApiKey,
+  validateManagedUpstreamApiKey,
 } from "./auth-service";
 import { toTrpcError } from "./auth-router";
 import { hasSystemAdminAccess } from "./admin-control-plane-service";
@@ -76,7 +76,10 @@ export const credentialRouter = router({
         if (!apiKey) {
           throw new AuthServiceError("NOT_FOUND", "请先填写或保存 API Key");
         }
-        await validateUpstreamApiKey(apiKey);
+        await validateManagedUpstreamApiKey(
+          apiKey,
+          savedCredential?.provider ?? "zhipu",
+        );
         return { ok: true } as const;
       } catch (error) {
         throw toTrpcError(error);

@@ -153,3 +153,29 @@ it("decodes CRLF split across chunks and an EOF frame without losing durable eve
     expect(seen).toEqual(["event_1"]);
   }
 });
+
+describe("Managed Agents acknowledged file deletion", () => {
+  it("validates the file identity before dispatch and requires a matching deletion acknowledgement", async () => {
+    const transport = vi.fn(async () => json({ id: "file_1", deleted: true }));
+    const client = new ZhipuManagedClient({
+      apiKey: "synthetic",
+      fetchImpl: transport,
+    });
+    await expect(client.deleteFile("../other")).rejects.toThrow(
+      "INVALID_RESOURCE_ID",
+    );
+    expect(transport).not.toHaveBeenCalled();
+    await expect(client.deleteFile("file_1")).resolves.toEqual({
+      id: "file_1",
+      deleted: true,
+    });
+    const bad = new ZhipuManagedClient({
+      apiKey: "synthetic",
+      fetchImpl: vi.fn(async () => json({ id: "another", deleted: true })),
+    });
+    await expect(bad.deleteFile("file_1")).rejects.toMatchObject({
+      outcomeUnknown: true,
+      code: "INVALID_RESPONSE",
+    });
+  });
+});

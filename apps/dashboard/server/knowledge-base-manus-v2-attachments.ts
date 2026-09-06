@@ -35,6 +35,10 @@ import {
   type ManusV2CreatedFile,
   type ManusV2ProviderFileDetail,
 } from "./manus-v2-client";
+import {
+  createDashboardAgentClient,
+  type DashboardAgentClient,
+} from "./providers/dashboard-agent-provider";
 import { readStoredPresalesFile } from "./presales-file-store";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -692,7 +696,7 @@ function exactProviderProof(input: {
 }
 
 export async function validateReusableKnowledgeBaseManusV2Attachment(input: {
-  client: ManusV2Client;
+  client: DashboardAgentClient;
   mapping: KnowledgeBaseManusV2AttachmentMapping;
   minimumExpirySeconds: number;
 }) {
@@ -715,7 +719,7 @@ export async function validateReusableKnowledgeBaseManusV2Attachment(input: {
 }
 
 export async function inspectKnowledgeBaseManusV2AttachmentAttempt(input: {
-  client: ManusV2Client;
+  client: DashboardAgentClient;
   attempt: KnowledgeBaseManusV2AttachmentAttempt;
   minimumExpirySeconds: number;
 }) {
@@ -769,7 +773,7 @@ export function shouldInspectReadyMappingBeforeAttachmentAttempt(input: {
 }
 
 async function inspectCandidate(input: {
-  client: ManusV2Client;
+  client: DashboardAgentClient;
   attempt: KnowledgeBaseManusV2AttachmentAttempt;
   minimumExpirySeconds: number;
 }): Promise<CandidateInspection> {
@@ -989,9 +993,224 @@ async function persistReadyMapping(input: {
   };
 }
 
+/** Complete-byte uploads have their own durable ledger states. The transport
+ * journal fences response loss; recovery may observe the same upload but never
+ * allocates a replacement merely because its response was lost. */
+export async function ensureKnowledgeBaseZhipuMapping(input: {
+  claim: KnowledgeBaseRecoveryClaim;
+  clientForGeneration: (generation: number) => DashboardAgentClient;
+  source: LocalAttachmentSource;
+  attachmentIndex: number;
+}) {
+  await renewKnowledgeBaseTurnLease({
+    userId: input.claim.turn.userId,
+    turnId: input.claim.turn.id,
+    leaseToken: input.claim.leaseToken,
+  });
+  let attempt = existingAttempt(input);
+  const mapping = existingMapping(input);
+  const minimumExpirySeconds =
+    Math.floor(Date.now() / 1000) + ENSURE_MINIMUM_USABLE_SECONDS;
+  if (
+    attempt?.state === "complete_upload_accepted" ||
+    (mapping &&
+      (!attempt || attempt.providerGeneration <= mapping.providerGeneration))
+  ) {
+    const known =
+      attempt ??
+      attachmentAttempt({
+        ...input,
+        providerGeneration: mapping!.providerGeneration,
+        state: "complete_upload_accepted",
+        file: {
+          fileId: mapping!.upstreamFileId,
+          filename: mapping!.filename,
+          uploadUrl: "",
+          uploadExpiresAt: mapping!.expiresAt,
+          requestId: null,
+        },
+      });
+    const inspection = await inspectCandidate({
+      client: input.clientForGeneration(known.providerGeneration),
+      attempt: known,
+      minimumExpirySeconds,
+    });
+    if (inspection.state === "ready") {
+      const ready = mappingFromCandidate({
+        attempt: known,
+        detail: inspection.detail,
+        mimeEvidence: inspection.mimeEvidence,
+      });
+      await persistReadyMapping({ claim: input.claim, mapping: ready });
+      return ready;
+    }
+    if (inspection.state === "unresolved")
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: inspection.code,
+      });
+    if (inspection.state === "integrity_conflict")
+      throw attachmentIntegrityError(
+        `FrontMind 附件身份与冻结源不一致（${inspection.code}）`,
+      );
+    attempt = {
+      ...known,
+      state: "unusable",
+      code: inspection.code,
+      recordedAt: new Date().toISOString(),
+    };
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  if (attempt?.state === "create_rejected")
+    throw localPreparationError("FrontMind 附件完整上传已被明确拒绝");
+  if (attempt?.state === "create_retry_wait") {
+    const wait = Date.parse(attempt.nextRetryAt ?? "") - Date.now();
+    if (!Number.isFinite(wait))
+      throw localPreparationError("FrontMind 附件重试时间无效");
+    if (wait > 0)
+      throw new KnowledgeBaseAttachmentsProcessingError(
+        0,
+        1,
+        Math.max(250, Math.min(60_000, wait)),
+        attempt.code ?? undefined,
+      );
+    attempt = {
+      ...attempt,
+      state: "creating",
+      nextRetryAt: null,
+      recordedAt: new Date().toISOString(),
+    };
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  const generation =
+    attempt?.state === "unusable"
+      ? attempt.providerGeneration + 1
+      : (attempt?.providerGeneration ?? 1);
+  if (generation > 2)
+    throw attachmentLifecycleExhaustedError(
+      "FrontMind 附件两次失效，当前构建已局部隔离",
+    );
+  if (!attempt || attempt.state === "unusable") {
+    attempt = attachmentAttempt({
+      ...input,
+      providerGeneration: generation,
+      state: "creating",
+    });
+    await persistAttempt({ claim: input.claim, attempt });
+  }
+  if (!["creating", "complete_upload_outcome_unknown"].includes(attempt.state))
+    throw localPreparationError("FrontMind 完整上传状态不兼容冻结提供方");
+  try {
+    const uploaded = await input
+      .clientForGeneration(generation)
+      .uploadFile({
+        filename: input.source.filename,
+        bytes: input.source.bytes,
+        contentType: input.source.mimeType,
+        minimumUsableSeconds: ENSURE_MINIMUM_USABLE_SECONDS,
+        confirmationPolicy: "kb_frozen_source_advisory",
+      });
+    if (uploaded.uploadUrl)
+      throw attachmentIntegrityError("完整字节上传不能包含签名 PUT 地址");
+    const accepted = attachmentAttempt({
+      ...input,
+      providerGeneration: generation,
+      state: "complete_upload_accepted",
+      file: uploaded,
+      mimeEvidence: providerMimeEvidence({
+        filename: input.source.filename,
+        expectedContentType: input.source.mimeType,
+        detail: uploaded.detail,
+      }),
+    });
+    await persistAttempt({ claim: input.claim, attempt: accepted });
+    const inspection = await inspectCandidate({
+      client: input.clientForGeneration(generation),
+      attempt: accepted,
+      minimumExpirySeconds,
+    });
+    if (inspection.state !== "ready") {
+      if (inspection.state === "integrity_conflict")
+        throw attachmentIntegrityError(
+          `FrontMind 附件身份与冻结源不一致（${inspection.code}）`,
+        );
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: inspection.code,
+      });
+    }
+    const ready = mappingFromCandidate({
+      attempt: accepted,
+      detail: inspection.detail,
+      mimeEvidence: inspection.mimeEvidence,
+    });
+    await persistReadyMapping({ claim: input.claim, mapping: ready });
+    return ready;
+  } catch (error) {
+    // Metadata or mapping persistence can fail after complete_upload_accepted;
+    // retain that acknowledged id for the next authoritative inspection.
+    const current = existingAttempt(input);
+    if (current?.state === "complete_upload_accepted") throw error;
+    if (error instanceof ManusV2ApiError && error.outcomeUnknown) {
+      if (attempt.state !== "complete_upload_outcome_unknown")
+        await persistAttempt({
+          claim: input.claim,
+          attempt: {
+            ...attempt,
+            state: "complete_upload_outcome_unknown",
+            code: error.code,
+            recordedAt: new Date().toISOString(),
+          },
+        });
+      throw unresolvedCandidateError({
+        filename: input.source.filename,
+        code: error.code,
+      });
+    }
+    if (
+      error instanceof ManusV2ApiError &&
+      error.operation === "file.upload" &&
+      !error.outcomeUnknown
+    ) {
+      const count = (attempt.rejectionCount ?? 0) + 1;
+      const retry =
+        error.retryable &&
+        error.status === 429 &&
+        count <= MAX_EXPLICIT_FILE_REJECTION_RETRIES;
+      const delay = knowledgeBaseManusV2FileRejectionRetryDelay({
+        mappingKey: attempt.mappingKey,
+        rejectionCount: count,
+        providerRetryAfterMs: error.retryAfterMs,
+      });
+      await persistAttempt({
+        claim: input.claim,
+        attempt: {
+          ...attempt,
+          state: retry ? "create_retry_wait" : "create_rejected",
+          code: error.code,
+          rejectionCount: count,
+          ...(retry
+            ? { nextRetryAt: new Date(Date.now() + delay).toISOString() }
+            : {}),
+          recordedAt: new Date().toISOString(),
+        },
+      });
+      if (retry)
+        throw new KnowledgeBaseAttachmentsProcessingError(
+          0,
+          1,
+          delay,
+          error.code,
+        );
+      throw localPreparationError("FrontMind 附件完整上传已被明确拒绝", error);
+    }
+    throw error;
+  }
+}
+
 async function ensureOneMapping(input: {
   claim: KnowledgeBaseRecoveryClaim;
-  client: ManusV2Client;
+  client: DashboardAgentClient;
   source: LocalAttachmentSource;
   attachmentIndex: number;
 }) {
@@ -1621,7 +1840,16 @@ async function ensureOneMapping(input: {
  */
 export async function ensureKnowledgeBaseManusV2Attachments(input: {
   claim: KnowledgeBaseRecoveryClaim;
-  credential: Pick<DecryptedCredential, "id" | "userId" | "apiKey">;
+  credential: Pick<
+    DecryptedCredential,
+    | "id"
+    | "userId"
+    | "apiKey"
+    | "version"
+    | "provider"
+    | "upstreamModel"
+    | "upstreamEffort"
+  >;
   baseUrl: string;
 }): Promise<KnowledgeBaseManusV2ResolvedAttachment[]> {
   const { claim } = input;
@@ -1643,10 +1871,41 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       "FrontMind 附件映射的用户、credential 或 frozen turn 所有权不一致",
     );
   }
-  const client = new ManusV2Client({
-    baseUrl: input.baseUrl,
+  const client = createDashboardAgentClient({
+    provider: input.credential.provider ?? "manus",
     apiKey: input.credential.apiKey,
+    credentialId: input.credential.id,
+    credentialVersion: input.credential.version,
+    accountUserId: claim.turn.userId,
+    credentialOwnerUserId: input.credential.userId,
+    intentId: claim.turn.id,
+    upstreamModel: input.credential.upstreamModel,
+    upstreamEffort: input.credential.upstreamEffort,
+    baseUrl: input.baseUrl,
   });
+  const ensureMapping = (entry: {
+    claim: KnowledgeBaseRecoveryClaim;
+    client: DashboardAgentClient;
+    source: LocalAttachmentSource;
+    attachmentIndex: number;
+  }) =>
+    input.credential.provider === "zhipu"
+      ? ensureKnowledgeBaseZhipuMapping({
+          ...entry,
+          clientForGeneration: (generation) =>
+            createDashboardAgentClient({
+              provider: "zhipu",
+              apiKey: input.credential.apiKey,
+              credentialId: input.credential.id,
+              credentialVersion: input.credential.version,
+              accountUserId: claim.turn.userId,
+              credentialOwnerUserId: input.credential.userId,
+              intentId: `${claim.turn.id}:attachment:${entry.attachmentIndex}:generation:${generation}`,
+              upstreamModel: input.credential.upstreamModel,
+              upstreamEffort: input.credential.upstreamEffort,
+            }),
+        })
+      : ensureOneMapping(entry);
   const sources = await resolveLocalSources(claim);
   const mappings: Array<KnowledgeBaseManusV2AttachmentMapping | null> = [];
   const inlineAttachments = new Map<
@@ -1668,7 +1927,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
       continue;
     }
     mappings.push(
-      await ensureOneMapping({
+      await ensureMapping({
         claim,
         client,
         source,
@@ -1809,7 +2068,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
             "FrontMind 附件最终复核超出有界替换次数",
           );
         }
-        mappings[attachmentIndex] = await ensureOneMapping({
+        mappings[attachmentIndex] = await ensureMapping({
           claim,
           client,
           source,

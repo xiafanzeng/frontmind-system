@@ -26,7 +26,10 @@ import { COOKIE_NAME } from "../shared/const";
 import {
   DEFAULT_MANAGED_AGENT_PROFILE,
   managedAgentProfileModel,
+  managedAgentProfileEffort,
   normalizeManagedAgentProfile,
+  type AgentProvider,
+  type AgentUpstreamEffort,
   type ManagedAgentProfile,
 } from "../shared/manus-agent-profile";
 import {
@@ -68,6 +71,10 @@ import { isFileResourceContentExpired } from "./file-content-retention";
 import { removeStoredPresalesFile } from "./presales-file-store";
 import { getUpstreamBaseUrl } from "./upstream-config";
 import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
+import {
+  ZhipuManagedClient,
+  ZhipuManagedError,
+} from "./providers/zhipu-managed-client";
 import {
   acquireManagedUploadDeletionFence,
   advanceManagedUploadAccountDeletionFence,
@@ -197,7 +204,9 @@ export type DecryptedCredential = {
   status: "active" | "retired";
   verifiedAt: Date | null;
   agentProfile: ManagedAgentProfile;
-  upstreamModel: "manus-1.6" | "manus-1.6-max";
+  provider: AgentProvider;
+  upstreamModel: string;
+  upstreamEffort: AgentUpstreamEffort | null;
 };
 
 export type KnowledgeBaseUploadReservationCredential = DecryptedCredential & {
@@ -225,7 +234,9 @@ export type CredentialStatus = {
   status: "active" | "retired" | "invalid" | null;
   verifiedAt: number | null;
   agentProfile: ManagedAgentProfile;
-  upstreamModel: "manus-1.6" | "manus-1.6-max";
+  provider: AgentProvider;
+  upstreamModel: string;
+  upstreamEffort: AgentUpstreamEffort | null;
 };
 
 type LoginAttempt = {
@@ -1187,13 +1198,26 @@ export async function discardManagedUploadProviderFileForRetirement(
       throw new Error("MANAGED_UPLOAD_RETIREMENT_CREDENTIAL_UNAVAILABLE");
     }
     try {
-      await new ManusV2Client({
-        baseUrl: getUpstreamBaseUrl(),
-        apiKey: credential.apiKey,
-        timeoutMs: 5_000,
-      }).deleteFile(target.fileId);
+      if (credential.provider === "zhipu") {
+        await new ZhipuManagedClient({
+          apiKey: credential.apiKey,
+          requestTimeoutMs: 5_000,
+        }).deleteFile(target.fileId);
+      } else {
+        await new ManusV2Client({
+          baseUrl: getUpstreamBaseUrl(),
+          apiKey: credential.apiKey,
+          timeoutMs: 5_000,
+        }).deleteFile(target.fileId);
+      }
     } catch (error) {
-      if (!(error instanceof ManusV2ApiError && error.status === 404)) {
+      if (
+        !(
+          (error instanceof ManusV2ApiError ||
+            error instanceof ZhipuManagedError) &&
+          error.status === 404
+        )
+      ) {
         throw error;
       }
     }
@@ -1855,9 +1879,14 @@ export function getApiKeyFingerprint(apiKey: string) {
  * two credential versions can access the same upstream task or file.
  */
 export function credentialsUseSameUpstreamApiKey(
-  left: Pick<DecryptedCredential, "apiKey" | "fingerprint">,
-  right: Pick<DecryptedCredential, "apiKey" | "fingerprint">,
+  left: Pick<DecryptedCredential, "apiKey" | "fingerprint"> & {
+    provider?: AgentProvider;
+  },
+  right: Pick<DecryptedCredential, "apiKey" | "fingerprint"> & {
+    provider?: AgentProvider;
+  },
 ) {
+  if ((left.provider ?? "manus") !== (right.provider ?? "manus")) return false;
   if (left.fingerprint !== right.fingerprint) return false;
   const leftBytes = Buffer.from(left.apiKey, "utf8");
   const rightBytes = Buffer.from(right.apiKey, "utf8");
@@ -1918,6 +1947,29 @@ export async function validateUpstreamApiKey(apiKey: string) {
   }
 }
 
+/** New managed-account keys use Zhipu; explicit historical keys retain their provider. */
+export async function validateManagedUpstreamApiKey(
+  apiKey: string,
+  provider: AgentProvider = "zhipu",
+) {
+  if (provider === "manus") return validateUpstreamApiKey(apiKey);
+  try {
+    const result = await new ZhipuManagedClient({ apiKey }).request(
+      "GET",
+      "/v1/agents?limit=1",
+    );
+    if (!Array.isArray(result.data)) throw new Error("INVALID_RESPONSE");
+  } catch (error) {
+    throw new AuthServiceError(
+      error instanceof ZhipuManagedError &&
+      (error.status === 401 || error.status === 403)
+        ? "INVALID_CREDENTIAL"
+        : "UPSTREAM_UNAVAILABLE",
+      "智谱 Managed Agents 凭据验证失败",
+    );
+  }
+}
+
 function credentialAgentProfile(credential?: unknown): ManagedAgentProfile {
   return normalizeManagedAgentProfile(
     credential && typeof credential === "object"
@@ -1926,11 +1978,46 @@ function credentialAgentProfile(credential?: unknown): ManagedAgentProfile {
   );
 }
 
-function credentialProfileProjection(credential?: unknown) {
+export function credentialProfileProjection(credential?: unknown) {
   const agentProfile = credentialAgentProfile(credential);
+  const row =
+    credential && typeof credential === "object"
+      ? (credential as {
+          provider?: unknown;
+          upstreamModel?: unknown;
+          upstreamEffort?: unknown;
+        })
+      : {};
+  if (
+    row.provider != null &&
+    row.provider !== "manus" &&
+    row.provider !== "zhipu"
+  ) {
+    throw new AuthServiceError("INVALID_CREDENTIAL", "凭据执行服务类型无效");
+  }
+  const provider: AgentProvider = row.provider === "zhipu" ? "zhipu" : "manus";
+  const upstreamModel =
+    typeof row.upstreamModel === "string" && row.upstreamModel.trim()
+      ? row.upstreamModel.trim()
+      : managedAgentProfileModel(agentProfile, provider);
+  const upstreamEffort: AgentUpstreamEffort | null =
+    provider === "manus"
+      ? null
+      : row.upstreamEffort == null
+        ? managedAgentProfileEffort(agentProfile)
+        : row.upstreamEffort === "low" ||
+            row.upstreamEffort === "high" ||
+            row.upstreamEffort === "max"
+          ? row.upstreamEffort
+          : null;
+  if (provider === "zhipu" && upstreamEffort === null) {
+    throw new AuthServiceError("INVALID_CREDENTIAL", "凭据推理档位无效");
+  }
   return {
     agentProfile,
-    upstreamModel: managedAgentProfileModel(agentProfile),
+    provider,
+    upstreamModel,
+    upstreamEffort,
   } as const;
 }
 
@@ -2039,6 +2126,14 @@ export async function replaceApiCredentialInTransaction(input: {
     ...encrypted,
     fingerprint,
     agentProfile,
+    provider: "zhipu" as const,
+    upstreamModel: managedAgentProfileModel(
+      agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE,
+      "zhipu",
+    ),
+    upstreamEffort: managedAgentProfileEffort(
+      agentProfile ?? DEFAULT_MANAGED_AGENT_PROFILE,
+    ),
     status: "active" as const,
     validationStatus: "verified" as const,
     verifiedAt: now,
@@ -2055,7 +2150,7 @@ export async function replaceApiCredential(
   userId: number,
   apiKey: string,
   agentProfile: ManagedAgentProfile = DEFAULT_MANAGED_AGENT_PROFILE,
-  validator: (apiKey: string) => Promise<void> = validateUpstreamApiKey,
+  validator: (apiKey: string) => Promise<void> = validateManagedUpstreamApiKey,
 ): Promise<CredentialStatus> {
   const db = await requireDb();
   await validator(apiKey);
@@ -2563,6 +2658,9 @@ export async function deleteActiveApiCredentialInTransaction(input: {
     encryptionIv: randomBytes(12).toString("base64"),
     encryptionAuthTag: randomBytes(16).toString("base64"),
     fingerprint: randomBytes(16).toString("hex"),
+    provider: credentialProfileProjection(latest).provider,
+    upstreamModel: credentialProfileProjection(latest).upstreamModel,
+    upstreamEffort: credentialProfileProjection(latest).upstreamEffort,
     agentProfile:
       typeof (latest as { agentProfile?: unknown }).agentProfile === "string"
         ? (latest as { agentProfile: string }).agentProfile
@@ -3108,6 +3206,7 @@ export type UnboundUpstreamFileDiscardContext = {
   projectAssignmentId: string | null;
   apiCredentialId: string;
   apiKey: string;
+  credential: DecryptedCredential;
 };
 
 /**
@@ -3218,12 +3317,23 @@ export async function discardUnboundUpstreamFileInTransaction(input: {
     );
   }
 
+  const credential: DecryptedCredential = {
+    id: row.credential.id,
+    userId: row.credential.userId,
+    version: row.credential.version,
+    apiKey: decryptApiKey(row.credential),
+    fingerprint: row.credential.fingerprint,
+    status: row.credential.status,
+    verifiedAt: row.credential.verifiedAt,
+    ...credentialProfileProjection(row.credential),
+  };
   await input.discard({
     fileId: input.fileId,
     userId: row.resource.userId,
     projectAssignmentId: row.resource.projectAssignmentId,
     apiCredentialId: row.resource.apiCredentialId,
-    apiKey: decryptApiKey(row.credential),
+    apiKey: credential.apiKey,
+    credential,
   });
   await input.executor
     .delete(upstreamResources)

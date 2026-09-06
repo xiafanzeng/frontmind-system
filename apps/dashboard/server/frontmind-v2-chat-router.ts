@@ -21,6 +21,8 @@ import {
   siteProjects,
 } from "../drizzle/schema";
 import { getDecryptedCredentialForAccountById } from "./auth-service";
+import type { DecryptedCredential } from "./auth-service";
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { getDb } from "./db";
 import {
   latestManusV2WaitingDetail,
@@ -94,6 +96,7 @@ import {
 import { GENERAL_CHAT_PARTIAL_RESULT_ERROR_CODE } from "../shared/frontmind-general-chat-terminal";
 import {
   generalAgentModelProfileModel,
+  generalAgentModelProfileEffort,
   generalAgentModelProfileSchema,
   type GeneralAgentModelProfile,
 } from "../shared/manus-agent-profile";
@@ -329,11 +332,31 @@ async function currentSiteOpsComposerUploadEpoch(
   };
 }
 
-function clientFor(apiKey: string, accountUserId: number) {
-  return new ManusV2Client({
-    baseUrl: getUpstreamBaseUrl(),
-    apiKey,
-    rateLimitScope: `managed-user:${accountUserId}`,
+function clientFor(
+  credential: DecryptedCredential,
+  accountUserId: number,
+  operation?: AgentOperation,
+  task?: AgentTask,
+  intentId?: string,
+) {
+  return createCredentialAgentClient(credential, {
+    accountUserId,
+    ...(operation
+      ? {
+          operationId: operation.id,
+          intentId: operation.id,
+          model: operation.upstreamModel,
+          ...(operation.provider === "zhipu"
+            ? {
+                effort: generalAgentModelProfileEffort(
+                  generalAgentModelProfileSchema.parse(operation.publicProfile),
+                ),
+              }
+            : {}),
+        }
+      : {}),
+    ...(task ? { localTaskId: task.id } : {}),
+    ...(intentId ? { intentId } : {}),
   });
 }
 
@@ -408,6 +431,7 @@ async function streamToBuffer(stream: Readable, maxBytes: number) {
 
 async function ensureProviderAttachments(input: {
   operation: AgentOperation;
+  task: AgentTask;
   credential: NonNullable<
     Awaited<ReturnType<typeof getDecryptedCredentialForAccountById>>
   >;
@@ -419,8 +443,10 @@ async function ensureProviderAttachments(input: {
     localAssetIds: input.localAssetIds,
   });
   const client = clientFor(
-    input.credential.apiKey,
+    input.credential,
     input.operation.accountUserId!,
+    input.operation,
+    input.task,
   );
   const attachments = [];
   for (const asset of assets) {
@@ -585,18 +611,44 @@ async function localizeArtifact(input: {
   )[0];
   if (existing && (await readStoredPresalesFile(artifactId))) return existing;
 
-  const url = assertSafeExternalUrl(input.attachment.url);
-  if (new URL(url).protocol !== "https:") {
-    throw new ChatV2HttpError("UNSAFE_ARTIFACT_URL", 502);
+  let response: {
+    status: number;
+    headers: Record<string, unknown>;
+    data: Readable;
+  };
+  if (input.operation.provider === "zhipu") {
+    const credential = await getDecryptedCredentialForAccountById(
+      input.operation.accountUserId!,
+      input.operation.apiCredentialId,
+    );
+    if (
+      !credential ||
+      credential.provider !== "zhipu" ||
+      credential.version !== input.operation.credentialVersion ||
+      !input.attachment.url.startsWith("zhipu-file:")
+    ) {
+      throw new ChatV2HttpError("TASK_CREDENTIAL_UNAVAILABLE", 409);
+    }
+    response = await clientFor(
+      credential,
+      input.operation.accountUserId!,
+      input.operation,
+      input.task,
+    ).downloadArtifact!(input.attachment.url.slice("zhipu-file:".length));
+  } else {
+    const url = assertSafeExternalUrl(input.attachment.url);
+    if (new URL(url).protocol !== "https:") {
+      throw new ChatV2HttpError("UNSAFE_ARTIFACT_URL", 502);
+    }
+    response = await axios.get<Readable>(url, {
+      ...safeExternalRequestOptions,
+      responseType: "stream",
+      timeout: 120_000,
+      maxContentLength: MAX_ARTIFACT_BYTES,
+      maxBodyLength: MAX_ARTIFACT_BYTES,
+      validateStatus: () => true,
+    });
   }
-  const response = await axios.get<Readable>(url, {
-    ...safeExternalRequestOptions,
-    responseType: "stream",
-    timeout: 120_000,
-    maxContentLength: MAX_ARTIFACT_BYTES,
-    maxBodyLength: MAX_ARTIFACT_BYTES,
-    validateStatus: () => true,
-  });
   if (response.status !== 200) {
     response.data.destroy();
     throw new ChatV2HttpError("ARTIFACT_DOWNLOAD_FAILED", 502, true);
@@ -2839,8 +2891,10 @@ async function reconcileUnknownCreate(input: {
     : null;
   if (!attachmentManifest) return input;
   const result = await clientFor(
-    input.credential.apiKey,
+    input.credential,
     input.operation.accountUserId!,
+    input.operation,
+    input.task,
   ).findCreatedTask({
     title: input.task.title,
     promptSha256: evidence.promptSha256,
@@ -3044,7 +3098,12 @@ async function syncTask(input: { userId: number; localTaskId: string }) {
   if (!owned.task.providerTaskId) return owned;
 
   try {
-    const client = clientFor(credential.apiKey, input.userId);
+    const client = clientFor(
+      credential,
+      input.userId,
+      owned.operation,
+      owned.task,
+    );
     const [events, detail] = await Promise.all([
       client.listAllMessages({
         taskId: owned.task.providerTaskId,
@@ -3494,6 +3553,7 @@ async function reserveCreate(input: {
     await db.transaction(async (tx) => {
       await tx.insert(agentOperations).values({
         id: operationId,
+        provider: input.credential.provider ?? "manus",
         scope: "managed_user",
         accountUserId: input.userId,
         presalesProjectId: null,
@@ -3506,7 +3566,10 @@ async function reserveCreate(input: {
         apiCredentialId: input.credential.id,
         credentialVersion: input.credential.version,
         publicProfile: input.value.modelProfile,
-        upstreamModel: generalAgentModelProfileModel(input.value.modelProfile),
+        upstreamModel: generalAgentModelProfileModel(
+          input.value.modelProfile,
+          input.credential.provider,
+        ),
         status: "queued",
       });
       await tx.insert(agentTasks).values({
@@ -3529,7 +3592,10 @@ async function reserveCreate(input: {
         localAssetIds: input.value.localAssetIds,
         operationId,
         localTaskId,
-        model: generalAgentModelProfileModel(input.value.modelProfile),
+        model: generalAgentModelProfileModel(
+          input.value.modelProfile,
+          input.credential.provider,
+        ),
         modelProfile: input.value.modelProfile,
         continuation: false,
       });
@@ -3707,8 +3773,11 @@ async function sendProviderMessage(input: {
     }
   }
   const client = clientFor(
-    input.credential.apiKey,
+    input.credential,
     input.operation.accountUserId!,
+    input.operation,
+    input.task,
+    input.turnId,
   );
   const reconcileReservedSend = async (evidence: Record<string, unknown>) => {
     if (evidence.status === "acknowledged") return true;
@@ -3823,6 +3892,7 @@ async function sendProviderMessage(input: {
     }
     attachments = await ensureProviderAttachments({
       operation: input.operation,
+      task: input.task,
       credential: input.credential,
       localAssetIds: input.localAssetIds,
     });
@@ -4702,6 +4772,7 @@ router.post("/tasks", async (req, res) => {
       try {
         attachments = await ensureProviderAttachments({
           operation: reserved.operation,
+          task: reserved.task,
           credential: req.frontmindCredential,
           localAssetIds: value.localAssetIds,
         });
@@ -4766,8 +4837,10 @@ router.post("/tasks", async (req, res) => {
         null;
       try {
         created = await clientFor(
-          req.frontmindCredential.apiKey,
+          req.frontmindCredential,
           req.frontmindUser.id,
+          reserved.operation,
+          reserved.task,
         ).createTask({
           prompt: value.prompt,
           attachments,
@@ -5036,8 +5109,11 @@ router.post(
       if (marker.id === markerId) {
         try {
           await clientFor(
-            credential.apiKey,
+            credential,
             req.frontmindUser.id,
+            owned.operation,
+            owned.task,
+            marker.id,
           ).confirmAction({
             taskId: owned.task.providerTaskId,
             eventId: providerEventId,

@@ -204,6 +204,12 @@ importers:
       '@vitejs/plugin-react':
         specifier: 5.0.4
         version: 5.0.4(vite@7.1.9(@types/node@24.7.0)(jiti@2.6.1)(lightningcss@1.33.0)(tsx@4.20.6)(yaml@2.9.0))
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
       astro:
         specifier: 7.2.4
         version: 7.2.4(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@24.7.0)(jiti@2.6.1)(tsx@4.20.6)(yaml@2.9.0)

@@ -98,11 +98,14 @@ import {
 } from "../../shared/siteops-workflow";
 import {
   managedAgentProfileSchema,
+  managedAgentProfileModel,
+  managedAgentProfileEffort,
   normalizeManagedAgentProfile,
   type ManagedAgentProfile,
 } from "../../shared/manus-agent-profile";
 import {
   AuthServiceError,
+  credentialProfileProjection,
   getDecryptedCredentialForUser,
   type AuthenticatedUser,
 } from "../auth-service";
@@ -3877,19 +3880,39 @@ export function resolveSiteOpsAgentProfile(input: {
 }
 
 export function freezeSiteOpsCustomerAiCredential(input: {
-  credential: { id: string; version: number; agentProfile?: unknown };
+  credential: {
+    id: string;
+    version: number;
+    agentProfile?: unknown;
+    provider?: unknown;
+    upstreamModel?: unknown;
+    upstreamEffort?: unknown;
+  };
   requestedProfile?: unknown;
   parentOperationInput?: unknown;
 }) {
+  const profile = resolveSiteOpsAgentProfile({
+    requested: input.requestedProfile,
+    parentOperationInput: input.parentOperationInput,
+    credentialDefault: input.credential.agentProfile,
+  });
+  const credential = credentialProfileProjection(input.credential);
   return {
     manusCredentialId: input.credential.id,
     manusCredentialVersion: input.credential.version,
     credentialScope: "customer" as const,
-    agentProfile: resolveSiteOpsAgentProfile({
-      requested: input.requestedProfile,
-      parentOperationInput: input.parentOperationInput,
-      credentialDefault: input.credential.agentProfile,
-    }),
+    agentProfile: profile,
+    provider: credential.provider,
+    upstreamModel:
+      credential.provider === "zhipu"
+        ? credential.upstreamModel
+        : managedAgentProfileModel(profile),
+    upstreamEffort:
+      credential.provider === "zhipu"
+        ? profile === credential.agentProfile
+          ? credential.upstreamEffort
+          : managedAgentProfileEffort(profile)
+        : null,
   };
 }
 
@@ -5417,7 +5440,7 @@ async function selectVisualSample(
     },
     kind: parentBuildId ? "build_revision" : "site_build",
     buildId,
-    provider: "manus",
+    provider: aiCredentialBinding.provider,
   });
   if (parentBuildId === null && input.project.knowledgeInputEpochId !== null) {
     const release = process.env.FRONTMIND_BUILD_SHA?.trim() ?? "";
@@ -5787,7 +5810,7 @@ async function handleRevision(
     },
     kind: "build_revision",
     buildId,
-    provider: "manus",
+    provider: aiCredentialBinding.provider,
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
@@ -6128,7 +6151,7 @@ async function handleSocialPackage(
       ...aiCredentialBinding,
     },
     kind: "social_package",
-    provider: "manus",
+    provider: aiCredentialBinding.provider,
   });
   await tx.insert(socialPackages).values({
     id: packageId,

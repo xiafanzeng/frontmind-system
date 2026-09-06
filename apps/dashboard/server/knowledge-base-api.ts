@@ -1,3 +1,4 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
 import axios from "axios";
 import {
   and,
@@ -949,11 +950,19 @@ export function selectMaterializedKnowledgeBaseAttachmentCredential<T>(input: {
 }
 
 export function knowledgeBaseUpstreamModelForCredential(credential: {
+  provider?: unknown;
   upstreamModel?: unknown;
 }) {
   if (
-    credential.upstreamModel === "manus-1.6" ||
-    credential.upstreamModel === "manus-1.6-max"
+    credential.provider === "zhipu" &&
+    credential.upstreamModel === "glm-5.3"
+  ) {
+    return credential.upstreamModel;
+  }
+  if (
+    (credential.provider === undefined || credential.provider === "manus") &&
+    (credential.upstreamModel === "manus-1.6" ||
+      credential.upstreamModel === "manus-1.6-max")
   ) {
     return credential.upstreamModel;
   }
@@ -4155,6 +4164,8 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
         try {
           return await input.downloadArchive({
             descriptor: source,
+            credential,
+            accountUserId: claim.turn.userId,
             apiKey: credential.apiKey,
             baseUrl: prepared.baseUrl,
             // The exact current Skill hash is checked before any Provider
@@ -4592,7 +4603,13 @@ async function dispatchKnowledgeBaseRecoveryClaim(
   const beginDispatch =
     dependencies.beginDispatch ?? beginKnowledgeBaseManusV2Dispatch;
   const createClient =
-    dependencies.createClient ?? ((input) => new ManusV2Client(input));
+    dependencies.createClient ??
+    ((input) =>
+      createCredentialAgentClient(credential, {
+        baseUrl: input.baseUrl,
+        accountUserId: claim.turn.userId,
+        intentId: claim.turn.id,
+      }));
   const bindSubmission =
     dependencies.bindSubmission ?? bindKnowledgeBaseManusV2Submission;
   const downloadArchive = dependencies.downloadArchive ?? downloadArchiveBytes;

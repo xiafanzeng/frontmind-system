@@ -9,7 +9,7 @@ const authMocks = vi.hoisted(() => ({
   getApiCredentialStatus: vi.fn(),
   getDecryptedCredentialForUser: vi.fn(),
   replaceApiCredential: vi.fn(),
-  validateUpstreamApiKey: vi.fn(),
+  validateManagedUpstreamApiKey: vi.fn(),
 }));
 
 vi.mock("./auth-service", async (importOriginal) => ({
@@ -86,6 +86,7 @@ describe("credential ownership policy", () => {
       fingerprint: "fp_test",
       status: "active",
       verifiedAt: new Date(),
+      provider: "manus",
     });
     authMocks.replaceApiCredential.mockResolvedValue({
       configured: true,
@@ -94,7 +95,7 @@ describe("credential ownership policy", () => {
       verifiedAt: Date.now(),
     });
     authMocks.deleteActiveApiCredential.mockResolvedValue(undefined);
-    authMocks.validateUpstreamApiKey.mockResolvedValue(undefined);
+    authMocks.validateManagedUpstreamApiKey.mockResolvedValue(undefined);
   });
 
   it.each(["set", "replace", "delete"] as const)(
@@ -124,7 +125,7 @@ describe("credential ownership policy", () => {
       code: "FORBIDDEN",
     });
     expect(authMocks.getApiCredentialStatus).not.toHaveBeenCalled();
-    expect(authMocks.validateUpstreamApiKey).not.toHaveBeenCalled();
+    expect(authMocks.validateManagedUpstreamApiKey).not.toHaveBeenCalled();
   });
 
   it("routes system-administrator writes to the unified API and people console", async () => {

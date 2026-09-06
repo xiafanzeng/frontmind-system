@@ -250,7 +250,7 @@ export function publicSiteOpsProviderResult(
   provider: string | null,
   result: SiteOpsProviderResult,
 ): SiteOpsProviderResult {
-  if (provider !== "manus") return result;
+  if (provider !== "manus" && provider !== "zhipu") return result;
   if (result.status === "pending") return result;
   if (result.status === "succeeded") {
     return result.message

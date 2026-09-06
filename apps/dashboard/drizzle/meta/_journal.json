@@ -421,6 +421,13 @@
       "when": 1788623016083,
       "tag": "0059_website_zhipu_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "5",
+      "when": 1788651412396,
+      "tag": "0060_dashboard_zhipu_provider",
+      "breakpoints": true
     }
   ]
 }

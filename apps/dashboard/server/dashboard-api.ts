@@ -1,3 +1,5 @@
+import type { DecryptedCredential } from "./auth-service";
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -6542,6 +6544,8 @@ function knowledgeArchiveLocalReadFailure(error: unknown) {
 
 export async function downloadArchiveBytes(input: {
   descriptor: KnowledgeArchiveDescriptor;
+  credential?: DecryptedCredential;
+  accountUserId?: number;
   apiKey: string;
   baseUrl: string;
   allowProviderFileIdFallback?: boolean;
@@ -6549,13 +6553,40 @@ export async function downloadArchiveBytes(input: {
   let filename = input.descriptor.filename;
   let downloadUrl: string | undefined;
   let headers: Record<string, string> | undefined;
+  let providerResponse:
+    | {
+        status: number;
+        headers: Record<string, string>;
+        data: import("node:stream").Readable;
+      }
+    | undefined;
   const fileId =
     input.descriptor.fileId ||
     (input.descriptor.url
       ? knowledgeArchiveFileIdFromUrl(input.descriptor.url)
       : undefined);
 
-  if (fileId) {
+  if (input.credential?.provider === "zhipu") {
+    const descriptorId = input.descriptor.url?.startsWith("zhipu-file:")
+      ? input.descriptor.url.slice("zhipu-file:".length)
+      : fileId;
+    if (!descriptorId || (fileId && fileId !== descriptorId)) {
+      throw new KnowledgeArchiveDownloadError(
+        "missing_url",
+        "知识库产物缺少一致的供应商文件标识",
+      );
+    }
+    try {
+      const client = createCredentialAgentClient(input.credential, {
+        accountUserId: input.accountUserId,
+      });
+      providerResponse = await client.downloadArtifact!(descriptorId);
+    } catch (error) {
+      throw knowledgeArchiveTransportFailure(error);
+    }
+  }
+
+  if (!providerResponse && fileId) {
     let stored: Awaited<ReturnType<typeof readStoredPresalesFile>>;
     try {
       stored = await readStoredPresalesFile(fileId);
@@ -6633,7 +6664,7 @@ export async function downloadArchiveBytes(input: {
       );
     }
   }
-  if (!downloadUrl && input.descriptor.url) {
+  if (!providerResponse && !downloadUrl && input.descriptor.url) {
     try {
       downloadUrl = assertSafeExternalUrl(input.descriptor.url);
     } catch {
@@ -6644,26 +6675,28 @@ export async function downloadArchiveBytes(input: {
     }
   }
 
-  if (!downloadUrl) {
+  if (!providerResponse && !downloadUrl) {
     throw new KnowledgeArchiveDownloadError(
       "missing_url",
       "知识库文件没有可验证的下载地址",
     );
   }
   const controller = new AbortController();
-  let response: AxiosResponse;
+  let response: Pick<AxiosResponse, "status" | "headers" | "data">;
   try {
-    response = await axios.get(downloadUrl, {
-      ...(headers
-        ? { maxRedirects: 0, proxy: false as const }
-        : safeExternalRequestOptions),
-      headers,
-      responseType: "stream",
-      timeout: 120_000,
-      maxContentLength: MAX_ARCHIVE_BYTES,
-      signal: controller.signal,
-      validateStatus: () => true,
-    });
+    response =
+      providerResponse ??
+      (await axios.get(downloadUrl!, {
+        ...(headers
+          ? { maxRedirects: 0, proxy: false as const }
+          : safeExternalRequestOptions),
+        headers,
+        responseType: "stream",
+        timeout: 120_000,
+        maxContentLength: MAX_ARCHIVE_BYTES,
+        signal: controller.signal,
+        validateStatus: () => true,
+      }));
   } catch (error) {
     throw knowledgeArchiveTransportFailure(error);
   }
@@ -6676,7 +6709,7 @@ export async function downloadArchiveBytes(input: {
     let redirectUrl: string;
     try {
       redirectUrl = assertSafeExternalUrl(
-        new URL(String(response.headers.location), downloadUrl).toString(),
+        new URL(String(response.headers.location), downloadUrl!).toString(),
       );
     } catch {
       response.data?.destroy?.();

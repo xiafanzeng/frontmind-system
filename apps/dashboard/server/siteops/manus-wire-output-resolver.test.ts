@@ -94,6 +94,64 @@ function jsonResponse(value: unknown, headers: Record<string, string> = {}) {
 }
 
 describe("SiteOps wire output resolver", () => {
+  it("reads Zhipu JSON only through its bound reader and retains hash and token checks", async () => {
+    const value = { operationToken: token, schemaVersion: 1 };
+    const hash = createHash("sha256")
+      .update(JSON.stringify(value))
+      .digest("hex");
+    const events = (url: string, sha256 = hash) =>
+      [
+        marker(),
+        rejected(),
+        assistant({
+          attachments: [
+            {
+              filename: SITEOPS_WIRE_OUTPUT_FILES.design,
+              content_type: "application/json",
+              url,
+              sha256,
+            },
+          ],
+        }),
+      ] as never;
+    const fetchPinned = vi.fn();
+    const fetchProviderFile = vi.fn(async () => jsonResponse(value));
+    await expect(
+      resolveSiteOpsWireOutput({
+        events: events("zhipu-file:file_123"),
+        operationToken: token,
+        taskCompleted: true,
+        fetchPinned,
+        fetchProviderFile,
+      }),
+    ).resolves.toMatchObject({ value });
+    expect(fetchProviderFile).toHaveBeenCalledWith("file_123");
+    expect(fetchPinned).not.toHaveBeenCalled();
+    for (const input of [
+      { events: events("zhipu-file:file_123") },
+      { events: events("zhipu-file:../secret"), fetchProviderFile },
+      {
+        events: events("zhipu-file:file_123"),
+        fetchProviderFile: async () =>
+          jsonResponse({ operationToken: "other", schemaVersion: 1 }),
+      },
+      {
+        events: events("zhipu-file:file_123", "f".repeat(64)),
+        fetchProviderFile,
+      },
+    ]) {
+      await expect(
+        resolveSiteOpsWireOutput({
+          ...input,
+          operationToken: token,
+          taskCompleted: true,
+          fetchPinned,
+        }),
+      ).rejects.toBeInstanceOf(SiteOpsWireOutputResolutionError);
+    }
+    expect(fetchPinned).not.toHaveBeenCalled();
+  });
+
   it("accepts the exact V2 content-plan attachment in the design phase while preserving strict validation", async () => {
     const planToken =
       "siteops-content-plan:10000000-0000-4000-8000-000000000001:0";

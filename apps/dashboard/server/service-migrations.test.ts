@@ -146,6 +146,7 @@ describe("service portal migration chain", () => {
       "0057_concerned_ares",
       "0058_dashboard_production_parity",
       "0059_website_zhipu_provider",
+      "0060_dashboard_zhipu_provider",
     ]);
   });
 
@@ -186,6 +187,34 @@ describe("service portal migration chain", () => {
         ).toEqual(nullable ? { ...previous, notNull: false } : previous);
       }
     }
+  });
+
+  it("preserves historical credentials and adds nullable frozen Zhipu model settings", async () => {
+    const before = JSON.parse(await migration("meta/0059_snapshot.json"));
+    const after = JSON.parse(await migration("meta/0060_snapshot.json"));
+    const columns = after.tables.api_credentials.columns;
+    expect(columns.provider).toMatchObject({
+      type: "varchar(16)",
+      default: "'manus'",
+      notNull: true,
+    });
+    expect(columns.upstream_model).toMatchObject({
+      type: "varchar(64)",
+      notNull: false,
+    });
+    expect(columns.upstream_effort).toMatchObject({
+      type: "varchar(16)",
+      notNull: false,
+    });
+    delete columns.provider;
+    delete columns.upstream_model;
+    delete columns.upstream_effort;
+    expect(after.tables).toEqual(before.tables);
+    const sql = await migration("0060_dashboard_zhipu_provider.sql");
+    expect(sql.split("--> statement-breakpoint")).toHaveLength(3);
+    expect(sql).not.toMatch(
+      /\b(DROP|DELETE|UPDATE|TRUNCATE|MODIFY|RENAME)\b/iu,
+    );
   });
 
   it("adds only provider routing and recovery fields after the production parity snapshot", async () => {

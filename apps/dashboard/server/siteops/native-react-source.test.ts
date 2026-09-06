@@ -1218,6 +1218,62 @@ describe("native React source archive boundary", () => {
 });
 
 describe("native source binary attachment boundary", () => {
+  it("reads a Zhipu source ZIP only through a bound reader and retains byte limits", async () => {
+    const body = Buffer.from("PK bounded source");
+    const attachment = {
+      filename: FRONTMIND_SITE_SOURCE_ARCHIVE_FILENAME,
+      contentType: FRONTMIND_SITE_SOURCE_ARCHIVE_MIME,
+      url: "zhipu-file:file_123",
+    };
+    const fetchPinned = vi.fn();
+    const fetchProviderFile = vi.fn(
+      async () =>
+        new Response(body, {
+          headers: {
+            "content-type": FRONTMIND_SITE_SOURCE_ARCHIVE_MIME,
+          },
+        }),
+    );
+    await expect(
+      readNativeSourceAttachment({
+        attachment,
+        fetchPinned,
+        fetchProviderFile,
+      }),
+    ).resolves.toEqual(body);
+    expect(fetchProviderFile).toHaveBeenCalledWith("file_123");
+    await expectCode(
+      readNativeSourceAttachment({ attachment, fetchPinned }),
+      "NATIVE_SOURCE_ATTACHMENT_INVALID",
+    );
+    await expectCode(
+      readNativeSourceAttachment({
+        attachment: { ...attachment, url: "zhipu-file:../secret" },
+        fetchPinned,
+        fetchProviderFile,
+      }),
+      "NATIVE_SOURCE_ATTACHMENT_INVALID",
+    );
+    await expectCode(
+      readNativeSourceAttachment({
+        attachment,
+        fetchPinned,
+        fetchProviderFile,
+        maxBytes: 3,
+      }),
+      "NATIVE_SOURCE_LIMIT_EXCEEDED",
+    );
+    await expectCode(
+      readNativeSourceAttachment({
+        attachment: { ...attachment, filename: "input-skill.zip" },
+        fetchPinned,
+        fetchProviderFile,
+      }),
+      "NATIVE_SOURCE_ATTACHMENT_INVALID",
+    );
+    expect(fetchPinned).not.toHaveBeenCalled();
+  });
+
   it("accepts only the exact ZIP filename and MIME from a bounded data URL", async () => {
     const body = Buffer.from("PK bounded source", "utf8");
     await expect(

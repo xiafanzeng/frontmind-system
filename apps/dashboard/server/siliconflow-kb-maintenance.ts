@@ -1,3 +1,4 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
@@ -529,9 +530,8 @@ export async function executeSiliconFlowKnowledgeBaseReset(input: {
     }
     try {
       try {
-        await new ManusV2Client({
-          baseUrl: getUpstreamBaseUrl(),
-          apiKey: credential.apiKey,
+        await createCredentialAgentClient(credential, {
+          accountUserId: input.userId,
         }).deleteFile(resource.upstreamId);
       } catch (error) {
         if (!(error instanceof ManusV2ApiError && error.status === 404)) {

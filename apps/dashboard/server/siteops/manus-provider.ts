@@ -54,6 +54,7 @@ import {
 import { createHostOwnedSiteDesignResultV2 } from "../../shared/siteops-host-design";
 import {
   managedAgentProfileModel,
+  managedAgentProfileEffort,
   managedAgentProfileSchema,
 } from "../../shared/manus-agent-profile";
 import {
@@ -75,7 +76,15 @@ import {
   trustedVisualPreviewBlueprintV3,
   validateDesignAndContentBindings,
 } from "../../shared/siteops-design";
-import { getDecryptedCredentialForUser } from "../auth-service";
+import {
+  credentialProfileProjection,
+  getDecryptedCredentialForUser,
+} from "../auth-service";
+import {
+  createDashboardAgentClient,
+  type DashboardAgentClient,
+  type DashboardAgentClientOptions,
+} from "../providers/dashboard-agent-provider";
 import { getDb } from "../db";
 import { assertUpstreamPromptBudget } from "../upstream-prompt-budget";
 import {
@@ -83,7 +92,6 @@ import {
   latestManusV2WaitingDetail,
   latestManusV2TaskState,
   ManusV2ApiError,
-  ManusV2Client,
   manusV2EventOperationToken,
   manusV2EventsContainOperationToken,
   orderManusV2EventsByProviderRank,
@@ -249,6 +257,9 @@ const PROVIDER_MUTABLE_SOCIAL_PACKAGE_STATUSES = [
 const operationInputSchema = z
   .object({
     credentialScope: z.literal("customer"),
+    provider: z.enum(["manus", "zhipu"]).default("manus"),
+    upstreamModel: z.string().trim().min(1).max(64).optional(),
+    upstreamEffort: z.enum(["low", "high", "max"]).nullable().optional(),
     manusCredentialId: z.string().uuid(),
     manusCredentialVersion: z.number().int().positive(),
     agentProfile: managedAgentProfileSchema.default("frontmind-pro"),
@@ -1077,10 +1088,7 @@ function transitionProviderState(
 type ManusProviderDependencies = {
   getDb?: typeof getDb;
   getCredential?: typeof getDecryptedCredentialForUser;
-  createClient?: (input: {
-    apiKey: string;
-    credentialId: string;
-  }) => ManusV2Client;
+  createClient?: (input: DashboardAgentClientOptions) => DashboardAgentClient;
   readSnapshotArchive?: typeof readKnowledgeSnapshotArchive;
   persistArtifact?: typeof persistSiteOpsArtifact;
   readArtifact?: typeof readSiteOpsArtifact;
@@ -2579,7 +2587,7 @@ function socialOutputSchema(
 }
 
 async function findUniqueCreatedTask(
-  client: ManusV2Client,
+  client: DashboardAgentClient,
   operation: SiteOperation,
   token: string,
 ) {
@@ -2660,7 +2668,9 @@ async function assertFrozenCredential(
   if (
     !credential ||
     credential.userId !== userId ||
-    credential.version !== input.manusCredentialVersion
+    credential.version !== input.manusCredentialVersion ||
+    credential.id !== input.manusCredentialId ||
+    credentialProfileProjection(credential).provider !== input.provider
   ) {
     throw new SiteOpsManusFailure(
       "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
@@ -2668,7 +2678,28 @@ async function assertFrozenCredential(
       "attention_required",
     );
   }
-  return credential;
+  const projection = credentialProfileProjection(credential);
+  if (
+    (input.provider === "zhipu" &&
+      (!input.upstreamModel ||
+        !input.upstreamEffort ||
+        input.upstreamModel !== projection.upstreamModel)) ||
+    (input.provider === "manus" && input.upstreamEffort != null)
+  ) {
+    throw new SiteOpsManusFailure(
+      "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+      "当前账号绑定的 AI 建站执行配置不可用。",
+      "attention_required",
+    );
+  }
+  return { ...credential, ...projection };
+}
+
+function frozenTaskProfile(input: z.infer<typeof operationInputSchema>) {
+  // Zhipu model and effort belong to the frozen client identity; the legacy
+  // Manus task field must not reinterpret that model selection.
+  if (input.provider === "zhipu") return {};
+  return { agentProfile: managedAgentProfileModel(input.agentProfile) };
 }
 
 function stateFromOperation(operation: SiteOperation): ProviderState | null {
@@ -2892,7 +2923,7 @@ export const MANUS_PROVIDER_READ_BACKOFF_MS = Object.freeze([
   10_000, 20_000, 40_000, 80_000, 160_000, 300_000,
 ] as const);
 export const MANUS_PROVIDER_READ_RECONCILIATION_MS = 24 * 60 * 60 * 1_000;
-type ManusTaskDetail = Awaited<ReturnType<ManusV2Client["taskDetail"]>>;
+type ManusTaskDetail = Awaited<ReturnType<DashboardAgentClient["taskDetail"]>>;
 
 function safeManusReadFailure(error: ManusV2ApiError) {
   const operation = /^(?:task|file)\.[A-Za-z][A-Za-z0-9.]{0,62}$/u.test(
@@ -3098,7 +3129,7 @@ export type ManusPollEventsResult = {
  * site_operations.result, including its bounded retry schedule.
  */
 export async function pollManusTaskEvents(input: {
-  client: ManusV2Client;
+  client: DashboardAgentClient;
   taskId: string;
   operationToken: string;
   providerState: ProviderState | null;
@@ -3400,7 +3431,7 @@ export async function pollManusTaskEvents(input: {
 }
 
 async function pollEvents(
-  client: ManusV2Client,
+  client: DashboardAgentClient,
   taskId: string,
   operationToken: string,
   providerState: ProviderState | null,
@@ -5472,8 +5503,8 @@ async function handleNativeReactSiteBuild(input: {
   operation: SiteOperation;
   signal: AbortSignal;
   assertExecutionActive: () => Promise<void>;
-  client: ManusV2Client | null;
-  getClient: () => Promise<ManusV2Client>;
+  client: DashboardAgentClient | null;
+  getClient: () => Promise<DashboardAgentClient>;
   input: z.infer<typeof operationInputSchema>;
   state: ProviderState | null;
   context: Awaited<ReturnType<typeof loadBuildContext>>;
@@ -6168,7 +6199,7 @@ async function handleNativeReactSiteBuild(input: {
             }),
             attachments: planAttachments(),
             locale: input.brief.primaryLanguage,
-            agentProfile: managedAgentProfileModel(input.input.agentProfile),
+            ...frozenTaskProfile(input.input),
             structuredOutputSchema: siteContentPlanOutputSchema({
               operationToken: planToken,
               inventorySha256: inventoryBinding!.inventorySha256,
@@ -6356,6 +6387,7 @@ async function handleNativeReactSiteBuild(input: {
       return pending(sync.state, taskId, "design_compiling", 60_000);
     }
     const planResolution = await resolveBuildWireValue({
+      fetchProviderFile: boundProviderFileReader(input.getClient),
       operationId: input.operation.id,
       buildId: input.context.build.id,
       events: polledPlan.events,
@@ -6617,7 +6649,7 @@ async function handleNativeReactSiteBuild(input: {
     );
   }
   const providerSourceAttachment = async (
-    sourceClient: ManusV2Client,
+    sourceClient: DashboardAgentClient,
   ): Promise<ManusV2Attachment> => {
     const sourceByteLength =
       sourceOverride?.bytes.length ??
@@ -6707,7 +6739,7 @@ async function handleNativeReactSiteBuild(input: {
   };
   const sourceAttachments = async (
     token: string,
-    sourceClient: ManusV2Client,
+    sourceClient: DashboardAgentClient,
     repair?: NativeSourceRepairInput,
   ): Promise<ManusV2Attachment[]> => [
     ...siteOpsSourceDossierAttachments({
@@ -7361,7 +7393,7 @@ async function handleNativeReactSiteBuild(input: {
           }),
           attachments: createAttachments,
           locale: input.brief.primaryLanguage,
-          agentProfile: managedAgentProfileModel(input.input.agentProfile),
+          ...frozenTaskProfile(input.input),
           structuredOutputSchema: nativeSourceReceiptOutputSchema({
             operationToken,
             baseSourceSha256,
@@ -7853,6 +7885,7 @@ async function handleNativeReactSiteBuild(input: {
   const receiptResolution = offlineResume
     ? { invalid: false as const, value: offlineResume.receipt }
     : await resolveBuildWireValue({
+        fetchProviderFile: boundProviderFileReader(input.getClient),
         operationId: input.operation.id,
         buildId: input.context.build.id,
         events: polled!.events,
@@ -8250,6 +8283,7 @@ async function handleNativeReactSiteBuild(input: {
       }
       archive = await readNativeSourceAttachment({
         attachment,
+        fetchProviderFile: boundProviderFileReader(input.getClient),
         signal: input.signal,
       });
       currentState = transitionProviderState(currentState, {
@@ -8870,6 +8904,24 @@ async function handleNativeReactSiteBuild(input: {
   };
 }
 
+function boundProviderFileReader(
+  getClient: () => Promise<DashboardAgentClient>,
+) {
+  return async (fileId: string): Promise<Response> => {
+    const client = await getClient();
+    if (!client.downloadArtifact)
+      throw new Error("SITEOPS_PROVIDER_FILE_READER_UNAVAILABLE");
+    const downloaded = await client.downloadArtifact(fileId);
+    return new Response(
+      Readable.toWeb(downloaded.data) as ReadableStream<Uint8Array>,
+      {
+        status: downloaded.status,
+        headers: downloaded.headers,
+      },
+    );
+  };
+}
+
 async function resolveBuildWireValue(input: {
   operationId: string;
   buildId: string;
@@ -8880,6 +8932,7 @@ async function resolveBuildWireValue(input: {
   taskCompleted: boolean;
   acceptCurrentPhaseWhileRunning?: boolean;
   signal: AbortSignal;
+  fetchProviderFile?: (fileId: string) => Promise<Response>;
   validateCandidate?: Parameters<
     typeof resolveSiteOpsWireOutput
   >[0]["validateCandidate"];
@@ -9603,6 +9656,40 @@ function safeProviderErrorName(error: unknown) {
   return /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(error.name) ? error.name : "Error";
 }
 
+export function createSiteOpsAgentClient(
+  options: DashboardAgentClientOptions,
+  createClient: (input: DashboardAgentClientOptions) => DashboardAgentClient,
+): DashboardAgentClient {
+  const client = createClient(options);
+  if (options.provider !== "zhipu") return client;
+  client.sendMessage = async (message) => {
+    const operationToken = manusV2EventOperationToken({
+      id: "siteops-command",
+      timestamp: 0,
+      type: "user_message",
+      user_message: { content: message.prompt },
+    });
+    if (
+      !operationToken ||
+      !operationToken.trim() ||
+      operationToken.length > 256
+    ) {
+      throw new SiteOpsManusFailure(
+        "FRONTMIND_BUILD_OPERATION_TOKEN_REQUIRED",
+        "当前建站阶段缺少可恢复的执行标识。",
+      );
+    }
+    // Each original persisted phase token is an immutable mutation identity.
+    // Replaying it reuses its command; advancing to the next phase creates the
+    // next command in the same provider session without rewriting the prompt.
+    return createClient({
+      ...options,
+      intentId: `${options.intentId}:command:${operationToken}`,
+    }).sendMessage(message);
+  };
+  return client;
+}
+
 export function createManusSiteOpsProviderHandler(
   dependencies: ManusProviderDependencies = {},
 ): SiteOpsProviderHandler {
@@ -9612,9 +9699,9 @@ export function createManusSiteOpsProviderHandler(
   const createClient =
     dependencies.createClient ??
     ((input) =>
-      new ManusV2Client({
+      createDashboardAgentClient({
+        ...input,
         baseUrl: baseUrl(),
-        apiKey: input.apiKey,
         rateLimitScope: input.credentialId,
         timeoutMs: 30_000,
       }));
@@ -9648,17 +9735,42 @@ export function createManusSiteOpsProviderHandler(
           "AI 建站数据库暂时不可用。",
         );
       const input = operationInputSchema.parse(operation.input);
-      let clientPromise: Promise<ManusV2Client> | null = null;
+      if (operation.provider !== input.provider) {
+        throw new SiteOpsManusFailure(
+          "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+          "当前任务的 AI 执行服务绑定不一致。",
+          "attention_required",
+        );
+      }
+      let clientPromise: Promise<DashboardAgentClient> | null = null;
       const getClient = () => {
         clientPromise ??= assertFrozenCredential(
           input,
           operation.userId,
           getCredential,
         ).then((credential) =>
-          createClient({
-            apiKey: credential.apiKey,
-            credentialId: credential.id,
-          }),
+          createSiteOpsAgentClient(
+            {
+              apiKey: credential.apiKey,
+              credentialId: credential.id,
+              credentialVersion: credential.version,
+              accountUserId: operation.userId,
+              provider: credential.provider,
+              intentId: `siteops:${operation.id}`,
+              upstreamModel:
+                input.upstreamModel ??
+                managedAgentProfileModel(
+                  input.agentProfile,
+                  credential.provider,
+                ),
+              upstreamEffort:
+                input.provider === "zhipu"
+                  ? (input.upstreamEffort ??
+                    managedAgentProfileEffort(input.agentProfile))
+                  : null,
+            },
+            createClient,
+          ),
         );
         return clientPromise;
       };
@@ -9747,7 +9859,7 @@ export function createManusSiteOpsProviderHandler(
                   }),
                 ],
                 locale: "zh-CN",
-                agentProfile: managedAgentProfileModel(input.agentProfile),
+                ...frozenTaskProfile(input),
                 structuredOutputSchema: socialOutputSchema(
                   token,
                   context.package.channel,
@@ -10916,7 +11028,7 @@ export function createManusSiteOpsProviderHandler(
               prompt,
               attachments: visualAttachments,
               locale: brief.primaryLanguage,
-              agentProfile: managedAgentProfileModel(input.agentProfile),
+              ...frozenTaskProfile(input),
               structuredOutputSchema: hostOwnedContentDraft
                 ? siteContentPatchOutputSchema({
                     operationToken: contentToken,
@@ -11210,6 +11322,7 @@ export function createManusSiteOpsProviderHandler(
           );
         }
         const repairResolution = await resolveBuildWireValue({
+          fetchProviderFile: boundProviderFileReader(getClient),
           operationId: operation.id,
           buildId: context.build.id,
           events: repaired.events,
@@ -11405,6 +11518,7 @@ export function createManusSiteOpsProviderHandler(
           );
         }
         const designResolution = await resolveBuildWireValue({
+          fetchProviderFile: boundProviderFileReader(getClient),
           operationId: operation.id,
           buildId: context.build.id,
           events: polled.events,
@@ -11905,6 +12019,7 @@ export function createManusSiteOpsProviderHandler(
       }
       const contentResolution = polled
         ? await resolveBuildWireValue({
+            fetchProviderFile: boundProviderFileReader(getClient),
             operationId: operation.id,
             buildId: context.build.id,
             events: polled.events,
@@ -12487,13 +12602,13 @@ export function registerManusSiteOpsProvider(
   dependencies: ManusProviderDependencies = {},
 ) {
   if (registered) return () => undefined;
-  const unregister = registerSiteOpsProviderHandler(
-    "manus",
-    createManusSiteOpsProviderHandler(dependencies),
-  );
+  const handler = createManusSiteOpsProviderHandler(dependencies);
+  const unregisterManus = registerSiteOpsProviderHandler("manus", handler);
+  const unregisterZhipu = registerSiteOpsProviderHandler("zhipu", handler);
   registered = true;
   return () => {
-    unregister();
+    unregisterZhipu();
+    unregisterManus();
     registered = false;
   };
 }

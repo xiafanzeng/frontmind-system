@@ -89,6 +89,7 @@ export type ExistingManusBuildReconciliationSnapshot = {
 };
 
 export type PreparedExistingManusBuildReconciliation = {
+  provider: "manus" | "zhipu";
   buildId: string;
   operationId: string;
   projectId: string;
@@ -164,7 +165,7 @@ export function prepareExistingManusBuildReconciliation(
     reject("SITEOPS_RECONCILE_BUILD_OPERATION_KIND_INVALID");
   }
   if (
-    operation.provider !== "manus" ||
+    (operation.provider !== "manus" && operation.provider !== "zhipu") ||
     operation.buildId !== build.id ||
     operation.projectId !== build.projectId ||
     operation.userId !== build.userId
@@ -253,6 +254,7 @@ export function prepareExistingManusBuildReconciliation(
   }
 
   return {
+    provider: operation.provider,
     buildId: build.id,
     operationId: operation.id,
     projectId: project.id,
@@ -303,7 +305,7 @@ async function loadReconciliationSnapshotForUpdate(tx: any, buildId: string) {
     .where(
       and(
         eq(siteOperations.buildId, build.id),
-        eq(siteOperations.provider, "manus"),
+        inArray(siteOperations.provider, ["manus", "zhipu"]),
         inArray(siteOperations.kind, ["site_build", "build_revision"]),
       ),
     )
@@ -457,7 +459,7 @@ export async function reconcileExistingManusBuild(
           eq(siteOperations.projectId, prepared.projectId),
           eq(siteOperations.buildId, prepared.buildId),
           eq(siteOperations.status, prepared.previousOperationStatus),
-          eq(siteOperations.provider, "manus"),
+          eq(siteOperations.provider, prepared.provider),
           eq(siteOperations.providerTaskId, prepared.taskId),
           eq(siteOperations.errorCode, prepared.recoveryErrorCode),
           isNull(siteOperations.leaseOwner),

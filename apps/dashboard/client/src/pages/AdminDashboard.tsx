@@ -84,7 +84,53 @@ export type ApiUsageSyncIssueCode =
   | "PARTIAL_USAGE_SCAN";
 type ManagedAgentProfile = "frontmind-base" | "frontmind-pro";
 
-type AdminUsageHierarchyManager = {
+type AgentUsageFields = {
+  provider?: "legacy" | "zhipu";
+  nativeUsage?: {
+    unit: "tokens";
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    observedTasks: number;
+  };
+};
+
+export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
+  if (!value || typeof value !== "object") return {};
+  const row = value as Record<string, any>;
+  if (row.provider !== "zhipu")
+    return typeof row.provider === "string" ? { provider: "legacy" } : {};
+  const usage = row.nativeUsage;
+  const count = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+      ? value
+      : 0;
+  return {
+    provider: "zhipu",
+    ...(usage?.unit === "tokens"
+      ? {
+          nativeUsage: {
+            unit: "tokens" as const,
+            inputTokens: count(usage.inputTokens),
+            outputTokens: count(usage.outputTokens),
+            cacheReadInputTokens: count(usage.cacheReadInputTokens),
+            observedTasks: count(usage.observedTasks),
+          },
+        }
+      : {}),
+  };
+}
+
+export function managedUsageDisplay(
+  value: AgentUsageFields & { rolling30DayUsed: number },
+) {
+  if (value.provider !== "zhipu")
+    return `${value.rolling30DayUsed.toLocaleString()} 积分`;
+  if (!value.nativeUsage?.observedTasks) return "暂无 Token 记录";
+  return `${(value.nativeUsage.inputTokens + value.nativeUsage.outputTokens).toLocaleString()} Token`;
+}
+
+type AdminUsageHierarchyManager = AgentUsageFields & {
   adminId: number;
   displayName: string;
   username: string | null;
@@ -122,7 +168,7 @@ type AdminUsageHierarchyManager = {
   }>;
 };
 
-type AdminUsageHierarchyEngineer = {
+type AdminUsageHierarchyEngineer = AgentUsageFields & {
   engineerId: number;
   displayName: string;
   username: string | null;
@@ -146,7 +192,7 @@ type AdminUsageHierarchySystemAdmin = Omit<
   "engineerId"
 > & { adminId: number };
 
-type AdminUsageHierarchyCustomer = {
+type AdminUsageHierarchyCustomer = AgentUsageFields & {
   userId: number;
   enterpriseName: string;
   username: string | null;
@@ -242,7 +288,8 @@ function apiKeyUsageTone(
 }
 
 export const issueMonitorUrl = "/admin/monitoring/accounts";
-export const channelDistributionUrl = "/admin/monitoring/media-publishing/integration";
+export const channelDistributionUrl =
+  "/admin/monitoring/media-publishing/integration";
 
 type AssignedTicketManager = { id: string; name: string };
 
@@ -271,7 +318,7 @@ type DeliveryEngineerStatusSource = {
   }>;
 };
 
-export type DeliveryEngineerStatusRow = {
+export type DeliveryEngineerStatusRow = AgentUsageFields & {
   id: number;
   username: string;
   displayName: string;
@@ -641,6 +688,7 @@ export function normalizeUsageHierarchy(value: unknown): {
         username: entry?.username ? String(entry.username) : null,
         isActive: entry?.isActive !== false,
         apiKeyConfigured: entry?.apiKeyConfigured === true,
+        ...normalizeAgentUsageFields(entry),
         apiKeyVersion: Math.max(0, Number(entry?.apiKeyVersion) || 0),
         keyPool: {
           fingerprint: entry?.keyPool?.fingerprint
@@ -673,6 +721,7 @@ export function normalizeUsageHierarchy(value: unknown): {
               enterpriseName:
                 String(customer?.enterpriseName || "").trim() || "未命名客户",
               username: customer?.username ? String(customer.username) : null,
+              ...normalizeAgentUsageFields(customer),
               rolling30DayUsed: Math.max(
                 0,
                 Number(customer?.rolling30DayUsed) || 0,
@@ -707,6 +756,7 @@ export function normalizeUsageHierarchy(value: unknown): {
           username: entry?.username ? String(entry.username) : null,
           isActive: entry?.isActive !== false,
           apiKeyConfigured: entry?.apiKeyConfigured === true,
+          ...normalizeAgentUsageFields(entry),
           apiKeyVersion: Math.max(0, Number(entry?.apiKeyVersion) || 0),
           rolling30DayUsed: Math.max(0, Number(entry?.rolling30DayUsed) || 0),
           usageObservedAt: entry?.usageObservedAt ?? null,
@@ -730,6 +780,7 @@ export function normalizeUsageHierarchy(value: unknown): {
           username: entry?.username ? String(entry.username) : null,
           isActive: entry?.isActive !== false,
           apiKeyConfigured: entry?.apiKeyConfigured === true,
+          ...normalizeAgentUsageFields(entry),
           apiKeyVersion: Math.max(0, Number(entry?.apiKeyVersion) || 0),
           rolling30DayUsed: Math.max(0, Number(entry?.rolling30DayUsed) || 0),
           usageObservedAt: entry?.usageObservedAt ?? null,
@@ -761,6 +812,7 @@ export function normalizeUsageHierarchy(value: unknown): {
             ? String(entry.deliveryAdminName)
             : null,
           apiKeyConfigured: entry?.apiKeyConfigured === true,
+          ...normalizeAgentUsageFields(entry),
           apiKeyVersion: Math.max(0, Number(entry?.apiKeyVersion) || 0),
           agentProfile: profile(entry?.agentProfile),
           usesInheritedKey: entry?.usesInheritedKey === true,
@@ -987,34 +1039,36 @@ export function parseCredentialManagementDeepLink(
   };
 }
 
-export type KeyManagementRow = OverviewApiKeyTarget & {
-  typeLabel: string;
-  scopeLabel: string;
-  isActive: boolean;
-  deliveryAdminId: number | null;
-  inherited: boolean;
-  rolling30DayUsed: number;
-  keyPoolTotalUsed: number | null;
-  keyHealth: ManagedKeyHealth;
-  syncIssueCode: ApiUsageSyncIssueCode | null;
-  keyPoolStale: boolean;
-  fetchedAt: number | string | Date | null;
-  fingerprint?: string | null;
-  sharedKeyAccountCount?: number;
-};
+export type KeyManagementRow = OverviewApiKeyTarget &
+  AgentUsageFields & {
+    typeLabel: string;
+    scopeLabel: string;
+    isActive: boolean;
+    deliveryAdminId: number | null;
+    inherited: boolean;
+    rolling30DayUsed: number;
+    keyPoolTotalUsed: number | null;
+    keyHealth: ManagedKeyHealth;
+    syncIssueCode: ApiUsageSyncIssueCode | null;
+    keyPoolStale: boolean;
+    fetchedAt: number | string | Date | null;
+    fingerprint?: string | null;
+    sharedKeyAccountCount?: number;
+  };
 
 export function annotateSharedKeyAccountCounts<
-  T extends { fingerprint?: string | null },
+  T extends { fingerprint?: string | null; provider?: string },
 >(rows: T[]): Array<T & { sharedKeyAccountCount: number }> {
   const counts = new Map<string, number>();
   for (const row of rows) {
     if (!row.fingerprint) continue;
-    counts.set(row.fingerprint, (counts.get(row.fingerprint) ?? 0) + 1);
+    const key = `${row.provider ?? "legacy"}:${row.fingerprint}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return rows.map((row) => ({
     ...row,
     sharedKeyAccountCount: row.fingerprint
-      ? (counts.get(row.fingerprint) ?? 1)
+      ? (counts.get(`${row.provider ?? "legacy"}:${row.fingerprint}`) ?? 1)
       : 0,
   }));
 }
@@ -1211,15 +1265,15 @@ function AdminOverviewApiKeyDialog({
             )}
             <div className="space-y-2">
               <Label htmlFor="overview-api-key">
-                {target?.configured ? "新的 API Key" : "API Key"}
+                {target?.configured ? "新的智谱 API Key" : "智谱 API Key"}
               </Label>
               <Input
+                placeholder="智谱 Managed Agents API Key"
                 id="overview-api-key"
                 type="password"
                 autoComplete="off"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder="输入后将先验证，再加密保存"
                 disabled={busy}
               />
               <p className="text-xs leading-5 text-muted-foreground">
@@ -1710,7 +1764,7 @@ function AdminBulkApiKeyDialog({
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="bulk-api-key">API Key</Label>
+              <Label htmlFor="bulk-api-key">智谱 Managed Agents API Key</Label>
               <Input
                 id="bulk-api-key"
                 type="password"
@@ -1964,7 +2018,7 @@ export function AdminBrandTrackingKeyManager({
             <div className="grid grid-cols-[minmax(190px,1.2fr)_170px_130px_130px_150px_130px_160px] gap-4 border-b border-[#eee8f2] px-5 py-3 text-xs font-medium text-[#716a80] sm:px-6">
               <span>海外客户</span>
               <span>Key 状态</span>
-              <span>近 30 天积分</span>
+              <span>近 30 天用量</span>
               <span>累计积分</span>
               <span>共享 Key 归因积分</span>
               <span>品牌追踪积分余额</span>
@@ -2454,6 +2508,7 @@ export default function AdminDashboard({
       ...engineer,
       apiKeyConfigured: usage?.apiKeyConfigured ?? engineer.apiKeyConfigured,
       apiKeyVersion: usage?.apiKeyVersion ?? engineer.apiKeyVersion,
+      ...normalizeAgentUsageFields(usage),
       rolling30DayUsed: usage?.rolling30DayUsed ?? 0,
       keyPoolTotalUsed: usage?.keyPoolTotalUsed ?? null,
       keyHealth: usage?.keyHealth ?? "unconfigured",
@@ -2480,6 +2535,7 @@ export default function AdminDashboard({
         typeLabel: "交付管理员",
         scopeLabel: `负责 ${manager.users.length} 个客户`,
         inherited: false,
+        ...normalizeAgentUsageFields(manager),
         rolling30DayUsed: manager.rolling30DayUsed,
         keyPoolTotalUsed: manager.keyPool.totalUsed,
         keyHealth: manager.keyPool.keyHealth,
@@ -2504,6 +2560,7 @@ export default function AdminDashboard({
           ? `${DELIVERY_ROLE_LABELS[engineer.roleType]} · ${engineer.projectCount} 个项目`
           : `岗位未设置 · ${engineer.projectCount} 个项目`,
         inherited: false,
+        ...normalizeAgentUsageFields(engineer),
         rolling30DayUsed: engineer.rolling30DayUsed,
         keyPoolTotalUsed: engineer.keyPoolTotalUsed,
         keyHealth: engineer.keyHealth,
@@ -2529,6 +2586,7 @@ export default function AdminDashboard({
           ? `负责人：${customer.deliveryAdminName}`
           : "负责人待分配",
         inherited: customer.usesInheritedKey,
+        ...normalizeAgentUsageFields(customer),
         rolling30DayUsed: customer.rolling30DayUsed,
         keyPoolTotalUsed: customer.keyPoolTotalUsed,
         keyHealth: customer.keyHealth,
@@ -2767,7 +2825,7 @@ export default function AdminDashboard({
                 {usageHierarchyQuery.isLoading ||
                 deliveryRoleOverviewQuery.isLoading ? (
                   <div className="p-6 text-sm text-[#716a80]">
-                    正在读取账号 Key 与积分…
+                    正在读取账号 Key 与用量…
                   </div>
                 ) : usageHierarchyQuery.error ||
                   deliveryRoleOverviewQuery.error ? (
@@ -2786,7 +2844,7 @@ export default function AdminDashboard({
                         <span>类型</span>
                         <span>归属范围</span>
                         <span>Key 状态</span>
-                        <span>近 30 天自用</span>
+                        <span>近 30 天自用量</span>
                         <span>积分池总额</span>
                         <span>操作</span>
                       </div>
@@ -2825,6 +2883,13 @@ export default function AdminDashboard({
                                   ? "使用历史共享 Key"
                                   : "Key 待配置"}
                             </p>
+                            {row.configured && (
+                              <p className="mt-1 text-[#716a80]">
+                                {row.provider === "zhipu"
+                                  ? "智谱"
+                                  : "历史服务凭据"}
+                              </p>
+                            )}
                             {row.kind === "customer" && (
                               <p className="mt-1 text-[#716a80]">
                                 {row.agentProfile === "frontmind-pro"
@@ -2840,12 +2905,22 @@ export default function AdminDashboard({
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-[#5b2a86]">
-                              {row.rolling30DayUsed.toLocaleString()}
+                              {managedUsageDisplay(row)}
                             </p>
+                            {row.provider === "zhipu" &&
+                              row.rolling30DayUsed > 0 && (
+                                <p className="mt-1 text-xs text-[#857e91]">
+                                  历史用量{" "}
+                                  {row.rolling30DayUsed.toLocaleString()} 积分
+                                </p>
+                              )}
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-[#332842]">
-                              {row.keyPoolTotalUsed?.toLocaleString() ?? "—"}
+                              {row.provider === "zhipu"
+                                ? "不提供积分池"
+                                : (row.keyPoolTotalUsed?.toLocaleString() ??
+                                  "—")}
                             </p>
                             {row.keyHealth !== "connected" ? (
                               <>
@@ -2920,7 +2995,7 @@ export default function AdminDashboard({
               <h2 className="font-semibold text-[#171321]">工程师状态</h2>
               <p className="mt-1 text-sm text-[#716a80]">
                 {systemAdmin
-                  ? "按人员查看岗位、项目、近 30 天自用与上游积分池总额；同一上游积分池可能被多个本地账号共享。"
+                  ? "按人员查看岗位、项目和近 30 天用量。智谱按 Token 展示，历史积分单独保留。"
                   : "按人员查看专业岗位、负责项目和当前工作状态；项目岗位缺员请前往客户项目团队处理。"}
               </p>
             </div>
@@ -2954,7 +3029,7 @@ export default function AdminDashboard({
                     <span>当前状态</span>
                     {systemAdmin && (
                       <>
-                        <span>近 30 天积分</span>
+                        <span>近 30 天用量</span>
                         <span>账号与 Key 状态</span>
                       </>
                     )}
@@ -3017,7 +3092,7 @@ export default function AdminDashboard({
                               <p>
                                 自用{" "}
                                 <span className="font-semibold text-[#5b2a86]">
-                                  {engineer.rolling30DayUsed.toLocaleString()}
+                                  {managedUsageDisplay(engineer)}
                                 </span>
                               </p>
                               <p>

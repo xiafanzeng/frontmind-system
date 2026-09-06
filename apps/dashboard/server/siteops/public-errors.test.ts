@@ -33,18 +33,21 @@ describe("SiteOps public error projection", () => {
     });
   });
 
-  it("projects provider results before persistence", () => {
-    const projected = publicSiteOpsProviderResult("manus", {
-      status: "outcome_unknown",
-      code: "PROVIDER_TIMEOUT",
-      message: "Manus 外部操作结果未知。",
-    });
-    expect(projected).toMatchObject({
-      status: "outcome_unknown",
-      code: "FRONTMIND_BUILD_RESULT_PENDING",
-    });
-    expect(JSON.stringify(projected)).not.toMatch(/manus/iu);
-  });
+  it.each(["manus", "zhipu"])(
+    "projects %s provider results before persistence",
+    (provider) => {
+      const projected = publicSiteOpsProviderResult(provider, {
+        status: "outcome_unknown",
+        code: "PROVIDER_TIMEOUT",
+        message: "Manus 外部操作结果未知。",
+      });
+      expect(projected).toMatchObject({
+        status: "outcome_unknown",
+        code: "FRONTMIND_BUILD_RESULT_PENDING",
+      });
+      expect(JSON.stringify(projected)).not.toMatch(/manus/iu);
+    },
+  );
 
   it("sanitizes historical server-owned message text", () => {
     expect(sanitizeFrontMindPublicText("Manus 暂时无法完成该任务")).toBe(

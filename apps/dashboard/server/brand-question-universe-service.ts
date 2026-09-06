@@ -1,3 +1,4 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 
@@ -876,11 +877,21 @@ async function updateOperationState(input: {
   });
 }
 
-function clientFor(credential: DecryptedCredential, userId: number) {
-  return new ManusV2Client({
-    baseUrl: getUpstreamBaseUrl(),
-    apiKey: credential.apiKey,
-    rateLimitScope: `managed-user:${userId}`,
+function clientFor(
+  credential: DecryptedCredential,
+  userId: number,
+  owned?: OwnedOperation,
+  intentId?: string,
+) {
+  return createCredentialAgentClient(credential, {
+    accountUserId: userId,
+    ...(owned
+      ? {
+          operationId: owned.operation.id,
+          localTaskId: owned.task.id,
+          intentId: intentId ?? owned.operation.id,
+        }
+      : {}),
   });
 }
 
@@ -1083,6 +1094,7 @@ async function reserveOperation(input: {
       schemaHash,
       apiCredentialId: input.credential.id,
       credentialVersion: input.credential.version,
+      provider: input.credential.provider ?? "manus",
       publicProfile: input.credential.agentProfile,
       upstreamModel: input.credential.upstreamModel,
       status: "queued",
@@ -1125,7 +1137,7 @@ async function dispatchOperation(input: {
 }) {
   const { owned, credential, context } = input;
   if (context.firstDispatchState !== "send_ready") return;
-  const client = clientFor(credential, owned.operation.accountUserId!);
+  const client = clientFor(credential, owned.operation.accountUserId!, owned);
   let createClaimed = false;
   let createAcknowledged: {
     taskId: string;
@@ -1578,6 +1590,8 @@ async function dispatchPendingRepair(input: {
     await clientFor(
       input.credential,
       input.owned.operation.accountUserId!,
+      input.owned,
+      claimedContext.repairToken,
     ).sendMessage({
       taskId: input.owned.task.providerTaskId,
       prompt: promptWithMarker(prompt, claimedContext.repairToken),
@@ -1799,6 +1813,7 @@ async function reconcileUnknownCreate(input: {
   const client = clientFor(
     input.credential,
     input.owned.operation.accountUserId!,
+    input.owned,
   );
   const reconciled = await client.findCreatedTask({
     title: input.owned.task.title,
@@ -1920,7 +1935,7 @@ async function reconcileOperation(initial: OwnedOperation) {
   let liveEvents: ManusV2MessageEvent[] = [];
   let detailState: string | null = null;
   try {
-    const client = clientFor(credential, owned.operation.accountUserId!);
+    const client = clientFor(credential, owned.operation.accountUserId!, owned);
     liveEvents = await client.listAllMessages({
       taskId: owned.task.providerTaskId,
       order: "asc",

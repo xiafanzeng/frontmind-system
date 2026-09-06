@@ -86,7 +86,7 @@ function localResetRetirableOperation(input: {
     ((input.kind === "site_build" ||
       input.kind === "build_revision" ||
       input.kind === "social_package") &&
-      input.provider === "manus")
+      (input.provider === "manus" || input.provider === "zhipu"))
   );
 }
 
@@ -2018,7 +2018,7 @@ export async function approveSiteOpsRebuildTicket(
                 "build_revision",
                 "social_package",
               ]),
-              eq(siteOperations.provider, "manus"),
+              inArray(siteOperations.provider, ["manus", "zhipu"]),
             ),
           ),
         ),

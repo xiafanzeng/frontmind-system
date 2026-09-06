@@ -19,6 +19,8 @@ import {
   getPreviewAdminNav,
   getPreviewAdminWorkspaceHref,
   issueMonitorUrl,
+  managedUsageDisplay,
+  normalizeAgentUsageFields,
   normalizeApiKeyUsageAlerts,
   normalizeBrandTrackingCredentialRows,
   normalizeUsageHierarchy,
@@ -442,6 +444,56 @@ describe("administrator channel navigation", () => {
     ]);
 
     expect(rows.map((row) => row.sharedKeyAccountCount)).toEqual([2, 2, 1, 0]);
+  });
+
+  it("separates identical key fingerprints across providers", () => {
+    const rows = annotateSharedKeyAccountCounts([
+      { fingerprint: "shared", provider: "legacy" as const },
+      { fingerprint: "shared", provider: "zhipu" as const },
+      { fingerprint: "shared", provider: "zhipu" as const },
+    ]);
+    expect(rows.map((row) => row.sharedKeyAccountCount)).toEqual([1, 2, 2]);
+  });
+
+  it("shows observed native tokens without translating historical credits", () => {
+    const normalized = normalizeAgentUsageFields({
+      provider: "zhipu",
+      nativeUsage: {
+        unit: "tokens",
+        inputTokens: 120,
+        outputTokens: 30,
+        cacheReadInputTokens: 20,
+        observedTasks: 1,
+      },
+    });
+    expect(managedUsageDisplay({ ...normalized, rolling30DayUsed: 900 })).toBe(
+      "150 Token",
+    );
+    expect(
+      managedUsageDisplay({ provider: "zhipu", rolling30DayUsed: 900 }),
+    ).toBe("暂无 Token 记录");
+    expect(
+      managedUsageDisplay({ provider: "legacy", rolling30DayUsed: 900 }),
+    ).toBe("900 积分");
+    expect(
+      normalizeAgentUsageFields({
+        provider: "zhipu",
+        nativeUsage: {
+          unit: "tokens",
+          inputTokens: -1,
+          outputTokens: NaN,
+          cacheReadInputTokens: Infinity,
+          observedTasks: 0,
+        },
+      }),
+    ).toMatchObject({
+      nativeUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        observedTasks: 0,
+      },
+    });
   });
 
   it("presents delivery workload as one status row per engineer", () => {

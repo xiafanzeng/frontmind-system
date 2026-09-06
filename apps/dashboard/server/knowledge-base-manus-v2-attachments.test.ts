@@ -55,12 +55,15 @@ vi.mock("./knowledge-base-local-source-store", async (importOriginal) => {
 import {
   finalKnowledgeBaseManusV2AttachmentInspectionAction,
   ensureKnowledgeBaseManusV2Attachments,
+  ensureKnowledgeBaseZhipuMapping,
   inspectKnowledgeBaseManusV2AttachmentAttempt,
   knowledgeBaseManusV2FileRejectionRetryDelay,
   nextKnowledgeBaseManusV2FileCreateGeneration,
   shouldInspectReadyMappingBeforeAttachmentAttempt,
   validateReusableKnowledgeBaseManusV2Attachment,
 } from "./knowledge-base-manus-v2-attachments";
+import { isAllowedManusV2AttachmentAttemptTransition } from "./knowledge-base-turn-service";
+import type { DashboardAgentClient } from "./providers/dashboard-agent-provider";
 import { encryptCredentialSecret } from "./auth-service";
 import { ManusV2ApiError, ManusV2Client } from "./manus-v2-client";
 
@@ -336,6 +339,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
         id: claim.turn.apiCredentialId!,
         userId: claim.turn.userId,
         apiKey: "synthetic-manus-key",
+        version: 1,
+        provider: "manus",
+        upstreamModel: "manus-1.6",
+        upstreamEffort: null,
       },
       baseUrl: "https://api.manus.test",
     });
@@ -441,6 +448,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -590,6 +601,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -666,6 +681,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -763,6 +782,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -865,6 +888,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -980,6 +1007,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -1104,6 +1135,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
             id: claim.turn.apiCredentialId!,
             userId: claim.turn.userId,
             apiKey: "synthetic-manus-key",
+            version: 1,
+            provider: "manus",
+            upstreamModel: "manus-1.6",
+            upstreamEffort: null,
           },
           baseUrl: "https://api.manus.test",
         }),
@@ -1214,6 +1249,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       });
@@ -1309,6 +1348,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
           id: claim.turn.apiCredentialId!,
           userId: claim.turn.userId,
           apiKey: "synthetic-manus-key",
+          version: 1,
+          provider: "manus",
+          upstreamModel: "manus-1.6",
+          upstreamEffort: null,
         },
         baseUrl: "https://api.manus.test",
       }),
@@ -1387,6 +1430,10 @@ describe("Manus v2 complete attachment-set recovery", () => {
             id: claim.turn.apiCredentialId!,
             userId: claim.turn.userId,
             apiKey: "synthetic-manus-key",
+            version: 1,
+            provider: "manus",
+            upstreamModel: "manus-1.6",
+            upstreamEffort: null,
           },
           baseUrl: "https://api.manus.test",
         }),
@@ -1802,5 +1849,157 @@ describe("Manus v2 reusable attachment proof", () => {
         state: "create_outcome_unknown",
       }),
     ).toBeNull();
+  });
+});
+
+describe("Knowledge base Zhipu complete-byte attachment recovery", () => {
+  function setup() {
+    const { claim, sources } = testClaim();
+    const source = sources[0]!;
+    const expiry = Math.floor(Date.now() / 1000) + 86400;
+    const detail = {
+      fileId: "zhipu-file-1",
+      filename: source.filename,
+      bytes: source.sizeBytes,
+      contentType: source.mimeType,
+      contentTypeParseStatus: "valid" as const,
+      status: "uploaded" as const,
+      expiresAt: expiry,
+      requestId: null,
+    };
+    const uploadFile = vi.fn(async () => ({
+      fileId: detail.fileId,
+      filename: source.filename,
+      uploadUrl: "",
+      uploadExpiresAt: expiry,
+      requestId: null,
+      detail,
+    }));
+    const fileDetail = vi.fn(async () => detail);
+    const client = {
+      uploadFile,
+      fileDetail,
+    } as unknown as DashboardAgentClient;
+    const generations: number[] = [];
+    const entry = {
+      claim,
+      source,
+      attachmentIndex: 0,
+      clientForGeneration: (generation: number) => {
+        generations.push(generation);
+        return client;
+      },
+    };
+    return { entry, detail, uploadFile, fileDetail, generations };
+  }
+  it("keeps lease, frozen bytes and mapping finalization without signed PUT or false PUT states", async () => {
+    const f = setup();
+    const mapping = await ensureKnowledgeBaseZhipuMapping(f.entry);
+    expect(f.uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bytes: f.entry.source.bytes,
+        filename: f.entry.source.filename,
+      }),
+    );
+    expect(
+      attachmentLedgerMocks.persistAttempt.mock.calls.map(
+        ([value]) => value.attempt.state,
+      ),
+    ).toEqual(["creating", "complete_upload_accepted"]);
+    const [creating, accepted] =
+      attachmentLedgerMocks.persistAttempt.mock.calls.map(
+        ([value]) => value.attempt,
+      );
+    expect(
+      isAllowedManusV2AttachmentAttemptTransition(undefined, creating),
+    ).toBe(true);
+    expect(
+      isAllowedManusV2AttachmentAttemptTransition(creating, accepted),
+    ).toBe(true);
+    expect(accepted.uploadCapability).toBeUndefined();
+    expect(mapping.contentSha256).toBe(f.entry.source.contentSha256);
+    expect(attachmentLedgerMocks.persistMapping).toHaveBeenCalledTimes(1);
+    await ensureKnowledgeBaseZhipuMapping(f.entry);
+    expect(f.uploadFile).toHaveBeenCalledTimes(1);
+    expect(attachmentLedgerMocks.renewLease).toHaveBeenCalledTimes(2);
+  });
+  it("retains unknown complete uploads at the same generation until the transport observes their acknowledgement", async () => {
+    const f = setup();
+    f.uploadFile.mockRejectedValueOnce(
+      new ManusV2ApiError(
+        "file.upload",
+        null,
+        "ZHIPU_MUTATION_OUTCOME_UNKNOWN",
+        false,
+        true,
+      ),
+    );
+    await expect(
+      ensureKnowledgeBaseZhipuMapping(f.entry),
+    ).rejects.toMatchObject({ code: "KNOWLEDGE_BASE_ATTACHMENTS_PROCESSING" });
+    const [creating, unknown] =
+      attachmentLedgerMocks.persistAttempt.mock.calls.map(
+        ([value]) => value.attempt,
+      );
+    expect(unknown.state).toBe("complete_upload_outcome_unknown");
+    expect(isAllowedManusV2AttachmentAttemptTransition(creating, unknown)).toBe(
+      true,
+    );
+    const ready = await ensureKnowledgeBaseZhipuMapping(f.entry);
+    const accepted =
+      attachmentLedgerMocks.persistAttempt.mock.calls.at(-1)![0].attempt;
+    expect(isAllowedManusV2AttachmentAttemptTransition(unknown, accepted)).toBe(
+      true,
+    );
+    expect(ready.providerGeneration).toBe(1);
+    expect(new Set(f.generations)).toEqual(new Set([1]));
+  });
+  it("does not reupload after acknowledgement when only metadata inspection fails", async () => {
+    const f = setup();
+    f.fileDetail.mockRejectedValueOnce(
+      new ManusV2ApiError("file.detail", 503, "ZHIPU_HTTP_503", false, false),
+    );
+    await expect(
+      ensureKnowledgeBaseZhipuMapping(f.entry),
+    ).rejects.toBeDefined();
+    await ensureKnowledgeBaseZhipuMapping(f.entry);
+    expect(f.uploadFile).toHaveBeenCalledTimes(1);
+  });
+  it("uses one bounded replacement only after authoritative missing-file evidence", async () => {
+    const f = setup();
+    await ensureKnowledgeBaseZhipuMapping(f.entry);
+    f.fileDetail.mockRejectedValueOnce(
+      new ManusV2ApiError("file.detail", 404, "ZHIPU_HTTP_404", false, false),
+    );
+    const next = { ...f.detail, fileId: "zhipu-file-2" };
+    f.fileDetail.mockResolvedValue(next);
+    f.uploadFile.mockResolvedValue({
+      fileId: next.fileId,
+      filename: next.filename,
+      uploadUrl: "",
+      uploadExpiresAt: next.expiresAt,
+      requestId: null,
+      detail: next,
+    });
+    const ready = await ensureKnowledgeBaseZhipuMapping(f.entry);
+    expect(ready.providerGeneration).toBe(2);
+    expect(f.uploadFile).toHaveBeenCalledTimes(2);
+    const attempts = attachmentLedgerMocks.persistAttempt.mock.calls.map(
+      ([value]) => value.attempt,
+    );
+    expect(attempts.map((item) => item.state)).toEqual([
+      "creating",
+      "complete_upload_accepted",
+      "unusable",
+      "creating",
+      "complete_upload_accepted",
+    ]);
+    for (let i = 1; i < attempts.length; i++)
+      expect(
+        isAllowedManusV2AttachmentAttemptTransition(
+          attempts[i - 1],
+          attempts[i],
+        ),
+      ).toBe(true);
   });
 });

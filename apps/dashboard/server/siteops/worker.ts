@@ -1144,7 +1144,7 @@ function stagedBuildCheckpointResult(
   operation: Claimed,
 ): SiteOpsProviderResult | null {
   if (
-    operation.provider !== "manus" ||
+    !["manus", "zhipu"].includes(operation.provider ?? "") ||
     !operation.buildId ||
     !["site_build", "build_revision"].includes(operation.kind) ||
     !operation.result ||

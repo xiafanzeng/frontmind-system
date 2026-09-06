@@ -951,7 +951,7 @@ describe("bulk managed API Key scopes", () => {
       { userId: 4, kind: "engineer" as const },
     ];
     const latestCredentials = new Map([
-      [1, { status: "active", fingerprint: "fp_next" }],
+      [1, { status: "active", fingerprint: "fp_next", provider: "zhipu" }],
       [2, { status: "deleted", fingerprint: "fp_retired" }],
     ]);
 
@@ -983,6 +983,7 @@ describe("bulk managed API Key scopes", () => {
         target.userId,
         {
           status: "active",
+          provider: "zhipu",
           fingerprint: target.userId === 201 ? "fp_old" : "fp_next",
         },
       ]),
@@ -1005,6 +1006,7 @@ describe("bulk managed API Key scopes", () => {
         1,
         {
           status: "active",
+          provider: "zhipu",
           fingerprint: "fp_same",
           agentProfile: "frontmind-pro",
         },
@@ -1031,6 +1033,7 @@ describe("bulk managed API Key scopes", () => {
             4,
             {
               status: "active",
+              provider: "zhipu",
               fingerprint: "fp_same",
               agentProfile: "frontmind-pro",
             },
@@ -1254,7 +1257,7 @@ describe("bulk managed API Key scopes", () => {
     );
     const bulkPath = source.slice(start, end);
 
-    expect(bulkPath).toContain("validateApiKey: validateUpstreamApiKey");
+    expect(bulkPath).toContain("validateApiKey: validateManagedUpstreamApiKey");
     expect(bulkPath).toContain("await runtime.validateApiKey(input.apiKey)");
     expect(bulkPath).toContain("await db.transaction(async (tx)");
     expect(bulkPath).not.toContain("bulkManagedApiKeyHistoryDisposition");

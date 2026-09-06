@@ -24,7 +24,9 @@ import { localAssets, providerFileLeases } from "../drizzle/schema";
 import {
   getCredentialForUpstreamResource,
   recordUpstreamResource,
+  type DecryptedCredential,
 } from "./auth-service";
+import { createCredentialAgentClient } from "./credential-agent-client";
 import {
   fileResourceContentExpiry,
   isFileResourceContentExpired,
@@ -1024,16 +1026,25 @@ export async function createResponseLogicTask(input: {
   idempotencyKey: string;
   agentProfile: string;
   rateLimitScope?: string;
+  credential?: DecryptedCredential;
+  accountUserId?: number;
 }) {
   const operationToken = input.idempotencyKey;
   const prompt = assertUpstreamPromptBudget(
     `${input.prompt}\n\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken })}`,
   );
-  const client = new ManusV2Client({
-    baseUrl: input.baseUrl,
-    apiKey: input.apiKey,
-    rateLimitScope: input.rateLimitScope,
-  });
+  const client = input.credential
+    ? createCredentialAgentClient(input.credential, {
+        baseUrl: input.baseUrl,
+        accountUserId: input.accountUserId,
+        intentId: operationToken,
+        rateLimitScope: input.rateLimitScope,
+      })
+    : new ManusV2Client({
+        baseUrl: input.baseUrl,
+        apiKey: input.apiKey,
+        rateLimitScope: input.rateLimitScope,
+      });
   const attachments = input.attachments.map(({ file_id, filename }) => ({
     file_id,
     filename,
@@ -1244,10 +1255,9 @@ router.get("/tasks/:taskId/status", async (req, res) => {
     }
     logSecret = credential.apiKey;
 
-    const client = new ManusV2Client({
+    const client = createCredentialAgentClient(credential, {
       baseUrl: getUpstreamBaseUrl(req),
-      apiKey: credential.apiKey,
-      rateLimitScope: `managed-user:${user.id}`,
+      accountUserId: user.id,
     });
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const roundEvents = currentResponseLogicRoundEvents(events);
@@ -1655,10 +1665,10 @@ router.post(["/start", "/turn"], async (req, res) => {
       attachment: { file_id: string; filename: string };
       fileId: string;
     }> = [];
-    const responseLogicClient = new ManusV2Client({
+    const responseLogicClient = createCredentialAgentClient(taskCredential, {
       baseUrl: getUpstreamBaseUrl(req),
-      apiKey: taskApiKey,
-      rateLimitScope: `managed-user:${req.frontmindUser.id}`,
+      accountUserId: req.frontmindUser.id,
+      intentId: taskIdempotencyKey,
     });
     for (const attachmentPackage of generatedAttachmentPackages) {
       const uploaded = await responseLogicClient.uploadFile({
@@ -1759,6 +1769,8 @@ router.post(["/start", "/turn"], async (req, res) => {
     const created = await createResponseLogicTask({
       baseUrl: getUpstreamBaseUrl(req),
       apiKey: taskApiKey,
+      credential: taskCredential,
+      accountUserId: req.frontmindUser.id,
       prompt,
       attachments: [
         ...generatedAttachments.map((item) => item.attachment),

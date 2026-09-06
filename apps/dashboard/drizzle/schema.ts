@@ -147,6 +147,10 @@ export const apiCredentials = mysqlTable(
   "api_credentials",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    /** Historical generations remain bound to Manus after a key rotation. */
+    provider: varchar("provider", { length: 16 }).default("manus").notNull(),
+    upstreamModel: varchar("upstream_model", { length: 64 }),
+    upstreamEffort: varchar("upstream_effort", { length: 16 }),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),

@@ -1310,6 +1310,9 @@ describe("site rebuild reset approval", () => {
 
   it.each([
     { kind: "site_build", provider: "manus", status: "running" },
+    { kind: "site_build", provider: "zhipu", status: "running" },
+    { kind: "build_revision", provider: "zhipu", status: "outcome_unknown" },
+    { kind: "social_package", provider: "zhipu", status: "queued" },
     { kind: "build_revision", provider: "manus", status: "outcome_unknown" },
     {
       kind: "site_build",

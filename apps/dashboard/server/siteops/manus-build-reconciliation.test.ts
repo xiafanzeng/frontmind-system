@@ -139,26 +139,32 @@ function fallbackSnapshot(): ExistingManusBuildReconciliationSnapshot {
 }
 
 describe("existing Manus build incident reconciliation", () => {
-  it("prepares the exact failed task for GET-only restart", () => {
-    const prepared = prepareExistingManusBuildReconciliation(snapshot());
-    expect(prepared).toMatchObject({
-      buildId,
-      projectId,
-      operationId,
-      taskId,
-      quotaPeriodId,
-      previousProjectRevision: 12,
-      previousOperationStatus: "failed",
-      recoveryState: {
-        schemaVersion: 2,
-        stage: "native_repair_pending",
+  it.each(["manus", "zhipu"] as const)(
+    "prepares the exact failed %s task for GET-only restart",
+    (provider) => {
+      const saved = snapshot();
+      saved.operation.provider = provider;
+      const prepared = prepareExistingManusBuildReconciliation(saved);
+      expect(prepared).toMatchObject({
+        provider,
+        buildId,
+        projectId,
+        operationId,
         taskId,
-        nativeRepairAttempt: 1,
-        existingTaskOnly: true,
-        buildPhase: "source_repairing",
-      },
-    });
-  });
+        quotaPeriodId,
+        previousProjectRevision: 12,
+        previousOperationStatus: "failed",
+        recoveryState: {
+          schemaVersion: 2,
+          stage: "native_repair_pending",
+          taskId,
+          nativeRepairAttempt: 1,
+          existingTaskOnly: true,
+          buildPhase: "source_repairing",
+        },
+      });
+    },
+  );
 
   it("restores an attention fallback only when all five bound coordinates still match", () => {
     const prepared =

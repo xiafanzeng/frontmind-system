@@ -1,3 +1,4 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
 /**
  * FrontMind API Proxy
  * Proxies requests from /api/manus/* to the configured FrontMind API base URL.
@@ -3910,9 +3911,9 @@ router.delete(
         discard: async (context) => {
           discardLogSecrets.push(context.apiKey);
           try {
-            await new ManusV2Client({
+            await createCredentialAgentClient(context.credential, {
+              accountUserId: context.userId,
               baseUrl,
-              apiKey: context.apiKey,
             }).deleteFile(fileId);
           } catch (error) {
             if (!(error instanceof ManusV2ApiError && error.status === 404)) {
@@ -5689,7 +5690,11 @@ router.get("/account-credit-usage", async (req: Request, res: Response) => {
 router.get("/credential-check", async (req: Request, res: Response) => {
   const { apiKey, baseUrl } = getFrontMindCredentials(req);
   try {
-    await new ManusV2Client({ baseUrl, apiKey }).probeCredential();
+    if (!req.frontmindCredential) throw new Error("CREDENTIAL_REQUIRED");
+    await createCredentialAgentClient(req.frontmindCredential, {
+      accountUserId: req.frontmindUser?.id,
+      baseUrl,
+    }).probeCredential();
     res.json({ ok: true });
   } catch (error) {
     if (

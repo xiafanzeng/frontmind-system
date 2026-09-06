@@ -2367,6 +2367,13 @@ describe("discard unbound upload", () => {
             projectAssignmentId: null,
             apiCredentialId: "credential-before-rotation",
             apiKey: "bound-key-before-rotation",
+            credential: {
+              id: "credential-before-rotation",
+              userId: 42,
+              version: 1,
+              provider: "manus",
+              apiKey: "bound-key-before-rotation",
+            },
           });
           return { discarded: true };
         },
@@ -2464,6 +2471,13 @@ describe("discard unbound upload", () => {
             projectAssignmentId: null,
             apiCredentialId: "credential-record-owner",
             apiKey: "bound-record-credential",
+            credential: {
+              id: "credential-record-owner",
+              userId: 42,
+              version: 1,
+              provider: "manus",
+              apiKey: "bound-record-credential",
+            },
           });
           return { discarded: true };
         },

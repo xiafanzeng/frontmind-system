@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export type AgentProvider = "manus" | "zhipu";
+export type AgentUpstreamEffort = "low" | "high" | "max";
+
 export const managedAgentProfileSchema = z.enum([
   "frontmind-base",
   "frontmind-pro",
@@ -18,8 +21,25 @@ export function normalizeManagedAgentProfile(
     : DEFAULT_MANAGED_AGENT_PROFILE;
 }
 
-export function managedAgentProfileModel(profile: ManagedAgentProfile) {
+export function managedAgentProfileModel(
+  profile: ManagedAgentProfile,
+): "manus-1.6" | "manus-1.6-max";
+export function managedAgentProfileModel(
+  profile: ManagedAgentProfile,
+  provider: AgentProvider,
+): "manus-1.6" | "manus-1.6-max" | "glm-5.3";
+export function managedAgentProfileModel(
+  profile: ManagedAgentProfile,
+  provider: AgentProvider = "manus",
+) {
+  if (provider === "zhipu") return "glm-5.3";
   return profile === "frontmind-base" ? "manus-1.6" : "manus-1.6-max";
+}
+
+export function managedAgentProfileEffort(
+  profile: ManagedAgentProfile,
+): AgentUpstreamEffort {
+  return profile === "frontmind-base" ? "high" : "max";
 }
 
 /**
@@ -43,8 +63,24 @@ export const DEFAULT_GENERAL_AGENT_MODEL_PROFILE: GeneralAgentModelProfile =
 
 export function generalAgentModelProfileModel(
   profile: GeneralAgentModelProfile,
+): "manus-1.6-lite" | "manus-1.6" | "manus-1.6-max";
+export function generalAgentModelProfileModel(
+  profile: GeneralAgentModelProfile,
+  provider: AgentProvider,
+): "manus-1.6-lite" | "manus-1.6" | "manus-1.6-max" | "glm-5.3";
+export function generalAgentModelProfileModel(
+  profile: GeneralAgentModelProfile,
+  provider: AgentProvider = "manus",
 ) {
+  if (provider === "zhipu") return "glm-5.3";
   if (profile === "frontmind-lite") return "manus-1.6-lite" as const;
   if (profile === "frontmind-base") return "manus-1.6" as const;
   return "manus-1.6-max" as const;
+}
+
+export function generalAgentModelProfileEffort(
+  profile: GeneralAgentModelProfile,
+): AgentUpstreamEffort {
+  if (profile === "frontmind-lite") return "low";
+  return profile === "frontmind-base" ? "high" : "max";
 }

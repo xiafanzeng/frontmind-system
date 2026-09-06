@@ -3,6 +3,7 @@ import type { SiteOperation } from "../../drizzle/schema";
 export type SiteOpsProviderName =
   | "21st"
   | "manus"
+  | "zhipu"
   | "aliyun_esa"
   | "aliyun_alidns";
 

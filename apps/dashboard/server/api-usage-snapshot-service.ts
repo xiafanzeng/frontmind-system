@@ -1,3 +1,4 @@
+import { readManagedNativeUsageByAccounts } from "./managed-agent-usage";
 import { randomUUID } from "node:crypto";
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
@@ -25,13 +26,15 @@ import { readRollingManagedUsageByAccounts } from "./api-usage-ledger";
 import {
   acquireActiveApiCredentialDeletionFence,
   AuthServiceError,
+  credentialProfileProjection,
+  getDecryptedCredentialForUser,
   completeActiveApiCredentialDeletionFence,
   deleteActiveApiCredentialInTransaction,
   getApiKeyFingerprint,
   replaceApiCredentialInTransaction,
   rollbackActiveApiCredentialDeletionFence,
   startActiveApiCredentialDeletionFenceHeartbeat,
-  validateUpstreamApiKey,
+  validateManagedUpstreamApiKey,
   type AuthenticatedUser,
 } from "./auth-service";
 import { writeWorkspaceAuditEvent } from "./admin-control-plane-service";
@@ -201,7 +204,9 @@ export async function runApiUsageSnapshotSyncWithLock(input: {
 type ApiUsageScope = "website_frontend" | "managed_user";
 type ApiUsageSeverity = "normal" | "warning" | "critical" | "unavailable";
 export type ManagedApiKeyTargetKind =
-  "customer" | "delivery_admin" | "engineer";
+  | "customer"
+  | "delivery_admin"
+  | "engineer";
 
 export type BulkManagedApiKeyScope =
   | { kind: "all" }
@@ -326,7 +331,12 @@ export function bulkManagedApiKeyActionTargets<
   resolvedTargets: T[];
   latestCredentials: Map<
     number,
-    { status: string; fingerprint?: string | null; agentProfile?: unknown }
+    {
+      status: string;
+      fingerprint?: string | null;
+      agentProfile?: unknown;
+      provider?: unknown;
+    }
   >;
   applyMode: BulkManagedApiKeyApplyMode;
   nextFingerprint: string;
@@ -340,6 +350,7 @@ export function bulkManagedApiKeyActionTargets<
     return (
       credential?.status !== "active" ||
       credential.fingerprint !== input.nextFingerprint ||
+      credential.provider !== "zhipu" ||
       (target.kind === "customer" &&
         normalizeManagedAgentProfile(credential.agentProfile) !==
           normalizeManagedAgentProfile(input.nextAgentProfile))
@@ -562,7 +573,7 @@ export function apiUsageSnapshotCompletionState(input: {
 
 export type BulkManagedApiKeyRuntime = {
   requireDatabase: typeof requireDb;
-  validateApiKey: typeof validateUpstreamApiKey;
+  validateApiKey: typeof validateManagedUpstreamApiKey;
   fingerprintApiKey: typeof getApiKeyFingerprint;
   replaceCredential: typeof replaceApiCredentialInTransaction;
   writeAuditEvent: typeof writeWorkspaceAuditEvent;
@@ -584,7 +595,7 @@ export async function bulkReplaceManagedApiKeyTargets(
 ) {
   const runtime: BulkManagedApiKeyRuntime = {
     requireDatabase: requireDb,
-    validateApiKey: validateUpstreamApiKey,
+    validateApiKey: validateManagedUpstreamApiKey,
     fingerprintApiKey: getApiKeyFingerprint,
     replaceCredential: replaceApiCredentialInTransaction,
     writeAuditEvent: writeWorkspaceAuditEvent,
@@ -809,7 +820,7 @@ export async function replaceManagedApiKeyTarget(input: {
       "只有系统管理员可以替换账号 API Key。",
     );
   }
-  await validateUpstreamApiKey(input.apiKey);
+  await validateManagedUpstreamApiKey(input.apiKey);
   const agentProfile = normalizeManagedAgentProfile(input.agentProfile);
   const nextFingerprint = getApiKeyFingerprint(input.apiKey);
   const db = await requireDb();
@@ -1150,6 +1161,7 @@ export function resolveEffectiveUsageCredentials(input: {
     version?: number;
     fingerprint: string;
     createdAt?: Date;
+    provider?: string | null;
   }>;
   ownerRows: Array<{ userId: number; deliveryAdminId: number }>;
 }) {
@@ -1167,6 +1179,7 @@ export function resolveEffectiveUsageCredentials(input: {
   const credentialIdByUser = new Map<number, string>();
   const credentialVersionByUser = new Map<number, number>();
   const credentialCreatedAtByUser = new Map<number, number>();
+  const providerByUser = new Map<number, "manus" | "zhipu">();
   for (const userId of input.userIds) {
     // Delivery ownership remains a reporting relationship. Every account's
     // runtime and pool status is derived only from its own active Key.
@@ -1174,6 +1187,10 @@ export function resolveEffectiveUsageCredentials(input: {
     const credential = activeByOwner.get(credentialOwnerId);
     if (credential) {
       byUser.set(userId, credential.fingerprint);
+      providerByUser.set(
+        userId,
+        credential.provider === "zhipu" ? "zhipu" : "manus",
+      );
       credentialOwnerByUser.set(userId, credentialOwnerId);
       if (credential.id) credentialIdByUser.set(userId, credential.id);
       if (credential.version !== undefined) {
@@ -1190,6 +1207,7 @@ export function resolveEffectiveUsageCredentials(input: {
     credentialIdByUser,
     credentialVersionByUser,
     credentialCreatedAtByUser,
+    providerByUser,
   };
 }
 
@@ -1204,6 +1222,7 @@ async function usageCredentialFingerprints(input: {
       version: apiCredentials.version,
       fingerprint: apiCredentials.fingerprint,
       createdAt: apiCredentials.createdAt,
+      provider: apiCredentials.provider,
     })
     .from(apiCredentials)
     .where(eq(apiCredentials.status, "active"))
@@ -1449,6 +1468,10 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
   ]);
   const items = policies.map((policy, index) => {
     const scope = scopes[index]!;
+    const provider =
+      policy.scope === "managed_user"
+        ? (fingerprints.providerByUser.get(policy.workspaceUserId!) ?? "manus")
+        : undefined;
     const snapshot = snapshotByPolicy.get(policy.id);
     const credentialFingerprint =
       policy.scope === "website_frontend"
@@ -1465,8 +1488,8 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
     // last successful pool total or turn an old successful read into pending.
     const snapshotMatchesCredential = Boolean(
       snapshot &&
-      credentialFingerprint &&
-      snapshot.credentialFingerprint === credentialFingerprint,
+        credentialFingerprint &&
+        snapshot.credentialFingerprint === credentialFingerprint,
     );
     const matchingSnapshot = snapshotMatchesCredential ? snapshot : undefined;
     const snapshotCurrent = snapshotMatchesCredential
@@ -1501,10 +1524,12 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
     const keyPoolTotalUsed =
       policy.scope === "website_frontend"
         ? websiteRollingUsage.keyPoolTotalUsed
-        : lastSuccessfulUsageSnapshotValue({
-            snapshot: matchingSnapshot,
-            fingerprint: credentialFingerprint,
-          });
+        : provider === "zhipu"
+          ? null
+          : lastSuccessfulUsageSnapshotValue({
+              snapshot: matchingSnapshot,
+              fingerprint: credentialFingerprint,
+            });
     const rollingUsage =
       policy.scope === "website_frontend"
         ? {
@@ -1522,6 +1547,7 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
         : 0;
     return {
       id: policy.id,
+      provider,
       scope: policy.scope,
       userId: policy.workspaceUserId,
       enterpriseName: scope.enterpriseName,
@@ -1556,19 +1582,22 @@ export async function getApiUsageAlertOverview(actor: AuthenticatedUser) {
           ? websiteRollingUsage.keyLastSuccessfulAt
           : (matchingSnapshot?.fetchedAt?.getTime() ?? null),
       periodStartedAt: matchingSnapshot?.windowStartedAt?.getTime() ?? null,
-      severity: apiUsageSeverity({
-        used: keyPoolTotalUsed ?? 0,
-        limit: policy.limit,
-        warningRatio,
-        syncStatus:
-          keyHealth === "connected"
-            ? "ok"
-            : keyHealth === "unconfigured"
-              ? "unconfigured"
-              : keyHealth === "pending"
-                ? "pending"
-                : "error",
-      }),
+      severity:
+        provider === "zhipu"
+          ? "unavailable"
+          : apiUsageSeverity({
+              used: keyPoolTotalUsed ?? 0,
+              limit: policy.limit,
+              warningRatio,
+              syncStatus:
+                keyHealth === "connected"
+                  ? "ok"
+                  : keyHealth === "unconfigured"
+                    ? "unconfigured"
+                    : keyHealth === "pending"
+                      ? "pending"
+                      : "error",
+            }),
       errorMessage:
         keyHealth === "sync_error" || keyHealth === "invalid_or_revoked"
           ? "用量暂时无法读取"
@@ -1688,7 +1717,14 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
     endAt: period.endAt,
   });
 
+  const nativeUsageByAccount = await readManagedNativeUsageByAccounts({
+    executor: db,
+    accountIds: subjectIds,
+    startAt: period.startAt,
+    endAt: period.endAt,
+  });
   const usageFor = (userId: number) => {
+    const provider = fingerprints.providerByUser.get(userId) ?? "manus";
     const policy = policyByUser.get(userId);
     const fingerprint = fingerprints.byUser.get(userId) ?? null;
     const snapshot = policy ? snapshotByPolicy.get(policy.id) : undefined;
@@ -1719,14 +1755,20 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
             ? ("invalid_or_revoked" as const)
             : ("sync_error" as const);
     const rolling = rollingUsageByAccount.get(userId);
-    const keyPoolTotalUsed = lastSuccessfulUsageSnapshotValue({
-      snapshot,
-      fingerprint,
-    });
+    const keyPoolTotalUsed =
+      provider === "zhipu"
+        ? null
+        : lastSuccessfulUsageSnapshotValue({
+            snapshot,
+            fingerprint,
+          });
     const limit = Number(policy?.limit ?? DEFAULT_API_USAGE_LIMIT);
     const warningRatio =
       Number(policy?.warningRatioBasisPoints ?? 8_000) / 10_000;
     return {
+      provider,
+      nativeUsage:
+        provider === "zhipu" ? nativeUsageByAccount.get(userId) : undefined,
       fingerprint,
       credentialOwnerId: fingerprints.credentialOwnerByUser.get(userId) ?? null,
       credentialId: fingerprints.credentialIdByUser.get(userId) ?? null,
@@ -1753,19 +1795,22 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       fetchedAt: snapshotMatchesCredential
         ? (snapshot?.fetchedAt?.getTime() ?? null)
         : null,
-      severity: apiUsageSeverity({
-        used: keyPoolTotalUsed ?? 0,
-        limit,
-        warningRatio,
-        syncStatus:
-          keyHealth === "connected"
-            ? "ok"
-            : keyHealth === "unconfigured"
-              ? "unconfigured"
-              : keyHealth === "pending"
-                ? "pending"
-                : "error",
-      }),
+      severity:
+        provider === "zhipu"
+          ? "unavailable"
+          : apiUsageSeverity({
+              used: keyPoolTotalUsed ?? 0,
+              limit,
+              warningRatio,
+              syncStatus:
+                keyHealth === "connected"
+                  ? "ok"
+                  : keyHealth === "unconfigured"
+                    ? "unconfigured"
+                    : keyHealth === "pending"
+                      ? "pending"
+                      : "error",
+            }),
     };
   };
   const customerById = new Map(
@@ -1802,11 +1847,10 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
         owner?.displayName?.trim() || owner?.username?.trim() || null,
       apiKeyConfigured: directApiKeyConfigured,
       apiKeyVersion: latestCredential?.version ?? 0,
-      agentProfile: normalizeManagedAgentProfile(
-        (latestCredential as { agentProfile?: unknown } | undefined)
-          ?.agentProfile,
-      ),
+      ...credentialProfileProjection(latestCredential),
       usesInheritedKey: false,
+      provider: usage.provider,
+      nativeUsage: usage.nativeUsage,
       rolling30DayUsed: usage.rolling30DayUsed,
       usageObservedAt: usage.usageObservedAt,
       keyPoolTotalUsed: usage.keyPoolTotalUsed,
@@ -1839,6 +1883,8 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
       isActive: engineer.isActive !== false,
       apiKeyConfigured: latestCredential?.status === "active",
       apiKeyVersion: latestCredential?.version ?? 0,
+      provider: usage.provider,
+      nativeUsage: usage.nativeUsage,
       rolling30DayUsed: usage.rolling30DayUsed,
       usageObservedAt: usage.usageObservedAt,
       keyPoolTotalUsed: usage.keyPoolTotalUsed,
@@ -1890,6 +1936,8 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
               customer.username?.trim() ||
               `用户 ${customer.id}`,
             username: customer.username,
+            provider: usage.provider,
+            nativeUsage: usage.nativeUsage,
             rolling30DayUsed: usage.rolling30DayUsed,
             usageObservedAt: usage.usageObservedAt,
             fingerprint: usage.fingerprint,
@@ -1935,20 +1983,10 @@ export async function getAdminApiUsageHierarchy(actor: AuthenticatedUser) {
           keyLastSuccessfulAt: managerUsage.keyLastSuccessfulAt,
           keyLastAttemptAt: managerUsage.keyLastAttemptAt,
           fetchedAt: managerUsage.fetchedAt,
-          severity: apiUsageSeverity({
-            used: keyPoolTotalUsed ?? 0,
-            limit: keyPoolLimit,
-            warningRatio: keyPoolWarningRatio,
-            syncStatus:
-              managerUsage.keyHealth === "connected"
-                ? "ok"
-                : managerUsage.keyHealth === "unconfigured"
-                  ? "unconfigured"
-                  : managerUsage.keyHealth === "pending"
-                    ? "pending"
-                    : "error",
-          }),
+          severity: managerUsage.severity,
         },
+        provider: managerUsage.provider,
+        nativeUsage: managerUsage.nativeUsage,
         rolling30DayUsed: managerUsage.rolling30DayUsed,
         usageObservedAt: managerUsage.usageObservedAt,
         users: managedCustomers,
@@ -2351,13 +2389,16 @@ async function syncApiUsageSnapshotsUnlocked(
       unconfiguredAccountIds.push(accountId);
       continue;
     }
-    const poolKey = usageCredentialPoolKey({
-      fingerprint,
-      credentialId: fingerprints.credentialIdByUser.get(accountId) ?? null,
-      credentialVersion:
-        fingerprints.credentialVersionByUser.get(accountId) ?? null,
-      windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
-    })!;
+    const poolKey =
+      (fingerprints.providerByUser.get(accountId) ?? "manus") +
+      ":" +
+      usageCredentialPoolKey({
+        fingerprint,
+        credentialId: fingerprints.credentialIdByUser.get(accountId) ?? null,
+        credentialVersion:
+          fingerprints.credentialVersionByUser.get(accountId) ?? null,
+        windowDays: DEFAULT_API_USAGE_WINDOW_DAYS,
+      })!;
     const grouped = accountIdsByCredential.get(poolKey) ?? {
       fingerprint,
       credentialOwnerIds: new Set<number>(),
@@ -2443,6 +2484,51 @@ async function syncApiUsageSnapshotsUnlocked(
         ),
       );
       try {
+        if (
+          fingerprints.providerByUser.get(groupedAccountIds[0]!) === "zhipu"
+        ) {
+          const credential = await getDecryptedCredentialForUser(
+            groupedAccountIds[0]!,
+          );
+          if (
+            !credential ||
+            credential.provider !== "zhipu" ||
+            credential.fingerprint !== fingerprint
+          ) {
+            throw new AuthServiceError(
+              "CONFLICT",
+              "凭据版本已变更，请重新同步连接状态",
+            );
+          }
+          await validateManagedUpstreamApiKey(credential.apiKey, "zhipu");
+          const claims = await Promise.all(
+            groupedAccountIds.map((accountId) =>
+              finalizeApiUsageSnapshotClaim({
+                executor: db,
+                policy: policyByAccount.get(accountId)!,
+                credentialFingerprint: fingerprint,
+                used: 0,
+                accountUsed: 0,
+                status: "ok",
+                errorCode: null,
+                windowStartedAt: new Date(
+                  getShanghaiRollingUsagePeriod(
+                    DEFAULT_API_USAGE_WINDOW_DAYS,
+                    now.getTime(),
+                  ).startAt,
+                ),
+                now,
+                syncToken: syncTokenByAccount.get(accountId)!,
+              }),
+            ),
+          );
+          if (claims.every(Boolean)) synced += 1;
+          else {
+            failed += 1;
+            retryableFailed += 1;
+          }
+          return;
+        }
         const usage = await getSharedKeyMonthlyCreditUsageForAccounts({
           credentialOwnerIds: [...credentialOwnerIds],
           accountIds: groupedAccountIds,

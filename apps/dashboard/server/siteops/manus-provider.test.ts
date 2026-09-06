@@ -26,6 +26,7 @@ import {
   handledWaitingResolution,
   hostOwnedEmptyRouteIds,
   createManusSiteOpsProviderHandler,
+  createSiteOpsAgentClient,
   frozenAssetDecisions,
   getSiteOpsSocialWorkflowReadiness,
   loadVerifiedSiteOpsSocialWorkflowPackage,
@@ -1289,6 +1290,138 @@ describe("Manus SiteOps provider boundary", () => {
     expect(safeLogs).not.toContain("siteops-repair:");
     expect(safeLogs).not.toContain("files.example.test");
   });
+
+  it("uses each original stage token for a distinct replayable Zhipu command", async () => {
+    const sendMessage = vi.fn(async () => ({ taskId: "session_1" }));
+    const createClient = vi.fn(() => ({ sendMessage }) as never);
+    const options = {
+      provider: "zhipu" as const,
+      accountUserId: 7,
+      credentialId: operation.input.manusCredentialId,
+      credentialVersion: 9,
+      apiKey: "test-key",
+      intentId: `siteops:${operation.id}`,
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high" as const,
+    };
+    const client = createSiteOpsAgentClient(options, createClient);
+    const phase = (name: string) => ({
+      taskId: "session_1",
+      prompt: `original task instructions\nFRONTMIND_MANUS_V2_OPERATION_CONTRACT=${JSON.stringify({ operationToken: `siteops-${name}:${operation.id}` })}`,
+    });
+    await client.sendMessage(phase("design"));
+    await client.sendMessage(phase("content"));
+    await client.sendMessage(phase("content"));
+    expect(createClient.mock.calls.map(([value]) => value.intentId)).toEqual([
+      options.intentId,
+      `${options.intentId}:command:siteops-design:${operation.id}`,
+      `${options.intentId}:command:siteops-content:${operation.id}`,
+      `${options.intentId}:command:siteops-content:${operation.id}`,
+    ]);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, phase("design"));
+    expect(sendMessage).toHaveBeenNthCalledWith(2, phase("content"));
+    await expect(
+      client.sendMessage({ taskId: "session_1", prompt: "unbound stage" }),
+    ).rejects.toMatchObject({
+      code: "FRONTMIND_BUILD_OPERATION_TOKEN_REQUIRED",
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes a Zhipu operation through its frozen provider identity", async () => {
+    const createClient = vi.fn(() => ({}) as never);
+    const handler = createManusSiteOpsProviderHandler({
+      getDb: async () =>
+        ({
+          select: () => ({
+            from: () => ({
+              innerJoin: () => ({
+                innerJoin: () => ({ where: () => ({ limit: async () => [] }) }),
+              }),
+            }),
+          }),
+        }) as never,
+      getCredential: async () =>
+        ({
+          id: operation.input.manusCredentialId,
+          userId: operation.userId,
+          version: operation.input.manusCredentialVersion,
+          apiKey: "test-zhipu-key",
+          provider: "zhipu",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: "max",
+        }) as never,
+      createClient,
+    });
+    await handler({
+      operation: {
+        ...operation,
+        kind: "social_package",
+        provider: "zhipu",
+        input: {
+          ...operation.input,
+          provider: "zhipu",
+          upstreamModel: "glm-5.3",
+          upstreamEffort: "high",
+        },
+      } as never,
+      signal: new AbortController().signal,
+    });
+    expect(createClient).toHaveBeenCalledOnce();
+    expect(createClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "zhipu",
+        accountUserId: operation.userId,
+        credentialId: operation.input.manusCredentialId,
+        credentialVersion: operation.input.manusCredentialVersion,
+        intentId: `siteops:${operation.id}`,
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "high",
+      }),
+    );
+  });
+
+  it.each(["provider", "model", "missing-effort"])(
+    "rejects a mismatched frozen %s before creating a client",
+    async (mismatch) => {
+      const createClient = vi.fn();
+      const handler = createManusSiteOpsProviderHandler({
+        getDb: async () => ({}) as never,
+        getCredential: async () =>
+          ({
+            id: operation.input.manusCredentialId,
+            userId: operation.userId,
+            version: operation.input.manusCredentialVersion,
+            apiKey: "test-zhipu-key",
+            provider: mismatch === "provider" ? "manus" : "zhipu",
+            upstreamModel: mismatch === "model" ? "glm-5.3-flash" : "glm-5.3",
+            upstreamEffort: "max",
+          }) as never,
+        createClient,
+      });
+      const result = await handler({
+        operation: {
+          ...operation,
+          kind: "social_package",
+          provider: "zhipu",
+          input: {
+            ...operation.input,
+            provider: "zhipu",
+            upstreamModel: "glm-5.3",
+            ...(mismatch === "missing-effort"
+              ? {}
+              : { upstreamEffort: "high" }),
+          },
+        } as never,
+        signal: new AbortController().signal,
+      });
+      expect(result).toMatchObject({
+        status: "attention_required",
+        code: "FRONTMIND_CUSTOMER_CREDENTIAL_VERSION_UNAVAILABLE",
+      });
+      expect(createClient).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the immutable credential id and version frozen in the operation", async () => {
     const createClient = vi.fn();

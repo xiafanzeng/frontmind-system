@@ -519,6 +519,8 @@ export type KnowledgeBaseManusV2AttachmentAttemptState =
   | "create_retry_wait"
   | "create_rejected"
   | "create_outcome_unknown"
+  | "complete_upload_accepted"
+  | "complete_upload_outcome_unknown"
   | "candidate_created"
   | "put_sending"
   | "put_retry_wait"
@@ -540,7 +542,7 @@ export interface KnowledgeBaseManusV2AttachmentAttempt {
   providerGeneration: number;
   state: KnowledgeBaseManusV2AttachmentAttemptState;
   upstreamFileId: string | null;
-  /** Provider epoch seconds. */
+  /** Provider epoch seconds, or a locally verified lease for complete uploads. */
   uploadExpiresAt: number | null;
   /**
    * AES-GCM sealed signed PUT capability. It is never returned by an API or
@@ -7320,6 +7322,8 @@ function normalizeManusV2AttachmentAttempt(
     "create_retry_wait",
     "create_rejected",
     "create_outcome_unknown",
+    "complete_upload_accepted",
+    "complete_upload_outcome_unknown",
     "candidate_created",
     "put_sending",
     "put_retry_wait",
@@ -7426,12 +7430,14 @@ function normalizeManusV2AttachmentAttempt(
     "create_retry_wait",
     "create_rejected",
     "create_outcome_unknown",
+    "complete_upload_outcome_unknown",
   ].includes(attempt.state);
   const forbidsProviderId = [
     "creating",
     "create_retry_wait",
     "create_rejected",
     "create_outcome_unknown",
+    "complete_upload_outcome_unknown",
   ].includes(attempt.state);
   if (
     (requiresProviderId &&
@@ -7461,7 +7467,7 @@ function normalizeManusV2AttachmentAttempt(
   return attempt;
 }
 
-function isAllowedManusV2AttachmentAttemptTransition(
+export function isAllowedManusV2AttachmentAttemptTransition(
   previous: KnowledgeBaseManusV2AttachmentAttempt | undefined,
   next: KnowledgeBaseManusV2AttachmentAttempt,
 ) {
@@ -7479,7 +7485,7 @@ function isAllowedManusV2AttachmentAttemptTransition(
     previous.filename === next.filename &&
     previous.mimeType === next.mimeType;
   if (!immutableMatches) return false;
-  if (previous.state === "creating" && next.state === "candidate_created") {
+  if ((["creating", "complete_upload_outcome_unknown"].includes(previous.state) && next.state === "complete_upload_accepted") || (previous.state === "creating" && next.state === "candidate_created")) {
     return (
       next.providerGeneration === previous.providerGeneration &&
       previous.upstreamFileId === null &&
@@ -7569,7 +7575,11 @@ function isAllowedManusV2AttachmentAttemptTransition(
       "create_rejected",
       "create_outcome_unknown",
       "candidate_created",
+      "complete_upload_accepted",
+      "complete_upload_outcome_unknown",
     ],
+    complete_upload_accepted: ["unusable"],
+    complete_upload_outcome_unknown: ["complete_upload_accepted"],
     create_retry_wait: ["creating", "create_rejected"],
     create_rejected: [],
     create_outcome_unknown: [],
@@ -7798,7 +7808,7 @@ export async function persistKnowledgeBaseManusV2AttachmentMapping(
       attempt &&
       (attempt.providerGeneration !== normalized.providerGeneration ||
         attempt.upstreamFileId !== normalized.upstreamFileId ||
-        !["put_accepted", "put_outcome_unknown"].includes(attempt.state))
+        !["put_accepted", "put_outcome_unknown", "complete_upload_accepted"].includes(attempt.state))
     ) {
       throw new KnowledgeBaseTurnReservationError(
         "CONFLICT",

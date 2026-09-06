@@ -11,6 +11,7 @@ import { fetchPinnedPublicHttps } from "./remote-preview";
 
 const WIRE_OUTPUT_TIMEOUT_MS = 15_000;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const PROVIDER_FILE_PATTERN = /^zhipu-file:([A-Za-z0-9_-]{1,255})$/u;
 
 export const SITEOPS_WIRE_OUTPUT_FILES = Object.freeze({
   design: "frontmind-site-design-wire-v2.json",
@@ -394,10 +395,16 @@ function assistantJsonBody(message: JsonObject) {
     : null;
 }
 
-function optionalString(record: JsonObject, aliases: readonly string[]) {
+function optionalString(
+  record: JsonObject,
+  aliases: readonly string[],
+  preserveWhitespace = false,
+) {
   for (const alias of aliases) {
     const value = record[alias];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) {
+      return preserveWhitespace ? value : value.trim();
+    }
   }
   return null;
 }
@@ -459,7 +466,11 @@ function jsonAttachments(
   );
   for (const value of raw) {
     if (!isRecord(value)) continue;
-    const url = optionalString(value, ["url", "file_url", "fileUrl"]);
+    const rawUrl = optionalString(value, ["url", "file_url", "fileUrl"], true);
+    // Provider file pointers are opaque identities, never normalized URLs.
+    const url = rawUrl?.trim().startsWith("zhipu-file:")
+      ? rawUrl
+      : rawUrl?.trim();
     if (!url) continue;
     const filename = optionalString(value, [
       "filename",
@@ -572,23 +583,40 @@ async function downloadAttachment(input: {
   maxBytes: number;
   signal?: AbortSignal;
   fetchPinned: FetchPinnedPublicHttps;
+  fetchProviderFile?: (fileId: string) => Promise<Response>;
 }) {
   const timeout = AbortSignal.timeout(WIRE_OUTPUT_TIMEOUT_MS);
   const signal = input.signal
     ? AbortSignal.any([input.signal, timeout])
     : timeout;
+  const providerPointer = input.attachment.url.trim().startsWith("zhipu-file:");
+  const providerFile = PROVIDER_FILE_PATTERN.exec(input.attachment.url);
+  if (
+    providerPointer &&
+    (!providerFile ||
+      providerFile[0] !== input.attachment.url ||
+      !input.fetchProviderFile)
+  ) {
+    throw new SiteOpsWireOutputResolutionError("SITEOPS_WIRE_OUTPUT_INVALID");
+  }
   let response: Response;
   try {
-    ({ response } = await input.fetchPinned({
-      url: input.attachment.url,
-      signal,
-      headers: {
-        Accept: "application/json",
-        "Accept-Encoding": "identity",
-        "User-Agent": "FrontMind-SiteOps-Wire/1.0",
-      },
-      maxRedirects: 3,
-    }));
+    if (providerFile) {
+      signal.throwIfAborted();
+      response = await input.fetchProviderFile!(providerFile[1]!);
+      signal.throwIfAborted();
+    } else {
+      ({ response } = await input.fetchPinned({
+        url: input.attachment.url,
+        signal,
+        headers: {
+          Accept: "application/json",
+          "Accept-Encoding": "identity",
+          "User-Agent": "FrontMind-SiteOps-Wire/1.0",
+        },
+        maxRedirects: 3,
+      }));
+    }
   } catch (error) {
     if (input.signal?.aborted) throw error;
     const code = error instanceof Error ? error.message : "";
@@ -635,6 +663,8 @@ export async function resolveSiteOpsWireOutput(input: {
   acceptCurrentPhaseWhileRunning?: boolean;
   signal?: AbortSignal;
   fetchPinned?: FetchPinnedPublicHttps;
+  /** Server-side reader already bound to the operation and credential. */
+  fetchProviderFile?: (fileId: string) => Promise<Response>;
   validateCandidate?: (
     value: JsonObject,
     source: SiteOpsWireOutputResolution["source"],
@@ -786,6 +816,7 @@ export async function resolveSiteOpsWireOutput(input: {
           maxBytes,
           signal: input.signal,
           fetchPinned: input.fetchPinned ?? fetchPinnedPublicHttps,
+          fetchProviderFile: input.fetchProviderFile,
         });
         addCandidate(value, "attachment");
       } catch (error) {

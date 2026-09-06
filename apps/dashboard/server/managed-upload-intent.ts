@@ -1,3 +1,5 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
+import type { DecryptedCredential } from "./auth-service";
 import axios from "axios";
 import {
   createHash,
@@ -2798,14 +2800,22 @@ async function discardKnownProvider(input: {
 }
 
 async function providerFileIsMissing(input: {
+  credential?: DecryptedCredential;
+  accountUserId?: number;
   apiKey: string;
   fileId: string;
 }) {
   try {
-    const detail = await new ManusV2Client({
-      baseUrl: getUpstreamBaseUrl(),
-      apiKey: input.apiKey,
-    }).fileDetail(input.fileId);
+    const detail = await (
+      input.credential
+        ? createCredentialAgentClient(input.credential, {
+            accountUserId: input.accountUserId,
+          })
+        : new ManusV2Client({
+            baseUrl: getUpstreamBaseUrl(),
+            apiKey: input.apiKey,
+          })
+    ).fileDetail(input.fileId);
     return detail.status === "deleted";
   } catch (error) {
     if (error instanceof ManusV2ApiError && error.status === 404) return true;
@@ -2856,9 +2866,8 @@ async function discardProviderGeneration(input: {
       projectAssignmentId: manifest.projectAssignmentId ?? undefined,
       discard: async (context) => {
         try {
-          await new ManusV2Client({
-            baseUrl: getUpstreamBaseUrl(),
-            apiKey: context.apiKey,
+          await createCredentialAgentClient(context.credential, {
+            accountUserId: manifest.userId,
           }).deleteFile(fileId);
         } catch (error) {
           if (!(error instanceof ManusV2ApiError && error.status === 404)) {
@@ -2892,7 +2901,20 @@ async function discardProviderGeneration(input: {
     // The ownership row may be absent only because a previous discard fully
     // committed before the process wrote `discarded`. Never infer deletion
     // from the missing row alone.
-    if (!(await providerFileIsMissing({ apiKey: input.apiKey, fileId }))) {
+    const credential = await getDecryptedCredentialForManagedUploadIntent({
+      credentialId: manifest.credentialId,
+      credentialOwnerUserId: manifest.credentialOwnerUserId,
+      credentialVersion: manifest.credentialVersion,
+    });
+    if (!credential) throw new Error("UPLOAD_CREDENTIAL_UNAVAILABLE");
+    if (
+      !(await providerFileIsMissing({
+        credential,
+        accountUserId: manifest.userId,
+        apiKey: input.apiKey,
+        fileId,
+      }))
+    ) {
       throw new ManagedUploadIntentError(
         503,
         "UPLOAD_PROVIDER_DISCARD_FAILED",
@@ -2994,6 +3016,140 @@ async function assertProviderGenerationUnbound(input: {
     }
     throw error;
   }
+}
+
+/** Browser ingress is already sealed locally. Zhipu accepts one complete
+ * multipart upload, so no provider PUT capability is minted or persisted. */
+async function materializeZhipuUploadIntent(input: {
+  manifest: ManagedUploadIntentManifest;
+  credential: DecryptedCredential;
+  owner: string;
+  traceId: string;
+  signal?: AbortSignal;
+}) {
+  let manifest = input.manifest;
+  if (input.signal?.aborted) throw input.signal.reason;
+  const contentPath = intentPaths(manifest.intentId).content;
+  const verified = await hashManagedUploadContent(contentPath);
+  if (
+    verified.sizeBytes !== manifest.sizeBytes ||
+    verified.sha256 !== manifest.sha256
+  ) {
+    throw new ManagedUploadIntentError(
+      409,
+      "UPLOAD_PROVIDER_IDENTITY_MISMATCH",
+      "Dashboard 本地文件完整性校验失败",
+      false,
+      "contact_admin",
+    );
+  }
+  if (!currentGeneration(manifest)) {
+    manifest = await updateLeased(manifest, input.owner, () => ({
+      state: "processing",
+      phase: "uploading_provider",
+      providerGeneration: 1,
+      provider: [generationRecord(1)],
+    }));
+  }
+  const generation = currentGeneration(manifest)!;
+  const client = createCredentialAgentClient(input.credential, {
+    accountUserId: manifest.userId,
+    intentId: `managed-upload:${manifest.intentId}`,
+  });
+  manifest = await updateLeased(manifest, input.owner, (current) => ({
+    state: "processing",
+    phase: "uploading_provider",
+    provider: replaceGeneration(current, generation.generation, {
+      state: generation.fileId ? "waiting" : "create_sending",
+      createStartedAt: generation.createStartedAt ?? nowIso(),
+    }),
+  }));
+  let uploaded: Awaited<ReturnType<typeof client.uploadFile>>;
+  try {
+    uploaded = await client.uploadFile({
+      filename: manifest.filename,
+      contentType: manifest.mimeType,
+      byteLength: verified.sizeBytes,
+      createReadStream: () => createReadStream(contentPath),
+      ...(generation.fileId
+        ? {
+            existingCandidate: {
+              fileId: generation.fileId,
+              filename: manifest.filename,
+            },
+          }
+        : {}),
+      observer: {
+        onCandidateCreated: async (candidate) => {
+          manifest = await updateLeased(manifest, input.owner, (current) => ({
+            phase: "waiting_provider",
+            provider: replaceGeneration(current, generation.generation, {
+              state: "waiting",
+              fileId: candidate.fileId,
+              filename: candidate.filename,
+              providerStatus: "uploaded",
+              putResponse2xx: true,
+            }),
+          }));
+          manifest = await ensureGenerationOwnership({
+            manifest,
+            owner: input.owner,
+            generation: currentGeneration(manifest)!,
+          });
+        },
+      },
+    });
+  } catch (error) {
+    const ambiguous =
+      !(error instanceof ManusV2ApiError) || error.outcomeUnknown;
+    manifest = await updateLeased(manifest, input.owner, (current) => ({
+      phase: "waiting_provider",
+      provider: replaceGeneration(current, generation.generation, {
+        state: ambiguous
+          ? "create_unknown"
+          : error instanceof ManusV2ApiError && error.retryable
+            ? "not_sent"
+            : "create_rejected",
+        createUnknownAt: ambiguous ? nowIso() : null,
+      }),
+    }));
+    throw new ManagedUploadIntentError(
+      503,
+      ambiguous
+        ? "UPLOAD_PROVIDER_CREATE_UNKNOWN"
+        : "UPLOAD_PROVIDER_CREATE_REJECTED",
+      ambiguous
+        ? "云端上传结果待核实，已保留原上传记录"
+        : "云端暂未接受文件上传",
+      ambiguous || (error instanceof ManusV2ApiError && error.retryable),
+      "check_status",
+    );
+  }
+  if (
+    uploaded.detail.status !== "uploaded" ||
+    uploaded.detail.bytes !== verified.sizeBytes ||
+    uploaded.filename !== manifest.filename
+  ) {
+    throw new ManagedUploadIntentError(
+      409,
+      "UPLOAD_PROVIDER_IDENTITY_MISMATCH",
+      "云端文件记录与本地副本不一致",
+      false,
+      "contact_admin",
+    );
+  }
+  manifest = await ensureGenerationOwnership({
+    manifest,
+    owner: input.owner,
+    generation: currentGeneration(manifest)!,
+  });
+  return finalizeIntent({
+    manifest,
+    owner: input.owner,
+    apiKey: input.credential.apiKey,
+    traceId: input.traceId,
+    authoritativeFilename: uploaded.filename,
+  });
 }
 
 async function finalizeIntent(input: {
@@ -3294,6 +3450,16 @@ async function processManagedUploadIntentUnderScopeGuard(
         completedAt: nowIso(),
       }));
       manifest = await releaseLease(manifest, owner);
+      return statusFromManifest(manifest, input.traceId);
+    }
+    if (credential.provider === "zhipu") {
+      manifest = await materializeZhipuUploadIntent({
+        manifest,
+        credential,
+        owner,
+        traceId: input.traceId,
+        signal: input.signal,
+      });
       return statusFromManifest(manifest, input.traceId);
     }
     let generation = currentGeneration(manifest);

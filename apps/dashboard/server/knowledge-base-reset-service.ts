@@ -1,3 +1,4 @@
+import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash, randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
@@ -1046,9 +1047,8 @@ export async function processKnowledgeResetCleanupJobs() {
         );
         if (!credential) throw new Error("上游资源凭据已不可用");
         try {
-          await new ManusV2Client({
-            baseUrl: getUpstreamBaseUrl(),
-            apiKey: credential.apiKey,
+          await createCredentialAgentClient(credential, {
+            accountUserId: job.userId,
           }).deleteFile(job.upstreamId);
         } catch (error) {
           if (!(error instanceof ManusV2ApiError && error.status === 404)) {

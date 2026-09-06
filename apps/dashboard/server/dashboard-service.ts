@@ -1,3 +1,4 @@
+import { readManagedNativeUsageByAccounts } from "./managed-agent-usage";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
 
@@ -2032,7 +2033,7 @@ export async function getSharedKeyMonthlyCreditUsageForAccounts(input: {
       attributionComplete: true,
     };
   }
-  const credentialRows = await db
+  const allCredentialRows = await db
     .select()
     .from(apiCredentials)
     .where(
@@ -2065,6 +2066,9 @@ export async function getSharedKeyMonthlyCreditUsageForAccounts(input: {
       ),
     )
     .orderBy(desc(apiCredentials.version));
+  const credentialRows = allCredentialRows.filter(
+    (credential) => credential.provider !== "zhipu",
+  );
   if (credentialRows.length === 0) {
     return {
       totalUsed: 0,
@@ -2510,6 +2514,26 @@ async function getAccountCreditUsageBetween(
       complete: true,
       ...(input.period ? { period: input.period } : {}),
     };
+  if (credential.provider === "zhipu") {
+    const native = await readManagedNativeUsageByAccounts({
+      executor: await requireDb(),
+      accountIds: [userId],
+      startAt: input.cutoff,
+      endAt: input.endExclusive ?? Date.now(),
+    });
+    return {
+      totalUsed: 0,
+      accountUsed: 0,
+      recentTasks: [],
+      fetchedAt: Date.now(),
+      fingerprint: credential.fingerprint,
+      complete: false,
+      provider: "zhipu" as const,
+      creditUsageAvailable: false,
+      nativeUsage: native.get(userId),
+      ...(input.period ? { period: input.period } : {}),
+    };
+  }
   const recentTasks: Array<{
     id: string;
     title: string;

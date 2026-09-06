@@ -2136,6 +2136,49 @@ describe("SiteOps core contracts", () => {
       manusCredentialId: "20000000-0000-4000-8000-000000000002",
       manusCredentialVersion: 8,
       agentProfile: "frontmind-base",
+      provider: "manus",
+      upstreamModel: "manus-1.6",
+      upstreamEffort: null,
+    });
+  });
+
+  it("freezes the selected Zhipu model and effort without inheriting a parent's key", () => {
+    const credential = {
+      id: "20000000-0000-4000-8000-000000000002",
+      version: 12,
+      agentProfile: "frontmind-pro",
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "max",
+    };
+    expect(
+      freezeSiteOpsCustomerAiCredential({
+        credential,
+        parentOperationInput: {
+          provider: "manus",
+          manusCredentialId: "old",
+          agentProfile: "frontmind-base",
+        },
+      }),
+    ).toMatchObject({
+      manusCredentialId: credential.id,
+      manusCredentialVersion: 12,
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
+      agentProfile: "frontmind-base",
+    });
+    expect(freezeSiteOpsCustomerAiCredential({ credential })).toMatchObject({
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "max",
+    });
+    expect(
+      freezeSiteOpsCustomerAiCredential({
+        credential: { ...credential, upstreamEffort: "high" },
+      }),
+    ).toMatchObject({
+      upstreamEffort: "high",
     });
   });
 

@@ -72,6 +72,14 @@ const localV1AliasFiles = new Set([
   "server/_core/frontmind-proxy-policy.ts",
   "server/_core/upstream-credential.ts",
 ]);
+// Managed Agents has a distinct, official /v1 Files protocol. Keep this
+// exception restricted to the server adapters using the fixed Zhipu client;
+// arbitrary business routers must still not issue Manus v1 requests.
+const zhipuProtocolFiles = new Set([
+  "server/providers/zhipu-managed-client.ts",
+  "server/providers/website-agent-provider.ts",
+  "server/providers/dashboard-agent-provider.ts",
+]);
 const v1Endpoint = /\/v1\/(?:tasks|responses|files)(?:\/|\b)/u;
 const directV1Egress = [
   /https:\/\/api\.manus\.ai\/v1\/(?:tasks|responses|files)(?:\/|\b)/u,
@@ -82,7 +90,11 @@ const directV1Egress = [
 for (const absolutePath of reachable) {
   const relativePath = toRepositoryPath(absolutePath);
   const contents = await readFile(absolutePath, "utf8");
-  if (v1Endpoint.test(contents) && !localV1AliasFiles.has(relativePath)) {
+  if (
+    v1Endpoint.test(contents) &&
+    !localV1AliasFiles.has(relativePath) &&
+    !zhipuProtocolFiles.has(relativePath)
+  ) {
     failures.push(`REACHABLE_MANUS_V1_ENDPOINT:${relativePath}`);
   }
   if (directV1Egress.some((pattern) => pattern.test(contents))) {
@@ -139,9 +151,7 @@ const dispatchEnd = knowledgeBaseApiSource.indexOf(
 );
 const dispatchSource = knowledgeBaseApiSource.slice(dispatchStart, dispatchEnd);
 const missingBuildFence = dispatchSource.indexOf("if (!existingBuild)");
-const resetFence = dispatchSource.indexOf(
-  "existingBuild.executionMode !==",
-);
+const resetFence = dispatchSource.indexOf("existingBuild.executionMode !==");
 const materializedDispatch = dispatchSource.indexOf(
   "dispatchMaterializedKnowledgeBaseClaim({",
 );
@@ -179,7 +189,9 @@ const runtimeEntry = await readFile(
   path.join(repositoryRoot, "server/_core/index.ts"),
   "utf8",
 );
-if (runtimeEntry.includes("releaseGeneratedAttachmentInvalidPreproviderTurns")) {
+if (
+  runtimeEntry.includes("releaseGeneratedAttachmentInvalidPreproviderTurns")
+) {
   failures.push("KNOWLEDGE_BASE_LEGACY_PREPROVIDER_SWEEP_MOUNTED");
 }
 

@@ -2247,6 +2247,8 @@ export async function readNativeSourceAttachment(input: {
   };
   signal?: AbortSignal;
   fetchPinned?: FetchPinned;
+  /** Server-side reader already bound to the operation and credential. */
+  fetchProviderFile?: (fileId: string) => Promise<Response>;
   maxBytes?: number;
 }) {
   const mediaType = input.attachment.contentType
@@ -2279,14 +2281,28 @@ export async function readNativeSourceAttachment(input: {
   if (input.attachment.url.startsWith("data:")) {
     return boundedDataUrl(input.attachment.url, maxBytes);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(input.attachment.url);
-  } catch {
+  const providerPointer = input.attachment.url.trim().startsWith("zhipu-file:");
+  const providerFile = /^zhipu-file:([A-Za-z0-9_-]{1,255})$/u.exec(
+    input.attachment.url,
+  );
+  if (
+    providerPointer &&
+    (!providerFile ||
+      providerFile[0] !== input.attachment.url ||
+      !input.fetchProviderFile)
+  ) {
     throw new NativeReactSourceError("NATIVE_SOURCE_ATTACHMENT_INVALID");
   }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw new NativeReactSourceError("NATIVE_SOURCE_ATTACHMENT_INVALID");
+  let parsed: URL | undefined;
+  if (!providerFile) {
+    try {
+      parsed = new URL(input.attachment.url);
+    } catch {
+      throw new NativeReactSourceError("NATIVE_SOURCE_ATTACHMENT_INVALID");
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      throw new NativeReactSourceError("NATIVE_SOURCE_ATTACHMENT_INVALID");
+    }
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -2294,11 +2310,17 @@ export async function readNativeSourceAttachment(input: {
   if (input.signal?.aborted) controller.abort();
   input.signal?.addEventListener("abort", onAbort, { once: true });
   try {
+    if (providerFile) {
+      controller.signal.throwIfAborted();
+      const response = await input.fetchProviderFile!(providerFile[1]!);
+      controller.signal.throwIfAborted();
+      return await readBoundedResponseBody(response, maxBytes);
+    }
     const fetched = await (input.fetchPinned ?? fetchPinnedPublicHttps)({
-      url: parsed,
+      url: parsed!,
       signal: controller.signal,
       maxRedirects: 2,
-      allowedOrigin: parsed.origin,
+      allowedOrigin: parsed!.origin,
       headers: { Accept: FRONTMIND_SITE_SOURCE_ARCHIVE_MIME },
     });
     return await readBoundedResponseBody(fetched.response, maxBytes);

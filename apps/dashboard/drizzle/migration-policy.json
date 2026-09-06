@@ -12,6 +12,7 @@
     "0056_monitoring_domain": "expand",
     "0057_concerned_ares": "expand",
     "0058_dashboard_production_parity": "expand",
-    "0059_website_zhipu_provider": "expand"
+    "0059_website_zhipu_provider": "expand",
+    "0060_dashboard_zhipu_provider": "expand"
   }
 }

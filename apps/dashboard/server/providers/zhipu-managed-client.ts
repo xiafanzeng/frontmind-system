@@ -168,8 +168,11 @@ export class ZhipuManagedClient {
       const result = await this.request("GET", `${path}?${search}`);
       if (!Array.isArray(result.data))
         throw new ZhipuManagedError(path, 502, "INVALID_PAGINATION", false);
-      for (const item of result.data)
-        results.set(zhipuResourceId(item), record(item));
+      for (const item of result.data) {
+        const id = zhipuResourceId(item);
+        if (query.order === "desc" && results.has(id)) continue;
+        results.set(id, record(item));
+      }
       const next = files
         ? result.has_more === true
           ? result.last_id
@@ -215,6 +218,18 @@ export class ZhipuManagedClient {
         if (!Array.isArray(value.data) || value.data.length !== 1)
           throw new Error("INVALID_SEND_ACKNOWLEDGEMENT");
         zhipuResourceId(value.data[0]);
+      },
+    );
+  }
+  async deleteFile(fileId: string) {
+    zhipuResourceId({ id: fileId });
+    return this.request(
+      "DELETE",
+      `/v1/files/${fileId}`,
+      undefined,
+      (result) => {
+        if (result.id !== fileId || result.deleted !== true)
+          throw new Error("INVALID_DELETE_ACK");
       },
     );
   }

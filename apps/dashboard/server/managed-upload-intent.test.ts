@@ -1,3 +1,5 @@
+import * as credentialAgentClient from "./credential-agent-client";
+import { ManusV2ApiError } from "./manus-v2-client";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -347,6 +349,7 @@ describe("stage-first managed upload intents", () => {
     });
     mocks.discardResource.mockReset().mockImplementation(async (input) => {
       await input.discard({
+        credential: await mocks.credential(),
         apiKey: "test-key",
         userId: 42,
         fileId: input.fileId,
@@ -364,12 +367,146 @@ describe("stage-first managed upload intents", () => {
   });
 
   afterEach(async () => {
+    if (vi.isMockFunction(credentialAgentClient.createCredentialAgentClient)) {
+      credentialAgentClient.createCredentialAgentClient.mockRestore();
+    }
     vi.useRealTimers();
     await stopManagedUploadIntentWorkerForTests();
     delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
     delete process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY;
     delete process.env.FRONTMIND_UPSTREAM_BASE_URL;
     await fs.rm(assetDirectory, { recursive: true, force: true });
+  });
+
+  it("materializes the original sealed bytes through Zhipu and replays the same uploaded receipt", async () => {
+    const credential = {
+      ...(await mocks.credential()),
+      provider: "zhipu",
+      upstreamModel: "glm-5.3",
+      upstreamEffort: "high",
+      status: "retired",
+    };
+    mocks.credential.mockResolvedValue(credential);
+    const { sealed, content } = await sealIntent();
+    const upload = vi.fn(async (input) => {
+      const chunks = [];
+      for await (const chunk of input.createReadStream()) chunks.push(chunk);
+      expect(Buffer.concat(chunks)).toEqual(content);
+      expect(input.filename).toBe("document.pdf");
+      expect(input.byteLength).toBe(content.length);
+      expect(input).not.toHaveProperty("uploadUrl");
+      const candidate = {
+        fileId: "zhipu-file-1",
+        filename: input.filename,
+        uploadUrl: "",
+        uploadExpiresAt: 253402300799,
+        requestId: null,
+      };
+      await input.observer.onCandidateCreated(candidate);
+      return {
+        ...candidate,
+        detail: { status: "uploaded", bytes: content.length },
+      };
+    });
+    const factory = vi
+      .spyOn(credentialAgentClient, "createCredentialAgentClient")
+      .mockReturnValue({ uploadFile: upload } as any);
+    const input = {
+      intentId: sealed.intentId,
+      userId: 42,
+      traceId: "zhipu-upload",
+    };
+    const first = await processManagedUploadIntent(input);
+    expect(first).toMatchObject({
+      state: "uploaded",
+      fileId: "zhipu-file-1",
+      sizeBytes: content.length,
+      recreated: false,
+    });
+    expect(await processManagedUploadIntent(input)).toEqual(first);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(factory).toHaveBeenCalledWith(credential, {
+      accountUserId: 42,
+      intentId: `managed-upload:${sealed.intentId}`,
+    });
+    expect(mocks.recordResource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 42,
+        apiCredentialId: credential.id,
+        upstreamId: "zhipu-file-1",
+      }),
+    );
+    expect(mocks.axiosPost).not.toHaveBeenCalled();
+    expect(mocks.axiosPut).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ambiguous Zhipu upload on its frozen intent without invoking the Manus replacement path", async () => {
+    mocks.credential.mockResolvedValue({
+      ...(await mocks.credential()),
+      provider: "zhipu",
+    });
+    const { sealed } = await sealIntent();
+    const upload = vi
+      .fn()
+      .mockRejectedValue(
+        new ManusV2ApiError(
+          "file.upload",
+          null,
+          "ZHIPU_MUTATION_OUTCOME_UNKNOWN",
+          false,
+          true,
+        ),
+      );
+    const factory = vi
+      .spyOn(credentialAgentClient, "createCredentialAgentClient")
+      .mockReturnValue({ uploadFile: upload } as any);
+    const input = {
+      intentId: sealed.intentId,
+      userId: 42,
+      traceId: "zhipu-unknown",
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(processManagedUploadIntent(input)).rejects.toMatchObject({
+        code: "UPLOAD_PROVIDER_CREATE_UNKNOWN",
+        retryable: true,
+      });
+    }
+    const manifest = await readManagedUploadIntent(sealed.intentId);
+    expect(manifest).toMatchObject({
+      providerGeneration: 1,
+      provider: [{ state: "create_unknown" }],
+    });
+    expect(
+      new Set(factory.mock.calls.map((call) => call[1]?.intentId)).size,
+    ).toBe(1);
+    expect(mocks.axiosPost).not.toHaveBeenCalled();
+    expect(mocks.axiosPut).not.toHaveBeenCalled();
+    expect(mocks.markRetention).not.toHaveBeenCalled();
+  });
+
+  it("rejects corrupted sealed Zhipu inputs before any provider mutation", async () => {
+    mocks.credential.mockResolvedValue({
+      ...(await mocks.credential()),
+      provider: "zhipu",
+    });
+    const { sealed } = await sealIntent();
+    await fs.writeFile(
+      path.join(intentDirectory(sealed.intentId), "upload.content"),
+      "other bytes",
+    );
+    const factory = vi.spyOn(
+      credentialAgentClient,
+      "createCredentialAgentClient",
+    );
+    await expect(
+      processManagedUploadIntent({
+        intentId: sealed.intentId,
+        userId: 42,
+        traceId: "zhipu-corrupt",
+      }),
+    ).rejects.toMatchObject({ code: "UPLOAD_PROVIDER_IDENTITY_MISMATCH" });
+    expect(factory).not.toHaveBeenCalled();
+    expect(mocks.recordResource).not.toHaveBeenCalled();
   });
 
   it("creates an idempotent local intent without touching the provider", async () => {
@@ -1831,6 +1968,7 @@ describe("stage-first managed upload intents", () => {
       discardCalls += 1;
       if (discardCalls <= 2) {
         await input.discard({
+          credential: await mocks.credential(),
           apiKey: "test-key",
           userId: 42,
           fileId: input.fileId,
@@ -2037,6 +2175,7 @@ describe("stage-first managed upload intents", () => {
       discardCalls += 1;
       if (discardCalls === 1) {
         return input.discard({
+          credential: await mocks.credential(),
           apiKey: "test-key",
           userId: 42,
           fileId: input.fileId,

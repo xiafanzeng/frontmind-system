@@ -127,9 +127,27 @@ describe("original v4.11 content workflow state", () => {
     const system = contentProductionSystemContext(context());
     expect(system).toContain("ZIP the entire current Job tree");
     expect(system).toContain("binary inputs and documents");
-    expect(system).toContain("lastObservation.sha256 and runnerRevision");
+    expect(system).not.toContain("lastObservation");
+    expect(system).toContain("select the largest epochMilliseconds");
+    expect(system).toContain(
+      "typed contentProductionAction's original revision",
+    );
     expect(system).toContain("never filesystem mtime");
     expect(system).toContain("never reconstruct files from conversation text");
+  });
+  it("passes already supplied article answers to the original start without skipping native pauses", () => {
+    const system = contentProductionSystemContext(context());
+    expect(system).toContain("[--answer FILE repeated] --job-dir DIR");
+    expect(system).toContain(
+      "repeated --answer parameters on the initial start command",
+    );
+    expect(system).toContain(
+      "complete original answer bytes and source notices",
+    );
+    expect(system).toContain("model-generated test inputs");
+    expect(system).toContain(
+      "The original Runner still pauses for the Reference Pack route",
+    );
   });
   it.each(CONTENT_PRODUCTION_CONFIRMATIONS)(
     "preserves native pause %s with revision and choices",

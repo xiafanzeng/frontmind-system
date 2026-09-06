@@ -56,6 +56,12 @@ export type DashboardAgentClientOptions = DashboardProviderIdentity & {
   effort?: "low" | "high" | "max";
   baseUrl?: string;
   rateLimitScope?: string;
+  /** Frozen server-owned purpose context, never supplied directly by the browser. */
+  systemContext?: string;
+  /** Server-owned workflow inputs mount in the same session, outside user-turn evidence. */
+  systemAttachments?: readonly ManusV2Attachment[];
+  /** Server-approved small operational status files may survive a native error; they never settle the task. */
+  recoverableStatusArtifact?: (filename: string) => boolean;
   timeoutMs?: number;
   store?: DashboardAgentRuntimeStore;
   api?: ZhipuManagedClient;
@@ -562,6 +568,15 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         file.filename !== attachment.filename
       )
         fail("task.create", "ATTACHMENT_OWNERSHIP_INVALID");
+      if (
+        record.runtime.files.some(
+          (old) =>
+            old.serverOwned &&
+            old.filename === file.filename &&
+            old.id !== file.id,
+        )
+      )
+        fail("task.sendMessage", "SYSTEM_INPUT_FILENAME_RESERVED", false, 400);
       files.push(file);
     }
     if (new Set(files.map((f) => f.filename)).size !== files.length)
@@ -584,6 +599,25 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     if (record.runtime.intentId !== this.intent())
       fail("task.create", "PROVIDER_INITIAL_INTENT_CONFLICT");
     const files = await this.attachments(input.attachments ?? [], record);
+    const systemFiles = await this.attachments(
+      this.options.systemAttachments ?? [],
+      record,
+    );
+    const mountedFiles = [...files, ...systemFiles];
+    if (
+      new Set(mountedFiles.map((file) => file.filename)).size !==
+      mountedFiles.length
+    )
+      fail("task.create", "ATTACHMENT_FILENAME_CONFLICT", false, 400);
+    if (systemFiles.length)
+      await this.change(record, (runtime) => ({
+        ...runtime,
+        files: runtime.files.map((file) =>
+          systemFiles.some((systemFile) => systemFile.id === file.id)
+            ? { ...file, serverOwned: true }
+            : file,
+        ),
+      }));
     const agentBody = {
       name: `FrontMind ${record.operationId}`,
       model: {
@@ -591,7 +625,9 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         effort: record.runtime.effort,
         speed: "standard",
       },
-      system: SYSTEM,
+      system: this.options.systemContext
+        ? `${SYSTEM}\n\n${this.options.systemContext}`
+        : SYSTEM,
       tools: [{ type: "agent_toolset_20260601" }],
     };
     const agent = await this.once(
@@ -632,7 +668,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         frontmind_operation: record.operationId,
         frontmind_intent: sha(this.intent()),
       },
-      resources: files.map((f) => ({
+      resources: mountedFiles.map((f) => ({
         type: "file",
         file_id: f.id,
         mount_path: `/input/${f.filename}`,
@@ -683,6 +719,15 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       ? session.resources.map(object)
       : [];
     for (const file of files) {
+      if (
+        record.runtime.files.some(
+          (old) =>
+            old.serverOwned &&
+            old.filename === file.filename &&
+            old.id !== file.id,
+        )
+      )
+        fail("task.sendMessage", "SYSTEM_INPUT_FILENAME_RESERVED", false, 400);
       const path = `/mnt/session/uploads/input/${file.filename}`;
       const occupied = resources.find((r) => r.mount_path === path);
       if (occupied?.file_id === file.id) continue;
@@ -1063,7 +1108,11 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       // A failed native run can still leave a complete structured deliverable.
       // Keep its error status; only the existing business parser can accept it.
       const failedStructuredDelivery = Boolean(command.schema && failure);
-      if (!completed && !failedStructuredDelivery) continue;
+      const failedStatusDelivery = Boolean(
+        this.options.recoverableStatusArtifact && failure,
+      );
+      if (!completed && !failedStructuredDelivery && !failedStatusDelivery)
+        continue;
       if (
         scoped
           .slice(terminalIndex + 1)
@@ -1135,7 +1184,12 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
             /\.json$/iu.test(String(file.filename)) &&
             Number(file.size_bytes) <= 512 * 1024,
         );
-        if (!completed && !structuredFile) continue;
+        const recoverableStatusFile = Boolean(
+          this.options.recoverableStatusArtifact?.(String(file.filename)) &&
+            /\.json$/iu.test(String(file.filename)) &&
+            Number(file.size_bytes) <= 256 * 1024,
+        );
+        if (!completed && !structuredFile && !recoverableStatusFile) continue;
         const prior = record.runtime.files.find((f) => f.id === id);
         if (prior?.commandKey && prior.commandKey !== command.key) continue;
         if (
@@ -1202,10 +1256,15 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
           ),
         ],
       }));
-      if (!completed) continue;
+      const attachmentFiles = completed
+        ? outputFiles
+        : outputFiles.filter((file) =>
+            this.options.recoverableStatusArtifact?.(file.filename),
+          );
+      if (!attachmentFiles.length) continue;
       result.push({
         id: `zhipu_outputs_${sha(
-          `${command.key}:${outputFiles
+          `${command.key}:${attachmentFiles
             .map((f) => f.id)
             .sort()
             .join(",")}`,
@@ -1215,7 +1274,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         providerOriginalRank: raw.indexOf(terminal) + 0.3,
         assistant_message: {
           content: "",
-          attachments: outputFiles.map((f) => ({
+          attachments: attachmentFiles.map((f) => ({
             file_id: f.id,
             filename: f.filename,
             content_type: f.contentType,

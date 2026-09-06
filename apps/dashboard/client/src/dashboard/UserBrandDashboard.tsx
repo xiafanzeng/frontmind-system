@@ -25,6 +25,8 @@ import {
   Layers3,
   ChartNoAxesColumnIncreasing,
   Radar,
+  Bot,
+  PenLine,
 } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
@@ -48,6 +50,7 @@ import ProgressReportWorkspace from "./ProgressReportWorkspace";
 import HistoricalResultsReadOnly from "./HistoricalResultsReadOnly";
 import ConnectedSiteOpsConversationPanel from "./siteops/ConnectedSiteOpsConversationPanel";
 import { trpc } from "@/lib/trpc";
+import { ConversationPurposeProvider } from "@/contexts/ConversationContext";
 import {
   KEYWORD_CATEGORY_OPTIONS,
   keywordCategoryKey,
@@ -84,6 +87,11 @@ import {
 const MonitoringModule = lazy(() => import("@/monitoring/Workspace"));
 const ContentInsightsWorkspace = lazy(
   () => import("./content-insights/ContentInsightsWorkspace"),
+);
+const GeneralAgentHome = lazy(() => import("@/pages/Home"));
+const EnterpriseQaWorkspace = lazy(() => import("./EnterpriseQaWorkspace"));
+const ContentProductionWorkspace = lazy(
+  () => import("./content-production/ContentProductionWorkspace"),
 );
 
 export { ManagedKeywordTables };
@@ -252,10 +260,11 @@ const publicOpinionSubpages = [
 
 const semanticSubpages = [
   {
-    id: "content-assets",
-    section: "semantic",
-    label: "内容资产运营",
-    desc: "按内容类型提交制作与行业权威信源发布需求。",
+    id: "enterprise-qa",
+    section: "enterprise-qa",
+    label: "企业问答智能体",
+    desc: "基于已发布的企业知识库回答业务问题。",
+    matchSectionOnly: true,
   },
   {
     id: "website-management",
@@ -640,6 +649,9 @@ function UserBrandDashboardContent({
   const moduleRoute = previewMode ? null : dashboardModuleRoute(location);
   const insightsRoute =
     new URLSearchParams(search).get("view") === "content-insights";
+  const agentRoute = location === "/agent";
+  const enterpriseQaRoute = location === "/enterprise-qa";
+  const contentProductionRoute = location === "/content-production";
   const [localRoute, setRoute] = useState(
     initialSection === "knowledge-agent"
       ? { section: "knowledge-agent", sub: "build" }
@@ -647,9 +659,15 @@ function UserBrandDashboardContent({
   );
   const route =
     moduleRoute ||
-    (insightsRoute
-      ? { section: "semantic", sub: "content-insights" }
-      : localRoute);
+    (enterpriseQaRoute
+      ? { section: "enterprise-qa", sub: null }
+      : agentRoute
+        ? { section: "general-agent", sub: null }
+        : contentProductionRoute
+          ? { section: "content-production", sub: null }
+          : insightsRoute
+            ? { section: "semantic", sub: "content-insights" }
+            : localRoute);
   const [accountOpen, setAccountOpen] = useState(false);
   const [salesAdvisorOpen, setSalesAdvisorOpen] = useState(false);
   const [responseQuestionId, setResponseQuestionId] = useState(null);
@@ -695,6 +713,26 @@ function UserBrandDashboardContent({
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const navigate = (section, sub = null) => {
+    if (
+      section === "general-agent" ||
+      section === "content-production" ||
+      section === "enterprise-qa"
+    ) {
+      setLocation(
+        section === "general-agent"
+          ? "/agent"
+          : section === "enterprise-qa"
+            ? "/enterprise-qa"
+            : "/content-production",
+      );
+      setMobileNavOpen(false);
+      return;
+    }
+    // Retired content operations have no reachable page, including old callers.
+    if (section === "semantic" && sub === "content-assets") {
+      section = "service";
+      sub = null;
+    }
     if (section === "monitoring-module" || section === "publishing-module") {
       setLocation(sub);
       setMobileNavOpen(false);
@@ -702,7 +740,13 @@ function UserBrandDashboardContent({
     }
     if (section === "semantic" && sub === "content-insights") {
       setLocation(`${previewMode ? location : "/"}?view=content-insights`);
-    } else if (moduleRoute || insightsRoute) {
+    } else if (
+      moduleRoute ||
+      insightsRoute ||
+      agentRoute ||
+      enterpriseQaRoute ||
+      contentProductionRoute
+    ) {
       setLocation(previewMode ? location : "/");
     }
     const legacyMonitoringRoute =
@@ -758,7 +802,11 @@ function UserBrandDashboardContent({
   const brandTrackingWorkspace =
     marketEdition === "overseas" && route.section === "public-opinion";
   const immersiveAgentWorkspace =
-    knowledgeBuildWorkspace || brandTrackingWorkspace;
+    knowledgeBuildWorkspace ||
+    brandTrackingWorkspace ||
+    agentRoute ||
+    enterpriseQaRoute ||
+    contentProductionRoute;
   const routeTitle =
     route.section === "public-opinion"
       ? "品牌追踪智能体"
@@ -781,7 +829,7 @@ function UserBrandDashboardContent({
                 : route.section === "semantic"
                   ? route.sub === "website-management"
                     ? SITEOPS_CUSTOMER_DISPLAY_NAME
-                    : "内容资产运营"
+                    : "AI 友好内容资产"
                   : "服务页面";
   return (
     <div
@@ -862,6 +910,27 @@ function UserBrandDashboardContent({
                 <MonitoringModule />
               </Suspense>
             </div>
+          ) : agentRoute ? (
+            <Suspense fallback={<div role="status">正在打开通用智能体…</div>}>
+              <ConversationPurposeProvider purpose="general">
+                <GeneralAgentHome
+                  embedded
+                  hidePortalNavigation
+                  showKnowledgeBaseStarter={false}
+                  showAccountMenu={false}
+                  showSettings={false}
+                  standardWelcomeVariant="simple"
+                />
+              </ConversationPurposeProvider>
+            </Suspense>
+          ) : enterpriseQaRoute ? (
+            <Suspense fallback={<div role="status">正在打开企业问答…</div>}>
+              <EnterpriseQaWorkspace />
+            </Suspense>
+          ) : contentProductionRoute ? (
+            <Suspense fallback={<div role="status">正在打开内容制作…</div>}>
+              <ContentProductionWorkspace />
+            </Suspense>
           ) : route.section === "service" ? (
             <ServiceHome
               portal={servicePortal}
@@ -1018,16 +1087,7 @@ function UserBrandDashboardContent({
                       assets={managedPayload?.contentAssets || []}
                     />
                   </section>
-                ) : (
-                  <SemanticAssetSystem
-                    publishedAssets={managedPayload?.contentAssets || []}
-                    onEdit={
-                      onEditDashboard
-                        ? () => onEditDashboard("content")
-                        : undefined
-                    }
-                  />
-                ))}
+                ) : null)}
               {route.section === "knowledge-agent" && (
                 <Suspense
                   fallback={
@@ -1159,32 +1219,40 @@ function Sidebar({
           onNavigate={onNavigate}
           portal={portal}
         />
+        {!preview && (
+          <>
+            <SidebarGroup
+              id="content-production"
+              label="内容制作"
+              icon={PenLine}
+              items={[
+                { id: "workspace", label: "内容制作", matchSectionOnly: true },
+              ]}
+              route={route}
+              onNavigate={onNavigate}
+              portal={portal}
+            />
+            <SidebarGroup
+              id="monitoring-module"
+              label="问题监控"
+              icon={Activity}
+              items={customerMonitoringPages}
+              route={route}
+              onNavigate={onNavigate}
+              portal={portal}
+            />
+            <SidebarGroup
+              id="publishing-module"
+              label="媒体发布"
+              icon={Database}
+              items={customerPublishingPages}
+              route={route}
+              onNavigate={onNavigate}
+              portal={portal}
+            />
+          </>
+        )}
       </div>
-      {!preview && (
-        <div className="nav-group-card promise-card">
-          <div className="nav-group-head">
-            <span>监控与发布</span>
-          </div>
-          <SidebarGroup
-            id="monitoring-module"
-            label="问题监控"
-            icon={Activity}
-            items={customerMonitoringPages}
-            route={route}
-            onNavigate={onNavigate}
-            portal={portal}
-          />
-          <SidebarGroup
-            id="publishing-module"
-            label="媒体发布"
-            icon={Database}
-            items={customerPublishingPages}
-            route={route}
-            onNavigate={onNavigate}
-            portal={portal}
-          />
-        </div>
-      )}
       <div className="mt-auto grid gap-2">
         <ServiceAccountDrawer
           portal={portal}
@@ -1193,6 +1261,19 @@ function Sidebar({
           open={accountOpen}
           onOpenChange={onAccountOpenChange}
         />
+        {!preview && (
+          <button
+            type="button"
+            className={`nav-section-label nav-section-button general-agent-nav ${route.section === "general-agent" ? "active" : ""}`}
+            aria-current={
+              route.section === "general-agent" ? "page" : undefined
+            }
+            onClick={() => onNavigate("general-agent")}
+          >
+            <Bot className="nav-icon" size={16} />
+            <span>通用智能体</span>
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -1250,6 +1331,7 @@ function SubNav({ items, section, route, onNavigate, portal }) {
         return (
           <button
             className={active ? "active" : ""}
+            aria-current={active ? "page" : undefined}
             key={`${targetSection}-${item.id}`}
             onClick={
               showPlanLock
@@ -3128,30 +3210,6 @@ function OptimizationReport({ questionGroups, report }) {
         report={report}
         questionGroups={questionGroups}
       />
-    </section>
-  );
-}
-
-// ==================== SEMANTIC ASSET SECTION (SaaS化：生产与分发流) ====================
-function SemanticAssetSystem({ publishedAssets = [], onEdit }) {
-  return (
-    <section className="page-shell semantic-page">
-      <PageHeader
-        eyebrow="MindPromise智诺 / AI 友好内容资产"
-        title="内容资产运营"
-        desc="查看和编辑自己的内容资产，可下载原格式模板、导入并确认发布。"
-      />
-      {onEdit && (
-        <Button variant="outline" onClick={onEdit}>
-          编辑内容资产
-        </Button>
-      )}
-      {!publishedAssets.length && (
-        <p className="mt-5 text-sm text-muted-foreground">
-          暂无内容资产，可从编辑入口导入内容。
-        </p>
-      )}
-      <PublishedContentAssets assets={publishedAssets} />
     </section>
   );
 }

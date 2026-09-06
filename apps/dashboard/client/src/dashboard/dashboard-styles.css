@@ -66,7 +66,7 @@
   position: sticky;
   top: 0;
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   flex-direction: column;
   gap: 16px;
   padding: 22px 16px 18px;
@@ -170,11 +170,14 @@
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 12px;
   color: rgba(255, 255, 255, 0.62);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  transition: color 160ms ease, background 160ms ease;
 }
 .user-brand-dashboard .sub-nav button > span {
   white-space: nowrap;
@@ -183,6 +186,15 @@
 .user-brand-dashboard .sub-nav button.active {
   color: #fff;
   background: rgba(255, 255, 255, 0.075);
+}
+.user-brand-dashboard .general-agent-nav {
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
 }
 .user-brand-dashboard .sidebar-footer-brand {
   margin-top: auto;

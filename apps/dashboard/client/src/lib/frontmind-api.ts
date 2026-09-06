@@ -1,3 +1,8 @@
+import type {
+  ContentProductionInput,
+  ContentProductionAction,
+  ContentProductionDto,
+} from "@shared/content-production";
 /**
  * FrontMind API Service Layer
  * Handles all communication with the API via the backend proxy.
@@ -184,6 +189,15 @@ export interface Message {
 
 export interface TaskResponse {
   id: string;
+  purpose?: "enterprise_qa" | "content_production" | "general";
+  contentProduction?: ContentProductionDto | null;
+  knowledgeBase?: {
+    snapshotId: string;
+    version: number;
+    sourceFileName: string;
+    documentCount: number;
+    contentHash: string;
+  } | null;
   /** Response-logic operation boundary; absent on ordinary tasks. */
   operationRevision?: number;
   /** Terminal ordinary task DTO has no reusable task binding. */
@@ -821,6 +835,9 @@ export async function createTask(
     clientRequestId?: string;
     projectId?: string;
     modelProfile?: GeneralAgentModelProfile;
+    purpose?: "enterprise_qa" | "content_production";
+    contentProduction?: ContentProductionInput;
+    contentProductionAction?: ContentProductionAction;
   },
 ): Promise<TaskResponse> {
   const prompt = buildPromptText(input);
@@ -845,8 +862,14 @@ export async function createTask(
           modelProfile: normalizePublicAgentProfile(
             options?.modelProfile,
           ) as GeneralAgentModelProfile,
+          ...(options?.purpose ? { purpose: options.purpose } : {}),
+          ...(options?.contentProduction
+            ? { contentProduction: options.contentProduction }
+            : {}),
         }
-      : {}),
+      : options?.contentProductionAction
+        ? { contentProductionAction: options.contentProductionAction }
+        : {}),
   };
   const response = await apiRequest(
     localTaskId

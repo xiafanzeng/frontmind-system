@@ -1,3 +1,4 @@
+import type { ContentProductionInput } from "@shared/content-production";
 /**
  * ChatArea Component - Main chat interface
  * Design: Glassmorphism cards, fluid animations, spacious layout.
@@ -1195,6 +1196,8 @@ async function fetchWithAuth(
 export default function ChatArea({
   fixedAgentProfile,
   syncKnowledgeBaseSnapshot = false,
+  purpose,
+  contentProduction,
   composerPrefill,
   responseLogicContext,
   messageProjection,
@@ -1208,11 +1211,13 @@ export default function ChatArea({
 }: {
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
+  purpose?: "enterprise_qa" | "content_production";
+  contentProduction?: ContentProductionInput;
   composerPrefill?: string;
   responseLogicContext?: ResponseLogicTaskContext;
   messageProjection?: (message: LocalMessage) => LocalMessage;
   showKnowledgeBaseStarter?: boolean;
-  standardWelcomeVariant?: "simple" | "workflow";
+  standardWelcomeVariant?: "simple" | "workflow" | "enterprise_qa";
   reserveOuterMobileNav?: boolean;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
@@ -1708,7 +1713,7 @@ export default function ChatArea({
   );
 
   if (!activeConversation) {
-    return <EmptyState />;
+    return <EmptyState enterpriseQa={purpose === "enterprise_qa"} />;
   }
 
   const sanitizedTitle = activeConversation.title
@@ -2028,6 +2033,8 @@ export default function ChatArea({
       <ChatInput
         fixedAgentProfile={fixedAgentProfile}
         syncKnowledgeBaseSnapshot={syncKnowledgeBaseSnapshot}
+        purpose={purpose}
+        contentProduction={contentProduction}
         composerPrefill={composerPrefill}
         responseLogicContext={responseLogicContext}
         knowledgeBaseProgress={knowledgeBaseProgress}
@@ -2037,7 +2044,7 @@ export default function ChatArea({
   );
 }
 
-function EmptyState() {
+function EmptyState({ enterpriseQa = false }: { enterpriseQa?: boolean }) {
   const { createConversation } = useConversation();
 
   return (
@@ -2054,17 +2061,19 @@ function EmptyState() {
           className="w-24 h-24 mx-auto mb-7 object-contain drop-shadow-sm rounded-2xl"
         />
         <h2 className="text-2xl font-bold text-foreground/80 mb-2 tracking-tight">
-          FrontMind 内容制作智能体
+          {enterpriseQa ? "企业问答智能体" : "FrontMind 通用智能体"}
         </h2>
         <p className="text-sm text-muted-foreground mb-8 leading-relaxed max-w-sm mx-auto">
-          面向客户交付的智能内容生产工作台，支持文本、图片、文件输入与多智能体编排。
+          {enterpriseQa
+            ? "基于已发布的企业知识库回答产品、服务和业务问题。"
+            : "直接输入任务或上传资料，开始研究、分析和内容制作。"}
         </p>
         <button
           onClick={() => createConversation()}
           className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-primary text-primary-foreground font-medium text-sm hover:opacity-90 transition-all shadow-lg glow-indigo active:scale-[0.98]"
         >
           <Sparkles className="w-4 h-4" />
-          创建内容制作流程
+          {enterpriseQa ? "开始企业问答" : "新建会话"}
         </button>
       </motion.div>
     </div>
@@ -2097,8 +2106,19 @@ function ResponseLogicConversationHint({ question }: { question: string }) {
 function StandardConversationHint({
   variant,
 }: {
-  variant: "simple" | "workflow";
+  variant: "simple" | "workflow" | "enterprise_qa";
 }) {
+  if (variant === "enterprise_qa") {
+    return (
+      <div className="mx-auto max-w-xl py-14 text-center">
+        <BookOpen className="mx-auto h-8 w-8 text-primary" />
+        <h3 className="mt-4 text-lg font-semibold">有什么企业问题需要解答？</h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          回答会参考本会话绑定的已发布知识库；资料未覆盖的内容会明确说明。
+        </p>
+      </div>
+    );
+  }
   if (variant === "workflow") {
     return (
       <motion.div

@@ -31,7 +31,7 @@ export default function PublishingOverviewPage() {
 
   return (
     <PublishingPage
-      title="发布总览"
+      title="发布工作台"
       description="管理稿件、选择媒体并追踪每一笔发布结果。"
       busy={query.loading || query.refreshing}
       actions={
@@ -131,7 +131,7 @@ export default function PublishingOverviewPage() {
                     : "当前没有异常项目"}
                 </span>
               </div>
-              <Link href="/publishing/publications">
+              <Link href="/publishing?tab=records">
                 查看记录 <ArrowRight size={14} />
               </Link>
             </article>
@@ -192,7 +192,7 @@ export default function PublishingOverviewPage() {
                   <h2>处理中发布</h2>
                   <p>{query.data.processingBatchCount} 个批次正在等待或发布</p>
                 </div>
-                <Link href="/publishing/publications">查看全部</Link>
+                <Link href="/publishing?tab=records">查看全部</Link>
               </header>
               {query.data.processingBatches.length ? (
                 <div className="publishing-list">
@@ -274,7 +274,7 @@ export default function PublishingOverviewPage() {
                   <h2>最近发布</h2>
                   <p>批次与逐项资金状态</p>
                 </div>
-                <Link href="/publishing/publications">查看全部</Link>
+                <Link href="/publishing?tab=records">查看全部</Link>
               </header>
               {query.data.recentBatches.length ? (
                 <div className="publishing-list">

@@ -1,3 +1,7 @@
+import type {
+  ContentProductionInput,
+  ContentProductionAction,
+} from "@shared/content-production";
 /**
  * Enhanced useSendMessage Hook with retry mechanism and streaming support
  * Features: Safe retry for uploads, streaming responses,
@@ -574,6 +578,9 @@ export function useSendMessage() {
       options?: {
         retryConfig?: RetryConfig;
         agentProfile?: string;
+        purpose?: "enterprise_qa" | "content_production";
+        contentProduction?: ContentProductionInput;
+        contentProductionAction?: ContentProductionAction;
         syncKnowledgeBaseSnapshot?: boolean;
         knowledgeBaseExpectedGeneration?: number;
         knowledgeBaseExpectedResetRevision?: number;
@@ -1398,6 +1405,17 @@ export function useSendMessage() {
                   ordinaryOriginalLocalTaskId === null
                     ? normalizedGeneralAgentProfile(agentProfile)
                     : null,
+                ...(!ordinaryOriginalLocalTaskId &&
+                (options?.purpose ?? conv?.purpose)
+                  ? { purpose: (options?.purpose ?? conv?.purpose)! }
+                  : {}),
+                ...(!ordinaryOriginalLocalTaskId && options?.contentProduction
+                  ? { contentProduction: options.contentProduction }
+                  : {}),
+                ...(ordinaryOriginalLocalTaskId &&
+                options?.contentProductionAction
+                  ? { contentProductionAction: options.contentProductionAction }
+                  : {}),
               })
             : undefined;
         const userMessage: LocalMessage = {
@@ -1497,6 +1515,9 @@ export function useSendMessage() {
               | "frontmind-lite"
               | "frontmind-base"
               | "frontmind-pro";
+            purpose?: "enterprise_qa" | "content_production";
+            contentProduction?: ContentProductionInput;
+            contentProductionAction?: ContentProductionAction;
           } = {
             conversationId: convId,
             clientRequestId: userMessage.id,
@@ -1512,6 +1533,14 @@ export function useSendMessage() {
           if (generalChatDispatch?.modelProfile) {
             taskOptions.modelProfile = generalChatDispatch.modelProfile;
           }
+          if (generalChatDispatch?.purpose)
+            taskOptions.purpose = generalChatDispatch.purpose;
+          if (generalChatDispatch?.contentProduction)
+            taskOptions.contentProduction =
+              generalChatDispatch.contentProduction;
+          if (generalChatDispatch?.contentProductionAction)
+            taskOptions.contentProductionAction =
+              generalChatDispatch.contentProductionAction;
 
           console.log("[SendMessage] Creating task", {
             attachmentCount: contentItems.filter(
@@ -2027,8 +2056,23 @@ export function useSendMessage() {
             completedAt: Date.now(),
           });
           const errorMsg = err.message || "请求失败";
-          const failureAdvice = getFailureAdvice(errorMsg);
-          const displayError = getFailureDisplayMessage(errorMsg);
+          const purposeFailure =
+            err.code === "ENTERPRISE_QA_KNOWLEDGE_REQUIRED"
+              ? {
+                  message: "尚无可用的已发布企业知识库。",
+                  advice:
+                    "请先在企业知识库中构建并发布资料，然后重试当前问题。",
+                }
+              : err.code === "CONTENT_PRODUCTION_CONFIRMATION_CONFLICT"
+                ? {
+                    message: "当前制作阶段已更新。",
+                    advice: "请刷新任务进度，并使用当前阶段提供的确认操作。",
+                  }
+                : null;
+          const failureAdvice =
+            purposeFailure?.advice ?? getFailureAdvice(errorMsg);
+          const displayError =
+            purposeFailure?.message ?? getFailureDisplayMessage(errorMsg);
           const terminalNoticeAdded = addGeneralChatTerminalMessage({
             conversationId: convId,
             taskId:

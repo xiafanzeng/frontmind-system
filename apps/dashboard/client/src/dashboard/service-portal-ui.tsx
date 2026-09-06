@@ -688,7 +688,6 @@ export function ServiceHome({
           },
         ]
       : workflowJourneyItems;
-  const contentOperationsAccess = getCapability(portal, "contentAssets");
   const planScopeModules = serviceScopeModules(portal.plan.code, marketEdition);
 
   if (loading) {
@@ -963,62 +962,6 @@ export function ServiceHome({
               </article>
             );
           })}
-        </div>
-        <div
-          className="mt-6 grid gap-3 border-t border-[#ece6f1] pt-6"
-          aria-label="持续内容运营"
-        >
-          <div className="mb-1 flex items-center gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[#8d8496]">
-              持续内容运营
-            </span>
-            <span className="h-px flex-1 bg-[#ece6f1]" aria-hidden="true" />
-          </div>
-          <article className="grid gap-3 rounded-2xl border border-[#e2d7e9] bg-[linear-gradient(135deg,#fbf8fd,#f5eff9)] p-4 sm:grid-cols-[38px_minmax(0,1fr)_auto] sm:items-center">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#5b2a86] shadow-sm">
-              <Sparkles className="h-4 w-4" />
-            </span>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h4 className="m-0 text-sm font-semibold text-[#171321]">
-                  AI 友好内容资产
-                </h4>
-                <ServicePathStatusPill
-                  unlocked={contentOperationsAccess.allowed}
-                />
-              </div>
-              <p className="mt-1.5 text-xs leading-5 text-[#716a80]">
-                {contentOperationsAccess.allowed
-                  ? "在 GEO 交付之外，自主提交并持续管理 AI 友好内容更新。"
-                  : contentOperationsAccess.reason ||
-                    "当前套餐尚未开放持续内容运营。"}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="justify-self-start text-[#5b2a86] sm:justify-self-end"
-              disabled={
-                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
-              }
-              aria-disabled={
-                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
-              }
-              title={
-                !isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
-                  ? contentOperationsAccess.reason
-                  : undefined
-              }
-              onClick={
-                isCapabilityIncludedInPlan(portal.plan.code, "contentAssets")
-                  ? () => onNavigate("semantic", "content-assets")
-                  : undefined
-              }
-            >
-              {contentOperationsAccess.allowed ? "管理" : "查看原因"}
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </article>
         </div>
       </section>
     </section>

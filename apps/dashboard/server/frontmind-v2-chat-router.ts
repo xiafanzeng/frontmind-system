@@ -108,6 +108,34 @@ import {
   generalChatPreparationClaimIsStale,
 } from "./general-chat-preparation-claim";
 import { validateGeneralChatDispatchMetadata } from "./general-chat-dispatch-validation";
+import {
+  enterpriseQaSystemContext,
+  frozenGeneralAgentPurpose,
+  generalAgentPurposePublic,
+  generalAgentKnowledgeAttachment,
+  publishedGeneralAgentKnowledge,
+  type FrozenGeneralAgentPurpose,
+} from "./general-agent-purpose";
+import {
+  contentProductionInputSchema,
+  contentProductionActionSchema,
+} from "../shared/content-production";
+import type {
+  ContentProductionInput,
+  ContentProductionAction,
+} from "../shared/content-production";
+import {
+  contentProductionSystemAttachments,
+  contentProductionSystemContext,
+  isContentWorkflowStateFilename,
+  originalContentWorkflowArchive,
+} from "./content-production-runtime";
+import {
+  contentProductionPublicDto,
+  parseContentRunnerState,
+  persistContentProductionObservations,
+  type ContentRunnerObservation,
+} from "./content-production-state";
 
 const router = Router();
 
@@ -130,6 +158,8 @@ const taskCreateSchema = z
     clientRequestId: z.string().trim().min(1).max(128),
     prompt: z.string().trim().min(1).max(2_000_000),
     modelProfile: generalAgentModelProfileSchema.default("frontmind-pro"),
+    purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
+    contentProduction: contentProductionInputSchema.optional(),
     localAssetIds: z
       .array(z.string().trim().min(1).max(36))
       .max(32)
@@ -138,8 +168,16 @@ const taskCreateSchema = z
   .strict();
 
 const taskMessageSchema = taskCreateSchema
-  .omit({ conversationId: true, modelProfile: true })
-  .extend({ conversationId: z.string().trim().min(1).max(191) })
+  .omit({
+    conversationId: true,
+    modelProfile: true,
+    purpose: true,
+    contentProduction: true,
+  })
+  .extend({
+    conversationId: z.string().trim().min(1).max(191),
+    contentProductionAction: contentProductionActionSchema.optional(),
+  })
   .strict();
 
 const actionSchema = z
@@ -167,6 +205,7 @@ class ChatV2HttpError extends Error {
 
 function assertGeneralAgentActor(user: Express.Request["frontmindUser"]) {
   const allowed =
+    user?.role === "user" ||
     user?.role === "delivery_member" ||
     (user?.role === "admin" && user.adminAccessLevel === "delivery_admin");
   if (!allowed) throw new ChatV2HttpError("GENERAL_AGENT_ROLE_FORBIDDEN", 403);
@@ -341,8 +380,22 @@ function clientFor(
   task?: AgentTask,
   intentId?: string,
 ) {
+  const purpose = task ? frozenGeneralAgentPurpose(task, accountUserId) : null;
   return createCredentialAgentClient(credential, {
     accountUserId,
+    ...(purpose?.purpose === "enterprise_qa"
+      ? {
+          systemContext: enterpriseQaSystemContext(purpose),
+          systemAttachments: [generalAgentKnowledgeAttachment(purpose)!],
+        }
+      : {}),
+    ...(purpose?.purpose === "content_production"
+      ? {
+          systemContext: contentProductionSystemContext(purpose),
+          systemAttachments: contentProductionSystemAttachments(purpose),
+          recoverableStatusArtifact: isContentWorkflowStateFilename,
+        }
+      : {}),
     ...(operation
       ? {
           operationId: operation.id,
@@ -1874,6 +1927,10 @@ async function persistProviderEvents(input: {
     watermarkAmbiguousTurnIds,
   );
   const stagedEvents: GeneralChatStagedProviderEvent[] = [];
+  const contentStateObservations: ContentRunnerObservation[] = [];
+  const isContentProduction =
+    frozenGeneralAgentPurpose(input.task, input.operation.accountUserId!)
+      ?.purpose === "content_production";
   for (const event of orderedEvents) {
     const providerEvidence = generalChatProviderEventEvidence(event);
     const providerErrorContent = providerEvidence.errorContent
@@ -1901,6 +1958,33 @@ async function persistProviderEvents(input: {
           attachment,
         });
         if (artifact) {
+          if (
+            isContentProduction &&
+            isContentWorkflowStateFilename(artifact.filename)
+          ) {
+            if (artifact.sizeBytes <= 256 * 1024) {
+              const storedState = await readStoredPresalesFile(artifact.id);
+              const state = storedState
+                ? parseContentRunnerState(
+                    await streamToBuffer(
+                      storedState.createReadStream(),
+                      256 * 1024,
+                    ),
+                  )
+                : null;
+              if (state)
+                contentStateObservations.push({
+                  state,
+                  providerRank:
+                    event.providerOriginalRank ?? eventIndexes.get(event.id)!,
+                  eventId: event.id,
+                  artifactId: artifact.id,
+                  sha256: artifact.contentSha256,
+                });
+            }
+            // The added transport-only state copy drives progress; it is not a customer deliverable.
+            continue;
+          }
           localized.push({
             artifactId: artifact.id,
             filename: artifact.filename,
@@ -2017,6 +2101,14 @@ async function persistProviderEvents(input: {
     eventTurnState,
     stagedEvents,
   });
+  if (applied && contentStateObservations.length)
+    await persistContentProductionObservations({
+      executor: await requireDb(),
+      taskId: input.task.id,
+      operationId: input.operation.id,
+      userId: input.operation.accountUserId!,
+      observations: contentStateObservations,
+    });
   return { ...eventTurnState, applied, claimReason: projectionClaim.reason };
 }
 
@@ -2161,6 +2253,11 @@ function publicStatus(status: AgentOperation["status"]) {
 }
 
 async function taskDto(operation: AgentOperation, task: AgentTask) {
+  const purpose = frozenGeneralAgentPurpose(task, operation.accountUserId!);
+  const contentProduction = contentProductionPublicDto(
+    purpose,
+    task.providerRuntime,
+  );
   const status = publicStatus(operation.status);
   const partialResult =
     operation.errorCode === GENERAL_CHAT_PARTIAL_RESULT_ERROR_CODE;
@@ -2169,7 +2266,14 @@ async function taskDto(operation: AgentOperation, task: AgentTask) {
     object: "frontmind.local_task",
     status,
     model: operation.publicProfile,
-    metadata: { task_title: "FrontMind 内容流程" },
+    ...generalAgentPurposePublic(purpose),
+    ...(contentProduction ? { contentProduction } : {}),
+    metadata: {
+      task_title:
+        purpose?.purpose === "enterprise_qa"
+          ? "企业问答"
+          : "FrontMind 内容流程",
+    },
     output: await cachedOutput(task.id),
     ...(!task.providerTaskId &&
     ["failed", "cancelled"].includes(operation.status)
@@ -3254,6 +3358,10 @@ async function reservePersistedGeneralChatTurn(input: {
   model: string;
   modelProfile: GeneralAgentModelProfile | null;
   continuation: boolean;
+  purpose?: "enterprise_qa" | "content_production";
+  contentProduction?: ContentProductionInput;
+  contentProductionAction?: ContentProductionAction;
+  availableContentActions?: ContentProductionAction["kind"][];
 }) {
   const persistedConversationId = persistedConversationResourceId(
     input.userId,
@@ -3374,6 +3482,26 @@ async function reservePersistedGeneralChatTurn(input: {
     throw new ChatV2HttpError(dispatchValidation.code, 409);
   }
   if (
+    !input.continuation &&
+    (dispatchValidation.kind === "valid"
+      ? dispatchValidation.dispatch.purpose
+      : undefined) !== input.purpose
+  ) {
+    throw new ChatV2HttpError("GENERAL_CHAT_PURPOSE_CONFLICT", 409);
+  }
+  if (
+    dispatchValidation.kind === "valid" &&
+    ((dispatchValidation.dispatch.purpose &&
+      dispatchValidation.dispatch.purpose !== input.purpose) ||
+      requestHash(dispatchValidation.dispatch.contentProduction ?? null) !==
+        requestHash(input.contentProduction ?? null) ||
+      requestHash(
+        dispatchValidation.dispatch.contentProductionAction ?? null,
+      ) !== requestHash(input.contentProductionAction ?? null))
+  ) {
+    throw new ChatV2HttpError("GENERAL_CHAT_PURPOSE_CONFLICT", 409);
+  }
+  if (
     dispatchValidation.kind === "legacy" &&
     stripFrontMindGeneralChatOperationContract(userMessage.content).trim() !==
       input.prompt.trim()
@@ -3385,6 +3513,9 @@ async function reservePersistedGeneralChatTurn(input: {
   const turnRequestHash = requestHash({
     prompt: input.prompt,
     localAssetIds: requestedAssetIds,
+    ...(input.contentProductionAction
+      ? { contentProductionAction: input.contentProductionAction }
+      : {}),
   });
   const operationKey = `chat-turn:${hash(
     `${input.userId}\0${input.conversationId}\0${input.clientRequestId}`,
@@ -3423,6 +3554,12 @@ async function reservePersistedGeneralChatTurn(input: {
     return { conversation, turn: existingTurn, persistedConversationId };
   }
   const turnId = randomUUID();
+  if (
+    input.contentProductionAction &&
+    !input.availableContentActions?.includes(input.contentProductionAction.kind)
+  ) {
+    throw new ChatV2HttpError("CONTENT_PRODUCTION_CONFIRMATION_CONFLICT", 409);
+  }
   const now = new Date();
   const metadata = {
     schemaVersion: 1,
@@ -3491,6 +3628,10 @@ async function reserveCreate(input: {
     prompt: input.value.prompt,
     localAssetIds: input.value.localAssetIds,
     modelProfile: input.value.modelProfile,
+    ...(input.value.purpose ? { purpose: input.value.purpose } : {}),
+    ...(input.value.contentProduction
+      ? { contentProduction: input.value.contentProduction }
+      : {}),
   });
   const existing = (
     await db
@@ -3526,6 +3667,8 @@ async function reserveCreate(input: {
         localTaskId: existing.task.id,
         model: existing.operation.upstreamModel,
         modelProfile: input.value.modelProfile,
+        purpose: input.value.purpose,
+        contentProduction: input.value.contentProduction,
         continuation: false,
       }),
     );
@@ -3547,12 +3690,68 @@ async function reserveCreate(input: {
   }
 
   const execution = generalAgentRuntimeForCredential(input.credential);
+  if (
+    Boolean(input.value.contentProduction) !==
+    (input.value.purpose === "content_production")
+  ) {
+    throw new ChatV2HttpError("CONTENT_PRODUCTION_INPUT_REQUIRED", 400);
+  }
+  if (input.value.contentProduction) {
+    originalContentWorkflowArchive();
+    const sourceIds = [
+      ...input.value.contentProduction.monitoringAnswerAssetIds,
+      ...(input.value.contentProduction.sourceWorkbookAssetId
+        ? [input.value.contentProduction.sourceWorkbookAssetId]
+        : []),
+    ];
+    if (sourceIds.some((id) => !input.value.localAssetIds.includes(id)))
+      throw new ChatV2HttpError("CONTENT_PRODUCTION_INPUT_ASSET_CONFLICT", 400);
+  }
   const operationId = randomUUID();
   const localTaskId = randomUUID();
   const createMarker = `chat-create:${operationId}`;
   const title = `FrontMind chat ${localTaskId}`;
   try {
     await db.transaction(async (tx) => {
+      let purposeContext: FrozenGeneralAgentPurpose | null = null;
+      if (input.value.purpose) {
+        const useKnowledge =
+          input.value.purpose === "enterprise_qa" ||
+          input.value.contentProduction?.knowledgeSource === "published";
+        const knowledge = useKnowledge
+          ? await publishedGeneralAgentKnowledge(tx, input.userId)
+          : null;
+        if (useKnowledge && !knowledge)
+          throw new ChatV2HttpError("ENTERPRISE_QA_KNOWLEDGE_REQUIRED", 428);
+        purposeContext = {
+          revision: 1,
+          accountUserId: input.userId,
+          purpose: input.value.purpose,
+          knowledgeBase: knowledge?.knowledgeBase ?? null,
+          knowledgeText: knowledge?.knowledgeText ?? null,
+          ...(input.value.contentProduction
+            ? { contentProduction: input.value.contentProduction }
+            : {}),
+        };
+        if (input.value.contentProduction && input.value.localAssetIds.length) {
+          const rows = await tx
+            .select({
+              localAssetId: localAssets.id,
+              filename: localAssets.filename,
+            })
+            .from(localAssets)
+            .where(
+              and(
+                eq(localAssets.scope, "managed_user"),
+                eq(localAssets.accountUserId, input.userId),
+                inArray(localAssets.id, input.value.localAssetIds),
+              ),
+            );
+          if (rows.length !== new Set(input.value.localAssetIds).size)
+            throw new ChatV2HttpError("LOCAL_ASSET_NOT_FOUND", 404);
+          purposeContext.inputFiles = rows;
+        }
+      }
       await tx.insert(agentOperations).values({
         id: operationId,
         provider: input.credential.provider ?? "zhipu",
@@ -3581,6 +3780,9 @@ async function reserveCreate(input: {
         createMarker,
         title,
         providerState: "queued",
+        ...(purposeContext
+          ? { providerRuntime: { generalPurpose: purposeContext } }
+          : {}),
       });
       await reservePersistedGeneralChatTurn({
         executor: tx,
@@ -3595,6 +3797,8 @@ async function reserveCreate(input: {
         localTaskId,
         model: execution.upstreamModel,
         modelProfile: input.value.modelProfile,
+        purpose: input.value.purpose,
+        contentProduction: input.value.contentProduction,
         continuation: false,
       });
     });
@@ -3633,6 +3837,8 @@ async function reserveCreate(input: {
         localTaskId: raced.task.id,
         model: raced.operation.upstreamModel,
         modelProfile: input.value.modelProfile,
+        purpose: input.value.purpose,
+        contentProduction: input.value.contentProduction,
         continuation: false,
       }),
     );
@@ -3675,6 +3881,7 @@ async function sendProviderMessage(input: {
   localAssetIds: readonly string[];
   turnId: string;
   conversationId: string;
+  contentProductionAction?: ContentProductionAction;
 }) {
   if (!input.task.providerTaskId) {
     throw new ChatV2HttpError("TASK_NOT_READY", 409, true);
@@ -3687,6 +3894,9 @@ async function sendProviderMessage(input: {
   const frozenRequestHash = requestHash({
     prompt: input.prompt,
     localAssetIds: input.localAssetIds,
+    ...(input.contentProductionAction
+      ? { contentProductionAction: input.contentProductionAction }
+      : {}),
   });
   const eventId = randomUUID();
   const initialClaim = createGeneralChatPreparationClaim();
@@ -4746,8 +4956,11 @@ router.get("/runtime-config", async (req, res) => {
   try {
     if (!req.frontmindUser) throw new ChatV2HttpError("UNAUTHORIZED", 401);
     assertGeneralAgentActor(req.frontmindUser);
-    const { localTaskId } = z
-      .object({ localTaskId: z.string().uuid().optional() })
+    const { localTaskId, purpose } = z
+      .object({
+        localTaskId: z.string().uuid().optional(),
+        purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
+      })
       .strict()
       .parse(req.query);
     if (localTaskId) {
@@ -4759,17 +4972,34 @@ router.get("/runtime-config", async (req, res) => {
         configured: true,
         source: "task",
         ...generalAgentRuntimeForOperation(owned.operation),
+        ...generalAgentPurposePublic(
+          frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id),
+        ),
       });
       return;
     }
+    const knowledge = purpose
+      ? await publishedGeneralAgentKnowledge(
+          await requireDb(),
+          req.frontmindUser.id,
+        )
+      : null;
+    const purposePublic = purpose
+      ? { purpose, knowledgeBase: knowledge?.knowledgeBase ?? null }
+      : {};
     if (!req.frontmindCredential) {
-      res.json({ configured: false, source: "administrator" });
+      res.json({
+        configured: false,
+        source: "administrator",
+        ...purposePublic,
+      });
       return;
     }
     res.json({
       configured: true,
       source: "administrator",
       ...generalAgentRuntimeForCredential(req.frontmindCredential),
+      ...purposePublic,
     });
   } catch (error) {
     sendError(res, error);
@@ -4959,6 +5189,17 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
       userId: req.frontmindUser.id,
       localTaskId: req.params.localTaskId,
     });
+    const purpose = frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id);
+    const contentProduction = contentProductionPublicDto(
+      purpose,
+      owned.task.providerRuntime,
+    );
+    if (
+      value.contentProductionAction &&
+      purpose?.purpose !== "content_production"
+    ) {
+      throw new ChatV2HttpError("CONTENT_PRODUCTION_TASK_REQUIRED", 400);
+    }
     const credential = await getDecryptedCredentialForAccountById(
       req.frontmindUser.id,
       owned.operation.apiCredentialId,
@@ -4986,6 +5227,9 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
         localTaskId: owned.task.id,
         model: owned.operation.upstreamModel,
         modelProfile: null,
+        purpose: purpose?.purpose,
+        contentProductionAction: value.contentProductionAction,
+        availableContentActions: contentProduction?.availableActions,
         continuation: true,
       }),
     );
@@ -4997,6 +5241,7 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
       localAssetIds: value.localAssetIds,
       turnId: reservedTurn.turn.id,
       conversationId: reservedTurn.persistedConversationId,
+      contentProductionAction: value.contentProductionAction,
     });
     owned = await syncTask({
       userId: req.frontmindUser.id,

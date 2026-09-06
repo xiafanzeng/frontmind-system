@@ -46,7 +46,7 @@ describe("Sidebar engineer settings visibility", () => {
       />,
     );
 
-    expect(screen.getByText("新内容流程")).toBeInTheDocument();
+    expect(screen.getByText("新会话")).toBeInTheDocument();
     expect(screen.queryByText("API Key 与积分")).not.toBeInTheDocument();
     expect(screen.queryByText("设置")).not.toBeInTheDocument();
   });

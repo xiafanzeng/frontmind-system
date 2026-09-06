@@ -29,12 +29,20 @@ function proxyPath(req: Pick<FrontMindRequest, "originalUrl">) {
   }
 }
 
-/**
- * The generic proxy remains the administrator Agent workbench and the
- * read/download transport for resources created by dedicated customer
- * workflows. Customer accounts may upload attachments, but cannot create,
- * continue, cancel, or mutate model tasks through this escape hatch.
- */
+function ordinaryUserGeneralAgentWrite(
+  req: Pick<FrontMindRequest, "method" | "originalUrl">,
+) {
+  if (req.method.toUpperCase() !== "POST") return false;
+  const path = proxyPath(req);
+  return (
+    path === "/v2/tasks" ||
+    /^\/v2\/tasks\/[^/]+\/messages$/u.test(path) ||
+    /^\/v2\/tasks\/[^/]+\/actions\/[^/]+\/confirm$/u.test(path)
+  );
+}
+
+/** Customer General Agent mutations use only the tenant-owned v2 contract.
+ * Legacy generic provider task mutations remain administrator-only. */
 export function ordinaryUserMayUseFrontMindProxy(
   req: Pick<FrontMindRequest, "method" | "originalUrl">,
 ) {
@@ -52,7 +60,10 @@ export function ordinaryUserMayUseFrontMindProxy(
   ) {
     return true;
   }
-  return ORDINARY_USER_SUPPORT_OPERATIONS.has(`${method} ${pathname}`);
+  return (
+    ordinaryUserGeneralAgentWrite(req) ||
+    ORDINARY_USER_SUPPORT_OPERATIONS.has(`${method} ${pathname}`)
+  );
 }
 
 export function ordinaryUserProxyWriteRequiresActiveService(
@@ -60,6 +71,7 @@ export function ordinaryUserProxyWriteRequiresActiveService(
 ) {
   const operation = `${req.method.toUpperCase()} ${proxyPath(req)}`;
   return (
+    ordinaryUserGeneralAgentWrite(req) ||
     operation === "POST /v2/assets" ||
     operation === "POST /v1/files" ||
     operation === "POST /v1/managed-uploads" ||
@@ -105,8 +117,7 @@ export function createFrontMindProxyAccessMiddleware(
     if (!ordinaryUserMayUseFrontMindProxy(req)) {
       res.status(403).json({
         error: {
-          message:
-            "用户看板只能通过对应服务流程调用模型；通用智能体操作仅向管理员开放",
+          message: "当前账号不能通过通用转发接口执行此操作",
           code: "GENERAL_AGENT_MUTATION_FORBIDDEN",
         },
       });

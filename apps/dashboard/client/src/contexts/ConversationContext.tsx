@@ -221,6 +221,7 @@ export interface KnowledgeBaseClientState {
 export interface Conversation {
   id: string;
   title: string;
+  purpose?: "enterprise_qa" | "content_production";
   messages: LocalMessage[];
   /** Server-derived boundary for provider tasks owned outside ordinary chat. */
   executionKind?: "general_chat_v2" | "response_logic";
@@ -1706,6 +1707,20 @@ export function prepareConversationForCloud(
   };
 }
 
+// Purpose is restored from a durable task or its pending first dispatch. Keep
+// empty specialized drafts local until that evidence can be saved with them.
+function hasDurableConversationIdentity(conversation: Conversation) {
+  return (
+    !conversation.purpose ||
+    conversation.messages.length > 0 ||
+    Boolean(
+      conversation.taskId ||
+        conversation.previousResponseId ||
+        conversation.deletedMessageIds?.length,
+    )
+  );
+}
+
 /**
  * A cloud read must never erase a local snapshot that has not received an
  * ACK. Merge by stable message/output identity while allowing a server-owned
@@ -1754,6 +1769,7 @@ export function mergeDirtyConversationHydration(
     title: local.title,
     status: local.status,
     executionKind: local.executionKind ?? remote.executionKind,
+    purpose: remote.purpose ?? local.purpose,
     taskId: local.taskId ?? remote.taskId,
     previousResponseId: local.previousResponseId ?? remote.previousResponseId,
     startedAt: local.startedAt ?? remote.startedAt,
@@ -2194,6 +2210,7 @@ interface ConversationContextType {
   createConversation: (options?: {
     title?: string;
     reuseEmpty?: boolean;
+    purpose?: "enterprise_qa" | "content_production";
   }) => string;
   setActive: (id: string) => void;
   addMessage: (conversationId: string, message: LocalMessage) => void;
@@ -2358,7 +2375,7 @@ export function ConversationProvider({
         const conversation = nextState.conversations.find(
           (candidate) => candidate.id === conversationId,
         );
-        if (conversation) {
+        if (conversation && hasDurableConversationIdentity(conversation)) {
           syncQueueRef.current!.enqueueSnapshot(
             prepareConversationForCloud(conversation),
           );
@@ -2736,12 +2753,17 @@ export function ConversationProvider({
   }, [replaceState, state]);
 
   const createConversation = useCallback(
-    (options?: { title?: string; reuseEmpty?: boolean }) => {
+    (options?: {
+      title?: string;
+      reuseEmpty?: boolean;
+      purpose?: "enterprise_qa" | "content_production";
+    }) => {
       const title = options?.title?.trim() || "新内容流程";
       if (options?.reuseEmpty) {
         const reusable = stateRef.current.conversations.find(
           (conversation) =>
             conversation.title === title &&
+            conversation.purpose === options.purpose &&
             conversation.status === "idle" &&
             conversation.messages.length === 0 &&
             !conversation.taskId &&
@@ -2755,6 +2777,7 @@ export function ConversationProvider({
       const conversation: Conversation = {
         id,
         title,
+        ...(options?.purpose ? { purpose: options.purpose } : {}),
         messages: [],
         status: "idle",
         createdAt: Date.now(),
@@ -2765,7 +2788,7 @@ export function ConversationProvider({
         payload: conversation,
       });
       replaceState(nextState);
-      if (canSyncRef.current) {
+      if (canSyncRef.current && hasDurableConversationIdentity(conversation)) {
         syncQueueRef.current!.enqueueSnapshot(
           prepareConversationForCloud(conversation),
           true,
@@ -3043,6 +3066,77 @@ export function useConversation() {
   if (!ctx)
     throw new Error("useConversation must be used within ConversationProvider");
   return ctx;
+}
+
+export function conversationBelongsToPurpose(
+  conversation: Conversation,
+  purpose: "general" | "enterprise_qa" | "content_production",
+) {
+  if (purpose !== "general") return conversation.purpose === purpose;
+  return (
+    !conversation.purpose &&
+    !conversation.knowledgeBase?.initialized &&
+    conversation.executionKind !== "response_logic"
+  );
+}
+
+/** Keep the original persistence and poll owner while separating workspaces. */
+export function ConversationPurposeProvider({
+  purpose,
+  children,
+}: {
+  purpose: "general" | "enterprise_qa" | "content_production";
+  children: React.ReactNode;
+}) {
+  const parent = useConversation();
+  const conversations = parent.state.conversations.filter(
+    (conversation) =>
+      conversationBelongsToPurpose(conversation, purpose) &&
+      !parent.isKnowledgeBaseConversation(conversation.id),
+  );
+  const activeConversation =
+    conversations.find(
+      (conversation) => conversation.id === parent.activeConversation?.id,
+    ) ?? null;
+  const createConversation = useCallback(
+    (options?: {
+      title?: string;
+      reuseEmpty?: boolean;
+      purpose?: "enterprise_qa" | "content_production";
+    }) =>
+      parent.createConversation({
+        ...options,
+        title:
+          options?.title ??
+          (purpose === "enterprise_qa"
+            ? "企业问答"
+            : purpose === "content_production"
+              ? "内容制作"
+              : "新会话"),
+        purpose: purpose === "general" ? undefined : purpose,
+      }),
+    [parent.createConversation, purpose],
+  );
+  return (
+    <ConversationContext.Provider
+      value={{
+        ...parent,
+        state: {
+          ...parent.state,
+          conversations,
+          activeConversationId: activeConversation?.id ?? null,
+        },
+        activeConversation,
+        createConversation,
+        setActive: (id) => {
+          if (conversations.some((conversation) => conversation.id === id))
+            parent.setActive(id);
+        },
+      }}
+    >
+      {children}
+    </ConversationContext.Provider>
+  );
 }
 
 /**

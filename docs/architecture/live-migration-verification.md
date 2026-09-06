@@ -2,15 +2,15 @@
 
 ## Current deployment and business acceptance status
 
-The table records the deployed runtime after the long-running-task and unified
-workspace update. Public `/readyz` reports this build SHA and image digest.
-Completed business acceptance below remains separate from brand-universe
-acceptance, which is blocked by native provider failures. Historical sections
+The table records the deployed runtime after the native-result and owned-download
+fixes. Public `/readyz` reports this build SHA and image digest.
+Brand-universe business acceptance now passes using the final High task's valid
+output, while its native provider error remains recorded separately. Historical sections
 retain the outcomes and identities of their own stages.
 
 | Service | Runtime source revision | Runtime image digest |
 | --- | --- | --- |
-| Dashboard | `2609549b3116378814362d8936a9d65f022f6f93` | `sha256:efc0d5bc836938e0db153f97122be940f678c3b03eb05de860e7e3bf62d3c798` |
+| Dashboard | `5be63244d6f52c94fd919fb0ac25cf92c0d66539` | `sha256:550c7566a1c08d6579972461be84592e9435a8125b9377642d5baf49cc84d395` |
 | Monitoring worker | `ac5ac7c4fac6302a83e5fe760cc76e7b94f62e9f` | `sha256:7134db0d9d3690533f470ce5af5a64e6876914021858368fdb926295187661a3` |
 | CN Website | `f1dc5182819574aea32dbc50a2f715c414d50e41` | `sha256:d6b3ed32728970ffee319592a269e9019547d9b03a14635207f36e968612238e` |
 
@@ -22,7 +22,7 @@ retain the outcomes and identities of their own stages.
 | General agent | Complete on `70fa85f`: the original two turns and both JSON downloads were reverified, including the attachment's exact-byte sum and hash. |
 | Customer self-service | Complete: own Dashboard editing/restoration and fresh KB reset passed live; on `70fa85f`, fresh direct question selection, draft save, response reset/replay, modification and subsequent deletion all passed. The pre-fix successful reset also replayed correctly. Retired ticket routes returned NOT_FOUND. |
 | Dashboard knowledge base | Complete on `1c89b0e`: fresh generation, one real node revision, 55 read/confirm actions, original final ZIP download and formal snapshot publication all passed. |
-| Dashboard brand universe | Not passed: three original max tasks and one controlled high comparison all failed with native provider service-unavailable/retries-exhausted events and no deliverable. Original Skill hashes, formal KB and model were unchanged. The account default was restored to max; no fifth task was submitted. |
+| Dashboard brand universe | Business acceptance complete on `5be6324`: the final authorized High run produced valid original JSON despite a native error. The original parser published all 160 rows (20/20/20/100), and JSON/XLSX downloads, cell values and persistent reload passed. In total four Max and two High native sessions failed; no further paid attempts are scheduled. See `docs/zhipu-high-max-findings.md`. |
 | Dashboard response logic | Complete: direct question selection, binding, initial generation/save, same-session continuation/save and confirmation passed. Confirmed revision 6/version 1 and all four original fields matched independent API/DB readback after the `70fa85f` restart. |
 | Original Website knowledge base, assessment and forecast | Complete: the original KB ZIP and both perspectives' assessments and forecasts survived reload. Its monitoring runs remain at exactly ten successful answers, with no additional attempts. |
 | Website execution-log presentation | Complete: only standalone generic tool messages are hidden; detailed events, errors and absolute timers are preserved. |

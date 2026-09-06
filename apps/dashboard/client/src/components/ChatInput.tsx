@@ -1,3 +1,4 @@
+import type { ContentProductionInput } from "@shared/content-production";
 /**
  * ChatInput Component - Message input with file upload and runtime status
  * Design: Floating glass card input area with drag-and-drop support.
@@ -140,6 +141,8 @@ function resizeAgentComposer(textarea: HTMLTextAreaElement) {
 export default function ChatInput({
   fixedAgentProfile,
   syncKnowledgeBaseSnapshot = false,
+  purpose,
+  contentProduction,
   composerPrefill,
   responseLogicContext,
   knowledgeBaseProgress,
@@ -147,6 +150,8 @@ export default function ChatInput({
 }: {
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
+  purpose?: "enterprise_qa" | "content_production";
+  contentProduction?: ContentProductionInput;
   composerPrefill?: string;
   responseLogicContext?: ResponseLogicTaskContext;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
@@ -479,6 +484,8 @@ export default function ChatInput({
           selectedFiles.map((file) => file.file),
           {
             agentProfile: fixedAgentProfile || selectedModel,
+            purpose,
+            contentProduction,
             syncKnowledgeBaseSnapshot,
             knowledgeBaseExpectedGeneration: syncKnowledgeBaseSnapshot
               ? knowledgeBaseReplySnapshot?.generation
@@ -532,6 +539,8 @@ export default function ChatInput({
       responseLogicContext,
       responseLogicInitialPromptLocked,
       composerPrefill,
+      purpose,
+      contentProduction,
       selectedModel,
       sendMessage,
       syncKnowledgeBaseSnapshot,
@@ -1076,6 +1085,7 @@ export default function ChatInput({
                         activeConversation?.previousResponseId ??
                         activeConversation?.taskId
                       }
+                      purpose={purpose}
                       onProfile={setSelectedModel}
                     />
                   )}

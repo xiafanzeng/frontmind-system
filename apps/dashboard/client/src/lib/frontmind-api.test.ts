@@ -1676,6 +1676,80 @@ describe("ordinary chat local v2 contract", () => {
     expect(body).not.toHaveProperty("taskMode");
   });
 
+  it("sends QA purpose only on creation and uses the frozen task for follow-ups", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "qa-task", status: "running", output: [] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const options = {
+      conversationId: "qa-conversation",
+      clientRequestId: "qa-request",
+      purpose: "enterprise_qa" as const,
+    };
+    await createTask([{ role: "user", content: "产品适用场景？" }], options);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      purpose: "enterprise_qa",
+      modelProfile: "frontmind-pro",
+    });
+    await createTask([{ role: "user", content: "请展开" }], {
+      ...options,
+      taskId: "qa-task",
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "/api/frontmind/v2/tasks/qa-task/messages",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).not.toHaveProperty(
+      "purpose",
+    );
+  });
+
+  it("freezes production input on creation and sends only its explicit action on follow-up", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: "production-task",
+          status: "running",
+          output: [],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    const contentProduction = {
+      mode: "new_reference_pack" as const,
+      enterpriseName: "示例企业",
+      knowledgeSource: "published" as const,
+      monitoringAnswerAssetIds: [],
+    };
+    const options = {
+      conversationId: "production-conversation",
+      clientRequestId: "production-request",
+      purpose: "content_production" as const,
+      contentProduction,
+    };
+    await createTask([{ role: "user", content: "建立资料包" }], options);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+      purpose: "content_production",
+      contentProduction,
+    });
+    await createTask([{ role: "user", content: "确认资料包" }], {
+      ...options,
+      taskId: "production-task",
+      contentProductionAction: { kind: "confirm_pack" },
+    });
+    const body = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(body).toMatchObject({
+      contentProductionAction: { kind: "confirm_pack" },
+    });
+    expect(body).not.toHaveProperty("purpose");
+    expect(body).not.toHaveProperty("contentProduction");
+  });
+
   it("continues by local task id without sending a Provider task id field", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

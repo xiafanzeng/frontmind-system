@@ -35,6 +35,7 @@ import { normalizeKnowledgeCollectionCopy } from "../shared/knowledge-base-copy"
 import { normalizeKnowledgeBaseAttachmentFilename } from "../shared/knowledge-base-attachment";
 import { uniquifyOrderedIds } from "../shared/ordered-id";
 import { generalChatDispatchSchema } from "../shared/frontmind-general-chat-dispatch";
+import { frozenGeneralAgentPurpose } from "./general-agent-purpose";
 import {
   type AuthenticatedUser,
   credentialMayServeAccount,
@@ -153,6 +154,7 @@ const messageSchema = z.object({
 export const conversationSnapshotSchema = z.object({
   id: z.string().min(1).max(128),
   title: z.string().min(1).max(255),
+  purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
   messages: z.array(messageSchema).max(5_000),
   taskId: z.string().max(255).optional(),
   previousResponseId: z.string().max(255).optional(),
@@ -751,6 +753,7 @@ type SnapshotResourceBinding = {
   apiCredentialId?: string;
   projectAssignmentId: string | null;
   createdAt?: Date;
+  purpose?: "enterprise_qa" | "content_production";
 };
 
 function snapshotFileIds(snapshot: ConversationSnapshot) {
@@ -833,6 +836,7 @@ async function loadGeneralChatTaskBindings(
       id: agentTasks.id,
       operationId: agentTasks.operationId,
       createdAt: agentTasks.createdAt,
+      providerRuntime: agentTasks.providerRuntime,
     })
     .from(agentTasks)
     .where(inArray(agentTasks.id, taskIds));
@@ -894,6 +898,9 @@ async function loadGeneralChatTaskBindings(
       apiCredentialId: operation.apiCredentialId,
       projectAssignmentId: null,
       createdAt: task.createdAt,
+      ...(frozenGeneralAgentPurpose(task, userId)?.purpose
+        ? { purpose: frozenGeneralAgentPurpose(task, userId)!.purpose }
+        : {}),
     });
   }
   return bindings;
@@ -3275,12 +3282,36 @@ export async function listSnapshots(
     projectAssignmentId,
   );
 
+  const durablePurposeTurns = messageRows.some((message) => message.turnId)
+    ? await db
+        .select({
+          conversationId: conversationTurns.conversationId,
+          taskId: conversationTurns.upstreamTaskId,
+        })
+        .from(conversationTurns)
+        .where(
+          and(
+            eq(conversationTurns.userId, userId),
+            inArray(conversationTurns.conversationId, ids),
+            eq(conversationTurns.operationType, GENERAL_CHAT_TURN_TYPE),
+          ),
+        )
+    : [];
+  const durableTaskIdsByConversation = new Map<string, string[]>();
+  for (const turn of durablePurposeTurns) {
+    if (!turn.taskId) continue;
+    const taskIds = durableTaskIdsByConversation.get(turn.conversationId) ?? [];
+    taskIds.push(turn.taskId);
+    durableTaskIdsByConversation.set(turn.conversationId, taskIds);
+  }
   const candidateGeneralChatTaskIds = Array.from(
     new Set(
       conversationRows.flatMap((row) =>
-        [row.upstreamTaskId, row.previousResponseId].filter(
-          (id): id is string => Boolean(id),
-        ),
+        [
+          row.upstreamTaskId,
+          row.previousResponseId,
+          ...(durableTaskIdsByConversation.get(row.id) ?? []),
+        ].filter((id): id is string => Boolean(id)),
       ),
     ),
   );
@@ -3298,6 +3329,31 @@ export async function listSnapshots(
 
   return conversationRows.map((row) => ({
     id: publicId(userId, row.id, projectAssignmentId),
+    ...(() => {
+      const bound = [
+        row.upstreamTaskId,
+        row.previousResponseId,
+        ...(durableTaskIdsByConversation.get(row.id) ?? []),
+      ].flatMap((taskId) => {
+        const binding = taskId
+          ? ownedGeneralChatTaskBindings.get(
+              upstreamResourceKey("task", taskId),
+            )
+          : undefined;
+        return binding ? [binding] : [];
+      });
+      // Once a durable task exists, its frozen server context owns the purpose.
+      if (bound.length)
+        return bound[0].purpose ? { purpose: bound[0].purpose } : {};
+      const pendingPurpose = (messagesByConversation.get(row.id) ?? [])
+        .filter((message) => message.role === "user")
+        .map(
+          (message) =>
+            parsedGeneralChatDispatchMetadata(message.metadata)?.purpose,
+        )
+        .find(Boolean);
+      return pendingPurpose ? { purpose: pendingPurpose } : {};
+    })(),
     ...(responseLogicConversationIds.has(
       publicId(userId, row.id, projectAssignmentId),
     )

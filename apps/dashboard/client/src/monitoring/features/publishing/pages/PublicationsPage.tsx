@@ -13,7 +13,7 @@ import {
 } from "../components/PublishingUi";
 import {
   readPublicationRouteState,
-  writePublicationRouteState,
+  writePublicationWorkbenchRouteState,
   type PublicationListFilters,
 } from "../queryState";
 import { formatPublishingMoney, publishingDateTime } from "../types";
@@ -24,13 +24,10 @@ export default function PublishingPublicationsPage() {
   const search = useSearch();
   const filters = useMemo(() => readPublicationRouteState(search), [search]);
   useEffect(() => {
-    const canonical = writePublicationRouteState(
-      "/publishing/publications",
-      filters,
-    );
+    const canonical = writePublicationWorkbenchRouteState(filters);
     const current = search
-      ? `/publishing/publications?${search.replace(/^\?/u, "")}`
-      : "/publishing/publications";
+      ? `/publishing?${search.replace(/^\?/u, "")}`
+      : "/publishing";
     if (canonical !== current) navigate(canonical, { replace: true });
   }, [filters, navigate, search]);
   const load = useCallback(
@@ -47,7 +44,7 @@ export default function PublishingPublicationsPage() {
       [key]: value,
       page: key === "page" ? Number(value) : 1,
     };
-    navigate(writePublicationRouteState("/publishing/publications", next));
+    navigate(writePublicationWorkbenchRouteState(next));
   };
   const pageCount = query.data
     ? Math.max(1, Math.ceil(query.data.total / query.data.pageSize))
@@ -55,7 +52,7 @@ export default function PublishingPublicationsPage() {
 
   return (
     <PublishingPage
-      title="发布记录"
+      title="发布工作台"
       description="按 FrontMind 发布编号追踪软文与自媒体的结果、回链和资金状态。"
       busy={query.loading || query.refreshing}
       actions={

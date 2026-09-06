@@ -303,6 +303,32 @@ describe("useSendMessage", () => {
     }));
   });
 
+  it("explains a missing published knowledge source without losing the pending question", async () => {
+    mocks.createTask.mockRejectedValueOnce(
+      Object.assign(new Error("ENTERPRISE_QA_KNOWLEDGE_REQUIRED"), {
+        status: 428,
+        code: "ENTERPRISE_QA_KNOWLEDGE_REQUIRED",
+      }),
+    );
+    const { result } = renderHook(() => useSendMessage());
+    await act(async () => {
+      await result.current.sendMessage("企业产品适用范围？", [], {
+        purpose: "enterprise_qa",
+      });
+    });
+    expect(
+      mocks.addMessage.mock.calls.some(([, message]) =>
+        message.content.includes("请先在企业知识库中构建并发布资料"),
+      ),
+    ).toBe(true);
+    expect(
+      mocks.addMessage.mock.calls.some(([, message]) =>
+        message.content.includes("ENTERPRISE_QA_KNOWLEDGE_REQUIRED"),
+      ),
+    ).toBe(false);
+    expect(mocks.settleGeneralChatDispatch).not.toHaveBeenCalled();
+  });
+
   it("should return sendMessage function", () => {
     const { result } = renderHook(() => useSendMessage());
     expect(typeof result.current.sendMessage).toBe("function");
@@ -778,7 +804,7 @@ describe("useSendMessage", () => {
     expect(terminalStatus).not.toHaveProperty("previousResponseId");
   });
 
-  it("replays a remounted first-create PNG from durable metadata without uploading or changing identity", async () => {
+  it("replays a remounted QA first-create PNG with its frozen purpose without uploading or changing identity", async () => {
     const messageId = "msg-remounted-create";
     const pendingMessage = {
       id: messageId,
@@ -802,6 +828,7 @@ describe("useSendMessage", () => {
         localAssetIds: ["asset_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
         localTaskId: null,
         modelProfile: "frontmind-base" as const,
+        purpose: "enterprise_qa" as const,
       },
     };
     mocks.createTask
@@ -845,6 +872,7 @@ describe("useSendMessage", () => {
         conversationId: "remounted-create",
         clientRequestId: messageId,
         modelProfile: "frontmind-base",
+        purpose: "enterprise_qa",
       });
       expect(taskOptions.previousResponseId).toBeUndefined();
       expect(input).toEqual([

@@ -6,6 +6,7 @@ import { PublisherWorkerEngine } from "./engine.js";
 import { HttpPublisherLogoSearchAdapter } from "./logo-search.js";
 import type { PublisherWorkerRepositoryPort } from "./ports.js";
 import { PublisherWorkerProcessor } from "./processor.js";
+import { publisherJobTypes } from "./job-types.js";
 
 export function createPublisherWorkerEngine(input: {
   config: PublisherRuntimeConfig;
@@ -56,7 +57,9 @@ export function createPublisherWorkerEngine(input: {
     workerId: input.config.workerId,
     concurrency: input.config.concurrency,
     providerEnabled: input.config.providerEnabled,
-    ...(input.config.providerEnabled === false ? { allowedTypes: ["import_docx", "purge_publisher_assets"] as const } : {}),
+    allowedTypes: input.config.providerEnabled === false
+      ? ["import_docx", "purge_publisher_assets"]
+      : publisherJobTypes.filter((type) => input.config.catalogLogosEnabled !== false || type !== "archive_publisher_media_logo"),
     typeConcurrency: {
       submit_publication_item: 1,
       sync_kol_catalog: 1,

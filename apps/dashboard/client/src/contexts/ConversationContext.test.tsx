@@ -5,6 +5,8 @@ import { knowledgeBaseUserMessagePublicId } from "@shared/knowledge-base-message
 import { generalChatTerminalMessagePublicId } from "@shared/frontmind-general-chat-terminal";
 import {
   ConversationProvider,
+  ConversationPurposeProvider,
+  conversationBelongsToPurpose,
   appendOrUpsertConversationMessage,
   applyKnowledgeBaseObservation,
   conversationSyncErrorMessage,
@@ -517,6 +519,90 @@ describe("ConversationProvider cloud hydration", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("isolates General, QA and content histories while preserving the cloud persistence owner", async () => {
+    const general = conversation("general");
+    const qa = { ...conversation("qa"), purpose: "enterprise_qa" as const };
+    const production = {
+      ...conversation("production"),
+      purpose: "content_production" as const,
+    };
+    const response = {
+      ...conversation("response"),
+      executionKind: "response_logic" as const,
+    };
+    mocks.listRefetch.mockResolvedValue({
+      data: [general, qa, production, response],
+    });
+    const { result } = renderHook(() => useConversation(), {
+      wrapper: ({ children }) => (
+        <ConversationProvider>
+          <ConversationPurposeProvider purpose="enterprise_qa">
+            {children}
+          </ConversationPurposeProvider>
+        </ConversationProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    expect(result.current.state.conversations.map(({ id }) => id)).toEqual([
+      "qa",
+    ]);
+    act(() => result.current.setActive("qa"));
+    expect(result.current.activeConversation?.id).toBe("qa");
+    act(() => result.current.setActive("general"));
+    expect(result.current.activeConversation?.id).toBe("qa");
+    act(() => {
+      result.current.createConversation();
+    });
+    expect(result.current.activeConversation).toMatchObject({
+      purpose: "enterprise_qa",
+      title: "企业问答",
+    });
+    await act(async () => {
+      await result.current.flushConversation(
+        result.current.activeConversation!.id,
+      );
+    });
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    act(() =>
+      result.current.addMessage(result.current.activeConversation!.id, {
+        id: "qa-first-message",
+        role: "user",
+        content: "请介绍企业产品",
+        timestamp: 1,
+        generalChatDispatch: {
+          schemaVersion: 1,
+          kind: "pending_user",
+          clientRequestId: "qa-first-message",
+          providerPrompt: "请介绍企业产品",
+          localAssetIds: [],
+          localTaskId: null,
+          modelProfile: "frontmind-pro",
+          purpose: "enterprise_qa",
+        },
+      }),
+    );
+    await act(async () => {
+      await result.current.flushConversation(
+        result.current.activeConversation!.id,
+      );
+    });
+    expect(mocks.syncSnapshot).toHaveBeenCalledWith({
+      conversation: expect.objectContaining({ purpose: "enterprise_qa" }),
+    });
+    expect(
+      [general, qa, production, response]
+        .filter((item) => conversationBelongsToPurpose(item, "general"))
+        .map(({ id }) => id),
+    ).toEqual(["general"]);
+    expect(
+      [general, qa, production, response]
+        .filter((item) =>
+          conversationBelongsToPurpose(item, "content_production"),
+        )
+        .map(({ id }) => id),
+    ).toEqual(["production"]);
   });
 
   it("accepts a higher durable KB revision even when its display sequence is lower", () => {

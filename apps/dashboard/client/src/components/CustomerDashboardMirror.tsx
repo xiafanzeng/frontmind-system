@@ -11,7 +11,6 @@ import {
   ListChecks,
   LockKeyhole,
   Menu,
-  Newspaper,
   Radar,
   Shield,
   Target,
@@ -125,7 +124,6 @@ const CUSTOMER_DASHBOARD_GROUPS: ReadonlyArray<{
     label: "AI 友好内容资产",
     icon: Database,
     items: [
-      { value: "content", label: "内容资产运营", icon: Newspaper },
       { value: "website", label: SITEOPS_CUSTOMER_DISPLAY_NAME, icon: Globe2 },
     ],
   },
@@ -188,7 +186,7 @@ function mirrorSectionForCustomerRoute(
       : "report";
   }
   if (section === "semantic") {
-    return sub === "website-management" ? "website" : "content";
+    return sub === "website-management" ? "website" : "home";
   }
   if (section === "public-opinion") return "public-opinion";
   return "home";
@@ -772,13 +770,7 @@ function CustomerDashboardSection({
     );
   }
 
-  return payload.contentAssets.length ? (
-    <section className="page-shell">
-      <PublishedContentAssets assets={payload.contentAssets} />
-    </section>
-  ) : (
-    <MirrorEmpty title="内容资产运营" />
-  );
+  return <MirrorEmpty title="客户看板" />;
 }
 
 function KnowledgeActivityPanel({

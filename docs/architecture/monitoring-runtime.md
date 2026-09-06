@@ -54,10 +54,45 @@ and configure the worker with `PUBLISHER_FEATURE_ENABLED=true`,
 origin. It then processes only DOCX imports and private asset cleanup; it creates
 neither a KOL client nor a mock catalog. Provider jobs remain unclaimed and the
 empty/unavailable catalog stays honest. Enabling the provider worker requires `PUBLISHER_KOL_ACCESS_TOKEN` or all
-six original login fields, a real provider base URL and encoding, and explicit
-publication runtime switches. No mock catalog or paid probe is an implicit part
+six original login fields and a real provider base URL. Order submission also
+requires confirmed encoding and the publication runtime switches. No mock catalog or paid probe is an implicit part
 of deployment. Customer prices remain the provider's resource `price`; supplier
 and agent costs never enter customer outputs.
+
+The supported KOL origin is `https://api.kol.cn`. Read-only catalog operation
+uses `PUBLISHER_PROVIDER_ENABLED=true`, `PUBLISHER_REAL_ENABLED=true`, a valid
+access token or the six documented login fields, and
+`PUBLISHER_PUBLISH_ENABLED=false`. `PUBLISHER_CREATE_ORDER_ENCODING=unknown`
+can remain unchanged while only reading resources. The catalog request is
+`GET /api/news_resource_2/data`, with token and page supplied server-side.
+An administrator starts it from the media-publishing catalog administration
+page (`publisherAdmin.requestCatalogSync`). It follows the provider's final
+page, stages every page, and activates the complete result in one transaction.
+The previous fixed 1,000-page cap has been removed: existing records show a
+93,067-resource response at 50/page (1,862 pages). The existing 100,000-resource
+bound still applies and incomplete pagination preserves the active catalog.
+
+Catalog names and `price` do not depend on logo downloads. The worker defaults
+`PUBLISHER_CATALOG_LOGOS_ENABLED=false`; optional logo jobs remain unclaimed
+and no logo-search configuration is required. Setting it to `true` enables the
+existing independent logo processing. Do not use the standalone original
+repository's `sync:real` script as a deployment or catalog activation gate.
+That historical script also required logo-search completion, which is outside
+the current names-and-prices requirement.
+
+The supplied source document is **软文街API接口文档2.0_已整合订单列表.docx**.
+It documents authentication, resource pagination, order submission, order
+queries, and result callbacks. `is_zimeiti=2` means news and `=1` self media.
+Its credential examples contain placeholders, so the document alone cannot
+authenticate a live sync. A signed-in website session is not a worker API
+credential. Live inventory counts must come from a completed authenticated
+sync, never from the documentation's example count or preview fixtures.
+
+Customer publication history is part of the publishing workbench at
+`/publishing?tab=records`. It retains the original search, media-type/status/date
+filters, pagination, batch details, result links, and charges. Old
+`/publishing/publications` links redirect with their filters, and existing batch
+detail URLs remain valid. The navigation change does not alter stored history.
 
 Online payment configuration retains the existing `FRONTMIND_ZPAY_*` and
 `FRONTMIND_BANK_*` names. Monitoring Zpay notify/return URLs are scoped to

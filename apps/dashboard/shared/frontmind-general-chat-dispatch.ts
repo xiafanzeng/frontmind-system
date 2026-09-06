@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import { generalAgentModelProfileSchema } from "./manus-agent-profile";
+import {
+  contentProductionInputSchema,
+  contentProductionActionSchema,
+} from "./content-production";
 
 /**
  * Browser-owned evidence for an ordinary-chat request whose task response has
@@ -16,9 +20,39 @@ export const generalChatDispatchSchema = z
     localAssetIds: z.array(z.string().min(1).max(36)).max(32),
     localTaskId: z.string().uuid().nullable(),
     modelProfile: generalAgentModelProfileSchema.nullable(),
+    purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
+    contentProduction: contentProductionInputSchema.optional(),
+    contentProductionAction: contentProductionActionSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.localTaskId !== null &&
+      (value.purpose || value.contentProduction)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["purpose"],
+        message: "a continuation must use the task's frozen purpose",
+      });
+    }
+    if (value.localTaskId === null && value.contentProductionAction) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contentProductionAction"],
+        message: "a workflow action requires an existing task",
+      });
+    }
+    if (
+      (value.purpose === "content_production") !==
+      Boolean(value.contentProduction)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contentProduction"],
+        message: "content production must freeze its workflow input",
+      });
+    }
     const sortedUnique = [...new Set(value.localAssetIds)].sort();
     if (
       sortedUnique.length !== value.localAssetIds.length ||

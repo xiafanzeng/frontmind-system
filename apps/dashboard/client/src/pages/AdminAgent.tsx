@@ -12,6 +12,7 @@ import {
 import { useAuth } from "@/_core/hooks/useAuth";
 import PortalShell from "@/components/PortalShell";
 import Home from "@/pages/Home";
+import { ConversationPurposeProvider } from "@/contexts/ConversationContext";
 import { Button } from "@/components/ui/button";
 import { isSystemAdminAccount } from "@/lib/admin-access";
 import type { PreviewAdminAccessLevel } from "@/lib/preview-navigation";
@@ -79,14 +80,16 @@ export default function AdminAgent({
         {previewMode ? (
           <PreviewAgentWorkspace />
         ) : (
-          <Home
-            embedded
-            hidePortalNavigation
-            showKnowledgeBaseStarter={false}
-            showAccountMenu={false}
-            showSettings={false}
-            standardWelcomeVariant="workflow"
-          />
+          <ConversationPurposeProvider purpose="general">
+            <Home
+              embedded
+              hidePortalNavigation
+              showKnowledgeBaseStarter={false}
+              showAccountMenu={false}
+              showSettings={false}
+              standardWelcomeVariant="workflow"
+            />
+          </ConversationPurposeProvider>
         )}
       </AgentViewport>
     </PortalShell>

@@ -8,9 +8,17 @@ import {
   readPublicationRouteState,
   unicodeLength,
   writeMediaRouteState,
+  writePublicationWorkbenchRouteState,
 } from "./queryState";
 
 describe("publishing route state", () => {
+  it("preserves old publication filters in the workbench records view", () => {
+    const filters = readPublicationRouteState("query=品牌&kind=self_media&status=success&from=2026-09-01&to=2026-09-06&page=3&pageSize=50");
+    const route = writePublicationWorkbenchRouteState(filters);
+    expect(route).toMatch(/^\/publishing\?tab=records&/);
+    expect(readPublicationRouteState(route.split("?")[1])).toEqual(filters);
+    expect(writePublicationWorkbenchRouteState(readPublicationRouteState(""))).toBe("/publishing?tab=records");
+  });
   it("round trips dual-kind filters and the explicit article version", () => {
     const url = writeMediaRouteState(
       "/publishing/media",

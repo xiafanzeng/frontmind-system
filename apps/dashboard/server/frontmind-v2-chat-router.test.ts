@@ -37,20 +37,28 @@ describe("General Agent runtime HTTP authorization", () => {
       ),
     );
   });
-  async function start(userId: number, adminAccessLevel = "delivery_admin") {
+  async function start(
+    userId: number,
+    adminAccessLevel = "delivery_admin",
+    role: "admin" | "user" = "admin",
+    configured = true,
+  ) {
     const app = express();
+    app.use(express.json());
     app.use((req, _res, next) => {
       req.frontmindUser = {
         id: userId,
-        role: "admin",
-        adminAccessLevel,
+        role,
+        adminAccessLevel: role === "admin" ? adminAccessLevel : null,
       } as any;
-      req.frontmindCredential = {
-        provider: "zhipu",
-        upstreamModel: "glm-5.3",
-        upstreamEffort: "max",
-        apiKey: "synthetic-secret-must-not-be-returned",
-      } as any;
+      req.frontmindCredential = configured
+        ? ({
+            provider: "zhipu",
+            upstreamModel: "glm-5.3",
+            upstreamEffort: "max",
+            apiKey: "synthetic-secret-must-not-be-returned",
+          } as any)
+        : undefined;
       next();
     });
     app.use(chatRouter);
@@ -61,67 +69,188 @@ describe("General Agent runtime HTTP authorization", () => {
     );
     return `http://127.0.0.1:${(server.address() as AddressInfo).port}/runtime-config`;
   }
-  it("returns the owned task's original High under a Max default and rejects another tenant", async () => {
-    const localTaskId = "baaf4d08-9f85-4d9c-8604-611e2541d76b";
-    const queries: ReturnType<MySqlDialect["sqlToQuery"]>[] = [];
-    let query: ReturnType<MySqlDialect["sqlToQuery"]>;
-    const chain: any = {
-      from: () => chain,
-      innerJoin: () => chain,
-      where: (condition: Parameters<MySqlDialect["sqlToQuery"]>[0]) => {
-        query = new MySqlDialect().sqlToQuery(condition);
-        queries.push(query);
-        return chain;
-      },
-      limit: async () =>
-        query.params[2] === 7
-          ? [
-              {
-                operation: {
-                  accountUserId: 7,
-                  upstreamModel: "glm-5.3",
-                  publicProfile: "frontmind-base",
+  it.each(["admin", "user"] as const)(
+    "returns the %s owned task's original High under a Max default and rejects another tenant",
+    async (role) => {
+      const localTaskId = "baaf4d08-9f85-4d9c-8604-611e2541d76b";
+      const queries: ReturnType<MySqlDialect["sqlToQuery"]>[] = [];
+      let query: ReturnType<MySqlDialect["sqlToQuery"]>;
+      const chain: any = {
+        from: () => chain,
+        innerJoin: () => chain,
+        where: (condition: Parameters<MySqlDialect["sqlToQuery"]>[0]) => {
+          query = new MySqlDialect().sqlToQuery(condition);
+          queries.push(query);
+          return chain;
+        },
+        limit: async () =>
+          query.params[2] === 7
+            ? [
+                {
+                  operation: {
+                    accountUserId: 7,
+                    upstreamModel: "glm-5.3",
+                    publicProfile: "frontmind-base",
+                  },
+                  task: { id: localTaskId },
                 },
-                task: { id: localTaskId },
-              },
-            ]
-          : [],
-    };
-    runtimeMocks.getDb.mockResolvedValue({ select: () => chain });
-    const ownerUrl = await start(7);
-    const current = await fetch(ownerUrl);
-    expect(await current.json()).toEqual({
-      configured: true,
-      source: "administrator",
-      publicProfile: "frontmind-pro",
-      upstreamModel: "glm-5.3",
-      upstreamEffort: "max",
-      speed: "standard",
+              ]
+            : [],
+      };
+      runtimeMocks.getDb.mockResolvedValue({ select: () => chain });
+      const ownerUrl = await start(7, "delivery_admin", role);
+      const current = await fetch(ownerUrl);
+      expect(await current.json()).toEqual({
+        configured: true,
+        source: "administrator",
+        publicProfile: "frontmind-pro",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "max",
+        speed: "standard",
+      });
+      const existing = await fetch(`${ownerUrl}?localTaskId=${localTaskId}`);
+      expect(existing.status).toBe(200);
+      expect(await existing.json()).toEqual({
+        configured: true,
+        source: "task",
+        publicProfile: "frontmind-base",
+        upstreamModel: "glm-5.3",
+        upstreamEffort: "high",
+        speed: "standard",
+      });
+      const foreign = await fetch(
+        `${await start(8, "delivery_admin", role)}?localTaskId=${localTaskId}`,
+      );
+      expect(foreign.status).toBe(404);
+      expect(await foreign.json()).toMatchObject({
+        error: { code: "TASK_NOT_FOUND" },
+      });
+      expect(queries.map((value) => value.params)).toEqual([
+        [localTaskId, "managed_user", 7, "dashboard.general-chat", 2],
+        [localTaskId, "managed_user", 8, "dashboard.general-chat", 2],
+      ]);
+      expect(
+        queries.every((value) => /account_user_id.*\?/u.test(value.sql)),
+      ).toBe(true);
+      expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+    },
+  );
+  it("requires the customer's personal credential before reserving a new General task", async () => {
+    const base = (await start(3, "delivery_admin", "user", false)).replace(
+      /\/runtime-config$/u,
+      "",
+    );
+    const response = await fetch(`${base}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        conversationId: "customer-conversation",
+        clientRequestId: "request-1",
+        prompt: "User task",
+        modelProfile: "frontmind-pro",
+        localAssetIds: [],
+      }),
     });
-    const existing = await fetch(`${ownerUrl}?localTaskId=${localTaskId}`);
-    expect(existing.status).toBe(200);
-    expect(await existing.json()).toEqual({
-      configured: true,
-      source: "task",
-      publicProfile: "frontmind-base",
-      upstreamModel: "glm-5.3",
-      upstreamEffort: "high",
-      speed: "standard",
+    expect(response.status).toBe(428);
+    expect(await response.json()).toMatchObject({
+      error: { code: "API_CREDENTIAL_REQUIRED" },
     });
-    const foreign = await fetch(`${await start(8)}?localTaskId=${localTaskId}`);
-    expect(foreign.status).toBe(404);
-    expect(await foreign.json()).toMatchObject({
-      error: { code: "TASK_NOT_FOUND" },
-    });
-    expect(queries.map((value) => value.params)).toEqual([
-      [localTaskId, "managed_user", 7, "dashboard.general-chat", 2],
-      [localTaskId, "managed_user", 8, "dashboard.general-chat", 2],
-    ]);
-    expect(
-      queries.every((value) => /account_user_id.*\?/u.test(value.sql)),
-    ).toBe(true);
+    expect(runtimeMocks.getDb).not.toHaveBeenCalled();
     expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
   });
+  it("returns current safe published QA metadata and refuses ungrounded creation before provider use", async () => {
+    let snapshot: any = {
+      id: "published-snapshot",
+      version: 3,
+      sourceFileName: "customer.zip",
+      documents: [
+        {
+          title: "产品资料",
+          path: "product.md",
+          content: "published facts",
+          privateToken: "never-return",
+        },
+      ],
+    };
+    const chain: any = {
+      select: () => chain,
+      from: () => chain,
+      innerJoin: () => chain,
+      where: () => chain,
+      orderBy: () => chain,
+      limit: async () => (snapshot ? [snapshot] : []),
+      transaction: async (fn: any) => fn(chain),
+    };
+    runtimeMocks.getDb.mockResolvedValue(chain);
+    const url = await start(7, "delivery_admin", "user");
+    const response = await fetch(`${url}?purpose=enterprise_qa`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      purpose: "enterprise_qa",
+      knowledgeBase: {
+        snapshotId: "published-snapshot",
+        version: 3,
+        documentCount: 1,
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("published facts");
+    expect(JSON.stringify(body)).not.toContain("never-return");
+    snapshot = null;
+    const create = await fetch(url.replace("/runtime-config", "/tasks"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        conversationId: "qa-conversation",
+        clientRequestId: "qa-first-request",
+        prompt: "企业产品是什么？",
+        purpose: "enterprise_qa",
+      }),
+    });
+    expect(create.status).toBe(428);
+    expect(await create.json()).toMatchObject({
+      error: { code: "ENTERPRISE_QA_KNOWLEDGE_REQUIRED" },
+    });
+    expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+  });
+  it.each(["messages", "actions/message-1/confirm"])(
+    "rejects customer cross-tenant %s before a provider call",
+    async (suffix) => {
+      const chain: any = {
+        from: () => chain,
+        innerJoin: () => chain,
+        where: () => chain,
+        limit: async () => [],
+      };
+      runtimeMocks.getDb.mockResolvedValue({ select: () => chain });
+      const base = (await start(3, "delivery_admin", "user")).replace(
+        /\/runtime-config$/u,
+        "",
+      );
+      const body =
+        suffix === "messages"
+          ? {
+              conversationId: "foreign-conversation",
+              clientRequestId: "request-1",
+              prompt: "Continue",
+              localAssetIds: [],
+            }
+          : { clientRequestId: "request-1" };
+      const response = await fetch(
+        `${base}/tasks/baaf4d08-9f85-4d9c-8604-611e2541d76b/${suffix}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: { code: "TASK_NOT_FOUND" },
+      });
+      expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+    },
+  );
   it("retains the system administrator role boundary before reading credentials or tasks", async () => {
     const response = await fetch(await start(1, "system_admin"));
     expect(response.status).toBe(403);
@@ -237,8 +366,8 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
       'user.adminAccessLevel === "delivery_admin"',
     );
     expect(serverSource).toContain("GENERAL_AGENT_ROLE_FORBIDDEN");
-    expect(serverSource).toContain(
-      ".omit({ conversationId: true, modelProfile: true })",
+    expect(serverSource).toMatch(
+      /\.omit\(\{\s*conversationId: true,\s*modelProfile: true,\s*purpose: true,\s*contentProduction: true,?\s*\}\)/u,
     );
   });
 

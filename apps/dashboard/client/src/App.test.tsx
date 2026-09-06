@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,10 @@ vi.mock("@/_core/hooks/useAuth", () => ({
   useAuth: () => authMock,
 }));
 
+vi.mock("./pages/UserDashboard", () => ({
+  default: () => <div>CUSTOMER_DASHBOARD</div>,
+}));
+
 vi.mock("@/pages/Login", () => ({
   default: () => <div>LOGIN_REQUIRED</div>,
 }));
@@ -22,6 +27,7 @@ import {
   canAccessAdminRoutes,
   canAccessSystemAdminRoutes,
   WorkspaceLoadingState,
+  GeneralAgentLanding,
 } from "./App";
 
 describe("WorkspaceLoadingState", () => {
@@ -113,5 +119,17 @@ describe("AuthBoundary", () => {
 
     expect(screen.getByText("正在打开工作空间")).toBeInTheDocument();
     expect(screen.queryByText("LOGIN_REQUIRED")).not.toBeInTheDocument();
+  });
+});
+
+describe("General Agent customer entry", () => {
+  it("opens the original customer dashboard for a customer account", async () => {
+    authMock.user = { id: 3, role: "user" } as any;
+    render(
+      <Suspense fallback={<div>loading</div>}>
+        <GeneralAgentLanding />
+      </Suspense>,
+    );
+    expect(await screen.findByText("CUSTOMER_DASHBOARD")).toBeInTheDocument();
   });
 });

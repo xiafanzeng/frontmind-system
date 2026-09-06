@@ -914,7 +914,7 @@ describe("DashboardSkeletonEditor", () => {
         module: "content-assets",
         title: "AI 友好内容资产",
         recordLabel: "内容资产",
-        section: "内容资产运营",
+        section: "AI友好官网管理",
       },
     ].flatMap((module) => [
       {

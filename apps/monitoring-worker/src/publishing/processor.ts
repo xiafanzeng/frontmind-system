@@ -389,7 +389,7 @@ export class PublisherWorkerProcessor {
       let page = 1;
       let expectedLastPage: number | undefined;
       let expectedPerPage: number | undefined;
-      while (page <= 1_000) {
+      while (true) {
         const result = await this.dependencies.provider.listResources(
           page,
           signal,
@@ -403,6 +403,16 @@ export class PublisherWorkerProcessor {
             throw new Error(
               "KOL catalog exceeds the 100,000-resource safety limit",
             );
+          }
+          // The real catalog has 50 rows/page and more than 1,800 pages.
+          // Bound work by the existing resource limit, not an unrelated page cap.
+          if (
+            !Number.isSafeInteger(expectedLastPage) ||
+            !Number.isSafeInteger(expectedPerPage) ||
+            expectedPerPage < 1 ||
+            (expectedLastPage - 1) * expectedPerPage + 1 > MAX_CATALOG_RESOURCES
+          ) {
+            throw new Error("KOL catalog pagination exceeds the 100,000-resource safety limit");
           }
         }
         if (

@@ -118,7 +118,7 @@ export default function Sidebar({
                 ? "left-[max(4.25rem,calc(env(safe-area-inset-left)+4.25rem))]"
                 : "left-[max(0.75rem,env(safe-area-inset-left))]"
             } ${embedded ? "absolute" : "fixed"}`}
-            aria-label="打开内容流程菜单"
+            aria-label="打开会话菜单"
           >
             <Menu className="w-5 h-5" />
           </Button>
@@ -128,7 +128,7 @@ export default function Sidebar({
           className="h-dvh w-[min(86vw,292px)] max-w-[292px] gap-0 overflow-hidden border-sidebar-border bg-sidebar p-0 [&>button]:hidden"
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>内容流程列表</SheetTitle>
+            <SheetTitle>会话列表</SheetTitle>
           </SheetHeader>
           <SidebarInner
             state={state}
@@ -221,12 +221,10 @@ export default function Sidebar({
               size="sm"
             >
               <Plus className="w-4 h-4 flex-shrink-0" />
-              {!collapsed && <span className="text-sm">新内容流程</span>}
+              {!collapsed && <span className="text-sm">新会话</span>}
             </Button>
           </TooltipTrigger>
-          {collapsed && (
-            <TooltipContent side="right">新内容流程</TooltipContent>
-          )}
+          {collapsed && <TooltipContent side="right">新会话</TooltipContent>}
         </Tooltip>
       </div>
 
@@ -254,7 +252,7 @@ export default function Sidebar({
 
           {state.conversations.length === 0 && !collapsed && (
             <div className="px-3 py-8 text-center">
-              <p className="text-xs text-muted-foreground/50">暂无内容流程</p>
+              <p className="text-xs text-muted-foreground/50">暂无会话</p>
             </div>
           )}
         </div>
@@ -447,7 +445,7 @@ function ConversationItem({
                     onDelete();
                   }}
                   className="p-1 rounded text-foreground/70 hover:text-red-400 hover:bg-red-500/20 transition-colors"
-                  title="删除此内容流程"
+                  title="删除此会话"
                 >
                   <Trash2 className="w-3 h-3" />
                 </button>
@@ -497,8 +495,8 @@ function ConversationItem({
                   ? "text-muted-foreground hover:text-red-500 hover:bg-red-500/10 active:text-red-500 active:bg-red-500/10"
                   : "text-transparent group-hover:text-muted-foreground hover:!text-red-500 hover:!bg-red-500/10",
               )}
-              title="删除此内容流程"
-              aria-label="删除此内容流程"
+              title="删除此会话"
+              aria-label="删除此会话"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -582,7 +580,7 @@ function SidebarInner({
           size="sm"
         >
           <Plus className="w-4 h-4 flex-shrink-0" />
-          <span className="text-sm">新内容流程</span>
+          <span className="text-sm">新会话</span>
         </Button>
       </div>
 
@@ -610,7 +608,7 @@ function SidebarInner({
 
           {state.conversations.length === 0 && (
             <div className="px-3 py-8 text-center">
-              <p className="text-xs text-muted-foreground/50">暂无内容流程</p>
+              <p className="text-xs text-muted-foreground/50">暂无会话</p>
             </div>
           )}
         </div>

@@ -118,7 +118,7 @@ describe("PortalShell fullscreen layout", () => {
 
       expect(shell).toHaveClass(
         "lg:grid",
-        "lg:grid-cols-[220px_minmax(0,1fr)]",
+        "lg:grid-cols-[232px_minmax(0,1fr)]",
         "h-[100dvh]",
         "overflow-hidden",
       );
@@ -157,7 +157,7 @@ describe("PortalShell sidebar collapse", () => {
     expect(
       screen.getByRole("button", { name: "收起侧栏" }),
     ).toBeInTheDocument();
-    expect(shell).toHaveClass("lg:grid-cols-[220px_minmax(0,1fr)]");
+    expect(shell).toHaveClass("lg:grid-cols-[232px_minmax(0,1fr)]");
 
     fireEvent.click(screen.getByRole("button", { name: "收起侧栏" }));
 
@@ -241,9 +241,9 @@ describe("PortalShell sidebar collapse", () => {
       hidden: true,
     });
 
-    expect(shell).toHaveClass("lg:grid-cols-[220px_minmax(0,1fr)]");
+    expect(shell).toHaveClass("lg:grid-cols-[232px_minmax(0,1fr)]");
     expect(sidebar).toHaveClass(
-      "w-[220px]",
+      "w-[232px]",
       "max-w-[calc(100vw-48px)]",
       "px-4",
       "pb-[18px]",
@@ -264,7 +264,7 @@ describe("PortalShell sidebar collapse", () => {
       "min-h-10",
       "px-2.5",
       "py-2",
-      "lg:min-h-[34px]",
+      "lg:min-h-9",
       "lg:py-1.5",
     );
 

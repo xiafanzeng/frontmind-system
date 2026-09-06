@@ -31,6 +31,8 @@ export type DashboardManagedFile = {
   role: "input" | "output";
   commandKey?: string;
   deleted?: boolean;
+  /** Immutable server-provided workflow/knowledge input; browser turns cannot replace its mount. */
+  serverOwned?: boolean;
 };
 export type DashboardManagedCommand = {
   key: string;
@@ -175,6 +177,7 @@ export function assertDashboardManagedRuntimeImmutable(
       old.role !== next.role ||
       old.commandKey !== next.commandKey ||
       (old.sha256 && old.sha256 !== next.sha256) ||
+      (old.serverOwned && !next.serverOwned) ||
       (old.deleted && !next.deleted)
     )
       throw new Error("DASHBOARD_PROVIDER_FILE_CONFLICT");

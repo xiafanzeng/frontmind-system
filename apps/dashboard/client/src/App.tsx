@@ -140,6 +140,18 @@ function UserOnly({ children }: { children: React.ReactNode }) {
   return user?.role === "user" ? children : <Redirect to="/" />;
 }
 
+export function GeneralAgentLanding() {
+  const { user } = useAuth();
+  if (user?.role === "user") return <UserDashboard />;
+  return isDeliveryAdminAccount(user) ? (
+    <Redirect to="/admin/agent" />
+  ) : user?.role === "delivery_member" ? (
+    <Redirect to="/delivery/agent" />
+  ) : (
+    <Redirect to="/" />
+  );
+}
+
 function MonitoringCustomerOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   return user?.role === "user" || isSystemAdminAccount(user) ? (
@@ -190,9 +202,17 @@ function Router() {
         </SystemAdminOnly>
       </Route>
       <Route path={"/agent"}>
-        <DeliveryAdminOnly>
-          <Redirect to="/admin/agent" />
-        </DeliveryAdminOnly>
+        <GeneralAgentLanding />
+      </Route>
+      <Route path={"/enterprise-qa"}>
+        <UserOnly>
+          <UserDashboard />
+        </UserOnly>
+      </Route>
+      <Route path={"/content-production"}>
+        <UserOnly>
+          <UserDashboard />
+        </UserOnly>
       </Route>
       <Route path={"/admin/agent"}>
         <DeliveryAdminOnly>

@@ -11,9 +11,33 @@ vi.mock("@/_core/hooks/useAuth", () => ({
   }),
 }));
 
+vi.mock("@/pages/Home", () => ({
+  default: () => <div data-testid="original-agent-chat" />,
+}));
+vi.mock("@/contexts/ConversationContext", () => ({
+  ConversationPurposeProvider: ({ children, purpose }: any) => (
+    <div data-testid="agent-purpose" data-purpose={purpose}>
+      {children}
+    </div>
+  ),
+}));
+
 import AdminAgent from "./AdminAgent";
 
 describe("AdminAgent preview", () => {
+  it("keeps the live administrator chat within its General-only history scope", () => {
+    render(<AdminAgent />);
+    expect(screen.getByTestId("agent-purpose")).toHaveAttribute(
+      "data-purpose",
+      "general",
+    );
+    expect(
+      within(screen.getByTestId("agent-purpose")).getByTestId(
+        "original-agent-chat",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("uses the shared administrator shell with an isolated read-only Agent adapter", () => {
     render(<AdminAgent preview />);
 

@@ -120,6 +120,7 @@ export interface PublisherRuntimeConfig {
   realEnabled: boolean;
   publishEnabled: boolean;
   imageEnabled: boolean;
+  catalogLogosEnabled?: boolean;
   webhookEnabled: boolean;
   publicOrigin: string;
   baseUrl: string;
@@ -388,6 +389,7 @@ export function loadWorkerConfig(
       mode: publisherMode,
       realEnabled: publisherFlag("PUBLISHER_REAL_ENABLED"),
       publishEnabled: publisherFlag("PUBLISHER_PUBLISH_ENABLED"),
+      catalogLogosEnabled: publisherFlag("PUBLISHER_CATALOG_LOGOS_ENABLED"),
       imageEnabled:
         publisherFlag("PUBLISHER_IMAGE_ENABLED") &&
         publisherFlag("PUBLISHER_PUBLIC_ASSETS_ENABLED"),

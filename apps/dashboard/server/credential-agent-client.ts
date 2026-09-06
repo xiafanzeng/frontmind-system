@@ -13,6 +13,9 @@ export function createCredentialAgentClient(
     effort?: "low" | "high" | "max";
     baseUrl?: string;
     rateLimitScope?: string;
+    systemContext?: string;
+    systemAttachments?: import("./manus-v2-client").ManusV2Attachment[];
+    recoverableStatusArtifact?: (filename: string) => boolean;
   } = {},
 ) {
   return createDashboardAgentClient({

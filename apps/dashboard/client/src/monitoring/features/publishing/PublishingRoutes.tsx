@@ -11,14 +11,14 @@ import "./publishing.media.css";
 import "./publishing.records.css";
 import "./publishing.admin.css";
 
-const OverviewPage = lazy(() => import("./pages/OverviewPage"));
+const WorkbenchPage = lazy(() => import("./pages/WorkbenchPage"));
+const LegacyPublicationListRedirect = lazy(() => import("./pages/WorkbenchPage").then((module) => ({ default: module.LegacyPublicationListRedirect })));
 const ArticlesPage = lazy(() => import("./pages/ArticlesPage"));
 const ImportPage = lazy(() => import("./pages/ImportPage"));
 const ArticleEditorPage = lazy(() => import("./pages/ArticleEditorPage"));
 const MediaLibraryPage = lazy(() => import("./pages/MediaLibraryPage"));
 const TitlesPage = lazy(() => import("./pages/TitlesPage"));
 const ReviewPage = lazy(() => import("./pages/ReviewPage"));
-const PublicationsPage = lazy(() => import("./pages/PublicationsPage"));
 const PublicationDetailPage = lazy(
   () => import("./pages/PublicationDetailPage"),
 );
@@ -63,10 +63,10 @@ export default function PublishingRoutes({ gateway }: PublishingRoutesProps) {
             {(params) => <PublicationDetailPage batchId={params.batchId} />}
           </Route>
           <Route path="/publishing/publications">
-            <PublicationsPage />
+            <LegacyPublicationListRedirect />
           </Route>
           <Route path="/publishing">
-            <OverviewPage />
+            <WorkbenchPage />
           </Route>
           <Route>
             <Redirect to="/publishing" />

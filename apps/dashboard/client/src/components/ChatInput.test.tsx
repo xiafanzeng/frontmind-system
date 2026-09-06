@@ -905,6 +905,45 @@ describe("knowledge-base ChatInput actions", () => {
     );
   });
 
+  it("passes the QA purpose through the existing composer and selects its new-task runtime", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        configured: true,
+        upstreamEffort: "high",
+        publicProfile: "frontmind-base",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    Object.assign(mocks.activeConversation, {
+      status: "idle",
+      messages: [],
+      taskId: undefined,
+      previousResponseId: undefined,
+    });
+    render(<ChatInput purpose="enterprise_qa" />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "支持哪些产品？" },
+    });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "支持哪些产品？",
+        [],
+        expect.objectContaining({
+          purpose: "enterprise_qa",
+          agentProfile: "frontmind-base",
+        }),
+      ),
+    );
+  });
+
   it("shows the existing task's frozen effort without a model selector", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

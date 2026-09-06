@@ -310,6 +310,130 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
+  it("mounts frozen server context files without changing the original user turn or attachment evidence", async () => {
+    const f = fixture();
+    const systemContext = "Frozen customer knowledge snapshot version 3";
+    const extra = {
+      systemContext,
+      systemAttachments: [
+        {
+          filename: "original-workflow.zip",
+          mime_type: "application/zip",
+          file_data: `data:application/zip;base64,${Buffer.from("unchanged-workflow-bytes").toString("base64")}`,
+        },
+      ],
+    };
+    await f.client(extra).createTask(request);
+    const agent = f.calls.find(
+      (call) => call.path === "/v1/agents" && call.method === "POST",
+    )!;
+    expect(agent.body.system).toContain(systemContext);
+    const session = f.calls.find(
+      (call) => call.path === "/v1/sessions" && call.method === "POST",
+    )!;
+    expect(session.body.resources).toHaveLength(1);
+    expect(session.body.resources[0].mount_path).toBe(
+      "/input/original-workflow.zip",
+    );
+    const record = [...f.rows.values()].find(
+      (row) => row.runtime.sessionId === "session_1",
+    )!;
+    expect(record.runtime.commands[0].prompt).toBe(request.prompt);
+    expect(record.runtime.commands[0].attachments).toEqual([]);
+    expect(
+      record.runtime.files.find(
+        (file) => file.filename === "original-workflow.zip",
+      )?.sha256,
+    ).toBe(digest("unchanged-workflow-bytes"));
+    f.finish();
+    await f
+      .client({
+        localTaskId: record.localTaskId,
+        operationId: record.operationId,
+        intentId: "continue-frozen",
+      })
+      .sendMessage({
+        taskId: "session_1",
+        prompt: "Continue using the original knowledge",
+      });
+    expect(
+      f.calls.filter(
+        (call) => call.path === "/v1/agents" && call.method === "POST",
+      ),
+    ).toHaveLength(1);
+    await expect(
+      f
+        .client({
+          ...extra,
+          systemContext: "silently replace published knowledge",
+        })
+        .createTask(request),
+    ).rejects.toThrow();
+  });
+  it("rejects continuation uploads that would replace frozen server knowledge or workflow mounts", async () => {
+    const f = fixture();
+    await f
+      .client({
+        systemContext: "Use the frozen published knowledge",
+        systemAttachments: [
+          {
+            filename: "frontmind_published_knowledge.md",
+            mime_type: "text/markdown",
+            file_data: `data:text/markdown;base64,${Buffer.from("original published facts").toString("base64")}`,
+          },
+        ],
+      })
+      .createTask(request);
+    f.finish();
+    const original = [...f.rows.values()].find(
+      (row) => row.runtime.sessionId === "session_1",
+    )!;
+    const pinnedFile = original.runtime.files.find(
+      (file) => file.filename === "frontmind_published_knowledge.md",
+    )!;
+    expect(pinnedFile.serverOwned).toBe(true);
+    const downgraded = structuredClone(original.runtime);
+    delete downgraded.files.find((file) => file.id === pinnedFile.id)!
+      .serverOwned;
+    expect(() =>
+      assertDashboardManagedRuntimeImmutable(original.runtime, downgraded),
+    ).toThrow("DASHBOARD_PROVIDER_FILE_CONFLICT");
+    const next = f.client({
+      localTaskId: original.localTaskId,
+      operationId: original.operationId,
+      intentId: "replace-server-file",
+    });
+    const upload = await next.uploadFile({
+      filename: "frontmind_published_knowledge.md",
+      contentType: "text/markdown",
+      bytes: Buffer.from("replacement facts"),
+    });
+    const before = f.calls.length;
+    await expect(
+      next.sendMessage({
+        taskId: "session_1",
+        prompt: "Continue",
+        attachments: [
+          {
+            filename: "frontmind_published_knowledge.md",
+            file_id: upload.fileId,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "SYSTEM_INPUT_FILENAME_RESERVED" });
+    expect(
+      f.calls
+        .slice(before)
+        .some(
+          (call) =>
+            call.method === "DELETE" && call.path.includes("/resources/"),
+        ),
+    ).toBe(false);
+    expect(
+      [...f.rows.values()].find((row) => row.runtime.sessionId === "session_1")!
+        .runtime.commands,
+    ).toHaveLength(1);
+  });
   it("executes administrator High despite legacy Pro metadata and keeps that session High after the default becomes Max", async () => {
     const f = fixture();
     const credential = {
@@ -796,6 +920,48 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
         ?.structured_output_result,
     ).toEqual({ success: true, value: { ok: true } });
     expect(JSON.stringify(events)).not.toContain(`zhipu-file:${archive.id}`);
+  });
+
+  it("retains only explicitly approved small Runner status files after a native error without declaring success", async () => {
+    const f = fixture();
+    const options = {
+      recoverableStatusArtifact: (filename: string) =>
+        /^frontmind_workflow_job_state_[a-f0-9]{16}\.json$/u.test(filename),
+    };
+    await f.client(options).createTask(request);
+    const state = f.output(
+      "frontmind_workflow_job_state_0123456789abcdef.json",
+      Buffer.from('{"current_stage":"E9","status":"running"}'),
+    );
+    const article = f.output("unfinished-article.docx");
+    const unrelated = f.output("unrelated.json", Buffer.from('{"ok":true}'));
+    f.events.push({
+      id: "native-failure",
+      type: "session.error",
+      processed_at: f.now(),
+      error: {
+        type: "unknown_error",
+        message: "exhausted",
+        retry_status: { type: "exhausted" },
+      },
+    });
+    f.finish("Execution failed");
+    const events = await f
+      .client(options)
+      .listAllMessages({ taskId: "session_1" });
+    expect((await f.client(options).taskDetail("session_1")).status).toBe(
+      "error",
+    );
+    expect(JSON.stringify(events)).toContain(`zhipu-file:${state.id}`);
+    expect(JSON.stringify(events)).not.toContain(`zhipu-file:${article.id}`);
+    expect(JSON.stringify(events)).not.toContain(`zhipu-file:${unrelated.id}`);
+    expect(
+      events.some((event) => event.type === "structured_output_result"),
+    ).toBe(false);
+    expect(
+      events.filter((event) => event.type === "status_update").at(-1)
+        ?.status_update,
+    ).toMatchObject({ agent_status: "error" });
   });
 
   it("exposes original same-round downloadable JSON while preserving the exhausted native failure", async () => {

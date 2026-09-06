@@ -1,3 +1,4 @@
+import type { ContentProductionInput } from "@shared/content-production";
 /**
  * Home Page - Main application layout
  * Design: Fluid Glass Workspace - Glassmorphism + Spatial Design
@@ -21,6 +22,8 @@ export default function Home({
   embedded = false,
   fixedAgentProfile,
   syncKnowledgeBaseSnapshot = false,
+  purpose,
+  contentProduction,
   composerPrefill,
   hideSidebar = false,
   hidePortalNavigation = false,
@@ -38,13 +41,15 @@ export default function Home({
   embedded?: boolean;
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
+  purpose?: "enterprise_qa" | "content_production";
+  contentProduction?: ContentProductionInput;
   composerPrefill?: string;
   hideSidebar?: boolean;
   hidePortalNavigation?: boolean;
   showKnowledgeBaseStarter?: boolean;
   showAccountMenu?: boolean;
   showSettings?: boolean;
-  standardWelcomeVariant?: "simple" | "workflow";
+  standardWelcomeVariant?: "simple" | "workflow" | "enterprise_qa";
   responseLogicContext?: ResponseLogicTaskContext;
   messageProjection?: (message: LocalMessage) => LocalMessage;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
@@ -180,6 +185,8 @@ export default function Home({
         <ChatArea
           fixedAgentProfile={fixedAgentProfile}
           syncKnowledgeBaseSnapshot={syncKnowledgeBaseSnapshot}
+          purpose={purpose}
+          contentProduction={contentProduction}
           composerPrefill={composerPrefill}
           responseLogicContext={responseLogicContext}
           messageProjection={messageProjection}

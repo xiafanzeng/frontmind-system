@@ -206,6 +206,14 @@ export function writePublicationRouteState(
   return query ? `${pathname}?${query}` : pathname;
 }
 
+export function writePublicationWorkbenchRouteState(filters: PublicationListFilters) {
+  const route = writePublicationRouteState("/publishing", filters);
+  const [pathname, query] = route.split("?");
+  const params = new URLSearchParams({ tab: "records" });
+  new URLSearchParams(query).forEach((value, key) => params.set(key, value));
+  return `${pathname}?${params}`;
+}
+
 export function unicodeLength(value: string) {
   return Array.from(value).length;
 }

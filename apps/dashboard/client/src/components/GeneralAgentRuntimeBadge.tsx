@@ -10,9 +10,11 @@ type RuntimeConfig = {
 
 export default function GeneralAgentRuntimeBadge({
   localTaskId,
+  purpose,
   onProfile,
 }: {
   localTaskId?: string | null;
+  purpose?: "enterprise_qa" | "content_production";
   onProfile: (profile: string) => void;
 }) {
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
@@ -25,7 +27,9 @@ export default function GeneralAgentRuntimeBadge({
       try {
         const query = localTaskId
           ? `?localTaskId=${encodeURIComponent(localTaskId)}`
-          : "";
+          : purpose
+            ? `?purpose=${encodeURIComponent(purpose)}`
+            : "";
         const response = await fetch(
           `/api/frontmind/v2/runtime-config${query}`,
           {
@@ -58,7 +62,7 @@ export default function GeneralAgentRuntimeBadge({
       disposed = true;
       window.removeEventListener("focus", refresh);
     };
-  }, [localTaskId, onProfile]);
+  }, [localTaskId, onProfile, purpose]);
 
   const label = runtime?.upstreamEffort
     ? { low: "Low", high: "High", max: "Max" }[runtime.upstreamEffort]

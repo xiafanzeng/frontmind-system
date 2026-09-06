@@ -81,6 +81,9 @@ describe("ordinary-user FrontMind proxy policy", () => {
     ["GET", "/api/frontmind/v1/tasks/task-1"],
     ["HEAD", "/api/frontmind/v1/files/file-1"],
     ["POST", "/api/frontmind/v2/assets"],
+    ["POST", "/api/frontmind/v2/tasks"],
+    ["POST", "/api/frontmind/v2/tasks/task-1/messages"],
+    ["POST", "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm"],
     ["POST", "/api/frontmind/v1/files"],
     ["PUT", "/api/frontmind/proxy-upload?target=https%3A%2F%2Fexample.com"],
     ["POST", "/api/frontmind/download-token"],
@@ -97,13 +100,16 @@ describe("ordinary-user FrontMind proxy policy", () => {
 
   it.each([
     ["POST", "/api/frontmind/v2/assets"],
+    ["POST", "/api/frontmind/v2/tasks"],
+    ["POST", "/api/frontmind/v2/tasks/task-1/messages"],
+    ["POST", "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm"],
     ["POST", "/api/frontmind/v1/files"],
     ["PUT", "/api/frontmind/proxy-upload?target=https%3A%2F%2Fexample.com"],
     ["POST", "/api/frontmind/v1/files/file-1/upload-recovery"],
     ["POST", "/api/frontmind/v1/managed-uploads"],
     ["POST", "/api/frontmind/v1/managed-uploads/recovery"],
   ])(
-    "marks upload transport %s %s as requiring an active service",
+    "marks customer writes %s %s as requiring an active service",
     (method, originalUrl) => {
       expect(
         ordinaryUserProxyWriteRequiresActiveService({ method, originalUrl }),
@@ -111,32 +117,65 @@ describe("ordinary-user FrontMind proxy policy", () => {
     },
   );
 
-  it("rejects file creation for an expired customer before reaching upstream", async () => {
-    const middleware = createFrontMindProxyAccessMiddleware({
-      assertWriteAccess: vi.fn(async () => {
-        throw new ServiceEntitlementError(
-          "SERVICE_PLAN_EXPIRED",
-          "当前服务已到期或取消，请续费后继续使用。",
-          403,
-        );
-      }),
-    });
-    const req = {
-      method: "POST",
-      originalUrl: "/api/frontmind/v2/assets",
-      frontmindUser: actor("user"),
-    } as FrontMindRequest;
-    const res = response();
-    const next = vi.fn();
+  it.each([
+    "/api/frontmind/v2/assets",
+    "/api/frontmind/v2/tasks",
+    "/api/frontmind/v2/tasks/task-1/messages",
+    "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm",
+  ])(
+    "rejects %s for an expired customer before reaching upstream",
+    async (originalUrl) => {
+      const middleware = createFrontMindProxyAccessMiddleware({
+        assertWriteAccess: vi.fn(async () => {
+          throw new ServiceEntitlementError(
+            "SERVICE_PLAN_EXPIRED",
+            "当前服务已到期或取消，请续费后继续使用。",
+            403,
+          );
+        }),
+      });
+      const req = {
+        method: "POST",
+        originalUrl,
+        frontmindUser: actor("user"),
+      } as FrontMindRequest;
+      const res = response();
+      const next = vi.fn();
 
-    await middleware(req, res as never, next);
+      await middleware(req, res as never, next);
 
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(res.json).toHaveBeenCalledWith({
-      error: expect.objectContaining({ code: "SERVICE_PLAN_EXPIRED" }),
-    });
-  });
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        error: expect.objectContaining({ code: "SERVICE_PLAN_EXPIRED" }),
+      });
+    },
+  );
+
+  it.each([
+    "/api/frontmind/v2/tasks",
+    "/api/frontmind/v2/tasks/task-1/messages",
+    "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm",
+  ])(
+    "allows an entitled customer through the owned General contract %s",
+    async (originalUrl) => {
+      const assertWriteAccess = vi.fn();
+      const middleware = createFrontMindProxyAccessMiddleware({
+        assertWriteAccess,
+      });
+      const req = {
+        method: "POST",
+        originalUrl,
+        frontmindUser: actor("user"),
+      } as FrontMindRequest;
+      const res = response();
+      const next = vi.fn();
+      await middleware(req, res as never, next);
+      expect(assertWriteAccess).toHaveBeenCalledWith(8);
+      expect(next).toHaveBeenCalledOnce();
+      expect(res.status).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps historical file downloads available after expiry", async () => {
     const assertWriteAccess = vi.fn();
@@ -178,10 +217,9 @@ describe("ordinary-user FrontMind proxy policy", () => {
   });
 
   it.each([
-    ["POST", "/api/frontmind/v2/tasks"],
-    ["POST", "/api/frontmind/v2/tasks/task-1/messages"],
-    ["POST", "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm"],
     ["POST", "/api/frontmind/v2/tasks/task-1/stop"],
+    ["DELETE", "/api/frontmind/v2/tasks/task-1"],
+    ["POST", "/api/frontmind/v2/tasks/task-1"],
     ["POST", "/api/frontmind/v1/tasks"],
     ["POST", "/api/frontmind/v1/responses"],
     ["POST", "/api/frontmind/v1/tasks/task-1"],

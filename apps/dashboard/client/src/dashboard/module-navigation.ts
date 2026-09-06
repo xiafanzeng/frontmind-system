@@ -7,7 +7,6 @@ export const customerPublishingPages = [
   { id: "/publishing", label: "发布工作台" },
   { id: "/publishing/articles", label: "稿件" },
   { id: "/publishing/media", label: "媒体库" },
-  { id: "/publishing/publications", label: "发布记录" },
 ];
 
 export function dashboardModuleRoute(pathname: string) {

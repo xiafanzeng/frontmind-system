@@ -122,7 +122,6 @@ describe("UserBrandDashboard service experience", () => {
       "应答逻辑智能体",
       "问题监控",
       "进度报告",
-      "内容资产运营",
       "AI友好官网管理",
     ]) {
       expect(screen.getByRole("button", { name: item })).toBeInTheDocument();
@@ -176,18 +175,13 @@ describe("UserBrandDashboard service experience", () => {
     const globalKeywords = screen.getByRole("button", {
       name: "品牌全域词库",
     });
-    const contentAssets = screen.getByRole("button", {
-      name: "内容资产运营",
-    });
     const websiteManagement = screen.getByRole("button", {
       name: "AI友好官网管理",
     });
     expect(knowledgeAgent.querySelector("svg")).toBeInTheDocument();
     expect(globalKeywords.querySelector("svg")).toBeInTheDocument();
     expect(knowledgeDisplay.querySelector("svg")).not.toBeInTheDocument();
-    expect(contentAssets.querySelector("svg")).toBeInTheDocument();
     expect(websiteManagement.querySelector("svg")).toBeInTheDocument();
-    expect(contentAssets).toBeDisabled();
     expect(websiteManagement).toBeDisabled();
     expect(
       knowledgeAgent.compareDocumentPosition(knowledgeDisplay) &
@@ -264,19 +258,14 @@ describe("UserBrandDashboard service experience", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("locks content assets and website management for the basic plan", () => {
+  it("keeps website management locked and removes content operations for the basic plan", () => {
     setPreviewPlan("basic");
     render(<UserBrandDashboard preview />);
 
-    const contentAssets = screen.getByRole("button", {
-      name: "内容资产运营",
-    });
     const websiteManagement = screen.getByRole("button", {
       name: "AI友好官网管理",
     });
-    expect(contentAssets).toBeDisabled();
     expect(websiteManagement).toBeDisabled();
-    fireEvent.click(contentAssets);
     fireEvent.click(websiteManagement);
     expect(
       screen.queryByRole("heading", { name: "提交内容需求" }),
@@ -708,7 +697,7 @@ describe("UserBrandDashboard service experience", () => {
     setPreviewPlan("advanced");
     render(<UserBrandDashboard preview />);
 
-    fireEvent.click(screen.getByRole("button", { name: "内容资产运营" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI友好官网管理" }));
 
     expect(
       screen.getByText(
@@ -798,7 +787,6 @@ describe("UserBrandDashboard service experience", () => {
         "应答逻辑智能体",
         "问题监控",
         "进度报告",
-        "内容资产运营",
         "AI友好官网管理",
       ]) {
         const navigationItem = screen.getByRole("button", { name: item });

@@ -4,7 +4,10 @@ import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import Home from "@/pages/Home";
 import PortalShell from "@/components/PortalShell";
 import { Button } from "@/components/ui/button";
-import { ConversationProvider } from "@/contexts/ConversationContext";
+import {
+  ConversationProvider,
+  ConversationPurposeProvider,
+} from "@/contexts/ConversationContext";
 import { useResumePolling } from "@/hooks/useResumePolling";
 import { trpc } from "@/lib/trpc";
 import { deliveryMemberNavForRole } from "@/pages/DeliveryMemberDashboard";
@@ -14,14 +17,16 @@ import { DELIVERY_ROLE_LABELS } from "@shared/delivery-roles";
 function ProjectAgentHome() {
   useResumePolling();
   return (
-    <Home
-      embedded
-      hidePortalNavigation
-      showKnowledgeBaseStarter={false}
-      showAccountMenu={false}
-      showSettings={false}
-      standardWelcomeVariant="workflow"
-    />
+    <ConversationPurposeProvider purpose="general">
+      <Home
+        embedded
+        hidePortalNavigation
+        showKnowledgeBaseStarter={false}
+        showAccountMenu={false}
+        showSettings={false}
+        standardWelcomeVariant="workflow"
+      />
+    </ConversationPurposeProvider>
   );
 }
 

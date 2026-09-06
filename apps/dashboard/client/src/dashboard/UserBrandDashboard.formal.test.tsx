@@ -82,6 +82,38 @@ vi.mock("@/_core/hooks/useAuth", () => ({
   }),
 }));
 
+vi.mock("@/contexts/ConversationContext", () => ({
+  ConversationPurposeProvider: ({
+    children,
+    purpose,
+  }: {
+    children: React.ReactNode;
+    purpose: string;
+  }) => (
+    <div data-testid="purpose-scope" data-purpose={purpose}>
+      {children}
+    </div>
+  ),
+}));
+vi.mock("./EnterpriseQaWorkspace", () => ({
+  default: () => <div data-testid="enterprise-qa-workspace" />,
+}));
+
+vi.mock("@/pages/Home", () => ({
+  default: (props: {
+    embedded: boolean;
+    showKnowledgeBaseStarter: boolean;
+    showAccountMenu: boolean;
+  }) => (
+    <div
+      data-testid="customer-general-agent"
+      data-embedded={String(props.embedded)}
+      data-knowledge-starter={String(props.showKnowledgeBaseStarter)}
+      data-account-menu={String(props.showAccountMenu)}
+    />
+  ),
+}));
+
 vi.mock("@/lib/trpc", () => ({
   trpc: {
     useUtils: () => trpcUtils,
@@ -526,22 +558,15 @@ describe("UserBrandDashboard formal workspace", () => {
     });
 
     render(<UserBrandDashboard />);
-    const contentAssetsNavigation = screen.getByRole("button", {
-      name: "内容资产运营",
-    });
     const websiteManagementNavigation = screen.getByRole("button", {
       name: "AI友好官网管理",
     });
-    expect(contentAssetsNavigation).not.toHaveAttribute("title");
-    expect(
-      contentAssetsNavigation.querySelector("svg"),
-    ).not.toBeInTheDocument();
     expect(websiteManagementNavigation).not.toHaveAttribute("title");
     expect(
       websiteManagementNavigation.querySelector("svg"),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(contentAssetsNavigation);
+    fireEvent.click(websiteManagementNavigation);
 
     expect(screen.getByText(/服务准备中/)).toBeInTheDocument();
     expect(screen.getByText(knowledgeReason)).toBeInTheDocument();
@@ -648,12 +673,17 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });
 
-  it("shows published content assets with direct editing", () => {
+  it("retains published website content after removing the content operations page", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("button", { name: "内容资产运营" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI友好官网管理" }));
 
-    expect(screen.getByRole("button", { name: "编辑内容资产" })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "内容资产运营" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "编辑内容资产" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText("提交内容需求")).not.toBeInTheDocument();
     expect(screen.getByText("首个企业资产")).toBeInTheDocument();
     expect(screen.getByText("管理员发布的文章")).toBeInTheDocument();
@@ -1374,6 +1404,74 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(window.location.pathname).toBe("/");
     expect(
       screen.queryByTestId("embedded-monitoring-business"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens Enterprise QA under AI-friendly content assets and preserves the outer navigation", async () => {
+    render(<UserBrandDashboard />);
+    const qa = screen.getByRole("button", { name: "企业问答智能体" });
+    const sectionLabel = qa.closest(".sub-nav")?.previousElementSibling;
+    expect(sectionLabel).toHaveTextContent("AI 友好内容资产");
+    fireEvent.click(qa);
+    expect(
+      await screen.findByTestId("enterprise-qa-workspace"),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/enterprise-qa");
+    expect(qa).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "服务首页" }));
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("places the real customer Agent last and keeps production, monitoring and publishing in one sidebar group", async () => {
+    render(<UserBrandDashboard />);
+    const sidebar = screen
+      .getByRole("button", { name: "服务首页" })
+      .closest("aside")!;
+    const agent = within(sidebar).getByRole("button", { name: "通用智能体" });
+    expect(within(sidebar).getAllByRole("button").at(-1)).toBe(agent);
+    expect(
+      within(sidebar).queryByRole("button", { name: "内容资产运营" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(sidebar).queryByRole("button", { name: "发布记录" }),
+    ).not.toBeInTheDocument();
+    const production = within(sidebar).getByRole("button", {
+      name: "内容制作",
+    });
+    const monitoring = within(sidebar).getByRole("button", {
+      name: "监控工作台",
+    });
+    const publishing = within(sidebar).getByRole("button", {
+      name: "发布工作台",
+    });
+    expect(
+      production.compareDocumentPosition(monitoring) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(monitoring.closest(".nav-group-card")).toBe(
+      publishing.closest(".nav-group-card"),
+    );
+    expect(monitoring.closest(".nav-group-card")).toBe(
+      production.closest(".nav-group-card"),
+    );
+    fireEvent.click(agent);
+    const workspace = await screen.findByTestId("customer-general-agent");
+    expect(window.location.pathname).toBe("/agent");
+    expect(screen.getByTestId("purpose-scope")).toHaveAttribute(
+      "data-purpose",
+      "general",
+    );
+    expect(workspace).toHaveAttribute("data-embedded", "true");
+    expect(workspace).toHaveAttribute("data-knowledge-starter", "false");
+    expect(workspace).toHaveAttribute("data-account-menu", "false");
+    expect(agent).toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("button", { name: "服务首页" }).closest("aside"),
+    ).toBe(sidebar);
+    fireEvent.click(screen.getByRole("button", { name: "服务首页" }));
+    expect(window.location.pathname).toBe("/");
+    expect(
+      screen.queryByTestId("customer-general-agent"),
     ).not.toBeInTheDocument();
   });
 

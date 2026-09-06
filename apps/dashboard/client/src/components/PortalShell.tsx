@@ -102,7 +102,7 @@ export default function PortalShell({
       className={`bg-[radial-gradient(circle_at_34%_0%,rgba(91,42,134,.09),transparent_34%),radial-gradient(circle_at_92%_18%,rgba(200,144,19,.09),transparent_30%),#f6f3f8] text-[#443a50] transition-[grid-template-columns] duration-200 lg:grid ${
         sidebarCollapsed
           ? "lg:grid-cols-[76px_minmax(0,1fr)]"
-          : "lg:grid-cols-[220px_minmax(0,1fr)]"
+          : "lg:grid-cols-[232px_minmax(0,1fr)]"
       } ${
         mode === "fullscreen" ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]"
       }`}
@@ -130,8 +130,8 @@ export default function PortalShell({
       <aside
         id="portal-workspace-sidebar"
         aria-label="工作台侧栏"
-        className={`fixed inset-y-0 left-0 z-[80] flex w-[220px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto bg-[radial-gradient(circle_at_20%_2%,rgba(120,74,176,.36),transparent_28%),linear-gradient(180deg,#11131b_0%,#090a10_48%,#06070b_100%)] px-4 pb-[18px] pt-[22px] text-white transition-[transform,width,padding] duration-200 lg:sticky lg:top-0 lg:h-[100dvh] lg:max-w-none lg:translate-x-0 ${
-          sidebarCollapsed ? "lg:w-[76px] lg:px-3" : "lg:w-[220px]"
+        className={`fixed inset-y-0 left-0 z-[80] flex w-[232px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto bg-[radial-gradient(circle_at_20%_2%,rgba(120,74,176,.36),transparent_28%),linear-gradient(180deg,#11131b_0%,#090a10_48%,#06070b_100%)] px-4 pb-[18px] pt-[22px] text-white transition-[transform,width,padding] duration-200 lg:sticky lg:top-0 lg:h-[100dvh] lg:max-w-none lg:translate-x-0 ${
+          sidebarCollapsed ? "lg:w-[76px] lg:px-3" : "lg:w-[232px]"
         } ${
           mobileOpen
             ? "visible translate-x-0"
@@ -178,7 +178,7 @@ export default function PortalShell({
             {navItems.map((item, itemIndex) => {
               const Icon = item.icon;
               const active = !item.external && item.href === activeHref;
-              const className = `flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] leading-5 transition lg:min-h-[34px] lg:py-1.5 ${
+              const className = `flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] leading-5 transition lg:min-h-9 lg:py-1.5 ${
                 sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
               } ${
                 active
@@ -264,7 +264,7 @@ export default function PortalShell({
           )}
           <button
             type="button"
-            className={`mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 py-2 text-xs text-white/65 transition hover:bg-white/10 hover:text-white lg:min-h-[34px] lg:py-1.5 ${
+            className={`mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 py-2 text-xs text-white/65 transition hover:bg-white/10 hover:text-white lg:min-h-9 lg:py-1.5 ${
               sidebarCollapsed ? "lg:mt-2 lg:h-9 lg:px-0 lg:py-0" : ""
             }`}
             onClick={() => {

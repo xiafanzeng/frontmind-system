@@ -1,18 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Download,
   Loader2,
-  PanelRightOpen,
+  MoreHorizontal,
   RefreshCw,
   Send,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useAuth } from "@/_core/hooks/useAuth";
 import { projectResourceUrl } from "@/lib/enterprise-project";
-import KnowledgeBaseProgressPanel from "@/components/KnowledgeBaseProgressPanel";
+import KnowledgeNodeWorkspace from "@/components/KnowledgeNodeWorkspace";
+import KnowledgeWorkspaceStatus from "@/components/KnowledgeWorkspaceStatus";
+import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
+import { getUnsavedWorkspaceDrafts } from "@/lib/workspace-navigation-guard";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import type { KnowledgeNodeDetailsDto } from "@shared/knowledge-node-workspace";
+import "./KnowledgeWorkspace.css";
 import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
 } from "@/components/KnowledgeBaseViewer";
@@ -25,12 +30,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   useConversation,
   type Conversation,
@@ -144,6 +143,9 @@ export default function EmbeddedKnowledgeBasePanel({
   mode?: "standard" | "workspace";
 }) {
   const previewMode = import.meta.env.DEV && preview && Boolean(previewData);
+  const unified = mode === "workspace";
+  const [editingBlocked, setEditingBlocked] = useState(false);
+  const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
   const { user } = useAuth();
   const trpcUtils = trpc.useUtils();
   const [previewProgress, setPreviewProgress] = useState(
@@ -248,101 +250,42 @@ export default function EmbeddedKnowledgeBasePanel({
   );
 
   return (
-    <section
-      className={
-        mode === "workspace"
-          ? "flex h-full min-h-0 flex-col overflow-hidden bg-white"
-          : "page-shell pb-8"
-      }
-      data-layout-mode={mode}
-    >
-      <header
-        className={
-          mode === "workspace"
-            ? "flex min-h-16 shrink-0 items-center justify-between gap-4 border-b border-[#e8e1ee] bg-white px-5 py-3 pl-16 min-[769px]:pl-5"
-            : "page-header flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
-        }
-      >
+    <section className={unified ? "knowledge-workspace" : "page-shell pb-8"} data-layout-mode={mode}>
+      <header className={unified ? "knowledge-workspace-toolbar" : "page-header flex flex-wrap items-center justify-between gap-4"}>
         <div>
-          {mode === "standard" && (
-            <span className="eyebrow">MindPromise智诺 / 知识库智能体</span>
-          )}
-          <h2
-            className={
-              mode === "workspace"
-                ? "m-0 text-base font-semibold text-[#171321]"
-                : undefined
-            }
-          >
-            {page === "build" ? "知识库智能体" : "知识库展示"}
-          </h2>
-          {mode === "standard" && (
-            <p>
-              {page === "build"
-                ? "完成对话更新后，点击“更新知识库”同步展示内容。"
-                : "按知识章节展示关联文本与图片，内容来自最近一次手动更新的知识库。"}
-            </p>
-          )}
+          <h2>{unified ? "智能知识库" : page === "build" ? "知识库智能体" : "知识库展示"}</h2>
+          <p>预览和修改当前节点，确认后更新知识库。</p>
         </div>
-        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-3 overflow-x-auto">
-          {page === "build" &&
-            (previewMode ? (
-              <Button
-                className="w-fit shrink-0 bg-[#5b2a86] hover:bg-[#49216c]"
-                onClick={() => {
-                  if (!previewProgress?.packageAllowed) {
-                    toast.warning("尚未达到知识库更新条件", {
-                      description: previewProgress
-                        ? `当前进度为 ${previewProgress.summary.handled}/${previewProgress.summary.total}，请继续完成当前节点。`
-                        : "当前预览未配置知识库进度。",
-                    });
-                    return;
-                  }
-                  toast.success("知识库展示已更新");
-                  onPageChange("display");
-                }}
-              >
-                <RefreshCw className="h-4 w-4" />
-                更新知识库
-              </Button>
-            ) : (
-              <ManualKnowledgeUpdateButton
-                onUpdated={async () => {
-                  await knowledgeQuery.refetch();
-                  onPageChange("display");
-                }}
-              />
-            ))}
-          {!previewMode && resetQuery.data && (
-            <KnowledgeResetButton
-              status={resetQuery.data}
-              onReset={async () => {
-                await resetQuery.refetch();
-                await knowledgeQuery.refetch();
-                onPageChange("build");
-              }}
-            />
-          )}
-          {page === "display" &&
-            displayedSnapshot &&
-            archiveDownloadAvailable && (
-              <a
-                href={projectResourceUrl(`/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`)}
-                download={displayedSnapshot.sourceFileName}
-                className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#5b2a86] px-4 text-sm font-medium text-white shadow-sm transition hover:bg-[#49216c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5b2a86] focus-visible:ring-offset-2"
-              >
-                <Download className="h-4 w-4" />
-                下载成品 ZIP
-              </a>
-            )}
+        <div className="knowledge-workspace-actions">
+          {(unified || page === "build") && !previewMode && <ManualKnowledgeUpdateButton
+            disabled={editingBlocked}
+            onPendingChange={setKnowledgeUpdating}
+            onUpdated={async () => {
+              await knowledgeQuery.refetch();
+              if (!unified) onPageChange("display");
+            }}
+          />}
+          {displayedSnapshot && archiveDownloadAvailable && <a
+            href={projectResourceUrl(`/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`)}
+            download={displayedSnapshot.sourceFileName}
+            className="knowledge-workspace-download"
+            title="下载最近一次更新的正式版本，不包含未更新的修改"
+          ><Download className="h-4 w-4" />下载已更新版本</a>}
+          {!previewMode && resetQuery.data && <KnowledgeResetButton
+            disabled={editingBlocked || knowledgeUpdating}
+            status={resetQuery.data}
+            onReset={async () => {
+              await resetQuery.refetch();
+              await knowledgeQuery.refetch();
+              if (!unified) onPageChange("build");
+            }}
+          />}
         </div>
       </header>
 
-      {page === "display" ? (
+      {!unified && page === "display" ? (
         <div
-          className={
-            mode === "workspace" ? "min-h-0 flex-1 overflow-auto p-5" : ""
-          }
+          className="min-h-0 flex-1 overflow-auto"
         >
           <KnowledgeBaseViewer
             snapshot={displayedSnapshot}
@@ -389,6 +332,9 @@ export default function EmbeddedKnowledgeBasePanel({
           mode={mode}
           resetRevision={resetQuery.data.revision}
           accountId={user?.id ?? 0}
+          fallbackSnapshot={displayedSnapshot ?? null}
+          onEditingBlockedChange={setEditingBlocked}
+          updating={knowledgeUpdating}
         />
       )}
     </section>
@@ -398,6 +344,7 @@ export default function EmbeddedKnowledgeBasePanel({
 function KnowledgeResetButton({
   status,
   onReset,
+  disabled = false,
 }: {
   status: {
     revision: number;
@@ -405,6 +352,7 @@ function KnowledgeResetButton({
     unavailableReason: string | null;
   };
   onReset: () => Promise<unknown>;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
@@ -412,7 +360,9 @@ function KnowledgeResetButton({
   const submittingRef = useRef(false);
   useEffect(() => {
     const openReset = () => {
-      if (status.canReset) {
+      if (disabled || getUnsavedWorkspaceDrafts().length) {
+        toast.info("请先保存或清空未提交内容，再重置知识库");
+      } else if (status.canReset) {
         setExpectedRevision(status.revision);
         setOpen(true);
       } else toast.info(status.unavailableReason || "当前暂时无法重置知识库");
@@ -420,16 +370,20 @@ function KnowledgeResetButton({
     window.addEventListener(KNOWLEDGE_BASE_RESET_REQUEST_EVENT, openReset);
     return () =>
       window.removeEventListener(KNOWLEDGE_BASE_RESET_REQUEST_EVENT, openReset);
-  }, [status.canReset, status.revision, status.unavailableReason]);
+  }, [disabled, status.canReset, status.revision, status.unavailableReason]);
   const reset = async () => {
-    if (submittingRef.current || expectedRevision === null) return;
+    if (submittingRef.current || expectedRevision === null || disabled) return;
+    const operation = captureWorkspaceRestOperation();
     submittingRef.current = true;
     try {
       await resetMutation.mutateAsync({ expectedRevision });
+      operation.assertActive();
       await onReset();
+      operation.assertActive();
       setOpen(false);
       toast.success("知识库已重置，可以重新上传资料");
     } catch (error) {
+      if (operation.signal.aborted) return;
       toast.error(error instanceof Error ? error.message : "知识库重置失败");
     } finally {
       submittingRef.current = false;
@@ -437,30 +391,26 @@ function KnowledgeResetButton({
   };
   return (
     <>
-      <Button
-        variant="outline"
-        className="w-fit shrink-0 text-destructive"
-        disabled={!status.canReset || resetMutation.isPending}
-        title={status.unavailableReason || undefined}
-        onClick={() => {
-          setExpectedRevision(status.revision);
-          setOpen(true);
-        }}
-      >
-        <Trash2 className="h-4 w-4" />
-        重置知识库
-      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="知识库更多操作"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem disabled={disabled || !status.canReset || resetMutation.isPending} onSelect={() => {
+            if (getUnsavedWorkspaceDrafts().length) { toast.info("请先保存或清空未提交内容，再重置知识库"); return; }
+            setExpectedRevision(status.revision); setOpen(true);
+          }}><Trash2 className="h-4 w-4" />重置知识库</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Dialog
         open={open}
         onOpenChange={(next) => {
           if (!resetMutation.isPending) setOpen(next);
         }}
       >
-        <DialogContent>
+        <DialogContent onEscapeKeyDown={(event) => { if (resetMutation.isPending) event.preventDefault(); }} onInteractOutside={(event) => { if (resetMutation.isPending) event.preventDefault(); }}>
           <DialogHeader>
             <DialogTitle>重置知识库</DialogTitle>
             <DialogDescription>
-              重置将清空本账号的知识库构建、版本、专属对话和附件，随后可以重新上传资料。其他业务内容保留。此操作无法撤销。
+              重置当前企业项目的知识库后，需要重新上传完整资料并创建全新任务。其他企业项目不受影响，已有任务和历史引用按原规则保留。此操作无法撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -488,13 +438,33 @@ function KnowledgeResetButton({
   );
 }
 
+async function withKnowledgeReadDeadline<T>(request: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([request, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("暂时无法核实更新结果，请稍后重新读取")), 30_000);
+    })]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 function ManualKnowledgeUpdateButton({
   onUpdated,
+  disabled = false,
+  onPendingChange,
 }: {
+  onPendingChange: (pending: boolean) => void;
   onUpdated: () => Promise<void>;
+  disabled?: boolean;
 }) {
   const { activeConversation, updateStatus } = useConversation();
   const [updating, setUpdating] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [uncertainConversation, setUncertainConversation] = useState<string | null>(null);
+  const confirmedConversation = useRef<string | null>(null);
+  const updateLock = useRef(false);
+  useEffect(() => { onPendingChange(updating); return () => onPendingChange(false); }, [updating, onPendingChange]);
   const progressQuery = trpc.workspace.knowledgeProgress.useQuery(
     activeConversation?.id
       ? { conversationId: activeConversation.id }
@@ -505,7 +475,39 @@ function ManualKnowledgeUpdateButton({
     },
   );
 
+  const reconcileUpdate = async () => {
+    if (updateLock.current || !uncertainConversation || uncertainConversation !== activeConversation?.id) return;
+    const operation = captureWorkspaceRestOperation();
+    updateLock.current = true;
+    setUpdating(true);
+    try {
+      const result = await withKnowledgeReadDeadline(progressQuery.refetch());
+      operation.assertActive();
+      if (result.error || !result.data?.progress) throw new Error("暂时无法核实更新结果，请稍后重新读取");
+      await withKnowledgeReadDeadline(onUpdated());
+      operation.assertActive();
+      setUncertainConversation(null);
+      setConfirmOpen(false);
+      if (result.data.progress.build.status === "published") {
+        toast.success("知识库已更新", { description: "正在执行和历史任务继续使用各自绑定的版本。" });
+      } else {
+        toast.info("已重新读取当前状态；尚未确认更新成功，请核对后再操作");
+      }
+    } catch (error) {
+      if (!operation.signal.aborted) toast.error(error instanceof Error ? error.message : "暂时无法核实更新结果，请稍后重新读取");
+    } finally {
+      updateLock.current = false;
+      setUpdating(false);
+    }
+  };
+
   const updateKnowledgeBase = async () => {
+    if (updateLock.current || disabled || getUnsavedWorkspaceDrafts().length) return;
+    if (confirmedConversation.current !== activeConversation?.id || uncertainConversation) {
+      setConfirmOpen(false);
+      toast.info("当前任务已变化，请重新核对知识库更新对象");
+      return;
+    }
     if (!activeConversation?.id) {
       toast.warning("当前任务还没有可更新的知识库内容", {
         description: "请先在构建工作台中完成知识库整理。",
@@ -535,37 +537,48 @@ function ManualKnowledgeUpdateButton({
       });
       return;
     }
-    if (!window.confirm("确认发布当前知识库吗？发布后可随时重置并重新构建。")) {
-      return;
-    }
-
+    const operation = captureWorkspaceRestOperation();
+    const updatedConversationId = activeConversation.id;
+    updateLock.current = true;
     setUpdating(true);
     try {
       const synced = await syncKnowledgeBaseArchiveFromOutput({
-        conversationId: activeConversation.id,
+        conversationId: updatedConversationId,
+        operation,
       });
+      operation.assertActive();
       if (!synced) {
-        toast.warning("知识库展示暂未更新", {
+        toast.warning("知识库暂未更新", {
           description: "请确认全部节点已完成，并生成了最终知识库文件。",
         });
         return;
       }
-      await onUpdated();
-      await progressQuery.refetch();
-      updateStatus(activeConversation.id, "completed", {
+      await withKnowledgeReadDeadline(onUpdated());
+      operation.assertActive();
+      await withKnowledgeReadDeadline(progressQuery.refetch());
+      operation.assertActive();
+      updateStatus(updatedConversationId, "completed", {
         completedAt: Date.now(),
       });
-      toast.success("知识库展示已更新");
+      setConfirmOpen(false);
+      toast.success("知识库已更新", { description: "正在执行和历史任务继续使用各自绑定的版本。" });
     } catch (error) {
-      toast.error("知识库更新失败", {
-        description: error instanceof Error ? error.message : "请稍后重试",
+      if (operation.signal.aborted) return;
+      setUncertainConversation(updatedConversationId);
+      setConfirmOpen(false);
+      toast.error("知识库更新结果待核实", {
+        description: "请先重新读取实际结果，避免重复提交更新。",
       });
     } finally {
+      updateLock.current = false;
       setUpdating(false);
     }
   };
 
   const progress = progressQuery.data?.progress;
+  if (uncertainConversation === activeConversation?.id) {
+    return <Button variant="outline" disabled={updating} onClick={() => void reconcileUpdate()}>{updating ? "正在核实…" : "重新读取更新结果"}</Button>;
+  }
   if (progress?.build.status === "published") {
     return null;
   }
@@ -573,32 +586,37 @@ function ManualKnowledgeUpdateButton({
     return null;
   }
 
-  return (
-    <div className="flex flex-col items-start gap-2">
-      <p className="max-w-full whitespace-nowrap text-xs leading-5 text-amber-700">
-        知识库已达到 100%：可以发布当前知识库；后续可直接重置并重新构建。
-      </p>
-      <Button
-        className="w-fit shrink-0 bg-[#5b2a86] hover:bg-[#49216c]"
-        disabled={updating}
-        onClick={() => void updateKnowledgeBase()}
-      >
-        {updating ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <RefreshCw className="h-4 w-4" />
-        )}
-        {updating ? "正在更新" : "更新知识库"}
-      </Button>
-    </div>
-  );
+  return <>
+    <Button disabled={disabled || updating} onClick={() => {
+      if (getUnsavedWorkspaceDrafts().length) { toast.info("请先保存或清空未提交内容，再更新知识库"); return; }
+      confirmedConversation.current = activeConversation?.id ?? null;
+      setConfirmOpen(true);
+    }}><RefreshCw className="h-4 w-4" />更新知识库</Button>
+    <Dialog open={confirmOpen} onOpenChange={(open) => { if (!updating) setConfirmOpen(open); }}>
+      <DialogContent onEscapeKeyDown={(event) => { if (updating) event.preventDefault(); }} onInteractOutside={(event) => { if (updating) event.preventDefault(); }}>
+        <DialogHeader><DialogTitle>更新知识库</DialogTitle><DialogDescription>
+          将已确认的知识内容更新为正式版本，供后续任务使用。正在执行和历史任务仍使用原来绑定的版本；此操作不会发布网站或投放媒体。
+        </DialogDescription></DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" disabled={updating} onClick={() => setConfirmOpen(false)}>取消</Button>
+          <Button disabled={disabled || updating} onClick={() => void updateKnowledgeBase()}>{updating ? "正在更新…" : "确认更新"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>;
 }
 
 function RealBuildFlow({
   mode,
   resetRevision,
   accountId,
+  fallbackSnapshot,
+  onEditingBlockedChange,
+  updating,
 }: {
+  updating: boolean;
+  fallbackSnapshot: KnowledgeSnapshotView | null;
+  onEditingBlockedChange: (blocked: boolean) => void;
   mode: "standard" | "workspace";
   resetRevision: number;
   accountId: number;
@@ -617,6 +635,15 @@ function RealBuildFlow({
     clearSyncError,
   } = useConversation();
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const requestedFreshConversationRef = useRef<string | null>(null);
+  const [nodeDirty, setNodeDirty] = useState(false);
+  const [nodePending, setNodePending] = useState(false);
+  const [composerDirty, setComposerDirty] = useState(false);
+  const [editTarget, setEditTarget] = useState<{ leafId: string; title: string; mode: "direct" | "ai" } | null>(null);
+  useEffect(() => {
+    onEditingBlockedChange(nodeDirty || nodePending || composerDirty);
+    return () => onEditingBlockedChange(false);
+  }, [nodeDirty, nodePending, composerDirty, onEditingBlockedChange]);
   const trpcUtils = trpc.useUtils();
   const latestProgressQuery = trpc.workspace.knowledgeProgress.useQuery(
     undefined,
@@ -630,15 +657,24 @@ function RealBuildFlow({
         (conversation) => conversation.id === conversationId,
       )
     : undefined;
+  const authoritativeConversationId = latestProgressQuery.data?.progress?.build.conversationId;
+  const expectedConversationId = requestedFreshConversationRef.current ?? authoritativeConversationId ?? conversationId;
+  const activeMatchesExpected = expectedConversationId
+    ? activeConversation?.id === expectedConversationId
+    : latestProgressQuery.data === undefined || latestProgressQuery.isError;
   // Home renders ConversationContext.activeConversation. Only use that same
   // object as the last-good fallback; a stale scoped id must never make the KB
   // shell mount while Home is actually pointing at an unrelated conversation.
-  const lastGoodConversation = hasLastGoodKnowledgeBasePresentation(
+  const lastGoodConversation = activeMatchesExpected && hasLastGoodKnowledgeBasePresentation(
     activeConversation,
   )
     ? activeConversation
     : undefined;
-  const displayedConversation = lastGoodConversation ?? scopedConversation;
+  const displayedConversation = lastGoodConversation ?? (
+    activeMatchesExpected && scopedConversation?.id === activeConversation?.id
+      ? scopedConversation
+      : undefined
+  );
   const [recoveryTimedOut, setRecoveryTimedOut] = useState(false);
   const recoveryPending = Boolean(
     !lastGoodConversation &&
@@ -669,6 +705,7 @@ function RealBuildFlow({
           ?.conversationId || "",
       ).trim();
       if (!nextConversationId) return;
+      requestedFreshConversationRef.current = nextConversationId;
       setConversationId(nextConversationId);
       setActive(nextConversationId);
     };
@@ -697,7 +734,19 @@ function RealBuildFlow({
           (conversation) => conversation.id === latestConversationId,
         )
       : undefined;
+    if (latestConversationId === requestedFreshConversationRef.current) requestedFreshConversationRef.current = null;
+    // A server-owned current build outranks an unrelated cached active KB.
+    // A missing conversation is a recovery condition, never permission to
+    // manufacture a replacement conversation for that build.
+    if (latestConversationId && !requestedFreshConversationRef.current && conversationId !== latestConversationId) {
+      if (latestConversation) {
+        setConversationId(latestConversation.id);
+        if (activeConversation?.id !== latestConversation.id) setActive(latestConversation.id);
+      } else if (conversationId) setConversationId(null);
+      return;
+    }
     if (conversationId && !scopedConversation) {
+      requestedFreshConversationRef.current = null;
       setConversationId(null);
       return;
     }
@@ -712,17 +761,19 @@ function RealBuildFlow({
       }
       return;
     }
-    if (!conversationId) {
+    if (!conversationId && !latestConversationId && !fallbackSnapshot) {
       const nextConversationId = createConversation({
         title: "企业知识库构建",
         reuseEmpty: false,
       });
+      requestedFreshConversationRef.current = nextConversationId;
       setConversationId(nextConversationId);
     }
   }, [
     activeConversation?.id,
     conversationId,
     createConversation,
+    fallbackSnapshot,
     hydrated,
     latestProgressQuery.data?.progress?.build.conversationId,
     latestProgressQuery.isError,
@@ -793,10 +844,15 @@ function RealBuildFlow({
     setLiveProgress(null);
     setProgressTimedOut(false);
     liveProgressCoordinateRef.current = { generation: -1, stateEpoch: -1 };
+    setEditTarget(null);
+    setNodeDirty(false);
+    setNodePending(false);
+    setComposerDirty(false);
   }, [conversationId]);
 
   useEffect(() => {
     const candidate = progressQuery.data?.progress;
+    if (candidate && candidate.build.conversationId !== expectedConversationId) return;
     if (candidate !== undefined) {
       setLiveProgress((current) => {
         if (candidate === null) return null;
@@ -806,17 +862,17 @@ function RealBuildFlow({
         return candidate;
       });
     }
-  }, [progressQuery.data?.progress]);
+  }, [progressQuery.data?.progress, expectedConversationId]);
 
   const latestScopedProgress =
-    latestProgressQuery.data?.progress?.build.conversationId === conversationId
+    latestProgressQuery.data?.progress?.build.conversationId === expectedConversationId
       ? latestProgressQuery.data.progress
       : null;
-  const displayedProgress =
-    liveProgress ??
-    progressQuery.data?.progress ??
-    latestScopedProgress ??
-    null;
+  const displayedProgress = [liveProgress, progressQuery.data?.progress, latestScopedProgress]
+    .find((candidate) => candidate?.build.conversationId === expectedConversationId) ?? null;
+  useEffect(() => {
+    if (editTarget?.mode === "ai" && displayedProgress && displayedProgress.build.currentLeafId !== editTarget.leafId) setEditTarget(null);
+  }, [displayedProgress, editTarget]);
   const progressRequestPending = Boolean(
     conversationId && !displayedProgress && progressQuery.isLoading,
   );
@@ -841,8 +897,8 @@ function RealBuildFlow({
       );
       if (detail) {
         if (
-          conversationId &&
-          detail.progress.build.conversationId !== conversationId
+          !expectedConversationId ||
+          detail.progress.build.conversationId !== expectedConversationId
         ) {
           return;
         }
@@ -891,20 +947,7 @@ function RealBuildFlow({
         "frontmind:knowledge-progress-updated",
         refresh,
       );
-  }, [conversationId, progressQuery.refetch, trpcUtils]);
-
-  const progressPanel = (
-    <KnowledgeBaseProgressPanel
-      progress={displayedProgress}
-      editable
-      loading={progressRequestPending && !progressTimedOut}
-      emptyMessage={
-        progressTimedOut
-          ? "构建状态同步暂时没有响应。任务可继续在上游处理，请稍后重试或在需要时重置。"
-          : undefined
-      }
-    />
-  );
+  }, [conversationId, expectedConversationId, progressQuery.refetch, trpcUtils]);
 
   const recoveryFailed = Boolean(
     !lastGoodConversation &&
@@ -925,7 +968,7 @@ function RealBuildFlow({
         <div className="max-w-lg rounded-2xl border bg-muted/30 p-7 text-center">
           <p className="font-medium">构建会话读取失败</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            {syncError || "未能在 15 秒内恢复已有构建会话，请检查网络后重试。"}
+            {syncError || "未能在 15 秒内读取当前构建会话，请检查网络后重试。"}
           </p>
           <Button
             type="button"
@@ -947,91 +990,76 @@ function RealBuildFlow({
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        正在恢复构建会话…
+        正在读取当前构建会话…
       </div>
     );
   }
 
-  return (
-    <div
-      className={
-        mode === "workspace"
-          ? "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_390px]"
-          : "grid min-h-[680px] gap-5 2xl:grid-cols-[minmax(0,1fr)_390px]"
-      }
-    >
-      <div
-        className={
-          mode === "workspace"
-            ? "min-h-0 overflow-hidden bg-white"
-            : "h-[calc(100dvh-210px)] min-h-[680px] overflow-hidden rounded-[20px] border border-[#e1d8e8] bg-white shadow-[0_18px_48px_rgba(33,19,58,.08)]"
-        }
-      >
-        {displayedConversation ? (
-          <Home
-            key={displayedConversation.id}
-            embedded
-            hideSidebar
-            fixedAgentProfile="frontmind-pro"
-            syncKnowledgeBaseSnapshot
-            knowledgeBaseProgress={displayedProgress}
-            knowledgeBaseResetRevision={resetRevision}
-            knowledgeBaseAccountId={accountId}
-            onKnowledgeBaseBatchCancelled={installCancelledBatchRevision}
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-[#716a80]">
-            <Loader2 className="h-5 w-5 animate-spin text-[#5b2a86]" />
-            正在打开知识库工作台…
-          </div>
-        )}
-      </div>
-      <div
-        className={
-          mode === "workspace"
-            ? "hidden min-h-0 overflow-y-auto border-l border-[#e8e1ee] bg-[#fbf9fd] p-4 custom-scrollbar xl:block"
-            : "max-h-[calc(100dvh-210px)] min-h-[320px] overflow-y-auto custom-scrollbar"
-        }
-      >
-        {progressPanel}
-      </div>
-      {mode === "workspace" && (
-        <MobileProgressSheet progressPanel={progressPanel} />
-      )}
+  const missingCurrentConversation = Boolean(!requestedFreshConversationRef.current && authoritativeConversationId && !state.conversations.some((conversation) => conversation.id === authoritativeConversationId));
+  const snapshotOnly = !requestedFreshConversationRef.current && !displayedProgress && !lastGoodConversation && !latestProgressQuery.data?.progress && Boolean(fallbackSnapshot);
+  const collaboration = <>
+    <header className="knowledge-collaboration-header"><h3>任务协作</h3><p>补充资料、处理确认，完成企业知识库。</p></header>
+    <KnowledgeWorkspaceStatus progress={displayedProgress} />
+    {editTarget && <div className="knowledge-workspace-edit-target">{editTarget.mode === "ai" ? "正在修改" : "正在直接编辑"}：{editTarget.title}</div>}
+    {nodeDirty && <div className="knowledge-workspace-edit-target">请先保存或取消右侧修改，再提交任务消息。</div>}
+    <div className="knowledge-workspace-task">
+      {missingCurrentConversation || snapshotOnly ? <div className="knowledge-workspace-empty">
+        <p>{snapshotOnly ? "现有正式资料可预览。重新构建后可使用节点编辑。" : "当前构建记录无法继续。请确认重置后重新上传资料。"}</p>
+        <Button variant="outline" onClick={() => window.dispatchEvent(new Event(KNOWLEDGE_BASE_RESET_REQUEST_EVENT))}>重置后重新上传</Button>
+      </div> : displayedConversation ? <Home
+        key={displayedConversation.id}
+        embedded hideSidebar operatorWorkspace={mode === "workspace"}
+        fixedAgentProfile="frontmind-pro" syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={displayedProgress}
+        knowledgeBaseResetRevision={resetRevision}
+        knowledgeBaseAccountId={accountId}
+        knowledgeEditingBlocked={updating || nodeDirty || nodePending || editTarget?.mode === "direct"}
+        onComposerDirtyChange={setComposerDirty}
+        onKnowledgeBaseBatchCancelled={installCancelledBatchRevision}
+      /> : <div className="knowledge-workspace-empty">正在打开知识库工作台…</div>}
     </div>
-  );
+  </>;
+  const knowledge = snapshotOnly ? <div className="knowledge-workspace-history"><KnowledgeBaseViewer snapshot={fallbackSnapshot} showArchiveDownload={false} /></div>
+    : <KnowledgeNodeWorkspace
+      key={`${conversationId ?? "empty"}:${displayedProgress?.build.id ?? "empty"}:${displayedConversation?.knowledgeBase?.generation ?? 0}:${resetRevision}`}
+      progress={displayedProgress} conversationId={conversationId ?? displayedConversation?.id ?? ""}
+      generation={displayedConversation?.knowledgeBase?.generation}
+      resetRevision={resetRevision}
+      loading={progressRequestPending && !progressTimedOut}
+      disabled={updating || composerDirty || missingCurrentConversation}
+      onDirtyChange={setNodeDirty}
+      onMutationPendingChange={setNodePending}
+      onEditTargetChange={setEditTarget}
+    />;
+  return <KnowledgeWorkspaceSurfaces collaboration={collaboration} knowledge={knowledge} collaborationRequest={editTarget?.mode === "ai" ? editTarget : null} />;
 }
 
-function MobileProgressSheet({
-  progressPanel,
-}: {
-  progressPanel: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Sheet open={open} onOpenChange={setOpen}>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => setOpen(true)}
-        className="absolute right-4 top-4 z-30 gap-2 border-[#d8cde3] bg-white/95 text-[#5b2a86] shadow-sm xl:hidden"
-        aria-label="查看知识库构建进度"
-      >
-        <PanelRightOpen className="h-4 w-4" />
-        构建进度
-      </Button>
-      <SheetContent
-        side="right"
-        className="w-[min(92vw,390px)] gap-0 overflow-y-auto bg-[#fbf9fd] p-4 sm:max-w-[390px]"
-      >
-        <SheetHeader className="mb-4 pr-8 text-left">
-          <SheetTitle>知识库构建进度</SheetTitle>
-        </SheetHeader>
-        {progressPanel}
-      </SheetContent>
-    </Sheet>
-  );
+function KnowledgeWorkspaceSurfaces({ collaboration, knowledge, collaborationRequest }: { collaboration: React.ReactNode; knowledge: React.ReactNode; collaborationRequest?: object | null }) {
+  const [view, setView] = useState<"collaboration" | "knowledge">("collaboration");
+  const id = useId();
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!collaborationRequest) return;
+    setView("collaboration");
+    const frame = window.requestAnimationFrame(() => root.current?.querySelector<HTMLTextAreaElement>(".knowledge-workspace-task textarea")?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [collaborationRequest]);
+  return <div className="knowledge-workspace-surfaces" ref={root}>
+    <div className="knowledge-workspace-view-switch" role="tablist" aria-label="知识库工作区域" onKeyDown={(event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "collaboration" : event.key === "End" ? "knowledge" : view === "collaboration" ? "knowledge" : "collaboration";
+      setView(next);
+      event.currentTarget.querySelector<HTMLButtonElement>(`[data-view-tab="${next}"]`)?.focus();
+    }}>
+      <button id={`${id}-collaboration-tab`} data-view-tab="collaboration" role="tab" tabIndex={view === "collaboration" ? 0 : -1} aria-controls={`${id}-collaboration`} aria-selected={view === "collaboration"} onClick={() => setView("collaboration")}>任务协作</button>
+      <button id={`${id}-knowledge-tab`} data-view-tab="knowledge" role="tab" tabIndex={view === "knowledge" ? 0 : -1} aria-controls={`${id}-knowledge`} aria-selected={view === "knowledge"} onClick={() => setView("knowledge")}>知识内容</button>
+    </div>
+    <div className="knowledge-workspace-grid" data-view={view}>
+      <section id={`${id}-collaboration`} className="knowledge-workspace-collaboration" role="tabpanel" aria-labelledby={`${id}-collaboration-tab`}>{collaboration}</section>
+      <section id={`${id}-knowledge`} className="knowledge-workspace-knowledge" role="tabpanel" aria-labelledby={`${id}-knowledge-tab`}>{knowledge}</section>
+    </div>
+  </div>;
 }
 
 function rebuildPreviewProgress(
@@ -1179,113 +1207,26 @@ function PreviewBuildFlow({
     setDraft("");
   };
 
-  const progressPanel = <KnowledgeBaseProgressPanel progress={progress} />;
-
-  return (
-    <div
-      className={
-        mode === "workspace"
-          ? "relative grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1fr)_390px]"
-          : "grid min-h-[680px] gap-5 2xl:grid-cols-[minmax(0,1fr)_390px]"
-      }
-    >
-      <section
-        className={
-          mode === "workspace"
-            ? "flex min-h-0 flex-col overflow-hidden bg-white"
-            : "flex min-h-[680px] flex-col overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)]"
-        }
-      >
-        <div className="flex items-center justify-between gap-3 border-b border-[#e8e1ee] px-5 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#5b2a86] text-white">
-              <Sparkles className="h-5 w-5" />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold text-[#171321]">
-                  FrontMind 知识库智能体
-                </h3>
-              </div>
-              <p className="mt-1 text-xs text-[#716a80]">
-                当前节点：{currentLeaf?.title || "全部节点已处理"}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-5 overflow-y-auto bg-[#fbf9fd] px-4 py-6 sm:px-7">
-          <div className="mx-auto max-w-3xl rounded-2xl border border-[#e4d9eb] bg-white p-5 text-sm leading-7 text-[#4f485c] shadow-sm">
-            <div className="flex items-center gap-2 text-[#5b2a86]">
-              <Sparkles className="h-5 w-5" />
-              <strong>
-                知识库构建进度 {progress.summary.handled}/
-                {progress.summary.total}（{progress.summary.overallPercent}%）
-              </strong>
-            </div>
-            <p className="mt-2 text-[#716a80]">
-              每个节点都可以确认、补充或保留预填内容；只有企业明确确认的节点显示对号。
-            </p>
-          </div>
-          {messages.map((message, index) => (
-            <div
-              key={`${message.role}-${index}`}
-              className={`mx-auto flex max-w-3xl ${
-                message.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              <div
-                className={`max-w-[88%] rounded-2xl px-5 py-3 text-sm leading-7 shadow-sm ${
-                  message.role === "user"
-                    ? "rounded-br-md bg-[#5b2a86] text-white"
-                    : "rounded-bl-md border border-[#e8e1ee] bg-white text-[#4f485c]"
-                }`}
-              >
-                {message.content}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="border-t border-[#e8e1ee] bg-white p-4 sm:p-5">
-          <div className="flex items-end gap-3 rounded-2xl border border-[#dcd1e5] bg-[#fbf9fd] p-2 focus-within:border-[#5b2a86]/50">
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  sendPreviewMessage();
-                }
-              }}
-              placeholder="试试输入补充内容、“确认”或“直接预填”…"
-              className="min-h-[62px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-[#9a94a8]"
-            />
-            <Button
-              size="icon"
-              aria-label="发送样例消息"
-              className="h-10 w-10 shrink-0 rounded-xl bg-[#5b2a86] hover:bg-[#49216c]"
-              disabled={!draft.trim() || !currentLeaf}
-              onClick={sendPreviewMessage}
-            >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </section>
-
-      <div
-        className={
-          mode === "workspace"
-            ? "hidden min-h-0 overflow-y-auto border-l border-[#e8e1ee] bg-[#fbf9fd] p-4 custom-scrollbar xl:block"
-            : "max-h-[780px] overflow-y-auto custom-scrollbar"
-        }
-      >
-        {progressPanel}
-      </div>
-      {mode === "workspace" && (
-        <MobileProgressSheet progressPanel={progressPanel} />
-      )}
+  const previewDetails: KnowledgeNodeDetailsDto[] = progress.branches.flatMap((branch) => branch.leaves).map((leaf) => ({
+    coordinates: { conversationId: progress.build.conversationId, buildId: progress.build.id, leafId: leaf.id, generation: 1, revision: progress.build.revision, stateEpoch: 1, contentVersion: progress.build.contentVersion ?? 1, resetRevision: 0 },
+    node: { leafId: leaf.id, title: leaf.title, status: leaf.status, contentMarkdown: leaf.contentMarkdown || `# ${leaf.title}\n\n这是本地设计预览资料。正式页面只展示当前企业项目经过校验的节点正文。\n\n## 已整理内容\n\n- 企业资料与已提供的事实。\n- 产品、服务及适用场景。\n- 需要进一步确认的内容。` },
+    resources: [],
+    capabilities: { directEdit: { allowed: false, reason: "设计预览不提交修改" }, aiEdit: { allowed: false, reason: "设计预览不创建任务" }, manageImages: { allowed: false, reason: "设计预览不上传资料" } },
+  }));
+  return <KnowledgeWorkspaceSurfaces collaboration={<>
+    <header className="knowledge-collaboration-header"><h3>任务协作</h3><p>本地设计预览 · 不会执行真实任务</p></header>
+    <KnowledgeWorkspaceStatus progress={progress} />
+    <div className="min-h-0 flex-1 overflow-auto p-5">
+      {messages.map((message, index) => <div className="knowledge-preview-message" data-role={message.role} key={index}>{message.content}</div>)}
     </div>
-  );
+    <div className="border-t p-4">
+      <label className="sr-only" htmlFor="knowledge-preview-input">样例任务输入</label>
+      <div className="flex items-end gap-3">
+        <textarea id="knowledge-preview-input" value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-20 min-w-0 flex-1 resize-none rounded-lg border p-3 text-base" placeholder="输入补充内容或确认意见…" onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); sendPreviewMessage(); }
+        }} />
+        <Button size="icon" aria-label="发送样例消息" disabled={!draft.trim() || !currentLeaf} onClick={sendPreviewMessage}><Send className="h-4 w-4" /></Button>
+      </div>
+    </div>
+  </>} knowledge={<KnowledgeNodeWorkspace progress={progress} conversationId={progress.build.conversationId} generation={1} resetRevision={0} previewDetails={previewDetails} />} />;
 }

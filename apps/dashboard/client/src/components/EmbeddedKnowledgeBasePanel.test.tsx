@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   knowledgeRefetch: vi.fn(),
   deliveryTicketCreate: vi.fn(),
   progressRefetch: vi.fn(),
+  publishKnowledge: vi.fn(),
   progressUseQuery: vi.fn(),
   setKnowledgeData: vi.fn(),
   setProgressData: vi.fn(),
@@ -24,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   refreshConversationsAfterDiscard: vi.fn(),
   refreshConversations: vi.fn(),
   clearSyncError: vi.fn(),
+  nodeProps: vi.fn(),
+  homeProps: vi.fn(),
   activeConversation: null as any,
   hydrated: true,
   conversationLoading: false,
@@ -69,12 +72,14 @@ vi.mock("@/contexts/ConversationContext", () => ({
 vi.mock("@/components/KnowledgeBaseViewer", () => ({
   default: () => <div>knowledge viewer</div>,
 }));
-vi.mock("@/components/KnowledgeBaseProgressPanel", () => ({
+vi.mock("@/components/KnowledgeNodeWorkspace", () => ({
   default: (props: {
     progress?: { operationState?: string } | null;
     loading?: boolean;
     emptyMessage?: string;
-  }) => (
+  }) => {
+    mocks.nodeProps(props);
+    return (
     <div data-testid="knowledge-progress-panel">
       {props.loading
         ? "progress-loading"
@@ -82,10 +87,13 @@ vi.mock("@/components/KnowledgeBaseProgressPanel", () => ({
           props.emptyMessage ||
           "progress-empty"}
     </div>
-  ),
+  );
+  },
 }));
+vi.mock("@/components/KnowledgeWorkspaceStatus", () => ({ default: () => null }));
+vi.mock("@/lib/knowledge-snapshot", () => ({ syncKnowledgeBaseArchiveFromOutput: mocks.publishKnowledge }));
 vi.mock("@/pages/Home", () => ({
-  default: () => <div data-testid="knowledge-home">knowledge home</div>,
+  default: (props: unknown) => { mocks.homeProps(props); return <div data-testid="knowledge-home">knowledge home</div>; },
 }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
@@ -162,6 +170,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mocks.publishKnowledge.mockReset().mockResolvedValue(true);
   mocks.resetMutation
     .mockReset()
     .mockResolvedValue({ revision: 1, cleanup: {} });
@@ -186,6 +195,8 @@ beforeEach(() => {
     .mockResolvedValue(undefined);
   mocks.refreshConversations.mockReset().mockResolvedValue(undefined);
   mocks.clearSyncError.mockReset();
+  mocks.nodeProps.mockReset();
+  mocks.homeProps.mockReset();
   mocks.resetIsError = false;
   mocks.progressIsError = false;
   mocks.progressData = { progress: null };
@@ -244,12 +255,93 @@ describe("knowledge-base progress projection ordering", () => {
 });
 
 describe("EmbeddedKnowledgeBasePanel reset action", () => {
+  const activeBuild = (conversationId = "current-kb", currentLeafId: string | null = "1.1") => ({
+    operationState: "waiting_output",
+    build: { id: `build-${conversationId}`, conversationId, revision: 2, contentVersion: 1, updatedAt: 10, currentLeafId },
+    branches: [],
+    packageAllowed: false,
+  });
+  const approvedConversation = (id: string) => ({
+    id, title: "企业知识库构建", status: "awaiting_input", createdAt: 1, updatedAt: 2,
+    knowledgeBase: { initialized: true, generation: 1, stateEpoch: 2, presentationKey: `key-${id}`, presentationTurnId: `turn-${id}`, canReply: true, leafId: "1.1" },
+    messages: [{ id: "presentation", role: "assistant", content: "已确认正文", timestamp: 2, knowledgeBase: { kind: "presentation", presentationKey: `key-${id}`, turnId: `turn-${id}`, serverOwned: true } }],
+  });
+  const publishedSnapshot = { id: "published-old", sourceFileName: "knowledge.zip", archiveHash: "a".repeat(64), archiveAvailable: true };
+
+  it("does not substitute an old active conversation for a missing authoritative current build", () => {
+    mocks.activeConversation = approvedConversation("old-kb");
+    mocks.progressData = { progress: activeBuild("missing-current-kb") };
+    mocks.knowledgeData = { snapshot: publishedSnapshot };
+    render(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    expect(screen.getByText("当前构建记录无法继续。请确认重置后重新上传资料。")).toBeVisible();
+    expect(screen.queryByTestId("knowledge-home")).not.toBeInTheDocument();
+    expect(screen.queryByText("knowledge viewer")).not.toBeInTheDocument();
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.nodeProps.mock.lastCall?.[0]).toMatchObject({ progress: { build: { conversationId: "missing-current-kb" } }, disabled: true });
+  });
+
+  it("uses historical snapshot fallback only when no current build is available", () => {
+    mocks.activeConversation = approvedConversation("old-kb");
+    mocks.progressData = { progress: null };
+    mocks.knowledgeData = { snapshot: publishedSnapshot };
+    render(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    expect(screen.getByText("knowledge viewer")).toBeVisible();
+    expect(screen.queryByTestId("knowledge-home")).not.toBeInTheDocument();
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+  });
+
+  it("keeps current progress ahead of a published snapshot while latest-progress recovery is incomplete", async () => {
+    const current = activeBuild();
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.progressData = { progress: current };
+    mocks.knowledgeData = { snapshot: publishedSnapshot };
+    const { rerender } = render(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-home")).toBeVisible());
+    mocks.scopedProgressOverride = true;
+    mocks.scopedProgressData = { progress: current };
+    mocks.progressData = undefined;
+    rerender(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    expect(screen.getByTestId("knowledge-home")).toBeVisible();
+    expect(screen.getByTestId("knowledge-progress-panel")).toHaveTextContent("waiting_output");
+    expect(screen.queryByText("knowledge viewer")).not.toBeInTheDocument();
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+  });
+
+  it("locks the opposite editor without locking the source of a draft", async () => {
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.progressData = { progress: activeBuild() };
+    render(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-home")).toBeVisible());
+    act(() => mocks.nodeProps.mock.lastCall?.[0].onDirtyChange(true));
+    expect(mocks.homeProps.mock.lastCall?.[0].knowledgeEditingBlocked).toBe(true);
+    expect(mocks.nodeProps.mock.lastCall?.[0].disabled).toBe(false);
+    act(() => { mocks.nodeProps.mock.lastCall?.[0].onDirtyChange(false); mocks.nodeProps.mock.lastCall?.[0].onEditTargetChange({ leafId: "1.1", title: "企业简介", mode: "direct" }); });
+    expect(mocks.homeProps.mock.lastCall?.[0].knowledgeEditingBlocked).toBe(true);
+    act(() => { mocks.nodeProps.mock.lastCall?.[0].onEditTargetChange(null); mocks.homeProps.mock.lastCall?.[0].onComposerDirtyChange(true); });
+    expect(mocks.nodeProps.mock.lastCall?.[0].disabled).toBe(true);
+    expect(mocks.homeProps.mock.lastCall?.[0].knowledgeEditingBlocked).toBe(false);
+  });
+
+  it("clears a stale AI target label when the authoritative workflow advances to another node", async () => {
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.progressData = { progress: activeBuild() };
+    const { rerender } = render(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("knowledge-home")).toBeVisible());
+    act(() => mocks.nodeProps.mock.lastCall?.[0].onEditTargetChange({ leafId: "1.1", title: "企业简介", mode: "ai" }));
+    expect(screen.getByText("正在修改：企业简介")).toBeVisible();
+    const next = activeBuild("current-kb", "1.2");
+    next.build.revision = 3;
+    mocks.progressData = { progress: next };
+    rerender(<EmbeddedKnowledgeBasePanel mode="workspace" page="build" onPageChange={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText("正在修改：企业简介")).not.toBeInTheDocument());
+  });
+
   it("keeps the enterprise project on the header archive download", () => {
     const projectId = "11111111-1111-4111-8111-111111111111";
     window.history.replaceState(null, "", `/?enterpriseProjectId=${projectId}`);
     mocks.knowledgeData = { snapshot: { id: "snapshot-1", sourceFileName: "knowledge.zip", archiveHash: "a".repeat(64), archiveAvailable: true } };
     render(<EmbeddedKnowledgeBasePanel page="display" onPageChange={vi.fn()} />);
-    expect(screen.getByRole("link", { name: "下载成品 ZIP" })).toHaveAttribute("href", `/api/dashboard/knowledge/snapshots/snapshot-1/archive?enterpriseProjectId=${projectId}`);
+    expect(screen.getByRole("link", { name: "下载已更新版本" })).toHaveAttribute("href", `/api/dashboard/knowledge/snapshots/snapshot-1/archive?enterpriseProjectId=${projectId}`);
   });
   it("does not mount the build flow before reset status is known", () => {
     mocks.resetStatus = undefined;
@@ -314,7 +406,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     )?.[1];
     expect(latestQueryOptions).toBeDefined();
     expect(latestQueryOptions).not.toHaveProperty("enabled");
-    expect(screen.getByText("正在恢复构建会话…")).toBeInTheDocument();
+    expect(screen.getByText("正在读取当前构建会话…")).toBeInTheDocument();
   });
 
   it("uses the latest canonical business state while the scoped query is still loading", async () => {
@@ -369,7 +461,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
         onPageChange={() => undefined}
       />,
     );
-    expect(screen.getByText("正在恢复构建会话…")).toBeInTheDocument();
+    expect(screen.getByText("正在读取当前构建会话…")).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS);
@@ -377,7 +469,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
 
     expect(screen.getByText("构建会话读取失败")).toBeInTheDocument();
     expect(
-      screen.getByText(/未能在 15 秒内恢复已有构建会话/),
+      screen.getByText(/未能在 15 秒内读取当前构建会话/),
     ).toBeInTheDocument();
   });
 
@@ -412,7 +504,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
         onPageChange={() => undefined}
       />,
     );
-    expect(screen.getByText("正在恢复构建会话…")).toBeInTheDocument();
+    expect(screen.getByText("正在读取当前构建会话…")).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS);
@@ -420,7 +512,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
 
     expect(screen.getByText("构建会话读取失败")).toBeInTheDocument();
     expect(
-      screen.getByText(/未能在 15 秒内恢复已有构建会话/),
+      screen.getByText(/未能在 15 秒内读取当前构建会话/),
     ).toBeInTheDocument();
   });
 
@@ -615,7 +707,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     );
 
     await waitFor(() =>
-      expect(mocks.setActive).toHaveBeenCalledWith("knowledge-conversation"),
+      expect(screen.getByTestId("knowledge-home")).toBeInTheDocument(),
     );
     const nextProgress = {
       ...progress,
@@ -667,7 +759,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
       />,
     );
     await waitFor(() =>
-      expect(mocks.setActive).toHaveBeenCalledWith("knowledge-conversation"),
+      expect(screen.getByTestId("knowledge-home")).toBeInTheDocument(),
     );
     mocks.setActive.mockClear();
 
@@ -684,7 +776,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     );
   });
 
-  it("keeps the 100 percent update notice on one line", () => {
+  it("requires an explicit update dialog without a decorative percentage notice", () => {
     mocks.activeConversation = {
       id: "knowledge-conversation",
       status: "completed",
@@ -706,9 +798,36 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
       />,
     );
 
-    expect(screen.getByText(/知识库已达到\s+100%/)).toHaveClass(
-      "whitespace-nowrap",
-    );
+    expect(screen.queryByText(/知识库已达到\s+100%/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "更新知识库" }));
+    expect(screen.getByRole("dialog", { name: "更新知识库" })).toHaveTextContent("正在执行和历史任务仍使用原来绑定的版本");
+  });
+
+  it("reads an uncertain publish result before permitting another update request", async () => {
+    mocks.activeConversation = { id: "knowledge-conversation", status: "completed" };
+    mocks.progressData = { progress: { packageAllowed: true, build: { status: "ready_to_publish", conversationId: "knowledge-conversation" } } };
+    mocks.publishKnowledge.mockRejectedValueOnce(new Error("response lost"));
+    mocks.progressRefetch.mockResolvedValue({ data: { progress: { packageAllowed: true, build: { status: "published", conversationId: "knowledge-conversation" } } } });
+    const onPageChange = vi.fn();
+    render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={onPageChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "更新知识库" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新读取更新结果" }));
+    await waitFor(() => expect(mocks.knowledgeRefetch).toHaveBeenCalled());
+    expect(mocks.publishKnowledge).toHaveBeenCalledTimes(1);
+    expect(mocks.progressRefetch).toHaveBeenCalled();
+    expect(onPageChange).not.toHaveBeenCalled();
+  });
+
+  it("does not retarget an open update confirmation to another conversation", () => {
+    mocks.activeConversation = { id: "knowledge-conversation", status: "completed" };
+    mocks.progressData = { progress: { packageAllowed: true, build: { status: "ready_to_publish", conversationId: "knowledge-conversation" } } };
+    const { rerender } = render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "更新知识库" }));
+    mocks.activeConversation = { id: "another-conversation", status: "completed" };
+    rerender(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
+    expect(mocks.publishKnowledge).not.toHaveBeenCalled();
   });
 
   it("discards established local KB state when first mounted after a completed reset", () => {
@@ -845,7 +964,7 @@ it("resets directly from the published page with the captured reset revision", a
   const { rerender } = render(
     <EmbeddedKnowledgeBasePanel page="display" onPageChange={onPageChange} />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "重置知识库" }));
+  act(() => window.dispatchEvent(new Event("frontmind:request-knowledge-reset")));
   expect(screen.queryByText(/审批|分配.*工程师|工单/)).not.toBeInTheDocument();
   mocks.resetStatus = { ...mocks.resetStatus, revision: 4 };
   rerender(

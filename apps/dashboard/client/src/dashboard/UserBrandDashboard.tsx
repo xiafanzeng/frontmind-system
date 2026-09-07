@@ -34,6 +34,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { OperatorThemeProvider } from "@/components/ui/operator-theme";
 
 import ResponseLogicWorkspace, {
   ResponseLogicConfirmationBoard,
@@ -608,24 +609,26 @@ function PersistentUserBrandDashboard({ initialSection }) {
     const project = result.project || result;
     switchEnterpriseProject(workspaceOwnerId, project.id);
   };
-  const onRenameProject = async name => {
-    if (!activeProject) return;
-    await renameProject.mutateAsync({ enterpriseProjectId: activeProject.id, name, expectedRevision: activeProject.revision });
+  const onRenameProject = async (name, target) => {
+    const project = projects.find(item => item.id === target?.id);
+    if (!project || project.revision !== target.revision) throw new Error("项目已更新，请重新打开项目管理。");
+    await renameProject.mutateAsync({ enterpriseProjectId: target.id, name, expectedRevision: target.revision });
     await projectsQuery.refetch();
   };
-  const onDeleteProject = async () => {
-    if (!activeProject) return;
-    const deletedId = activeProject.id;
+  const onDeleteProject = async target => {
+    const project = projects.find(item => item.id === target?.id);
+    if (!project || project.revision !== target.revision) throw new Error("项目已更新，请重新打开项目管理。");
+    const deletedId = target.id;
     const originUrl = window.location.href;
     const remaining = projects.filter(project => project.id !== deletedId);
-    await deleteProject.mutateAsync({ enterpriseProjectId: deletedId, expectedRevision: activeProject.revision });
+    await deleteProject.mutateAsync({ enterpriseProjectId: deletedId, expectedRevision: target.revision });
     // Remove the confirmed deletion immediately; a failed refresh must not reselect it.
     projectUtils.enterpriseProjects.list.setData({ ownerUserId: workspaceOwnerId }, current =>
       current ? { ...current, projects: current.projects.filter(project => project.id !== deletedId) } : current);
     if (rememberedEnterpriseProject(workspaceOwnerId) === deletedId) sessionStorage.removeItem("frontmind.enterpriseProject");
     void projectUtils.enterpriseProjects.list.invalidate({ ownerUserId: workspaceOwnerId });
     // A completed request must not override navigation made while it was pending.
-    if (window.location.href !== originUrl) return;
+    if (window.location.href !== originUrl || deletedId !== activeProject?.id) return;
     const next = remaining.find(project => project.isLegacyDefault) || remaining[0];
     if (next) switchEnterpriseProject(workspaceOwnerId, next.id);
     else {
@@ -674,6 +677,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
       preview={false}
       workspaceOwnerId={workspaceOwnerId}
       operatorProjects={projects}
+      operatorAccountLabel={user?.displayName || user?.username}
       operatorProject={activeProject}
       operatorProjectsLoading={projectsQuery.isLoading}
       operatorProjectsError={projectsQuery.error?.message || (new URLSearchParams(search).has("enterpriseProjectId") && projectsQuery.data && !activeProject ? "该企业项目不存在或无权访问，请在左侧选择可用项目。" : undefined)}
@@ -701,6 +705,7 @@ function UserBrandDashboardContent({
   preview,
   workspaceOwnerId,
   operatorProjects,
+  operatorAccountLabel,
   operatorProject,
   operatorProjectsLoading,
   operatorProjectsError,
@@ -729,8 +734,15 @@ function UserBrandDashboardContent({
 }) {
   const previewMode = import.meta.env.DEV && preview;
   const operatorMode = operatorProjects !== undefined;
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("frontmind.operator.sidebarCollapsed") === "1");
-  const toggleSidebar = () => setSidebarCollapsed(value => { localStorage.setItem("frontmind.operator.sidebarCollapsed", value ? "0" : "1"); return !value; });
+  const [compactViewport, setCompactViewport] = useState(() => window.matchMedia("(min-width: 1024px) and (max-width: 1279px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px) and (max-width: 1279px)");
+    const update = () => setCompactViewport(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => { try { return localStorage.getItem("frontmind.operator.sidebarCollapsed") === "1"; } catch { return false; } });
+  const toggleSidebar = () => setSidebarCollapsed(value => { try { localStorage.setItem("frontmind.operator.sidebarCollapsed", value ? "0" : "1"); } catch { /* Navigation remains usable without storage. */ } return !value; });
   const [location, setLocation] = useLocation();
   const search = useSearch();
   const moduleRoute = previewMode ? null : dashboardModuleRoute(location);
@@ -935,6 +947,7 @@ function UserBrandDashboardContent({
                     : "AI 友好内容资产"
                   : "服务页面";
   return (
+    <OperatorThemeProvider enabled={operatorMode}>
     <div
       className={`user-brand-dashboard ${operatorMode ? `operator-mode ${sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
         immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
@@ -950,6 +963,8 @@ function UserBrandDashboardContent({
           className="mobile-menu-btn"
           onClick={() => setMobileNavOpen(!mobileNavOpen)}
           aria-label="切换菜单"
+          aria-expanded={mobileNavOpen}
+          aria-controls="operator-project-navigation"
         >
           {mobileNavOpen ? <X size={22} /> : <BarChart3 size={22} />}
         </button>
@@ -963,8 +978,10 @@ function UserBrandDashboardContent({
         {operatorMode ? <OperatorSidebar
           projects={operatorProjects} activeProject={operatorProject}
           activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
-          collapsed={sidebarCollapsed} onCollapse={toggleSidebar}
-          onNavigate={navigatePath} onSelectProject={onSelectProject}
+          collapsed={compactViewport ? !mobileNavOpen : sidebarCollapsed} onCollapse={compactViewport ? () => setMobileNavOpen(value => !value) : toggleSidebar}
+          accountName={operatorAccountLabel}
+          mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)}
+          onNavigate={navigatePath} onSelectProject={id => { onSelectProject(id); setMobileNavOpen(false); }}
           onCreateProject={onCreateProject} onRenameProject={onRenameProject} onDeleteProject={onDeleteProject}
         /> : <Sidebar
           route={route}
@@ -1203,9 +1220,9 @@ function UserBrandDashboardContent({
                   <EmbeddedKnowledgeBasePanel
                     preview={previewMode}
                     previewData={previewKnowledgeData}
-                    page={route.sub === "display" ? "display" : "build"}
-                    onPageChange={(page) => navigate("knowledge-agent", page)}
-                    mode={route.sub === "display" ? "standard" : "workspace"}
+                    page={operatorMode ? "build" : route.sub === "display" ? "display" : "build"}
+                    onPageChange={(page) => { if (!operatorMode) navigate("knowledge-agent", page); }}
+                    mode={operatorMode || route.sub !== "display" ? "workspace" : "standard"}
                   />
                 </Suspense>
               )}
@@ -1236,6 +1253,7 @@ function UserBrandDashboardContent({
         onOpenChange={setSalesAdvisorOpen}
       />
     </div>
+    </OperatorThemeProvider>
   );
 }
 

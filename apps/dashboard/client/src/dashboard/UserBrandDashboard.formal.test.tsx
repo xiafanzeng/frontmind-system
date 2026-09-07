@@ -510,7 +510,7 @@ describe("UserBrandDashboard formal workspace", () => {
   it("opens the selected enterprise project with six modules and no plan chrome", async () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
-    expect(within(screen.getByRole("tablist", { name: "项目板块" })).getAllByRole("tab")).toHaveLength(6);
+    expect(within(screen.getByRole("navigation", { name: "项目板块" })).getAllByRole("link")).toHaveLength(6);
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();
@@ -529,26 +529,26 @@ describe("UserBrandDashboard formal workspace", () => {
   it("keeps monitoring and publishing in the same project shell", async () => {
     render(<UserBrandDashboard />);
     const sidebar = screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside");
-    fireEvent.click(screen.getByRole("tab", { name: /进度监控/ }));
+    fireEvent.click(screen.getByRole("link", { name: /进度监控/ }));
     expect(await screen.findByTestId("embedded-monitoring-business")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "从优化问题新建监控项目" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("tab", { name: /媒体发布/ }));
-    fireEvent.click(screen.getByRole("tab", { name: "稿件" }));
+    fireEvent.click(screen.getByRole("link", { name: /媒体发布/ }));
+    fireEvent.click(screen.getByRole("link", { name: "稿件" }));
     expect(window.location.pathname).toBe("/publishing/articles");
     expect(new URLSearchParams(window.location.search).get("enterpriseProjectId")).toBe(projectMocks.id);
     expect(screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside")).toBe(sidebar);
   });
-  it("opens enterprise QA under extensions while preserving project navigation", async () => {
+  it("opens enterprise QA under project tools while preserving project navigation", async () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("tab", { name: /扩展应用/ }));
+    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
     expect(await screen.findByTestId("enterprise-qa-workspace")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/enterprise-qa");
     expect(screen.getByRole("button", { name: "账号与余额" })).toBeInTheDocument();
   });
   it("shows actual monitoring report counts instead of invented results", () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("tab", { name: /进度监控/ }));
-    fireEvent.click(screen.getByRole("tab", { name: "进度报告" }));
+    fireEvent.click(screen.getByRole("link", { name: /进度监控/ }));
+    fireEvent.click(screen.getByRole("link", { name: "进度报告" }));
     expect(screen.getByText(/尚无监控运行记录/)).toBeInTheDocument();
     expect(screen.getByText("运行次数")).toBeInTheDocument();
   });
@@ -615,8 +615,8 @@ describe("UserBrandDashboard formal workspace", () => {
     authState.marketEdition = "overseas";
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: /扩展应用/ }));
-    fireEvent.click(screen.getByRole("tab", { name: "网站管理" }));
+    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("link", { name: "网站管理" }));
 
     expect(screen.queryByTestId("connected-siteops-panel")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "AI友好官网" }));
@@ -634,8 +634,8 @@ describe("UserBrandDashboard formal workspace", () => {
   it("retains published website content after removing the content operations page", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: /扩展应用/ }));
-    fireEvent.click(screen.getByRole("tab", { name: "网站管理" }));
+    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("link", { name: "网站管理" }));
 
     expect(
       screen.queryByRole("button", { name: "内容资产运营" }),
@@ -668,7 +668,7 @@ describe("UserBrandDashboard formal workspace", () => {
   it("does not substitute built-in sample questions when a formal account has no questions", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
 
     expect(
       screen.getByRole("heading", { name: "当前项目尚无优化问题" }),
@@ -686,7 +686,7 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.queryByRole("button", { name: "企业资料看板" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "品牌全域词库" }));
+    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
 
     expect(
       screen.getByRole("heading", { name: "品牌全域词库" }),
@@ -743,7 +743,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "品牌全域词库" }));
+    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
 
     expect(
       screen.getByRole("heading", { name: "品牌全域词库正在准备中" }),
@@ -775,7 +775,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "品牌全域词库" }));
+    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
     fireEvent.click(screen.getByRole("button", { name: "选择并进入问题优化" }));
 
     const questionInput = screen.getByRole("textbox", { name: "目标问题" });
@@ -817,7 +817,7 @@ describe("UserBrandDashboard formal workspace", () => {
     );
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "品牌全域词库" }));
+    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
     fireEvent.click(screen.getByRole("button", { name: "选择并进入问题优化" }));
     fireEvent.click(screen.getByRole("button", { name: "确认优化问题" }));
     fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
@@ -843,7 +843,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("tab", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
     expect(screen.getByRole("textbox", { name: "问题来源" })).toHaveValue(
       "自主填写",
     );
@@ -974,7 +974,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
 
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("tab", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
 
     expect(screen.getByText("问题目录")).toBeInTheDocument();
     expect(screen.getAllByText("产品场景词").length).toBeGreaterThan(0);

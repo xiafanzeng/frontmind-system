@@ -1,5 +1,6 @@
 "use client";
 
+import { useOperatorPortalClassName } from "./operator-theme";
 import * as React from "react";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
@@ -32,10 +33,12 @@ function SheetOverlay({
   className,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+  const portalTheme = useOperatorPortalClassName();
   return (
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
       className={cn(
+          portalTheme,
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
         className,
       )}
@@ -54,12 +57,14 @@ function SheetContent({
   side?: "top" | "right" | "bottom" | "left";
   overlayClassName?: string;
 }) {
+  const portalTheme = useOperatorPortalClassName();
   return (
     <SheetPortal>
       <SheetOverlay className={overlayClassName} />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
+          portalTheme,
           "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
           side === "right" &&
             "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm",

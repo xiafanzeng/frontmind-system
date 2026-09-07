@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   BookOpen,
   Database,
@@ -506,6 +506,7 @@ export default function KnowledgeBaseViewer({
   showArchiveDownload?: boolean;
 }) {
   const [view, setView] = useState<"knowledge" | "assets">("knowledge");
+  const viewId = useId();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [assetPage, setAssetPage] = useState(0);
@@ -545,8 +546,7 @@ export default function KnowledgeBaseViewer({
 
   const selectedDocument =
     filteredDocuments.find((document) => document.path === selectedPath) ||
-    filteredDocuments[0] ||
-    formalDocuments[0];
+    filteredDocuments[0];
   const documentSections = useMemo(
     () => (selectedDocument ? knowledgeDocumentSections(selectedDocument) : []),
     [selectedDocument],
@@ -638,6 +638,13 @@ export default function KnowledgeBaseViewer({
         className="flex flex-wrap gap-2"
         role="tablist"
         aria-label="知识库内容视图"
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? "knowledge" : event.key === "End" ? "assets" : view === "knowledge" ? "assets" : "knowledge";
+          document.getElementById(`${viewId}-${next}-tab`)?.click();
+          document.getElementById(`${viewId}-${next}-tab`)?.focus();
+        }}
       >
         {(
           [
@@ -649,6 +656,9 @@ export default function KnowledgeBaseViewer({
             key={id}
             type="button"
             role="tab"
+            id={`${viewId}-${id}-tab`}
+            aria-controls={`${viewId}-${id}-panel`}
+            tabIndex={view === id ? 0 : -1}
             aria-selected={view === id}
             onClick={() => {
               setView(id);
@@ -675,7 +685,7 @@ export default function KnowledgeBaseViewer({
       </div>
 
       {view === "assets" ? (
-        <section className="overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)]">
+        <section role="tabpanel" id={`${viewId}-assets-panel`} aria-labelledby={`${viewId}-assets-tab`} tabIndex={0} className="overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)]">
           <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8e1ee] px-5 py-4 sm:px-7">
             <div>
               <p className="text-xs font-semibold text-[#5b2a86]">
@@ -741,8 +751,8 @@ export default function KnowledgeBaseViewer({
           )}
         </section>
       ) : (
-        <div className="grid min-h-[650px] overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)] lg:grid-cols-[290px_minmax(0,1fr)]">
-          <aside className="border-b border-[#e8e1ee] bg-[#fbf9fd] p-4 lg:border-b-0 lg:border-r">
+        <div role="tabpanel" id={`${viewId}-knowledge-panel`} aria-labelledby={`${viewId}-knowledge-tab`} tabIndex={0} className="knowledge-snapshot-document grid min-h-[650px] overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)] lg:grid-cols-[290px_minmax(0,1fr)]">
+          <aside className="knowledge-snapshot-directory border-b border-[#e8e1ee] bg-[#fbf9fd] p-4 lg:border-b-0 lg:border-r">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9a94a8]" />
               <Input
@@ -787,7 +797,7 @@ export default function KnowledgeBaseViewer({
             </div>
           </aside>
 
-          <article className="min-w-0 p-5 sm:p-8 lg:p-10">
+          <article className="knowledge-snapshot-body min-w-0 p-5 sm:p-8 lg:p-10">
             {selectedDocument ? (
               <>
                 <div className="mb-6">

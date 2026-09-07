@@ -1,3 +1,5 @@
+import { assertEnterpriseProjectActive } from "./enterprise-project-lifecycle";
+import { AuthServiceError } from "./auth-service";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import {
@@ -213,6 +215,13 @@ export async function authorizeManagedAiCommand(
   );
   await db
     .transaction(async (tx) => {
+      try {
+        await assertEnterpriseProjectActive(tx, input.identity.enterpriseProjectId, input.identity.accountUserId);
+      } catch (error) {
+        if (error instanceof AuthServiceError && error.code === "NOT_FOUND")
+          throw new AiBillingError("AI_BILLING_PROJECT_OWNERSHIP");
+        throw error;
+      }
       const config = await configuration(tx);
       const operation = await ownedOperation(tx, input);
       const [ownedTask] = await tx

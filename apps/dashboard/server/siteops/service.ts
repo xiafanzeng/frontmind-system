@@ -1,3 +1,4 @@
+import { assertEnterpriseProjectActive } from "../enterprise-project-lifecycle";
 import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "../enterprise-project-context";
 import { enterpriseAccountOwnerPredicate } from "../enterprise-project-scope";
 import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
@@ -3040,6 +3041,7 @@ export async function openSiteOps(actor: AuthenticatedUser) {
   await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const db = await requireDb();
   const project = await db.transaction(async (tx: any) => {
+    await assertEnterpriseProjectActive(tx, getEnterpriseProjectScope()?.enterpriseProjectId, enterpriseWorkspaceUserId(actor.id));
     await tx
       .select({ id: users.id })
       .from(users)
@@ -3575,6 +3577,7 @@ export async function sendSiteOpsMessage(
     localAssetIds: input.localAssetIds,
   });
   await db.transaction(async (tx: any) => {
+    await assertEnterpriseProjectActive(tx, getEnterpriseProjectScope()?.enterpriseProjectId, enterpriseWorkspaceUserId(actor.id));
     const project = await loadOwnedProject(
       tx,
       enterpriseWorkspaceUserId(actor.id),
@@ -6366,6 +6369,7 @@ export async function actOnSiteOpsFast(
   const db = await requireDb();
   let visualSelectionProjectId: string | null = null;
   const transaction = db.transaction(async (tx: any) => {
+    await assertEnterpriseProjectActive(tx, getEnterpriseProjectScope()?.enterpriseProjectId, enterpriseWorkspaceUserId(actor.id));
     const project = await loadOwnedProject(
       tx,
       enterpriseWorkspaceUserId(actor.id),

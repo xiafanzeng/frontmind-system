@@ -120,6 +120,8 @@ const url = process.env.FRONTMIND_FINANCE_TEST_MYSQL_URL;
       const ddl = [
         "CREATE TABLE users(id int PRIMARY KEY,username varchar(64),role varchar(16),adminAccessLevel varchar(24),isActive boolean)",
         "INSERT INTO users VALUES(1,'one','user',NULL,true),(2,'two','user',NULL,true)",
+        "CREATE TABLE enterprise_projects(id varchar(36) PRIMARY KEY,ownerUserId int NOT NULL,archivedAt timestamp NULL)",
+        "INSERT INTO enterprise_projects VALUES('project-a',1,NULL),('project-b',1,NULL)",
         "CREATE TABLE monitoring_users(id varchar(36) PRIMARY KEY,username varchar(64),password_hash varchar(255),role varchar(16),status varchar(16),session_version int,password_changed_at datetime(3))",
         "CREATE TABLE monitoring_account_links(dashboardUserId int PRIMARY KEY,monitoringUserId varchar(36))",
         "CREATE TABLE quota_wallets(user_id varchar(36) PRIMARY KEY)",
@@ -561,6 +563,23 @@ const url = process.env.FRONTMIND_FINANCE_TEST_MYSQL_URL;
           identity: { ...input.identity, enterpriseProjectId: "project-b" },
         }),
       ).rejects.toThrow("AI_BILLING_PROJECT_OWNERSHIP");
+    });
+
+    it("blocks new authorization after project deletion while still accounting for late incurred usage", async () => {
+      await query("UPDATE agent_operations SET enterpriseProjectId='project-a' WHERE id='op-1'");
+      const identity = { ...input.identity, enterpriseProjectId: "project-a" };
+      const usage = { input_tokens: 1000, output_tokens: 0, cache_read_input_tokens: 0 };
+      await authorizeManagedAiCommand({ ...input, identity });
+      await observeManagedAiUsage({ ...observation(1, usage), identity });
+      await query("UPDATE enterprise_projects SET archivedAt=NOW() WHERE id='project-a'");
+      try {
+        await expect(authorizeManagedAiCommand({ ...input, identity, commandKey: "new" })).rejects.toThrow("AI_BILLING_PROJECT_OWNERSHIP");
+        await observeManagedAiUsage({ ...observation(2, usage), identity });
+        expect(Number((await wallet()).balance_ten_thousandths)).toBe(19840);
+        expect((await query("SELECT * FROM ai_charge_commands")).length).toBe(1);
+      } finally {
+        await query("UPDATE enterprise_projects SET archivedAt=NULL WHERE id='project-a'");
+      }
     });
 
     async function seedBillingKnowledge(stage: "before_send" | "after_send") {

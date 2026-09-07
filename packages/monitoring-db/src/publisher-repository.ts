@@ -1,3 +1,4 @@
+import { assertMonitoringEnterpriseProjectActive } from "./enterprise-lifecycle.js";
 import {
   monitoringProjectOwnerPredicate,
   monitoringEnterpriseProjectIdForOwner,
@@ -2944,6 +2945,7 @@ export class PublishingRepository {
       ? `enterprise:${projectId}:${sha256(input.idempotencyKey)}`
       : input.idempotencyKey;
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, projectId, ownerId);
       await ensureAndLockPublisherWallet(tx, ownerId);
       const [replay] = await tx
         .select()

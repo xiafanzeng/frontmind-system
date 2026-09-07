@@ -133,16 +133,16 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-button-primary {
-  background: #3636e2;
+  background: var(--publishing-purple, #3636e2);
   color: #fff !important;
   box-shadow: 0 5px 14px rgba(54, 54, 226, 0.17);
-  border-color: #3636e2;
+  border-color: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module
   :where(.publishing-page)
   .publishing-button-primary:hover:not(:disabled) {
-  background: #2929ca;
+  background: var(--publishing-purple-dark, #2929ca);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-button-secondary {
@@ -159,8 +159,8 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-button-accent {
-  border-color: #3636e2;
-  background: #3636e2;
+  border-color: var(--publishing-purple, #3636e2);
+  background: var(--publishing-purple, #3636e2);
   color: #fff;
   box-shadow: 0 5px 14px rgba(54, 54, 226, 0.17);
 }
@@ -287,7 +287,7 @@
   border-radius: 6px;
   background: #f8f7fa;
   color: #60586e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 650;
   white-space: nowrap;
 }
@@ -337,7 +337,7 @@
   );
   box-shadow: 0 0 0 1px #e6dfeb;
   color: white;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 800;
   line-height: 1.05;
   position: relative;
@@ -358,7 +358,7 @@
   .publishing-media-mark.is-placeholder
   b {
   max-width: 35px;
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
   font-weight: 800;
   letter-spacing: -0.4px;
   line-height: 1;
@@ -440,7 +440,7 @@
 .monitoring-module :where(.publishing-page) .publishing-media-name small,
 .monitoring-module :where(.publishing-page) .publishing-article-name small {
   color: #837b91;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 450;
 }
 
@@ -499,7 +499,7 @@
 .monitoring-module :where(.publishing-page) .publishing-metric p {
   margin: 0 0 5px;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-metric > div > strong {
@@ -510,7 +510,7 @@
 .monitoring-module :where(.publishing-page) .publishing-metric > div > span {
   margin-top: 5px;
   color: #837b91;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-metric > a {
@@ -521,7 +521,7 @@
   align-items: center;
   gap: 4px;
   color: var(--publishing-purple);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 650;
 }
 
@@ -604,7 +604,7 @@
 .monitoring-module :where(.publishing-page) .publishing-list-copy span,
 .monitoring-module :where(.publishing-page) .publishing-row-time {
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-image-preview {
@@ -720,7 +720,7 @@
 .monitoring-module
   :where(.publishing-page)
   .publishing-button-accent:hover:not(:disabled) {
-  background: #2929ca;
+  background: var(--publishing-purple-dark, #2929ca);
 }
 .monitoring-module :where(.publishing-page) .publishing-shared-title {
   display: grid;
@@ -732,7 +732,7 @@
   display: grid;
   gap: 8px;
   color: #555768;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .monitoring-module :where(.publishing-page) .publishing-shared-title textarea {
   width: 100%;

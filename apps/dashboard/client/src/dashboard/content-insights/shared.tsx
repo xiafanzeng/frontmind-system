@@ -1,3 +1,4 @@
+import { useOperatorPortalClassName } from "@/components/ui/operator-theme";
 import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -63,6 +64,7 @@ export function HlSelect({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const portalTheme = useOperatorPortalClassName() || "";
   return (
     <Select.Root value={value} onValueChange={onChange} disabled={disabled}>
       <Select.Trigger className="hl-select" aria-label={label}>
@@ -73,7 +75,7 @@ export function HlSelect({
       </Select.Trigger>
       <Select.Portal>
         <Select.Content
-          className="hl-portal hl-select-options"
+          className={`hl-portal hl-select-options ${portalTheme}`}
           position="popper"
           sideOffset={6}
         >
@@ -136,13 +138,14 @@ export function HlDialog({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const portalTheme = useOperatorPortalClassName() || "";
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="hl-portal hl-overlay" />
+        <Dialog.Overlay className={`hl-portal hl-overlay ${portalTheme}`} />
         <Dialog.Content
           aria-describedby={undefined}
-          className={`hl-portal hl-dialog${wide ? " hl-dialog--wide" : ""}`}
+          className={`hl-portal hl-dialog${wide ? " hl-dialog--wide" : ""} ${portalTheme}`}
         >
           <div className="hl-dialog-head">
             <Dialog.Title>{title}</Dialog.Title>
@@ -165,6 +168,7 @@ export function PeriodControl({
   value: Period;
   onChange: (period: Period) => void;
 }) {
+  const portalTheme = useOperatorPortalClassName() || "";
   const [open, setOpen] = useState(false);
   const range: DateRange = {
     from: parseISO(value.from),
@@ -181,7 +185,7 @@ export function PeriodControl({
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content
-            className="hl-portal hl-calendar"
+            className={`hl-portal hl-calendar ${portalTheme}`}
             sideOffset={8}
             align="end"
           >
@@ -368,6 +372,7 @@ export function ExportMenu({
   selectedCount: number;
   onExport: (selectedOnly: boolean) => void;
 }) {
+  const portalTheme = useOperatorPortalClassName() || "";
   const [open, setOpen] = useState(false);
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -379,7 +384,7 @@ export function ExportMenu({
         </HlButton>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content className="hl-portal hl-export-menu" sideOffset={5}>
+        <Popover.Content className={`hl-portal hl-export-menu ${portalTheme}`} sideOffset={5}>
           <button
             type="button"
             disabled={!selectedCount}

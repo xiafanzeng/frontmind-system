@@ -51,7 +51,7 @@
   min-height: 58px;
   background: #fdfcfe;
   color: #5c536b;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 650;
 }
 
@@ -107,7 +107,7 @@
   .publishing-pagination-edge {
   width: auto;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-pagination-pages,
@@ -158,7 +158,7 @@
 .monitoring-module :where(.publishing-page) .publishing-pagination-jump button {
   width: auto;
   padding: 0 9px;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module
@@ -223,8 +223,8 @@
 .monitoring-module :where(.publishing-page) .publishing-catalog-count strong {
   max-width: 170px;
   overflow: hidden;
-  color: #3636e2;
-  font-size: 12px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 12px);
   text-overflow: ellipsis;
 }
 
@@ -262,7 +262,7 @@
   > div
   > span {
   color: #858798;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-context-bar strong {
@@ -291,13 +291,13 @@
 .monitoring-module :where(.publishing-page) .publishing-context-bar p {
   margin: 0;
   color: #a06e16;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-context-bar > a {
   margin-left: auto;
-  color: #3636e2;
-  font-size: 12px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 600;
 }
 
@@ -356,21 +356,21 @@
   border-radius: 10px;
   background: #f1f2f6;
   color: #888a9a;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module
   :where(.publishing-page)
   .publishing-kind-tabs
   button.is-active {
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module
   :where(.publishing-page)
   .publishing-kind-tabs
   button.is-active::after {
-  background: #3636e2;
+  background: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module
@@ -378,8 +378,8 @@
   .publishing-kind-tabs
   button.is-active
   span {
-  background: #ededff;
-  color: #3636e2;
+  background: var(--publishing-purple-soft, #ededff);
+  color: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-media-search-row {
@@ -416,7 +416,7 @@
   border-radius: 7px;
   background: #fff;
   color: #3d3f50;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module
@@ -433,7 +433,7 @@
   align-items: center;
   gap: 8px;
   color: #858797;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-sort-field select {
@@ -454,7 +454,7 @@
 
 .monitoring-module :where(.publishing-page) .publishing-batch-search > span {
   color: #3f4154;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 650;
 }
 
@@ -475,7 +475,7 @@
   border: 1px solid #dedfea;
   border-radius: 7px;
   background: #fff;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 1.6;
 }
 
@@ -484,7 +484,7 @@
   right: 24px;
   bottom: 21px;
   color: #9698a7;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-filter-groups {
@@ -509,7 +509,7 @@
   width: 68px;
   flex: 0 0 68px;
   color: #7d7f91;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 500;
 }
 
@@ -532,7 +532,7 @@
   border-radius: 5px;
   background: transparent;
   color: #4f5161;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   cursor: pointer;
 }
 
@@ -546,7 +546,7 @@
   button.is-active {
   border-color: #cfcfff;
   background: #f0f0ff;
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-price-range {
@@ -562,7 +562,7 @@
 .monitoring-module :where(.publishing-page) .publishing-price-range i,
 .monitoring-module :where(.publishing-page) .publishing-price-range em {
   color: #9a9cab;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   font-style: normal;
 }
 
@@ -575,7 +575,7 @@
   padding: 0 5px;
   border: 0;
   outline: 0;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-advanced-toggle {
@@ -589,7 +589,7 @@
   border-top: 1px solid #eeeef4;
   background: #fafafd;
   color: #626476;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   cursor: pointer;
 }
 
@@ -599,9 +599,9 @@
   height: 18px;
   place-items: center;
   border-radius: 9px;
-  background: #3636e2;
+  background: var(--publishing-purple, #3636e2);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module
@@ -632,7 +632,7 @@
   align-items: center;
   gap: 7px;
   color: #7d7f90;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-advanced-grid select {
@@ -659,14 +659,14 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-check-filter input {
-  accent-color: #3636e2;
+  accent-color: var(--publishing-purple, #3636e2);
 }
 .monitoring-module :where(.publishing-page) .publishing-filter-reset {
   height: 34px;
   border: 0;
   background: transparent;
-  color: #3636e2;
-  font-size: 12px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 12px);
   cursor: pointer;
 }
 
@@ -698,7 +698,7 @@
   gap: 12px;
   padding: 10px 16px;
   color: #4a4c5d;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module
@@ -708,7 +708,7 @@
   min-height: 42px;
   background: #f8f9fc;
   color: #7c7e90;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module
@@ -722,7 +722,7 @@
   .publishing-media-table-detailed
   label.publishing-media-row.is-selected {
   background: #f2f2ff;
-  box-shadow: inset 3px 0 #3636e2;
+  box-shadow: inset 3px 0 var(--publishing-purple, #3636e2);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -758,7 +758,7 @@
   .publishing-media-row
   small {
   color: #9294a3;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 400;
 }
 .monitoring-module
@@ -785,7 +785,7 @@
   align-items: center;
   gap: 2px;
   margin-left: 7px;
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 .monitoring-module :where(.publishing-page) .publishing-market-price {
   color: #ef5b32;
@@ -797,7 +797,7 @@
   border-radius: 3px;
   background: #fff0e8;
   color: #ed653c;
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
 }
 .monitoring-module :where(.publishing-page) .publishing-capability {
   color: #655d72;
@@ -805,7 +805,7 @@
   padding: 3px 7px;
   border-radius: 4px;
   background: #f1f2f6;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module :where(.publishing-page) .publishing-capability.is-image {
   background: #eaf8f2;
@@ -823,7 +823,7 @@
   bottom: 2px;
   margin: 0;
   color: #999baa;
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
 }
 .monitoring-module :where(.publishing-page) .publishing-media-remark.is-danger {
   color: #d64b55;
@@ -840,7 +840,7 @@
   border: 1px solid #cfd1ff;
   border-radius: 10px;
   background: #f2f2ff;
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-catalog-update strong,
@@ -857,7 +857,7 @@
 .monitoring-module :where(.publishing-page) .publishing-catalog-update p {
   margin-top: 3px;
   color: #66698b;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   line-height: 1.5;
 }
 
@@ -870,7 +870,7 @@
   justify-content: flex-end;
   gap: 22px;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   max-width: 1660px;
   margin: 0 auto;
 }
@@ -913,7 +913,7 @@
   .publishing-selection-summary
   > span {
   color: #cacbda;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -966,14 +966,14 @@
   > header
   span {
   color: #898b9a;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 .monitoring-module :where(.publishing-page) .publishing-selection-drawer h2 {
   margin: 3px 0 0;
   font-size: 20px;
 }
 .monitoring-module :where(.publishing-page) .publishing-selection-drawer h2 b {
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -1007,7 +1007,7 @@
   padding: 13px;
   background: #f9f9fc;
   color: #838596;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module :where(.publishing-page) .publishing-drawer-summary b {
   color: #303244;
@@ -1042,7 +1042,7 @@
   article
   strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1052,7 +1052,7 @@
   article
   small {
   color: #8c8e9e;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -1060,7 +1060,7 @@
   article
   > b {
   color: #ef5b32;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -1173,7 +1173,7 @@
     border-radius: 6px;
     background: #fff;
     color: #555869;
-    font-size: 11px;
+    font-size: var(--operator-caption-size, 11px);
     font-weight: 600;
     cursor: pointer;
     list-style: none;
@@ -1193,7 +1193,7 @@
     .publishing-media-compact-details
     summary:focus-visible {
     border-color: #aeb0ef;
-    color: #3636e2;
+    color: var(--publishing-purple, #3636e2);
   }
   .monitoring-module
     :where(.publishing-page)
@@ -1223,7 +1223,7 @@
     grid-template-columns: 72px minmax(0, 1fr);
     gap: 7px;
     color: #505365;
-    font-size: 11px;
+    font-size: var(--operator-caption-size, 11px);
   }
   .monitoring-module
     :where(.publishing-page)
@@ -1369,7 +1369,7 @@
     > .publishing-market-price::before {
     color: #989aa9;
     content: attr(data-label);
-    font-size: 9px;
+    font-size: var(--operator-caption-size, 9px);
     font-weight: 400;
   }
   .monitoring-module
@@ -1475,6 +1475,6 @@
     .publishing-button-accent {
     min-width: 132px;
     padding: 0 12px;
-    font-size: 12px;
+    font-size: var(--operator-caption-size, 12px);
   }
 }

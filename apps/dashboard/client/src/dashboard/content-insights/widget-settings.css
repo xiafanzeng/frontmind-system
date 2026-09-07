@@ -16,7 +16,7 @@
   background: #fdf6ec;
   border: 1px solid #faecd8;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 20px;
 }
 .helplook-preview .hl-widget-trial > svg {
@@ -49,7 +49,7 @@
 .helplook-preview p.hl-widget-settings-subtitle {
   margin: 10px 0;
   color: #8e8b8e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 13.8px;
 }
 .helplook-preview .hl-widget-form-item {
@@ -68,7 +68,7 @@
 .helplook-preview .hl-widget-settings .hl-hint {
   display: block;
   color: #8e8b8e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 18px;
 }
 .helplook-preview .hl-widget-settings .hl-field {
@@ -97,7 +97,7 @@
   transition: background-color 0.15s;
 }
 .helplook-preview button.hl-widget-switch[data-state="checked"] {
-  background: #0868f7;
+  background: var(--hl-primary, #0868f7);
 }
 .helplook-preview .hl-widget-switch-thumb {
   display: block;
@@ -134,7 +134,7 @@
   white-space: nowrap;
 }
 .helplook-preview button.hl-widget-tab[data-state="active"] {
-  color: #0868f7;
+  color: var(--hl-primary, #0868f7);
 }
 .helplook-preview button.hl-widget-tab[data-state="active"]::after {
   position: absolute;
@@ -143,7 +143,7 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: #0868f7;
+  background: var(--hl-primary, #0868f7);
 }
 .helplook-preview .hl-widget-tab-content {
   outline: none;
@@ -187,8 +187,8 @@
   overflow: hidden;
 }
 .helplook-preview button.hl-widget-upload:hover {
-  border-color: #0868f7;
-  color: #0868f7;
+  border-color: var(--hl-primary, #0868f7);
+  color: var(--hl-primary, #0868f7);
 }
 .helplook-preview .hl-widget-upload > img {
   width: 100%;
@@ -201,7 +201,7 @@
   display: grid;
   place-items: center;
   background: #ffffffe6;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   color: #909399;
 }
 .helplook-preview .hl-widget-upload-actions {
@@ -240,7 +240,7 @@
   display: block;
   margin-top: 5px;
   color: #f56c6c;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 18px;
 }
 .helplook-preview .hl-widget-add-recommendation {
@@ -279,7 +279,7 @@
   color: #909399;
 }
 .helplook-preview .hl-widget-recommendation-row > button:hover {
-  color: #0868f7;
+  color: var(--hl-primary, #0868f7);
 }
 .helplook-preview input.hl-widget-color {
   width: 40px;
@@ -306,7 +306,7 @@
 }
 .helplook-preview .hl-widget-save-footer > span {
   color: #909399;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .helplook-preview .hl-widget-save-footer > .hl-button {
   height: 40px;
@@ -334,7 +334,7 @@
   border: 1px solid #ebeef5;
   border-radius: 4px;
   color: #606266;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 22px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -436,7 +436,7 @@
   border-radius: 16px;
   color: #fff;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .helplook-preview .hl-widget-chat-tabs > button[aria-selected="true"] {
   background: #ffffff20;
@@ -535,7 +535,7 @@
   padding: 7px 0 0;
   margin-top: 7px;
   color: var(--hl-widget-theme);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   text-align: left;
 }
 .helplook-preview .hl-widget-composer {
@@ -593,7 +593,7 @@
   height: 24px;
   padding-bottom: 3px;
   color: #333;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 18px;
 }
 .helplook-preview .hl-widget-powered > span:first-child {
@@ -672,7 +672,7 @@
   left: 8px;
   bottom: 12px;
   color: #7b8595;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   padding: 3px 6px;
 }
 .helplook-preview
@@ -698,7 +698,7 @@
   font-weight: 400;
 }
 .helplook-preview .hl-widget-unavailable > span {
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   color: #909399;
 }
 .helplook-preview .hl-widget-suggestions {
@@ -717,7 +717,7 @@
   padding: 6px 9px;
   background: #fff;
   color: var(--hl-widget-theme);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   text-align: left;
   overflow-wrap: anywhere;
 }
@@ -740,14 +740,14 @@
 }
 .helplook-preview .hl-widget-lead-form > p {
   color: #909399;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 18px;
   white-space: pre-wrap;
 }
 .helplook-preview .hl-widget-lead-input {
   display: grid;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   color: #606266;
 }
 .helplook-preview .hl-widget-lead-input i {
@@ -756,7 +756,7 @@
   margin-left: 4px;
 }
 .helplook-preview .hl-widget-lead-input > input.hl-input {
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .helplook-preview .hl-widget-lead-submit {
   border: 0;
@@ -768,7 +768,7 @@
 }
 .helplook-preview .hl-widget-gate-notice {
   color: #909399;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 18px;
   margin-top: 12px;
 }
@@ -798,12 +798,12 @@
   padding: 0;
   background: transparent;
   color: #606266;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .helplook-preview .hl-widget-desk > span {
   display: block;
   color: #909399;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   margin-bottom: 8px;
 }
 .helplook-preview .hl-widget-desk > button {
@@ -817,7 +817,7 @@
   border-bottom: 1px solid #ebeef5;
   background: #fff;
   color: #606266;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 .helplook-preview .hl-widget-desk > button > svg:last-child {
   margin-left: auto;
@@ -829,7 +829,7 @@
   border: 0;
   background: transparent;
   color: var(--hl-widget-theme);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   padding: 0;
   margin-bottom: 20px;
 }
@@ -842,7 +842,7 @@
   color: #909399;
   text-align: center;
   padding: 20px 0;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 @media (max-width: 1500px) {
   .helplook-preview .hl-widget-settings-panel {

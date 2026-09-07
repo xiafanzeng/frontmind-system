@@ -1,3 +1,5 @@
+import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
+import KnowledgeBillingResume from "./KnowledgeBillingResume";
 import {
   AlertTriangle,
   Archive,
@@ -28,6 +30,7 @@ export interface KnowledgeBaseProgressPanelProps {
   className?: string;
   title?: string;
   emptyMessage?: string;
+  editable?: boolean;
 }
 
 const MAX_PERCENT = 100;
@@ -104,6 +107,7 @@ function LeafStatusIcon({ status }: { status: KnowledgeBaseLeafStatus }) {
 export default function KnowledgeBaseProgressPanel({
   progress,
   loading = false,
+  editable = false,
   className = "",
   title = "知识库构建进度",
   emptyMessage = "完成首次资料分析后，这里会展示每个知识节点的处理进度。",
@@ -160,7 +164,7 @@ export default function KnowledgeBaseProgressPanel({
   const coverageIncomplete = progress.resultQuality?.warnings?.some(
     (warning) => warning.code === "COVERAGE_INCOMPLETE",
   );
-  const resultResetRequired = progress.operationState === "reset_required";
+  const resultResetRequired = progress.operationState === "reset_required" && !progress.billingPause;
   const taskWasNotCreated =
     progress.taskCreationState === "not_attempted" &&
     (progress.failureStage === "local_upload" ||
@@ -187,6 +191,7 @@ export default function KnowledgeBaseProgressPanel({
     (progress.build.status === "failed" ||
       progress.build.status === "protocol_error");
   const buildExecuting =
+    !progress.billingPause &&
     !buildStopped &&
     !resultResetRequired &&
     (materializedOperationActive ||
@@ -217,6 +222,7 @@ export default function KnowledgeBaseProgressPanel({
       className={`overflow-hidden rounded-[20px] border border-[#e8e1ee] bg-white shadow-[0_16px_42px_rgba(33,19,58,.065)] ${className}`}
     >
       <header className="border-b border-[#ece5f0] bg-[radial-gradient(circle_at_92%_0%,rgba(91,42,134,.10),transparent_36%)] px-5 py-5 sm:px-6">
+        {progress.billingPause && <KnowledgeBillingResume key={progress.billingPause.turnId} buildId={progress.build.id} turnId={progress.billingPause.turnId} reason={progress.billingPause.reason} />}
         <div className="flex flex-col gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-bold tracking-[.08em] text-[#5b2a86]">
@@ -357,6 +363,7 @@ export default function KnowledgeBaseProgressPanel({
               key={branch.id}
               branch={branch}
               branchNumber={index + 1}
+              conversationId={editable && !buildExecuting && !resultResetRequired ? progress.build.conversationId : undefined}
             />
           ))
         ) : (
@@ -422,9 +429,11 @@ function SummaryMetric({
 function BranchProgress({
   branch,
   branchNumber,
+  conversationId,
 }: {
   branch: KnowledgeBaseProgressBranchDto;
   branchNumber: number;
+  conversationId?: string;
 }) {
   const total = clampCount(branch.total);
   const handled = clampCount(branch.handled, total);
@@ -517,6 +526,7 @@ function BranchProgress({
                       {summary}
                     </div>
                   )}
+                  {conversationId && <KnowledgeNodeLocalActions conversationId={conversationId} leafId={leaf.id} />}
                 </li>
               );
             })}

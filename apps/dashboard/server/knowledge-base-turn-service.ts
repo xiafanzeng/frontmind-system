@@ -1,3 +1,8 @@
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseProjectIdForOwner } from "./enterprise-project-scope";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import {
@@ -21,9 +26,9 @@ import {
   knowledgeBaseSnapshots,
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
+  knowledgeBaseWorkingSets,
   knowledgeBaseConversationRetentionTombstones,
   knowledgeBaseConversationTombstones,
-  knowledgeBaseResetStates,
   localAssets,
   messages,
   providerFileLeases,
@@ -855,6 +860,7 @@ export interface KnowledgeBaseStartBuildReservation {
 }
 
 export interface KnowledgeBaseRecoveryCandidate {
+  enterpriseProjectId?: string | null;
   turnId: string;
   userId: number;
   buildId: string;
@@ -1003,7 +1009,7 @@ export async function ensureKnowledgeBaseBuildSkillArchivePin(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -1038,7 +1044,7 @@ export async function ensureKnowledgeBaseBuildSkillArchivePin(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.generation),
           ),
         );
@@ -2019,7 +2025,7 @@ async function proveKnowledgeBaseFailedNotSentLocalSources(input: {
             .where(
               and(
                 eq(knowledgeBaseSnapshots.id, prefillSnapshotId),
-                eq(knowledgeBaseSnapshots.userId, input.userId),
+                enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
               ),
             )
             .limit(1)
@@ -2226,7 +2232,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         ),
       )
       .limit(1)
@@ -2239,7 +2245,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
           .where(
             and(
               eq(conversationTurns.id, sourceTurnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, buildId),
             ),
           )
@@ -2289,7 +2295,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
           .where(
             and(
               eq(knowledgeBaseBuilds.id, buildId),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             ),
           )
           .limit(1)
@@ -2391,7 +2397,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -2656,7 +2662,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.stateEpoch, input.expectedStateEpoch),
           eq(knowledgeBaseBuilds.activeTurnId, source.id),
@@ -2677,7 +2683,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
         .where(
           and(
             eq(conversations.id, source.conversationId),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
           ),
         )
         .limit(1)
@@ -2705,7 +2711,7 @@ export async function reserveKnowledgeBaseFailedNotSentLegacyHandoff(
       .where(
         and(
           eq(conversations.id, conversation.id),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
           eq(conversations.version, conversation.version),
         ),
       );
@@ -2728,7 +2734,7 @@ export function knowledgeBaseConversationStorageId(
     "conversationId",
     191,
   );
-  const persistedId = `u${userId}:${publicId}`;
+  const persistedId = `${enterpriseConversationStoragePrefix(userId)}${publicId}`;
   if (persistedId.length > 191) {
     throw new KnowledgeBaseTurnReservationError(
       "INVALID_REQUEST",
@@ -3388,7 +3394,7 @@ export async function inspectKnowledgeBaseTurnReplay(
       .from(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.conversationId, conversationId),
           eq(conversationTurns.clientRequestId, clientRequestId),
         ),
@@ -3415,7 +3421,7 @@ export async function inspectKnowledgeBaseTurnReplay(
       .from(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.conversationId, conversationId),
           eq(conversationTurns.buildGeneration, expectedGeneration),
           eq(conversationTurns.expectedRevision, expectedRevision),
@@ -3504,7 +3510,7 @@ export async function inspectKnowledgeBaseLegacyStartReplay(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.conversationId, conversationId),
             eq(conversationTurns.clientRequestId, clientRequestId),
           ),
@@ -3519,7 +3525,7 @@ export async function inspectKnowledgeBaseLegacyStartReplay(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, row.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -3595,7 +3601,7 @@ export async function inspectKnowledgeBaseDeferredAttachmentReplay(
       .where(
         and(
           eq(conversationTurns.id, turnId),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.conversationId, conversationId),
         ),
       )
@@ -3671,7 +3677,7 @@ export async function inspectKnowledgeBaseDeferredDispatchReplay(
         .where(
           and(
             eq(conversationTurns.id, turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.conversationId, conversationId),
           ),
         )
@@ -3755,7 +3761,7 @@ export async function inspectKnowledgeBaseLegacyDeferredReservationReplay(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.conversationId, conversationId),
             eq(conversationTurns.clientRequestId, clientRequestId),
           ),
@@ -3831,7 +3837,7 @@ export async function inspectKnowledgeBaseLegacyAttachmentTakeoverReplay(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.conversationId, conversationId),
             eq(conversationTurns.clientRequestId, clientRequestId),
           ),
@@ -4105,9 +4111,9 @@ async function reserveKnowledgeBaseTurnInTransaction(
   if (resetFencedDeferredOperation) {
     const resetState = (
       await tx
-        .select({ revision: knowledgeBaseResetStates.revision })
-        .from(knowledgeBaseResetStates)
-        .where(eq(knowledgeBaseResetStates.userId, input.userId))
+        .select({ revision: enterpriseResetStateTable().revision })
+        .from(enterpriseResetStateTable())
+        .where(enterpriseResetStateOwnerPredicate(input.userId))
         .limit(1)
         .for("update")
     )[0];
@@ -4124,7 +4130,7 @@ async function reserveKnowledgeBaseTurnInTransaction(
     .where(
       and(
         eq(knowledgeBaseBuilds.id, buildId),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
       ),
     )
     .limit(1)
@@ -4471,7 +4477,7 @@ async function reserveKnowledgeBaseTurnInTransaction(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.expectedGeneration),
             eq(knowledgeBaseBuilds.activeTurnId, existing.id),
           ),
@@ -4677,6 +4683,7 @@ async function reserveKnowledgeBaseTurnInTransaction(
     canRegenerate: false,
   };
   const row: ConversationTurn = {
+    enterpriseProjectId: enterpriseProjectIdForOwner(input.userId),
     id,
     conversationId,
     userId: input.userId,
@@ -4748,7 +4755,7 @@ async function reserveKnowledgeBaseTurnInTransaction(
     .where(
       and(
         eq(knowledgeBaseBuilds.id, build.id),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, input.expectedGeneration),
       ),
     );
@@ -5009,7 +5016,7 @@ async function bindKnowledgeBaseStartAttachments(input: {
           upstreamResources.id,
           input.resources.map((resource) => resource.id),
         ),
-        eq(upstreamResources.userId, input.userId),
+        enterpriseOwnerPredicate(upstreamResources, input.userId),
         isNull(upstreamResources.projectAssignmentId),
         eq(upstreamResources.apiCredentialId, input.apiCredentialId),
         eq(upstreamResources.kind, "file"),
@@ -5193,7 +5200,7 @@ export async function reserveKnowledgeBaseStartBuild(
     // same row is updated by approval before old builds are removed, so a
     // delayed start request can never recreate state from an older revision.
     await tx
-      .insert(knowledgeBaseResetStates)
+      .insert(enterpriseResetStateTable())
       .values({
         userId: input.userId,
         revision: 0,
@@ -5204,9 +5211,9 @@ export async function reserveKnowledgeBaseStartBuild(
       });
     const resetState = (
       await tx
-        .select({ revision: knowledgeBaseResetStates.revision })
-        .from(knowledgeBaseResetStates)
-        .where(eq(knowledgeBaseResetStates.userId, input.userId))
+        .select({ revision: enterpriseResetStateTable().revision })
+        .from(enterpriseResetStateTable())
+        .where(enterpriseResetStateOwnerPredicate(input.userId))
         .limit(1)
         .for("update")
     )[0];
@@ -5271,7 +5278,7 @@ export async function reserveKnowledgeBaseStartBuild(
         .from(knowledgeBaseConversationTombstones)
         .where(
           and(
-            eq(knowledgeBaseConversationTombstones.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseConversationTombstones, input.userId),
             eq(
               knowledgeBaseConversationTombstones.publicConversationId,
               conversationId,
@@ -5289,10 +5296,7 @@ export async function reserveKnowledgeBaseStartBuild(
             .from(knowledgeBaseConversationRetentionTombstones)
             .where(
               and(
-                eq(
-                  knowledgeBaseConversationRetentionTombstones.userId,
-                  input.userId,
-                ),
+                enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, input.userId),
                 eq(
                   knowledgeBaseConversationRetentionTombstones.publicConversationId,
                   conversationId,
@@ -5357,7 +5361,7 @@ export async function reserveKnowledgeBaseStartBuild(
         .from(knowledgeBaseBuilds)
         .where(
           and(
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.conversationId, conversationId),
           ),
         )
@@ -5404,10 +5408,7 @@ export async function reserveKnowledgeBaseStartBuild(
         .from(knowledgeBaseConversationRetentionTombstones)
         .where(
           and(
-            eq(
-              knowledgeBaseConversationRetentionTombstones.userId,
-              input.userId,
-            ),
+            enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, input.userId),
             eq(
               knowledgeBaseConversationRetentionTombstones.publicConversationId,
               conversationId,
@@ -5486,7 +5487,7 @@ export async function reserveKnowledgeBaseStartBuild(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -5544,7 +5545,7 @@ async function lockedOwnedTurnAndBuild(
         eq(conversationTurns.id, turnId),
         ...(input.userId === undefined
           ? []
-          : [eq(conversationTurns.userId, input.userId)]),
+          : [enterpriseOwnerPredicate(conversationTurns, input.userId)]),
       ),
     )
     .limit(1);
@@ -5574,7 +5575,7 @@ async function lockedOwnedTurnAndBuild(
         eq(conversationTurns.id, turnId),
         ...(input.userId === undefined
           ? []
-          : [eq(conversationTurns.userId, input.userId)]),
+          : [enterpriseOwnerPredicate(conversationTurns, input.userId)]),
       ),
     )
     .limit(1)
@@ -5684,9 +5685,9 @@ async function assertDeferredResetRevisionInTransaction(input: {
   }
   const state = (
     await input.tx
-      .select({ revision: knowledgeBaseResetStates.revision })
-      .from(knowledgeBaseResetStates)
-      .where(eq(knowledgeBaseResetStates.userId, input.turn.userId))
+      .select({ revision: enterpriseResetStateTable().revision })
+      .from(enterpriseResetStateTable())
+      .where(enterpriseResetStateOwnerPredicate(input.turn.userId))
       .limit(1)
       .for("update")
   )[0];
@@ -5921,7 +5922,7 @@ export async function assertKnowledgeBaseLocalUploadCoordinate(
         .where(
           and(
             eq(conversations.id, conversationId),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
           ),
         )
         .limit(1)
@@ -6204,7 +6205,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
             and(
               eq(localAssets.id, attachment.file_id),
               eq(localAssets.scope, "managed_user"),
-              eq(localAssets.accountUserId, turn.userId),
+              enterpriseAccountOwnerPredicate(localAssets, turn.userId),
               isNull(localAssets.presalesProjectId),
             ),
           )
@@ -8243,7 +8244,7 @@ export async function findReusableKnowledgeBaseSkillFileId(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -8262,7 +8263,7 @@ export async function findReusableKnowledgeBaseSkillFileId(
       .from(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, buildId),
           eq(conversationTurns.buildGeneration, build.generation),
           eq(conversationTurns.apiCredentialId, apiCredentialId),
@@ -8335,7 +8336,7 @@ export async function findReusableKnowledgeBaseSkillFileId(
       .from(upstreamResources)
       .where(
         and(
-          eq(upstreamResources.userId, input.userId),
+          enterpriseOwnerPredicate(upstreamResources, input.userId),
           eq(upstreamResources.apiCredentialId, apiCredentialId),
           eq(upstreamResources.kind, "file"),
           isNull(upstreamResources.projectAssignmentId),
@@ -8375,6 +8376,54 @@ function assertAttachmentPrefix(existing: string[], next: string[]) {
 }
 
 /** Persist an ordered, monotonically-growing upload ledger after each file. */
+/** Records an application-authored node patch under the same lease and exact
+ * local attachment ledger. A local image edit never invents a provider task. */
+export async function recordKnowledgeNodeEditPatch(input: {
+  userId: number; turnId: string; leaseToken: string;
+  patchSha256: string; providerTaskId: string | null;
+  attachmentSourceProofs: Array<{ index: number; fileId: string; contentSha256: string; sizeBytes: number; mimeType: string; localStorageKey: string; sourceWorkingSetId?: string; sourceAssetId?: string }>;
+}) {
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    const { turn, build } = await lockedOwnedTurnAndBuild(tx, input);
+    assertLease(turn, input.leaseToken);
+    const metadata = metadataOf(turn);
+    const recovery = metadata.recovery ?? {};
+    const uploadedCount = (turn.attachmentFileIds ?? []).length;
+    if (recovery.nodeEditMode !== "low_v1" || turn.operationType !== "revise" || metadata.attachmentsFrozen !== true || turn.upstreamTaskId !== input.providerTaskId || !/^[a-f0-9]{64}$/u.test(input.patchSha256) || input.attachmentSourceProofs.length < uploadedCount || input.attachmentSourceProofs.some((proof, index) => proof.index !== index || (index < uploadedCount && proof.fileId !== turn.attachmentFileIds?.[index])))
+      throw new KnowledgeBaseTurnReservationError("CONFLICT", "知识节点本地修订所有权已变化");
+    if (input.attachmentSourceProofs.length > uploadedCount) {
+      const base = (await tx.select().from(knowledgeBaseWorkingSets).where(and(eq(knowledgeBaseWorkingSets.id, build.activeWorkingSetId!), eq(knowledgeBaseWorkingSets.buildId, build.id), eq(knowledgeBaseWorkingSets.status, "active"))).limit(1).for("update"))[0];
+      const assets = (base?.manifest?.assets ?? []) as Array<{ assetId: string; sha256: string; bytes: number; mimeType: string; provenance: Record<string, unknown> }>;
+      for (const proof of input.attachmentSourceProofs.slice(uploadedCount)) {
+        const asset = assets.find((item) => item.assetId === proof.sourceAssetId);
+        if (!base || proof.sourceWorkingSetId !== base.id || !asset || asset.sha256 !== proof.contentSha256 || asset.bytes !== proof.sizeBytes || asset.mimeType !== proof.mimeType || asset.provenance.sourceKind !== "user_upload" || asset.provenance.ownership !== "first_party") throw new KnowledgeBaseTurnReservationError("CONFLICT", "本地图片不属于当前知识库版本");
+      }
+    }
+    const old = metadata.applicationNodeEdit as { patchSha256?: string } | undefined;
+    if (old && old.patchSha256 !== input.patchSha256)
+      throw new KnowledgeBaseTurnReservationError("CONFLICT", "知识节点本地修订内容已冻结");
+    const now = new Date();
+    await tx.update(conversationTurns).set({ status: "running", startedAt: turn.startedAt ?? now, metadata: { ...metadata, recovery: { ...recovery, attachmentSourceProofs: input.attachmentSourceProofs }, applicationNodeEdit: { schemaVersion: 1, patchSha256: input.patchSha256, providerTaskId: input.providerTaskId, mode: "low_v1", baseWorkingSetId: build.activeWorkingSetId, baseContentVersion: build.contentVersion }, dispatchState: "running" }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
+  });
+}
+
+/** Failed lightweight edits preserve the last good content and release only
+ * their own turn, so a user can issue a new edit without rebuilding the KB. */
+export async function failKnowledgeNodeEdit(input: { userId: number; turnId: string; leaseToken: string; message: string }) {
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    const { turn, build } = await lockedOwnedTurnAndBuild(tx, input);
+    assertLease(turn, input.leaseToken);
+    const metadata = metadataOf(turn);
+    if (metadata.recovery?.nodeEditMode !== "low_v1") throw new KnowledgeBaseTurnReservationError("CONFLICT", "当前修改不是轻量节点编辑");
+    const now = new Date();
+    await tx.update(conversationTurns).set({ status: "failed", errorCode: "KNOWLEDGE_NODE_EDIT_FAILED", errorMessage: input.message, completedAt: now, leaseExpiresAt: null, metadata: { ...metadata, dispatchState: "failed", failureClass: "terminal_nonregenerable", recoveryAction: "stopped", canRegenerate: false, nodeEditFailure: true }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
+    await tx.update(knowledgeBaseBuilds).set({ activeTurnId: null, upstreamTaskId: null, awaitingResponseSince: null, stateEpoch: build.stateEpoch + 1, protocolErrorCode: null, protocolError: null, handoffProvenance: { ...(build.handoffProvenance ?? {}), nodeEditFailure: { schemaVersion: 1, stateEpoch: build.stateEpoch + 1, message: input.message, turnId: turn.id, createdAt: now.getTime() } }, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
+    await markKnowledgeBaseConversationAwaitingInputInTransaction({ tx, userId: input.userId, conversationId: turn.conversationId, authoritativeTaskId: null, updatedAt: now });
+  });
+}
+
 export async function stageKnowledgeBaseTurnAttachments(
   input: {
     userId: number;
@@ -8827,7 +8876,7 @@ export async function activateKnowledgeBaseManusV2Handoff(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, input.expectedGeneration),
           eq(knowledgeBaseBuilds.revision, input.expectedRevision),
           eq(knowledgeBaseBuilds.providerProtocol, "legacy_v1"),
@@ -9654,7 +9703,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
           ),
         )
@@ -9673,7 +9722,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
           .where(
             and(
               eq(conversations.id, turn.conversationId),
-              eq(conversations.userId, input.userId),
+              enterpriseOwnerPredicate(conversations, input.userId),
             ),
           )
           .limit(1)
@@ -9821,7 +9870,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
         .from(upstreamResources)
         .where(
           and(
-            eq(upstreamResources.userId, input.userId),
+            enterpriseOwnerPredicate(upstreamResources, input.userId),
             eq(upstreamResources.apiCredentialId, stagedCredentialId),
             eq(upstreamResources.kind, "file"),
             eq(upstreamResources.conversationId, turn.conversationId),
@@ -9897,13 +9946,13 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
     if (strictStartCancellation) {
       const nextResetRevision = Number(input.expectedResetRevision) + 1;
       const resetUpdate = await tx
-        .update(knowledgeBaseResetStates)
+        .update(enterpriseResetStateTable())
         .set({ revision: nextResetRevision, updatedAt: now })
         .where(
           and(
-            eq(knowledgeBaseResetStates.userId, input.userId),
+            enterpriseResetStateOwnerPredicate(input.userId),
             eq(
-              knowledgeBaseResetStates.revision,
+              enterpriseResetStateTable().revision,
               Number(input.expectedResetRevision),
             ),
           ),
@@ -9928,7 +9977,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
           .set({ conversationId: null })
           .where(
             and(
-              eq(upstreamResources.userId, input.userId),
+              enterpriseOwnerPredicate(upstreamResources, input.userId),
               eq(upstreamResources.apiCredentialId, stagedCredentialId),
               eq(upstreamResources.kind, "file"),
               eq(upstreamResources.conversationId, turn.conversationId),
@@ -9955,7 +10004,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, build.generation),
             eq(knowledgeBaseBuilds.activeTurnId, turn.id),
           ),
@@ -9965,7 +10014,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
         .where(
           and(
             eq(conversations.id, strictStartConversation!.id),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
             eq(conversations.version, strictStartConversation!.version),
           ),
         );
@@ -9990,7 +10039,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
         ),
@@ -10019,7 +10068,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
         .set({ conversationId: null })
         .where(
           and(
-            eq(upstreamResources.userId, input.userId),
+            enterpriseOwnerPredicate(upstreamResources, input.userId),
             eq(upstreamResources.apiCredentialId, stagedCredentialId),
             eq(upstreamResources.kind, "file"),
             eq(upstreamResources.conversationId, turn.conversationId),
@@ -10045,7 +10094,7 @@ async function cancelUnpreparedKnowledgeBaseTurnInternal(
           .where(
             and(
               eq(conversations.id, turn.conversationId),
-              eq(conversations.userId, input.userId),
+              enterpriseOwnerPredicate(conversations, input.userId),
             ),
           )
           .limit(1)
@@ -10160,10 +10209,7 @@ export async function cancelIncompleteKnowledgeBaseStart(
           .from(knowledgeBaseConversationRetentionTombstones)
           .where(
             and(
-              eq(
-                knowledgeBaseConversationRetentionTombstones.userId,
-                input.userId,
-              ),
+              enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, input.userId),
               eq(
                 knowledgeBaseConversationRetentionTombstones.publicConversationId,
                 input.conversationId,
@@ -10176,9 +10222,9 @@ export async function cancelIncompleteKnowledgeBaseStart(
       if (!tombstone) throw error;
       const state = (
         await tx
-          .select({ revision: knowledgeBaseResetStates.revision })
-          .from(knowledgeBaseResetStates)
-          .where(eq(knowledgeBaseResetStates.userId, input.userId))
+          .select({ revision: enterpriseResetStateTable().revision })
+          .from(enterpriseResetStateTable())
+          .where(enterpriseResetStateOwnerPredicate(input.userId))
           .limit(1)
           .for("update")
       )[0];
@@ -10235,7 +10281,7 @@ export async function rejectUnacknowledgedKnowledgeBaseManualLogoTurn(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.buildGeneration),
           ),
         )
@@ -10249,7 +10295,7 @@ export async function rejectUnacknowledgedKnowledgeBaseManualLogoTurn(
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, buildId),
             eq(conversationTurns.buildGeneration, input.buildGeneration),
           ),
@@ -10369,7 +10415,7 @@ export async function rejectUnacknowledgedKnowledgeBaseManualLogoTurn(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
           eq(knowledgeBaseBuilds.upstreamTaskId, parentTaskId),
@@ -10457,7 +10503,7 @@ export async function rejectAcknowledgedKnowledgeBaseManualLogoTurn(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.buildGeneration),
           ),
         )
@@ -10471,7 +10517,7 @@ export async function rejectAcknowledgedKnowledgeBaseManualLogoTurn(
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, buildId),
             eq(conversationTurns.buildGeneration, input.buildGeneration),
           ),
@@ -10587,7 +10633,7 @@ export async function rejectAcknowledgedKnowledgeBaseManualLogoTurn(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
           eq(knowledgeBaseBuilds.upstreamTaskId, turn.upstreamTaskId),
@@ -10882,7 +10928,7 @@ export async function observeKnowledgeBaseMaterializedResultDiagnostic(
       .where(
         and(
           eq(conversationTurns.id, turn.id),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           inArray(conversationTurns.status, ["queued", "running"]),
@@ -11141,7 +11187,7 @@ export async function observeKnowledgeBaseMaterializedCompletionCandidate(
       .where(
         and(
           eq(conversationTurns.id, turn.id),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           inArray(conversationTurns.status, ["queued", "running"]),
@@ -11271,7 +11317,7 @@ export async function deferKnowledgeBaseMaterializedProviderStatus(
       .where(
         and(
           eq(conversationTurns.id, turn.id),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           inArray(conversationTurns.status, ["queued", "running"]),
@@ -11495,7 +11541,7 @@ async function settleLockedKnowledgeBaseMaterializedResultForApprovedReset(input
     .where(
       and(
         eq(knowledgeBaseBuilds.id, build.id),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, build.generation),
         eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
         eq(knowledgeBaseBuilds.activeTurnId, turn.id),
@@ -11521,7 +11567,7 @@ async function settleLockedKnowledgeBaseMaterializedResultForApprovedReset(input
     .where(
       and(
         eq(conversationTurns.id, turn.id),
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, build.id),
         eq(conversationTurns.buildGeneration, build.generation),
         inArray(conversationTurns.status, ["queued", "running"]),
@@ -11737,7 +11783,7 @@ export async function deferKnowledgeBaseMaterializedResultRead(
       .where(
         and(
           eq(conversationTurns.id, turn.id),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           inArray(conversationTurns.status, ["queued", "running"]),
@@ -11882,7 +11928,7 @@ export async function failKnowledgeBaseTurnDeterministically(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
         ),
@@ -12057,7 +12103,7 @@ export async function settleKnowledgeBasePreCreateFailureForApprovedReset(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
@@ -12085,7 +12131,7 @@ export async function settleKnowledgeBasePreCreateFailureForApprovedReset(
       .where(
         and(
           eq(conversationTurns.id, turn.id),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           inArray(conversationTurns.status, ["queued", "running"]),
@@ -12204,7 +12250,7 @@ export async function pauseKnowledgeBasePreCreateCredentialUnavailable(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
           isNull(knowledgeBaseBuilds.canonicalTaskId),
@@ -12283,6 +12329,7 @@ export async function findRecoverableKnowledgeBaseTurnIds(
   assertInteger(limit, "limit", 1);
   return db
     .select({
+      enterpriseProjectId: conversationTurns.enterpriseProjectId,
       turnId: conversationTurns.id,
       userId: conversationTurns.userId,
       buildId: conversationTurns.buildId,
@@ -12384,7 +12431,7 @@ async function settleLockedMaterializedCreateOutcomeUnknownForReset(input: {
     .where(
       and(
         eq(knowledgeBaseBuilds.id, build.id),
-        eq(knowledgeBaseBuilds.userId, turn.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, turn.userId),
         eq(knowledgeBaseBuilds.generation, build.generation),
         eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
         eq(knowledgeBaseBuilds.activeTurnId, turn.id),
@@ -12410,7 +12457,7 @@ async function settleLockedMaterializedCreateOutcomeUnknownForReset(input: {
     .where(
       and(
         eq(conversationTurns.id, turn.id),
-        eq(conversationTurns.userId, turn.userId),
+        enterpriseOwnerPredicate(conversationTurns, turn.userId),
         eq(conversationTurns.buildId, build.id),
         eq(conversationTurns.buildGeneration, build.generation),
         inArray(conversationTurns.status, ["queued", "running"]),

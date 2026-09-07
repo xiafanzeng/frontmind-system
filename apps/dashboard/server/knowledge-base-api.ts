@@ -1,3 +1,13 @@
+import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
+import { sendAiBillingError } from "./ai-billing-http";
+import { assertAiAccountFunds } from "./ai-billing-service";
+import { assertKnowledgeBaseDispatchFunds, continueKnowledgeBaseAfterRecharge, pauseKnowledgeBaseForBilling } from "./knowledge-base-billing";
+import { z } from "zod";
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { knowledgeBaseWorkingSetAssetUrl } from "./knowledge-base-materialized-assets";
+import { enterpriseProjectUrl } from "./enterprise-project-scope";
+import { dispatchKnowledgeNodeEdit } from "./knowledge-node-edit-service";
+import { KNOWLEDGE_NODE_IMAGE_MIMES } from "./knowledge-node-edit-contract";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import axios from "axios";
 import {
@@ -214,6 +224,7 @@ import {
   applyKnowledgeBaseRevisionWorkingSet,
   bindMaterializedKnowledgeBaseOfficialLogoLocally,
   confirmMaterializedKnowledgeBaseNode,
+  selectMaterializedKnowledgeBaseNode,
   KnowledgeBaseMaterializedError,
   MATERIALIZED_KNOWLEDGE_BASE_EXECUTION_MODE,
   readActiveKnowledgeBaseWorkingSet,
@@ -4432,6 +4443,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
       "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
+  if (claim.recoveryMetadata?.nodeEditMode === "low_v1") return dispatchKnowledgeNodeEdit(claim, credential);
   return dispatchMaterializedKnowledgeBaseClaim({
     claim,
     credential,
@@ -4473,6 +4485,7 @@ export async function persistKnowledgeBaseDispatchFailure(
     deferMaterializedResultRead?: typeof deferKnowledgeBaseMaterializedResultRead;
   } = {},
 ) {
+  if (await pauseKnowledgeBaseForBilling(input.claim, input.error)) return "deterministic" as const;
   const markManusV2OutcomeUnknown =
     dependencies.markManusV2OutcomeUnknown ??
     markKnowledgeBaseManusV2OutcomeUnknown;
@@ -4722,6 +4735,7 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
   const worker = async () => {
     while (cursor < candidates.length) {
       const candidate = candidates[cursor++];
+      await runWithStoredEnterpriseProjectScope(candidate.userId, candidate.enterpriseProjectId, async () => {
       let claim: KnowledgeBaseRecoveryClaim | null = null;
       let recoveryApiKey: string | undefined;
       try {
@@ -4731,7 +4745,7 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
         });
         if (!claim) {
           result.skipped += 1;
-          continue;
+          return;
         }
         const ownedClaim = claim;
         result.claimed += 1;
@@ -4771,7 +4785,7 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
           );
           if (paused) {
             result.credentialPaused += 1;
-            continue;
+            return;
           }
           throw new Error("Reserved credential version is unavailable");
         }
@@ -4918,6 +4932,7 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
           additionalSecrets: [recoveryApiKey],
         });
       }
+      });
     }
   };
   await Promise.all(
@@ -5485,6 +5500,20 @@ function launchAcceptedKnowledgeBaseClaim(input: {
  * file bytes. This endpoint deliberately performs no provider file/task call;
  * `/turn/dispatch` is the only route that may acquire a worker lease.
  */
+router.post("/billing-resume", async (req, res) => {
+  if (!req.frontmindUser) { res.status(401).json({error:{message:"请先登录"}}); return; }
+  const body=z.object({buildId:z.string().uuid(),turnId:z.string().uuid(),requestId:z.string().uuid()}).safeParse(req.body);
+  if(!body.success){res.status(400).json({error:{message:"恢复请求无效，请刷新后重试"}});return;}
+  try {
+    const result=await continueKnowledgeBaseAfterRecharge({userId:enterpriseWorkspaceUserId(req.frontmindUser.id),...body.data});
+    if(!result.already) {
+      const claim=await claimKnowledgeBaseTurnForRecovery({turnId:result.turnId,leaseMs:300000});
+      if(claim) launchAcceptedKnowledgeBaseClaim({claim,credential:result.credential,outcomeUnknownCode:"BILLING_RESUME_OUTCOME_UNKNOWN"});
+    }
+    res.status(202).json({accepted:true});
+  }catch(error){if(sendAiBillingError(res,error))return;res.status(409).json({error:{code:"AI_RESUME_PENDING",message:"恢复请求正在核对，请稍后再次查看。系统不会自动重复发送。",retryable:false}});}
+});
+
 router.post("/start/reserve", async (req, res) => {
   const body = (req.body || {}) as KnowledgeBaseStartRequest & {
     attachmentManifest?: unknown;
@@ -5514,7 +5543,7 @@ router.post("/start/reserve", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
@@ -5532,7 +5561,7 @@ router.post("/start/reserve", async (req, res) => {
   const requestTraceId = randomUUID();
   let reservationCreated = false;
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const attachmentManifest =
       Array.isArray(body.attachmentManifest) &&
       body.attachmentManifest.length === 0
@@ -5540,14 +5569,14 @@ router.post("/start/reserve", async (req, res) => {
         : normalizeKnowledgeBaseClientAttachmentManifest(
             body.attachmentManifest,
           );
-    const workspace = await getDashboardWorkspace(req.frontmindUser.id);
+    const workspace = await getDashboardWorkspace(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const companyName = resolveKnowledgeBaseEnterpriseIdentity({
       sourceName: workspace.sourceName,
       brandName: workspace.payload.brandName,
       requestedCompanyName,
     });
     const existingBuild = await getKnowledgeBaseProgress({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
     if (
@@ -5578,9 +5607,10 @@ router.post("/start/reserve", async (req, res) => {
       return;
     }
     const newBuildPolicy = knowledgeBaseNewBuildPolicyBinding();
+    if (!existingBuild) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const [prefillKnowledgeSnapshot, latestSkillDescriptor] = await Promise.all(
       [
-        getLatestKnowledgeSnapshot(req.frontmindUser.id),
+        getLatestKnowledgeSnapshot(enterpriseWorkspaceUserId(req.frontmindUser.id)),
         getKnowledgeBaseSkillDescriptor({
           version: newBuildPolicy.skillVersion,
           contentHash: newBuildPolicy.skillContentHash,
@@ -5588,7 +5618,7 @@ router.post("/start/reserve", async (req, res) => {
       ],
     );
     const start = await reserveKnowledgeBaseStartBuild({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       clientRequestId,
       companyName,
@@ -5644,11 +5674,11 @@ router.post("/start/reserve", async (req, res) => {
     });
     reservationCreated = true;
     const progress = await getKnowledgeBaseProgress({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     });
@@ -5672,6 +5702,7 @@ router.post("/start/reserve", async (req, res) => {
       startedAt: start.reservation.turn.createdAt.getTime(),
     });
   } catch (error) {
+    if (sendAiBillingError(res, error)) return;
     if (error instanceof KnowledgeBaseTurnReservationError) {
       res.status(knowledgeBaseTurnReservationErrorStatus(error)).json({
         traceId: requestTraceId,
@@ -5736,14 +5767,14 @@ router.post("/start/cancel", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const cancelled = await cancelIncompleteKnowledgeBaseStart({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       turnId,
       clientRequestId,
@@ -5859,14 +5890,14 @@ router.post("/confirm", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const receipt = await confirmMaterializedKnowledgeBaseNode({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       clientRequestId,
       expectedGeneration,
@@ -5878,7 +5909,7 @@ router.post("/confirm", async (req, res) => {
       expectedContentVersion,
     });
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "local",
     });
@@ -5892,7 +5923,7 @@ router.post("/confirm", async (req, res) => {
             ? 404
             : 409;
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "local",
       }).catch(() => null);
@@ -5905,7 +5936,7 @@ router.post("/confirm", async (req, res) => {
     logKnowledgeBaseRuntimeFailure({
       level: "error",
       event: "[KnowledgeBaseLocalConfirm] failed",
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       error,
     });
     res.status(503).json({
@@ -5917,11 +5948,49 @@ router.post("/confirm", async (req, res) => {
   }
 });
 
+function normalizeNodeEditAssetIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 99 || value.some((item) => typeof item !== "string" || !/^[a-zA-Z0-9_.-]{1,128}$/u.test(item))) throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "本地图片选择无效");
+  return [...new Set(value)];
+}
+
+router.get("/node/images", async (req, res) => {
+  if (!req.frontmindUser || !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))) return;
+  try {
+    const conversationId = String(req.query.conversationId ?? "");
+    const leafId = String(req.query.leafId ?? "");
+    const build = await requireMaterializedKnowledgeBaseBuild({ userId: enterpriseWorkspaceUserId(req.frontmindUser.id), conversationId });
+    const active = await readActiveKnowledgeBaseWorkingSet({ userId: enterpriseWorkspaceUserId(req.frontmindUser.id), buildId: build.id, generation: build.generation });
+    const manifest = active.workingSet.manifest as import("./knowledge-base-materialized-contract").KnowledgeBaseWorkingSetManifest;
+    const leaf = manifest.leaves.find((item) => item.leafId === leafId);
+    if (!leaf) { res.status(404).json({ error: { message: "知识节点不存在" } }); return; }
+    res.json({ coordinates: { conversationId, expectedGeneration: build.generation, expectedRevision: build.revision, expectedStateEpoch: build.stateEpoch, expectedContentVersion: build.contentVersion, expectedLeafId: leafId }, images: manifest.assets.filter((asset) => leaf.assetIds.includes(asset.assetId) || (asset.provenance.sourceKind === "user_upload" && asset.provenance.ownership === "first_party")).map((asset) => ({ assetId: asset.assetId, url: enterpriseProjectUrl(knowledgeBaseWorkingSetAssetUrl({ buildId: build.id, asset })), caption: asset.caption ?? "本地图片", attached: leaf.assetIds.includes(asset.assetId), removable: asset.documentIds.includes(leafId), selectable: asset.provenance.sourceKind === "user_upload" && asset.provenance.ownership === "first_party" })) });
+  } catch { res.status(409).json({ error: { message: "知识库状态已变化，请刷新后重试" } }); }
+});
+
+router.post("/node/select", async (req, res) => {
+  if (!req.frontmindUser || !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))) return;
+  const body = req.body ?? {};
+  if (typeof body.conversationId !== "string" || typeof body.clientRequestId !== "string" || body.clientRequestId.length > 128 || typeof body.leafId !== "string" || body.leafId.length > 128 || ![body.expectedGeneration, body.expectedRevision, body.expectedStateEpoch].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+    res.status(400).json({ error: { message: "节点选择坐标无效" } }); return;
+  }
+  try {
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
+    const receipt = await selectMaterializedKnowledgeBaseNode({ userId: enterpriseWorkspaceUserId(req.frontmindUser.id), conversationId: body.conversationId, clientRequestId: body.clientRequestId, leafId: body.leafId, expectedGeneration: body.expectedGeneration, expectedRevision: body.expectedRevision, expectedStateEpoch: body.expectedStateEpoch });
+    const observation = await getKnowledgeBaseObservation({ userId: enterpriseWorkspaceUserId(req.frontmindUser.id), conversationId: body.conversationId, upstreamStatus: "local" });
+    res.json({ ...receipt, observation });
+  } catch (error) {
+    res.status(error instanceof KnowledgeBaseMaterializedError && error.code === "BUILD_NOT_FOUND" ? 404 : 409).json({ error: { message: error instanceof KnowledgeBaseMaterializedError ? error.message : "节点状态已变化，请刷新后重试" } });
+  }
+});
+
 router.post("/turn/reserve", async (req, res) => {
   const body = (req.body || {}) as {
     conversationId?: string;
     clientRequestId?: string;
     userMessage?: string;
+    removeAssetIds?: string[];
+    selectedAssetIds?: string[];
     attachmentManifest?: unknown;
     resumeExisting?: boolean;
     expectedGeneration?: number;
@@ -5966,26 +6035,31 @@ router.post("/turn/reserve", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
 
   let replayAfterMutableFailure: (() => Promise<boolean>) | null = null;
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const boundBuild = await requireMaterializedKnowledgeBaseBuild({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
     const attachmentManifest = normalizeKnowledgeBaseClientAttachmentManifest(
       body.attachmentManifest,
     );
+    const removeAssetIds = normalizeNodeEditAssetIds(body.removeAssetIds);
+    const selectedAssetIds = normalizeNodeEditAssetIds(body.selectedAssetIds);
+    if (attachmentManifest.some((item) => !KNOWLEDGE_NODE_IMAGE_MIMES.includes(item.mimeType as typeof KNOWLEDGE_NODE_IMAGE_MIMES[number]))) throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "节点补充资料仅支持本地图片；文字修改请填写修改要求");
     const clientIntent = {
       schemaVersion: 1,
       flow: "deferred",
       conversationId,
       userMessage,
+      ...(removeAssetIds.length ? { removeAssetIds } : {}),
+      ...(selectedAssetIds.length ? { selectedAssetIds } : {}),
       attachmentManifest,
       expectedGeneration: Number(expectedGeneration),
       expectedRevision: Number(expectedRevision),
@@ -6009,13 +6083,13 @@ router.post("/turn/reserve", async (req, res) => {
     }
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         inspect: () =>
           body.resumeExisting === true
             ? inspectKnowledgeBaseLegacyDeferredReservationReplay({
-                userId: req.frontmindUser!.id,
+                userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
                 conversationId,
                 clientRequestId,
                 clientAttachmentManifest: attachmentManifest,
@@ -6026,7 +6100,7 @@ router.post("/turn/reserve", async (req, res) => {
                 expectedPresentationKey,
               })
             : inspectKnowledgeBaseTurnReplay({
-                userId: req.frontmindUser!.id,
+                userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
                 conversationId,
                 clientRequestId,
                 clientIntent,
@@ -6050,7 +6124,7 @@ router.post("/turn/reserve", async (req, res) => {
       );
     }
     await assertKnowledgeBaseCustomerUploadCapacity({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: boundBuild.id,
       generation: boundBuild.generation,
       officialLogoSha256: boundBuild.logoSha256,
@@ -6077,7 +6151,7 @@ router.post("/turn/reserve", async (req, res) => {
     if (!taskCredential) {
       if (await replayAfterMutableFailure()) return;
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "running",
       }).catch(() => null);
@@ -6103,7 +6177,7 @@ router.post("/turn/reserve", async (req, res) => {
           });
     if (finalPackageRequired && deferredLogoPolicy.assertFinalLogoProvenance) {
       await assertKnowledgeBaseFinalLogoProvenanceForBuild(
-        req.frontmindUser.id,
+        enterpriseWorkspaceUserId(req.frontmindUser.id),
         boundBuild,
       );
     }
@@ -6120,7 +6194,7 @@ router.post("/turn/reserve", async (req, res) => {
     const skillVersion = skillDescriptor.version;
     const skillContentHash = skillDescriptor.contentHash;
     const reservation = await reserveKnowledgeBaseTurn({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: boundBuild.id,
       clientRequestId,
       operationType: action === "initial" ? "revise" : action,
@@ -6130,6 +6204,8 @@ router.post("/turn/reserve", async (req, res) => {
       expectedPresentationKey,
       requestPayload: {
         userMessage,
+        ...(removeAssetIds.length ? { removeAssetIds } : {}),
+      ...(selectedAssetIds.length ? { selectedAssetIds } : {}),
         attachmentManifest,
         expectedPresentationKey: expectedPresentationKey ?? null,
         sourceResetRevision: expectedResetRevision,
@@ -6141,13 +6217,15 @@ router.post("/turn/reserve", async (req, res) => {
       userText: userMessage,
       userAttachmentCount: attachmentManifest.length,
       expectedAttachmentCount:
-        attachmentManifest.length + (boundBuild.skillVersion === "5" ? 3 : 2),
+        attachmentManifest.length,
       deferDispatchUntilAttachments: true,
       clientAttachmentManifest: attachmentManifest,
       sourceResetRevision: expectedResetRevision,
       resumeDeferredReservation: body.resumeExisting === true,
       recoveryMetadata: {
         kind: "turn",
+        nodeEditMode: "low_v1",
+        removeAssetIds, selectedAssetIds,
         conversationId,
         parentTaskId: null,
         userMessage,
@@ -6170,13 +6248,14 @@ router.post("/turn/reserve", async (req, res) => {
       );
     }
     await respondKnowledgeBaseTurnReplayReceipt({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       requestedClientRequestId: clientRequestId,
       receipt: reservation,
       res,
     });
   } catch (caught) {
+    if (sendAiBillingError(res, caught)) return;
     let error = caught;
     if (replayAfterMutableFailure) {
       try {
@@ -6197,7 +6276,7 @@ router.post("/turn/reserve", async (req, res) => {
     if (error instanceof KnowledgeBaseTurnReservationError) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -6210,7 +6289,7 @@ router.post("/turn/reserve", async (req, res) => {
     }
     const observation = req.frontmindUser
       ? await getKnowledgeBaseObservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           upstreamStatus: "running",
         }).catch(() => null)
@@ -6256,15 +6335,15 @@ router.post("/turn/attachments/resume", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
 
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const result = await resumeKnowledgeBaseDeferredTurnAttachments({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       conversationId,
@@ -6273,14 +6352,14 @@ router.post("/turn/attachments/resume", async (req, res) => {
       expectedResetRevision,
     });
     const knowledgeObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     });
     res.json({ ...result, knowledgeObservation });
   } catch (error) {
     const knowledgeObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     }).catch(() => null);
@@ -6332,29 +6411,29 @@ router.post("/turn/attachments/cancel", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
 
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     await cancelIncompleteKnowledgeBaseRevision({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       turnId,
       clientRequestId,
       expectedResetRevision,
     });
     const knowledgeObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     });
     res.json({ cancelled: true, knowledgeObservation });
   } catch (error) {
     const knowledgeObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     }).catch(() => null);
@@ -6409,14 +6488,14 @@ router.post("/turn/attachments/stage", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
 
   let replayAfterMutableFailure: (() => Promise<boolean>) | null = null;
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const manifest = normalizeKnowledgeBaseClientAttachmentManifest(
       body.attachmentManifest,
     );
@@ -6440,12 +6519,12 @@ router.post("/turn/attachments/stage", async (req, res) => {
     }
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         inspect: () =>
           inspectKnowledgeBaseDeferredAttachmentReplay({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             turnId,
             clientRequestId,
@@ -6460,7 +6539,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
       return;
     }
     const build = await requireKnowledgeBaseDeferredAttachmentStageBuild({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
     const projectAssignmentId =
@@ -6470,7 +6549,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     // before mutating the turn. Frozen filename/MIME remain display labels,
     // not a second content gate. A Provider file lease does not exist yet.
     const localAsset = await readOwnedMaterializedKnowledgeBaseLocalAsset({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       localAssetId: attachment.file_id,
       filename: manifestItem.filename,
       mimeType: manifestItem.mimeType,
@@ -6492,7 +6571,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     if (stagePolicyRejection) {
       if (await replayAfterMutableFailure()) return;
       await cancelUnpreparedKnowledgeBaseTurn({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         turnId,
         clientRequestId,
         code: stagePolicyRejection.code,
@@ -6507,7 +6586,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     // the same live reset fence. This endpoint never claims or launches a
     // Provider task; `/turn/dispatch` is the sole dispatch boundary.
     const turn = await stageKnowledgeBaseDeferredTurnAttachment({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: build.id,
       turnId,
       clientRequestId,
@@ -6526,7 +6605,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
       projectAssignmentId: projectAssignmentId ?? null,
     });
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     });
@@ -6544,6 +6623,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
       observation,
     });
   } catch (caught) {
+    if (sendAiBillingError(res, caught)) return;
     let error = caught;
     if (replayAfterMutableFailure) {
       try {
@@ -6564,7 +6644,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     if (error instanceof ManagedUploadIntentError) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -6577,7 +6657,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     }
     if (error instanceof KnowledgeBaseTurnReservationError) {
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "running",
       }).catch(() => null);
@@ -6595,7 +6675,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     }
     const observation = req.frontmindUser
       ? await getKnowledgeBaseObservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           upstreamStatus: "running",
         }).catch(() => null)
@@ -6640,7 +6720,7 @@ router.post("/turn/dispatch", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
@@ -6648,7 +6728,7 @@ router.post("/turn/dispatch", async (req, res) => {
   let acquiredClaim: KnowledgeBaseDeferredDispatchClaim | null = null;
   let replayAfterMutableFailure: (() => Promise<boolean>) | null = null;
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const attachmentManifest =
       Array.isArray(body.attachmentManifest) &&
       body.attachmentManifest.length === 0
@@ -6658,12 +6738,12 @@ router.post("/turn/dispatch", async (req, res) => {
           );
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         inspect: () =>
           inspectKnowledgeBaseDeferredDispatchReplay({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             turnId,
             clientRequestId,
@@ -6676,7 +6756,7 @@ router.post("/turn/dispatch", async (req, res) => {
       return;
     }
     const build = await loadKnowledgeBaseBuildRecord(
-      req.frontmindUser.id,
+      enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     );
     if (
@@ -6707,7 +6787,7 @@ router.post("/turn/dispatch", async (req, res) => {
     });
     if (!isStartReservation && dispatchLogoPolicy.assertFinalLogoProvenance) {
       await assertKnowledgeBaseFinalLogoProvenanceForBuild(
-        req.frontmindUser.id,
+        enterpriseWorkspaceUserId(req.frontmindUser.id),
         build,
       );
     }
@@ -6715,7 +6795,7 @@ router.post("/turn/dispatch", async (req, res) => {
       req.frontmindDeliveryProjectContext?.projectAssignmentId;
     const startCredential = isStartReservation
       ? await getDecryptedCredentialForKnowledgeBaseUploadReservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           turnId,
           projectAssignmentId: projectAssignmentId ?? null,
@@ -6729,7 +6809,7 @@ router.post("/turn/dispatch", async (req, res) => {
     if (!taskCredential) {
       if (await replayAfterMutableFailure()) return;
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "running",
       }).catch(() => null);
@@ -6742,8 +6822,9 @@ router.post("/turn/dispatch", async (req, res) => {
       });
       return;
     }
+    await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
     acquiredClaim = await claimKnowledgeBaseDeferredTurnDispatch({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: build.id,
       turnId,
       clientRequestId,
@@ -6752,7 +6833,7 @@ router.post("/turn/dispatch", async (req, res) => {
     });
     if (acquiredClaim.state !== "acquired") {
       await respondKnowledgeBaseTurnReplayReceipt({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         receipt: acquiredClaim,
@@ -6780,7 +6861,7 @@ router.post("/turn/dispatch", async (req, res) => {
     ) {
       const message = "客户附件的服务端完整性账本不完整，请重新上传";
       await cancelUnpreparedKnowledgeBaseTurn({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         turnId: acquiredClaim.turn.id,
         clientRequestId,
         leaseToken: acquiredClaim.leaseToken,
@@ -6801,7 +6882,7 @@ router.post("/turn/dispatch", async (req, res) => {
       const message =
         "该图片与已绑定的企业主 Logo 完全相同，无需作为普通补图再次上传";
       await cancelUnpreparedKnowledgeBaseTurn({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         turnId: acquiredClaim.turn.id,
         clientRequestId,
         leaseToken: acquiredClaim.leaseToken,
@@ -6816,7 +6897,7 @@ router.post("/turn/dispatch", async (req, res) => {
 
     try {
       await assertKnowledgeBaseCustomerUploadCapacity({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         buildId: build.id,
         generation: acquiredClaim.turn.buildGeneration,
         officialLogoSha256: build.logoSha256,
@@ -6829,7 +6910,7 @@ router.post("/turn/dispatch", async (req, res) => {
           ? error.message
           : "客户补充图片超过当前知识库容量，请重新选择附件";
       await cancelUnpreparedKnowledgeBaseTurn({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         turnId: acquiredClaim.turn.id,
         clientRequestId,
         leaseToken: acquiredClaim.leaseToken,
@@ -6856,7 +6937,7 @@ router.post("/turn/dispatch", async (req, res) => {
         !attachment
       ) {
         await cancelUnpreparedKnowledgeBaseTurn({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           turnId: acquiredClaim.turn.id,
           clientRequestId,
           leaseToken: acquiredClaim.leaseToken,
@@ -6870,7 +6951,7 @@ router.post("/turn/dispatch", async (req, res) => {
       }
       try {
         const verifiedLogo = await bindKnowledgeBaseOfficialLogoUpload({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           buildId: build.id,
           generation: acquiredClaim.turn.buildGeneration,
           turnId: acquiredClaim.turn.id,
@@ -6914,7 +6995,7 @@ router.post("/turn/dispatch", async (req, res) => {
             : "企业官方主 Logo 校验失败，请重新上传";
         if (error instanceof KnowledgeBaseArtifactBindingError) {
           await cancelUnpreparedKnowledgeBaseTurn({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             turnId: acquiredClaim.turn.id,
             clientRequestId,
             leaseToken: acquiredClaim.leaseToken,
@@ -6936,7 +7017,7 @@ router.post("/turn/dispatch", async (req, res) => {
     }
 
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     }).catch(() => null);
@@ -6959,6 +7040,7 @@ router.post("/turn/dispatch", async (req, res) => {
       outcomeUnknownCode: "TURN_DISPATCH_OUTCOME_UNKNOWN",
     });
   } catch (caught) {
+    if (sendAiBillingError(res, caught)) return;
     let error = caught;
     if (replayAfterMutableFailure && !acquiredClaim) {
       try {
@@ -6979,7 +7061,7 @@ router.post("/turn/dispatch", async (req, res) => {
     if (error instanceof KnowledgeBaseTurnReservationError) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -6992,7 +7074,7 @@ router.post("/turn/dispatch", async (req, res) => {
     }
     const observation = req.frontmindUser
       ? await getKnowledgeBaseObservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           upstreamStatus: "running",
         }).catch(() => null)
@@ -7012,6 +7094,8 @@ router.post("/turn", async (req, res) => {
     conversationId?: string;
     clientRequestId?: string;
     userMessage?: string;
+    removeAssetIds?: string[];
+    selectedAssetIds?: string[];
     attachments?: KnowledgeBaseAttachment[];
     resumeLegacyAttachments?: boolean;
     attachmentManifest?: unknown;
@@ -7033,6 +7117,15 @@ router.post("/turn", async (req, res) => {
       : String(body.expectedPresentationKey || "").trim();
   const submissionKind = String(body.submissionKind || "message").trim();
   const manualLogoSubmission = submissionKind === "logo";
+  let removeAssetIds: string[];
+  let selectedAssetIds: string[];
+  try {
+    removeAssetIds = normalizeNodeEditAssetIds(body.removeAssetIds);
+    selectedAssetIds = normalizeNodeEditAssetIds(body.selectedAssetIds);
+  } catch {
+    res.status(400).json({ error: { code: "INVALID_REQUEST", message: "本地图片选择无效" } });
+    return;
+  }
   const turnUserMessage = manualLogoSubmission
     ? KNOWLEDGE_BASE_MANUAL_LOGO_USER_INSTRUCTION
     : userMessage;
@@ -7043,7 +7136,7 @@ router.post("/turn", async (req, res) => {
     !conversationId ||
     !clientRequestId ||
     clientRequestId.length > 128 ||
-    (!userMessage.trim() && !body.attachments?.length)
+    (!userMessage.trim() && !body.attachments?.length && !body.removeAssetIds?.length && !body.selectedAssetIds?.length)
   ) {
     res.status(400).json({
       error: {
@@ -7100,7 +7193,7 @@ router.post("/turn", async (req, res) => {
   }
   if (
     !req.frontmindUser ||
-    !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+    !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
   ) {
     return;
   }
@@ -7109,7 +7202,7 @@ router.post("/turn", async (req, res) => {
     isAmbiguousKnowledgeBaseAdvance(userMessage)
   ) {
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     }).catch(() => null);
@@ -7128,9 +7221,9 @@ router.post("/turn", async (req, res) => {
   let reservationAcquiredByThisRequest = false;
   let acquiredManualLogoClaim: KnowledgeBaseRecoveryClaim | null = null;
   try {
-    await assertKnowledgeBaseWritable(req.frontmindUser!.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser!.id));
     const boundBuild = await requireMaterializedKnowledgeBaseBuild({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       conversationId,
     });
     if (!isMaterializedBuildPublishable(boundBuild)) {
@@ -7179,6 +7272,8 @@ router.post("/turn", async (req, res) => {
       ...(manualLogoSubmission ? { submissionKind: "logo" } : {}),
       conversationId,
       userMessage: turnUserMessage,
+      ...(removeAssetIds.length ? { removeAssetIds } : {}),
+      ...(selectedAssetIds.length ? { selectedAssetIds } : {}),
       attachments,
       attachmentManifest: attachmentManifest ?? null,
       resumeLegacyAttachments,
@@ -7193,7 +7288,7 @@ router.post("/turn", async (req, res) => {
     );
     if (action === "confirm") {
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "local",
       }).catch(() => null);
@@ -7244,7 +7339,7 @@ router.post("/turn", async (req, res) => {
         officialLogoUploadCandidate,
       );
       const local = await readOwnedMaterializedKnowledgeBaseLocalAsset({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         localAssetId: attachment.file_id,
         filename: manifestItem.filename,
         mimeType: manifestItem.mimeType,
@@ -7252,7 +7347,7 @@ router.post("/turn", async (req, res) => {
         sha256: manifestItem.sha256,
       });
       const receipt = await bindMaterializedKnowledgeBaseOfficialLogoLocally({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         buildId: boundBuild.id,
         clientRequestId,
@@ -7271,7 +7366,7 @@ router.post("/turn", async (req, res) => {
         bytes: local.bytes,
       });
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         conversationId,
         upstreamStatus: "local",
       }).catch((error) => {
@@ -7292,13 +7387,13 @@ router.post("/turn", async (req, res) => {
     }
     replayAfterMutableFailure = () =>
       respondIfKnowledgeBaseTurnReplay({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         inspect: () => {
           if (!resumeLegacyAttachments) {
             return inspectKnowledgeBaseTurnReplay({
-              userId: req.frontmindUser!.id,
+              userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
               conversationId,
               clientRequestId,
               clientIntent,
@@ -7316,7 +7411,7 @@ router.post("/turn", async (req, res) => {
             return Promise.resolve(null);
           }
           return inspectKnowledgeBaseLegacyAttachmentTakeoverReplay({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             clientRequestId,
             clientAttachmentManifest: attachmentManifest,
@@ -7363,7 +7458,7 @@ router.post("/turn", async (req, res) => {
     if (!taskCredential) {
       if (await replayAfterMutableFailure()) return;
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         upstreamStatus: "running",
       }).catch(() => null);
@@ -7376,6 +7471,7 @@ router.post("/turn", async (req, res) => {
       });
       return;
     }
+    if (!manualLogoSubmission && turnUserMessage.trim()) await assertAiAccountFunds(enterpriseWorkspaceUserId(req.frontmindUser.id));
     assertKnowledgeBaseAttachmentManifestPresent({
       skillVersion: boundBuild.skillVersion,
       attachmentCount: attachments.length,
@@ -7391,12 +7487,13 @@ router.post("/turn", async (req, res) => {
       contentSha256: string;
       localStorageKey: string;
     }> = [];
+    if (attachmentManifest && !manualLogoSubmission && attachmentManifest.some((item) => !KNOWLEDGE_NODE_IMAGE_MIMES.includes(item.mimeType as typeof KNOWLEDGE_NODE_IMAGE_MIMES[number]))) throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "节点补充资料仅支持本地图片；文字修改请填写修改要求");
     if (attachmentManifest) {
       for (let index = 0; index < attachments.length; index += 1) {
         const attachment = attachments[index]!;
         const expected = attachmentManifest[index]!;
         const local = await readOwnedMaterializedKnowledgeBaseLocalAsset({
-          userId: req.frontmindUser!.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
           localAssetId: attachment.file_id,
           filename: expected.filename,
           mimeType: expected.mimeType,
@@ -7404,7 +7501,7 @@ router.post("/turn", async (req, res) => {
           sha256: expected.sha256,
         });
         const retained = await persistKnowledgeBaseBuildSource({
-          userId: req.frontmindUser!.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
           buildId: boundBuild.id,
           generation: boundBuild.generation,
           bytes: local.bytes,
@@ -7460,7 +7557,7 @@ router.post("/turn", async (req, res) => {
         attachmentManifest,
       );
       await assertKnowledgeBaseCustomerUploadCapacity({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         buildId: boundBuild.id,
         generation: boundBuild.generation,
         officialLogoSha256: boundBuild.logoSha256,
@@ -7525,7 +7622,7 @@ router.post("/turn", async (req, res) => {
     // final-coordinate build with missing provenance is repair-only.
     if (finalPackageRequired && directLogoPolicy.assertFinalLogoProvenance) {
       await assertKnowledgeBaseFinalLogoProvenanceForBuild(
-        req.frontmindUser!.id,
+        enterpriseWorkspaceUserId(req.frontmindUser!.id),
         boundBuild,
       );
     }
@@ -7541,9 +7638,12 @@ router.post("/turn", async (req, res) => {
     };
     const recoveryMetadata = {
       kind: "turn",
+      ...(!manualLogoSubmission ? { nodeEditMode: "low_v1", removeAssetIds, selectedAssetIds } : {}),
       conversationId,
       parentTaskId: null,
       userMessage: turnUserMessage,
+      ...(removeAssetIds.length ? { removeAssetIds } : {}),
+      ...(selectedAssetIds.length ? { selectedAssetIds } : {}),
       attachments,
       attachmentSourceProofs,
       ...(manualLogoSubmission ? { manualLogoSubmission: true } : {}),
@@ -7571,7 +7671,7 @@ router.post("/turn", async (req, res) => {
         : {}),
     };
     const reservation = await reserveKnowledgeBaseTurn({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       buildId: boundBuild.id,
       clientRequestId,
       operationType: action === "initial" ? "revise" : action,
@@ -7582,6 +7682,8 @@ router.post("/turn", async (req, res) => {
       requestPayload: {
         submissionKind: manualLogoSubmission ? "logo" : "message",
         userMessage: turnUserMessage,
+      ...(removeAssetIds.length ? { removeAssetIds } : {}),
+      ...(selectedAssetIds.length ? { selectedAssetIds } : {}),
         attachments,
         ...(attachmentManifest ? { attachmentManifest } : {}),
         expectedPresentationKey: expectedPresentationKey ?? null,
@@ -7594,7 +7696,7 @@ router.post("/turn", async (req, res) => {
       userText: turnDisplayMessage,
       userAttachmentCount: attachments.length,
       expectedAttachmentCount:
-        attachments.length + (boundBuild.skillVersion === "5" ? 3 : 2),
+        attachments.length + (manualLogoSubmission ? (boundBuild.skillVersion === "5" ? 3 : 2) : 0),
       clientAttachmentManifest: attachmentManifest,
       resumeLegacyAttachmentTakeover: resumeLegacyAttachments,
       recoveryMetadata,
@@ -7602,7 +7704,7 @@ router.post("/turn", async (req, res) => {
     reservationAcquiredByThisRequest = reservation.state === "acquired";
     if (reservation.state !== "acquired") {
       await respondKnowledgeBaseTurnReplayReceipt({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         requestedClientRequestId: clientRequestId,
         receipt: reservation,
@@ -7615,7 +7717,7 @@ router.post("/turn", async (req, res) => {
     if (officialLogoUploadCandidate && !manualLogoSubmission) {
       try {
         verifiedOfficialLogoUpload = await bindKnowledgeBaseOfficialLogoUpload({
-          userId: req.frontmindUser!.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
           buildId: boundBuild.id,
           generation: reservation.turn.buildGeneration,
           turnId: reservation.turn.id,
@@ -7645,7 +7747,7 @@ router.post("/turn", async (req, res) => {
             : "企业官方主 Logo 校验失败，请重新上传";
         if (error instanceof KnowledgeBaseArtifactBindingError) {
           await cancelUnpreparedKnowledgeBaseTurn({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             turnId: reservation.turn.id,
             clientRequestId,
             leaseToken: reservation.leaseToken,
@@ -7661,7 +7763,7 @@ router.post("/turn", async (req, res) => {
           error.code === "LOGO_UPLOAD_INVALID"
         ) {
           const observation = await getKnowledgeBaseObservation({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             upstreamStatus: "awaiting_input",
           }).catch(() => null);
@@ -7743,7 +7845,7 @@ router.post("/turn", async (req, res) => {
           }
           if (!rejectionPersisted) {
             const observation = await getKnowledgeBaseObservation({
-              userId: req.frontmindUser!.id,
+              userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
               conversationId,
               upstreamStatus: "running",
             }).catch(() => null);
@@ -7755,7 +7857,7 @@ router.post("/turn", async (req, res) => {
             return;
           }
           const observation = await getKnowledgeBaseObservation({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             upstreamStatus: "awaiting_input",
           }).catch(() => null);
@@ -7772,7 +7874,7 @@ router.post("/turn", async (req, res) => {
         // interrupted, that real task remains the winner. Return it instead of
         // inviting a second logical submission.
         const receipt = await inspectKnowledgeBaseTurnReplay({
-          userId: req.frontmindUser!.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
           conversationId,
           clientRequestId,
           clientIntent,
@@ -7782,7 +7884,7 @@ router.post("/turn", async (req, res) => {
         }).catch(() => null);
         if (receipt?.state === "bound") {
           await respondKnowledgeBaseTurnReplayReceipt({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             requestedClientRequestId: clientRequestId,
             receipt,
@@ -7831,7 +7933,7 @@ router.post("/turn", async (req, res) => {
           }
           if (!rejectionPersisted) {
             const observation = await getKnowledgeBaseObservation({
-              userId: req.frontmindUser!.id,
+              userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
               conversationId,
               upstreamStatus: "running",
             }).catch(() => null);
@@ -7843,7 +7945,7 @@ router.post("/turn", async (req, res) => {
             return;
           }
           const observation = await getKnowledgeBaseObservation({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             upstreamStatus: "awaiting_input",
           }).catch(() => null);
@@ -7887,7 +7989,7 @@ router.post("/turn", async (req, res) => {
           error instanceof KnowledgeBaseUpstreamCreateError
         ) {
           const observation = await getKnowledgeBaseObservation({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             upstreamStatus: "failed",
           }).catch(() => null);
@@ -7903,7 +8005,7 @@ router.post("/turn", async (req, res) => {
         }
         if (failureClass !== "deterministic") {
           const pendingReceipt = await inspectKnowledgeBaseTurnReplay({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             clientRequestId,
             clientIntent,
@@ -7913,7 +8015,7 @@ router.post("/turn", async (req, res) => {
           }).catch(() => null);
           if (pendingReceipt) {
             await respondKnowledgeBaseTurnReplayReceipt({
-              userId: req.frontmindUser!.id,
+              userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
               conversationId,
               requestedClientRequestId: clientRequestId,
               receipt: pendingReceipt,
@@ -7923,7 +8025,7 @@ router.post("/turn", async (req, res) => {
             return;
           }
           const observation = await getKnowledgeBaseObservation({
-            userId: req.frontmindUser!.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null);
@@ -7937,7 +8039,7 @@ router.post("/turn", async (req, res) => {
         throw error;
       }
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         upstreamStatus: "running",
       }).catch(() => null);
@@ -7954,7 +8056,7 @@ router.post("/turn", async (req, res) => {
       return;
     }
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       conversationId,
       upstreamStatus: "running",
     }).catch(() => null);
@@ -7977,6 +8079,7 @@ router.post("/turn", async (req, res) => {
       outcomeUnknownCode: "TURN_DISPATCH_OUTCOME_UNKNOWN",
     });
   } catch (caught) {
+    if (sendAiBillingError(res, caught)) return;
     let error = caught;
     if (replayAfterMutableFailure && !reservationAcquiredByThisRequest) {
       try {
@@ -7997,7 +8100,7 @@ router.post("/turn", async (req, res) => {
     if (error instanceof KnowledgeBaseTurnReservationError) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -8017,7 +8120,7 @@ router.post("/turn", async (req, res) => {
     if (error instanceof KnowledgeBaseMaterializedError) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "local",
           }).catch(() => null)
@@ -8040,7 +8143,7 @@ router.post("/turn", async (req, res) => {
     if (terminalManualLogoFailure) {
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "awaiting_input",
           }).catch(() => null)
@@ -8058,7 +8161,7 @@ router.post("/turn", async (req, res) => {
       const status = error.code === "BUILD_NOT_FOUND" ? 404 : 422;
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -8112,7 +8215,7 @@ router.post("/turn", async (req, res) => {
       }
       const observation = req.frontmindUser
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId,
             upstreamStatus: "running",
           }).catch(() => null)
@@ -8127,7 +8230,7 @@ router.post("/turn", async (req, res) => {
     }
     const observation = req.frontmindUser
       ? await getKnowledgeBaseObservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           upstreamStatus: "running",
         }).catch(() => null)
@@ -8163,7 +8266,7 @@ router.post("/retry", (_req, res) => {
 router.get("/progress/:conversationId", async (req, res) => {
   try {
     const observation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       conversationId: req.params.conversationId,
       upstreamStatus: "running",
     });
@@ -8199,17 +8302,17 @@ router.post("/progress/reconcile", async (req, res) => {
     const requestedTaskId = String(body.taskId || "");
     if (
       !req.frontmindUser ||
-      !(await requireKnowledgeBuildCapability(req.frontmindUser.id, res))
+      !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))
     ) {
       return;
     }
-    await assertKnowledgeBaseWritable(req.frontmindUser.id);
+    await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const runtimeBuild = await requireMaterializedKnowledgeBaseBuild({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
     });
     const currentObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       conversationId,
       upstreamStatus: "running",
     });
@@ -8285,7 +8388,7 @@ router.post("/progress/reconcile", async (req, res) => {
       return;
     }
     const boundBuild = await assertKnowledgeBaseTaskBinding({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       conversationId,
       taskId,
     });
@@ -8302,7 +8405,7 @@ router.post("/progress/reconcile", async (req, res) => {
     }
     if (boundBuild.status === "published") {
       const observation = await getKnowledgeBaseObservation({
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         conversationId,
         upstreamStatus: "completed",
       });
@@ -8319,7 +8422,7 @@ router.post("/progress/reconcile", async (req, res) => {
     // recovery worker own the single task.create/reconcile lease; a browser
     // refresh can therefore never create, continue or repair a Provider task.
     const materializedObservation = await getKnowledgeBaseObservation({
-      userId: req.frontmindUser!.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
       conversationId,
       upstreamStatus: "running",
     });
@@ -8339,7 +8442,7 @@ router.post("/progress/reconcile", async (req, res) => {
     const observation =
       req.frontmindUser && String(body.conversationId || "").trim()
         ? await getKnowledgeBaseObservation({
-            userId: req.frontmindUser.id,
+            userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
             conversationId: String(body.conversationId || "").trim(),
             upstreamStatus: "running",
           }).catch(() => null)

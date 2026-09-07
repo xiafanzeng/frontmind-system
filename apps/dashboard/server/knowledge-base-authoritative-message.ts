@@ -1,3 +1,4 @@
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
@@ -89,7 +90,7 @@ export function knowledgeBasePresentationKey(input: {
 }
 
 function persistedAccountMessageId(userId: number, publicMessageId: string) {
-  return `u${userId}:${publicMessageId}`;
+  return `${enterpriseConversationStoragePrefix(userId)}${publicMessageId}`;
 }
 
 /**
@@ -106,7 +107,7 @@ export function matchesAuthoritativeKnowledgeBaseMessageTuple(input: {
   publicConversationId: string;
 }) {
   const { message, knowledgeBase, turn, build } = input;
-  const expectedPersistedConversationId = `u${message.userId}:${input.publicConversationId}`;
+  const expectedPersistedConversationId = `${enterpriseConversationStoragePrefix(message.userId)}${input.publicConversationId}`;
   if (expectedPersistedConversationId.length > 191) return false;
   if (
     knowledgeBase.serverOwned !== true ||

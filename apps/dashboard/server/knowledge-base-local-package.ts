@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 
 import { and, asc, eq, inArray } from "drizzle-orm";
@@ -1006,7 +1007,7 @@ export async function runKnowledgeBasePackageSweep(limit = 8) {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, candidate.id),
-            eq(knowledgeBaseBuilds.userId, candidate.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
             eq(knowledgeBaseBuilds.generation, candidate.generation),
             eq(knowledgeBaseBuilds.revision, candidate.revision),
             eq(knowledgeBaseBuilds.status, "ready_to_publish"),
@@ -1037,7 +1038,7 @@ export async function runKnowledgeBasePackageSweep(limit = 8) {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, candidate.id),
-            eq(knowledgeBaseBuilds.userId, candidate.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
             eq(knowledgeBaseBuilds.generation, candidate.generation),
             eq(knowledgeBaseBuilds.revision, candidate.revision),
             eq(

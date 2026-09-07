@@ -11,6 +11,7 @@ import {
 import { toast } from "sonner";
 
 import { useAuth } from "@/_core/hooks/useAuth";
+import { projectResourceUrl } from "@/lib/enterprise-project";
 import KnowledgeBaseProgressPanel from "@/components/KnowledgeBaseProgressPanel";
 import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
@@ -326,7 +327,7 @@ export default function EmbeddedKnowledgeBasePanel({
             displayedSnapshot &&
             archiveDownloadAvailable && (
               <a
-                href={`/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`}
+                href={projectResourceUrl(`/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`)}
                 download={displayedSnapshot.sourceFileName}
                 className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#5b2a86] px-4 text-sm font-medium text-white shadow-sm transition hover:bg-[#49216c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5b2a86] focus-visible:ring-offset-2"
               >
@@ -895,6 +896,7 @@ function RealBuildFlow({
   const progressPanel = (
     <KnowledgeBaseProgressPanel
       progress={displayedProgress}
+      editable
       loading={progressRequestPending && !progressTimedOut}
       emptyMessage={
         progressTimedOut

@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -291,7 +292,7 @@ async function defaultResolveBuildLifecycle(input: {
     .from(knowledgeBaseBuilds)
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.id, input.buildId),
       ),
     )

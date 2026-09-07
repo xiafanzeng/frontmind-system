@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import axios, { type AxiosResponse } from "axios";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
@@ -602,7 +603,7 @@ export async function cleanupKnowledgeBaseStagedArtifactCandidate(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, candidate.buildId),
-            eq(knowledgeBaseBuilds.userId, candidate.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
             eq(knowledgeBaseBuilds.generation, candidate.generation),
           ),
         )
@@ -638,7 +639,7 @@ export async function cleanupKnowledgeBaseStagedArtifactCandidate(
           .where(
             and(
               eq(conversationTurns.id, candidate.turnId),
-              eq(conversationTurns.userId, candidate.userId),
+              enterpriseOwnerPredicate(conversationTurns, candidate.userId),
               eq(conversationTurns.buildId, candidate.buildId),
               eq(conversationTurns.buildGeneration, candidate.generation),
             ),
@@ -690,7 +691,7 @@ export async function cleanupOrphanedKnowledgeBuildArtifactCandidates(
             .where(
               and(
                 eq(knowledgeBaseBuilds.id, candidate.buildId),
-                eq(knowledgeBaseBuilds.userId, candidate.userId),
+                enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
                 eq(knowledgeBaseBuilds.generation, candidate.generation),
               ),
             )
@@ -852,7 +853,7 @@ async function loadBoundBuild(input: {
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, input.generation),
           eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
         ),
@@ -873,7 +874,7 @@ async function loadBoundBuild(input: {
           .where(
             and(
               eq(conversationTurns.id, build.activeTurnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(conversationTurns.buildGeneration, build.generation),
             ),
@@ -1193,7 +1194,7 @@ export async function bindKnowledgeBaseOfficialLogoUpload(input: {
           .where(
             and(
               eq(knowledgeBaseBuilds.id, input.buildId),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
               eq(knowledgeBaseBuilds.generation, input.generation),
             ),
           )
@@ -1207,7 +1208,7 @@ export async function bindKnowledgeBaseOfficialLogoUpload(input: {
           .where(
             and(
               eq(conversationTurns.id, input.turnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, input.buildId),
               eq(conversationTurns.buildGeneration, input.generation),
             ),
@@ -1331,7 +1332,7 @@ export async function bindKnowledgeBaseOfficialLogoUpload(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.generation),
             eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
             eq(knowledgeBaseBuilds.activeTurnId, input.turnId),
@@ -1630,7 +1631,7 @@ export async function bindKnowledgeBaseInitialLogo(input: {
     .where(
       and(
         eq(knowledgeBaseBuilds.id, input.buildId),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, input.generation),
         eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
         inArray(knowledgeBaseBuilds.status, ["researching", "confirming"]),
@@ -1677,7 +1678,7 @@ export async function recoverKnowledgeBaseInitialLogoFromCompletedTurn(input: {
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, input.generation),
         ),
       )
@@ -1718,7 +1719,7 @@ export async function recoverKnowledgeBaseInitialLogoFromCompletedTurn(input: {
       .where(
         and(
           eq(conversationTurns.id, firstNode.sourceTurnId),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           eq(conversationTurns.status, "completed"),
@@ -1807,7 +1808,7 @@ export async function recoverKnowledgeBaseInitialLogoFromCompletedTurn(input: {
             .where(
               and(
                 eq(knowledgeBaseBuilds.id, build.id),
-                eq(knowledgeBaseBuilds.userId, input.userId),
+                enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
                 eq(knowledgeBaseBuilds.generation, input.generation),
               ),
             )
@@ -1866,7 +1867,7 @@ export async function recoverKnowledgeBaseInitialLogoFromCompletedTurn(input: {
           .where(
             and(
               eq(knowledgeBaseBuilds.id, lockedBuild.id),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
               eq(knowledgeBaseBuilds.generation, input.generation),
               eq(knowledgeBaseBuilds.stateEpoch, lockedBuild.stateEpoch),
               isNull(knowledgeBaseBuilds.logoSha256),
@@ -2417,7 +2418,7 @@ export async function bindKnowledgeBaseFinalPackage(input: {
     .where(
       and(
         eq(knowledgeBaseBuilds.id, input.buildId),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, input.generation),
         eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
         eq(knowledgeBaseBuilds.status, "confirming"),
@@ -2568,7 +2569,7 @@ export async function bindKnowledgeBaseReadyPackage(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.generation),
             eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
             eq(knowledgeBaseBuilds.status, "protocol_error"),
@@ -2879,7 +2880,7 @@ export async function bindKnowledgeBaseReadyPackage(input: {
     .where(
       and(
         eq(knowledgeBaseBuilds.id, input.buildId),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, input.generation),
         eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
         eq(knowledgeBaseBuilds.status, build.status),

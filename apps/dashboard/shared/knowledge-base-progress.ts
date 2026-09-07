@@ -296,6 +296,7 @@ export interface KnowledgeBaseProgressDto {
    */
   contentAvailability?: KnowledgeBaseContentAvailability;
   operationState?: KnowledgeBaseOperationState;
+  billingPause?: { reason: "balance" | "cost"; turnId: string };
   resetAllowed?: boolean;
   warningCodes?: string[];
   /** Public task-create boundary; independent from Provider runtime status. */

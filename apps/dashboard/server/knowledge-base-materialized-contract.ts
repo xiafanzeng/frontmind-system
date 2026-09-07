@@ -313,8 +313,10 @@ export type KnowledgeBaseInitialResultProvenance = Readonly<{
 }>;
 
 export type KnowledgeBasePatchResultProvenance = Readonly<{
-  exactBoundTask: true;
-  directAssistantOutput: true;
+  exactBoundTask: boolean;
+  directAssistantOutput: boolean;
+  /** Valid only after the application patch hash and active turn were checked. */
+  applicationAuthoredPatch?: true;
   descriptorFilename: string;
   /** Set only while the active build/base/turn/leaf tuple is row-locked. */
   baseAuthorityLocked?: true;
@@ -2859,6 +2861,7 @@ function assertPatchBaseAuthority(input: {
 function assertPatchRemovalOwnership(input: {
   base: KnowledgeBaseWorkingSetManifest;
   patch: KnowledgeBaseNodePatchManifest;
+  allowSharedAssetDetach?: boolean;
 }) {
   const targetLeaf = input.base.leaves.find(
     (leaf) => leaf.leafId === input.patch.targetLeafId,
@@ -2886,8 +2889,8 @@ function assertPatchRemovalOwnership(input: {
       return (
         !targetAssetIds.has(assetId) ||
         !asset ||
-        asset.documentIds.length !== 1 ||
-        asset.documentIds[0] !== input.patch.targetLeafId
+        !asset.documentIds.includes(input.patch.targetLeafId) ||
+        (!input.allowSharedAssetDetach && asset.documentIds.length !== 1)
       );
     })
   ) {
@@ -2914,10 +2917,12 @@ function patchedEvidenceLedger(input: {
 async function composeNormalizedKnowledgeBasePatch(input: {
   base: ValidatedKnowledgeBaseWorkingSet;
   patch: ValidatedKnowledgeBaseNodePatch;
+  allowSharedAssetDetach?: boolean;
 }) {
   assertPatchRemovalOwnership({
     base: input.base.manifest,
     patch: input.patch.manifest,
+    allowSharedAssetDetach: input.allowSharedAssetDetach,
   });
   const targetLeafId = input.patch.manifest.targetLeafId;
   const previousLeaf = input.base.manifest.leaves.find(
@@ -2953,6 +2958,7 @@ async function composeNormalizedKnowledgeBasePatch(input: {
       : { add: input.patch.manifest.assets.add, remove: [] };
   const removedEvidence = new Set(evidencePatch.remove);
   const removedAssets = new Set(assetPatch.remove);
+  const deletedAssets = new Set(input.base.manifest.assets.filter((asset) => removedAssets.has(asset.assetId) && asset.documentIds.length === 1).map((asset) => asset.assetId));
   const changed =
     contentChanged ||
     evidencePatch.add.length > 0 ||
@@ -2971,9 +2977,7 @@ async function composeNormalizedKnowledgeBasePatch(input: {
     patch: effectivePatch,
   });
   const assets = [
-    ...input.base.manifest.assets.filter(
-      (asset) => !removedAssets.has(asset.assetId),
-    ),
+    ...input.base.manifest.assets.filter((asset) => !deletedAssets.has(asset.assetId)).map((asset) => removedAssets.has(asset.assetId) ? { ...asset, documentIds: asset.documentIds.filter((leafId) => leafId !== targetLeafId) } : asset),
     ...assetPatch.add,
   ];
   assertUnique(
@@ -3011,7 +3015,7 @@ async function composeNormalizedKnowledgeBasePatch(input: {
     assets,
     logo:
       input.base.manifest.logo.status === "available" &&
-      removedAssets.has(input.base.manifest.logo.assetId)
+      deletedAssets.has(input.base.manifest.logo.assetId)
         ? { status: "missing", assetId: null }
         : input.base.manifest.logo,
     counts: {
@@ -3025,7 +3029,7 @@ async function composeNormalizedKnowledgeBasePatch(input: {
   files.set(previousLeaf.contentPath, contentBytes);
   for (const path of removedEvidence) files.delete(path);
   for (const asset of input.base.manifest.assets) {
-    if (removedAssets.has(asset.assetId)) files.delete(asset.path);
+    if (deletedAssets.has(asset.assetId)) files.delete(asset.path);
   }
   for (const evidence of evidencePatch.add) {
     files.set(evidence.path, input.patch.files.get(evidence.path)!);
@@ -3121,6 +3125,7 @@ async function normalizeMaterializedKnowledgeBasePatchResult(input: {
     const composed = await composeNormalizedKnowledgeBasePatch({
       base: input.base,
       patch: sourcePatch,
+      allowSharedAssetDetach: input.provenance.applicationAuthoredPatch === true,
     });
     const completeness = recoveredViewOnly ? "partial" : "complete";
     const diagnostics: KnowledgeBaseNormalizationDiagnostic[] = [

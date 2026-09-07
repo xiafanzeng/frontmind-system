@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { lstat, readdir, realpath, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
@@ -243,7 +244,7 @@ async function removeWithBuildLock(input: {
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.coordinate.buildId),
-          eq(knowledgeBaseBuilds.userId, input.coordinate.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.coordinate.userId),
           eq(knowledgeBaseBuilds.generation, input.coordinate.generation),
         ),
       )

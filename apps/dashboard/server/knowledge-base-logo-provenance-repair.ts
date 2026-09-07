@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import sharp from "sharp";
@@ -199,7 +200,7 @@ async function completedLogoLedgerTurns(input: {
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
@@ -224,7 +225,7 @@ async function loadFinalCoordinate(input: {
     .where(
       and(
         eq(knowledgeBaseBuilds.id, input.buildId),
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.generation, input.generation),
       ),
     )
@@ -406,7 +407,7 @@ export async function replayCompletedKnowledgeBaseLogoProvenanceRepair(
       .from(knowledgeBaseBuilds)
       .where(
         and(
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.conversationId, input.conversationId.trim()),
         ),
       )
@@ -489,7 +490,7 @@ export async function repairKnowledgeBaseOfficialLogoProvenance(
       .from(knowledgeBaseBuilds)
       .where(
         and(
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.conversationId, input.conversationId.trim()),
         ),
       )
@@ -586,7 +587,7 @@ export async function repairKnowledgeBaseOfficialLogoProvenance(
           .where(
             and(
               eq(conversationTurns.id, build.activeTurnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(conversationTurns.buildGeneration, build.generation),
             ),
@@ -710,7 +711,7 @@ export async function repairKnowledgeBaseOfficialLogoProvenance(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
         ),

@@ -45,11 +45,46 @@ export const bankTransferReviewStatusSchema = z.enum([
   "rejected",
 ]);
 
+export const accountConsumptionSourceSchema = z.enum([
+  "monitoring",
+  "media_publishing",
+  "ai",
+]);
+export const accountConsumptionTotalsSchema = z.object({
+  totalTenThousandths: nonnegativeMoneyAmountSchema,
+  last30DaysTenThousandths: nonnegativeMoneyAmountSchema,
+});
+export const consumptionBySourceSchema = z.object({
+  monitoring: accountConsumptionTotalsSchema,
+  media_publishing: accountConsumptionTotalsSchema,
+  ai: accountConsumptionTotalsSchema,
+});
+export const accountActivityInputSchema = z.object({
+  limit: z.number().int().min(1).max(500).optional(),
+  source: accountConsumptionSourceSchema.optional(),
+});
+export const accountActivityOutputSchema = z.object({
+  id: idSchema,
+  source: accountConsumptionSourceSchema,
+  type: z.string(),
+  balanceDeltaTenThousandths: moneyAmountSchema,
+  reservedDeltaTenThousandths: moneyAmountSchema,
+  frozenDeltaTenThousandths: moneyAmountSchema,
+  balanceAfterTenThousandths: moneyAmountSchema,
+  reason: z.string(),
+  referenceType: z.string().nullable(),
+  referenceId: z.string().nullable(),
+  createdAt: z.coerce.date(),
+});
+
 export const billingSummaryOutputSchema = z.object({
   userId: idSchema,
   currency: currencySchema,
   scale: moneyScaleSchema,
   balanceTenThousandths: moneyAmountSchema,
+  accountingMode: z.literal("unified").optional(),
+  consumptionBySource: consumptionBySourceSchema.optional(),
+  frozenTenThousandths: nonnegativeMoneyAmountSchema.optional(),
   reservedTenThousandths: nonnegativeMoneyAmountSchema,
   spentTenThousandths: nonnegativeMoneyAmountSchema,
   availableTenThousandths: moneyAmountSchema,

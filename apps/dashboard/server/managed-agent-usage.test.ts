@@ -11,6 +11,7 @@ describe("managed native usage", () => {
       {},
       { usage: { input_tokens: -1 } },
       {
+        model: "glm-5.3",
         usage: {
           input_tokens: 120,
           output_tokens: 30,
@@ -26,8 +27,24 @@ describe("managed native usage", () => {
       outputTokens: 37,
       cacheReadInputTokens: 80,
       observedTasks: 2,
+      costCny: "0.001960",
+      costStatus: "partial",
+      pricingSourceUrl: "https://bigmodel.cn/pricing",
     });
     expect(result).not.toHaveProperty("creditUsage");
+  });
+  it("keeps costs unknown when an otherwise complete token snapshot has no frozen model", () => {
+    expect(
+      projectManagedNativeUsage([
+        {
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 10,
+          },
+        },
+      ]),
+    ).toMatchObject({ costCny: null, costStatus: "unknown", inputTokens: 100 });
   });
   it("attributes observed tasks to their own account without sharing token totals", async () => {
     const rows = [

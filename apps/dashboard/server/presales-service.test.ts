@@ -1659,6 +1659,7 @@ describe("Website provider usage units", () => {
     expect(
       projectZhipuNativeUsage([
         {
+          model: "glm-5.3",
           usage: {
             input_tokens: 12,
             output_tokens: 3,
@@ -1682,6 +1683,7 @@ describe("Website provider usage units", () => {
       outputTokens: 5,
       cacheReadInputTokens: 4,
       observedTasks: 2,
+      costCny:"0.000188",costStatus:"partial",pricingSourceUrl:"https://bigmodel.cn/pricing",
     });
   });
   it("keeps Website execution on Zhipu even with an obsolete environment override", () => {

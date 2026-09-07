@@ -31,6 +31,8 @@ export type BillingSummaryView = {
   availableTenThousandths: string;
   reservedTenThousandths: string;
   totalSpentTenThousandths: string;
+  frozenTenThousandths?: string;
+  consumptionBySource?: Record<"monitoring"|"media_publishing"|"ai",{totalTenThousandths:string;last30DaysTenThousandths:string}>;
 };
 export type MediaPublishingBillingSummaryView = BillingSummaryView & {
   frozenTenThousandths: string;
@@ -52,6 +54,7 @@ export type BillingLedgerEntryView = {
   description: string;
   relatedRun?: string;
   walletScope?: WalletScope;
+  source?: "monitoring" | "media_publishing" | "ai";
   createdAt?: string;
 };
 export type BillingPaymentMethod = "alipay" | "wxpay" | "bank_transfer";
@@ -86,6 +89,7 @@ type SettingsPageProps = {
   pricing?: BillingPricingView[];
   ledger?: BillingLedgerEntryView[];
   mediaPublishingLedger?: BillingLedgerEntryView[];
+  activity?: BillingLedgerEntryView[];
   paymentMethods?: BillingPaymentMethodView[];
   activeTopup?: BillingTopupView;
   mediaPublishingActiveTopup?: BillingTopupView;
@@ -187,6 +191,7 @@ export default function SettingsPage({
   pricing = [],
   ledger = [],
   mediaPublishingLedger = [],
+  activity,
   paymentMethods = [],
   activeTopup,
   mediaPublishingActiveTopup,
@@ -213,9 +218,10 @@ export default function SettingsPage({
       ? mediaPublishingActiveTopup
       : activeTopup;
   const [currentTopup, setCurrentTopup] = useState(selectedActiveTopup);
+  const [consumptionFilter,setConsumptionFilter] = useState<"all"|"monitoring"|"media_publishing"|"ai">("all");
   const combinedLedger = useMemo(
     () =>
-      [
+      (activity ?? [
         ...ledger.map((entry) => ({
           ...entry,
           walletScope: entry.walletScope ?? ("monitoring" as const),
@@ -224,12 +230,12 @@ export default function SettingsPage({
           ...entry,
           walletScope: "media_publishing" as const,
         })),
-      ].sort((left, right) =>
+      ]).filter(entry=>consumptionFilter==="all" || (entry.type==="spend" && (entry.source??entry.walletScope??"monitoring")===consumptionFilter)).sort((left, right) =>
         String(right.createdAt ?? "").localeCompare(
           String(left.createdAt ?? ""),
         ),
       ),
-    [ledger, mediaPublishingLedger],
+    [ledger, mediaPublishingLedger,activity,consumptionFilter],
   );
   useEffect(() => setCurrentTopup(selectedActiveTopup), [selectedActiveTopup]);
 
@@ -252,8 +258,8 @@ export default function SettingsPage({
     <div className="page-content settings-page account-settings-page">
       <section className="page-heading account-settings-heading">
         <div>
-          <h1>账号设置</h1>
-          <p>查看账户余额、官方资费与资金明细，并维护登录安全。</p>
+          <h1>账号与余额</h1>
+          <p>一个账户余额，用于问题监控、媒体投放和智能体。</p>
         </div>
       </section>
       {billingError && (
@@ -266,25 +272,19 @@ export default function SettingsPage({
         aria-busy={billingLoading || undefined}
       >
         <SectionTitle icon={<WalletCards size={20} />} title="账户余额" />
-        <div className="wallet-account-grid">
-          <WalletSummaryCard
-            scope="monitoring"
-            title="问题监控钱包"
-            summary={summary}
-            note="仅对成功且有内容的回答计费"
-            actionLabel="立即充值"
-            onTopup={() => openTopup("monitoring")}
-          />
-          <WalletSummaryCard
-            scope="media_publishing"
-            title="媒体发布钱包"
-            summary={mediaPublishingSummary}
-            frozenTenThousandths={mediaPublishingSummary?.frozenTenThousandths}
-            note="单价与总价以发布预检快照为准"
-            actionLabel="为媒体发布充值"
-            onTopup={() => openTopup("media_publishing")}
-            disabled={!onCreateMediaPublishingTopup}
-          />
+        <div className="wallet-account-grid" style={{gridTemplateColumns:"1fr"}}>
+          <WalletSummaryCard scope="monitoring" title="账户余额" summary={summary}
+            frozenTenThousandths={summary?.frozenTenThousandths}
+            note="所有企业项目共用，按实际用量结算" actionLabel="账户充值" onTopup={()=>openTopup("monitoring")} />
+        </div>
+        <div className="account-consumption-grid">
+          {([["monitoring","问题监控消耗"],["media_publishing","媒体投放消耗"],["ai","智能体消耗"]] as const).map(([source,label])=>(
+            <article className="account-consumption-card" key={source}>
+              <span>{label}</span>
+              <strong>{formatCny(summary?.consumptionBySource?.[source].last30DaysTenThousandths??"0")}</strong>
+              <small>近 30 天 · 累计 {formatCny(summary?.consumptionBySource?.[source].totalTenThousandths??"0")}</small>
+            </article>
+          ))}
         </div>
       </section>
 
@@ -294,12 +294,17 @@ export default function SettingsPage({
         <small className="billing-section-note">
           <Info size={13} />
           问题监控以运行创建时资费版本为准；媒体发布以提交前 API
-          市场价快照为准，两个钱包不可互转。
+          市场价快照为准。智能体依据智谱原生用量按模型官方原价计费，无加价。
         </small>
       </section>
 
       <section className="content-card account-settings-section">
         <SectionTitle icon={<ListChecks size={20} />} title="资金明细" />
+        <div className="account-consumption-filters" aria-label="消费分类">
+          {([["all","全部收支"],["monitoring","问题监控消耗"],["media_publishing","媒体投放消耗"],["ai","智能体消耗"]] as const).map(([value,label])=>(
+            <button type="button" key={value} aria-pressed={consumptionFilter===value} onClick={()=>setConsumptionFilter(value)}>{label}</button>
+          ))}
+        </div>
         <LedgerTable rows={combinedLedger} />
       </section>
 
@@ -313,11 +318,7 @@ export default function SettingsPage({
       <Modal
         open={topupOpen}
         onClose={() => setTopupOpen(false)}
-        title={
-          topupWalletScope === "media_publishing"
-            ? "媒体发布钱包充值"
-            : "问题监控钱包充值"
-        }
+        title="账户充值"
         size="large"
       >
         <TopupForm
@@ -509,9 +510,9 @@ function LedgerTable({ rows }: { rows: BillingLedgerEntryView[] }) {
               <span data-label="类型" role="cell">
                 <strong>{ledgerTypeLabel(entry.type)}</strong>
                 <small className="billing-ledger-scope">
-                  {entry.walletScope === "media_publishing"
-                    ? "媒体发布"
-                    : "问题监控"}
+                  {entry.type === "topup" || entry.type === "adjustment" ? "账户收支" :
+                    (entry.source??entry.walletScope)==="ai"?"智能体消耗":
+                    (entry.source??entry.walletScope)==="media_publishing"?"媒体投放消耗":"问题监控消耗"}
                 </small>
                 <small>{entry.description}</small>
               </span>

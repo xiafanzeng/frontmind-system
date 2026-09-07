@@ -13,6 +13,8 @@ type BillingSummarySource = {
   availableTenThousandths: string;
   reservedTenThousandths: string;
   spentTenThousandths: string;
+  frozenTenThousandths?: string;
+  consumptionBySource?: BillingSummaryView["consumptionBySource"];
 };
 
 type PricingItemSource = {
@@ -168,6 +170,8 @@ export function mapBillingSummaryView(
     availableTenThousandths: source.availableTenThousandths,
     reservedTenThousandths: source.reservedTenThousandths,
     totalSpentTenThousandths: source.spentTenThousandths,
+    ...(source.frozenTenThousandths !== undefined ? { frozenTenThousandths:source.frozenTenThousandths } : {}),
+    ...(source.consumptionBySource ? { consumptionBySource:source.consumptionBySource } : {}),
   };
 }
 
@@ -449,3 +453,18 @@ export function bankTransferInputForApi(input: BankTransferSubmissionView) {
     remittanceReference: input.remittanceReference,
   };
 }
+
+/** Unified account history retains business source while sharing one posted balance. */
+export function mapAccountActivityViews(entries:Array<{
+ id:string;source:"monitoring"|"media_publishing"|"ai";type:string;balanceDeltaTenThousandths:string;
+ reservedDeltaTenThousandths:string;frozenDeltaTenThousandths:string;reason:string;
+ referenceType:string|null;referenceId:string|null;createdAt:Date|string;
+}>):BillingLedgerEntryView[] {
+ return entries.map(entry=>{
+   const result=mapMediaPublishingLedgerViews([{...entry,type:entry.type as MediaPublishingLedgerEntrySource["type"]}])[0]!;
+   return {...result, ...(!["topup","admin_adjustment","reserve","freeze","consume","release"].includes(entry.type)?{type:"adjustment" as const,balanceDeltaTenThousandths:entry.balanceDeltaTenThousandths}:{}),source:entry.source,walletScope:entry.source==="ai"?undefined:entry.source,description:entry.reason,
+     ...(entry.referenceId?{relatedRun:entry.referenceId}:{})};
+ });
+}
+
+export const mapBillingActivityViews = mapAccountActivityViews;

@@ -1,3 +1,5 @@
+import { projectManagedNativeUsage } from "./managed-agent-usage";
+import { readAiCostTotals } from "./ai-billing-service";
 import {
   ZhipuManagedClient,
   ZhipuManagedError,
@@ -155,6 +157,7 @@ export type WebsiteApiKeyUsageSnapshot = {
     outputTokens: number;
     cacheReadInputTokens: number;
     observedTasks: number;
+    costCny?: string | null; costStatus?: "complete" | "partial" | "unknown"; pricingSourceUrl?: string;
   };
   windowDays: 30;
   rollingWebsiteUsed: number;
@@ -613,7 +616,7 @@ export async function getPresalesCreditUsageSnapshot(
   const zhipuRuntimeRows =
     credential?.provider === "zhipu"
       ? await db
-          .select({ runtime: agentTasks.providerRuntime })
+          .select({ runtime: agentTasks.providerRuntime, model: agentOperations.upstreamModel })
           .from(agentTasks)
           .innerJoin(
             agentOperations,
@@ -628,8 +631,12 @@ export async function getPresalesCreditUsageSnapshot(
           )
       : [];
   const nativeUsage = projectZhipuNativeUsage(
-    zhipuRuntimeRows.map((row) => row.runtime),
+    zhipuRuntimeRows.map((row) => row.runtime ? {model:row.model,...row.runtime} : null),
   );
+  if(credential?.provider==="zhipu") {
+    const eventCosts=await readAiCostTotals({executor:db,scope:"website_frontend",startAt:cutoffMs,endAt:now});
+    const cost=eventCosts.get(null);if(cost)Object.assign(nativeUsage,cost);
+  }
   const observedAt = ledgerRows[0]?.observedAt;
   return {
     windowDays: 30,
@@ -2694,36 +2701,8 @@ export function aggregatePresalesCreditUsagePage(input: {
   };
 }
 
-export function projectZhipuNativeUsage(
-  runtimes: Array<Record<string, unknown> | null>,
-) {
-  const result = {
-    provider: "zhipu" as const,
-    unit: "tokens" as const,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadInputTokens: 0,
-    observedTasks: 0,
-  };
-  for (const runtime of runtimes) {
-    const usage = runtime?.usage as Record<string, unknown> | undefined;
-    if (!usage || typeof usage !== "object") continue;
-    result.observedTasks += 1;
-    for (const [field, target] of [
-      ["input_tokens", "inputTokens"],
-      ["output_tokens", "outputTokens"],
-      ["cache_read_input_tokens", "cacheReadInputTokens"],
-    ] as const) {
-      const value = usage[field];
-      if (
-        typeof value === "number" &&
-        Number.isSafeInteger(value) &&
-        value >= 0
-      )
-        result[target] += value;
-    }
-  }
-  return result;
+export function projectZhipuNativeUsage(runtimes: Array<Record<string, unknown> | null>) {
+  return projectManagedNativeUsage(runtimes);
 }
 
 /** Usage comes from local native-token observations; old keys are never scanned. */

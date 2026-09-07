@@ -1,3 +1,4 @@
+import { observeManagedAiUsage, registerAiUsageTask } from "../ai-billing-service";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import {
@@ -454,6 +455,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
   async createTask(
     input: Parameters<ManusV2Client["createTask"]>[0],
   ): ReturnType<ManusV2Client["createTask"]> {
+    await registerAiUsageTask(this.record.localTaskId);
     const providerPrompt = zhipuTaskPrompt(input);
     const frozenRuntime = runtime(await this.current());
     const agentBody = {
@@ -591,6 +593,8 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
         `/v1/sessions/${input.taskId}/events`,
         { order: "asc" },
       );
+      await observeManagedAiUsage({localTaskId:this.record.localTaskId,operationId:this.record.operationId,
+        sessionId:input.taskId,model:runtime(current).model,commands:[],events:raw,session});
       const events = normalizeZhipuEvents(raw);
       if (session.status === "terminated") {
         const terminatedAt = Date.parse(

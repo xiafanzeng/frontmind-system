@@ -1,3 +1,10 @@
+import { getEnterpriseProjectScope } from "../enterprise-project-context";
+import {
+  AiBillingPausedError,
+  authorizeManagedAiCommand,
+  observeManagedAiUsage,
+  rejectManagedAiCommand,
+} from "../ai-billing-service";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { repairStructuredJsonCandidate } from "../../shared/model-output-repair";
@@ -67,6 +74,11 @@ export type DashboardAgentClientOptions = DashboardProviderIdentity & {
   timeoutMs?: number;
   store?: DashboardAgentRuntimeStore;
   api?: ZhipuManagedClient;
+  billing?: {
+    authorize: typeof authorizeManagedAiCommand;
+    observe: typeof observeManagedAiUsage;
+    reject: typeof rejectManagedAiCommand;
+  };
 };
 const sha = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -248,6 +260,10 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       credentialId: options.credentialId,
       credentialVersion: options.credentialVersion,
       credentialOwnerUserId: options.credentialOwnerUserId,
+      enterpriseProjectId:
+        getEnterpriseProjectScope()?.enterpriseProjectId ?? null,
+      enterpriseProjectLegacyDefault:
+        getEnterpriseProjectScope()?.isLegacyDefault ?? false,
     };
   }
   private intent() {
@@ -867,7 +883,17 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         : await this.api.listAll(`/v1/sessions/${sessionId}/events`, {
             order: "asc",
           });
-      const previous = record.runtime.commands.at(-1);
+      const latest = record.runtime.commands.at(-1);
+      // A definitely rejected message never started a provider turn. A new
+      // explicit intent follows the last accepted turn; unknown sends block it.
+      const previous = [...record.runtime.commands]
+        .reverse()
+        .find(
+          (command) =>
+            command.eventId ||
+            record.runtime.mutations[`message:${command.key}`]?.state !==
+              "rejected",
+        );
       if (!initial && previous) {
         const start = before.findIndex(
           (event) => event.id === previous.eventId,
@@ -908,7 +934,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         const raced = runtime.commands.find((c) => c.key === key);
         if (raced && !matchesRequest(raced))
           fail("task.sendMessage", "PROVIDER_COMMAND_CONFLICT");
-        if (!raced && runtime.commands.at(-1)?.key !== previous?.key)
+        if (!raced && runtime.commands.at(-1)?.key !== latest?.key)
           fail("task.sendMessage", "PROVIDER_CONCURRENT_TURN_CONFLICT");
         return raced
           ? runtime
@@ -921,14 +947,37 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     await this.connect(record).catch((error) =>
       compat(error, initial ? "task.create" : "task.sendMessage"),
     );
+    const billing = this.options.billing ?? {
+      authorize: authorizeManagedAiCommand,
+      observe: observeManagedAiUsage,
+      reject: rejectManagedAiCommand,
+    };
+    await billing.authorize({
+      identity: this.identity,
+      localTaskId: record.localTaskId,
+      operationId: record.operationId,
+      sessionId,
+      commandKey: key,
+      model: record.runtime.model,
+      effort: record.runtime.effort,
+    });
     const id = await this.once(
       record,
       `message:${key}`,
       initial ? "task.create" : "task.sendMessage",
       request,
       async () => {
-        const result = await this.api.sendMessage(sessionId, providerPrompt);
-        return zhipuResourceId((result.data as unknown[])[0]);
+        try {
+          const result = await this.api.sendMessage(sessionId, providerPrompt);
+          return zhipuResourceId((result.data as unknown[])[0]);
+        } catch (error) {
+          if (error instanceof ZhipuManagedError && !error.outcomeUnknown)
+            await billing.reject({
+              localTaskId: record.localTaskId,
+              commandKey: key,
+            });
+          throw error;
+        }
       },
       (runtime, eventId) => ({
         ...runtime,
@@ -951,6 +1000,31 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       raw: { ok: true, task_id: input.taskId },
     };
   }
+  private async observeBilling(
+    record: DashboardRuntimeRecord,
+    session: ZhipuRecord,
+    events: ZhipuRecord[],
+  ) {
+    const result = await (
+      this.options.billing?.observe ?? observeManagedAiUsage
+    )({
+      identity: this.identity,
+      localTaskId: record.localTaskId,
+      operationId: record.operationId,
+      sessionId: record.runtime.sessionId!,
+      model: record.runtime.model,
+      commands: record.runtime.commands,
+      session,
+      events,
+    });
+    if (
+      result.shouldInterrupt &&
+      ["running", "rescheduling"].includes(String(session.status))
+    )
+      await this.stopTask(record.runtime.sessionId!);
+    if (result.pause) throw new AiBillingPausedError(result.pause);
+  }
+
   async taskDetail(taskId: string): ReturnType<ManusV2Client["taskDetail"]> {
     const record = await this.session(taskId);
     try {
@@ -960,6 +1034,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       const events = await this.api.listAll(`/v1/sessions/${taskId}/events`, {
         order: "asc",
       });
+      await this.observeBilling(record, session, events);
       if (session.usage)
         await this.change(record, (runtime) => ({
           ...runtime,
@@ -1041,6 +1116,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       const raw = order === "desc" ? [...fetched].reverse() : fetched;
       if (zhipuResourceId(session) !== input.taskId)
         fail("task.listMessages", "TASK_ID_CONFLICT");
+      await this.observeBilling(record, session, raw);
       const events = normalizeDashboardZhipuEvents(raw, record.runtime);
       const files = await this.api.listAll(
         "/v1/files",

@@ -70,6 +70,7 @@ import {
   reserveKnowledgeBaseFailedNotSentLegacyHandoff,
   reserveKnowledgeBaseStartBuild,
   reserveKnowledgeBaseTurn,
+  recordKnowledgeNodeEditPatch,
   stageAndClaimKnowledgeBaseDeferredTurnAttachment,
   stageKnowledgeBaseDeferredTurnAttachment,
   sanitizeKnowledgeBaseRecoveryMetadata,
@@ -9418,5 +9419,46 @@ describe("knowledge-base safe retry reservation", () => {
     expect(inspectKnowledgeBaseRetryAuthority(source, build)).not.toBeNull();
     (source.metadata as any).recovery.finalPackageRequired = false;
     expect(inspectKnowledgeBaseRetryAuthority(source, build)).toBeNull();
+  });
+});
+
+describe("manual node reservation and recovery", () => {
+  it("reserves and recovers a credential-free local revise with the same frozen body", async () => {
+    const now = new Date();
+    const build = {
+      ...currentMaterializedRecoveryBuildAuthority,
+      id: "00000000-0000-4000-8000-000000000090", userId: 1,
+      conversationId: "manual-node", companyName: "示例企业",
+      status: "confirming", generation: 1, revision: 5, stateEpoch: 8,
+      currentLeafId: "1.1", currentPresentationKey: "presentation",
+      activeTurnId: null, activeWorkingSetId: "00000000-0000-4000-8000-000000000091",
+      upstreamTaskId: null, protocolErrorCode: null, protocolError: null,
+    };
+    const { executor, store } = createTurnServiceExecutor({
+      build,
+      credentials: [],
+      conversation: { id: "u1:manual-node", userId: 1, projectAssignmentId: null, deletedAt: null, deletedMessageIds: [], version: 1, status: "awaiting_input" },
+      turnSelections: [[[], []], [(current) => current.turns], [(current) => current.turns]],
+    });
+    const contentMarkdown = "# 节点\n\n手动保存的正文";
+    const reservation = await reserveKnowledgeBaseTurn({
+      userId: 1, buildId: build.id, clientRequestId: "manual-save",
+      operationType: "revise", expectedGeneration: 1, expectedRevision: 5,
+      expectedLeafId: "1.1", expectedPresentationKey: "presentation",
+      requestPayload: { contentMarkdown }, apiCredentialId: null,
+      userText: "直接编辑节点正文", attachmentFileIds: [], expectedAttachmentCount: 0,
+      sourceResetRevision: 0,
+      recoveryMetadata: { kind: "turn", nodeEditMode: "manual_v1", contentMarkdown, contentSha256: hashKnowledgeBaseTurnRequest(contentMarkdown), baseWorkingSetId: build.activeWorkingSetId, baseContentVersion: 1 },
+      now, leaseMs: 1_000,
+    }, executor);
+    expect(reservation.state).toBe("acquired");
+    expect(reservation.turn).toMatchObject({ apiCredentialId: null, upstreamTaskId: null, attachmentsFrozen: true, createAttemptState: "not_sent" });
+    expect(store.credentials).toEqual([]);
+    const recovered = await claimKnowledgeBaseTurnForRecovery({ turnId: reservation.turn.id, now: new Date(now.getTime() + 2_000) }, executor);
+    expect(recovered).toMatchObject({ turn: { id: reservation.turn.id, apiCredentialId: null }, recoveryMetadata: { nodeEditMode: "manual_v1", contentMarkdown } });
+    expect(store.turns).toHaveLength(1);
+    expect(recovered!.leaseToken).not.toBe(reservation.state === "acquired" ? reservation.leaseToken : "");
+    await recordKnowledgeNodeEditPatch({ userId: 1, turnId: recovered!.turn.id, leaseToken: recovered!.leaseToken, patchSha256: "a".repeat(64), providerTaskId: null, attachmentSourceProofs: [] }, executor);
+    expect(store.turns[0].metadata).toMatchObject({ applicationNodeEdit: { mode: "manual_v1", providerTaskId: null, baseContentVersion: 1, patchSha256: "a".repeat(64) } });
   });
 });

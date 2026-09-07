@@ -3958,7 +3958,7 @@ function assertKnowledgeBaseReservationCredentialAvailable(
   }
 }
 
-async function reserveKnowledgeBaseTurnInTransaction(
+export async function reserveKnowledgeBaseTurnInTransaction(
   input: ReserveKnowledgeBaseTurnInput,
   tx: any,
 ): Promise<KnowledgeBaseTurnReservation> {
@@ -8382,15 +8382,15 @@ export async function recordKnowledgeNodeEditPatch(input: {
   userId: number; turnId: string; leaseToken: string;
   patchSha256: string; providerTaskId: string | null;
   attachmentSourceProofs: Array<{ index: number; fileId: string; contentSha256: string; sizeBytes: number; mimeType: string; localStorageKey: string; sourceWorkingSetId?: string; sourceAssetId?: string }>;
-}) {
-  const db = await requireDb();
+}, executor?: any) {
+  const db = executor ?? await requireDb();
   return db.transaction(async (tx: any) => {
     const { turn, build } = await lockedOwnedTurnAndBuild(tx, input);
     assertLease(turn, input.leaseToken);
     const metadata = metadataOf(turn);
     const recovery = metadata.recovery ?? {};
     const uploadedCount = (turn.attachmentFileIds ?? []).length;
-    if (recovery.nodeEditMode !== "low_v1" || turn.operationType !== "revise" || metadata.attachmentsFrozen !== true || turn.upstreamTaskId !== input.providerTaskId || !/^[a-f0-9]{64}$/u.test(input.patchSha256) || input.attachmentSourceProofs.length < uploadedCount || input.attachmentSourceProofs.some((proof, index) => proof.index !== index || (index < uploadedCount && proof.fileId !== turn.attachmentFileIds?.[index])))
+    if (!["low_v1", "manual_v1"].includes(String(recovery.nodeEditMode)) || (recovery.nodeEditMode === "manual_v1" && (input.providerTaskId !== null || turn.apiCredentialId !== null || input.attachmentSourceProofs.length !== 0 || uploadedCount !== 0)) || turn.operationType !== "revise" || metadata.attachmentsFrozen !== true || turn.upstreamTaskId !== input.providerTaskId || !/^[a-f0-9]{64}$/u.test(input.patchSha256) || input.attachmentSourceProofs.length < uploadedCount || input.attachmentSourceProofs.some((proof, index) => proof.index !== index || (index < uploadedCount && proof.fileId !== turn.attachmentFileIds?.[index])))
       throw new KnowledgeBaseTurnReservationError("CONFLICT", "知识节点本地修订所有权已变化");
     if (input.attachmentSourceProofs.length > uploadedCount) {
       const base = (await tx.select().from(knowledgeBaseWorkingSets).where(and(eq(knowledgeBaseWorkingSets.id, build.activeWorkingSetId!), eq(knowledgeBaseWorkingSets.buildId, build.id), eq(knowledgeBaseWorkingSets.status, "active"))).limit(1).for("update"))[0];
@@ -8404,7 +8404,7 @@ export async function recordKnowledgeNodeEditPatch(input: {
     if (old && old.patchSha256 !== input.patchSha256)
       throw new KnowledgeBaseTurnReservationError("CONFLICT", "知识节点本地修订内容已冻结");
     const now = new Date();
-    await tx.update(conversationTurns).set({ status: "running", startedAt: turn.startedAt ?? now, metadata: { ...metadata, recovery: { ...recovery, attachmentSourceProofs: input.attachmentSourceProofs }, applicationNodeEdit: { schemaVersion: 1, patchSha256: input.patchSha256, providerTaskId: input.providerTaskId, mode: "low_v1", baseWorkingSetId: build.activeWorkingSetId, baseContentVersion: build.contentVersion }, dispatchState: "running" }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
+    await tx.update(conversationTurns).set({ status: "running", startedAt: turn.startedAt ?? now, metadata: { ...metadata, recovery: { ...recovery, attachmentSourceProofs: input.attachmentSourceProofs }, applicationNodeEdit: { schemaVersion: 1, patchSha256: input.patchSha256, providerTaskId: input.providerTaskId, mode: recovery.nodeEditMode, baseWorkingSetId: build.activeWorkingSetId, baseContentVersion: build.contentVersion }, dispatchState: "running" }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
   });
 }
 
@@ -8416,7 +8416,7 @@ export async function failKnowledgeNodeEdit(input: { userId: number; turnId: str
     const { turn, build } = await lockedOwnedTurnAndBuild(tx, input);
     assertLease(turn, input.leaseToken);
     const metadata = metadataOf(turn);
-    if (metadata.recovery?.nodeEditMode !== "low_v1") throw new KnowledgeBaseTurnReservationError("CONFLICT", "当前修改不是轻量节点编辑");
+    if (!["low_v1", "manual_v1"].includes(String(metadata.recovery?.nodeEditMode))) throw new KnowledgeBaseTurnReservationError("CONFLICT", "当前修改不是本地节点编辑");
     const now = new Date();
     await tx.update(conversationTurns).set({ status: "failed", errorCode: "KNOWLEDGE_NODE_EDIT_FAILED", errorMessage: input.message, completedAt: now, leaseExpiresAt: null, metadata: { ...metadata, dispatchState: "failed", failureClass: "terminal_nonregenerable", recoveryAction: "stopped", canRegenerate: false, nodeEditFailure: true }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
     await tx.update(knowledgeBaseBuilds).set({ activeTurnId: null, upstreamTaskId: null, awaitingResponseSince: null, stateEpoch: build.stateEpoch + 1, protocolErrorCode: null, protocolError: null, handoffProvenance: { ...(build.handoffProvenance ?? {}), nodeEditFailure: { schemaVersion: 1, stateEpoch: build.stateEpoch + 1, message: input.message, turnId: turn.id, createdAt: now.getTime() } }, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));

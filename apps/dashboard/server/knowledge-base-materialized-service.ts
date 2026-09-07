@@ -727,11 +727,11 @@ export async function selectMaterializedKnowledgeBaseNode(input: {
   userId: number; conversationId: string; clientRequestId: string;
   expectedGeneration: number; expectedRevision: number; expectedStateEpoch: number;
   leafId: string;
-}) {
+}, executor?: any) {
   const db = await requireDb();
   const storedConversationId = knowledgeBaseObservationConversationStorageId(input.userId, input.conversationId);
   const requestHash = sha256(stableJson(input));
-  return db.transaction(async (tx: any) => {
+  const select = async (tx: any) => {
     const existing = (await tx.select().from(conversationTurns).where(and(enterpriseOwnerPredicate(conversationTurns, input.userId), eq(conversationTurns.conversationId, storedConversationId), eq(conversationTurns.clientRequestId, input.clientRequestId))).limit(1).for("update"))[0];
     if (existing) {
       if (existing.operationType !== "local_select" || existing.requestHash !== requestHash) fail("IDEMPOTENCY_CONFLICT", "本地节点选择标识已被使用");
@@ -760,7 +760,8 @@ export async function selectMaterializedKnowledgeBaseNode(input: {
     await tx.update(knowledgeBaseBuilds).set({ status: "confirming", currentLeafId: target.leafId, currentPresentationKey: presentationKey, revision, stateEpoch: build.stateEpoch + 1, confirmedCount: nextNodes.filter((node) => node.status === "confirmed").length, directPrefilledCount: nextNodes.filter((node) => node.status === "direct_prefilled").length, needsVerificationCount: nextNodes.filter((node) => node.status === "needs_verification").length, lastAppliedOperationKey: operation, contentCompletedAt: null, packageStatus: "not_started", packageRevision: null, packageStorageKey: null, packageArchiveSha256: null, packageSizeBytes: null, packageNextRetryAt: null, packageAttemptCount: 0, packageLastErrorCode: null, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
     await persistKnowledgeBasePresentationInTransaction({ tx, userId: input.userId, conversationId: storedConversationId, turnId, buildId: build.id, generation: build.generation, operationKey: operation, presentationKey, revision, leafId: target.leafId, content: target.contentMarkdown, authoritativeTaskId: null, sentAt: now });
     return { accepted: true, execution: "local", disposition: "selected" };
-  });
+  };
+  return executor ? select(executor) : db.transaction(select);
 }
 
 export async function confirmMaterializedKnowledgeBaseNode(
@@ -1713,7 +1714,8 @@ export async function composeKnowledgeBaseWorkingSetRevision(input: {
 export function hasKnowledgeNodeEditPatchAuthority(metadata: unknown, archiveBytes: Buffer, providerTaskId: string | null, baseWorkingSetId: string, baseContentVersion: number) {
   const value = record(metadata);
   const authority = record(value?.applicationNodeEdit);
-  return record(value?.recovery)?.nodeEditMode === "low_v1" && authority?.schemaVersion === 1 && authority.mode === "low_v1" && authority.patchSha256 === sha256(archiveBytes) && authority.providerTaskId === providerTaskId && authority.baseWorkingSetId === baseWorkingSetId && authority.baseContentVersion === baseContentVersion;
+  const mode = record(value?.recovery)?.nodeEditMode;
+  return (mode === "low_v1" || (mode === "manual_v1" && providerTaskId === null)) && authority?.schemaVersion === 1 && authority.mode === mode && authority.patchSha256 === sha256(archiveBytes) && authority.providerTaskId === providerTaskId && authority.baseWorkingSetId === baseWorkingSetId && authority.baseContentVersion === baseContentVersion;
 }
 
 export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input: {

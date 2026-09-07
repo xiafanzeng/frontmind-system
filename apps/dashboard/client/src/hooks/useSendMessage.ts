@@ -1,3 +1,4 @@
+import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import type {
   ContentProductionInput,
   ContentProductionAction,
@@ -159,7 +160,15 @@ export function classifyFailure(errorMsg: string): FailureKind {
   return "unknown";
 }
 
-function getFailureAdvice(errorMsg: string) {
+function getFailureAdvice(errorMsg: string, code?: string, status?: number) {
+  if (/OUTCOME_(?:UNKNOWN|UNRESOLVED)/.test(code ?? ""))
+    return "提交结果仍在核对，请稍后查看任务状态；请勿重复发送。";
+  if (code === "AI_BALANCE_INSUFFICIENT")
+    return "账户可用余额不足，请到账号与余额充值后重新发送。";
+  if (code === "AI_COST_PENDING")
+    return "上一轮费用仍在结算，请等待结算完成后继续。";
+  if (status === 429 || /RATE_LIMIT|THROTTL/.test(code ?? ""))
+    return "服务请求频率受限，本次未执行，请稍后重新发送。";
   const failureKind = classifyFailure(errorMsg);
 
   if (failureKind === "quota") {
@@ -600,6 +609,7 @@ export function useSendMessage() {
         return false;
       }
 
+      const workspaceOperation = captureWorkspaceRestOperation();
       sendInFlightRef.current = true;
       const requestedResumeAttempt =
         resumeKnowledgeBaseAttachmentAttemptRef.current;
@@ -619,6 +629,7 @@ export function useSendMessage() {
           toast.info("检测到新版本，正在刷新后继续");
           return false;
         }
+        workspaceOperation.assertActive();
         const retryConfig = options?.retryConfig || defaultRetryConfig;
         const agentProfile =
           durableGeneralChatRetry?.message.modelName ?? options?.agentProfile;
@@ -755,6 +766,7 @@ export function useSendMessage() {
                   }
                 : await prepareUploadFiles(files);
         } catch (err: any) {
+            if (workspaceOperation.signal.aborted) return false;
           toast.error("图片 ZIP 打包失败", {
             description:
               err?.message || "请手动将原图压缩为 ZIP 后通过上传文件发送。",
@@ -762,6 +774,7 @@ export function useSendMessage() {
           return false;
         }
 
+        workspaceOperation.assertActive();
         try {
           // Image preparation can replace multiple source images with a ZIP;
           // the generated upload must obey the same per-file contract.
@@ -976,7 +989,9 @@ export function useSendMessage() {
                       options?.knowledgeBaseExpectedPresentationKey,
                     attachmentManifest: knowledgeBaseAttachmentManifest,
                   },
+                  workspaceOperation.signal,
                 );
+            workspaceOperation.assertActive();
             knowledgeBaseAttachmentReservation = {
               turnId: reserved.reservation.turnId,
               sourceResetRevision: reserved.reservation.sourceResetRevision,
@@ -997,6 +1012,7 @@ export function useSendMessage() {
               );
             }
           } catch (reservationError: any) {
+            if (workspaceOperation.signal.aborted) return false;
             if (reservationError?.knowledgeObservation) {
               commitKnowledgeBaseObservation(
                 convId,
@@ -1038,6 +1054,7 @@ export function useSendMessage() {
           i < (reusableGeneralChatEnvelope ? 0 : preparedUploads.files.length);
           i++
         ) {
+          workspaceOperation.assertActive();
           const prepared = preparedUploads.files[i];
           const file = prepared.file;
           const attemptFile =
@@ -1104,6 +1121,7 @@ export function useSendMessage() {
               });
             }
 
+            workspaceOperation.assertActive();
             const uploadProgressHandler = (percent: number) => {
               setUploadProgress({
                 currentFileIndex: i,
@@ -1149,6 +1167,7 @@ export function useSendMessage() {
                     uploadProgressHandler,
                     retryConfig,
                     {
+                      signal: workspaceOperation.signal,
                       captureLocalCopy: true,
                       captureFilename: knowledgeBaseFilename!,
                       ...(knowledgeBaseAttachmentReservation &&
@@ -1178,7 +1197,7 @@ export function useSendMessage() {
                         : {}),
                     },
                   )
-                : await uploadChatLocalAsset(file, uploadProgressHandler));
+                : await uploadChatLocalAsset(file, uploadProgressHandler, { signal: workspaceOperation.signal }));
             const attachmentAlreadyStaged =
               "alreadyStaged" in result && result.alreadyStaged === true;
             const resumedKnowledgeObservation = attachmentAlreadyStaged
@@ -1231,7 +1250,9 @@ export function useSendMessage() {
                 phase: "staging",
                 activeOrdinal: i + 1,
               }));
+              workspaceOperation.assertActive();
               await stageKnowledgeBaseTurnAttachment({
+                signal: workspaceOperation.signal,
                 conversationId: convId,
                 turnId: knowledgeBaseAttachmentReservation.turnId,
                 clientRequestId: knowledgeBaseClientRequestId!,
@@ -1295,6 +1316,7 @@ export function useSendMessage() {
               });
             }
           } catch (uploadErr: any) {
+            if (workspaceOperation.signal.aborted) return false;
             // The attachment never reached ConversationContext, so its normal
             // lifecycle cleanup cannot see this optimistic URL.
             if (fileBlobUrl) URL.revokeObjectURL(fileBlobUrl);
@@ -1487,6 +1509,7 @@ export function useSendMessage() {
         }
 
         if (!isKnowledgeBaseSubmission && !options?.responseLogicContext) {
+          workspaceOperation.assertActive();
           const snapshotAcknowledged = await flushConversation(convId);
           if (!snapshotAcknowledged) {
             toast.error("会话尚未同步", {
@@ -1496,6 +1519,7 @@ export function useSendMessage() {
           }
         }
 
+        workspaceOperation.assertActive();
         const responseStartedAt = Date.now();
 
         try {
@@ -1578,7 +1602,7 @@ export function useSendMessage() {
                 : knowledgeBaseAttachmentManifest
                   ? { attachmentManifest: knowledgeBaseAttachmentManifest }
                   : {}),
-            });
+            }, workspaceOperation.signal);
 
             // Version freshness is non-authoritative. Run its bounded,
             // fail-open check only after the durable turn POST is acknowledged
@@ -1595,9 +1619,9 @@ export function useSendMessage() {
               ...(isMultiTurn && conv?.previousResponseId
                 ? { taskId: conv.previousResponseId }
                 : {}),
-            });
+            }, workspaceOperation.signal);
           } else {
-            response = await createTask(input, taskOptions);
+            response = await createTask(input, taskOptions, workspaceOperation.signal);
           }
 
           if (!isKnowledgeBaseSubmission && !options?.responseLogicContext) {
@@ -1805,7 +1829,7 @@ export function useSendMessage() {
             const error = generalChatTaskError(response);
             const partialResult = error?.partialResult === true;
             const errorMsg = error?.message || "任务执行出错";
-            const failureAdvice = getFailureAdvice(errorMsg);
+            const failureAdvice = getFailureAdvice(errorMsg, generalChatTaskErrorCode(response));
             const displayError = getFailureDisplayMessage(errorMsg);
 
             updateStatus(convId, "error", {
@@ -1837,6 +1861,7 @@ export function useSendMessage() {
             creditEventBus.emit();
           }
         } catch (err: any) {
+            if (workspaceOperation.signal.aborted) return false;
           const responseLogicFailure = options?.responseLogicContext
             ? readResponseLogicTaskStartFailure(err)
             : null;
@@ -2070,7 +2095,7 @@ export function useSendMessage() {
                   }
                 : null;
           const failureAdvice =
-            purposeFailure?.advice ?? getFailureAdvice(errorMsg);
+            purposeFailure?.advice ?? getFailureAdvice(errorMsg, err.code, err.status);
           const displayError =
             purposeFailure?.message ?? getFailureDisplayMessage(errorMsg);
           const terminalNoticeAdded = addGeneralChatTerminalMessage({
@@ -2089,6 +2114,9 @@ export function useSendMessage() {
           return false;
         }
         return true;
+      } catch (error) {
+        if (workspaceOperation.signal.aborted) return false;
+        throw error;
       } finally {
         setUploadProgress(null);
         sendInFlightRef.current = false;

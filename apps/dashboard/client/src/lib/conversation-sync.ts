@@ -4,6 +4,7 @@ export type ConversationSyncOperation<T extends { id: string }> =
 
 type QueueEntry<T extends { id: string }> = {
   pending: ConversationSyncOperation<T> | null;
+  active: ConversationSyncOperation<T> | null;
   running: boolean;
   inFlight: Promise<void> | null;
   timer: ReturnType<typeof setTimeout> | null;
@@ -86,6 +87,26 @@ export class ConversationSyncQueue<T extends { id: string }> {
     return Boolean(entry && (entry.pending || entry.running));
   }
 
+  /** Detach unsaved work before its immutable workspace transport is disposed. */
+  detachPending(): ConversationSyncOperation<T>[] {
+    const operations = [...this.entries.values()].flatMap(entry => {
+      const operation = entry.pending ?? entry.active;
+      return operation ? [operation] : [];
+    });
+    this.reset();
+    return operations;
+  }
+
+  /** Restore only local save/delete intents; explicit flush resumes transport. */
+  restorePending(operations: ConversationSyncOperation<T>[]) {
+    for (const operation of operations) {
+      const id = operation.kind === "snapshot" ? operation.conversation.id : operation.id;
+      const entry = this.getEntry(id);
+      entry.pending = operation;
+      entry.blocked = true;
+    }
+  }
+
   /** Drop queued writes when the authenticated account changes. */
   reset() {
     this.generation += 1;
@@ -114,6 +135,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
 
     const entry: QueueEntry<T> = {
       pending: null,
+      active: null,
       running: false,
       inFlight: null,
       timer: null,
@@ -171,6 +193,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
     const generation = this.generation;
     const operation = entry.pending!;
     entry.pending = null;
+    entry.active = operation;
     entry.running = true;
     entry.lastAttemptFailed = false;
     entry.blocked = false;
@@ -213,6 +236,7 @@ export class ConversationSyncQueue<T extends { id: string }> {
       this.schedule(id, entry, retryDelay);
     } finally {
       entry.running = false;
+      entry.active = null;
       entry.inFlight = null;
       if (generation !== this.generation || this.entries.get(id) !== entry)
         return;

@@ -1,3 +1,4 @@
+import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
@@ -219,6 +220,29 @@ describe("outputForKnowledgePresentation", () => {
 });
 
 describe("useSendMessage", () => {
+  it("does not upload or create a task after switching projects during file preparation", async () => {
+    const disposeA = activateWorkspaceRestScope("7:A", "project-a");
+    let prepared!: (value: unknown) => void;
+    mocks.prepareUploadFiles.mockImplementationOnce(() => new Promise(resolve => { prepared = resolve; }));
+    const { result } = renderHook(() => useSendMessage());
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = result.current.sendMessage("完善这段内容", [new File(["facts"], "facts.txt")]);
+    });
+    await waitFor(() => expect(prepared).toBeDefined());
+    disposeA();
+    const disposeB = activateWorkspaceRestScope("7:B", "project-b");
+    try {
+      await act(async () => {
+        prepared({ files: [], didZipLargeImages: false, zippedImages: [] });
+        expect(await pending).toBe(false);
+      });
+      expect(mocks.createTask).not.toHaveBeenCalled();
+      expect(mocks.uploadChatLocalAsset).not.toHaveBeenCalled();
+      expect(mocks.reserveKnowledgeBaseTurnWithAttachments).not.toHaveBeenCalled();
+    } finally { disposeB(); }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.createTask.mockResolvedValue({
@@ -630,6 +654,29 @@ describe("useSendMessage", () => {
       "ordinary-settled-422",
       userMessage.id,
     );
+  });
+
+  it.each([
+    ["CREATE_OUTCOME_UNRESOLVED", 409, false, "请勿重复发送"],
+    ["AI_BALANCE_INSUFFICIENT", 402, true, "账号与余额充值"],
+    ["AI_COST_PENDING", 409, false, "上一轮费用仍在结算"],
+    ["ZHIPU_RATE_LIMITED", 429, true, "本次未执行"],
+  ])("explains %s without a generic retry instruction", async (code, status, dispatchSettled, advice) => {
+    mocks.createTask.mockRejectedValueOnce(Object.assign(new Error("提交未完成"), {
+      code, status, dispatchSettled,
+    }));
+    mocks.useConversation.mockReturnValue(mockConversationContext({
+      activeConversation: {
+        id: `ordinary-${code}`, title: "通用智能体", messages: [],
+        status: "idle", createdAt: 1, updatedAt: 1,
+      },
+    }));
+    const { result } = renderHook(() => useSendMessage());
+    await act(async () => { await result.current.sendMessage("测试请求", []); });
+    expect(toast.error).toHaveBeenCalledWith("发送失败", {
+      description: expect.stringContaining(advice),
+    });
+    if (!dispatchSettled) expect(mocks.settleGeneralChatDispatch).not.toHaveBeenCalled();
   });
 
   it("reuses the frozen PNG asset envelope after snapshot ACK fails", async () => {
@@ -1338,6 +1385,7 @@ describe("useSendMessage", () => {
       expect.objectContaining({
         submissionKind: "logo",
       }),
+      expect.any(AbortSignal),
     );
     expect(
       mocks.createKnowledgeBaseTurnTask.mock.calls[0]![1],
@@ -1968,6 +2016,7 @@ describe("useSendMessage", () => {
           },
         ],
       }),
+      expect.any(AbortSignal),
     );
     const uploadOptions = mocks.uploadFile.mock.calls[0]![3];
     expect(uploadOptions).toEqual(
@@ -1997,6 +2046,7 @@ describe("useSendMessage", () => {
       String(reservationManifest[0].itemId).split(":1")[0],
     );
     expect(mocks.stageKnowledgeBaseTurnAttachment).toHaveBeenCalledWith({
+      signal: expect.any(AbortSignal),
       conversationId: "test-conv-id",
       turnId: "reserved-turn-1",
       clientRequestId:
@@ -2040,6 +2090,7 @@ describe("useSendMessage", () => {
           attachmentManifest: reservationManifest,
         },
       }),
+      expect.any(AbortSignal),
     );
     const pendingMessages = mocks.addMessage.mock.calls.filter(
       ([, message]) => message.knowledgeBase?.kind === "pending_user",
@@ -2116,6 +2167,7 @@ describe("useSendMessage", () => {
           turnId: "reserved-turn-1",
         }),
       }),
+      expect.any(AbortSignal),
     );
     const pendingMessages = mocks.addMessage.mock.calls.filter(
       ([, message]) => message.knowledgeBase?.kind === "pending_user",
@@ -2241,6 +2293,7 @@ describe("useSendMessage", () => {
           attachmentManifest: reservationManifest,
         },
       }),
+      expect.any(AbortSignal),
     );
     expect(mocks.createKnowledgeBaseTurnTask).toHaveBeenCalledTimes(1);
   });
@@ -2304,6 +2357,7 @@ describe("useSendMessage", () => {
           ],
         },
       }),
+      expect.any(AbortSignal),
     );
   });
 
@@ -2937,6 +2991,7 @@ describe("useSendMessage", () => {
     expect(mocks.uploadChatLocalAsset).toHaveBeenCalledWith(
       file,
       expect.any(Function),
+      { signal: expect.any(AbortSignal) },
     );
     expect(mocks.uploadFile).not.toHaveBeenCalled();
   });

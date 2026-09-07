@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { EnterpriseMonitoringWorkspace, EnterpriseProgressReport } from "./EnterpriseMonitoringWorkspace";
 import { Link, useLocation, useSearch } from "wouter";
+import { navigate as navigateBrowser } from "wouter/use-browser-location";
 import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import {
   Activity,
@@ -578,17 +579,19 @@ export function PreviewUserBrandDashboard({
 
 function PersistentUserBrandDashboard({ initialSection }) {
   const { user } = useAuth();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const requestedOwner = Number(new URLSearchParams(search).get("operatorOwnerId"));
   const workspaceOwnerId = user?.role === "admin" && Number.isSafeInteger(requestedOwner) && requestedOwner > 0 ? requestedOwner : user?.id;
   const projectsQuery = trpc.enterpriseProjects.list.useQuery({ ownerUserId: workspaceOwnerId }, { retry: false, enabled: Boolean(user) });
   const createProject = trpc.enterpriseProjects.create.useMutation();
   const renameProject = trpc.enterpriseProjects.rename.useMutation();
+  const deleteProject = trpc.enterpriseProjects.delete.useMutation();
+  const projectUtils = trpc.useUtils();
   const projects = projectsQuery.data?.projects || [];
-  const selectedProjectId = activeEnterpriseProjectId();
-  const activeProject = projects.find(project => project.id === selectedProjectId);
   const accountLevel = location === "/agent" || location === "/account";
+  const selectedProjectId = activeEnterpriseProjectId() || (accountLevel && workspaceOwnerId ? rememberedEnterpriseProject(workspaceOwnerId) : undefined);
+  const activeProject = projects.find(project => project.id === selectedProjectId);
   useEffect(() => {
     if (!user || !projectsQuery.data || accountLevel) return;
     const explicit = new URLSearchParams(search).get("enterpriseProjectId");
@@ -597,7 +600,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
     const next = projects.find(project => project.id === remembered) || projects.find(project => project.isLegacyDefault) || projects[0];
     if (next) {
       rememberEnterpriseProject(workspaceOwnerId, next.id);
-      window.location.replace(projectWorkspaceUrl(`${location}${search ? `?${search}` : ""}`, next.id));
+      setLocation(projectWorkspaceUrl(`${location}${search ? `?${search}` : ""}`, next.id), { replace: true });
     }
   }, [user?.id, projectsQuery.data, search, location, activeProject?.id]);
   const onCreateProject = async name => {
@@ -609,6 +612,27 @@ function PersistentUserBrandDashboard({ initialSection }) {
     if (!activeProject) return;
     await renameProject.mutateAsync({ enterpriseProjectId: activeProject.id, name, expectedRevision: activeProject.revision });
     await projectsQuery.refetch();
+  };
+  const onDeleteProject = async () => {
+    if (!activeProject) return;
+    const deletedId = activeProject.id;
+    const originUrl = window.location.href;
+    const remaining = projects.filter(project => project.id !== deletedId);
+    await deleteProject.mutateAsync({ enterpriseProjectId: deletedId, expectedRevision: activeProject.revision });
+    // Remove the confirmed deletion immediately; a failed refresh must not reselect it.
+    projectUtils.enterpriseProjects.list.setData({ ownerUserId: workspaceOwnerId }, current =>
+      current ? { ...current, projects: current.projects.filter(project => project.id !== deletedId) } : current);
+    if (rememberedEnterpriseProject(workspaceOwnerId) === deletedId) sessionStorage.removeItem("frontmind.enterpriseProject");
+    void projectUtils.enterpriseProjects.list.invalidate({ ownerUserId: workspaceOwnerId });
+    // A completed request must not override navigation made while it was pending.
+    if (window.location.href !== originUrl) return;
+    const next = remaining.find(project => project.isLegacyDefault) || remaining[0];
+    if (next) switchEnterpriseProject(workspaceOwnerId, next.id);
+    else {
+      const query = new URLSearchParams({ view: "knowledge" });
+      if (user?.role === "admin") query.set("operatorOwnerId", String(workspaceOwnerId));
+      navigateBrowser(`/?${query}`, { replace: true });
+    }
   };
   const [editingSection, setEditingSection] = useState(null);
   const queryOptions = {
@@ -655,6 +679,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
       operatorProjectsError={projectsQuery.error?.message || (new URLSearchParams(search).has("enterpriseProjectId") && projectsQuery.data && !activeProject ? "该企业项目不存在或无权访问，请在左侧选择可用项目。" : undefined)}
       onCreateProject={onCreateProject}
       onRenameProject={onRenameProject}
+      onDeleteProject={onDeleteProject}
       onSelectProject={id => switchEnterpriseProject(workspaceOwnerId, id)}
       administratorOwnerId={user?.role === "admin" ? workspaceOwnerId : null}
       marketEdition={user?.marketEdition || "domestic"}
@@ -681,6 +706,7 @@ function UserBrandDashboardContent({
   operatorProjectsError,
   onCreateProject,
   onRenameProject,
+  onDeleteProject,
   onSelectProject,
   administratorOwnerId,
   marketEdition = "domestic",
@@ -779,8 +805,6 @@ function UserBrandDashboardContent({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const navigatePath = path => {
     const next = projectWorkspaceUrl(path, operatorProject?.id);
-    const accountPage = value => ["/agent", "/account"].includes(value.split("?")[0]);
-    if (accountPage(path) !== accountPage(location)) { window.location.assign(next); return; }
     setLocation(next); setMobileNavOpen(false);
   };
   const navigate = (section, sub = null) => {
@@ -941,7 +965,7 @@ function UserBrandDashboardContent({
           activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
           collapsed={sidebarCollapsed} onCollapse={toggleSidebar}
           onNavigate={navigatePath} onSelectProject={onSelectProject}
-          onCreateProject={onCreateProject} onRenameProject={onRenameProject}
+          onCreateProject={onCreateProject} onRenameProject={onRenameProject} onDeleteProject={onDeleteProject}
         /> : <Sidebar
           route={route}
           onNavigate={navigate}

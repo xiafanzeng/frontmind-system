@@ -1012,7 +1012,6 @@ export default function ChatInput({
             <div className="flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
               {/* File buttons */}
               <div className="flex items-center gap-1 pb-0.5">
-                {syncKnowledgeBaseSnapshot && !knowledgeBaseNotStarted && !inputLocked && <span className="mr-1 whitespace-nowrap rounded-md bg-violet-50 px-2 py-1 text-xs text-violet-700" title="文字修改固定 Low；图片仅在本地处理">Low</span>}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1063,7 +1062,7 @@ export default function ChatInput({
                         : officialLogoRequired
                           ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
                           : syncKnowledgeBaseSnapshot
-                            ? "输入文字修改要求（Low）；仅上传图片会直接本地保存"
+                            ? "输入文字修改要求；仅上传图片会直接本地保存"
                             : purpose === "enterprise_qa"
                               ? "输入企业相关问题，按 Enter 提问…"
                               : "输入你的内容需求，按 Enter 开始编排..."

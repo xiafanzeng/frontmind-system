@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  accountId: 7,
   listRefetch: vi.fn(),
   syncSnapshot: vi.fn(),
   deleteConversation: vi.fn(),
@@ -23,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/_core/hooks/useAuth", () => ({
-  useAuth: () => ({ user: { id: 7 }, loading: false }),
+  useAuth: () => ({ user: { id: mocks.accountId }, loading: false }),
 }));
 
 vi.mock("@/lib/trpc", () => ({
@@ -274,6 +275,9 @@ function addFiveFiles() {
 describe("ChatArea + ConversationProvider knowledge-base start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Each test is an independent signed-in account; workspace drafts survive
+    // component unmounts in the real app by design.
+    mocks.accountId += 1;
     Object.defineProperty(HTMLElement.prototype, "scrollTo", {
       configurable: true,
       value: vi.fn(),
@@ -402,6 +406,23 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  it.each(["general", "knowledge", "enterprise_qa", "content_production"] as const)(
+    "shows the historical effort only in the general agent, for %s",
+    async (purpose) => {
+      mocks.listRefetch.mockResolvedValue({ data: [{
+        id: "historical-task", title: "历史任务", status: "completed", createdAt: 1, updatedAt: 1,
+        messages: [{ id: "historical-answer", role: "assistant", content: "历史回答", timestamp: 1, modelName: "frontmind-pro" }],
+      }] });
+      render(<ConversationProvider><ChatArea
+        syncKnowledgeBaseSnapshot={purpose === "knowledge"}
+        purpose={purpose === "enterprise_qa" || purpose === "content_production" ? purpose : undefined}
+      /></ConversationProvider>);
+      const header = await screen.findByLabelText("任务执行信息");
+      expect(header).toHaveTextContent(purpose === "general" ? "Max" : "FrontMind Agent");
+      if (purpose !== "general") expect(header).not.toHaveTextContent(/\b(Low|High|Max)\b/);
+    },
+  );
 
   it("reserves a materialized build, stores N/N local assets, then dispatches once", async () => {
     renderIntegratedChat();

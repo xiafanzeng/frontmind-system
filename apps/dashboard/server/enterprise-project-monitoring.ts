@@ -1,3 +1,4 @@
+import { assertEnterpriseProjectActive } from "./enterprise-project-lifecycle";
 import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { ensureDashboardAccountLink } from "@frontmind/monitoring-db";
@@ -22,7 +23,7 @@ export async function createEnterpriseMonitoringProject(actor: AuthenticatedUser
     const projectId = enterpriseProjectOperationId(scope.ownerUserId, `monitoring:${scope.enterpriseProjectId}:${input.clientRequestId}`);
     const brandVersionId = enterpriseProjectOperationId(scope.ownerUserId, `${projectId}:brand:1`);
     return db.transaction(async tx => {
-      await tx.select({ id: enterpriseProjects.id }).from(enterpriseProjects).where(eq(enterpriseProjects.id, scope.enterpriseProjectId)).limit(1).for("update");
+      await assertEnterpriseProjectActive(tx, scope.enterpriseProjectId, scope.ownerUserId);
       const [prior] = await tx.select().from(enterpriseProjectMonitoringLinks).where(and(eq(enterpriseProjectMonitoringLinks.enterpriseProjectId, scope.enterpriseProjectId), eq(enterpriseProjectMonitoringLinks.clientRequestId, input.clientRequestId))).limit(1);
       if (prior) {
         if (prior.requestHash !== requestHash) throw new AuthServiceError("CONFLICT", "该请求编号已用于另一监控项目");

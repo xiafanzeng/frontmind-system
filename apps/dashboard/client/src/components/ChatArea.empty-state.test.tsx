@@ -21,6 +21,7 @@ import {
   type KnowledgeBaseStarterStartOutcome,
 } from "./ChatArea";
 import * as frontmindApi from "@/lib/frontmind-api";
+import { activateWorkspaceRestScope, captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import {
   normalizedKnowledgeBaseUploadFilename,
   normalizedKnowledgeBaseUploadMimeType,
@@ -1239,6 +1240,41 @@ describe("EmptyConversationHint", () => {
 });
 
 describe("knowledge-base starter orchestration", () => {
+  it("inherits the starter's frozen project after an await and never adopts newer route headers", async () => {
+    const release = activateWorkspaceRestScope("starter-project-a", "project-a");
+    try {
+      const lifecycle = captureWorkspaceRestOperation();
+      await Promise.resolve();
+      const fetchImplementation = vi.fn().mockResolvedValue(new Response("{}"));
+      await fetchKnowledgeBaseStartRequest({ method: "POST", headers: { "x-enterprise-project-id": "project-b" } }, {
+        signal: lifecycle.signal, fetchImplementation,
+      });
+      expect(fetchImplementation.mock.calls[0][1].headers).toMatchObject({ "x-enterprise-project-id": "project-a" });
+    } finally { release(); }
+  });
+
+  it("aborts an old project's starter and ignores a late response when the workspace changes", async () => {
+    const releaseA = activateWorkspaceRestScope("starter-project-a", "project-a");
+    let releaseB: (() => void) | undefined;
+    try {
+      const lifecycle = captureWorkspaceRestOperation();
+      const response = deferred<Response>();
+      const fetchImplementation = vi.fn().mockReturnValue(response.promise);
+      const request = fetchKnowledgeBaseStartRequest({ method: "POST" }, { signal: lifecycle.signal, fetchImplementation });
+      const settled = request.catch(error => error);
+      releaseB = activateWorkspaceRestScope("starter-project-b", "project-b");
+      expect(fetchImplementation.mock.calls[0][1].signal.aborted).toBe(true);
+      response.resolve(new Response("{}"));
+      expect(await settled).toMatchObject({ name: "AbortError" });
+      const onRequestStarted = vi.fn();
+      await expect(fetchKnowledgeBaseStartRequest({ method: "POST" }, {
+        signal: lifecycle.signal, fetchImplementation, onRequestStarted,
+      })).rejects.toMatchObject({ name: "AbortError" });
+      expect(fetchImplementation).toHaveBeenCalledTimes(1);
+      expect(onRequestStarted).not.toHaveBeenCalled();
+    } finally { releaseB?.(); releaseA(); }
+  });
+
   it("builds the reserve manifest without reading browser file bytes", async () => {
     const files = [
       sizedFile("one.pdf", 12),

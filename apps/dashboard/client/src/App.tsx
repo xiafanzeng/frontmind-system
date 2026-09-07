@@ -6,7 +6,7 @@ import { lazy, Suspense } from "react";
 import NotFound from "@/pages/NotFound";
 import Login from "@/pages/Login";
 import { Loader2, RefreshCw } from "lucide-react";
-import { Redirect, Route, Switch, useLocation, useSearch } from "wouter";
+import { Redirect, Route, Router as BrowserRouter, Switch, useLocation, useSearch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ConversationProvider } from "./contexts/ConversationContext";
@@ -22,6 +22,9 @@ import {
 } from "@/lib/admin-access";
 import { hasExplicitAdminRole } from "@shared/admin-access";
 import { userFacingErrorMessage } from "@/lib/user-facing-error";
+import { WorkspaceQueryProvider } from "./contexts/WorkspaceQueryProvider";
+import { useWorkspaceLocation } from "./hooks/useWorkspaceLocation";
+import { isEnterpriseWorkspacePath, projectWorkspaceUrl } from "./lib/enterprise-project";
 
 const MonitoringDemo = lazy(() => import("./monitoring/MonitoringDemo"));
 const KnowledgeFrontendSettings = lazy(
@@ -192,6 +195,15 @@ function DeliveryMemberOnly({ children }: { children: React.ReactNode }) {
 }
 
 function Router() {
+  const { user } = useAuth();
+  const [pathname] = useLocation();
+  const search = useSearch();
+  const mirrored = canAccessAdminRoutes(user) && /^\d+$/.test(new URLSearchParams(search).get("operatorOwnerId") || "");
+  const customerRoute = isEnterpriseWorkspacePath(pathname) || pathname === "/agent" || pathname === "/account";
+  // A single component identity keeps the sidebar and shell in place across module routes.
+  if (customerRoute && (user?.role === "user" || (mirrored && pathname !== "/agent") || (isSystemAdminAccount(user) && /^\/(monitoring-system|publishing)(?:\/|$)/.test(pathname)))) {
+    return <UserDashboard />;
+  }
   return (
     <Switch>
       <Route path={"/"} component={RoleLanding} />
@@ -397,17 +409,19 @@ export function AuthBoundary() {
   if (!user) return <Login />;
 
   if (user.role === "delivery_member") {
-    return <AppShell resumePolling={false} />;
+    return <WorkspaceQueryProvider userId={user.id}><AppShell resumePolling={false} /></WorkspaceQueryProvider>;
   }
 
   return (
-    <ConversationProvider>
-      <AppShell />
-    </ConversationProvider>
+    <WorkspaceQueryProvider userId={user.id}>
+      <ConversationProvider>
+        <AppShell />
+      </ConversationProvider>
+    </WorkspaceQueryProvider>
   );
 }
 
-function App() {
+function AppContent() {
   const [location] = useLocation();
   const previewPage =
     import.meta.env.DEV &&
@@ -448,6 +462,10 @@ function App() {
       </ThemeProvider>
     </ErrorBoundary>
   );
+}
+
+function App() {
+  return <BrowserRouter hook={useWorkspaceLocation} hrefs={href => projectWorkspaceUrl(href)}><AppContent /></BrowserRouter>;
 }
 
 export default App;

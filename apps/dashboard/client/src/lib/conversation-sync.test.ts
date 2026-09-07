@@ -7,6 +7,36 @@ describe("ConversationSyncQueue", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("detaches the latest pending save and queued delete without replaying on the old transport", async () => {
+    let finish!: () => void;
+    const oldSave = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const oldQueue = new ConversationSyncQueue<Snapshot>({ syncSnapshot: oldSave, deleteConversation: vi.fn() });
+    oldQueue.enqueueSnapshot({ id: "draft", value: 1 }, true);
+    await vi.advanceTimersByTimeAsync(0);
+    oldQueue.enqueueSnapshot({ id: "draft", value: 2 });
+    oldQueue.enqueueDelete("deleted");
+    const pending = oldQueue.detachPending();
+    expect(pending).toEqual([{ kind: "snapshot", conversation: { id: "draft", value: 2 } }, { kind: "delete", id: "deleted" }]);
+    const save = vi.fn().mockResolvedValue(undefined), remove = vi.fn().mockResolvedValue(undefined);
+    const restored = new ConversationSyncQueue<Snapshot>({ syncSnapshot: save, deleteConversation: remove });
+    restored.restorePending(pending);
+    finish();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(oldSave).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    await expect(restored.flushAll()).resolves.toBe(true);
+    expect(save).toHaveBeenCalledWith({ id: "draft", value: 2 });
+    expect(remove).toHaveBeenCalledWith("deleted");
+  });
+
+  it("retains the active operation when a request was sent but never acknowledged", async () => {
+    const queue = new ConversationSyncQueue<Snapshot>({ syncSnapshot: () => new Promise(() => {}), deleteConversation: vi.fn() });
+    queue.enqueueSnapshot({ id: "in-flight", value: 3 }, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(queue.detachPending()).toEqual([{ kind: "snapshot", conversation: { id: "in-flight", value: 3 } }]);
+  });
+
   it("coalesces debounced snapshots and sends the latest state", async () => {
     const syncSnapshot = vi.fn().mockResolvedValue(undefined);
     const queue = new ConversationSyncQueue<Snapshot>({

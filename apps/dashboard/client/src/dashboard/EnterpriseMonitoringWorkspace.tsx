@@ -1,5 +1,6 @@
 import { lazy, Suspense, useRef, useState } from "react";
 import { Plus, ArrowUpRight } from "lucide-react";
+import { navigate } from "wouter/use-browser-location";
 import { trpc } from "@/lib/trpc";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -21,7 +22,7 @@ export function EnterpriseMonitoringWorkspace({ enterpriseProjectId, questions }
     if (intent.current?.fingerprint !== fingerprint) intent.current = { fingerprint, id: crypto.randomUUID() };
     try {
       const result = await create.mutateAsync({ enterpriseProjectId, name: name.trim(), questionIds: selected, clientRequestId: intent.current.id });
-      window.location.assign(projectWorkspaceUrl(`/monitoring-system?project=${result.projectId}&newMonitor=1`, enterpriseProjectId));
+      navigate(projectWorkspaceUrl(`/monitoring-system?project=${result.projectId}&newMonitor=1`, enterpriseProjectId));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "监控项目未能创建，请重试。"); }
   };
   const sources = Object.fromEntries((progress.data?.projects || []).map(project => [project.id, (project.sourceQuestions || []).map(item => item.question)]));

@@ -69,7 +69,11 @@ export default function GeneralAgentRuntimeBadge({
     if (!localTaskId && !purpose) onProfile(selected);
   }, [localTaskId, purpose, selected, onProfile]);
 
-  if (!localTaskId && !purpose) return (
+  // Workflow tasks still freeze the administrator's configured runtime, but
+  // only the account's general agent exposes model choices and effort labels.
+  if (purpose) return null;
+
+  if (!localTaskId) return (
     <select
       aria-label="智能体推理档位"
       title="选择新会话的推理档位"

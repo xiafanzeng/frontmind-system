@@ -4,6 +4,11 @@ import type {
   PublicationBatchStatus,
   PublisherMediaKind,
 } from "./types";
+import { projectWorkspaceUrl } from "@/lib/enterprise-project";
+
+function scopedPublishingUrl(path: string) {
+  return typeof window === "undefined" ? path : projectWorkspaceUrl(path);
+}
 
 export const DEFAULT_MEDIA_FILTERS: MediaFilters = {
   kind: "news",
@@ -149,7 +154,7 @@ export function writeMediaRouteState(
   }
   if (articleVersionId) params.set("articleVersion", articleVersionId);
   const query = params.toString();
-  return query ? `${pathname}?${query}` : pathname;
+  return scopedPublishingUrl(query ? `${pathname}?${query}` : pathname);
 }
 
 export type PublicationListFilters = {
@@ -203,7 +208,7 @@ export function writePublicationRouteState(
     params.set(key, String(value));
   }
   const query = params.toString();
-  return query ? `${pathname}?${query}` : pathname;
+  return scopedPublishingUrl(query ? `${pathname}?${query}` : pathname);
 }
 
 export function writePublicationWorkbenchRouteState(filters: PublicationListFilters) {

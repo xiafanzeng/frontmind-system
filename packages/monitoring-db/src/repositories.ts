@@ -1,3 +1,4 @@
+import { assertMonitoringEnterpriseProjectActive } from "./enterprise-lifecycle.js";
 import { currentMonitoringEnterpriseProjectId, monitoringProjectOwnerPredicate, monitoringChildOwnerPredicate } from "./enterprise-scope.js";
 import { readAccountActivity, readAccountConsumption } from "./account-billing.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -2965,6 +2966,7 @@ export class MonitoringRepository {
         .limit(1);
       if (!project?.currentBrandVersionId)
         throw new RepositoryError("NOT_FOUND", "Project not found");
+      await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
       await validatePlatforms(tx, configuration);
 
       const monitorId = randomUUID();
@@ -3061,6 +3063,7 @@ export class MonitoringRepository {
         .limit(1);
       if (!project?.currentBrandVersionId)
         throw new RepositoryError("NOT_FOUND", "Project not found");
+      await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
       await validatePlatforms(tx, configuration);
       const [latest] = await tx
         .select({ version: monitorVersions.version })
@@ -3384,6 +3387,10 @@ export class MonitoringRepository {
           now,
         );
     await this.db.transaction(async (tx) => {
+      const [project] = await tx.select({ enterpriseProjectId: projects.enterpriseProjectId }).from(projects)
+        .where(and(eq(projects.id, monitor.projectId), eq(projects.ownerId, ownerId))).limit(1);
+      if (!project) throw new RepositoryError("NOT_FOUND", "Project not found");
+      await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
       await tx
         .update(monitors)
         .set({
@@ -3553,6 +3560,12 @@ export class MonitoringRepository {
     },
   ) {
     const execute = async (tx: Transaction) => {
+      // Workers have no request scope: recover the immutable project binding.
+      const [admission] = await tx.select({ enterpriseProjectId: projects.enterpriseProjectId })
+        .from(monitors).innerJoin(projects, eq(projects.id, monitors.projectId))
+        .where(and(eq(monitors.id, monitorId), eq(monitors.ownerId, ownerId), eq(projects.ownerId, ownerId))).limit(1);
+      if (!admission) throw new RepositoryError("NOT_FOUND", "Monitor not found");
+      await assertMonitoringEnterpriseProjectActive(tx, admission.enterpriseProjectId, ownerId);
       const duplicate = await findRunByIdempotencyKey(
         tx,
         ownerId,

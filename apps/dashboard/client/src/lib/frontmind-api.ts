@@ -1,3 +1,4 @@
+import { captureWorkspaceRestOperation } from "./workspace-rest-scope";
 import type {
   ContentProductionInput,
   ContentProductionAction,
@@ -643,9 +644,11 @@ async function apiRequest(
   options: RequestInit = {},
   timeoutMs?: number,
 ): Promise<Response> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   const url = `/api/frontmind${endpoint}`;
 
-  const headers = deliveryProjectHeaders({
+  const headers = rest.headers({
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   });
@@ -669,7 +672,7 @@ async function apiRequest(
   }, timeout);
 
   try {
-    const response = await fetch(url, {
+    const response = await rest.fetch(url, {
       ...options,
       headers,
       credentials: "include",
@@ -841,6 +844,7 @@ export async function createTask(
     contentProduction?: ContentProductionInput;
     contentProductionAction?: ContentProductionAction;
   },
+  signal?: AbortSignal,
 ): Promise<TaskResponse> {
   const prompt = buildPromptText(input);
   const attachments = extractAttachments(input);
@@ -879,6 +883,7 @@ export async function createTask(
       : "/v2/tasks",
     {
       method: "POST",
+      signal,
       body: JSON.stringify(body),
     },
     CREATE_TASK_TIMEOUT_MS,
@@ -913,6 +918,8 @@ export async function uploadChatLocalAsset(
   replayed: boolean;
   traceId?: string;
 }> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   assertChatAttachmentSizes([file]);
   if (options.knowledgeBaseCoordinate && options.siteOpsComposerCoordinate) {
     throw new FileUploadError("附件上传坐标冲突，请重新上传", {
@@ -931,7 +938,7 @@ export async function uploadChatLocalAsset(
       return;
     }
     xhr.open("POST", "/api/frontmind/v2/assets");
-    const headers = deliveryProjectHeaders({
+    const headers = rest.headers({
       // This route is mounted after the bounded JSON parser. Keep the wire
       // body unconditionally binary so a user-supplied .json file is not
       // consumed as an HTTP request object before the asset stream runs.
@@ -1096,6 +1103,8 @@ export async function uploadKnowledgeBaseLocalAsset(
     knowledgeObservation?: KnowledgeBaseObservationDto;
   }
 > {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   const filename =
     options.captureFilename || normalizedKnowledgeBaseUploadFilename(file.name);
   const coordinate = options.resumeScope
@@ -1328,7 +1337,9 @@ export async function createResponseLogicTask(
     conversationId: string;
     taskId?: string;
   },
+  signal?: AbortSignal,
 ): Promise<TaskResponse> {
+  const rest = captureWorkspaceRestOperation(signal);
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),
@@ -1354,7 +1365,7 @@ export async function createResponseLogicTask(
     } = context;
     let response: Response;
     try {
-      response = await fetch(
+      response = await rest.fetch(
         context.taskId
           ? "/api/response-logic/turn"
           : "/api/response-logic/start",
@@ -1570,6 +1581,8 @@ export async function reserveKnowledgeBaseStart(
   },
   signal?: AbortSignal,
 ) {
+  const rest = captureWorkspaceRestOperation(signal);
+  signal = rest.signal;
   const requestBody = JSON.stringify(input);
   let lastError: unknown;
   for (
@@ -1581,9 +1594,9 @@ export async function reserveKnowledgeBaseStart(
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await fetch("/api/knowledge-base/start/reserve", {
+      const response = await rest.fetch("/api/knowledge-base/start/reserve", {
         method: "POST",
-        headers: deliveryProjectHeaders({
+        headers: rest.headers({
           "Content-Type": "application/json",
         }),
         credentials: "include",
@@ -1638,9 +1651,10 @@ export async function cancelKnowledgeBaseStartReservation(input: {
   clientRequestId: string;
   expectedResetRevision: number;
 }) {
-  const response = await fetch("/api/knowledge-base/start/cancel", {
+  const rest = captureWorkspaceRestOperation();
+  const response = await rest.fetch("/api/knowledge-base/start/cancel", {
     method: "POST",
-    headers: deliveryProjectHeaders({ "Content-Type": "application/json" }),
+    headers: rest.headers({ "Content-Type": "application/json" }),
     credentials: "include",
     body: JSON.stringify(input),
   });
@@ -1786,10 +1800,12 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     attachmentManifest: KnowledgeBaseAttachmentManifestItem[];
     resumeExisting?: boolean;
   },
+  signal?: AbortSignal,
 ): Promise<{
   reservation: KnowledgeBaseAttachmentTurnReservation;
   knowledgeObservation?: KnowledgeBaseObservationDto;
 }> {
+  const rest = captureWorkspaceRestOperation(signal);
   const coordinateIsComplete =
     context.conversationId.trim().length > 0 &&
     context.clientRequestId.trim().length > 0 &&
@@ -1838,9 +1854,9 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     attempt += 1
   ) {
     try {
-      const response = await fetch("/api/knowledge-base/turn/reserve", {
+      const response = await rest.fetch("/api/knowledge-base/turn/reserve", {
         method: "POST",
-        headers: deliveryProjectHeaders({ "Content-Type": "application/json" }),
+        headers: rest.headers({ "Content-Type": "application/json" }),
         credentials: "include",
         body: requestBody,
       });
@@ -1883,12 +1899,12 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     } catch (error) {
       lastError = error;
       if (
-        !isTransientKnowledgeBaseRequestError(error) ||
+        rest.signal.aborted || !isTransientKnowledgeBaseRequestError(error) ||
         attempt === KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS - 1
       ) {
         throw error;
       }
-      await waitForKnowledgeBaseRequestRetry(error, attempt);
+      await waitForKnowledgeBaseRequestRetry(error, attempt, rest.signal);
     }
   }
   throw lastError;
@@ -1912,6 +1928,8 @@ export async function resumeKnowledgeBaseTurnAttachments(
   input: KnowledgeBaseTurnAttachmentCoordinate,
   signal?: AbortSignal,
 ): Promise<KnowledgeBaseTurnAttachmentResumeResult> {
+  const rest = captureWorkspaceRestOperation(signal);
+  signal = rest.signal;
   assertKnowledgeBaseTurnAttachmentCoordinate(input);
   const requestBody = JSON.stringify(input);
   let lastError: unknown;
@@ -1924,11 +1942,11 @@ export async function resumeKnowledgeBaseTurnAttachments(
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await fetch(
+      const response = await rest.fetch(
         "/api/knowledge-base/turn/attachments/resume",
         {
           method: "POST",
-          headers: deliveryProjectHeaders({
+          headers: rest.headers({
             "Content-Type": "application/json",
           }),
           credentials: "include",
@@ -1995,10 +2013,12 @@ export async function cancelKnowledgeBaseTurnAttachments(
   cancelled: true;
   knowledgeObservation: KnowledgeBaseObservationDto;
 }> {
+  const rest = captureWorkspaceRestOperation(signal);
+  signal = rest.signal;
   assertKnowledgeBaseTurnAttachmentCoordinate(input);
-  const response = await fetch("/api/knowledge-base/turn/attachments/cancel", {
+  const response = await rest.fetch("/api/knowledge-base/turn/attachments/cancel", {
     method: "POST",
-    headers: deliveryProjectHeaders({ "Content-Type": "application/json" }),
+    headers: rest.headers({ "Content-Type": "application/json" }),
     credentials: "include",
     signal,
     body: JSON.stringify(input),
@@ -2034,6 +2054,8 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
   attachment: { file_id: string; filename: string };
   signal?: AbortSignal;
 }) {
+  const rest = captureWorkspaceRestOperation(input.signal);
+  input = { ...input, signal: rest.signal };
   if (
     !Number.isSafeInteger(input.expectedResetRevision) ||
     input.expectedResetRevision < 0
@@ -2052,11 +2074,11 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await fetch(
+      const response = await rest.fetch(
         "/api/knowledge-base/turn/attachments/stage",
         {
           method: "POST",
-          headers: deliveryProjectHeaders({
+          headers: rest.headers({
             "Content-Type": "application/json",
           }),
           credentials: "include",
@@ -2126,7 +2148,9 @@ export async function createKnowledgeBaseTurnTask(
       attachmentManifest: KnowledgeBaseAttachmentManifestItem[];
     };
   },
+  signal?: AbortSignal,
 ): Promise<TaskResponse> {
+  const rest = captureWorkspaceRestOperation(signal);
   if (
     context.attachmentReservation &&
     (!Number.isSafeInteger(context.expectedResetRevision) ||
@@ -2203,9 +2227,9 @@ export async function createKnowledgeBaseTurnTask(
     ) {
       let response: Response;
       try {
-        response = await fetch(endpoint, {
+        response = await rest.fetch(endpoint, {
           method: "POST",
-          headers: deliveryProjectHeaders({
+          headers: rest.headers({
             "Content-Type": "application/json",
           }),
           credentials: "include",
@@ -2215,12 +2239,12 @@ export async function createKnowledgeBaseTurnTask(
       } catch (error) {
         lastError = error;
         if (
-          controller.signal.aborted ||
+          rest.signal.aborted || controller.signal.aborted ||
           attempt === KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS - 1
         ) {
           throw error;
         }
-        await waitForKnowledgeBaseRequestRetry(error, attempt);
+        await waitForKnowledgeBaseRequestRetry(error, attempt, rest.signal);
         continue;
       }
 
@@ -2236,7 +2260,7 @@ export async function createKnowledgeBaseTurnTask(
         ) {
           throw error;
         }
-        await waitForKnowledgeBaseRequestRetry(error, attempt);
+        await waitForKnowledgeBaseRequestRetry(error, attempt, rest.signal);
         continue;
       }
 
@@ -2257,6 +2281,7 @@ export async function createKnowledgeBaseTurnTask(
       ) {
         throw new Error("任务创建失败：未返回权威任务状态");
       }
+      rest.assertActive();
       if (observation) dispatchKnowledgeBaseProgressUpdated(observation);
       return {
         ...data,
@@ -2369,10 +2394,12 @@ async function createManagedIntent(
   file: File,
   options: UploadFileOptions,
 ): Promise<ManagedUploadHandle> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   const operationId = managedIntentOperationId(file, options);
-  const response = await fetch("/api/frontmind/v1/managed-uploads", {
+  const response = await rest.fetch("/api/frontmind/v1/managed-uploads", {
     method: "POST",
-    headers: deliveryProjectHeaders({ "Content-Type": "application/json" }),
+    headers: rest.headers({ "Content-Type": "application/json" }),
     credentials: "include",
     signal: options.signal,
     body: JSON.stringify({
@@ -2724,15 +2751,17 @@ export async function listManagedUploadsForKnowledgeBase(input: {
   turnId: string;
   signal?: AbortSignal;
 }): Promise<ManagedUploadDiscovery> {
+  const rest = captureWorkspaceRestOperation(input.signal);
+  input = { ...input, signal: rest.signal };
   const query = new URLSearchParams({
     conversationId: input.conversationId,
     turnId: input.turnId,
   });
-  const response = await fetch(
+  const response = await rest.fetch(
     `/api/frontmind/v1/managed-uploads?${query.toString()}`,
     {
       method: "GET",
-      headers: deliveryProjectHeaders(),
+      headers: rest.headers(),
       credentials: "include",
       signal: input.signal,
     },
@@ -2908,6 +2937,8 @@ async function recoverManagedIntent(
   file: ManagedUploadFileIdentity,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ) {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   const controller = new AbortController();
   const abort = () => controller.abort();
   options.signal?.addEventListener("abort", abort, { once: true });
@@ -2916,9 +2947,9 @@ async function recoverManagedIntent(
     options.timeoutMs ?? MANAGED_UPLOAD_RECOVERY_TIMEOUT_MS,
   );
   try {
-    const response = await fetch("/api/frontmind/v1/managed-uploads/recovery", {
+    const response = await rest.fetch("/api/frontmind/v1/managed-uploads/recovery", {
       method: "POST",
-      headers: deliveryProjectHeaders({
+      headers: rest.headers({
         "Content-Type": "application/json",
         "X-FrontMind-Upload-Intent-Id": handle.intentId!,
         "X-FrontMind-Upload-Intent-Ticket": handle.ticket,
@@ -3220,6 +3251,8 @@ export async function recoverManagedUpload(
   file: File,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ManagedUploadRecovery> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   if (handle.intentId) {
     return recoverManagedIntent(
       {
@@ -3249,7 +3282,7 @@ export async function recoverManagedUpload(
   }
   if (options.signal?.aborted) throw cancelledFileUploadError(fileId);
 
-  const headers = deliveryProjectHeaders({
+  const headers = rest.headers({
     "Content-Type": "application/json",
     ...(ticket ? { "X-FrontMind-Upload-Ticket": ticket } : {}),
   });
@@ -3266,7 +3299,7 @@ export async function recoverManagedUpload(
   );
   let response: Response;
   try {
-    response = await fetch(
+    response = await rest.fetch(
       `/api/frontmind/v1/files/${encodeURIComponent(fileId)}/upload-recovery`,
       {
         method: "POST",
@@ -3453,6 +3486,8 @@ export async function discardUnboundUpload(
   fileId: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   if (!fileId.trim()) {
     throw new FileUploadError("缺少待清理的文件 ID", {
       code: "INVALID_UPLOAD_OPTIONS",
@@ -3472,11 +3507,11 @@ export async function discardUnboundUpload(
   }, 30_000);
   let response: Response;
   try {
-    response = await fetch(
+    response = await rest.fetch(
       `/api/frontmind/v1/files/${encodeURIComponent(fileId)}/discard`,
       {
         method: "DELETE",
-        headers: deliveryProjectHeaders(),
+        headers: rest.headers(),
         credentials: "include",
         signal: controller.signal,
       },
@@ -3540,6 +3575,8 @@ export async function discardManagedUploadIntent(
   handle: ManagedUploadHandle,
   options: { signal?: AbortSignal; deferProviderCleanup?: boolean } = {},
 ) {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   if (!handle.intentId || !handle.ticket) {
     if (!handle.fileId) {
       throw new FileUploadError("缺少待清理的文件 ID", {
@@ -3549,9 +3586,9 @@ export async function discardManagedUploadIntent(
     }
     return discardUnboundUpload(handle.fileId, options);
   }
-  const response = await fetch("/api/frontmind/v1/managed-uploads", {
+  const response = await rest.fetch("/api/frontmind/v1/managed-uploads", {
     method: "DELETE",
-    headers: deliveryProjectHeaders({
+    headers: rest.headers({
       "X-FrontMind-Upload-Intent-Id": handle.intentId,
       "X-FrontMind-Upload-Intent-Ticket": handle.ticket,
       ...(options.deferProviderCleanup
@@ -3712,6 +3749,8 @@ export async function uploadFileToUrl(
   onProgress?: (percent: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const rest = captureWorkspaceRestOperation(signal);
+  signal = rest.signal;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(cancelledFileUploadError());
@@ -3787,6 +3826,8 @@ function uploadManagedIntentBody(input: {
   signal?: AbortSignal;
   onStage?: (event: FileUploadStageEvent) => void;
 }): Promise<ManagedUploadRecovery> {
+  const rest = captureWorkspaceRestOperation(input.signal);
+  input = { ...input, signal: rest.signal };
   return new Promise((resolve, reject) => {
     const errorIdentity = managedUploadErrorIdentity(input.handle);
     if (!input.handle.intentId || input.signal?.aborted) {
@@ -3808,15 +3849,7 @@ function uploadManagedIntentBody(input: {
       "X-FrontMind-Upload-Intent-Ticket",
       input.handle.ticket,
     );
-    const projectAssignmentId = sessionStorage
-      .getItem(DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY)
-      ?.trim();
-    if (projectAssignmentId) {
-      xhr.setRequestHeader(
-        "x-delivery-project-assignment-id",
-        projectAssignmentId,
-      );
-    }
+    for (const [name, value] of Object.entries(rest.headers())) xhr.setRequestHeader(name, value);
     input.onStage?.({
       stage: "uploading_to_dashboard",
       itemId: input.handle.itemId,
@@ -4073,6 +4106,8 @@ export async function uploadFile(
   recovered?: boolean;
   traceId?: string;
 }> {
+  const rest = captureWorkspaceRestOperation(options.signal);
+  options = { ...options, signal: rest.signal };
   // This is the single browser upload boundary, including non-chat product
   // surfaces. Reject before creating the upstream record so an oversized
   // selection cannot leave an upstream-only orphan.
@@ -4835,6 +4870,8 @@ type ProxyUploadInput = {
 async function uploadFileToUrlViaProxy(
   input: ProxyUploadInput,
 ): Promise<ManagedUploadStatus | undefined> {
+  const rest = captureWorkspaceRestOperation(input.signal);
+  input = { ...input, signal: rest.signal };
   const {
     uploadUrl,
     file,
@@ -4909,15 +4946,7 @@ async function uploadFileToUrlViaProxy(
         encodeURIComponent(captureFilename || file.name),
       );
     }
-    const projectAssignmentId = sessionStorage
-      .getItem(DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY)
-      ?.trim();
-    if (projectAssignmentId) {
-      xhr.setRequestHeader(
-        "x-delivery-project-assignment-id",
-        projectAssignmentId,
-      );
-    }
+    for (const [name, value] of Object.entries(rest.headers())) xhr.setRequestHeader(name, value);
 
     let serverProcessingEmitted = false;
     const emitServerProcessing = () => {

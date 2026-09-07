@@ -1,4 +1,4 @@
-import { projectResourceUrl } from "@/lib/enterprise-project";
+import { projectResourceUrl, projectWorkspaceUrl } from "@/lib/enterprise-project";
 import type { MonitorRun, MonitorSummary } from "../../domain";
 import {
   MONITORING_TABS,
@@ -330,7 +330,7 @@ export function writeMonitoringQuery(
   mode: "push" | "replace" = "push",
 ) {
   if (typeof window === "undefined") return;
-  const url = `${window.location.pathname}${monitoringQueryString(state)}${window.location.hash}`;
+  const url = projectWorkspaceUrl(`${window.location.pathname}${monitoringQueryString(state)}${window.location.hash}`);
   window.history[mode === "push" ? "pushState" : "replaceState"](
     window.history.state,
     "",

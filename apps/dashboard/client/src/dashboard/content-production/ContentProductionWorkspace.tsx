@@ -16,11 +16,7 @@ import {
   useConversation,
 } from "@/contexts/ConversationContext";
 import { useSendMessage } from "@/hooks/useSendMessage";
-import {
-  getModelDisplayName,
-  retrieveTask,
-  type TaskResponse,
-} from "@/lib/frontmind-api";
+import { retrieveTask, type TaskResponse } from "@/lib/frontmind-api";
 import type {
   ContentProductionDto,
   ContentProductionInput,
@@ -445,11 +441,7 @@ function ContentProductionInner() {
               <Sparkles size={17} />
               <strong>{activeConversation?.title ?? "制作对话"}</strong>
             </div>
-            <span>
-              {task?.model
-                ? `GLM-5.3 · ${getModelDisplayName(task.model)}`
-                : "Zhipu · GLM-5.3"}
-            </span>
+            <span>FrontMind Agent</span>
           </div>
           {notice && (
             <div className="cp-notice" role="status">

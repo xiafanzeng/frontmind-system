@@ -426,6 +426,16 @@ describe("knowledge-base ChatInput actions", () => {
     mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
   });
 
+  it("describes node edits without exposing the frozen effort", () => {
+    render(<ChatInput fixedAgentProfile="frontmind-pro" syncKnowledgeBaseSnapshot />);
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "placeholder",
+      "输入文字修改要求；仅上传图片会直接本地保存",
+    );
+    expect(screen.queryByLabelText("智能体推理档位")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Low|High|Max)$/)).not.toBeInTheDocument();
+  });
+
   it("replaces confirmation with an official Logo picker while Logo input is required", () => {
     showLogoRequiredPresentation();
 
@@ -923,10 +933,11 @@ describe("knowledge-base ChatInput actions", () => {
       taskId: undefined,
       previousResponseId: undefined,
     });
-    render(<ChatInput purpose="enterprise_qa" />);
-    await waitFor(() =>
-      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
-    );
+    await act(async () => {
+      render(<ChatInput purpose="enterprise_qa" />);
+    });
+    expect(screen.queryByLabelText("智能体推理档位")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Low|High|Max)$/)).not.toBeInTheDocument();
     expect(fetchMock.mock.calls[0][0]).toBe(
       "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
     );

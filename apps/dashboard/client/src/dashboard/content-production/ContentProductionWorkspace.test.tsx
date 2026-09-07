@@ -122,6 +122,13 @@ beforeEach(() => {
 });
 
 describe("内容制作 v4.11 原流程界面", () => {
+  it("does not expose the frozen model effort in a historical production task", async () => {
+    paused("awaiting_blueprint_confirmation");
+    render(<ContentProductionWorkspace />);
+    await screen.findByText("FrontMind Agent");
+    expect(screen.queryByText(/\b(Low|High|Max)\b/)).not.toBeInTheDocument();
+  });
+
   it("offers the four native entries before brand inputs, and waits for an active new conversation before dispatching once", async () => {
     const view = render(<ContentProductionWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "新建任务" }));

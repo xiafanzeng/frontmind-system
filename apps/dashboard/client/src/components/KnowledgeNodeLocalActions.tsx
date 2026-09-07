@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ImageIcon, Pencil, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { deliveryProjectHeaders } from "@/lib/delivery-project";
+import { captureWorkspaceRestOperation, type WorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import { useConversation } from "@/contexts/ConversationContext";
 import {
   Dialog,
@@ -32,14 +32,15 @@ type Library = {
     selectable: boolean;
   }>;
 };
-async function localRequest(path: string, body?: unknown) {
-  const response = await fetch(path, {
+async function localRequest(rest: WorkspaceRestOperation, path: string, body?: unknown) {
+  const response = await rest.fetch(path, {
     method: body ? "POST" : "GET",
     credentials: "include",
-    headers: deliveryProjectHeaders({ "Content-Type": "application/json" }),
+    headers: { "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const result = await response.json();
+  rest.assertActive();
   if (!response.ok)
     throw new Error(result.error?.message ?? "节点状态已变化，请刷新后重试");
   return result;
@@ -59,45 +60,55 @@ export default function KnowledgeNodeLocalActions({
     refreshConversations,
     wakeKnowledgeBaseConversation,
   } = useConversation();
+  const lifetime = useRef(new AbortController());
+  useEffect(() => {
+    if (lifetime.current.signal.aborted) lifetime.current = new AbortController();
+    const mountedLifetime = lifetime.current;
+    return () => mountedLifetime.abort();
+  }, []);
   const [busy, setBusy] = useState(false);
   const [library, setLibrary] = useState<Library | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const readLibrary = async () =>
-    localRequest(
+  const readLibrary = async (rest: WorkspaceRestOperation) =>
+    localRequest(rest,
       `/api/knowledge-base/node/images?${new URLSearchParams({ conversationId, leafId })}`,
     ) as Promise<Library>;
-  const commit = async (observation?: KnowledgeBaseObservationDto) => {
+  const commit = async (rest: WorkspaceRestOperation, observation?: KnowledgeBaseObservationDto) => {
+    rest.assertActive();
     if (observation)
       commitKnowledgeBaseObservation(conversationId, observation);
     await refreshConversations();
+    rest.assertActive();
     window.dispatchEvent(
       new CustomEvent("frontmind:knowledge-progress-updated"),
     );
   };
-  const selectNode = async (data: Library) => {
-    const result = await localRequest("/api/knowledge-base/node/select", {
+  const selectNode = async (rest: WorkspaceRestOperation, data: Library) => {
+    const result = await localRequest(rest, "/api/knowledge-base/node/select", {
       ...data.coordinates,
       leafId,
       clientRequestId: crypto.randomUUID(),
     });
-    await commit(result.observation);
+    await commit(rest, result.observation);
     return result.observation as KnowledgeBaseObservationDto;
   };
   const edit = async () => {
+    const rest = captureWorkspaceRestOperation(lifetime.current.signal);
     setBusy(true);
     try {
-      await selectNode(await readLibrary());
+      await selectNode(rest, await readLibrary(rest));
       toast.success("已选择该节点，可在输入框修改文字或上传图片");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法选择节点");
+      if (!rest.signal.aborted) toast.error(error instanceof Error ? error.message : "无法选择节点");
     } finally {
       setBusy(false);
     }
   };
   const openLibrary = async () => {
+    const rest = captureWorkspaceRestOperation(lifetime.current.signal);
     setBusy(true);
     try {
-      const data = await readLibrary();
+      const data = await readLibrary(rest);
       setLibrary(data);
       setSelected(
         new Set(
@@ -107,12 +118,13 @@ export default function KnowledgeNodeLocalActions({
         ),
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "图片加载失败");
+      if (!rest.signal.aborted) toast.error(error instanceof Error ? error.message : "图片加载失败");
     } finally {
       setBusy(false);
     }
   };
   const saveImages = async () => {
+    const rest = captureWorkspaceRestOperation(lifetime.current.signal);
     if (!library) return;
     const removeAssetIds = library.images
       .filter((image) => image.attached && !selected.has(image.assetId))
@@ -126,9 +138,9 @@ export default function KnowledgeNodeLocalActions({
     }
     setBusy(true);
     try {
-      const observation = await selectNode(library);
+      const observation = await selectNode(rest, library);
 
-      const result = await localRequest("/api/knowledge-base/turn", {
+      const result = await localRequest(rest, "/api/knowledge-base/turn", {
         conversationId,
         clientRequestId: crypto.randomUUID(),
         userMessage: "",
@@ -141,12 +153,12 @@ export default function KnowledgeNodeLocalActions({
         expectedPresentationKey:
           observation.approvedPresentation?.presentationKey,
       });
-      await commit(result.observation);
+      await commit(rest, result.observation);
       wakeKnowledgeBaseConversation(conversationId);
       setLibrary(null);
       toast.success("本地图片修改已提交，不调用 AI");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "图片保存失败");
+      if (!rest.signal.aborted) toast.error(error instanceof Error ? error.message : "图片保存失败");
     } finally {
       setBusy(false);
     }

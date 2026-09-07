@@ -1,3 +1,4 @@
+import { assertEnterpriseProjectActive } from "../enterprise-project-lifecycle";
 import { createHash } from "node:crypto";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
@@ -210,6 +211,7 @@ export const dashboardAgentRuntimeStore: DashboardAgentRuntimeStore = {
       throw new Error("DASHBOARD_PROVIDER_INTENT_REQUIRED");
     const db = await database();
     return db.transaction(async (tx) => {
+      await assertEnterpriseProjectActive(tx, input.identity.enterpriseProjectId, input.identity.accountUserId);
       const [credential] = await tx
         .select({ id: apiCredentials.id })
         .from(apiCredentials)

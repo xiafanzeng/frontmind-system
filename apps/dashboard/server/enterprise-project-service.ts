@@ -94,6 +94,7 @@ export async function createEnterpriseProject(actor: AuthenticatedUser, input: {
     await tx.select({ id: users.id }).from(users).where(eq(users.id, ownerUserId)).limit(1).for("update");
     const [existing] = await tx.select().from(enterpriseProjects).where(eq(enterpriseProjects.id, id)).limit(1);
     if (existing) {
+      if (existing.archivedAt) throw new AuthServiceError("CONFLICT", "该请求对应的企业项目已删除，请重新新建项目");
       if (existing.name !== name || existing.ownerUserId !== ownerUserId) throw new AuthServiceError("CONFLICT", "该请求编号已用于另一企业项目");
       return existing;
     }
@@ -109,7 +110,7 @@ export async function renameEnterpriseProject(actor: AuthenticatedUser, input: {
   const db = await database();
   return db.transaction(async tx => {
     const [project] = await tx.select().from(enterpriseProjects).where(and(eq(enterpriseProjects.id, scope.enterpriseProjectId), eq(enterpriseProjects.ownerUserId, scope.ownerUserId))).limit(1).for("update");
-    if (!project || project.revision !== input.expectedRevision) throw new AuthServiceError("CONFLICT", "项目已更新，请刷新后重试");
+    if (!project || project.archivedAt || project.revision !== input.expectedRevision) throw new AuthServiceError("CONFLICT", "项目已更新或删除，请刷新后重试");
     await tx.update(enterpriseProjects).set({ name: input.name.trim(), revision: project.revision + 1 }).where(eq(enterpriseProjects.id, project.id));
     return { ...project, name: input.name.trim(), revision: project.revision + 1 };
   });
@@ -122,6 +123,6 @@ export async function readEnterpriseDashboard(userId: number) {
   const db = await database();
   const [content] = await db.select().from(enterpriseProjectDashboardContents).where(and(eq(enterpriseProjectDashboardContents.enterpriseProjectId, scope.enterpriseProjectId), eq(enterpriseProjectDashboardContents.userId, userId))).limit(1);
   const [project] = await db.select().from(enterpriseProjects).where(eq(enterpriseProjects.id, scope.enterpriseProjectId)).limit(1);
-  if (!project) throw new AuthServiceError("NOT_FOUND", "企业项目不存在");
+  if (!project || project.archivedAt) throw new AuthServiceError("NOT_FOUND", "企业项目不存在或已删除");
   return { payload: dashboardPayloadSchema.parse(content?.payload ?? createDefaultDashboardPayload(project.name)), sourceName: content?.sourceName ?? null, enterpriseIdentityBoundAt: content?.enterpriseIdentityBoundAt?.getTime() ?? null, revision: content?.revision ?? 0, updatedAt: content?.updatedAt?.getTime() ?? null, knowledgeUpdatedAt: null };
 }

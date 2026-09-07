@@ -11,7 +11,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import {
   ConversationSyncQueue,
   getErrorMessage,
+  type ConversationSyncOperation,
 } from "@/lib/conversation-sync";
+import { enterpriseWorkspaceScope } from "@/lib/enterprise-project";
 import { trpc } from "@/lib/trpc";
 import {
   sanitizeBrandText,
@@ -322,6 +324,17 @@ interface ConversationState {
   conversations: Conversation[];
   activeConversationId: string | null;
 }
+
+// Browser-memory drafts belong to one authenticated account and immutable
+// workspace. Nothing here dispatches provider work or changes a paid intent.
+const retainedWorkspaceDrafts = new Map<
+  string,
+  {
+    state: ConversationState;
+    operations: ConversationSyncOperation<Conversation>[];
+    discardedIds: string[];
+  }
+>();
 
 function attachmentHasBrowserPayload(attachment: Attachment) {
   return Boolean(attachment.file || attachment.blobUrl || attachment.base64);
@@ -1788,7 +1801,8 @@ export function remoteMissingLocalConversations(
 ) {
   return local.filter(
     (conversation) =>
-      !remoteIds.has(conversation.id) && (initial || isDirty(conversation.id)),
+      !remoteIds.has(conversation.id) &&
+      (initial || isDirty(conversation.id) || !hasDurableConversationIdentity(conversation)),
   );
 }
 
@@ -2278,6 +2292,10 @@ export function ConversationProvider({
   const auth = useAuth();
   const authenticatedUser = auth.user as { id: number } | null;
   const userId = authenticatedUser?.id ?? null;
+  const [workspaceScope] = useState(() =>
+    typeof window === "undefined" ? undefined :
+      enterpriseWorkspaceScope(window.location.pathname, window.location.search),
+  );
   const conversationApi = (
     trpc as unknown as { conversation: ConversationTrpcHooks }
   ).conversation;
@@ -2301,6 +2319,7 @@ export function ConversationProvider({
   const hydrationGenerationRef = useRef(0);
   const activeHydrationGenerationRef = useRef<number | null>(null);
   const canSyncRef = useRef(false);
+  const restoredPendingIdsRef = useRef(new Set<string>());
   const listRefetchRef = useRef(listQuery.refetch);
   const syncSnapshotRef = useRef(syncSnapshotMutation.mutateAsync);
   const deleteRemoteRef = useRef(deleteMutation.mutateAsync);
@@ -2370,15 +2389,16 @@ export function ConversationProvider({
       if (nextState === currentState) return;
       replaceState(nextState);
 
-      if (!canSyncRef.current) return;
       for (const conversationId of conversationIdsToSync) {
         const conversation = nextState.conversations.find(
           (candidate) => candidate.id === conversationId,
         );
         if (conversation && hasDurableConversationIdentity(conversation)) {
-          syncQueueRef.current!.enqueueSnapshot(
-            prepareConversationForCloud(conversation),
-          );
+          const snapshot = prepareConversationForCloud(conversation);
+          if (canSyncRef.current) syncQueueRef.current!.enqueueSnapshot(snapshot);
+          else syncQueueRef.current!.restorePending([
+            { kind: "snapshot", conversation: snapshot },
+          ]);
         }
       }
     },
@@ -2403,6 +2423,10 @@ export function ConversationProvider({
         syncQueueRef.current!.enqueueSnapshot(
           prepareConversationForCloud(after),
         );
+      } else {
+        syncQueueRef.current!.restorePending([
+          { kind: "snapshot", conversation: prepareConversationForCloud(after) },
+        ]);
       }
       dispatchKnowledgeBaseProgressUpdated(observation);
     },
@@ -2645,11 +2669,19 @@ export function ConversationProvider({
         canSyncRef.current = true;
         if (initial) {
           for (const conversation of optimisticConversations) {
+            if (
+              restoredPendingIdsRef.current.has(conversation.id) ||
+              !hasDurableConversationIdentity(conversation)
+            ) continue;
             syncQueueRef.current!.enqueueSnapshot(
               prepareConversationForCloud(conversation),
               true,
             );
           }
+        }
+        if (restoredPendingIdsRef.current.size > 0) {
+          setSyncError("会话尚未同步，消息和附件已保留。请重试，请勿重复发送。");
+          restoredPendingIdsRef.current.clear();
         }
       } catch (error: unknown) {
         if (
@@ -2686,7 +2718,27 @@ export function ConversationProvider({
     knowledgeBaseCoordinatorRef.current?.reset();
     knowledgeBaseConversationIdsRef.current.clear();
     locallyDiscardedConversationIdsRef.current.clear();
-    replaceState(EMPTY_STATE);
+    restoredPendingIdsRef.current.clear();
+    const key = JSON.stringify([
+      userId, workspaceScope ?? null, projectAssignmentId ?? null,
+    ]);
+    const retained = userId === null ? undefined : retainedWorkspaceDrafts.get(key);
+    retainedWorkspaceDrafts.delete(key);
+    if (retained) {
+      syncQueueRef.current!.restorePending(retained.operations);
+      for (const operation of retained.operations) {
+        const id = operation.kind === "snapshot"
+          ? operation.conversation.id : operation.id;
+        restoredPendingIdsRef.current.add(id);
+        if (operation.kind === "delete") {
+          locallyDiscardedConversationIdsRef.current.add(id);
+        }
+      }
+      for (const id of retained.discardedIds) {
+        locallyDiscardedConversationIdsRef.current.add(id);
+      }
+    }
+    replaceState(retained?.state ?? EMPTY_STATE);
     setSyncError(null);
 
     if (userId === null) {
@@ -2697,7 +2749,39 @@ export function ConversationProvider({
 
     setHydrationLoading(true);
     void hydrateForUser(userId, true);
-  }, [auth.loading, hydrateForUser, projectAssignmentId, replaceState, userId]);
+    return () => {
+      // Invalidate every late callback before handing its drafts to a future
+      // provider. Pending requests retain the old transport's frozen headers.
+      hydrationGenerationRef.current += 1;
+      activeHydrationGenerationRef.current = null;
+      accountIdRef.current = null;
+      canSyncRef.current = false;
+      const operations = syncQueueRef.current!.detachPending();
+      const dirtyIds = new Set(operations
+        .filter(operation => operation.kind === "snapshot")
+        .map(operation => operation.conversation.id));
+      const conversations = stateRef.current.conversations.filter(conversation =>
+        dirtyIds.has(conversation.id) || !hasDurableConversationIdentity(conversation),
+      );
+      const retainedState = {
+        conversations,
+        activeConversationId: conversations.some(conversation =>
+          conversation.id === stateRef.current.activeConversationId,
+        ) ? stateRef.current.activeConversationId : null,
+      };
+      if (conversations.length || operations.length || locallyDiscardedConversationIdsRef.current.size) {
+        retainedWorkspaceDrafts.set(key, {
+          state: retainedState,
+          operations,
+          discardedIds: [...locallyDiscardedConversationIdsRef.current],
+        });
+      }
+      revokeReleasedAttachmentBlobUrls(stateRef.current, retainedState, retainedState);
+      // The next effect may be an account/assignment change within this mount.
+      // Retained blob URLs now belong exclusively to the scoped draft store.
+      stateRef.current = EMPTY_STATE;
+    };
+  }, [auth.loading, hydrateForUser, projectAssignmentId, replaceState, userId, workspaceScope]);
 
   useEffect(() => {
     // A previous rejection must not turn off the outbox. Newer local snapshots
@@ -2788,11 +2872,12 @@ export function ConversationProvider({
         payload: conversation,
       });
       replaceState(nextState);
-      if (canSyncRef.current && hasDurableConversationIdentity(conversation)) {
-        syncQueueRef.current!.enqueueSnapshot(
-          prepareConversationForCloud(conversation),
-          true,
-        );
+      if (hasDurableConversationIdentity(conversation)) {
+        const snapshot = prepareConversationForCloud(conversation);
+        if (canSyncRef.current) syncQueueRef.current!.enqueueSnapshot(snapshot, true);
+        else syncQueueRef.current!.restorePending([
+          { kind: "snapshot", conversation: snapshot },
+        ]);
       }
       return id;
     },
@@ -2898,6 +2983,7 @@ export function ConversationProvider({
       knowledgeBaseCoordinatorRef.current?.unregister(id);
       commit({ type: "DELETE_CONVERSATION", payload: id });
       if (canSyncRef.current) syncQueueRef.current!.enqueueDelete(id);
+      else syncQueueRef.current!.restorePending([{ kind: "delete", id }]);
     },
     [commit],
   );
@@ -3012,18 +3098,6 @@ export function ConversationProvider({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [refreshConversations]);
-
-  useEffect(
-    () => () => {
-      syncQueueRef.current?.reset();
-      if (typeof URL.revokeObjectURL === "function") {
-        for (const url of collectAttachmentBlobUrls(stateRef.current)) {
-          URL.revokeObjectURL(url);
-        }
-      }
-    },
-    [],
-  );
 
   return (
     <ConversationContext.Provider

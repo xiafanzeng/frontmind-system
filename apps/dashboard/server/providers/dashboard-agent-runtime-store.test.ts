@@ -99,17 +99,17 @@ describe("Dashboard runtime ownership and immutable bindings", () => {
   });
   it("replays a migrated default project's old intent without creating a second provider operation", async () => {
     const legacyIdentity = { ...identity, enterpriseProjectId: "legacy-project", enterpriseProjectLegacyDefault: true };
-    const f = database([[{id:identity.credentialId}], [{id:"local-task"}], [row()]]);
+    const f = database([[{id:"legacy-project",archivedAt:null}], [{id:identity.credentialId}], [{id:"local-task"}], [row()]]);
     const found = await dashboardAgentRuntimeStore.reserve({ identity:legacyIdentity, intentId:"first-turn", model:"glm-5.3", effort:"high" });
     expect(found.localTaskId).toBe("local-task");
     expect(f.insert).not.toHaveBeenCalled();
-    const lookup = new MySqlDialect().sqlToQuery(f.predicates[1]);
+    const lookup = new MySqlDialect().sqlToQuery(f.predicates[2]);
     expect(lookup.params).toContain("legacy-project");
     expect(lookup.sql).toContain("idempotency_key_hash");
     expect(lookup.sql).not.toContain("is null");
   });
   it("refuses an ambiguous migrated replay rather than sending another provider request", async () => {
-    const f = database([[{id:identity.credentialId}], [{id:"old-task"},{id:"new-task"}]]);
+    const f = database([[{id:"legacy-project",archivedAt:null}], [{id:identity.credentialId}], [{id:"old-task"},{id:"new-task"}]]);
     await expect(dashboardAgentRuntimeStore.reserve({ identity:{...identity,enterpriseProjectId:"legacy-project",enterpriseProjectLegacyDefault:true}, intentId:"first-turn", model:"glm-5.3", effort:"high" })).rejects.toThrow("DASHBOARD_PROVIDER_INTENT_AMBIGUOUS");
     expect(f.insert).not.toHaveBeenCalled();
   });

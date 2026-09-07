@@ -1,7 +1,19 @@
-/** A project switch reloads the document so queued requests and caches cannot cross scopes. */
+import { navigate } from "wouter/use-browser-location";
+
+/** WorkspaceQueryProvider replaces transports and caches when this scope changes. */
 const PROJECT_KEY = "frontmind.enterpriseProject";
 const validId = (value: unknown): value is string =>
   typeof value === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+
+export function isEnterpriseWorkspacePath(path: string) {
+  return ["/", "/knowledge-base", "/enterprise-qa", "/content-production"].includes(path) || /^\/(monitoring-system|publishing)(?:\/|$)/.test(path);
+}
+
+export function enterpriseWorkspaceScope(path: string, search: string): string | undefined {
+  if (!isEnterpriseWorkspacePath(path)) return undefined;
+  const id = new URLSearchParams(search).get("enterpriseProjectId");
+  return validId(id) ? id : undefined;
+}
 
 export function activeEnterpriseProjectId(): string | undefined {
   if (typeof window === "undefined") return undefined;
@@ -33,15 +45,19 @@ export function clearEnterpriseProject() { sessionStorage.removeItem(PROJECT_KEY
 
 export function projectWorkspaceUrl(path: string, id = activeEnterpriseProjectId()): string {
   const url = new URL(path, window.location.origin);
-  if (id) url.searchParams.set("enterpriseProjectId", id);
+  if (url.origin !== window.location.origin) return path;
+  if (isEnterpriseWorkspacePath(url.pathname)) {
+    if (id && !url.searchParams.has("enterpriseProjectId")) url.searchParams.set("enterpriseProjectId", id);
+  } else url.searchParams.delete("enterpriseProjectId");
   const owner = new URLSearchParams(window.location.search).get("operatorOwnerId");
-  if (owner && /^\d+$/.test(owner) && url.pathname !== "/agent") url.searchParams.set("operatorOwnerId", owner);
+  if (owner && /^\d+$/.test(owner) && (isEnterpriseWorkspacePath(url.pathname) || url.pathname === "/account") && !url.searchParams.has("operatorOwnerId")) url.searchParams.set("operatorOwnerId", owner);
+  if (url.pathname === "/agent") url.searchParams.delete("operatorOwnerId");
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
 export function switchEnterpriseProject(ownerUserId: number, id: string) {
   rememberEnterpriseProject(ownerUserId, id);
-  window.location.assign(projectWorkspaceUrl("/?view=knowledge", id));
+  navigate(projectWorkspaceUrl("/?view=knowledge", id));
 }
 
 /** Preserve the project on browser-native image and download requests. */

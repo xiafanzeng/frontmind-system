@@ -25,6 +25,7 @@ import {
 } from "../general-agent-runtime";
 import { contentProductionInputSchema } from "../../shared/content-production";
 import { contentProductionSystemContext } from "../content-production-runtime";
+import { runWithEnterpriseProjectScope } from "../enterprise-project-context";
 
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -320,6 +321,13 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
+  it("keeps an explicitly account-scoped general agent outside an ambient enterprise project", async () => {
+    const f = fixture();
+    await runWithEnterpriseProjectScope({ enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 7, actorUserId: 7, isLegacyDefault: true }, async () => {
+      await f.client({ enterpriseProjectId: null }).createTask(request);
+    });
+    expect([...f.rows.values()][0].identity).toMatchObject({ enterpriseProjectId: null, enterpriseProjectLegacyDefault: false });
+  });
   it("reuses the unsent High session after recharge without duplicating provider resources", async () => {
     const f = fixture();
     let funded = false;
@@ -371,6 +379,10 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
         .createTask(request),
     ).rejects.toThrow("AI_BALANCE_INSUFFICIENT");
     expect(authorize).toHaveBeenCalledOnce();
+    const runtime = [...f.rows.values()][0].runtime;
+    expect(runtime.commands).toHaveLength(1);
+    expect(runtime.commands[0].eventId).toBeUndefined();
+    expect(runtime.mutations["message:initial"]).toBeUndefined();
     expect(
       f.calls.filter(
         (call) => call.method === "POST" && call.path.endsWith("/events"),

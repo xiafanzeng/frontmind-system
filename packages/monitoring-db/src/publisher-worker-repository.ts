@@ -160,7 +160,9 @@ export class PublisherWorkerRepository {
               ),
             ),
             sql`${publisherJobs.attempts} < ${publisherJobs.maxAttempts}`,
-            input.allowedTypes ? inArray(publisherJobs.type, [...input.allowedTypes]) : undefined,
+            input.allowedTypes
+              ? inArray(publisherJobs.type, [...input.allowedTypes])
+              : undefined,
           ),
         )
         .orderBy(
@@ -354,6 +356,7 @@ export class PublisherWorkerRepository {
       .values({
         id: randomUUID(),
         type: "sync_kol_catalog",
+        enterpriseProjectId: null,
         deterministicKey: `publisher:catalog:${slot}`,
         aggregateId: slot,
         payload: {},
@@ -419,6 +422,7 @@ export class PublisherWorkerRepository {
             type: "reconcile_publication_unknown",
             key: `publisher:reconcile:${item.id}:${item.attemptCount}`,
             aggregateId: item.id,
+            enterpriseProjectId: item.enterpriseProjectId,
             payload: { itemId: item.id },
             at,
           });
@@ -633,6 +637,16 @@ export class PublisherWorkerRepository {
         .limit(1);
       if (!row || terminalItem(row.item.status))
         return { status: "terminal" as const };
+      if (
+        row.item.ownerId !== row.batch.ownerId ||
+        row.item.ownerId !== row.version.ownerId ||
+        row.item.enterpriseProjectId !== row.batch.enterpriseProjectId ||
+        row.item.enterpriseProjectId !== row.version.enterpriseProjectId
+      )
+        throw new RepositoryError(
+          "INVALID_STATE",
+          "Publication project provenance mismatch",
+        );
       if (row.item.status !== "queued") {
         return { status: "terminal" as const };
       }
@@ -797,6 +811,7 @@ export class PublisherWorkerRepository {
         type: "poll_publication_item",
         key: `publisher:poll:${input.itemId}:1`,
         aggregateId: input.itemId,
+        enterpriseProjectId: item.enterpriseProjectId,
         payload: { itemId: input.itemId },
         at: input.nextPollAt,
       });
@@ -873,6 +888,7 @@ export class PublisherWorkerRepository {
         type: "reconcile_publication_unknown",
         key: `publisher:reconcile:${input.itemId}:${item.attemptCount}`,
         aggregateId: input.itemId,
+        enterpriseProjectId: item.enterpriseProjectId,
         payload: { itemId: input.itemId },
         at: input.observedAt,
       });
@@ -2451,7 +2467,10 @@ export class PublisherWorkerRepository {
     if (!storageKeys.length) return;
     await this.db.transaction(async (tx) => {
       const [record] = await tx
-        .select({ status: publisherDocxImports.status })
+        .select({
+          status: publisherDocxImports.status,
+          enterpriseProjectId: publisherDocxImports.enterpriseProjectId,
+        })
         .from(publisherDocxImports)
         .where(
           and(
@@ -2478,6 +2497,7 @@ export class PublisherWorkerRepository {
             storageKeys.slice(offset, offset + 25).map((storageKey) => ({
               id: randomUUID(),
               ownerId: input.ownerId,
+              enterpriseProjectId: record.enterpriseProjectId,
               operationId,
               storageKey,
               storageKeyHash: sha256(storageKey),
@@ -2572,6 +2592,7 @@ export class PublisherWorkerRepository {
       );
       if (!record.articleId) {
         await tx.insert(publisherArticles).values({
+          enterpriseProjectId: record.enterpriseProjectId,
           id: articleId,
           ownerId: input.ownerId,
           workingName,
@@ -2587,6 +2608,7 @@ export class PublisherWorkerRepository {
         });
       }
       await tx.insert(publisherArticleVersions).values({
+        enterpriseProjectId: record.enterpriseProjectId,
         id: versionId,
         ownerId: input.ownerId,
         articleId,
@@ -2608,6 +2630,7 @@ export class PublisherWorkerRepository {
           );
         }
         await tx.insert(publisherArticleAssets).values({
+          enterpriseProjectId: record.enterpriseProjectId,
           id: image.assetId,
           ownerId: input.ownerId,
           articleId,
@@ -2628,6 +2651,7 @@ export class PublisherWorkerRepository {
             : null,
         });
         await tx.insert(publisherArticleVersionAssets).values({
+          enterpriseProjectId: record.enterpriseProjectId,
           ownerId: input.ownerId,
           articleVersionId: versionId,
           assetId: image.assetId,
@@ -3134,6 +3158,7 @@ async function enqueueJob(
     type: typeof publisherJobs.$inferInsert.type;
     key: string;
     aggregateId: string;
+    enterpriseProjectId?: string | null;
     payload: Record<string, unknown>;
     at: Date;
   },
@@ -3145,6 +3170,7 @@ async function enqueueJob(
       type: input.type,
       deterministicKey: input.key,
       aggregateId: input.aggregateId,
+      enterpriseProjectId: input.enterpriseProjectId ?? null,
       payload: input.payload,
       availableAt: input.at,
     })

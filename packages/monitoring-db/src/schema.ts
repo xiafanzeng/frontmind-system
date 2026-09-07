@@ -1,3 +1,4 @@
+import { currentMonitoringEnterpriseProjectId } from "./enterprise-scope.js";
 import { sql } from "drizzle-orm";
 import type { KeywordEvaluation } from "@frontmind/monitoring-contracts";
 import {
@@ -344,6 +345,7 @@ export const sessions = mysqlTable(
 export const projects = mysqlTable(
   "projects",
   {
+    enterpriseProjectId: id("enterprise_project_id"),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -360,6 +362,10 @@ export const projects = mysqlTable(
   },
   (table) => [
     index("projects_owner_created_idx").on(table.ownerId, table.createdAt),
+    index("projects_enterprise_scope_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     index("projects_purge_idx").on(table.purgeAfter),
   ],
 );
@@ -1232,7 +1238,7 @@ export const providerCosts = mysqlTable(
  * Customer funds are stored in integer 1/10,000 CNY units. These tables are
  * deliberately separate from the dormant integer-attempt quota tables above.
  */
-export const moneyWallets = mysqlTable("money_wallets", {
+export const moneyWallets = mysqlTable("unified_money_wallets", {
   userId: id("user_id")
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
@@ -1243,6 +1249,18 @@ export const moneyWallets = mysqlTable("money_wallets", {
     .notNull()
     .default(sql`0`),
   reservedTenThousandths: bigint("reserved_ten_thousandths", {
+    mode: "bigint",
+    unsigned: true,
+  })
+    .notNull()
+    .default(sql`0`),
+  frozenTenThousandths: bigint("frozen_ten_thousandths", {
+    mode: "bigint",
+    unsigned: true,
+  })
+    .notNull()
+    .default(sql`0`),
+  aiCostRemainderNanos: bigint("ai_cost_remainder_nanos", {
     mode: "bigint",
     unsigned: true,
   })
@@ -1751,6 +1769,9 @@ export const dailyRunAggregates = mysqlTable(
 export const publisherArticles = mysqlTable(
   "publisher_articles",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -1772,6 +1793,10 @@ export const publisherArticles = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_articles_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_articles_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_articles_current_version_uq").on(table.currentVersionId),
     index("pub_articles_owner_updated_idx").on(table.ownerId, table.updatedAt),
@@ -1782,6 +1807,9 @@ export const publisherArticles = mysqlTable(
 export const publisherDocxImports = mysqlTable(
   "publisher_docx_imports",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -1809,6 +1837,10 @@ export const publisherDocxImports = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_docx_imports_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_imports_id_owner_uq").on(table.id, table.ownerId),
     index("pub_imports_owner_status_idx").on(table.ownerId, table.status),
     index("pub_imports_expiry_idx").on(table.expiresAt),
@@ -1824,6 +1856,9 @@ export const publisherDocxImports = mysqlTable(
 export const publisherArticleVersions = mysqlTable(
   "publisher_article_versions",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -1845,6 +1880,10 @@ export const publisherArticleVersions = mysqlTable(
     createdAt: createdAt(),
   },
   (table) => [
+    index("pub_article_versions_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_versions_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_versions_article_number_uq").on(
       table.articleId,
@@ -1871,6 +1910,9 @@ export const publisherArticleVersions = mysqlTable(
 export const publisherArticleAssets = mysqlTable(
   "publisher_article_assets",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -1895,6 +1937,10 @@ export const publisherArticleAssets = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_article_assets_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_assets_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_assets_article_sha_uq").on(table.articleId, table.sha256),
     uniqueIndex("pub_assets_capability_uq").on(table.publicCapabilityDigest),
@@ -1915,6 +1961,9 @@ export const publisherArticleAssets = mysqlTable(
 export const publisherArticleVersionAssets = mysqlTable(
   "publisher_article_version_assets",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     ownerId: id("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -1924,6 +1973,10 @@ export const publisherArticleVersionAssets = mysqlTable(
     createdAt: createdAt(),
   },
   (table) => [
+    index("pub_article_version_assets_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     primaryKey({ columns: [table.articleVersionId, table.assetId] }),
     index("pub_version_assets_owner_idx").on(table.ownerId),
     foreignKey({
@@ -1948,6 +2001,9 @@ export const publisherArticleVersionAssets = mysqlTable(
 export const publisherObjectLeases = mysqlTable(
   "publisher_object_leases",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -1961,6 +2017,10 @@ export const publisherObjectLeases = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_object_leases_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_object_leases_operation_key_uq").on(
       table.ownerId,
       table.operationId,
@@ -2344,6 +2404,9 @@ export const publisherLiveWhitelist = mysqlTable("publisher_live_whitelist", {
 export const publisherDrafts = mysqlTable(
   "publisher_drafts",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -2361,6 +2424,10 @@ export const publisherDrafts = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_drafts_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_drafts_id_owner_uq").on(table.id, table.ownerId),
     index("pub_drafts_owner_updated_idx").on(table.ownerId, table.updatedAt),
     foreignKey({
@@ -2377,6 +2444,9 @@ export const publisherDrafts = mysqlTable(
 export const publisherPreflights = mysqlTable(
   "publisher_preflights",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -2391,6 +2461,10 @@ export const publisherPreflights = mysqlTable(
     createdAt: createdAt(),
   },
   (table) => [
+    index("pub_preflights_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_preflights_id_owner_uq").on(table.id, table.ownerId),
     index("pub_preflights_owner_expiry_idx").on(table.ownerId, table.expiresAt),
     foreignKey({
@@ -2404,6 +2478,9 @@ export const publisherPreflights = mysqlTable(
 export const publisherDraftItems = mysqlTable(
   "publisher_draft_items",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -2437,6 +2514,10 @@ export const publisherDraftItems = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_draft_items_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_draft_items_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_draft_items_draft_media_uq").on(
       table.draftId,
@@ -2454,6 +2535,9 @@ export const publisherDraftItems = mysqlTable(
 export const publisherBatches = mysqlTable(
   "publisher_batches",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -2489,6 +2573,10 @@ export const publisherBatches = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_batches_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_batches_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_batches_owner_idempotency_uq").on(
       table.ownerId,
@@ -2516,6 +2604,9 @@ export const publisherBatches = mysqlTable(
 export const publisherItems = mysqlTable(
   "publisher_items",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     ownerId: id("owner_id")
       .notNull()
@@ -2576,6 +2667,10 @@ export const publisherItems = mysqlTable(
     updatedAt: updatedAt(),
   },
   (table) => [
+    index("pub_items_enterprise_idx").on(
+      table.ownerId,
+      table.enterpriseProjectId,
+    ),
     uniqueIndex("pub_items_id_owner_uq").on(table.id, table.ownerId),
     uniqueIndex("pub_items_submission_key_uq").on(table.submissionKey),
     uniqueIndex("pub_items_batch_media_uq").on(
@@ -2660,6 +2755,9 @@ export const publisherReconciliationCandidates = mysqlTable(
 export const publisherJobs = mysqlTable(
   "publisher_jobs",
   {
+    enterpriseProjectId: id("enterprise_project_id").$defaultFn(
+      () => currentMonitoringEnterpriseProjectId() ?? sql`NULL`,
+    ),
     id: id("id").primaryKey(),
     type: mysqlEnum("type", publisherJobTypes).notNull(),
     status: mysqlEnum("status", publisherJobStatuses)
@@ -2761,37 +2859,8 @@ export const publisherWebhookItems = mysqlTable(
   ],
 );
 
-/** A wholly separate customer wallet for media publishing. */
-export const mediaPublishingWallets = mysqlTable("media_publishing_wallets", {
-  userId: id("user_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  currency: varchar("currency", { length: 3 }).notNull().default("CNY"),
-  balanceTenThousandths: bigint("balance_ten_thousandths", {
-    mode: "bigint",
-  })
-    .notNull()
-    .default(sql`0`),
-  reservedTenThousandths: bigint("reserved_ten_thousandths", {
-    mode: "bigint",
-    unsigned: true,
-  })
-    .notNull()
-    .default(sql`0`),
-  frozenTenThousandths: bigint("frozen_ten_thousandths", {
-    mode: "bigint",
-    unsigned: true,
-  })
-    .notNull()
-    .default(sql`0`),
-  spentTenThousandths: bigint("spent_ten_thousandths", {
-    mode: "bigint",
-    unsigned: true,
-  })
-    .notNull()
-    .default(sql`0`),
-  updatedAt: updatedAt(),
-});
+/** Both domains lock the same account. Legacy wallet tables remain migration evidence. */
+export const mediaPublishingWallets = moneyWallets;
 
 export const mediaPublishingReservations = mysqlTable(
   "media_publishing_reservations",

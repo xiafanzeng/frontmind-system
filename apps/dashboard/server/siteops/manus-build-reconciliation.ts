@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import {
@@ -528,7 +529,7 @@ export async function reconcileExistingManusBuild(
       .where(
         and(
           eq(siteProjects.id, prepared.projectId),
-          eq(siteProjects.userId, prepared.userId),
+          enterpriseOwnerPredicate(siteProjects, prepared.userId),
           eq(siteProjects.status, prepared.previousProjectStatus),
           eq(siteProjects.revision, prepared.previousProjectRevision),
           nullableCoordinate(

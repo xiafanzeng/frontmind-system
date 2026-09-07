@@ -1,3 +1,8 @@
+import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "../enterprise-project-context";
+import { enterpriseAccountOwnerPredicate } from "../enterprise-project-scope";
+import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
+import { enterpriseOwnerPredicate, enterpriseProjectUrl } from "../enterprise-project-scope";
+import { runWithSiteOpsOAuthProjectScope } from "./oauth-project-context";
 import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
@@ -38,7 +43,6 @@ import {
   visualCandidatePools,
   websiteStyleSampleBatches,
   websiteStyleSamples,
-  workspaceSiteProfiles,
 } from "../../drizzle/schema";
 import {
   SITEOPS_DEFAULT_WORKFLOW,
@@ -300,7 +304,7 @@ function assertEnabled() {
 }
 
 function assertCustomer(actor: AuthenticatedUser) {
-  if (actor.role !== "user") {
+  if (actor.role !== "user" && !getEnterpriseProjectScope()) {
     throw new SiteOpsServiceError(
       "FORBIDDEN",
       "只有客户本人可以操作 AI 建站会话。",
@@ -1217,10 +1221,10 @@ async function loadOwnedProject(
     .where(
       conversationId
         ? and(
-            eq(siteProjects.userId, userId),
+            enterpriseOwnerPredicate(siteProjects, userId),
             eq(siteProjects.conversationId, conversationId),
           )
-        : eq(siteProjects.userId, userId),
+        : enterpriseOwnerPredicate(siteProjects, userId),
     )
     .limit(1);
   if (lock) query = query.for("update");
@@ -2370,7 +2374,7 @@ async function projectObservationOnce(
         .from(knowledgeBaseSnapshots)
         .where(
           and(
-            eq(knowledgeBaseSnapshots.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
             eq(knowledgeBaseSnapshots.status, "active"),
           ),
         )
@@ -2442,8 +2446,8 @@ async function projectObservationOnce(
     () =>
       executor
         .select()
-        .from(workspaceSiteProfiles)
-        .where(eq(workspaceSiteProfiles.userId, input.userId))
+        .from(enterpriseSiteProfileTable())
+        .where(enterpriseSiteProfileOwnerPredicate(input.userId))
         .limit(1),
     () =>
       executor
@@ -2779,7 +2783,7 @@ async function projectObservationOnce(
       id: row.id,
       label: row.label,
       title: providerTitle || row.note?.trim() || `视觉方向 ${row.label}`,
-      previewUrl: `/api/site-ops/style-previews/${row.id}`,
+      previewUrl: enterpriseProjectUrl(`/api/site-ops/style-previews/${row.id}`),
       note: row.note,
       ...heroMetadata,
       selected: selectedSampleIds.has(row.id),
@@ -2946,10 +2950,10 @@ async function projectObservationOnce(
         ordinal: row.ordinal,
         status: row.status,
         previewUrl: row.distLocalAssetId
-          ? `/api/site-ops/builds/${row.id}/preview/`
+          ? enterpriseProjectUrl(`/api/site-ops/builds/${row.id}/preview/`)
           : null,
         sourceUrl: row.sourceLocalAssetId
-          ? `/api/site-ops/builds/${row.id}/source`
+          ? enterpriseProjectUrl(`/api/site-ops/builds/${row.id}/source`)
           : null,
         contentPlan: {
           status:
@@ -2996,7 +3000,7 @@ async function projectObservationOnce(
         channel: row.channel,
         status: row.status,
         archiveUrl: row.archiveLocalAssetId
-          ? `/api/site-ops/social-packages/${row.id}/archive`
+          ? enterpriseProjectUrl(`/api/site-ops/social-packages/${row.id}/archive`)
           : null,
         createdAt: row.createdAt.toISOString(),
       }),
@@ -3033,37 +3037,37 @@ async function projectObservation(
 export async function openSiteOps(actor: AuthenticatedUser) {
   assertEnabled();
   assertCustomer(actor);
-  await requireSiteOpsEntitlement(actor.id);
+  await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const db = await requireDb();
   const project = await db.transaction(async (tx: any) => {
     await tx
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.id, actor.id))
+      .where(eq(users.id, enterpriseWorkspaceUserId(actor.id)))
       .limit(1)
       .for("update");
-    const existing = await loadOwnedProject(tx, actor.id, undefined, true);
+    const existing = await loadOwnedProject(tx, enterpriseWorkspaceUserId(actor.id), undefined, true);
     if (existing) return existing;
 
     const projectId = randomUUID();
-    const conversationId = `siteops:${actor.id}`;
+    const conversationId = `siteops:${getEnterpriseProjectScope()?.enterpriseProjectId ?? enterpriseWorkspaceUserId(actor.id)}`;
     await tx.insert(conversations).values({
       id: conversationId,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       title: "官网任务与AI建站",
       status: "awaiting_input",
       version: 1,
     });
     await tx.insert(siteProjects).values({
       id: projectId,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       conversationId,
       status: "draft",
       revision: 1,
     });
     await appendMessage(tx, {
       conversationId,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       role: "assistant",
       content:
         "点击下方按钮，FrontMind 将自动连接当前企业知识库并开始整理建站资料。",
@@ -3075,25 +3079,25 @@ export async function openSiteOps(actor: AuthenticatedUser) {
         payload: { requested: "current_knowledge" },
       },
     });
-    const inserted = await loadOwnedProject(tx, actor.id, conversationId);
+    const inserted = await loadOwnedProject(tx, enterpriseWorkspaceUserId(actor.id), conversationId);
     if (!inserted) throw new Error("SITEOPS_PROJECT_INSERT_FAILED");
     return inserted;
   });
-  return projectObservation(db, { userId: actor.id, project });
+  return projectObservation(db, { userId: enterpriseWorkspaceUserId(actor.id), project });
 }
 
 export async function observeSiteOps(actor: AuthenticatedUser, value: unknown) {
   assertEnabled();
   assertCustomer(actor);
-  await requireSiteOpsEntitlement(actor.id);
+  await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const input = siteOpsObserveInputSchema.parse(value);
   const db = await requireDb();
-  const project = await loadOwnedProject(db, actor.id, input.conversationId);
+  const project = await loadOwnedProject(db, enterpriseWorkspaceUserId(actor.id), input.conversationId);
   if (!project) {
     throw new SiteOpsServiceError("NOT_FOUND", "AI 建站会话不存在。", 404);
   }
   return projectObservation(db, {
-    userId: actor.id,
+    userId: enterpriseWorkspaceUserId(actor.id),
     project,
     afterSequence: input.afterSequence,
   });
@@ -3155,9 +3159,9 @@ async function requireOwnedAliyunProject(
 ) {
   assertEnabled();
   assertCustomer(actor);
-  await requireSiteOpsEntitlement(actor.id);
+  await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const db = await requireDb();
-  const project = await loadOwnedProject(db, actor.id, conversationId);
+  const project = await loadOwnedProject(db, enterpriseWorkspaceUserId(actor.id), conversationId);
   if (!project) {
     throw new SiteOpsServiceError("NOT_FOUND", "AI 建站会话不存在。", 404);
   }
@@ -3173,7 +3177,7 @@ export async function getSiteOpsAliyunConnection(
   try {
     const status = await getAliyunCustomerConnectionStatus({
       projectId: project.id,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
     });
     return {
       configured: status.status === "active",
@@ -3202,7 +3206,9 @@ export async function beginSiteOpsAliyunOAuth(
   try {
     return await createAliyunOAuthAuthorization({
       projectId: project.id,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
+      actorUserId: actor.id,
+      enterpriseProjectId: project.enterpriseProjectId,
     });
   } catch (error) {
     translateAliyunConnectionError(error);
@@ -3219,7 +3225,7 @@ export async function listSiteOpsAliyunDomains(
     return siteOpsAliyunDomainListSchema.parse(
       await listAliyunCustomerDomains({
         projectId: project.id,
-        userId: actor.id,
+        userId: enterpriseWorkspaceUserId(actor.id),
       }),
     );
   } catch (error) {
@@ -3231,26 +3237,37 @@ export async function completeSiteOpsAliyunOAuth(input: {
   actor: AuthenticatedUser;
   credentialId: string;
   projectId: string;
+  userId: number;
+  actorUserId?: number;
+  enterpriseProjectId?: string | null;
   accountUid: string;
   refreshToken: string;
 }) {
-  assertEnabled();
-  assertCustomer(input.actor);
-  await requireSiteOpsEntitlement(input.actor.id);
   const credentialId = z.string().uuid().parse(input.credentialId);
   const projectId = z.string().uuid().parse(input.projectId);
-  try {
-    await bindAliyunCustomerAccountFromOAuth({
-      projectId,
-      userId: input.actor.id,
-      credentialId,
-      accountUid: input.accountUid,
-      refreshToken: input.refreshToken,
-    });
-    return { connected: true as const };
-  } catch (error) {
-    translateAliyunConnectionError(error);
-  }
+  return await runWithSiteOpsOAuthProjectScope(input.actor, {
+    projectId,
+    userId: input.userId,
+    actorUserId: input.actorUserId,
+    enterpriseProjectId: input.enterpriseProjectId,
+  }, async () => {
+    assertEnabled();
+    assertCustomer(input.actor);
+    // Completing an OAuth connection is not a model operation. Revalidate the
+    // frozen project and account here without consulting historical packages.
+    try {
+      await bindAliyunCustomerAccountFromOAuth({
+        projectId,
+        userId: input.userId,
+        credentialId,
+        accountUid: input.accountUid,
+        refreshToken: input.refreshToken,
+      });
+      return { connected: true as const };
+    } catch (error) {
+      translateAliyunConnectionError(error);
+    }
+  });
 }
 
 export async function disconnectSiteOpsAliyunConnection(
@@ -3262,7 +3279,7 @@ export async function disconnectSiteOpsAliyunConnection(
   try {
     return await disconnectAliyunCustomerConnection({
       projectId: project.id,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
     });
   } catch (error) {
     translateAliyunConnectionError(error);
@@ -3330,7 +3347,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
   if (input.localAssetIds.length === 0) return [];
   const project = await loadOwnedProject(
     input.db,
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
     input.conversationId,
   );
   if (!project?.knowledgeInputEpochId) {
@@ -3364,7 +3381,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
       and(
         eq(siteBuilds.id, project.currentBuildId),
         eq(siteBuilds.projectId, project.id),
-        eq(siteBuilds.userId, input.actor.id),
+        eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
         gte(siteBuilds.createdAt, project.currentTaskStartedAt),
       ),
     )
@@ -3396,7 +3413,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
         and(
           eq(localAssets.id, sourceAssetId),
           eq(localAssets.scope, "managed_user"),
-          eq(localAssets.accountUserId, input.actor.id),
+          enterpriseAccountOwnerPredicate(localAssets, enterpriseWorkspaceUserId(input.actor.id)),
           isNull(localAssets.presalesProjectId),
           gt(localAssets.retainUntil, new Date()),
           eq(localAssets.siteOpsKnowledgeInputEpochId, knowledgeInputEpochId),
@@ -3413,7 +3430,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     let resolved: Awaited<ReturnType<typeof ownedFileContentResolver.resolve>>;
     try {
       resolved = await ownedFileContentResolver.resolve({
-        ownerUserId: input.actor.id,
+        ownerUserId: enterpriseWorkspaceUserId(input.actor.id),
         fileId: sourceAssetId,
         expectedSourceKind: "managed_local_asset",
       });
@@ -3480,7 +3497,7 @@ async function freezeSiteOpsRevisionInputAssets(input: {
     }
     publicPaths.add(publicPath);
     const stable = await persistSiteOpsArtifact({
-      userId: input.actor.id,
+      userId: enterpriseWorkspaceUserId(input.actor.id),
       projectId: project.id,
       kind: "revision-input",
       filename: `frontmind-user-media-${contentSha256}${publicExtension}`,
@@ -3515,7 +3532,7 @@ export async function sendSiteOpsMessage(
 ) {
   assertEnabled();
   assertCustomer(actor);
-  const entitlement = await requireSiteOpsEntitlement(actor.id);
+  const entitlement = await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const input = siteOpsSendMessageInputSchema.parse(value);
   const request = {
     action: "brief_message",
@@ -3530,7 +3547,7 @@ export async function sendSiteOpsMessage(
   // first-writer races.
   const replayProject = await loadOwnedProject(
     db,
-    actor.id,
+    enterpriseWorkspaceUserId(actor.id),
     input.conversationId,
   );
   if (!replayProject) {
@@ -3560,7 +3577,7 @@ export async function sendSiteOpsMessage(
   await db.transaction(async (tx: any) => {
     const project = await loadOwnedProject(
       tx,
-      actor.id,
+      enterpriseWorkspaceUserId(actor.id),
       input.conversationId,
       true,
     );
@@ -3593,7 +3610,7 @@ export async function sendSiteOpsMessage(
     await tx.insert(conversationTurns).values({
       id: turnId,
       conversationId: project.conversationId,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       clientRequestId: input.clientRequestId,
       operationKey: `siteops:${hashSiteOpsRequest({
         projectId: project.id,
@@ -3635,7 +3652,7 @@ export async function sendSiteOpsMessage(
     await tx.insert(siteOperations).values({
       id: operationId,
       projectId: project.id,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       conversationTurnId: turnId,
       kind: "brief_message",
       status: "succeeded",
@@ -3646,7 +3663,7 @@ export async function sendSiteOpsMessage(
     });
     await appendMessage(tx, {
       conversationId: project.conversationId,
-      userId: actor.id,
+      userId: enterpriseWorkspaceUserId(actor.id),
       role: "user",
       content: input.text,
       turnId,
@@ -3659,7 +3676,7 @@ export async function sendSiteOpsMessage(
     if (project.status === "collecting_brief" && existingBrief.success) {
       await appendMessage(tx, {
         conversationId: project.conversationId,
-        userId: actor.id,
+        userId: enterpriseWorkspaceUserId(actor.id),
         role: "assistant",
         content: "已记录你补充的信息。资料完整后即可生成视觉候选。",
         turnId,
@@ -4138,7 +4155,7 @@ async function createActionTurn(
   await tx.insert(conversationTurns).values({
     id: turnId,
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     clientRequestId: input.requestId,
     operationKey: `siteops:${hashSiteOpsRequest({
       projectId: input.project.id,
@@ -4173,7 +4190,7 @@ async function reserveOperation(
   await tx.insert(siteOperations).values({
     id,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     conversationTurnId: input.turnId,
     buildId: input.buildId,
     kind: input.kind,
@@ -4328,7 +4345,7 @@ async function handleSelectSnapshot(
   const lockedUsers = await tx
     .select({ id: users.id })
     .from(users)
-    .where(eq(users.id, input.actor.id))
+    .where(eq(users.id, enterpriseWorkspaceUserId(input.actor.id)))
     .limit(1)
     .for("update");
   if (!lockedUsers[0]) {
@@ -4343,7 +4360,7 @@ async function handleSelectSnapshot(
     .from(knowledgeBaseSnapshots)
     .where(
       and(
-        eq(knowledgeBaseSnapshots.userId, input.actor.id),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, enterpriseWorkspaceUserId(input.actor.id)),
         eq(knowledgeBaseSnapshots.status, "active"),
       ),
     )
@@ -4391,14 +4408,14 @@ async function handleSelectSnapshot(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "user",
     turnId: input.turnId,
     content: "从当前企业知识库开始建站",
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content:
@@ -4478,7 +4495,7 @@ async function handleVisualSearch(
       .where(
         and(
           eq(siteBuilds.projectId, input.project.id),
-          eq(siteBuilds.userId, input.actor.id),
+          eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
           gte(siteBuilds.createdAt, input.project.currentTaskStartedAt),
           notInArray(siteBuilds.status, ["cancelled", "superseded"]),
         ),
@@ -4503,7 +4520,7 @@ async function handleVisualSearch(
     .where(
       and(
         eq(websiteStyleSampleBatches.siteProjectId, input.project.id),
-        eq(websiteStyleSampleBatches.userId, input.actor.id),
+        eq(websiteStyleSampleBatches.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
         ne(websiteStyleSampleBatches.status, "superseded"),
         gte(
@@ -4532,7 +4549,7 @@ async function handleVisualSearch(
     .where(
       and(
         eq(siteOperations.projectId, input.project.id),
-        eq(siteOperations.userId, input.actor.id),
+        eq(siteOperations.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(siteOperations.kind, "visual_search"),
         gte(siteOperations.createdAt, input.project.currentTaskStartedAt),
       ),
@@ -4736,7 +4753,7 @@ async function handleVisualSearch(
       ? await frozenSupplementalVisualWorkflowVersion(tx, {
           batches: currentPublishedBatches,
           projectId: input.project.id,
-          userId: input.actor.id,
+          userId: enterpriseWorkspaceUserId(input.actor.id),
           knowledgeSnapshotId: input.project.currentKnowledgeSnapshotId,
           credentialId: credential!.id,
           credentialVersion: credential!.version,
@@ -4801,7 +4818,7 @@ async function handleVisualSearch(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content: staticCatalogVisualCycle
@@ -4874,7 +4891,7 @@ async function selectVisualSample(
     .where(
       and(
         eq(siteBuilds.projectId, input.project.id),
-        eq(siteBuilds.userId, input.actor.id),
+        eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
         gte(siteBuilds.createdAt, input.project.currentTaskStartedAt),
         notInArray(siteBuilds.status, ["cancelled", "superseded"]),
       ),
@@ -4901,7 +4918,7 @@ async function selectVisualSample(
     .where(
       and(
         eq(siteOperations.projectId, input.project.id),
-        eq(siteOperations.userId, input.actor.id),
+        eq(siteOperations.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(siteOperations.kind, "visual_search"),
         gte(siteOperations.createdAt, input.project.currentTaskStartedAt),
         inArray(siteOperations.status, [
@@ -4935,7 +4952,7 @@ async function selectVisualSample(
       .where(
         and(
           eq(siteOperations.projectId, input.project.id),
-          eq(siteOperations.userId, input.actor.id),
+          eq(siteOperations.userId, enterpriseWorkspaceUserId(input.actor.id)),
           eq(siteOperations.kind, "visual_search"),
           gte(siteOperations.createdAt, input.project.currentTaskStartedAt),
         ),
@@ -4966,7 +4983,7 @@ async function selectVisualSample(
       .where(
         and(
           eq(websiteStyleSampleBatches.siteProjectId, input.project.id),
-          eq(websiteStyleSampleBatches.userId, input.actor.id),
+          eq(websiteStyleSampleBatches.userId, enterpriseWorkspaceUserId(input.actor.id)),
           eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
           eq(websiteStyleSampleBatches.status, "published"),
           gte(
@@ -5035,7 +5052,7 @@ async function selectVisualSample(
           : batchId
             ? eq(websiteStyleSamples.batchId, batchId)
             : eq(websiteStyleSampleBatches.status, "published"),
-        eq(websiteStyleSampleBatches.userId, input.actor.id),
+        eq(websiteStyleSampleBatches.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(websiteStyleSampleBatches.siteProjectId, input.project.id),
         eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
         eq(websiteStyleSampleBatches.status, "published"),
@@ -5203,7 +5220,7 @@ async function selectVisualSample(
     .where(
       and(
         eq(knowledgeBaseSnapshots.id, input.project.currentKnowledgeSnapshotId),
-        eq(knowledgeBaseSnapshots.userId, input.actor.id),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, enterpriseWorkspaceUserId(input.actor.id)),
       ),
     )
     .limit(1);
@@ -5218,20 +5235,20 @@ async function selectVisualSample(
   const credential = await resolvePinnedTwentyFirstCredentialForBatch(tx, {
     engineerNote: selected.batch.engineerNote,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     knowledgeSnapshotId: snapshot.id,
     workflowVersion: selectedWorkflow.frontMindVersion,
   });
   const aiCredential = await ensureActiveCustomerAiCredential(
     tx,
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
   );
   const aiCredentialBinding = freezeSiteOpsCustomerAiCredential({
     credential: aiCredential,
   });
   const parentBuildId = input.project.currentBuildId;
   const quotaPeriodId = await reserveSiteOpsDeliveryQuota(tx, {
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     portal: input.entitlement,
     quotaPool: "website_content_publish",
   });
@@ -5257,7 +5274,7 @@ async function selectVisualSample(
       .where(
         and(
           eq(websiteStyleSampleBatches.siteProjectId, input.project.id),
-          eq(websiteStyleSampleBatches.userId, input.actor.id),
+          eq(websiteStyleSampleBatches.userId, enterpriseWorkspaceUserId(input.actor.id)),
           eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
           eq(websiteStyleSampleBatches.status, "published"),
           ne(websiteStyleSampleBatches.id, selected.batch.id),
@@ -5308,7 +5325,7 @@ async function selectVisualSample(
       .where(
         and(
           eq(visualCandidatePools.projectId, input.project.id),
-          eq(visualCandidatePools.userId, input.actor.id),
+          eq(visualCandidatePools.userId, enterpriseWorkspaceUserId(input.actor.id)),
           eq(
             visualCandidatePools.taskStartedAt,
             input.project.currentTaskStartedAt,
@@ -5339,7 +5356,7 @@ async function selectVisualSample(
   await tx.insert(siteBuilds).values({
     id: buildId,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     parentBuildId,
     quotaPeriodId,
     quotaState: "reserved",
@@ -5390,7 +5407,7 @@ async function selectVisualSample(
   }
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "user",
     turnId: input.turnId,
     content: input.delegated
@@ -5399,7 +5416,7 @@ async function selectVisualSample(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content: "视觉方向已锁定，建站任务将自动继续，不需要第二次风格确认。",
@@ -5440,7 +5457,7 @@ async function handleApproveBuild(
       and(
         eq(siteBuilds.id, input.payload.buildId),
         eq(siteBuilds.projectId, input.project.id),
-        eq(siteBuilds.userId, input.actor.id),
+        eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
         gte(siteBuilds.createdAt, input.project.currentTaskStartedAt),
       ),
     )
@@ -5483,7 +5500,7 @@ async function handleApproveBuild(
     .where(eq(siteProjects.id, input.project.id));
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "user",
     turnId: input.turnId,
     content: "已批准当前官网预览。",
@@ -5517,7 +5534,7 @@ async function handleRevision(
       and(
         eq(siteBuilds.id, input.payload.buildId),
         eq(siteBuilds.projectId, input.project.id),
-        eq(siteBuilds.userId, input.actor.id),
+        eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
         gte(siteBuilds.createdAt, input.project.currentTaskStartedAt),
       ),
     )
@@ -5567,7 +5584,7 @@ async function handleRevision(
       and(
         eq(websiteStyleSamples.id, parent.styleSampleId),
         eq(websiteStyleSampleBatches.siteProjectId, input.project.id),
-        eq(websiteStyleSampleBatches.userId, input.actor.id),
+        eq(websiteStyleSampleBatches.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
         gte(
           websiteStyleSampleBatches.createdAt,
@@ -5611,7 +5628,7 @@ async function handleRevision(
       });
   const aiCredential = await ensureActiveCustomerAiCredential(
     tx,
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
   );
   const parentOperationRows = await tx
     .select({ input: siteOperations.input })
@@ -5619,7 +5636,7 @@ async function handleRevision(
     .where(
       and(
         eq(siteOperations.projectId, input.project.id),
-        eq(siteOperations.userId, input.actor.id),
+        eq(siteOperations.userId, enterpriseWorkspaceUserId(input.actor.id)),
         eq(siteOperations.buildId, parent.id),
         gte(siteOperations.createdAt, input.project.currentTaskStartedAt),
         inArray(siteOperations.kind, ["site_build", "build_revision"]),
@@ -5640,7 +5657,7 @@ async function handleRevision(
     parentOperationInput,
   });
   const quotaPeriodId = await reserveSiteOpsDeliveryQuota(tx, {
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     portal: input.entitlement,
     quotaPool: "website_content_publish",
   });
@@ -5693,7 +5710,7 @@ async function handleRevision(
         ...asset,
         buildId,
         projectId: input.project.id,
-        userId: input.actor.id,
+        userId: enterpriseWorkspaceUserId(input.actor.id),
       })),
     );
     await tx
@@ -5705,7 +5722,7 @@ async function handleRevision(
             localAssets.id,
             inputAssets.map((asset) => asset.localAssetId),
           ),
-          eq(localAssets.accountUserId, input.actor.id),
+          enterpriseAccountOwnerPredicate(localAssets, enterpriseWorkspaceUserId(input.actor.id)),
         ),
       );
   }
@@ -5748,14 +5765,14 @@ async function handleRevision(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "user",
     turnId: input.turnId,
     content: input.payload.feedback,
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content: "已保留原版本并创建新的修改版本。",
@@ -5798,15 +5815,15 @@ async function handlePublish(
         and(
           eq(siteBuilds.id, input.payload.buildId),
           eq(siteBuilds.projectId, input.project.id),
-          eq(siteBuilds.userId, input.actor.id),
+          eq(siteBuilds.userId, enterpriseWorkspaceUserId(input.actor.id)),
           gte(siteBuilds.createdAt, input.project.currentTaskStartedAt),
         ),
       )
       .limit(1),
     tx
       .select()
-      .from(workspaceSiteProfiles)
-      .where(eq(workspaceSiteProfiles.userId, input.actor.id))
+      .from(enterpriseSiteProfileTable())
+      .where(enterpriseSiteProfileOwnerPredicate(enterpriseWorkspaceUserId(input.actor.id)))
       .limit(1),
   ]);
   const build = buildRows[0];
@@ -5877,7 +5894,7 @@ async function handlePublish(
   await tx.insert(siteDeployments).values({
     id: deploymentId,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     buildId: build.id,
     operationId,
     target: input.target,
@@ -5890,7 +5907,7 @@ async function handlePublish(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content: "已锁定精确官网版本并提交发布任务。旧站会保留到新版本验证成功。",
@@ -5927,7 +5944,7 @@ async function handleRollback(
       and(
         eq(siteDeployments.id, input.payload.deploymentId),
         eq(siteDeployments.projectId, input.project.id),
-        eq(siteDeployments.userId, input.actor.id),
+        eq(siteDeployments.userId, enterpriseWorkspaceUserId(input.actor.id)),
         gte(siteDeployments.createdAt, input.project.currentTaskStartedAt),
         inArray(siteDeployments.status, ["active", "superseded"]),
       ),
@@ -5961,8 +5978,8 @@ async function handleRollback(
   }
   const profileRows = await tx
     .select()
-    .from(workspaceSiteProfiles)
-    .where(eq(workspaceSiteProfiles.userId, input.actor.id))
+    .from(enterpriseSiteProfileTable())
+    .where(enterpriseSiteProfileOwnerPredicate(enterpriseWorkspaceUserId(input.actor.id)))
     .limit(1);
   const profile = profileRows[0];
   if (!profile || profile.domainRevision !== targetDeployment.domainRevision) {
@@ -6007,7 +6024,7 @@ async function handleRollback(
   await tx.insert(siteDeployments).values({
     id: deploymentId,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     buildId: targetDeployment.buildId,
     operationId,
     target: targetDeployment.target,
@@ -6021,7 +6038,7 @@ async function handleRollback(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content: "已提交恢复历史官网版本；如验证未完成，当前线上网站不会变化。",
@@ -6061,13 +6078,13 @@ async function handleSocialPackage(
   }
   const aiCredential = await ensureActiveCustomerAiCredential(
     tx,
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
   );
   const aiCredentialBinding = freezeSiteOpsCustomerAiCredential({
     credential: aiCredential,
   });
   const quotaPeriodId = await reserveSiteOpsDeliveryQuota(tx, {
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     portal: input.entitlement,
     quotaPool: "content_asset_publish",
   });
@@ -6090,7 +6107,7 @@ async function handleSocialPackage(
   await tx.insert(socialPackages).values({
     id: packageId,
     projectId: input.project.id,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     knowledgeSnapshotId: input.project.currentKnowledgeSnapshotId,
     operationId,
     quotaPeriodId,
@@ -6100,7 +6117,7 @@ async function handleSocialPackage(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content:
@@ -6172,7 +6189,7 @@ async function handleDomainSync(
       .where(
         and(
           eq(siteOperations.projectId, input.project.id),
-          eq(siteOperations.userId, input.actor.id),
+          eq(siteOperations.userId, enterpriseWorkspaceUserId(input.actor.id)),
           inArray(siteOperations.provider, ["aliyun_alidns", "aliyun_esa"]),
           inArray(siteOperations.status, [
             "queued",
@@ -6184,14 +6201,14 @@ async function handleDomainSync(
       .limit(1),
     tx
       .select({
-        domain: workspaceSiteProfiles.domain,
-        normalizedAsciiDomain: workspaceSiteProfiles.normalizedAsciiDomain,
-        providerAccountUid: workspaceSiteProfiles.providerAccountUid,
-        domainOwnershipStatus: workspaceSiteProfiles.domainOwnershipStatus,
-        dnsStatus: workspaceSiteProfiles.dnsStatus,
+        domain: enterpriseSiteProfileTable().domain,
+        normalizedAsciiDomain: enterpriseSiteProfileTable().normalizedAsciiDomain,
+        providerAccountUid: enterpriseSiteProfileTable().providerAccountUid,
+        domainOwnershipStatus: enterpriseSiteProfileTable().domainOwnershipStatus,
+        dnsStatus: enterpriseSiteProfileTable().dnsStatus,
       })
-      .from(workspaceSiteProfiles)
-      .where(eq(workspaceSiteProfiles.userId, input.actor.id))
+      .from(enterpriseSiteProfileTable())
+      .where(enterpriseSiteProfileOwnerPredicate(enterpriseWorkspaceUserId(input.actor.id)))
       .limit(1),
     tx
       .select({ id: siteDnsRecords.id })
@@ -6199,7 +6216,7 @@ async function handleDomainSync(
       .where(
         and(
           eq(siteDnsRecords.projectId, input.project.id),
-          eq(siteDnsRecords.userId, input.actor.id),
+          eq(siteDnsRecords.userId, enterpriseWorkspaceUserId(input.actor.id)),
         ),
       )
       .limit(1),
@@ -6250,7 +6267,7 @@ async function handleDomainSync(
   });
   await appendMessage(tx, {
     conversationId: input.project.conversationId,
-    userId: input.actor.id,
+    userId: enterpriseWorkspaceUserId(input.actor.id),
     role: "assistant",
     turnId: input.turnId,
     content:
@@ -6292,7 +6309,7 @@ async function projectSiteOpsActionAck(
       .where(
         and(
           eq(siteProjects.id, input.projectId),
-          eq(siteProjects.userId, input.actorId),
+          enterpriseOwnerPredicate(siteProjects, input.actorId),
         ),
       )
       .limit(1),
@@ -6340,7 +6357,7 @@ export async function actOnSiteOpsFast(
   assertEnabled();
   assertCustomer(actor);
   const input = siteOpsActInputSchema.parse(value);
-  const entitlement = await requireSiteOpsEntitlement(actor.id);
+  const entitlement = await requireSiteOpsEntitlement(enterpriseWorkspaceUserId(actor.id));
   const payload = parseSiteOpsActionPayload(
     input.action,
     input.input,
@@ -6351,7 +6368,7 @@ export async function actOnSiteOpsFast(
   const transaction = db.transaction(async (tx: any) => {
     const project = await loadOwnedProject(
       tx,
-      actor.id,
+      enterpriseWorkspaceUserId(actor.id),
       input.conversationId,
       true,
     );
@@ -6412,7 +6429,7 @@ export async function actOnSiteOpsFast(
       );
       if (storedAck.success) return storedAck.data;
       const replayAck = await projectSiteOpsActionAck(tx, {
-        actorId: actor.id,
+        actorId: enterpriseWorkspaceUserId(actor.id),
         projectId: project.id,
         conversationId: project.conversationId,
         clientRequestId: input.clientRequestId,
@@ -6445,7 +6462,7 @@ export async function actOnSiteOpsFast(
           and(
             eq(messages.id, input.messageId),
             eq(messages.conversationId, project.conversationId),
-            eq(messages.userId, actor.id),
+            eq(messages.userId, enterpriseWorkspaceUserId(actor.id)),
             isNull(messages.deletedAt),
             gte(messages.sentAt, project.currentTaskStartedAt),
           ),
@@ -6572,7 +6589,7 @@ export async function actOnSiteOpsFast(
         break;
     }
     const ack = await projectSiteOpsActionAck(tx, {
-      actorId: actor.id,
+      actorId: enterpriseWorkspaceUserId(actor.id),
       projectId: project.id,
       conversationId: project.conversationId,
       clientRequestId: input.clientRequestId,

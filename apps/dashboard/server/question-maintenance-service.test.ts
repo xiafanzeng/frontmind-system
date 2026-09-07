@@ -275,7 +275,7 @@ describe("direct customer question maintenance", () => {
     ).rejects.toThrow("问题已更新");
     expect(h.updates).toEqual([]);
   });
-  it("rejects a question outside the current service scope", async () => {
+  it("rejects a question outside the current enterprise project", async () => {
     const h = harness();
     dependencies.assertServiceWriteAccess.mockResolvedValue({
       purchasedQuestions: [],
@@ -285,7 +285,7 @@ describe("direct customer question maintenance", () => {
         actor: customer,
         value: { ...request, action: "delete" },
       }),
-    ).rejects.toThrow("当前有效服务周期");
+    ).rejects.toThrow("当前企业项目已选择的问题");
     expect(h.updates).toEqual([]);
   });
   it("replays the same request without applying it twice", async () => {

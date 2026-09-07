@@ -428,6 +428,34 @@
       "when": 1788651412396,
       "tag": "0060_dashboard_zhipu_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "5",
+      "when": 1788740000000,
+      "tag": "0062_enterprise_operator_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "5",
+      "when": 1788740001000,
+      "tag": "0063_unified_account_wallet",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "5",
+      "when": 1788740002000,
+      "tag": "0064_ai_cost_accounting",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "5",
+      "when": 1788740003000,
+      "tag": "0065_publisher_enterprise_projects",
+      "breakpoints": true
     }
   ]
 }

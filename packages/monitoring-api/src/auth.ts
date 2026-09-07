@@ -11,6 +11,7 @@ export interface AuthenticationService {
   syncAccounts?(): Promise<void>;
   resolve(request: Request): Promise<{
     user: AuthenticatedUser;
+    auditActor?: { id: string; role: "user" | "admin" };
     session: null;
     tokenHash: null;
   } | null>;

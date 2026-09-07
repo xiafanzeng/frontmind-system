@@ -1,3 +1,4 @@
+import { startAiUsageAccountingScheduler } from "../ai-billing-service";
 import "dotenv/config";
 import { monitoringModule } from "../monitoring-module";
 import express from "express";
@@ -529,6 +530,7 @@ async function startServer() {
 
   if (runtimeRoleServesWeb(runtimeRole)) {
     await startApiUsageSnapshotScheduler();
+    startAiUsageAccountingScheduler();
     startDashboardImportPreflightCleanupScheduler();
     // Start only after configuration, durable storage and database startup
     // checks have completed. Importing a route module must never trigger

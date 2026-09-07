@@ -3,6 +3,9 @@ import superjson from "superjson";
 import { ZodError } from "zod";
 import { hasExplicitAdminRole } from "../../shared/admin-access";
 import type { TrpcContext } from "./context";
+import { requestEnterpriseProjectId } from "../enterprise-project-request";
+import { resolveEnterpriseProjectScope } from "../enterprise-project-service";
+import { runWithEnterpriseProjectScope } from "../enterprise-project-scope";
 
 const validationFieldLabels: Record<string, string> = {
   question: "目标问题",
@@ -126,11 +129,19 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+export const protectedProcedure = t.procedure.use(async ({ ctx, next, path }) => {
   if (!ctx.user) {
     throw new TRPCError({ code: "UNAUTHORIZED", message: "请先登录" });
   }
-  return next({ ctx: { ...ctx, user: ctx.user } });
+  if (path.startsWith("enterpriseProjects.") || path.startsWith("auth.") || path.startsWith("credential.")) {
+    return next({ ctx: { ...ctx, user: ctx.user } });
+  }
+  let projectId: string | null;
+  try { projectId = requestEnterpriseProjectId(ctx.req); }
+  catch { throw new TRPCError({ code: "BAD_REQUEST", message: "企业项目参数无效" }); }
+  if (!projectId) return next({ ctx: { ...ctx, user: ctx.user } });
+  const scope = await resolveEnterpriseProjectScope(ctx.user, projectId);
+  return runWithEnterpriseProjectScope(scope, () => next({ ctx: { ...ctx, user: ctx.user! } }));
 });
 export const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (!hasExplicitAdminRole(ctx.user)) {

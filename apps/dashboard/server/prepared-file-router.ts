@@ -1,3 +1,5 @@
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { enterpriseProjectUrl } from "./enterprise-project-scope";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { Router, type Request, type Response } from "express";
@@ -23,6 +25,30 @@ import {
 
 const router = Router();
 const DOWNLOAD_TOKEN_TTL_MS = 5 * 60 * 1000;
+
+function bindWorkspaceDownloadUrl(
+  url: string,
+  projectAssignmentId?: string | null,
+) {
+  return enterpriseProjectUrl(
+    bindDownloadUrlToProject(url, projectAssignmentId),
+  );
+}
+function bindPreparedUrls<
+  T extends { contentUrl: string; downloadTokenUrl: string },
+>(asset: T, req: Request): T {
+  return {
+    ...asset,
+    contentUrl: bindWorkspaceDownloadUrl(
+      asset.contentUrl,
+      requestProjectAssignmentId(req),
+    ),
+    downloadTokenUrl: bindWorkspaceDownloadUrl(
+      asset.downloadTokenUrl,
+      requestProjectAssignmentId(req),
+    ),
+  };
+}
 
 router.use((_req, res, next) => {
   res.setHeader("Cache-Control", "private, no-store, max-age=0");
@@ -222,7 +248,9 @@ export function boundedPreparedDownloadExpiry(
 
 router.post("/prepare", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res
         .status(401)
@@ -240,16 +268,19 @@ router.post("/prepare", async (req, res) => {
         projectAssignmentId: requestProjectAssignmentId(req),
       });
       res.json(
-        await preparedFileService.registerFile({
-          ownerUserId,
-          credentialId: authorization.credentialId,
-          sourceKind: authorization.sourceKind,
-          sourceAuthorityId: authorization.sourceAuthorityId,
-          projectAssignmentId: requestProjectAssignmentId(req),
-          fileId: source.fileId,
-          filename,
-          expiresAt: authorization.expiresAt,
-        }),
+        bindPreparedUrls(
+          await preparedFileService.registerFile({
+            ownerUserId,
+            credentialId: authorization.credentialId,
+            sourceKind: authorization.sourceKind,
+            sourceAuthorityId: authorization.sourceAuthorityId,
+            projectAssignmentId: requestProjectAssignmentId(req),
+            fileId: source.fileId,
+            filename,
+            expiresAt: authorization.expiresAt,
+          }),
+          req,
+        ),
       );
       return;
     }
@@ -257,13 +288,16 @@ router.post("/prepare", async (req, res) => {
     const credential =
       await getEffectiveDecryptedCredentialForAccount(ownerUserId);
     res.json(
-      await preparedFileService.registerExternal({
-        ownerUserId,
-        credentialId: credential?.id || "external",
-        projectAssignmentId: requestProjectAssignmentId(req),
-        url: source.url,
-        filename,
-      }),
+      bindPreparedUrls(
+        await preparedFileService.registerExternal({
+          ownerUserId,
+          credentialId: credential?.id || "external",
+          projectAssignmentId: requestProjectAssignmentId(req),
+          url: source.url,
+          filename,
+        }),
+        req,
+      ),
     );
   } catch (error) {
     sendPreparedError(res, error);
@@ -272,7 +306,9 @@ router.post("/prepare", async (req, res) => {
 
 router.get("/:assetId/status", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res
         .status(401)
@@ -280,10 +316,13 @@ router.get("/:assetId/status", async (req, res) => {
       return;
     }
     res.json(
-      await preparedFileService.getStatus(
-        req.params.assetId,
-        ownerUserId,
-        requestProjectAssignmentId(req),
+      bindPreparedUrls(
+        await preparedFileService.getStatus(
+          req.params.assetId,
+          ownerUserId,
+          requestProjectAssignmentId(req),
+        ),
+        req,
       ),
     );
   } catch (error) {
@@ -293,7 +332,9 @@ router.get("/:assetId/status", async (req, res) => {
 
 router.post("/:assetId/retry", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res
         .status(401)
@@ -301,10 +342,13 @@ router.post("/:assetId/retry", async (req, res) => {
       return;
     }
     res.json(
-      await preparedFileService.retry(
-        req.params.assetId,
-        ownerUserId,
-        requestProjectAssignmentId(req),
+      bindPreparedUrls(
+        await preparedFileService.retry(
+          req.params.assetId,
+          ownerUserId,
+          requestProjectAssignmentId(req),
+        ),
+        req,
       ),
     );
   } catch (error) {
@@ -314,7 +358,9 @@ router.post("/:assetId/retry", async (req, res) => {
 
 router.post("/:assetId/download-token", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res
         .status(401)
@@ -371,7 +417,7 @@ router.post("/:assetId/download-token", async (req, res) => {
       exp: expiresAt,
     });
     res.json({
-      downloadUrl: bindDownloadUrlToProject(
+      downloadUrl: bindWorkspaceDownloadUrl(
         `/api/frontmind/assets/download/${token}`,
         manifest.projectAssignmentId,
       ),
@@ -467,7 +513,9 @@ async function streamPreparedFile(
 
 router.get("/download/:token", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res.status(410).json({
         error: {
@@ -539,7 +587,9 @@ router.get("/download/:token", async (req, res) => {
 
 router.get("/:assetId/content", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res
         .status(401)
@@ -552,7 +602,9 @@ router.get("/:assetId/content", async (req, res) => {
       requestProjectAssignmentId(req),
     );
     if (manifest.status !== "ready") {
-      res.status(202).json(preparedFilePublicStatus(manifest));
+      res
+        .status(202)
+        .json(bindPreparedUrls(preparedFilePublicStatus(manifest), req));
       return;
     }
     await streamPreparedFile(
@@ -568,7 +620,9 @@ router.get("/:assetId/content", async (req, res) => {
 
 router.head("/:assetId/content", async (req, res) => {
   try {
-    const ownerUserId = req.frontmindUser?.id;
+    const ownerUserId = req.frontmindUser
+      ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+      : undefined;
     if (!ownerUserId) {
       res.status(401).end();
       return;

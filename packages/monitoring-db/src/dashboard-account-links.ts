@@ -61,9 +61,8 @@ export async function ensureDashboardAccountLink(
       `);
     }
     // Never overwrite balances or issue complimentary quota while linking.
-    await tx.execute(sql`INSERT IGNORE INTO money_wallets (user_id) VALUES (${monitoringUserId})`);
+    await tx.execute(sql`INSERT IGNORE INTO unified_money_wallets (user_id) VALUES (${monitoringUserId})`);
     await tx.execute(sql`INSERT IGNORE INTO quota_wallets (user_id) VALUES (${monitoringUserId})`);
-    await tx.execute(sql`INSERT IGNORE INTO media_publishing_wallets (user_id) VALUES (${monitoringUserId})`);
     return { dashboardUserId, monitoringUserId };
   });
 }

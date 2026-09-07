@@ -147,6 +147,10 @@ describe("service portal migration chain", () => {
       "0058_dashboard_production_parity",
       "0059_website_zhipu_provider",
       "0060_dashboard_zhipu_provider",
+      "0062_enterprise_operator_projects",
+      "0063_unified_account_wallet",
+      "0064_ai_cost_accounting",
+      "0065_publisher_enterprise_projects",
     ]);
   });
 
@@ -253,7 +257,7 @@ describe("service portal migration chain", () => {
     ).toMatchObject({ type: "varchar(40)", notNull: true });
   });
 
-  it("adds durable visual candidate pools, pages and item references as one expand migration", async () => {
+  it("adds durable visual candidate pools, pages and item references within the parity migration", async () => {
     const migrationSql = await parityMigration(
       "visual_candidate_pools",
       "visual_candidate_pool_pages",
@@ -278,7 +282,7 @@ describe("service portal migration chain", () => {
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations[parityMigrationName]).toBe("expand");
+    expect(policy.migrations[parityMigrationName]).toBe("contract");
   });
 
   it("adds immutable revision input assets as an expand-only table", async () => {
@@ -301,7 +305,7 @@ describe("service portal migration chain", () => {
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations[parityMigrationName]).toBe("expand");
+    expect(policy.migrations[parityMigrationName]).toBe("contract");
   });
 
   it("adds nullable SiteOps knowledge epochs without backfilling historical rows", async () => {
@@ -335,7 +339,7 @@ describe("service portal migration chain", () => {
     const policy = JSON.parse(
       await readFile(path.join(drizzleRoot, "migration-policy.json"), "utf8"),
     ) as { migrations: Record<string, string> };
-    expect(policy.migrations[parityMigrationName]).toBe("expand");
+    expect(policy.migrations[parityMigrationName]).toBe("contract");
   });
 
   it("adds an optional unsigned overseas brand-tracking quota as an expand migration", async () => {

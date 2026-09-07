@@ -32,6 +32,10 @@ import {
 } from "./response-logic-api";
 import { ManusV2ApiError } from "./manus-v2-client";
 import * as credentialAgentClient from "./credential-agent-client";
+import * as dashboardService from "./dashboard-service";
+import * as serviceEntitlement from "./service-entitlement";
+import responseLogicRouter from "./response-logic-api";
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 import { assertResponseLogicDraftPublishable } from "./response-logic-service";
 import {
   normalizeResponseLogicPublicProvenance,
@@ -901,6 +905,27 @@ describe("response logic execution contract", () => {
       }),
     ).not.toThrow();
 
+    runWithEnterpriseProjectScope({
+      enterpriseProjectId: "11111111-1111-4111-8111-111111111111",
+      actorUserId: 99,
+      ownerUserId: 7,
+      isLegacyDefault: false,
+    }, () => {
+      const binding = {
+        authenticatedUserId: 99,
+        workspaceUserId: 7,
+        questionId: "question-1",
+        conversationId: "conversation-1",
+        taskId: "task-1",
+        operationRevision: 4,
+        record,
+        configuredQuestion,
+      };
+      expect(() => assertResponseLogicTaskBinding(binding)).not.toThrow();
+      expect(() => assertResponseLogicTaskBinding({ ...binding, authenticatedUserId: 98 })).toThrow(ResponseLogicTaskBindingError);
+      expect(() => assertResponseLogicTaskBinding({ ...binding, workspaceUserId: 99 })).toThrow(ResponseLogicTaskBindingError);
+    });
+
     const releasedRecord = { ...record, lastTaskId: undefined };
     expect(() =>
       assertResponseLogicTaskBinding({
@@ -1065,5 +1090,32 @@ describe("response logic execution contract", () => {
         attachments: [],
       }),
     ).not.toThrow();
+  });
+});
+
+describe("response logic enterprise route identity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reads the project owner's question while retaining the administrator actor", async () => {
+    const capability = vi.spyOn(serviceEntitlement, "assertServiceCapability").mockResolvedValue({} as never);
+    const question = vi.spyOn(dashboardService, "getDashboardQuestion").mockResolvedValue(null);
+    const route = responseLogicRouter.stack.find((layer: any) => layer.route?.path === "/tasks/:taskId/status");
+    const req = {
+      frontmindUser: { id: 99, role: "admin" },
+      params: { taskId: "task-1" },
+      query: { questionId: "question-1", conversationId: "conversation-1", operationRevision: "4" },
+    };
+    const res = { setHeader: vi.fn(), status: vi.fn(), json: vi.fn() };
+    res.status.mockReturnValue(res);
+    await runWithEnterpriseProjectScope({
+      enterpriseProjectId: "11111111-1111-4111-8111-111111111111",
+      actorUserId: 99,
+      ownerUserId: 7,
+      isLegacyDefault: false,
+    }, () => route.route.stack[0].handle(req, res));
+    expect(capability).toHaveBeenCalledWith(7, "responseLogic");
+    expect(question).toHaveBeenCalledWith(7, "question-1");
+    expect(req.frontmindUser.id).toBe(99);
+    expect(res.status).toHaveBeenCalledWith(422);
   });
 });

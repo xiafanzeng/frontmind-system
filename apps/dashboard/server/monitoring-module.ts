@@ -4,8 +4,11 @@ import {
   createMonitoringRuntime,
   type MonitoringRuntime,
 } from "@frontmind/monitoring-api/runtime";
-import { ensureDashboardAccountLink, syncDashboardMonitoringAccounts } from "@frontmind/monitoring-db";
-import { authenticateRequest } from "./auth-service";
+import { ensureDashboardAccountLink, syncDashboardMonitoringAccounts, runWithMonitoringEnterpriseScope } from "@frontmind/monitoring-db";
+import { AuthServiceError, authenticateRequest } from "./auth-service";
+import { requestEnterpriseProjectId } from "./enterprise-project-request";
+import { resolveEnterpriseProjectScope } from "./enterprise-project-service";
+import { getEnterpriseProjectScope, runWithEnterpriseProjectScope } from "./enterprise-project-scope";
 
 let runtime: MonitoringRuntime | undefined;
 
@@ -39,15 +42,18 @@ export async function resolveMonitoringIdentity(request: Request) {
   const dashboardUser = await authenticateRequest(request);
   if (!dashboardUser) return null;
   const services = getMonitoringRuntime();
-  const link = await ensureDashboardAccountLink(services.repository.db, dashboardUser.id);
+  const scope = getEnterpriseProjectScope();
+  const link = await ensureDashboardAccountLink(services.repository.db, scope?.ownerUserId ?? dashboardUser.id);
+  const actorLink = scope && scope.ownerUserId !== dashboardUser.id ? await ensureDashboardAccountLink(services.repository.db, dashboardUser.id) : link;
   return {
     user: {
       id: link.monitoringUserId,
       username: dashboardUser.username,
-      role: dashboardUser.role === "admin" && dashboardUser.adminAccessLevel === "system_admin"
+      role: !scope && dashboardUser.role === "admin" && dashboardUser.adminAccessLevel === "system_admin"
         ? "admin" as const : "user" as const,
       status: "active" as const,
     },
+    auditActor: { id: actorLink.monitoringUserId, role: dashboardUser.role === "admin" ? "admin" as const : "user" as const },
     session: null,
     tokenHash: null,
   };
@@ -65,10 +71,18 @@ export function getMonitoringRuntime(): MonitoringRuntime {
 }
 
 /** Mount before the Dashboard body parser: uploads and payment signatures own theirs. */
-export const monitoringModule: RequestHandler = (request, response, next) => {
+export const monitoringModule: RequestHandler = async (request, response, next) => {
   try {
-    getMonitoringRuntime().app(request, response, next);
+    const projectId = requestEnterpriseProjectId(request);
+    const actor = await authenticateRequest(request);
+    if (!actor) { getMonitoringRuntime().app(request, response, next); return; }
+    const projectScope = projectId ? await resolveEnterpriseProjectScope(actor, projectId) : null;
+    const link = await ensureDashboardAccountLink(getMonitoringRuntime().repository.db, projectScope?.ownerUserId ?? actor.id);
+    const dispatch = () => runWithMonitoringEnterpriseScope({ enterpriseProjectId: projectScope?.enterpriseProjectId ?? null, ownerId: link.monitoringUserId }, () => getMonitoringRuntime().app(request, response, next));
+    if (projectScope) runWithEnterpriseProjectScope(projectScope, dispatch); else dispatch();
   } catch (error) {
+    if (error instanceof AuthServiceError && error.code === "NOT_FOUND") { response.status(404).json({error:"企业项目不存在或无权访问"}); return; }
+    if (error instanceof Error && (error.name === "ZodError" || error.message === "ENTERPRISE_PROJECT_SCOPE_CONFLICT")) { response.status(400).json({error:"企业项目参数无效"}); return; }
     console.error("[Monitoring] Module unavailable", error instanceof Error ? error.name : "configuration");
     response.status(503).json({ error: "问题监控与媒体发布服务暂不可用" });
   }

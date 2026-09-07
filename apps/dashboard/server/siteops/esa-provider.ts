@@ -1,3 +1,5 @@
+import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 import * as EsaModels from "@alicloud/esa20240910";
@@ -16,7 +18,6 @@ import {
   siteOperations,
   siteProjects,
   websiteStyleSampleBatches,
-  workspaceSiteProfiles,
   type SiteOperation,
 } from "../../drizzle/schema";
 import { buildContractV2Schema } from "../../shared/siteops-design";
@@ -830,7 +831,7 @@ async function loadApprovedResetProject(
     .where(
       and(
         eq(siteProjects.id, operation.projectId),
-        eq(siteProjects.userId, operation.userId),
+        enterpriseOwnerPredicate(siteProjects, operation.userId),
       ),
     )
     .limit(1);
@@ -1128,7 +1129,7 @@ async function loadApprovedResetSafeNoExposureCoordinates(input: {
     .where(
       and(
         eq(siteProjects.id, input.operation.projectId),
-        eq(siteProjects.userId, input.operation.userId),
+        enterpriseOwnerPredicate(siteProjects, input.operation.userId),
       ),
     )
     .limit(1);
@@ -2077,7 +2078,7 @@ export async function loadFrozenProductionMediaRequirements(input: {
     .where(
       and(
         eq(knowledgeBaseSnapshots.id, input.context.build.knowledgeSnapshotId),
-        eq(knowledgeBaseSnapshots.userId, input.operation.userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.operation.userId),
       ),
     )
     .limit(1);
@@ -2854,8 +2855,8 @@ async function handlePrepareDomainBinding(input: {
   const [profileRows, projectRows] = await Promise.all([
     input.db
       .select()
-      .from(workspaceSiteProfiles)
-      .where(eq(workspaceSiteProfiles.userId, input.operation.userId))
+      .from(enterpriseSiteProfileTable())
+      .where(enterpriseSiteProfileOwnerPredicate(input.operation.userId))
       .limit(1),
     input.db
       .select()
@@ -2863,7 +2864,7 @@ async function handlePrepareDomainBinding(input: {
       .where(
         and(
           eq(siteProjects.id, input.operation.projectId),
-          eq(siteProjects.userId, input.operation.userId),
+          enterpriseOwnerPredicate(siteProjects, input.operation.userId),
         ),
       )
       .limit(1),
@@ -2985,9 +2986,9 @@ async function handlePrepareDomainBinding(input: {
       .limit(1);
     if (txtRows[0]?.status !== "active") {
       await input.db
-        .update(workspaceSiteProfiles)
+        .update(enterpriseSiteProfileTable())
         .set({ dnsStatus: "pending_esa_verification", updatedAt: new Date() })
-        .where(eq(workspaceSiteProfiles.userId, input.operation.userId));
+        .where(enterpriseSiteProfileOwnerPredicate(input.operation.userId));
       return {
         status: "succeeded",
         result: {
@@ -3153,9 +3154,9 @@ async function handlePrepareDomainBinding(input: {
     value: cname,
   });
   await input.db
-    .update(workspaceSiteProfiles)
+    .update(enterpriseSiteProfileTable())
     .set({ dnsStatus: "pending_cname", updatedAt: new Date() })
-    .where(eq(workspaceSiteProfiles.userId, input.operation.userId));
+    .where(enterpriseSiteProfileOwnerPredicate(input.operation.userId));
   return {
     status: "succeeded",
     result: {

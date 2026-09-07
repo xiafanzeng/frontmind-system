@@ -1,3 +1,6 @@
+import { getMonitoringRuntime } from "./monitoring-module";
+import { ensureDashboardAccountLink } from "@frontmind/monitoring-db";
+import { assertWorkspaceAccess } from "./dashboard-service";
 import { assertDashboardUpdateCapability } from "./dashboard-editing";
 import { z } from "zod";
 import { adminProcedure, router } from "./_core/trpc";
@@ -124,6 +127,7 @@ import { createDeliveryEngineer } from "./delivery-role-service";
 import {
   completeManagedServiceUserProvisioning,
   createManagedServiceUser,
+  createManagedOperatorUser,
 } from "./managed-user-onboarding-service";
 import {
   bulkAssignJenovaBrandTrackingCredential,
@@ -581,6 +585,14 @@ export const adminRouter = router({
   }),
 
   workspace: router({
+    accountBalance: adminProcedure.input(z.object({userId:z.number().int().positive()})).query(async({ctx,input})=>{
+      try {
+        await assertWorkspaceAccess(ctx.user,input.userId);
+        const runtime=getMonitoringRuntime();
+        const link=await ensureDashboardAccountLink(runtime.repository.db,input.userId);
+        return runtime.repository.getBillingSummary(link.monitoringUserId);
+      } catch(error) { throw toTrpcError(error); }
+    }),
     list: adminProcedure.query(async ({ ctx }) => {
       try {
         return await listManagedWorkspaceUsers(ctx.user);
@@ -1707,7 +1719,7 @@ export const adminRouter = router({
             password: passwordSchema,
             displayName: z.string().trim().max(128).optional(),
             role: z.literal("user"),
-            planCode: provisionableServicePlanCodeSchema,
+            planCode: provisionableServicePlanCodeSchema.optional(),
             marketEdition: accountMarketEditionSchema,
             deliveryAdminId: z.number().int().positive(),
             apiKey: presalesApiKeySchema.optional(),
@@ -1774,12 +1786,11 @@ export const adminRouter = router({
               assignedToCreator: false,
             };
           }
-          const result = await createManagedServiceUser({
+          const result = await createManagedOperatorUser({
             actor: ctx.user,
             username: input.username,
             password: input.password,
             displayName: input.displayName,
-            planCode: input.planCode,
             marketEdition: input.marketEdition,
             deliveryAdminId: isSystemAdmin(ctx.user)
               ? input.deliveryAdminId
@@ -1790,11 +1801,7 @@ export const adminRouter = router({
             user: result.user,
             setupUrl: null,
             setupExpiresAt: null,
-            contract: {
-              ...result.contract,
-              startsAt: result.contract.startsAt.getTime(),
-              endsAt: result.contract.endsAt.getTime(),
-            },
+            contract: null,
             assignedToCreator: result.assignedToCreator,
             assignedDeliveryAdminId: result.assignedDeliveryAdminId,
           };

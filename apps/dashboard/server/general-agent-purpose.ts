@@ -1,3 +1,5 @@
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { knowledgeBaseSnapshots } from "../drizzle/schema";
@@ -15,6 +17,7 @@ export type GeneralAgentPurpose = "enterprise_qa" | "content_production";
 export type FrozenGeneralAgentPurpose = {
   revision: 1;
   accountUserId: number;
+  enterpriseProjectId?: string | null;
   purpose: GeneralAgentPurpose;
   knowledgeBase: ContentProductionKnowledgeSource | null;
   knowledgeText: string | null;
@@ -73,7 +76,7 @@ export async function publishedGeneralAgentKnowledge(
     .from(knowledgeBaseSnapshots)
     .where(
       and(
-        eq(knowledgeBaseSnapshots.userId, userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
         eq(knowledgeBaseSnapshots.status, "active"),
       ),
     )
@@ -105,6 +108,8 @@ export function frozenGeneralAgentPurpose(
   if (
     value.revision !== 1 ||
     value.accountUserId !== userId ||
+    (getEnterpriseProjectScope() && !getEnterpriseProjectScope()!.isLegacyDefault && !value.enterpriseProjectId) ||
+    (value.enterpriseProjectId != null && value.enterpriseProjectId !== getEnterpriseProjectScope()?.enterpriseProjectId) ||
     !["enterprise_qa", "content_production"].includes(value.purpose) ||
     (value.knowledgeBase &&
       (typeof value.knowledgeText !== "string" ||

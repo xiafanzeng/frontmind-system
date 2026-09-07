@@ -47,3 +47,15 @@ export function generalAgentRuntimeForOperation(operation: {
     speed: "standard" as const,
   };
 }
+
+/** Only new general conversations accept a user's choice. The operation freezes it. */
+export function generalAgentRuntimeForSelection(
+  credential: Parameters<typeof generalAgentRuntimeForCredential>[0],
+  profile: unknown = "frontmind-base",
+) {
+  generalAgentRuntimeForCredential(credential);
+  return generalAgentRuntimeForOperation({
+    upstreamModel: credential.upstreamModel,
+    publicProfile: generalAgentModelProfileSchema.parse(profile),
+  });
+}

@@ -1,3 +1,5 @@
+import { currentMonitoringEnterpriseProjectId, monitoringProjectOwnerPredicate, monitoringChildOwnerPredicate } from "./enterprise-scope.js";
+import { readAccountActivity, readAccountConsumption } from "./account-billing.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AdminOperationsListInput,
@@ -46,6 +48,7 @@ import {
   moneyLedger,
   moneyReservations,
   moneyWallets,
+  paymentReceiptClaims,
   platformCatalog,
   platformAcceptanceBatches,
   platformAcceptanceChecks,
@@ -427,7 +430,7 @@ export class MonitoringRepository {
       const ownedMonitors = await tx
         .select()
         .from(monitors)
-        .where(and(eq(monitors.ownerId, userId), isNull(monitors.deletedAt)));
+        .where(and(monitoringChildOwnerPredicate(monitors, userId), isNull(monitors.deletedAt)));
       for (const monitor of ownedMonitors) {
         const nextRunAt =
           status === "active" && monitor.status === "active"
@@ -596,7 +599,13 @@ export class MonitoringRepository {
       .limit(1);
     if (!wallet)
       throw new RepositoryError("NOT_FOUND", "Money wallet not found");
-    return billingSummary(wallet);
+    return { ...billingSummary(wallet), consumptionBySource: await readAccountConsumption(this.db,userId) };
+  }
+
+  async listAccountActivity(userId: string, input: { limit?: number; source?: "monitoring" | "media_publishing" | "ai" } = {}) {
+    // Canonical account ownership is resolved server-side; no caller-selected wallet UUID.
+    await this.getBillingSummary(userId);
+    return readAccountActivity(this.db,userId,input);
   }
 
   async getActivePricing() {
@@ -807,6 +816,7 @@ export class MonitoringRepository {
         createdAt: users.createdAt,
         balance: moneyWallets.balanceTenThousandths,
         reserved: moneyWallets.reservedTenThousandths,
+        frozen: moneyWallets.frozenTenThousandths,
         spent: moneyWallets.spentTenThousandths,
       })
       .from(users)
@@ -821,7 +831,7 @@ export class MonitoringRepository {
       reservedTenThousandths: moneyToApiString(row.reserved ?? 0n),
       spentTenThousandths: moneyToApiString(row.spent ?? 0n),
       availableTenThousandths: moneyToApiString(
-        (row.balance ?? 0n) - (row.reserved ?? 0n),
+        (row.balance ?? 0n) - (row.reserved ?? 0n) - (row.frozen ?? 0n),
       ),
     }));
   }
@@ -869,7 +879,7 @@ export class MonitoringRepository {
       }
       const wallet = await lockMoneyWallet(tx, input.userId);
       const nextBalance = wallet.balanceTenThousandths + amount;
-      if (amount < 0n && nextBalance < wallet.reservedTenThousandths) {
+      if (amount < 0n && nextBalance < wallet.reservedTenThousandths + wallet.frozenTenThousandths) {
         throw new RepositoryError(
           "CONFLICT",
           "Adjustment cannot reduce available balance below zero",
@@ -1244,6 +1254,11 @@ export class MonitoringRepository {
           providerTradeNo: existing.providerTradeNo,
         };
       }
+      await claimMonitoringReceipt(tx, {
+        provider: input.provider, providerTradeNo: input.providerTradeNo,
+        providerOrderId: order.providerOrderId, payloadDigest: input.payloadDigest,
+        receivedAt: input.receivedAt,
+      });
       const receiptId = randomUUID();
       await tx.insert(topupReceipts).values({
         id: receiptId,
@@ -1261,6 +1276,8 @@ export class MonitoringRepository {
           order.state,
         );
       if (shouldReview) {
+        await tx.update(paymentReceiptClaims).set({status:"review_required"})
+          .where(eq(paymentReceiptClaims.providerOrderId,order.providerOrderId));
         await tx
           .update(topupOrders)
           .set({ state: "review_required", paidAt: input.paidAt })
@@ -1454,6 +1471,11 @@ export class MonitoringRepository {
       }
       const reviewedAt = input.reviewedAt ?? new Date();
       if (input.decision === "approve") {
+        await claimMonitoringReceipt(tx, {
+          provider: "bank", providerTradeNo: providerTradeNo!,
+          providerOrderId: order.providerOrderId,
+          payloadDigest: sha256(`bank:${review.id}:${providerTradeNo}`), receivedAt: reviewedAt,
+        });
         const receiptId = randomUUID();
         await tx.insert(topupReceipts).values({
           id: receiptId,
@@ -1509,6 +1531,7 @@ export class MonitoringRepository {
     const brandVersionId = randomUUID();
     await this.db.transaction(async (tx) => {
       await tx.insert(projects).values({
+        enterpriseProjectId: currentMonitoringEnterpriseProjectId(),
         id: projectId,
         ownerId,
         name: input.name,
@@ -1553,7 +1576,7 @@ export class MonitoringRepository {
         projectBrandVersions,
         eq(projects.currentBrandVersionId, projectBrandVersions.id),
       )
-      .where(and(eq(projects.ownerId, ownerId), isNull(projects.deletedAt)))
+      .where(and(monitoringProjectOwnerPredicate(projects, ownerId), isNull(projects.deletedAt)))
       .orderBy(asc(projects.createdAt));
   }
 
@@ -1568,7 +1591,7 @@ export class MonitoringRepository {
       .from(projects)
       .where(
         and(
-          eq(projects.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(projects, ownerId),
           sql`${projects.deletedAt} IS NOT NULL`,
         ),
       )
@@ -1589,7 +1612,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         );
@@ -1652,7 +1675,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             sql`${projects.deletedAt} IS NOT NULL`,
           ),
         )
@@ -1723,7 +1746,7 @@ export class MonitoringRepository {
       .where(
         and(
           eq(projects.id, projectId),
-          eq(projects.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(projects, ownerId),
           isNull(projects.deletedAt),
         ),
       )
@@ -1752,7 +1775,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, input.projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -1796,7 +1819,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.projectId, input.projectId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         )
@@ -2170,7 +2193,7 @@ export class MonitoringRepository {
       .where(
         and(
           eq(projects.id, input.projectId),
-          eq(projects.ownerId, input.ownerId),
+          monitoringProjectOwnerPredicate(projects, input.ownerId),
           isNull(projects.deletedAt),
         ),
       )
@@ -2380,7 +2403,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, input.projectId),
-            eq(projects.ownerId, input.ownerId),
+            monitoringProjectOwnerPredicate(projects, input.ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -2934,7 +2957,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -3018,7 +3041,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         )
@@ -3031,7 +3054,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, monitor.projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -3175,7 +3198,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         )
@@ -3240,7 +3263,7 @@ export class MonitoringRepository {
 
   async listMonitors(ownerId: string, projectId?: string) {
     const conditions = [
-      eq(monitors.ownerId, ownerId),
+      monitoringChildOwnerPredicate(monitors, ownerId),
       isNull(monitors.deletedAt),
       sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${monitors.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
     ];
@@ -3294,7 +3317,7 @@ export class MonitoringRepository {
       .where(
         and(
           eq(monitors.id, monitorId),
-          eq(monitors.ownerId, ownerId),
+          monitoringChildOwnerPredicate(monitors, ownerId),
           isNull(monitors.deletedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${monitors.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
         ),
@@ -3336,7 +3359,7 @@ export class MonitoringRepository {
       .where(
         and(
           eq(monitors.id, monitorId),
-          eq(monitors.ownerId, ownerId),
+          monitoringChildOwnerPredicate(monitors, ownerId),
           isNull(monitors.deletedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${monitors.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
         ),
@@ -3395,7 +3418,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         );
@@ -3440,7 +3463,7 @@ export class MonitoringRepository {
       .from(monitors)
       .where(
         and(
-          eq(monitors.ownerId, ownerId),
+          monitoringChildOwnerPredicate(monitors, ownerId),
           sql`${monitors.deletedAt} IS NOT NULL`,
         ),
       )
@@ -3460,7 +3483,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             sql`${monitors.deletedAt} IS NOT NULL`,
           ),
         )
@@ -3474,7 +3497,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, monitor.projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -3550,7 +3573,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         )
@@ -3602,7 +3625,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, monitor.projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -3756,7 +3779,7 @@ export class MonitoringRepository {
         );
       }, 0n);
       const availableAmount =
-        wallet.balanceTenThousandths - wallet.reservedTenThousandths;
+        wallet.balanceTenThousandths - wallet.reservedTenThousandths - wallet.frozenTenThousandths;
       if (availableAmount < reservedAmount)
         throw new RepositoryError(
           "BALANCE_INSUFFICIENT",
@@ -3905,7 +3928,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(runs.id, runId),
-            eq(runs.ownerId, ownerId),
+            monitoringChildOwnerPredicate(runs, ownerId),
             isNull(runs.deletedAt),
           ),
         )
@@ -4283,7 +4306,7 @@ export class MonitoringRepository {
         and(
           eq(attempts.id, answerId),
           eq(attempts.ownerId, ownerId),
-          eq(runs.ownerId, ownerId),
+          monitoringChildOwnerPredicate(runs, ownerId),
           eq(runs.monitorId, monitorId),
           isNull(runs.deletedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${runs.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
@@ -4634,7 +4657,7 @@ export class MonitoringRepository {
   ) {
     await this.getMonitor(ownerId, monitorId);
     const conditions = [
-      eq(runs.ownerId, ownerId),
+      monitoringChildOwnerPredicate(runs, ownerId),
       eq(runs.monitorId, monitorId),
       isNull(runs.deletedAt),
       sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${runs.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
@@ -4670,7 +4693,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(projects.id, detail.monitor.projectId),
-            eq(projects.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(projects, ownerId),
             isNull(projects.deletedAt),
           ),
         )
@@ -4989,7 +5012,7 @@ export class MonitoringRepository {
       .leftJoin(runMetrics, eq(runMetrics.runId, runs.id))
       .where(
         and(
-          eq(runs.ownerId, ownerId),
+          monitoringChildOwnerPredicate(runs, ownerId),
           eq(runs.monitorId, monitorId),
           isNull(runs.deletedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${runs.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
@@ -5046,7 +5069,7 @@ export class MonitoringRepository {
         createdAt: runs.createdAt,
       })
       .from(runs)
-      .where(and(eq(runs.ownerId, ownerId), sql`${runs.deletedAt} IS NOT NULL`))
+      .where(and(monitoringChildOwnerPredicate(runs, ownerId), sql`${runs.deletedAt} IS NOT NULL`))
       .orderBy(desc(runs.deletedAt))
       .limit(limit);
   }
@@ -5061,7 +5084,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(runs.id, runId),
-            eq(runs.ownerId, ownerId),
+            monitoringChildOwnerPredicate(runs, ownerId),
             isNull(runs.deletedAt),
           ),
         )
@@ -5104,7 +5127,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(runs.id, runId),
-            eq(runs.ownerId, ownerId),
+            monitoringChildOwnerPredicate(runs, ownerId),
             sql`${runs.deletedAt} IS NOT NULL`,
           ),
         )
@@ -5118,7 +5141,7 @@ export class MonitoringRepository {
         .where(
           and(
             eq(monitors.id, run.monitorId),
-            eq(monitors.ownerId, ownerId),
+            monitoringChildOwnerPredicate(monitors, ownerId),
             isNull(monitors.deletedAt),
           ),
         )
@@ -5144,7 +5167,7 @@ export class MonitoringRepository {
       .where(
         and(
           eq(runs.id, runId),
-          eq(runs.ownerId, ownerId),
+          monitoringChildOwnerPredicate(runs, ownerId),
           isNull(runs.deletedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${runs.projectId} AND p.owner_id = ${ownerId} AND p.deleted_at IS NULL)`,
         ),
@@ -5481,9 +5504,9 @@ export class MonitoringRepository {
       .where(
         and(
           eq(resultMedia.id, mediaId),
-          eq(runs.ownerId, ownerId),
+          monitoringChildOwnerPredicate(runs, ownerId),
           isNull(runs.deletedAt),
-          eq(projects.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(projects, ownerId),
           isNull(projects.deletedAt),
         ),
       )
@@ -5524,7 +5547,7 @@ export class MonitoringRepository {
         monitorName: monitors.name,
       })
       .from(runs)
-      .innerJoin(users, eq(runs.ownerId, users.id))
+      .innerJoin(users, monitoringChildOwnerPredicate(runs, users.id))
       .innerJoin(monitors, eq(runs.monitorId, monitors.id))
       .where(isNull(runs.deletedAt))
       .orderBy(desc(runs.createdAt))
@@ -5533,7 +5556,7 @@ export class MonitoringRepository {
 
   async listAdminOperations(input: AdminOperationsListInput) {
     const baseConditions = [isNull(runs.deletedAt)];
-    if (input.userId) baseConditions.push(eq(runs.ownerId, input.userId));
+    if (input.userId) baseConditions.push(monitoringChildOwnerPredicate(runs, input.userId));
     if (input.status) baseConditions.push(eq(runs.status, input.status));
     if (input.from) baseConditions.push(gte(runs.createdAt, input.from));
     if (input.to) baseConditions.push(lte(runs.createdAt, input.to));
@@ -5568,7 +5591,7 @@ export class MonitoringRepository {
           monitorName: monitors.name,
         })
         .from(runs)
-        .innerJoin(users, eq(runs.ownerId, users.id))
+        .innerJoin(users, monitoringChildOwnerPredicate(runs, users.id))
         .innerJoin(monitors, eq(runs.monitorId, monitors.id))
         .where(and(...pageConditions))
         .orderBy(desc(runs.createdAt), desc(runs.id))
@@ -5593,7 +5616,7 @@ export class MonitoringRepository {
         monitorName: monitors.name,
       })
       .from(runs)
-      .innerJoin(users, eq(runs.ownerId, users.id))
+      .innerJoin(users, monitoringChildOwnerPredicate(runs, users.id))
       .innerJoin(monitors, eq(runs.monitorId, monitors.id))
       .where(and(eq(runs.id, runId), isNull(runs.deletedAt)))
       .limit(1);
@@ -6066,7 +6089,7 @@ function monitoringFactCitationProvenance(
 function monitoringFactConditions(ownerId: string, scope: MonitoringScope) {
   const conditions = [
     eq(attempts.ownerId, ownerId),
-    eq(runs.ownerId, ownerId),
+    monitoringChildOwnerPredicate(runs, ownerId),
     eq(runs.monitorId, scope.monitorId),
     isNull(runs.deletedAt),
     gte(runs.createdAt, scope.from),
@@ -6931,16 +6954,19 @@ function billingSummary(wallet: {
   balanceTenThousandths: bigint;
   reservedTenThousandths: bigint;
   spentTenThousandths: bigint;
+  frozenTenThousandths: bigint;
 }) {
   return {
     userId: wallet.userId,
     currency: MONEY_CURRENCY,
     scale: 4 as const,
+    accountingMode: "unified" as const,
+    frozenTenThousandths: moneyToApiString(wallet.frozenTenThousandths),
     balanceTenThousandths: moneyToApiString(wallet.balanceTenThousandths),
     reservedTenThousandths: moneyToApiString(wallet.reservedTenThousandths),
     spentTenThousandths: moneyToApiString(wallet.spentTenThousandths),
     availableTenThousandths: moneyToApiString(
-      wallet.balanceTenThousandths - wallet.reservedTenThousandths,
+      wallet.balanceTenThousandths - wallet.reservedTenThousandths - wallet.frozenTenThousandths,
     ),
   };
 }
@@ -7047,6 +7073,8 @@ async function creditTopupOrder(
   receiptId: string,
   paidAt: Date,
 ) {
+  await tx.update(paymentReceiptClaims).set({ status: "credited", completedAt: paidAt })
+    .where(eq(paymentReceiptClaims.providerOrderId, order.providerOrderId));
   const wallet = await lockMoneyWallet(tx, order.userId);
   const nextBalance = wallet.balanceTenThousandths + order.amountTenThousandths;
   await tx
@@ -7079,7 +7107,7 @@ async function findRunByIdempotencyKey(
   forUpdate = false,
 ) {
   const condition = and(
-    eq(runs.ownerId, ownerId),
+    monitoringChildOwnerPredicate(runs, ownerId),
     eq(runs.idempotencyKey, idempotencyKey),
   );
   if (forUpdate) {
@@ -7880,4 +7908,23 @@ function zonedParts(value: Date, timezone: string) {
     minute: get("minute"),
     weekday: weekdays[weekdayText] ?? 1,
   };
+}
+
+async function claimMonitoringReceipt(tx: Transaction, input: {
+  provider: "zpay" | "bank"; providerTradeNo: string; providerOrderId: string;
+  payloadDigest: string; receivedAt: Date;
+}) {
+  const [existing] = await tx.select().from(paymentReceiptClaims).where(and(
+    eq(paymentReceiptClaims.provider, input.provider),
+    eq(paymentReceiptClaims.providerTradeNo, input.providerTradeNo),
+  )).limit(1);
+  if (existing) {
+    if (existing.providerOrderId !== input.providerOrderId || existing.walletScope !== "monitoring")
+      throw new RepositoryError("CONFLICT", "Payment receipt is already claimed by another order");
+    return;
+  }
+  // The global unique key also serializes claims made simultaneously in different domains.
+  await tx.insert(paymentReceiptClaims).values({ id: randomUUID(), ...input,
+    walletScope: "monitoring", status: "received", claimedAt: input.receivedAt,
+  });
 }

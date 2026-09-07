@@ -133,15 +133,15 @@ describe("unified SiteOps AliDNS OAuth migration", () => {
     ).toBeUndefined();
   });
 
-  it("classifies the direct OAuth introduction as expand and registers no destructive replay", async () => {
+  it("classifies the full parity migration as contract and registers no destructive replay", async () => {
     const policy = await readJson("drizzle/migration-policy.json");
     const journal = await readJson("drizzle/meta/_journal.json");
     expect(policy.migrations["0058_dashboard_production_parity"]).toBe(
-      "expand",
+      "contract",
     );
     expect(
       journal.entries
-        .filter((entry: { idx: number }) => entry.idx >= 58)
+        .filter((entry: { idx: number }) => entry.idx >= 58 && entry.idx <= 60)
         .map((entry: { tag: string }) => entry.tag),
     ).toEqual([
       "0058_dashboard_production_parity",

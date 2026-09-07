@@ -6,6 +6,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { router } from "./_core/trpc";
 import { workspaceRouter } from "./workspace-router";
 import { deliveryRoleRouter } from "./delivery-role-router";
+import { enterpriseProjectRouter } from "./enterprise-project-router";
 
 export const appRouter = router({
   system: systemRouter,
@@ -15,6 +16,7 @@ export const appRouter = router({
   conversation: conversationRouter,
   workspace: workspaceRouter,
   delivery: deliveryRoleRouter,
+  enterpriseProjects: enterpriseProjectRouter,
 });
 
 export type AppRouter = typeof appRouter;

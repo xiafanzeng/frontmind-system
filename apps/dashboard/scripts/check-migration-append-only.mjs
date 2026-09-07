@@ -40,7 +40,7 @@ async function canonicalBaseline(entries) {
   return sha256(`${JSON.stringify(records)}\n`);
 }
 
-function assertJournalShape(entries) {
+export function assertJournalShape(entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
     throw new Error("MIGRATION_JOURNAL_EMPTY");
   }
@@ -50,10 +50,10 @@ function assertJournalShape(entries) {
       entry?.idx !== index ||
       entry.version !== "5" ||
       !Number.isSafeInteger(entry.when) ||
-      !new RegExp(
-        `^${String(index).padStart(4, "0")}[A-Za-z0-9_-]*$`,
-        "u",
-      ).test(entry.tag) ||
+      !/^\d{4}_[A-Za-z0-9_-]+$/u.test(entry.tag) ||
+      (index > 0 &&
+        Number(entry.tag.slice(0, 4)) <=
+          Number(entries[index - 1].tag.slice(0, 4))) ||
       entry.breakpoints !== true
     ) {
       throw new Error(`MIGRATION_JOURNAL_ENTRY_INVALID:${index}`);
@@ -149,7 +149,7 @@ export function assertExpandSql(tag, sql) {
     statements.push(...blockStatements);
   }
   const compatibleLiteralDefault =
-    /\bDEFAULT\s+(?:NULL|TRUE|FALSE|[-+]?\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:""|[^"])*")(?=\s*(?:COMMENT\b|,|;|$))/iu;
+    /\bDEFAULT\s+(?:NULL|TRUE|FALSE|[-+]?\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:""|[^"])*")(?=\s*(?:NOT\s+NULL\s*)?(?:COMMENT\b|,|;|$))/iu;
   const identifier = "(?:`([^`]+)`|([A-Za-z0-9_$]+))";
   const nullableAdditions = new Map();
   statements.forEach((statement, statementIndex) => {
@@ -373,6 +373,9 @@ async function main() {
 }
 
 // Importing SQL validators must not execute the repository-wide CLI audit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   await main();
 }

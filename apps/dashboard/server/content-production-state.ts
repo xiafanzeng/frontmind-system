@@ -1,3 +1,4 @@
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { agentOperations, agentTasks } from "../drizzle/schema";
@@ -280,7 +281,7 @@ export async function persistContentProductionObservations(input: {
           eq(agentTasks.id, input.taskId),
           eq(agentOperations.id, input.operationId),
           eq(agentOperations.scope, "managed_user"),
-          eq(agentOperations.accountUserId, input.userId),
+          enterpriseAccountOwnerPredicate(agentOperations, input.userId),
         ),
       )
       .limit(1)

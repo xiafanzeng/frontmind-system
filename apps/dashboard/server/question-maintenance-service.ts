@@ -1,3 +1,6 @@
+import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
+import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -5,7 +8,6 @@ import {
   responseLogicEntries,
   users,
   workspaceAuditEvents,
-  workspaceQuestions,
 } from "../drizzle/schema";
 import { AuthServiceError, type AuthenticatedUser } from "./auth-service";
 import { getDb } from "./db";
@@ -47,7 +49,7 @@ export function questionMaintenanceOperationId(
   scope = "operation",
 ) {
   const hash = createHash("sha256")
-    .update(`question-maintenance:${userId}:${clientRequestId}:${scope}`)
+    .update(`question-maintenance:${userId}:${getEnterpriseProjectScope()?.isLegacyDefault === false ? getEnterpriseProjectScope()!.enterpriseProjectId + ":" : ""}${clientRequestId}:${scope}`)
     .digest("hex");
   // Existing audit keys are the persisted replay boundary and must stay stable.
   // Question IDs cross UUID-validated APIs; SHA-256-derived custom UUIDs use v8.
@@ -62,7 +64,7 @@ export async function applyQuestionMaintenance(input: {
   actor: AuthenticatedUser;
   value: ApplyQuestionMaintenanceInput;
 }): Promise<QuestionMaintenanceResult> {
-  if (input.actor.role !== "user")
+  if (input.actor.role !== "user" && !getEnterpriseProjectScope())
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "只有客户可以修改自己的问题",
@@ -74,7 +76,7 @@ export async function applyQuestionMaintenance(input: {
       "DATABASE_UNAVAILABLE",
       "Database is not configured",
     );
-  const userId = input.actor.id;
+  const userId = enterpriseWorkspaceUserId(input.actor.id);
   const operationId = questionMaintenanceOperationId(
     userId,
     value.clientRequestId,
@@ -116,16 +118,16 @@ export async function applyQuestionMaintenance(input: {
     if (!currentScope)
       throw new AuthServiceError(
         "CONFLICT",
-        "只能修改当前有效服务周期内的问题",
+        "只能修改当前企业项目已选择的问题",
       );
     const question = (
       await tx
         .select()
-        .from(workspaceQuestions)
+        .from(workspaceQuestionTable())
         .where(
           and(
-            eq(workspaceQuestions.id, value.questionId),
-            eq(workspaceQuestions.userId, userId),
+            eq(workspaceQuestionTable().id, value.questionId),
+            workspaceQuestionOwnerPredicate(userId),
           ),
         )
         .limit(1)
@@ -138,11 +140,11 @@ export async function applyQuestionMaintenance(input: {
       question.selectionApprovalStatus !== "approved" ||
       question.revision !== value.expectedRevision ||
       question.contractId !== currentScope.contractId ||
-      question.quotaPeriodId !== currentScope.quotaPeriodId
+      (question.quotaPeriodId ?? "") !== currentScope.quotaPeriodId
     ) {
       throw new AuthServiceError(
         "CONFLICT",
-        "问题已更新或不属于当前服务周期，请刷新后重试",
+        "问题已更新或不属于当前企业项目，请刷新后重试",
       );
     }
     const now = new Date();
@@ -154,7 +156,7 @@ export async function applyQuestionMaintenance(input: {
           .from(responseLogicEntries)
           .where(
             and(
-              eq(responseLogicEntries.userId, userId),
+              enterpriseOwnerPredicate(responseLogicEntries, userId),
               eq(responseLogicEntries.questionId, question.id),
             ),
           )
@@ -167,7 +169,7 @@ export async function applyQuestionMaintenance(input: {
         .delete(responseLogicEntries)
         .where(
           and(
-            eq(responseLogicEntries.userId, userId),
+            enterpriseOwnerPredicate(responseLogicEntries, userId),
             eq(responseLogicEntries.questionId, question.id),
             eq(
               responseLogicEntries.revision,
@@ -186,19 +188,19 @@ export async function applyQuestionMaintenance(input: {
         throw new AuthServiceError("CONFLICT", "问题内容没有变化");
       }
       await tx
-        .update(workspaceQuestions)
+        .update(workspaceQuestionTable())
         .set({
           status: "archived",
           locked: false,
           archivedAt: now,
-          revision: sql`${workspaceQuestions.revision} + 1`,
+          revision: sql`${workspaceQuestionTable().revision} + 1`,
           updatedAt: now,
         })
         .where(
           and(
-            eq(workspaceQuestions.id, question.id),
-            eq(workspaceQuestions.userId, userId),
-            eq(workspaceQuestions.revision, value.expectedRevision),
+            eq(workspaceQuestionTable().id, question.id),
+            workspaceQuestionOwnerPredicate(userId),
+            eq(workspaceQuestionTable().revision, value.expectedRevision),
           ),
         );
       if (value.action === "modify") {
@@ -207,7 +209,7 @@ export async function applyQuestionMaintenance(input: {
           value.clientRequestId,
           "replacement",
         );
-        await tx.insert(workspaceQuestions).values({
+        await tx.insert(workspaceQuestionTable()).values({
           id: replacementQuestionId,
           userId,
           contractId: question.contractId,
@@ -254,7 +256,7 @@ export async function applyQuestionMaintenance(input: {
       .insert(workspaceAuditEvents)
       .values({
         id: operationId,
-        actorUserId: userId,
+        actorUserId: input.actor.id,
         actorUsername: input.actor.username,
         action: `workspace.question.${value.action}`,
         targetType: "workspace_question",

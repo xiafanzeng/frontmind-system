@@ -1,3 +1,4 @@
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 import { createHash } from "node:crypto";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { describe, expect, it } from "vitest";
@@ -36,6 +37,13 @@ describe("enterprise QA frozen published knowledge", () => {
     expect(enterpriseQaKnowledgeDocuments(documents)).toEqual([
       { title: "产品", path: "products.md", content: "已发布事实" },
     ]);
+  });
+  it("accepts pre-project frozen purpose only in its migrated default and rejects another project's snapshot", () => {
+    const legacy = {revision:1 as const,accountUserId:71,purpose:"enterprise_qa" as const,knowledgeBase:null,knowledgeText:null};
+    const scope = {enterpriseProjectId:"project-a",ownerUserId:71,actorUserId:99,isLegacyDefault:true};
+    expect(runWithEnterpriseProjectScope(scope, () => frozenGeneralAgentPurpose({providerRuntime:{generalPurpose:legacy}},71))).toEqual(legacy);
+    expect(() => runWithEnterpriseProjectScope({...scope,isLegacyDefault:false}, () => frozenGeneralAgentPurpose({providerRuntime:{generalPurpose:legacy}},71))).toThrow("GENERAL_AGENT_PURPOSE_CONTEXT_INVALID");
+    expect(() => runWithEnterpriseProjectScope({...scope,enterpriseProjectId:"project-b",isLegacyDefault:false}, () => frozenGeneralAgentPurpose({providerRuntime:{generalPurpose:{...legacy,enterpriseProjectId:"project-a"}}},71))).toThrow("GENERAL_AGENT_PURPOSE_CONTEXT_INVALID");
   });
   it("selects only the current owner's active published snapshot and freezes its safe content hash", async () => {
     let query: ReturnType<MySqlDialect["sqlToQuery"]> | undefined;

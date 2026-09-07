@@ -1075,6 +1075,8 @@ const oauthStatePayloadSchema = z
     credentialId: z.string().uuid(),
     projectId: z.string().uuid(),
     userId: z.number().int().positive(),
+    actorUserId: z.number().int().positive().optional(),
+    enterpriseProjectId: z.string().uuid().nullable().optional(),
     nonce: z.string().regex(/^[A-Za-z0-9_-]{16,128}$/),
     expiresAt: z.number().int().positive(),
   })
@@ -1091,6 +1093,8 @@ export function buildAliyunOAuthState(input: {
   credentialId: string;
   projectId: string;
   userId: number;
+  actorUserId?: number;
+  enterpriseProjectId?: string | null;
   clientSecret: string;
   expiresAt: number;
   nonce?: string;
@@ -1102,6 +1106,8 @@ export function buildAliyunOAuthState(input: {
         credentialId: input.credentialId,
         projectId: input.projectId,
         userId: input.userId,
+        actorUserId: input.actorUserId,
+        enterpriseProjectId: input.enterpriseProjectId,
         nonce: input.nonce ?? randomBytes(18).toString("base64url"),
         expiresAt: input.expiresAt,
       }),
@@ -1114,6 +1120,8 @@ export function buildAliyunOAuthState(input: {
 export async function createAliyunOAuthAuthorization(input: {
   projectId: string;
   userId: number;
+  actorUserId?: number;
+  enterpriseProjectId?: string | null;
   nowMs?: number;
   fetchImpl?: typeof fetch;
 }) {
@@ -1157,6 +1165,8 @@ export async function createAliyunOAuthAuthorization(input: {
         credentialId: storedCredential.id,
         projectId: input.projectId,
         userId: input.userId,
+        actorUserId: input.actorUserId ?? input.userId,
+        enterpriseProjectId: input.enterpriseProjectId ?? null,
         clientSecret: credential.clientSecret,
         expiresAt: nowMs + OAUTH_STATE_TTL_MS,
       });
@@ -1188,7 +1198,7 @@ export async function verifyAliyunOAuthState(input: {
   }
   const payload = oauthStatePayloadSchema.parse(decoded);
   if (
-    payload.userId !== input.userId ||
+    (payload.actorUserId ?? payload.userId) !== input.userId ||
     payload.expiresAt < (input.nowMs ?? Date.now())
   ) {
     throw new AuthServiceError("INVALID_CREDENTIAL", "阿里云授权状态已失效");
@@ -1219,6 +1229,7 @@ export async function exchangeAliyunOAuthCode(input: {
   code: string;
   state: string;
   userId: number;
+  authorizeProject?: (identity: import("./oauth-project-context").SiteOpsOAuthProjectIdentity) => Promise<void>;
   fetchImpl?: typeof fetch;
   nowMs?: number;
   probeAccessToken?: (accessToken: string) => Promise<unknown>;
@@ -1239,6 +1250,12 @@ export async function exchangeAliyunOAuthCode(input: {
     ...stageContext,
     stage: "state_verify",
     operation: () => verifyAliyunOAuthState(input),
+  });
+  await input.authorizeProject?.({
+    projectId: payload.projectId,
+    userId: payload.userId,
+    actorUserId: payload.actorUserId,
+    enterpriseProjectId: payload.enterpriseProjectId,
   });
   const fetchImpl = input.fetchImpl ?? fetch;
   const token = await runAliyunOAuthStage({
@@ -1326,6 +1343,8 @@ export async function exchangeAliyunOAuthCode(input: {
     credentialId: credential.id,
     projectId: payload.projectId,
     userId: payload.userId,
+    ...(payload.actorUserId === undefined ? {} : { actorUserId: payload.actorUserId }),
+    ...(payload.enterpriseProjectId === undefined ? {} : { enterpriseProjectId: payload.enterpriseProjectId }),
     accountUid,
     refreshToken: token.refreshToken,
     scopes: token.scopes,

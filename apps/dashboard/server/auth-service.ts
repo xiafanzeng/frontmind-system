@@ -1,3 +1,5 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseProjectIdForOwner } from "./enterprise-project-scope";
 import {
   createCipheriv,
   createDecipheriv,
@@ -38,6 +40,12 @@ import {
 } from "../shared/admin-access";
 import {
   agentOperations,
+  enterpriseProjects,
+  enterpriseProjectDashboardContents,
+  enterpriseProjectQuestions,
+  enterpriseProjectMonitoringLinks,
+  enterpriseProjectResetStates,
+  enterpriseProjectSiteProfiles,
   apiCredentials,
   apiKeyOwnership,
   attachments,
@@ -1157,6 +1165,15 @@ export async function permanentlyDeleteManagedUserRows(
   await executor
     .delete(apiKeyOwnership)
     .where(eq(apiKeyOwnership.userId, userId));
+  // This is an already-authorized permanent account deletion, not a project
+  // reset. Remove every enterprise root owned by the account before users;
+  // an ambient browser project must not narrow this lifecycle cleanup.
+  await executor.delete(enterpriseProjectMonitoringLinks).where(eq(enterpriseProjectMonitoringLinks.ownerUserId, userId));
+  await executor.delete(enterpriseProjectQuestions).where(eq(enterpriseProjectQuestions.userId, userId));
+  await executor.delete(enterpriseProjectDashboardContents).where(eq(enterpriseProjectDashboardContents.userId, userId));
+  await executor.delete(enterpriseProjectResetStates).where(eq(enterpriseProjectResetStates.userId, userId));
+  await executor.delete(enterpriseProjectSiteProfiles).where(eq(enterpriseProjectSiteProfiles.userId, userId));
+  await executor.delete(enterpriseProjects).where(eq(enterpriseProjects.ownerUserId, userId));
   await executor.delete(users).where(eq(users.id, userId));
 }
 
@@ -1442,7 +1459,7 @@ export async function deleteManagedUser(
                 .from(upstreamResources)
                 .where(
                   and(
-                    eq(upstreamResources.userId, targetUserId),
+                    enterpriseOwnerPredicate(upstreamResources, targetUserId),
                     isNotNull(upstreamResources.projectAssignmentId),
                   ),
                 )
@@ -1453,7 +1470,7 @@ export async function deleteManagedUser(
                 .from(conversations)
                 .where(
                   and(
-                    eq(conversations.userId, targetUserId),
+                    enterpriseOwnerPredicate(conversations, targetUserId),
                     isNotNull(conversations.projectAssignmentId),
                   ),
                 )
@@ -2426,7 +2443,7 @@ export async function deleteActiveApiCredentialInTransaction(input: {
     ),
   );
   const credentialBuildCoordinate = or(
-    eq(knowledgeBaseBuilds.userId, input.userId),
+    enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
     ...(credentialBuildIds.length > 0
       ? [inArray(knowledgeBaseBuilds.id, credentialBuildIds)]
       : []),
@@ -2803,7 +2820,7 @@ export async function getDecryptedCredentialForKnowledgeBaseReservation(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, input.buildGeneration),
           ),
         )
@@ -2834,7 +2851,7 @@ export async function getDecryptedCredentialForKnowledgeBaseReservation(
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, input.buildId),
             eq(conversationTurns.buildGeneration, input.buildGeneration),
             eq(conversationTurns.apiCredentialId, input.apiCredentialId),
@@ -2896,7 +2913,7 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.conversationId, storedConversationId),
           ),
         )
@@ -3001,7 +3018,7 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
         .where(
           and(
             eq(knowledgeBaseBuilds.id, turn.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.conversationId, input.conversationId),
             eq(knowledgeBaseBuilds.generation, turn.buildGeneration),
           ),
@@ -3030,7 +3047,7 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
         .where(
           and(
             eq(conversations.id, storedConversationId),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
           ),
         )
         .limit(1)
@@ -3125,7 +3142,7 @@ export async function getCredentialForUpstreamResource(
         projectAssignmentId
           ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
           : and(
-              eq(upstreamResources.userId, userId),
+              enterpriseOwnerPredicate(upstreamResources, userId),
               isNull(upstreamResources.projectAssignmentId),
             ),
         eq(upstreamResources.kind, kind),
@@ -3325,7 +3342,7 @@ export async function getOwnedUpstreamResourceIds(
         projectAssignmentId
           ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
           : and(
-              eq(upstreamResources.userId, userId),
+              enterpriseOwnerPredicate(upstreamResources, userId),
               isNull(upstreamResources.projectAssignmentId),
             ),
         eq(upstreamResources.kind, kind),
@@ -3464,7 +3481,7 @@ export async function recordUpstreamResource(input: {
           projectAssignmentId
             ? eq(conversations.projectAssignmentId, projectAssignmentId)
             : and(
-                eq(conversations.userId, input.userId),
+                enterpriseOwnerPredicate(conversations, input.userId),
                 isNull(conversations.projectAssignmentId),
               ),
         ),
@@ -3476,6 +3493,7 @@ export async function recordUpstreamResource(input: {
   }
 
   const resource: UpstreamResource = {
+    enterpriseProjectId: enterpriseProjectIdForOwner(input.userId),
     id: randomUUID(),
     userId: input.userId,
     apiCredentialId: input.apiCredentialId,
@@ -3505,7 +3523,7 @@ export async function recordUpstreamResource(input: {
           projectAssignmentId
             ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
             : and(
-                eq(upstreamResources.userId, input.userId),
+                enterpriseOwnerPredicate(upstreamResources, input.userId),
                 isNull(upstreamResources.projectAssignmentId),
               ),
         ),

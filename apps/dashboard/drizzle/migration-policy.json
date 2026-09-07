@@ -8,11 +8,15 @@
     "0052_delivery_ticket_retention_guards": "contract",
     "0053_low_dorian_gray": "expand",
     "0054_file_content_retention": "expand",
-    "0055_mean_dark_beast": "expand",
-    "0056_monitoring_domain": "expand",
-    "0057_concerned_ares": "expand",
-    "0058_dashboard_production_parity": "expand",
+    "0055_mean_dark_beast": "contract",
+    "0056_monitoring_domain": "contract",
+    "0057_concerned_ares": "contract",
+    "0058_dashboard_production_parity": "contract",
     "0059_website_zhipu_provider": "expand",
-    "0060_dashboard_zhipu_provider": "expand"
+    "0060_dashboard_zhipu_provider": "expand",
+    "0062_enterprise_operator_projects": "contract",
+    "0063_unified_account_wallet": "contract",
+    "0064_ai_cost_accounting": "contract",
+    "0065_publisher_enterprise_projects": "contract"
   }
 }

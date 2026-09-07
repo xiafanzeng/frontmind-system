@@ -1,3 +1,5 @@
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { enterpriseProjectUrl } from "./enterprise-project-scope";
 import { createCredentialAgentClient } from "./credential-agent-client";
 /**
  * FrontMind API Proxy
@@ -117,6 +119,27 @@ import {
 const router = Router();
 
 const DOWNLOAD_TOKEN_TTL = 5 * 60 * 1000; // 5 minutes
+
+function bindWorkspaceDownloadUrl(
+  url: string,
+  projectAssignmentId?: string | null,
+) {
+  return enterpriseProjectUrl(
+    bindDownloadUrlToProject(url, projectAssignmentId),
+  );
+}
+function bindPreparedUrls<
+  T extends { contentUrl: string; downloadTokenUrl: string },
+>(asset: T, projectAssignmentId?: string | null): T {
+  return {
+    ...asset,
+    contentUrl: bindWorkspaceDownloadUrl(asset.contentUrl, projectAssignmentId),
+    downloadTokenUrl: bindWorkspaceDownloadUrl(
+      asset.downloadTokenUrl,
+      projectAssignmentId,
+    ),
+  };
+}
 export const MAX_EXTERNAL_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 const MAX_CAPTURED_UPLOAD_BYTES = 100 * 1024 * 1024;
 export const CAPTURED_UPLOAD_MAX_ATTEMPTS = 2;
@@ -3298,28 +3321,24 @@ router.delete(
 router.post(
   "/v1/files/:fileId/upload-recovery",
   (_req: Request, res: Response) => {
-    res
-      .status(410)
-      .json({
-        error: {
-          code: "UPLOAD_RECREATE_REQUIRED",
-          message: "请移除旧上传记录，重新选择文件上传",
-          recreateRequired: true,
-        },
-      });
+    res.status(410).json({
+      error: {
+        code: "UPLOAD_RECREATE_REQUIRED",
+        message: "请移除旧上传记录，重新选择文件上传",
+        recreateRequired: true,
+      },
+    });
   },
 );
 
 router.put("/proxy-upload", (_req: Request, res: Response) => {
-  res
-    .status(410)
-    .json({
-      error: {
-        code: "UPLOAD_RECREATE_REQUIRED",
-        message: "请重新选择文件，通过当前上传入口上传",
-        recreateRequired: true,
-      },
-    });
+  res.status(410).json({
+    error: {
+      code: "UPLOAD_RECREATE_REQUIRED",
+      message: "请重新选择文件，通过当前上传入口上传",
+      recreateRequired: true,
+    },
+  });
 });
 
 /**
@@ -3351,10 +3370,10 @@ router.get("/proxy-download", async (req: Request, res: Response) => {
     // those requests into the same asynchronous prepared-asset pipeline.
     if (isPdfFile(candidateFilename) && req.frontmindUser) {
       const credential = await getEffectiveDecryptedCredentialForAccount(
-        req.frontmindUser.id,
+        enterpriseWorkspaceUserId(req.frontmindUser.id),
       );
       const asset = await preparedFileService.registerExternal({
-        ownerUserId: req.frontmindUser.id,
+        ownerUserId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         credentialId: credential?.id || "external",
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
@@ -3362,10 +3381,23 @@ router.get("/proxy-download", async (req: Request, res: Response) => {
         filename: candidateFilename,
       });
       if (asset.status !== "ready") {
-        return res.status(202).json(asset);
+        return res
+          .status(202)
+          .json(
+            bindPreparedUrls(
+              asset,
+              req.frontmindDeliveryProjectContext?.projectAssignmentId,
+            ),
+          );
       }
       const suffix = disposition === "attachment" ? "?download=1" : "";
-      return res.redirect(307, `${asset.contentUrl}${suffix}`);
+      return res.redirect(
+        307,
+        bindWorkspaceDownloadUrl(
+          `${asset.contentUrl}${suffix}`,
+          req.frontmindDeliveryProjectContext?.projectAssignmentId,
+        ),
+      );
     }
 
     console.log(
@@ -3574,11 +3606,17 @@ async function handleFileDownload(
       expiresAt: resolved.expiresAt,
     });
     if (asset.status !== "ready") {
-      res.status(202).json(asset);
+      res.status(202).json(bindPreparedUrls(asset, projectAssignmentId));
       return;
     }
     const suffix = disposition === "attachment" ? "?download=1" : "";
-    res.redirect(307, `${asset.contentUrl}${suffix}`);
+    res.redirect(
+      307,
+      bindWorkspaceDownloadUrl(
+        `${asset.contentUrl}${suffix}`,
+        projectAssignmentId,
+      ),
+    );
     return;
   }
   res.status(200);
@@ -3635,7 +3673,7 @@ router.post("/download-token", async (req: Request, res: Response) => {
         .json({ error: { message: "请先登录", code: "UNAUTHORIZED" } });
     }
     const authorization = await ownedFileContentResolver.authorize({
-      ownerUserId: req.frontmindUser.id,
+      ownerUserId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       fileId,
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
@@ -3660,7 +3698,7 @@ router.post("/download-token", async (req: Request, res: Response) => {
     const token = createSignedDownloadToken({
       kind: "owned_file",
       fileId,
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       credentialId: authorization.sourceAuthorityId,
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
@@ -3669,7 +3707,7 @@ router.post("/download-token", async (req: Request, res: Response) => {
     const projectAssignmentId =
       req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null;
     res.json({
-      downloadUrl: bindDownloadUrlToProject(
+      downloadUrl: bindWorkspaceDownloadUrl(
         `/api/frontmind/download/${token}`,
         projectAssignmentId,
       ),
@@ -3727,7 +3765,10 @@ router.get("/download/:token", async (req: Request, res: Response) => {
     }
     logSecret = req.frontmindCredential?.apiKey || "";
 
-    if (!req.frontmindUser || req.frontmindUser.id !== data.userId) {
+    if (
+      !req.frontmindUser ||
+      enterpriseWorkspaceUserId(req.frontmindUser.id) !== data.userId
+    ) {
       return res.status(403).json({
         error: {
           message: "下载链接不属于当前账号",
@@ -3819,7 +3860,9 @@ router.get("/v1/files/:fileId", async (req: Request, res: Response) => {
       res,
       fileId,
       "inline",
-      req.frontmindUser?.id,
+      req.frontmindUser
+        ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+        : undefined,
       req.frontmindCredential?.id,
       req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
     );
@@ -3856,7 +3899,9 @@ router.get("/v1/files/:fileId/content", async (req: Request, res: Response) => {
       res,
       fileId,
       "inline",
-      req.frontmindUser?.id,
+      req.frontmindUser
+        ? enterpriseWorkspaceUserId(req.frontmindUser.id)
+        : undefined,
       req.frontmindCredential?.id,
       req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
     );
@@ -3946,11 +3991,9 @@ router.get("/credential-check", async (req: Request, res: Response) => {
 
 // Every supported operation has a local route above; there is no provider proxy.
 router.all("/*", (_req: Request, res: Response) => {
-  res
-    .status(404)
-    .json({
-      error: { code: "FRONTMIND_ROUTE_NOT_FOUND", message: "接口不存在" },
-    });
+  res.status(404).json({
+    error: { code: "FRONTMIND_ROUTE_NOT_FOUND", message: "接口不存在" },
+  });
 });
 
 export default router;

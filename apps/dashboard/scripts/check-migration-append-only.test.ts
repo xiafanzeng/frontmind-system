@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import {
   assertExpandSql,
+  assertJournalShape,
   assertNoEmptyMigrationBlocks,
 } from "./check-migration-append-only.mjs";
 
@@ -49,6 +51,9 @@ describe("append-only expand SQL policy", () => {
       "ALTER TABLE `users` ADD COLUMN `enabled` boolean NOT NULL DEFAULT TRUE;",
       "ALTER TABLE `users` ADD `attempts` int NOT NULL DEFAULT 0;",
       "ALTER TABLE `users` ADD `status` varchar(32) NOT NULL DEFAULT 'active';",
+      "ALTER TABLE `users` ADD `provider` varchar(16) DEFAULT 'manus' NOT NULL;",
+      "ALTER TABLE `users` ADD `enabled` boolean DEFAULT TRUE NOT NULL;",
+      "ALTER TABLE `users` ADD `attempts` int DEFAULT 0 NOT NULL COMMENT 'initial attempts';",
       "CREATE INDEX `users_status_idx` ON `users` (`status`);",
       "ALTER TABLE `users` ADD INDEX `users_name_idx` (`name`);",
     ]) {
@@ -93,6 +98,7 @@ describe("append-only expand SQL policy", () => {
       "ALTER TABLE `users` ADD `status` varchar(32) NOT NULL;",
       "ALTER TABLE `users` ADD `createdAt` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP;",
       "ALTER TABLE `users` ADD `token` varchar(36) NOT NULL DEFAULT (uuid());",
+      "ALTER TABLE `users` ADD `token` varchar(36) DEFAULT (uuid()) NOT NULL;",
       "ALTER TABLE `users` ADD `optionalToken` varchar(36) DEFAULT (uuid());",
       "ALTER TABLE `users` ADD `updatedAt` timestamp DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP;",
       "ALTER TABLE `users` ADD `a` int NOT NULL DEFAULT 0, ADD `b` int NOT NULL;",
@@ -139,5 +145,43 @@ describe("append-only expand SQL policy", () => {
         "EXPAND_MIGRATION_HAS_CONTRACT_SQL",
       );
     }
+  });
+});
+
+describe("repository migration classifications", () => {
+  it("keeps every declared expand migration within the strict additive SQL policy", async () => {
+    const policy = JSON.parse(
+      await readFile(new URL("../drizzle/migration-policy.json", import.meta.url), "utf8"),
+    ) as { migrations: Record<string, string> };
+    for (const [tag, classification] of Object.entries(policy.migrations)) {
+      if (classification !== "expand") continue;
+      const sql = await readFile(new URL(`../drizzle/${tag}.sql`, import.meta.url), "utf8");
+      expect(() => assertExpandSql(tag, sql), tag).not.toThrow();
+    }
+  });
+});
+
+describe("migration journal numbering", () => {
+  const entry = (idx: number, tag: string) => ({
+    idx,
+    tag,
+    version: "5",
+    when: 1000 + idx,
+    breakpoints: true,
+  });
+  it("accepts strictly increasing SQL prefixes with a reserved gap while journal indices stay contiguous", () => {
+    expect(() =>
+      assertJournalShape([entry(0, "0000_initial"), entry(1, "0002_next")]),
+    ).not.toThrow();
+  });
+  it("rejects repeated or reversed SQL prefixes and noncontiguous journal indices", () => {
+    for (const entries of [
+      [entry(0, "0000_initial"), entry(1, "0000_duplicate")],
+      [entry(0, "0002_initial"), entry(1, "0001_reversed")],
+      [entry(0, "0000_initial"), entry(2, "0002_skipped_index")],
+    ])
+      expect(() => assertJournalShape(entries)).toThrow(
+        "MIGRATION_JOURNAL_ENTRY_INVALID",
+      );
   });
 });

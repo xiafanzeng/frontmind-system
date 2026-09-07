@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { and, desc, eq, isNull } from "drizzle-orm";
 
 import {
@@ -92,7 +93,7 @@ export async function getManagedKnowledgeActivity(userId: number) {
   const builds = await db
     .select()
     .from(knowledgeBaseBuilds)
-    .where(eq(knowledgeBaseBuilds.userId, userId))
+    .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId))
     .orderBy(desc(knowledgeBaseBuilds.updatedAt), desc(knowledgeBaseBuilds.id))
     .limit(1);
   const build = builds[0];
@@ -118,7 +119,7 @@ export async function getManagedKnowledgeActivity(userId: number) {
       .from(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, userId),
+          enterpriseOwnerPredicate(conversationTurns, userId),
           eq(conversationTurns.conversationId, build.conversationId),
         ),
       )
@@ -256,7 +257,7 @@ export async function getManagedTaskActivity(userId: number) {
       updatedAt: conversationTurns.updatedAt,
     })
     .from(conversationTurns)
-    .where(eq(conversationTurns.userId, userId))
+    .where(enterpriseOwnerPredicate(conversationTurns, userId))
     .orderBy(desc(conversationTurns.updatedAt), desc(conversationTurns.id))
     .limit(100);
   const counts = {

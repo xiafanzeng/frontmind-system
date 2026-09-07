@@ -1,3 +1,4 @@
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import {
   createHash,
   createHmac,
@@ -10,7 +11,6 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import {
   purchaseIntents,
   serviceContracts,
-  userDashboardContents,
   users,
   websiteUserProvisions,
 } from "../drizzle/schema";
@@ -423,9 +423,9 @@ export async function submitWebsitePurchase(input: {
       }
       marketEdition = account.marketEdition;
       const dashboards = await tx
-        .select({ payload: userDashboardContents.payload })
-        .from(userDashboardContents)
-        .where(eq(userDashboardContents.userId, account.id))
+        .select({ payload: enterpriseDashboardTable().payload })
+        .from(enterpriseDashboardTable())
+        .where(enterpriseDashboardOwnerPredicate(account.id))
         .limit(1);
       const brandName = dashboards[0]?.payload?.brandName;
       if (
@@ -836,12 +836,12 @@ export async function decideWebsitePurchase(input: {
       );
     }
     const dashboards = await tx
-      .select({ userId: userDashboardContents.userId })
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, userId))
+      .select({ userId: enterpriseDashboardTable().userId })
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(userId))
       .limit(1);
     if (!dashboards[0]) {
-      await tx.insert(userDashboardContents).values({
+      await tx.insert(enterpriseDashboardTable()).values({
         userId,
         payload: createDefaultDashboardPayload(row.companyName),
         sourceName: `官网普通版开通 · ${row.projectId}`.slice(0, 512),

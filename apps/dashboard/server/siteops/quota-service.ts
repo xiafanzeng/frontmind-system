@@ -1,3 +1,4 @@
+import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { serviceQuotaPeriods } from "../../drizzle/schema";
@@ -32,6 +33,7 @@ export class SiteOpsQuotaError extends Error {
  * before their historical service contract has been imported.
  */
 export function assertSiteOpsServiceEntitlement(portal: ServicePortal) {
+  if (portal.mode === "operator") return portal;
   if (
     portal.service.status === "unconfigured" &&
     portal.entitlementRollout.mode === "compatibility"
@@ -59,6 +61,7 @@ export function siteOpsQuotaPeriodIds(
   _quotaPool: ContentQuotaPool,
 ) {
   assertSiteOpsServiceEntitlement(portal);
+  if (portal.mode === "operator") return [];
   const periodIds = [
     ...new Set(
       [
@@ -124,6 +127,8 @@ export async function reserveSiteOpsQuota(
     quotaPeriodIds: string[];
   },
 ) {
+  const projectScope = getEnterpriseProjectScope();
+  if (projectScope) { if (projectScope.ownerUserId !== input.userId) throw new Error("ENTERPRISE_PROJECT_OWNER_MISMATCH"); return null; }
   const lockedPeriods = await tx
     .select()
     .from(serviceQuotaPeriods)

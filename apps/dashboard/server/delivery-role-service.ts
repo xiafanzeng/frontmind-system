@@ -1,3 +1,5 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { randomUUID } from "node:crypto";
 
 import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
@@ -9,7 +11,6 @@ import {
   monitoringBatches,
   serviceContracts,
   serviceQuotaPeriods,
-  userDashboardContents,
   userUsageOwners,
   users,
   workspaceQuestions,
@@ -134,15 +135,8 @@ export function assertDeliveryMemberCredentialVersion(input: {
   }
 }
 
-function requiredRolesForPlan(planCode: string | null | undefined) {
-  const roles: DeliveryRoleType[] = [
-    "monitoring_optimization_engineer",
-    "content_distribution_engineer",
-  ];
-  if (planCode === "advanced" || planCode === "luxury") {
-    roles.unshift("ai_operations_engineer");
-  }
-  return roles;
+function requiredRolesForPlan(_historicalPlanCode: string | null | undefined) {
+  return ["ai_operations_engineer", "monitoring_optimization_engineer", "content_distribution_engineer"] satisfies DeliveryRoleType[];
 }
 
 function requiredRolesForCustomer(
@@ -639,7 +633,7 @@ export async function setProjectEngineer(input: {
           marketEdition: customerRows[0].marketEdition,
         })
       ) {
-        throw new AuthServiceError("CONFLICT", "当前套餐未启用该工程师岗位");
+        throw new AuthServiceError("CONFLICT", "当前账号未启用该工程师岗位");
       }
       if (input.engineerUserId != null) {
         const engineerRows = await tx
@@ -916,7 +910,7 @@ export async function assertDeliveryProjectContext(input: {
       marketEdition: role.marketEdition,
     })
   ) {
-    throw new AuthServiceError("NOT_FOUND", "当前套餐未启用该工程师岗位");
+    throw new AuthServiceError("NOT_FOUND", "当前账号未启用该工程师岗位");
   }
   return {
     ...role,
@@ -932,7 +926,7 @@ export function formalMonitoringBatchOptionsScope(input: {
   scopes: Array<{ contractId: string; quotaPeriodId: string }>;
 }) {
   return and(
-    eq(monitoringBatches.userId, input.userId),
+    enterpriseOwnerPredicate(monitoringBatches, input.userId),
     or(
       ...input.scopes.map((scope) =>
         and(
@@ -1068,14 +1062,14 @@ export async function getMyDeliveryWorkbench(input: {
     customerIds.length
       ? db
           .select({
-            userId: userDashboardContents.userId,
-            payload: userDashboardContents.payload,
-            revision: userDashboardContents.revision,
-            sourceName: userDashboardContents.sourceName,
-            updatedAt: userDashboardContents.updatedAt,
+            userId: enterpriseDashboardTable().userId,
+            payload: enterpriseDashboardTable().payload,
+            revision: enterpriseDashboardTable().revision,
+            sourceName: enterpriseDashboardTable().sourceName,
+            updatedAt: enterpriseDashboardTable().updatedAt,
           })
-          .from(userDashboardContents)
-          .where(inArray(userDashboardContents.userId, customerIds))
+          .from(enterpriseDashboardTable())
+          .where(inArray(enterpriseDashboardTable().userId, customerIds))
       : [],
     role.roleType === "ai_operations_engineer"
       ? getKnowledgeBaseProgress({ userId: role.customerUserId })

@@ -8,6 +8,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import chatRouter from "./frontmind-v2-chat-router";
+import { AiBillingError } from "./ai-billing-service";
 import {
   generalAgentRuntimeForCredential,
   generalAgentRuntimeForOperation,
@@ -16,6 +17,11 @@ import {
 const runtimeMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   createCredentialAgentClient: vi.fn(),
+  assertAiAccountFunds: vi.fn(),
+}));
+vi.mock("./ai-billing-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ai-billing-service")>()),
+  assertAiAccountFunds: runtimeMocks.assertAiAccountFunds,
 }));
 vi.mock("./db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./db")>()),
@@ -159,6 +165,20 @@ describe("General Agent runtime HTTP authorization", () => {
       error: { code: "API_CREDENTIAL_REQUIRED" },
     });
     expect(runtimeMocks.getDb).not.toHaveBeenCalled();
+    expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
+  });
+  it("returns a real 402 for an unfunded new general conversation before creating any provider resources", async () => {
+    const chain: any = { from: () => chain, innerJoin: () => chain, where: () => chain, limit: async () => [] };
+    runtimeMocks.getDb.mockResolvedValue({ select: () => chain });
+    runtimeMocks.assertAiAccountFunds.mockRejectedValueOnce(new AiBillingError("AI_BALANCE_INSUFFICIENT"));
+    const base = (await start(3, "delivery_admin", "user")).replace(/\/runtime-config$/u, "");
+    const response = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ conversationId: "general-conversation", clientRequestId: "new-request", prompt: "hello", modelProfile: "frontmind-base", localAssetIds: [] }),
+    });
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ error: { code: "AI_BALANCE_INSUFFICIENT", dispatchSettled: true, accountUrl: "/account" } });
+    expect(runtimeMocks.assertAiAccountFunds).toHaveBeenCalledWith(3);
     expect(runtimeMocks.createCredentialAgentClient).not.toHaveBeenCalled();
   });
   it("returns current safe published QA metadata and refuses ungrounded creation before provider use", async () => {
@@ -690,11 +710,10 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
     );
 
     expect(sendSource).toContain('"SEND_OUTCOME_UNRESOLVED", 409, true');
-    expect(sendSource).toContain('error.operation !== "task.sendMessage"');
-    expect(sendSource).toContain("error.outcomeUnknown");
+    expect(sendSource).toContain("generalChatDispatchIsDefinitelyRejected(error)");
     expect(sendSource).toContain("rejectionProven: true");
     expect(sendSource).toContain(
-      'new ChatV2HttpError("SEND_REJECTED", 422, false, true)',
+      'new ChatV2HttpError(rejectionCode, rejectionStatus, error.retryable, true)',
     );
     expect(providerCallIndex).toBeGreaterThanOrEqual(0);
     expect(acknowledgedWriteIndex).toBeGreaterThan(providerCallIndex);

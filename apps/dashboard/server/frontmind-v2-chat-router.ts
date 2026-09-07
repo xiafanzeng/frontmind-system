@@ -1,5 +1,7 @@
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
-import { sendAiBillingError } from "./ai-billing-http";
+import { aiBillingHttpFailure, sendAiBillingError } from "./ai-billing-http";
+import { AiBillingError, assertAiAccountFunds } from "./ai-billing-service";
+import { generalChatDispatchIsDefinitelyRejected, generalChatHasPersistedPreSendBalanceRefusal, generalChatHttpErrorMessage } from "./general-chat-dispatch-failure";
 import { enterpriseProjectPredicate, enterpriseOwnerPredicate, enterpriseProjectUrl } from "./enterprise-project-scope";
 import { currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { createHash, randomUUID } from "node:crypto";
@@ -411,6 +413,7 @@ function clientFor(
     ...(operation
       ? {
           operationId: operation.id,
+          enterpriseProjectId: operation.enterpriseProjectId ?? null,
           intentId: operation.id,
           model: operation.upstreamModel,
           ...(operation.provider === "zhipu"
@@ -2866,6 +2869,8 @@ async function transitionCreateReservation(input: {
   expectedStatus?: CreateReservationStatus;
   claimToken?: string;
   rejectionProven?: boolean;
+  rejectionCode?: string;
+  requirePersistedPreSendBalanceRefusal?: boolean;
 }) {
   const db = await requireDb();
   return db.transaction(async (tx) => {
@@ -2893,6 +2898,14 @@ async function transitionCreateReservation(input: {
     if (payload.status === "acknowledged" && input.status !== "acknowledged") {
       return false;
     }
+    if (payload.status === "rejected" && payload.rejectionProven === true && input.status !== "rejected") {
+      return false;
+    }
+    if (input.requirePersistedPreSendBalanceRefusal) {
+      const [task] = await tx.select({ runtime: agentTasks.providerRuntime, providerTaskId: agentTasks.providerTaskId })
+        .from(agentTasks).where(eq(agentTasks.id, input.taskId)).limit(1).for("update");
+      if (task?.providerTaskId || !generalChatHasPersistedPreSendBalanceRefusal(task?.runtime)) return false;
+    }
     await tx
       .update(agentEvents)
       .set({
@@ -2900,7 +2913,10 @@ async function transitionCreateReservation(input: {
           ...payload,
           status: input.status,
           ...(input.status === "rejected"
-            ? { rejectionProven: input.rejectionProven === true }
+            ? {
+                rejectionProven: input.rejectionProven === true,
+                ...(input.rejectionCode ? { rejectionCode: input.rejectionCode } : {}),
+              }
             : {}),
         },
       })
@@ -2943,6 +2959,7 @@ async function readCreateReservation(taskId: string) {
         ? (payload.status as CreateReservationStatus)
         : null,
     rejectionProven: payload.rejectionProven === true,
+    rejectionCode: typeof payload.rejectionCode === "string" ? payload.rejectionCode : undefined,
     evidence: promptSha256
       ? ({
           promptSha256,
@@ -2982,7 +2999,7 @@ async function assertCreateTaskDtoMaySettle(input: {
       localTaskId: owned.task.id,
       status: "failed",
       providerState: "failed",
-      errorCode: owned.operation.errorCode ?? "TASK_CREATE_REJECTED",
+      errorCode: reservation.rejectionCode ?? owned.operation.errorCode ?? "TASK_CREATE_REJECTED",
       clearConversationTaskPointers: true,
     });
     owned = await findOwnedTask({
@@ -3020,6 +3037,28 @@ async function reconcileUnknownCreate(input: {
     !["sending", "outcome_unknown"].includes(reservation.status ?? "")
   ) {
     return input;
+  }
+  if (input.operation.provider === "zhipu" && reservation.status === "outcome_unknown" &&
+      generalChatHasPersistedPreSendBalanceRefusal(input.task.providerRuntime)) {
+    const settled = await transitionCreateReservation({
+      taskId: input.task.id,
+      expectedStatus: "outcome_unknown",
+      status: "rejected",
+      rejectionProven: true,
+      rejectionCode: "AI_BALANCE_INSUFFICIENT",
+      requirePersistedPreSendBalanceRefusal: true,
+    });
+    if (settled) {
+      await updateTaskState({
+        operationId: input.operation.id,
+        localTaskId: input.task.id,
+        status: "failed",
+        providerState: "failed",
+        errorCode: "AI_BALANCE_INSUFFICIENT",
+        clearConversationTaskPointers: true,
+      });
+    }
+    return findOwnedTask({ userId: input.operation.accountUserId!, localTaskId: input.task.id });
   }
   const evidence = reservation.evidence;
   const localAttachmentManifest = await generalChatLocalAttachmentManifest({
@@ -3073,11 +3112,12 @@ async function reconcileUnknownCreate(input: {
       status: "acknowledged",
     });
   } else {
-    await transitionCreateReservation({
+    const unresolved = await transitionCreateReservation({
       taskId: input.task.id,
+      expectedStatus: reservation.status ?? undefined,
       status: "outcome_unknown",
     });
-    await updateTaskState({
+    if (unresolved) await updateTaskState({
       operationId: input.operation.id,
       localTaskId: input.task.id,
       status: "queued",
@@ -3740,6 +3780,9 @@ async function reserveCreate(input: {
     return { ...owned, ...claim, created: false as const };
   }
 
+  // Refuse an unfunded new task before creating any provider resources. Existing
+  // task replays above still reconcile even when their funds are fully reserved.
+  await assertAiAccountFunds(input.userId);
   const execution = input.value.purpose
     ? generalAgentRuntimeForCredential(input.credential)
     : generalAgentRuntimeForSelection(input.credential, input.value.modelProfile);
@@ -4123,7 +4166,14 @@ async function sendProviderMessage(input: {
     }
     if (payload.status === "rejected") {
       if (payload.rejectionProven === true) {
-        throw new ChatV2HttpError("SEND_REJECTED", 422, false, true);
+        if (typeof payload.rejectionCode === "string" && payload.rejectionCode.startsWith("AI_"))
+          throw new AiBillingError(payload.rejectionCode);
+        throw new ChatV2HttpError(
+          typeof payload.rejectionCode === "string" ? payload.rejectionCode : "SEND_REJECTED",
+          typeof payload.rejectionStatus === "number" ? payload.rejectionStatus : 422,
+          payload.rejectionStatus === 429,
+          true,
+        );
       }
       throw new ChatV2HttpError("SEND_OUTCOME_UNRESOLVED", 409, true);
     }
@@ -4318,19 +4368,19 @@ async function sendProviderMessage(input: {
     });
   } catch (error) {
     if (error instanceof ManusV2ApiError && error.outcomeUnknown) {
-      const acknowledged = await reconcileReservedSend(frozenEvidence);
+      const acknowledged = await reconcileReservedSend(frozenEvidence).catch(() => false);
       if (!acknowledged) {
         throw new ChatV2HttpError("SEND_OUTCOME_UNRESOLVED", 409, true);
       }
       return;
     }
-    if (
-      !(error instanceof ManusV2ApiError) ||
-      error.operation !== "task.sendMessage" ||
-      error.outcomeUnknown
-    ) {
-      throw error;
+    if (!generalChatDispatchIsDefinitelyRejected(error)) {
+      const acknowledged = await reconcileReservedSend(frozenEvidence).catch(() => false);
+      if (!acknowledged) throw new ChatV2HttpError("SEND_OUTCOME_UNRESOLVED", 409, true);
+      return;
     }
+    const rejectionCode = error instanceof Error && "code" in error ? String(error.code) : "SEND_REJECTED";
+    const rejectionStatus = error instanceof ManusV2ApiError ? (error.status ?? 422) : (aiBillingHttpFailure(error)?.status ?? 503);
     await db
       .update(agentEvents)
       .set({
@@ -4338,10 +4388,22 @@ async function sendProviderMessage(input: {
           ...frozenEvidence,
           status: "rejected",
           rejectionProven: true,
+          rejectionCode,
+          rejectionStatus,
         },
       })
       .where(eq(agentEvents.id, reservation.id));
-    throw new ChatV2HttpError("SEND_REJECTED", 422, false, true);
+    await updateTaskState({
+      operationId: input.operation.id,
+      localTaskId: input.task.id,
+      status: "failed",
+      providerState: "failed",
+      errorCode: rejectionCode,
+      turnId: input.turnId,
+      conversationId: input.conversationId,
+    });
+    if (!(error instanceof ManusV2ApiError)) throw error;
+    throw new ChatV2HttpError(rejectionCode, rejectionStatus, error.retryable, true);
   }
   await db
     .update(agentEvents)
@@ -4381,7 +4443,7 @@ function sendError(res: Response, error: unknown) {
     res.status(error.statusCode).json({
       error: {
         code: error.code,
-        message: error.code,
+        message: generalChatHttpErrorMessage(error.code, error.statusCode),
         retryable: error.retryable,
         dispatchSettled: error.dispatchSettled,
       },
@@ -5177,10 +5239,11 @@ router.post("/tasks", async (req, res) => {
           locale: "zh-CN",
         });
       } catch (error) {
-        const explicitlyRejected =
-          error instanceof ManusV2ApiError &&
-          error.operation === "task.create" &&
-          !error.outcomeUnknown;
+        console.warn("[FrontMindV2] create command failed", {
+          code: error instanceof Error && "code" in error ? String(error.code) : error instanceof Error ? error.name : "UNKNOWN_ERROR",
+          ...(error instanceof ManusV2ApiError ? { operation: error.operation, status: error.status, outcomeUnknown: error.outcomeUnknown } : {}),
+        });
+        const explicitlyRejected = generalChatDispatchIsDefinitelyRejected(error);
         if (!explicitlyRejected) {
           await transitionCreateReservation({
             taskId: reserved.task.id,
@@ -5201,18 +5264,20 @@ router.post("/tasks", async (req, res) => {
           expectedStatus: "sending",
           status: "rejected",
           rejectionProven: true,
+          rejectionCode: error instanceof Error && "code" in error ? String(error.code) : "TASK_CREATE_FAILED",
         });
         await updateTaskState({
           operationId: reserved.operation.id,
           localTaskId: reserved.task.id,
           status: "failed",
           providerState: "failed",
-          errorCode:
-            error instanceof ManusV2ApiError
-              ? error.code
-              : "TASK_CREATE_FAILED",
+          errorCode: error instanceof Error && "code" in error ? String(error.code) : "TASK_CREATE_FAILED",
           clearConversationTaskPointers: true,
         });
+        // A known refusal must keep its 402/403/429 response. Do not send it
+        // through create reconciliation and turn it into an unknown 409.
+        if (!(error instanceof ManusV2ApiError)) throw error;
+        throw new ChatV2HttpError(error.code, error.status ?? 422, error.retryable, true);
       }
       if (created) {
         await updateTaskState({

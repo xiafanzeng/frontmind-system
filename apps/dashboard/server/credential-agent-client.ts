@@ -6,6 +6,7 @@ export function createCredentialAgentClient(
   credential: DecryptedCredential,
   options: {
     accountUserId?: number;
+    enterpriseProjectId?: string | null;
     intentId?: string;
     localTaskId?: string;
     operationId?: string;

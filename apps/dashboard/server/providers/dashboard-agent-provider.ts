@@ -261,9 +261,14 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       credentialVersion: options.credentialVersion,
       credentialOwnerUserId: options.credentialOwnerUserId,
       enterpriseProjectId:
-        getEnterpriseProjectScope()?.enterpriseProjectId ?? null,
+        options.enterpriseProjectId !== undefined
+          ? options.enterpriseProjectId
+          : getEnterpriseProjectScope()?.enterpriseProjectId ?? null,
       enterpriseProjectLegacyDefault:
-        getEnterpriseProjectScope()?.isLegacyDefault ?? false,
+        options.enterpriseProjectLegacyDefault ??
+        (options.enterpriseProjectId === undefined
+          ? getEnterpriseProjectScope()?.isLegacyDefault ?? false
+          : false),
     };
   }
   private intent() {

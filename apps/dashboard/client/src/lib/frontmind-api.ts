@@ -22,6 +22,7 @@ import type { KnowledgeBaseInteractionDto } from "@shared/knowledge-base-progres
 import { stripKnowledgeBaseProtocolPayloads } from "@shared/knowledge-base-output";
 import { sanitizeFrontMindPublicText } from "@shared/frontmind-public-brand";
 import { userFacingErrorMessage } from "@/lib/user-facing-error";
+import { showAiBillingAction } from "@/lib/ai-billing-feedback";
 import {
   assertChatAttachmentSizes,
   normalizedKnowledgeBaseUploadFilename,
@@ -54,7 +55,7 @@ export {
  * Historical public profile IDs remain stable; labels describe frozen effort.
  */
 export const MODEL_OPTIONS = [
-  { value: "frontmind-lite", label: "Low", description: "历史推理档位" },
+  { value: "frontmind-lite", label: "Low", description: "轻量推理档位" },
   { value: "frontmind-base", label: "High", description: "高推理档位" },
   { value: "frontmind-pro", label: "Max", description: "最高推理档位" },
 ] as const;
@@ -74,7 +75,7 @@ export function getModelDisplayName(modelValue: string | undefined): string {
 // only by the server; browser-local credentials and conversations are not
 // imported into an account.
 const DEFAULT_CONFIG = {
-  agentProfile: "frontmind-pro",
+  agentProfile: "frontmind-base",
 };
 const DEVICE_PREFERENCES_STORAGE_KEY = "frontmind-client-preferences";
 
@@ -733,6 +734,7 @@ async function apiRequest(
       if (typeof errorDetails?.dispatchSettled === "boolean") {
         requestError.dispatchSettled = errorDetails.dispatchSettled;
       }
+      showAiBillingAction(requestError);
       throw requestError;
     }
 
@@ -1401,6 +1403,7 @@ export async function createResponseLogicTask(
           ? (payloadObject.error as Record<string, unknown>)
           : null;
       const envelope = nestedError ?? payloadObject;
+      showAiBillingAction(envelope);
       const legacyMessage =
         (typeof envelope?.message === "string" && envelope.message.trim()) ||
         `任务创建失败（${response.status}）`;
@@ -1669,6 +1672,7 @@ export async function cancelKnowledgeBaseStartReservation(input: {
 function isTransientKnowledgeBaseRequestError(error: unknown) {
   const status = Number((error as { status?: unknown })?.status || 0);
   const code = String((error as { code?: unknown })?.code || "");
+  if (code.startsWith("AI_")) return false;
   return (
     !status ||
     code === "IDEMPOTENCY_PENDING" ||
@@ -1756,6 +1760,7 @@ async function knowledgeBaseRequestError(
   error.status = response.status;
   error.code =
     String(payload?.error?.code || payload?.code || "").trim() || undefined;
+  showAiBillingAction(error);
   error.retryAfter = retryAfter;
   error.retryAfterMs = retryAfterMilliseconds(retryAfter || null);
   if (payload?.knowledgeObservation) {

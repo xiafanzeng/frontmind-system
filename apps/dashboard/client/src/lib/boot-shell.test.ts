@@ -38,7 +38,7 @@ describe("React-only application boot", () => {
   });
 
   it("keeps authentication and workspace suspense on one React loading state", () => {
-    expect(app.match(/<WorkspaceLoadingState \/>/g)).toHaveLength(2);
+    expect(app.match(/<WorkspaceLoadingState \/>/g)).toHaveLength(4);
     expect(app.match(/正在打开工作空间/g)).toHaveLength(1);
     expect(app.match(/rounded-2xl bg-muted/g)).toHaveLength(1);
     expect(app.match(/animate-spin text-primary/g)).toHaveLength(1);

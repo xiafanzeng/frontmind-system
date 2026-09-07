@@ -576,36 +576,16 @@ describe("DeliveryMemberDashboard project context", () => {
     );
   });
 
-  it("explains Luxury's quarterly unlock and caps every editable field at the unlocked tier", async () => {
+  it("keeps the workspace free of question limits even when historical quota data remains", () => {
     mocks.assignments = [monitoringAssignment];
     mocks.workbenchData = {
-      customers: [],
-      tickets: [],
-      customerQuestions: [],
-      dashboard: null,
-      questionQuota: {
-        ...questionQuotaFixture,
-        progressiveUnlock: true,
-        unlockStage: { current: 1, total: 4 },
-        nextUnlockAt: Date.parse("2026-09-30T16:00:00.000Z"),
-      },
+      customers: [], tickets: [], customerQuestions: [], dashboard: null,
+      questionQuota: { ...questionQuotaFixture, progressiveUnlock: true, unlockStage: { current: 1, total: 4 } },
     };
-
     render(<DeliveryMemberDashboard customerWorkbench />);
-
-    const editor = await screen.findByTestId("question-quota-editor");
-    expect(editor).toHaveTextContent("豪华版按季度自动解锁");
-    expect(editor).toHaveTextContent("当前第 1/4 档");
-    expect(editor).toHaveTextContent("2026/10/1");
-    fireEvent.click(within(editor).getByRole("button", { name: "修改额度" }));
-    expect(within(editor).getByLabelText("行业排名词额度")).toHaveAttribute(
-      "max",
-      "1",
-    );
-    expect(within(editor).getByLabelText("产品场景词额度")).toHaveAttribute(
-      "max",
-      "5",
-    );
+    expect(screen.getByTestId("current-delivery-target")).toBeInTheDocument();
+    expect(screen.queryByTestId("question-quota-editor")).toBeNull();
+    expect(mocks.adjustQuestionQuotaMutation).not.toHaveBeenCalled();
   });
 
   it.each([

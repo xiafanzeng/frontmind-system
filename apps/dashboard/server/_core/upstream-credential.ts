@@ -1,3 +1,4 @@
+import { enterpriseWorkspaceUserId } from "../enterprise-project-context";
 import type { NextFunction, Response } from "express";
 import {
   AuthServiceError,
@@ -76,6 +77,7 @@ export async function resolveUpstreamCredential(
   }
 
   try {
+    const ownerUserId = enterpriseWorkspaceUserId(user.id);
     // A one-time download token already carries the credential version chosen
     // when it was issued. The route itself binds that token to the logged-in
     // user, so requiring a currently active key here would break downloads for
@@ -130,7 +132,7 @@ export async function resolveUpstreamCredential(
         (req.method === "POST" && requestPath === "/download-token"));
     const credential = primaryResource
       ? await getCredentialForUpstreamResource(
-          user.id,
+          ownerUserId,
           primaryResource.kind,
           primaryResource.id,
           projectAssignmentId,
@@ -138,7 +140,7 @@ export async function resolveUpstreamCredential(
             ? { allowExpiredFileContent: true }
             : undefined,
         )
-      : await getEffectiveDecryptedCredentialForAccount(user.id);
+      : await getEffectiveDecryptedCredentialForAccount(ownerUserId);
 
     if (!credential) {
       sendCredentialError(
@@ -158,7 +160,7 @@ export async function resolveUpstreamCredential(
 
     for (const fileId of getAttachmentFileIds(req)) {
       const ownedFile = await getCredentialForUpstreamResource(
-        user.id,
+        ownerUserId,
         "file",
         fileId,
         projectAssignmentId,

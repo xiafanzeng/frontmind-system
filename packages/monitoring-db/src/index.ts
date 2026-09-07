@@ -10,3 +10,4 @@ export * from "./platform-acceptance-types.js";
 export * from "./repositories.js";
 export * from "./schema.js";
 export * from "./dashboard-account-links.js";
+export * from "./enterprise-scope.js";

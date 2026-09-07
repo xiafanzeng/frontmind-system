@@ -1,3 +1,4 @@
+import { agentCostDisplay, type AgentCost } from "@/lib/agent-cost";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Activity,
@@ -87,7 +88,7 @@ type ManagedAgentEffort = "high" | "max";
 type AgentUsageFields = {
   provider?: "unavailable" | "zhipu";
   upstreamEffort?: ManagedAgentEffort;
-  nativeUsage?: {
+  nativeUsage?: AgentCost & {
     unit: "tokens";
     inputTokens: number;
     outputTokens: number;
@@ -119,6 +120,8 @@ export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
             outputTokens: count(usage.outputTokens),
             cacheReadInputTokens: count(usage.cacheReadInputTokens),
             observedTasks: count(usage.observedTasks),
+            costCny: typeof usage.costCny === "string" ? usage.costCny : null,
+            costStatus: ["complete", "partial", "unknown"].includes(usage.costStatus) ? usage.costStatus : "unknown",
           },
         }
       : {}),
@@ -129,8 +132,7 @@ export function managedUsageDisplay(
   value: AgentUsageFields & { rolling30DayUsed: number },
 ) {
   if (value.provider === "unavailable") return "请配置智谱 Key";
-  if (!value.nativeUsage?.observedTasks) return "暂无 Token 记录";
-  return `${(value.nativeUsage.inputTokens + value.nativeUsage.outputTokens).toLocaleString()} Token`;
+  return agentCostDisplay(value.nativeUsage);
 }
 
 type AdminUsageHierarchyManager = AgentUsageFields & {
@@ -2594,7 +2596,7 @@ export default function AdminDashboard({
                 </div>
                 <p className="mt-1 text-sm leading-6 text-[#716a80]">
                   {apiKeyManagementTab === "general"
-                    ? "客户、交付管理员和工程师统一使用智谱 Key；近 30 天自用量按本地任务账本滚动累计。"
+                    ? "客户、交付管理员和工程师统一使用智谱 Key；近 30 天自用金额按实际调用记录累计。"
                     : "只为海外客户分配 FrontMind 品牌追踪 Key。不同客户可以共享同一 Key，个人积分仍按每轮实际用量分别归因。"}
                 </p>
               </div>
@@ -2792,6 +2794,7 @@ export default function AdminDashboard({
                             <p className="text-sm font-semibold text-[#5b2a86]">
                               {managedUsageDisplay(row)}
                             </p>
+                            {row.nativeUsage && <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">Token 明细</summary><p>输入 {row.nativeUsage.inputTokens.toLocaleString()}</p><p>输出 {row.nativeUsage.outputTokens.toLocaleString()}</p><p>缓存 {row.nativeUsage.cacheReadInputTokens.toLocaleString()}</p></details>}
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-[#332842]">
@@ -2848,7 +2851,7 @@ export default function AdminDashboard({
               <h2 className="font-semibold text-[#171321]">工程师状态</h2>
               <p className="mt-1 text-sm text-[#716a80]">
                 {systemAdmin
-                  ? "按人员查看岗位、项目和近 30 天用量。统一展示智谱 Token 用量。"
+                  ? "按人员查看岗位、项目和近 30 天用量。统一展示人民币成本，Token 见用量明细。"
                   : "按人员查看专业岗位、负责项目和当前工作状态；项目岗位缺员请前往客户项目团队处理。"}
               </p>
             </div>

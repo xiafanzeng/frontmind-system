@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, max } from "drizzle-orm";
 import {
@@ -157,7 +158,7 @@ async function applyFreshLocalResetEpoch(
     .where(
       and(
         eq(siteProjects.id, input.project.id),
-        eq(siteProjects.userId, input.project.userId),
+        enterpriseOwnerPredicate(siteProjects, input.project.userId),
         eq(siteProjects.revision, input.expectedRevision),
         nullableCoordinate(
           siteProjects.currentBuildId,

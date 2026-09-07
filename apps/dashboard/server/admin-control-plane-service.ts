@@ -1,3 +1,4 @@
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, or } from "drizzle-orm";
 
@@ -7,7 +8,6 @@ import {
   knowledgeBaseBuilds,
   serviceContracts,
   userAdminAssignments,
-  userDashboardContents,
   users,
   workspaceAuditEvents,
 } from "../drizzle/schema";
@@ -628,12 +628,12 @@ export async function getAdminControlPlaneOverview(actor: AuthenticatedUser) {
   ] = await Promise.all([
     db
       .select({
-        userId: userDashboardContents.userId,
-        payload: userDashboardContents.payload,
-        sourceName: userDashboardContents.sourceName,
+        userId: enterpriseDashboardTable().userId,
+        payload: enterpriseDashboardTable().payload,
+        sourceName: enterpriseDashboardTable().sourceName,
       })
-      .from(userDashboardContents)
-      .where(inArray(userDashboardContents.userId, visibleUserIds)),
+      .from(enterpriseDashboardTable())
+      .where(inArray(enterpriseDashboardTable().userId, visibleUserIds)),
     db
       .select()
       .from(serviceContracts)

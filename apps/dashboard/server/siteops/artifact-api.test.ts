@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import express from "express";
 import JSZip from "jszip";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { runWithEnterpriseProjectScope, type EnterpriseProjectScope } from "../enterprise-project-scope";
 import { JSDOM } from "jsdom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     }
   },
   completeSiteOpsAliyunOAuth: vi.fn(),
+  runWithSiteOpsOAuthProjectScope: vi.fn(),
   exchangeAliyunOAuthCode: vi.fn(),
   getDb: vi.fn(),
   openStaticTemplateCatalogVersionPreview: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock("./artifact-store", () => ({
 vi.mock("./aliyun-platform-service", () => ({
   exchangeAliyunOAuthCode: mocks.exchangeAliyunOAuthCode,
 }));
+vi.mock("./oauth-project-context", () => ({ runWithSiteOpsOAuthProjectScope: mocks.runWithSiteOpsOAuthProjectScope }));
 vi.mock("./service", () => ({
   completeSiteOpsAliyunOAuth: mocks.completeSiteOpsAliyunOAuth,
 }));
@@ -132,10 +135,12 @@ beforeEach(async () => {
   mocks.exchangeAliyunOAuthCode.mockReset().mockResolvedValue({
     credentialId: oauthCredentialId,
     projectId: "project-1",
+    userId: 42,
     accountUid: "1234567890123456",
     refreshToken: "refresh-token-secret-sentinel",
   });
   mocks.completeSiteOpsAliyunOAuth.mockReset().mockResolvedValue(undefined);
+  mocks.runWithSiteOpsOAuthProjectScope.mockReset().mockImplementation(async (_actor, _identity, action) => action());
   mocks.openStaticTemplateCatalogVersionPreview.mockReset();
 });
 
@@ -152,13 +157,14 @@ afterEach(async () => {
   );
 });
 
-async function startApp(options: { authenticated?: boolean } = {}) {
+async function startApp(options: { authenticated?: boolean; actorUserId?: number; projectScope?: EnterpriseProjectScope } = {}) {
   const app = express();
   app.use((req: any, _res, next) => {
     if (options.authenticated !== false) {
-      req.frontmindUser = { id: 42, username: "site-owner", role: "user" };
+      req.frontmindUser = { id: options.actorUserId ?? options.projectScope?.actorUserId ?? 42, username: "site-owner", role: options.actorUserId || options.projectScope ? "admin" : "user" };
     }
-    next();
+    if (options.projectScope) runWithEnterpriseProjectScope(options.projectScope, next);
+    else next();
   });
   app.use("/api/site-ops", siteOpsArtifactApi);
   const server = createServer(app);
@@ -236,17 +242,34 @@ describe("SiteOps Aliyun OAuth callback", () => {
       code: "secret-code-sentinel",
       state: "secret-state-sentinel",
       userId: 42,
+      authorizeProject: expect.any(Function),
     });
     expect(mocks.completeSiteOpsAliyunOAuth).toHaveBeenCalledWith({
       actor: { id: 42, username: "site-owner", role: "user" },
       credentialId: oauthCredentialId,
       projectId: "project-1",
+      userId: 42,
+      actorUserId: undefined,
+      enterpriseProjectId: undefined,
       accountUid: "1234567890123456",
       refreshToken: "refresh-token-secret-sentinel",
     });
     expect(html).not.toContain("secret-code-sentinel");
     expect(html).not.toContain("secret-state-sentinel");
     expect(html).not.toContain('if (message.status !== "success")');
+  });
+
+  it.each([false, true])("binds the signed owner for an administrator regardless of a current project (%s)", async switched => {
+    const identity = { credentialId: oauthCredentialId, projectId: buildId, userId: 42, actorUserId: 99, enterpriseProjectId: "11111111-1111-4111-8111-111111111111", accountUid: "1234567890123456", refreshToken: "refresh-token-secret-sentinel" };
+    mocks.exchangeAliyunOAuthCode.mockImplementationOnce(async input => {
+      await input.authorizeProject({ projectId: identity.projectId, userId: identity.userId, actorUserId: identity.actorUserId, enterpriseProjectId: identity.enterpriseProjectId });
+      return identity;
+    });
+    const origin = await startApp({ actorUserId: 99, ...(switched ? { projectScope: { enterpriseProjectId: "55555555-5555-4555-8555-555555555555", ownerUserId: 99, actorUserId: 99, isLegacyDefault: false } } : {}) });
+    const response = await fetch(`${origin}/api/site-ops/aliyun/oauth/callback?code=authorization-code&state=signed-state`);
+    expectSecureOAuthCompletionPage(response, await response.text(), "success");
+    expect(mocks.runWithSiteOpsOAuthProjectScope).toHaveBeenCalledWith(expect.objectContaining({ id: 99 }), expect.objectContaining({ userId: 42, actorUserId: 99, enterpriseProjectId: identity.enterpriseProjectId }), expect.any(Function));
+    expect(mocks.completeSiteOpsAliyunOAuth).toHaveBeenCalledWith({ ...identity, actor: { id: 99, username: "site-owner", role: "admin" } });
   });
 
   it("projects access_denied as a cancelled page without exposing provider input", async () => {
@@ -696,6 +719,61 @@ describe("SiteOps private preview proxy", () => {
         }
       }
     }
+  });
+
+  it("preserves enterprise scope across static, relative, dynamic, and history preview navigation", async () => {
+    const scope = { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 42, actorUserId: 99, isLegacyDefault: false };
+    const prefix = `/api/site-ops/builds/${buildId}/preview/`;
+    const archive = new JSZip();
+    archive.file("index.html", '<!doctype html><html><head></head><body><a id="root" href="/about/?from=root#section">About</a><a id="relative" href="contact/">Contact</a><a id="external" href="https://example.com/">External</a></body></html>');
+    const document = await runWithEnterpriseProjectScope(scope, () => createSandboxedPreviewDocument({ zip: archive, entryName: "index.html", previewPrefix: prefix, previewRoutingMode: "canonical_pathname" }));
+    const dom = new JSDOM(document.bytes.toString("utf8"), { runScripts: "dangerously", url: `https://dashboard.frontmind.net${prefix}?enterpriseProjectId=${scope.enterpriseProjectId}` });
+    try {
+      expect(dom.window.document.querySelector("#root")?.getAttribute("href")).toBe(`${prefix}about/?from=root&enterpriseProjectId=${scope.enterpriseProjectId}#section`);
+      expect(dom.window.document.querySelector("#relative")?.getAttribute("href")).toBe(`${prefix}contact/?enterpriseProjectId=${scope.enterpriseProjectId}`);
+      expect(dom.window.document.querySelector("#external")?.getAttribute("href")).toBe("https://example.com/");
+      const dynamic = dom.window.document.createElement("a");
+      dynamic.href = "/cases/?from=dynamic#case";
+      dynamic.target = "_blank";
+      dom.window.document.body.append(dynamic);
+      dynamic.addEventListener("click", event => event.preventDefault());
+      dynamic.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+      expect(dynamic.getAttribute("href")).toBe(`${prefix}cases/?from=dynamic&enterpriseProjectId=${scope.enterpriseProjectId}#case`);
+      dom.window.history.pushState({}, "", "/contact/?from=history#form");
+      expect(dom.window.location.pathname).toBe(`${prefix}contact/`);
+      expect(dom.window.location.search).toBe(`?from=history&enterpriseProjectId=${scope.enterpriseProjectId}`);
+      expect((dom.window as any).canonicalSitePathname()).toBe("/contact/");
+    } finally { dom.window.close(); }
+  });
+
+  it("reads project build artifacts with the owner identity while constraining the enterprise project", async () => {
+    const scope = { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 42, actorUserId: 99, isLegacyDefault: false };
+    const conditions: unknown[] = [];
+    mocks.getDb.mockResolvedValue({ select: () => ({ from: () => ({ innerJoin: () => ({ where: (condition: any) => { conditions.push(new MySqlDialect().sqlToQuery(condition)); return { limit: async () => [{ build: { id: buildId, userId: 42, sourceLocalAssetId: "source-asset", sourceHash: "a".repeat(64) }, project: { id: "site-project", userId: 42 } }] }; } }) }) }) });
+    const origin = await startApp({ projectScope: scope });
+    const response = await fetch(`${origin}/api/site-ops/builds/${buildId}/source?enterpriseProjectId=${scope.enterpriseProjectId}`);
+    expect(response.status).toBe(200);
+    expect(conditions).toEqual([expect.objectContaining({ params: [buildId, 42, 42, scope.enterpriseProjectId] })]);
+    expect(mocks.readSiteOpsArtifact).toHaveBeenCalledWith(expect.objectContaining({ userId: 42, localAssetId: "source-asset" }));
+  });
+
+  it.each(["style", "social"] as const)("constrains %s assets through their parent enterprise project", async kind => {
+    const scope = { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 42, actorUserId: 99, isLegacyDefault: false };
+    const conditions: Array<{ sql: string; params: unknown[] }> = [];
+    const row = kind === "style"
+      ? { localAssetId: "asset", sourceMetadata: { schemaVersion: 6, renderer: "twenty_first_native_template_v1", previewSha256: "a".repeat(64) } }
+      : { id: "package", archiveLocalAssetId: "asset", archiveHash: "a".repeat(64), downloadCount: 0 };
+    const select = { innerJoin: () => select, where: (condition: any) => { conditions.push(new MySqlDialect().sqlToQuery(condition)); return { limit: async () => [row] }; } };
+    mocks.getDb.mockResolvedValue({ select: () => ({ from: () => select }), update: () => ({ set: () => ({ where: async () => undefined }) }) });
+    mocks.readSiteOpsArtifact.mockResolvedValue({ row: { id: "asset", filename: kind === "style" ? "preview.png" : "archive.zip", mimeType: kind === "style" ? "image/png" : "application/zip", contentSha256: "a".repeat(64), sizeBytes: 5 }, stored: { createReadStream: () => Readable.from([Buffer.from("asset")]) } });
+    const origin = await startApp({ projectScope: scope });
+    const response = await fetch(`${origin}/api/site-ops/${kind === "style" ? "style-previews/sample" : "social-packages/package/archive"}?enterpriseProjectId=${scope.enterpriseProjectId}`);
+    expect(response.status).toBe(200);
+    expect(conditions[0]?.sql).toContain("EXISTS (SELECT 1 FROM `site_projects`");
+    expect(conditions[0]?.params).toContain(scope.enterpriseProjectId);
+    expect(conditions[0]?.params).toContain(scope.ownerUserId);
+    expect(conditions[0]?.params).not.toContain(scope.actorUserId);
+    expect(mocks.readSiteOpsArtifact).toHaveBeenCalledWith(expect.objectContaining({ userId: 42, localAssetId: "asset" }));
   });
 
   it("keeps legacy static route keys scoped but leaves dynamic templates to the navigation bridge", () => {

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import KnowledgeBaseViewer, {
   type KnowledgeSnapshotView,
@@ -50,6 +50,7 @@ const snapshot: KnowledgeSnapshotView = {
 };
 
 describe("KnowledgeBaseViewer", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"));
   it("offers the authenticated snapshot ZIP from the published knowledge view", () => {
     render(
       <KnowledgeBaseViewer
@@ -75,6 +76,13 @@ describe("KnowledgeBaseViewer", () => {
     render(<KnowledgeBaseViewer snapshot={snapshot} />);
 
     expect(screen.queryByRole("link", { name: "下载成品 ZIP" })).toBeNull();
+  });
+
+  it("keeps the selected enterprise project on the native archive download", () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    window.history.replaceState(null, "", `/?enterpriseProjectId=${projectId}`);
+    render(<KnowledgeBaseViewer snapshot={{ ...snapshot, archiveHash: "a".repeat(64), archiveAvailable: true }} />);
+    expect(screen.getByRole("link", { name: "下载成品 ZIP" })).toHaveAttribute("href", `/api/dashboard/knowledge/snapshots/snapshot-1/archive?enterpriseProjectId=${projectId}`);
   });
 
   it("does not advertise a historical ZIP whose archive bytes are unavailable", () => {

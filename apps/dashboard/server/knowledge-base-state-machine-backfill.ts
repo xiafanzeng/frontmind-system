@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
@@ -399,7 +400,7 @@ async function ensureLegacyConversation(
       .select()
       .from(conversations)
       .where(
-        and(eq(conversations.id, id), eq(conversations.userId, build.userId)),
+        and(eq(conversations.id, id), enterpriseOwnerPredicate(conversations, build.userId)),
       )
       .limit(1)
       .for("update")
@@ -561,7 +562,7 @@ export async function prepareKnowledgeBaseStateMachineBackfill(input: {
           .from(upstreamResources)
           .where(
             and(
-              eq(upstreamResources.userId, build.userId),
+              enterpriseOwnerPredicate(upstreamResources, build.userId),
               eq(upstreamResources.kind, "task"),
               eq(upstreamResources.upstreamId, build.upstreamTaskId),
             ),

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { vi } from "vitest";
+vi.mock("../ai-billing-service",()=>({ observeManagedAiUsage:async()=>({shouldInterrupt:false}), registerAiUsageTask:async()=>{} }));
+import { beforeEach, describe, expect, it } from "vitest";
 import type { PresalesV2TaskRecord } from "../presales-v2-store";
 const state = vi.hoisted(() => ({
   record: null as unknown as PresalesV2TaskRecord,

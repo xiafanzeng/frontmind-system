@@ -1,3 +1,9 @@
+import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
+import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
+import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
@@ -10,7 +16,6 @@ import {
   knowledgeBaseBuilds,
   knowledgeBaseConversationRetentionTombstones,
   knowledgeBaseResetCleanupJobs,
-  knowledgeBaseResetStates,
   knowledgeBaseSnapshots,
   knowledgeImportReceipts,
   localAssets,
@@ -18,7 +23,6 @@ import {
   siteProjects,
   socialPackages,
   visualCandidatePools,
-  workspaceQuestions,
   upstreamResources,
   workspaceAuditEvents,
 } from "../drizzle/schema";
@@ -57,7 +61,7 @@ async function requireDb() {
 }
 
 function persistedConversationId(userId: number, publicId: string) {
-  return `u${userId}:${publicId}`;
+  return `${enterpriseConversationStoragePrefix(userId)}${publicId}`;
 }
 
 type KnowledgeCounts = {
@@ -137,7 +141,7 @@ async function getKnowledgeCounts(
       assets: knowledgeBaseSnapshots.assets,
     })
     .from(knowledgeBaseSnapshots)
-    .where(eq(knowledgeBaseSnapshots.userId, userId));
+    .where(enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId));
   const [builds, snapshots, receipts] = await Promise.all([
     executor
       .select({
@@ -149,7 +153,7 @@ async function getKnowledgeCounts(
         packageStorageKey: knowledgeBaseBuilds.packageStorageKey,
       })
       .from(knowledgeBaseBuilds)
-      .where(eq(knowledgeBaseBuilds.userId, userId)),
+      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId)),
     lockSnapshots ? snapshotQuery.for("update") : snapshotQuery,
     executor
       .select({
@@ -158,7 +162,7 @@ async function getKnowledgeCounts(
         fileId: knowledgeImportReceipts.fileId,
       })
       .from(knowledgeImportReceipts)
-      .where(eq(knowledgeImportReceipts.userId, userId)),
+      .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId)),
   ]);
   return {
     builds,
@@ -185,7 +189,7 @@ async function retainedKnowledgeSnapshotIds(
     [siteBuilds, siteBuilds.knowledgeSnapshotId],
     [visualCandidatePools, visualCandidatePools.knowledgeSnapshotId],
     [socialPackages, socialPackages.knowledgeSnapshotId],
-    [workspaceQuestions, workspaceQuestions.knowledgeSnapshotId],
+    [workspaceQuestionTable(), workspaceQuestionTable().knowledgeSnapshotId],
   ] as const;
   const rows = await Promise.all(
     references.map(([table, column]) =>
@@ -258,9 +262,9 @@ export async function getKnowledgeResetStatus(userId: number) {
   const [counts, states] = await Promise.all([
     getKnowledgeCounts(db, userId),
     db
-      .select({ revision: knowledgeBaseResetStates.revision })
-      .from(knowledgeBaseResetStates)
-      .where(eq(knowledgeBaseResetStates.userId, userId))
+      .select({ revision: enterpriseResetStateTable().revision })
+      .from(enterpriseResetStateTable())
+      .where(enterpriseResetStateOwnerPredicate(userId))
       .limit(1),
   ]);
   return {
@@ -285,7 +289,7 @@ export function knowledgeResetOperationId(
   scope = "reset",
 ) {
   const hash = createHash("sha256")
-    .update(`knowledge-reset:${userId}:${revision}:${scope}`)
+    .update(`knowledge-reset:${getEnterpriseProjectScope()?.isLegacyDefault === false ? getEnterpriseProjectScope()!.enterpriseProjectId + ":" : ""}${userId}:${revision}:${scope}`)
     .digest("hex");
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 }
@@ -294,7 +298,7 @@ export async function resetKnowledgeBase(input: {
   actor: AuthenticatedUser;
   expectedRevision: number;
 }) {
-  if (input.actor.role !== "user") {
+  if (input.actor.role !== "user" && !getEnterpriseProjectScope()) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "只有客户可以重置自己的知识库",
@@ -303,7 +307,7 @@ export async function resetKnowledgeBase(input: {
   if (!Number.isInteger(input.expectedRevision) || input.expectedRevision < 0) {
     throw new AuthServiceError("CONFLICT", "知识库版本无效，请刷新后重试");
   }
-  const userId = input.actor.id;
+  const userId = enterpriseWorkspaceUserId(input.actor.id);
   const resetActionId = knowledgeResetOperationId(
     userId,
     input.expectedRevision,
@@ -323,7 +327,7 @@ export async function resetKnowledgeBase(input: {
     // and observes the incremented revision; it cannot recreate the old build
     // after cleanup.
     await tx
-      .insert(knowledgeBaseResetStates)
+      .insert(enterpriseResetStateTable())
       .values({
         userId: userId,
         revision: 0,
@@ -334,9 +338,9 @@ export async function resetKnowledgeBase(input: {
       });
     const lockedResetState = (
       await tx
-        .select({ revision: knowledgeBaseResetStates.revision })
-        .from(knowledgeBaseResetStates)
-        .where(eq(knowledgeBaseResetStates.userId, userId))
+        .select({ revision: enterpriseResetStateTable().revision })
+        .from(enterpriseResetStateTable())
+        .where(enterpriseResetStateOwnerPredicate(userId))
         .limit(1)
         .for("update")
     )[0];
@@ -427,7 +431,7 @@ export async function resetKnowledgeBase(input: {
             .from(conversations)
             .where(
               and(
-                eq(conversations.userId, userId),
+                enterpriseOwnerPredicate(conversations, userId),
                 inArray(conversations.id, storedIds),
               ),
             )
@@ -452,7 +456,7 @@ export async function resetKnowledgeBase(input: {
         .from(upstreamResources)
         .where(
           and(
-            eq(upstreamResources.userId, userId),
+            enterpriseOwnerPredicate(upstreamResources, userId),
             or(
               storedIds.length
                 ? inArray(upstreamResources.conversationId, storedIds)
@@ -554,17 +558,17 @@ export async function resetKnowledgeBase(input: {
     await tx
       .update(knowledgeBaseBuilds)
       .set({ publishedSnapshotId: null })
-      .where(eq(knowledgeBaseBuilds.userId, userId));
+      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId));
     await tx
       .delete(knowledgeImportReceipts)
-      .where(eq(knowledgeImportReceipts.userId, userId));
+      .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId));
     if (retainedSnapshotIds.size) {
       await tx
         .update(knowledgeBaseSnapshots)
         .set({ status: "archived" })
         .where(
           and(
-            eq(knowledgeBaseSnapshots.userId, userId),
+            enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
             inArray(knowledgeBaseSnapshots.id, [...retainedSnapshotIds]),
           ),
         );
@@ -572,7 +576,7 @@ export async function resetKnowledgeBase(input: {
     if (removableSnapshots.length) {
       await tx.delete(knowledgeBaseSnapshots).where(
         and(
-          eq(knowledgeBaseSnapshots.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
           inArray(
             knowledgeBaseSnapshots.id,
             removableSnapshots.map((snapshot) => snapshot.id),
@@ -582,30 +586,30 @@ export async function resetKnowledgeBase(input: {
     }
     await tx
       .delete(knowledgeBaseBuilds)
-      .where(eq(knowledgeBaseBuilds.userId, userId));
+      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId));
     if (storedIds.length) {
       await tx
         .delete(conversations)
         .where(
           and(
-            eq(conversations.userId, userId),
+            enterpriseOwnerPredicate(conversations, userId),
             inArray(conversations.id, storedIds),
           ),
         );
     }
     await tx
-      .update(knowledgeBaseResetStates)
+      .update(enterpriseResetStateTable())
       .set({ revision: nextResetRevision, updatedAt: now })
       .where(
         and(
-          eq(knowledgeBaseResetStates.userId, userId),
-          eq(knowledgeBaseResetStates.revision, lockedResetState.revision),
+          enterpriseResetStateOwnerPredicate(userId),
+          eq(enterpriseResetStateTable().revision, lockedResetState.revision),
         ),
       );
     const completed = { revision: nextResetRevision, cleanup };
     await tx.insert(workspaceAuditEvents).values({
       id: resetActionId,
-      actorUserId: userId,
+      actorUserId: input.actor.id,
       actorUsername: input.actor.username,
       action: "workspace.knowledge.reset",
       targetType: "knowledge_base",
@@ -662,6 +666,7 @@ export async function processKnowledgeResetCleanupJobs() {
     .orderBy(knowledgeBaseResetCleanupJobs.createdAt)
     .limit(50);
   for (const job of jobs) {
+    await runWithStoredEnterpriseProjectScope(job.userId, job.enterpriseProjectId, async () => {
     try {
       if (job.kind === "local_asset") {
         const localAssetKey = job.localAssetKey || job.upstreamId;
@@ -714,7 +719,7 @@ export async function processKnowledgeResetCleanupJobs() {
             .delete(upstreamResources)
             .where(
               and(
-                eq(upstreamResources.userId, job.userId),
+                enterpriseOwnerPredicate(upstreamResources, job.userId),
                 eq(upstreamResources.kind, job.kind),
                 eq(upstreamResources.upstreamId, job.upstreamId),
               ),
@@ -736,6 +741,7 @@ export async function processKnowledgeResetCleanupJobs() {
         })
         .where(eq(knowledgeBaseResetCleanupJobs.id, job.id));
     }
+    });
   }
   return { processed: jobs.length };
 }

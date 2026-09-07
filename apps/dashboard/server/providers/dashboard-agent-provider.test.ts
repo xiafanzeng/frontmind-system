@@ -262,6 +262,11 @@ function fixture() {
       model: "glm-5.3",
       effort: "high",
       store: memory.store,
+      billing: {
+        authorize: async () => {},
+        observe: async () => ({ shouldInterrupt: false }),
+        reject: async () => {},
+      },
       api,
       ...extra,
     });
@@ -315,6 +320,65 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
+  it("reuses the unsent High session after recharge without duplicating provider resources", async () => {
+    const f = fixture();
+    let funded = false;
+    const client = f.client({
+      billing: {
+        authorize: async () => {
+          if (!funded) throw new Error("AI_BALANCE_INSUFFICIENT");
+        },
+        observe: async () => ({ shouldInterrupt: false }),
+        reject: async () => {},
+      },
+    });
+    await expect(client.createTask(request)).rejects.toThrow(
+      "AI_BALANCE_INSUFFICIENT",
+    );
+    funded = true;
+    await client.createTask(request);
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path === "/v1/sessions",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path === "/v1/agents",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path.endsWith("/events"),
+      ),
+    ).toHaveLength(1);
+    expect([...f.rows.values()][0].runtime.effort).toBe("high");
+  });
+  it("does not post the user command when its wallet reservation fails", async () => {
+    const f = fixture();
+    const authorize = vi.fn(async () => {
+      throw new Error("AI_BALANCE_INSUFFICIENT");
+    });
+    await expect(
+      f
+        .client({
+          billing: {
+            authorize,
+            observe: async () => ({ shouldInterrupt: false }),
+            reject: async () => {},
+          },
+        })
+        .createTask(request),
+    ).rejects.toThrow("AI_BALANCE_INSUFFICIENT");
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path.endsWith("/events"),
+      ),
+    ).toHaveLength(0);
+    expect(f.events).toHaveLength(0);
+  });
+
   it("mounts frozen server context files without changing the original user turn or attachment evidence", async () => {
     const f = fixture();
     const systemContext = contentProductionSystemContext({
@@ -810,6 +874,75 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
       f.client({ operationId: "wrong" }).taskDetail("session_1"),
     ).rejects.toMatchObject({ status: 404 });
     expect(f.calls).toHaveLength(count);
+  });
+  it("allows a new explicit continuation intent after a definite rejection while retaining the High session", async () => {
+    const f = fixture();
+    await f.client().createTask(request);
+    f.finish();
+    f.failSend("429");
+    await expect(
+      f
+        .client({ intentId: "resume-one" })
+        .sendMessage({ taskId: "session_1", prompt: "continue" }),
+    ).rejects.toMatchObject({ outcomeUnknown: false });
+    await f
+      .client({ intentId: "resume-two" })
+      .sendMessage({ taskId: "session_1", prompt: "continue" });
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path.endsWith("/events"),
+      ),
+    ).toHaveLength(3);
+    expect(
+      f.calls.filter(
+        (call) => call.method === "POST" && call.path === "/v1/sessions",
+      ),
+    ).toHaveLength(1);
+    expect([...f.rows.values()][0].runtime.effort).toBe("high");
+  });
+  it("interrupts each exhausted command once even after continuation and repeated billing polls", async () => {
+    const f = fixture();
+    await f.client().createTask(request);
+    f.status("running");
+    const observe = vi.fn(async (input: any) => ({
+      shouldInterrupt: true,
+      pause: {
+        reason: "balance" as const,
+        stage: "after_send" as const,
+        commandKey: input.commands.at(-1).key,
+        sessionId: "session_1",
+        pausedAt: new Date().toISOString(),
+      },
+    }));
+    const client = f.client({
+      billing: { authorize: async () => {}, observe, reject: async () => {} },
+    });
+    await expect(client.taskDetail("session_1")).rejects.toThrow(
+      "AI_BALANCE_PAUSED",
+    );
+    await expect(client.taskDetail("session_1")).rejects.toThrow(
+      "AI_BALANCE_PAUSED",
+    );
+    f.finish();
+    f.status("idle");
+    await f
+      .client({ intentId: "continue-funded" })
+      .sendMessage({ taskId: "session_1", prompt: "continue" });
+    f.status("running");
+    await expect(client.taskDetail("session_1")).rejects.toThrow(
+      "AI_BALANCE_PAUSED",
+    );
+    await expect(client.taskDetail("session_1")).rejects.toThrow(
+      "AI_BALANCE_PAUSED",
+    );
+    expect(
+      f.calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.path.endsWith("/events") &&
+          call.body.events[0].type === "user.interrupt",
+      ),
+    ).toHaveLength(2);
   });
   it("passes structured JSON to the business validator and binds the current turn artifacts", async () => {
     const f = fixture();

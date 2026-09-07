@@ -1,3 +1,4 @@
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
 import {
   assertDashboardUpdateCapability,
   mergeCustomerDashboardPayload,
@@ -314,7 +315,7 @@ export const workspaceRouter = router({
   brandTracking: router({
     overview: protectedProcedure.query(async ({ ctx }) => {
       try {
-        await assertServiceCapability(ctx.user.id, "brandTracking");
+        await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "brandTracking");
         return await getJenovaBrandTrackingOverview(ctx.user);
       } catch (error) {
         if (error instanceof ServiceEntitlementError) toServiceError(error);
@@ -323,7 +324,7 @@ export const workspaceRouter = router({
     }),
     listSessions: protectedProcedure.query(async ({ ctx }) => {
       try {
-        await assertServiceCapability(ctx.user.id, "brandTracking");
+        await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "brandTracking");
         return await listJenovaBrandTrackingSessions(ctx.user);
       } catch (error) {
         if (error instanceof ServiceEntitlementError) toServiceError(error);
@@ -334,7 +335,7 @@ export const workspaceRouter = router({
       .input(z.object({ sessionId: z.string().uuid() }).strict())
       .query(async ({ ctx, input }) => {
         try {
-          await assertServiceCapability(ctx.user.id, "brandTracking");
+          await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "brandTracking");
           return await getJenovaBrandTrackingSession(ctx.user, input.sessionId);
         } catch (error) {
           if (error instanceof ServiceEntitlementError) toServiceError(error);
@@ -359,7 +360,7 @@ export const workspaceRouter = router({
   knowledgeReset: router({
     status: protectedProcedure.query(async ({ ctx }) => {
       try {
-        return await getKnowledgeResetStatus(ctx.user.id);
+        return await getKnowledgeResetStatus(enterpriseWorkspaceUserId(ctx.user.id));
       } catch (error) {
         toServiceError(error);
       }
@@ -378,7 +379,7 @@ export const workspaceRouter = router({
   }),
   portal: protectedProcedure.query(async ({ ctx }) => {
     try {
-      return toPublicServicePortal(await getServicePortal(ctx.user.id));
+      return toPublicServicePortal(await getServicePortal(enterpriseWorkspaceUserId(ctx.user.id)));
     } catch (error) {
       toServiceError(error);
     }
@@ -401,8 +402,8 @@ export const workspaceRouter = router({
           message: "只有客户可以修改自己的看板",
         });
       try {
-        const portal = await assertServiceWriteAccess(ctx.user.id);
-        const existing = await getDashboardWorkspace(ctx.user.id);
+        const portal = await assertServiceWriteAccess(enterpriseWorkspaceUserId(ctx.user.id));
+        const existing = await getDashboardWorkspace(enterpriseWorkspaceUserId(ctx.user.id));
         const contentAssetsVisible =
           portal.capabilities.contentAssets.allowed &&
           servicePortalHasRequiredKnowledge(portal);
@@ -412,14 +413,14 @@ export const workspaceRouter = router({
           contentAssetsVisible,
         });
         await assertDashboardUpdateCapability({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           existing,
           next: payload,
           portal,
         });
         assertDashboardEnterpriseIdentity(existing, payload);
         const updated = await updateDashboardWorkspace({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           actorUserId: ctx.user.id,
           payload,
           sourceName: input.sourceName || existing.sourceName || "用户编辑",
@@ -445,13 +446,13 @@ export const workspaceRouter = router({
 
   questionPortfolio: protectedProcedure.query(async ({ ctx }) => {
     try {
-      const portal = await getServicePortal(ctx.user.id);
+      const portal = await getServicePortal(enterpriseWorkspaceUserId(ctx.user.id));
       const quotaPeriodId = portal.quotas?.periodId;
       return {
-        questions: quotaPeriodId
+        questions: portal.mode === "operator" || quotaPeriodId
           ? (
               await listWorkspaceQuestions({
-                userId: ctx.user.id,
+                userId: enterpriseWorkspaceUserId(ctx.user.id),
                 quotaPeriodId,
               })
             ).map(toPublicServicePortalQuestion)
@@ -478,7 +479,7 @@ export const workspaceRouter = router({
       }
       try {
         return await createServicePurchaseIntent({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           ...input,
         });
       } catch (error) {
@@ -501,9 +502,9 @@ export const workspaceRouter = router({
         });
       }
       try {
-        await assertServiceCapability(ctx.user.id, "questionSelection");
+        await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "questionSelection");
         const question = await requestWorkspaceQuestionSelection({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           actorUserId: ctx.user.id,
           questionId: input.questionId,
           expectedRevision: input.expectedRevision,
@@ -555,10 +556,10 @@ export const workspaceRouter = router({
           message: "只有客户可以选择自己的目标问题",
         });
       try {
-        await assertServiceCapability(ctx.user.id, "questionSelection");
+        await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "questionSelection");
         let question;
         if (input.mode === "brand_keyword_library") {
-          const dashboard = await getDashboardWorkspace(ctx.user.id);
+          const dashboard = await getDashboardWorkspace(enterpriseWorkspaceUserId(ctx.user.id));
           const reference = {
             dashboardRevision: input.dashboardRevision,
             tableId: input.tableId,
@@ -574,7 +575,7 @@ export const workspaceRouter = router({
               resolved.message,
             );
           question = await confirmWorkspaceBrandKeywordSelection({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             actorUserId: ctx.user.id,
             ...reference,
             expectedQuestion: resolved.selection.question,
@@ -582,7 +583,7 @@ export const workspaceRouter = router({
           });
         } else {
           question = await requestWorkspaceQuestionSelection({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             actorUserId: ctx.user.id,
             ...(input.mode === "candidate"
               ? {
@@ -615,7 +616,7 @@ export const workspaceRouter = router({
       }
       try {
         const question = await confirmWorkspaceQuestionIntent({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           ...input,
         });
         return {
@@ -629,8 +630,8 @@ export const workspaceRouter = router({
   dashboard: protectedProcedure.query(async ({ ctx }) => {
     try {
       const [workspace, portal] = await Promise.all([
-        getDashboardWorkspace(ctx.user.id),
-        getServicePortal(ctx.user.id),
+        getDashboardWorkspace(enterpriseWorkspaceUserId(ctx.user.id)),
+        getServicePortal(enterpriseWorkspaceUserId(ctx.user.id)),
       ]);
       const configured = workspace.revision > 0;
       return {
@@ -652,7 +653,7 @@ export const workspaceRouter = router({
 
   knowledge: protectedProcedure.query(async ({ ctx }) => {
     try {
-      return { snapshot: await getLatestKnowledgeSnapshot(ctx.user.id) };
+      return { snapshot: await getLatestKnowledgeSnapshot(enterpriseWorkspaceUserId(ctx.user.id)) };
     } catch (error) {
       throw toTrpcError(error);
     }
@@ -671,7 +672,7 @@ export const workspaceRouter = router({
         return {
           progress: toKnowledgeBasePublicPayload(
             await getKnowledgeBaseProgress({
-              userId: ctx.user.id,
+              userId: enterpriseWorkspaceUserId(ctx.user.id),
               conversationId: input?.conversationId,
             }),
           ),
@@ -683,7 +684,7 @@ export const workspaceRouter = router({
 
   responseLogic: protectedProcedure.query(async ({ ctx }) => {
     try {
-      return { records: await listResponseLogicEntries(ctx.user.id) };
+      return { records: await listResponseLogicEntries(enterpriseWorkspaceUserId(ctx.user.id)) };
     } catch (error) {
       throw toTrpcError(error);
     }
@@ -698,7 +699,7 @@ export const workspaceRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         return await getHistoricalQuestionResults({
-          userId: ctx.user.id,
+          userId: enterpriseWorkspaceUserId(ctx.user.id),
           questionId: input.questionId,
         });
       } catch (error) {
@@ -710,9 +711,9 @@ export const workspaceRouter = router({
     .input(saveResponseLogicSchema)
     .mutation(async ({ ctx, input }) => {
       try {
-        await assertServiceCapability(ctx.user.id, "responseLogic");
+        await assertServiceCapability(enterpriseWorkspaceUserId(ctx.user.id), "responseLogic");
         const question = await getDashboardQuestion(
-          ctx.user.id,
+          enterpriseWorkspaceUserId(ctx.user.id),
           input.questionId,
         );
         if (!question) {
@@ -723,7 +724,7 @@ export const workspaceRouter = router({
         }
         return {
           record: await saveResponseLogicEntry({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             expectedQuestionScope: question.writeScope,
             value: {
               ...input,
@@ -742,8 +743,8 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await getMonitoringFilterOptions(
-            ctx.user.id,
-            await resolveMonitoringReadQuotaPeriodIds(ctx.user.id),
+            enterpriseWorkspaceUserId(ctx.user.id),
+            await resolveMonitoringReadQuotaPeriodIds(enterpriseWorkspaceUserId(ctx.user.id)),
             input ?? {},
           );
         } catch (error) {
@@ -756,10 +757,10 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await listMonitoringSamples({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             filters: input,
             quotaPeriodIds: await resolveMonitoringReadQuotaPeriodIds(
-              ctx.user.id,
+              enterpriseWorkspaceUserId(ctx.user.id),
             ),
           });
         } catch (error) {
@@ -772,10 +773,10 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await listMonitoringCitations({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             filters: input,
             quotaPeriodIds: await resolveMonitoringReadQuotaPeriodIds(
-              ctx.user.id,
+              enterpriseWorkspaceUserId(ctx.user.id),
             ),
           });
         } catch (error) {
@@ -788,10 +789,10 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await listMonitoringSampleCitations({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             value: input,
             quotaPeriodIds: await resolveMonitoringReadQuotaPeriodIds(
-              ctx.user.id,
+              enterpriseWorkspaceUserId(ctx.user.id),
             ),
           });
         } catch (error) {
@@ -804,10 +805,10 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await getMonitoringCitationSummary({
-            userId: ctx.user.id,
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
             value: input,
             quotaPeriodIds: await resolveMonitoringReadQuotaPeriodIds(
-              ctx.user.id,
+              enterpriseWorkspaceUserId(ctx.user.id),
             ),
           });
         } catch (error) {

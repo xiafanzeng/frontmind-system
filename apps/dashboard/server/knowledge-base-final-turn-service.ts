@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { and, asc, eq } from "drizzle-orm";
 import {
   knowledgeBaseBuildNodes,
@@ -34,7 +35,7 @@ export async function loadKnowledgeBaseBuildRecord(
       .from(knowledgeBaseBuilds)
       .where(
         and(
-          eq(knowledgeBaseBuilds.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
           eq(knowledgeBaseBuilds.conversationId, conversationId),
         ),
       )
@@ -55,7 +56,7 @@ export async function loadKnowledgeBaseBuildRecordById(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, buildId),
-          eq(knowledgeBaseBuilds.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         ),
       )
       .limit(1)

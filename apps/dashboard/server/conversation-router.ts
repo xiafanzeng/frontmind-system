@@ -1,3 +1,8 @@
+import { enterpriseProjectPredicate } from "./enterprise-project-scope";
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { TRPCError } from "@trpc/server";
 import {
   and,
@@ -328,7 +333,7 @@ async function attachmentRetentionByFileId(
           .where(
             and(
               eq(localAssets.scope, "managed_user"),
-              eq(localAssets.accountUserId, userId),
+              enterpriseAccountOwnerPredicate(localAssets, userId),
               inArray(localAssets.id, localFileIds),
             ),
           );
@@ -351,7 +356,7 @@ async function attachmentRetentionByFileId(
               projectAssignmentId
                 ? eq(upstreamResources.projectAssignmentId, projectAssignmentId)
                 : and(
-                    eq(upstreamResources.userId, userId),
+                    enterpriseOwnerPredicate(upstreamResources, userId),
                     isNull(upstreamResources.projectAssignmentId),
                   ),
             ),
@@ -455,7 +460,7 @@ function conversationStoragePrefix(
   userId: number,
   projectAssignmentId: string | null,
 ) {
-  return projectAssignmentId ? `p${projectAssignmentId}:` : `u${userId}:`;
+  return enterpriseConversationStoragePrefix(userId, projectAssignmentId);
 }
 
 function storageId(
@@ -666,7 +671,7 @@ export async function permanentlyDeleteConversation(
         projectAssignmentId
           ? eq(conversations.projectAssignmentId, projectAssignmentId)
           : and(
-              eq(conversations.userId, userId),
+              enterpriseOwnerPredicate(conversations, userId),
               isNull(conversations.projectAssignmentId),
             ),
       ),
@@ -723,6 +728,7 @@ async function assertResourceOwnership(
     .from(upstreamResources)
     .where(
       and(
+        enterpriseProjectPredicate(upstreamResources.enterpriseProjectId),
         eq(upstreamResources.kind, kind),
         eq(upstreamResources.upstreamId, upstreamId),
       ),
@@ -794,7 +800,8 @@ async function loadLegacySnapshotResourceBindings(
       .from(upstreamResources)
       .where(
         and(
-          eq(upstreamResources.kind, kind),
+          enterpriseProjectPredicate(upstreamResources.enterpriseProjectId),
+        eq(upstreamResources.kind, kind),
           inArray(upstreamResources.upstreamId, ids),
         ),
       );
@@ -1597,7 +1604,7 @@ async function authoritativeKnowledgeBaseMetadataForMessages(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, userId),
+        enterpriseOwnerPredicate(conversationTurns, userId),
         inArray(conversationTurns.id, turnIds),
       ),
     )) as ServerOwnedTurnResourceIdentity[];
@@ -1617,7 +1624,7 @@ async function authoritativeKnowledgeBaseMetadataForMessages(
           .from(knowledgeBaseBuilds)
           .where(
             and(
-              eq(knowledgeBaseBuilds.userId, userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
               inArray(knowledgeBaseBuilds.id, buildIds),
             ),
           )) as ServerOwnedBuildResourceIdentity[]);
@@ -1747,7 +1754,7 @@ async function authoritativeGeneralChatMetadataForMessages(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, userId),
+        enterpriseOwnerPredicate(conversationTurns, userId),
         inArray(conversationTurns.id, turnIds),
       ),
     );
@@ -2242,7 +2249,7 @@ async function loadGeneralChatSnapshotTurnAuthority(
     .from(conversationTurns)
     .where(
       and(
-        projectAssignmentId ? undefined : eq(conversationTurns.userId, userId),
+        projectAssignmentId ? undefined : enterpriseOwnerPredicate(conversationTurns, userId),
         eq(conversationTurns.conversationId, persistedConversationId),
         eq(conversationTurns.operationType, "general_chat_v2"),
       ),
@@ -2691,7 +2698,7 @@ export async function persistSnapshot(
         .from(siteProjects)
         .where(
           and(
-            eq(siteProjects.userId, userId),
+            enterpriseOwnerPredicate(siteProjects, userId),
             or(
               eq(siteProjects.conversationId, snapshot.id),
               eq(siteProjects.conversationId, persistedConversationId),
@@ -2711,7 +2718,7 @@ export async function persistSnapshot(
     .from(knowledgeBaseBuilds)
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         eq(knowledgeBaseBuilds.conversationId, snapshot.id),
       ),
     )
@@ -2738,7 +2745,7 @@ export async function persistSnapshot(
       .from(knowledgeBaseConversationTombstones)
       .where(
         and(
-          eq(knowledgeBaseConversationTombstones.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseConversationTombstones, userId),
           eq(
             knowledgeBaseConversationTombstones.publicConversationId,
             snapshot.id,
@@ -2751,7 +2758,7 @@ export async function persistSnapshot(
       .from(knowledgeBaseConversationRetentionTombstones)
       .where(
         and(
-          eq(knowledgeBaseConversationRetentionTombstones.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, userId),
           eq(
             knowledgeBaseConversationRetentionTombstones.publicConversationId,
             snapshot.id,
@@ -2946,7 +2953,7 @@ export async function persistSnapshot(
           projectAssignmentId
             ? eq(conversations.projectAssignmentId, projectAssignmentId)
             : and(
-                eq(conversations.userId, userId),
+                enterpriseOwnerPredicate(conversations, userId),
                 isNull(conversations.projectAssignmentId),
               ),
         ),
@@ -3002,7 +3009,7 @@ export async function persistSnapshot(
             .from(conversationTurns)
             .where(
               and(
-                eq(conversationTurns.userId, userId),
+                enterpriseOwnerPredicate(conversationTurns, userId),
                 eq(conversationTurns.conversationId, persistedConversationId),
                 inArray(conversationTurns.id, requestedTurnIds),
               ),
@@ -3181,7 +3188,7 @@ export async function listSnapshots(
         projectAssignmentId
           ? eq(conversations.projectAssignmentId, projectAssignmentId)
           : and(
-              eq(conversations.userId, userId),
+              enterpriseOwnerPredicate(conversations, userId),
               isNull(conversations.projectAssignmentId),
             ),
         isNull(conversations.deletedAt),
@@ -3199,7 +3206,7 @@ export async function listSnapshots(
           await db
             .select({ conversationId: siteProjects.conversationId })
             .from(siteProjects)
-            .where(eq(siteProjects.userId, userId))
+            .where(enterpriseOwnerPredicate(siteProjects, userId))
         ).map((row) => row.conversationId),
       );
   const conversationRows = allConversationRows.filter(
@@ -3215,7 +3222,7 @@ export async function listSnapshots(
           await db
             .select({ conversationId: responseLogicEntries.conversationId })
             .from(responseLogicEntries)
-            .where(eq(responseLogicEntries.userId, userId))
+            .where(enterpriseOwnerPredicate(responseLogicEntries, userId))
         ).flatMap((row) => (row.conversationId ? [row.conversationId] : [])),
   );
   const messageRows = await db
@@ -3291,7 +3298,7 @@ export async function listSnapshots(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, userId),
+            enterpriseOwnerPredicate(conversationTurns, userId),
             inArray(conversationTurns.conversationId, ids),
             eq(conversationTurns.operationType, GENERAL_CHAT_TURN_TYPE),
           ),
@@ -3461,7 +3468,7 @@ export const conversationRouter = router({
         ctx.user,
         input?.projectAssignmentId,
       );
-      return listSnapshots(ctx.user.id, projectAssignmentId);
+      return listSnapshots(enterpriseWorkspaceUserId(ctx.user.id), projectAssignmentId);
     }),
 
   syncSnapshot: protectedProcedure
@@ -3479,7 +3486,7 @@ export const conversationRouter = router({
       const db = requireDb(await getDb());
       try {
         await runConversationWriteTransaction(db, async (tx) => {
-          await persistSnapshot(tx, ctx.user.id, input.conversation, {
+          await persistSnapshot(tx, enterpriseWorkspaceUserId(ctx.user.id), input.conversation, {
             projectAssignmentId,
           });
         });
@@ -3494,7 +3501,7 @@ export const conversationRouter = router({
         }
         throw error;
       }
-      const snapshots = await listSnapshots(ctx.user.id, projectAssignmentId);
+      const snapshots = await listSnapshots(enterpriseWorkspaceUserId(ctx.user.id), projectAssignmentId);
       const persisted = snapshots.find(
         (item) => item.id === input.conversation.id,
       );
@@ -3524,7 +3531,7 @@ export const conversationRouter = router({
       );
       const db = requireDb(await getDb());
       const persistedConversationId = storageId(
-        ctx.user.id,
+        enterpriseWorkspaceUserId(ctx.user.id),
         input.id,
         projectAssignmentId,
       );
@@ -3536,7 +3543,7 @@ export const conversationRouter = router({
               .from(siteProjects)
               .where(
                 and(
-                  eq(siteProjects.userId, ctx.user.id),
+                  enterpriseOwnerPredicate(siteProjects, enterpriseWorkspaceUserId(ctx.user.id)),
                   or(
                     eq(siteProjects.conversationId, input.id),
                     eq(siteProjects.conversationId, persistedConversationId),
@@ -3558,7 +3565,7 @@ export const conversationRouter = router({
           .from(knowledgeBaseBuilds)
           .where(
             and(
-              eq(knowledgeBaseBuilds.userId, ctx.user.id),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, enterpriseWorkspaceUserId(ctx.user.id)),
               eq(knowledgeBaseBuilds.conversationId, input.id),
             ),
           )
@@ -3581,14 +3588,14 @@ export const conversationRouter = router({
           .for("update");
         const owned = projectAssignmentId
           ? existing[0]?.projectAssignmentId === projectAssignmentId
-          : existing[0]?.userId === ctx.user.id &&
+          : existing[0]?.userId === enterpriseWorkspaceUserId(ctx.user.id) &&
             existing[0]?.projectAssignmentId == null;
         if (!existing[0] || !owned) {
           throw new TRPCError({ code: "NOT_FOUND", message: "会话不存在" });
         }
         await permanentlyDeleteConversation(
           tx,
-          ctx.user.id,
+          enterpriseWorkspaceUserId(ctx.user.id),
           persistedConversationId,
           projectAssignmentId,
         );
@@ -3612,7 +3619,7 @@ export const conversationRouter = router({
       // Upstream ownership proof happens before any transaction or row lock.
       // Normal sync never creates ledger rows from client-supplied IDs.
       const prepared = await prepareLegacyImport(
-        ctx.user.id,
+        enterpriseWorkspaceUserId(ctx.user.id),
         projectAssignmentId,
         input.conversations,
       );
@@ -3620,7 +3627,7 @@ export const conversationRouter = router({
       let skipped = 0;
       for (const conversation of input.conversations) {
         const result = await runConversationWriteTransaction(db, (tx) =>
-          persistSnapshot(tx, ctx.user.id, conversation, {
+          persistSnapshot(tx, enterpriseWorkspaceUserId(ctx.user.id), conversation, {
             skipExisting: true,
             importCredentialId: prepared.credentialId,
             validatedResourceKeys: prepared.validatedResourceKeys,

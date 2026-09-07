@@ -111,7 +111,7 @@ describe("ResponseLogicWorkspace", () => {
     render(<ResponseLogicWorkspace preview />);
 
     expect(
-      screen.getByRole("heading", { name: "当前周期尚无服务问题" }),
+      screen.getByRole("heading", { name: "当前项目尚无优化问题" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("示例企业是一家什么样的公司？")).toBeNull();
   });
@@ -120,7 +120,7 @@ describe("ResponseLogicWorkspace", () => {
     render(<ResponseLogicWorkspace preview questionGroups={[]} />);
 
     expect(
-      screen.getByRole("heading", { name: "当前周期尚无服务问题" }),
+      screen.getByRole("heading", { name: "当前项目尚无优化问题" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("企业资料.pdf")).toBeNull();
     expect(screen.queryByText("现场 图.png")).toBeNull();

@@ -8,8 +8,13 @@ import { AuthSessionProvider } from "@/_core/hooks/useAuth";
 import { checkFrontMindBuildVersion } from "@/lib/build-version";
 import { shouldIsolateAuthOperation } from "@/lib/trpc-link-routing";
 import "./index.css";
+import { enterpriseProjectHeaders } from "@/lib/enterprise-project";
 
+const isLocalDemo = ["/monitoring", "/knowledge-frontend-demo"].includes(
+  window.location.pathname,
+);
 const queryClient = new QueryClient();
+const workspaceHeaders = enterpriseProjectHeaders();
 
 function loadOptionalAnalytics() {
   const endpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT;
@@ -30,7 +35,7 @@ function loadOptionalAnalytics() {
   }
 }
 
-loadOptionalAnalytics();
+if (!isLocalDemo) loadOptionalAnalytics();
 
 queryClient.getQueryCache().subscribe((event) => {
   if (event.type === "updated" && event.action.type === "error") {
@@ -56,11 +61,13 @@ const trpcClient = trpc.createClient({
         url: "/api/trpc",
         transformer: superjson,
         fetch: credentialedFetch,
+        headers: {},
       }),
       false: httpBatchLink({
         url: "/api/trpc",
         transformer: superjson,
         fetch: credentialedFetch,
+        headers: workspaceHeaders,
       }),
     }),
   ],
@@ -83,7 +90,7 @@ function credentialedFetch(input: RequestInfo | URL, init?: RequestInit) {
 //   - One lightweight check (~100 bytes) when the tab regains focus
 //   - Automatic reload only when a genuinely new version is detected
 // ============================================================
-if (import.meta.env.PROD) {
+if (import.meta.env.PROD && !isLocalDemo) {
   void checkFrontMindBuildVersion();
 
   // Re-check when the user switches back to this tab.
@@ -116,9 +123,13 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
-      <AuthSessionProvider>
+      {isLocalDemo ? (
         <App />
-      </AuthSessionProvider>
+      ) : (
+        <AuthSessionProvider>
+          <App />
+        </AuthSessionProvider>
+      )}
     </QueryClientProvider>
   </trpc.Provider>,
 );

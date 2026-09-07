@@ -21,7 +21,6 @@ function project(
     id: number;
     displayName: string;
     username: string;
-    planCode: string;
     managerId: number;
     requiredRoleTypes: DeliveryRoleType[];
   }> = {},
@@ -31,14 +30,10 @@ function project(
     username: input.username ?? "acme",
     displayName: input.displayName ?? "示例客户",
     isActive: true,
-    planCode: input.planCode ?? "basic",
-    contractStatus: "active",
-    contractStartsAt: null,
-    contractEndsAt: null,
     managerId: input.managerId ?? 10,
     managerUsername: "delivery-admin",
     managerDisplayName: "交付管理员",
-    requiredRoleTypes: input.requiredRoleTypes ?? coreRoles,
+    requiredRoleTypes: input.requiredRoleTypes ?? allRoles,
   };
 }
 
@@ -60,21 +55,16 @@ function assignment(
 }
 
 describe("customer project team helpers", () => {
-  it("only counts roles required by the customer's plan", () => {
-    const basicProject = project();
-    const assignments = coreRoles
-      .slice(0, 1)
-      .map((roleType) => assignment(basicProject.id, roleType));
-
-    expect(getMissingProjectRoleTypes(basicProject, assignments)).toEqual([
-      "content_distribution_engineer",
+  it("requires the same three roles even when a legacy project lists fewer roles", () => {
+    const legacyProject = project({ requiredRoleTypes: coreRoles });
+    const assignments = coreRoles.map((roleType) => assignment(legacyProject.id, roleType));
+    expect(getMissingProjectRoleTypes(legacyProject, assignments)).toEqual([
+      "ai_operations_engineer",
     ]);
-    expect(
-      getMissingProjectRoleTypes(basicProject, [
-        ...assignments,
-        assignment(basicProject.id, "content_distribution_engineer"),
-      ]),
-    ).toEqual([]);
+    expect(getMissingProjectRoleTypes(legacyProject, [
+      ...assignments,
+      assignment(legacyProject.id, "ai_operations_engineer"),
+    ])).toEqual([]);
   });
 
   it("summarizes incomplete projects and missing roles", () => {
@@ -82,7 +72,6 @@ describe("customer project team helpers", () => {
       project({ id: 1 }),
       project({
         id: 2,
-        planCode: "advanced",
         requiredRoleTypes: allRoles,
       }),
     ];
@@ -94,7 +83,7 @@ describe("customer project team helpers", () => {
     expect(summarizeProjectTeams(projects, assignments)).toEqual({
       projectCount: 2,
       incompleteProjectCount: 1,
-      missingRoleCount: 1,
+      missingRoleCount: 2,
     });
   });
 
@@ -103,7 +92,7 @@ describe("customer project team helpers", () => {
       ...project(),
       managerId: null,
     };
-    const assignments = coreRoles.map((roleType) =>
+    const assignments = allRoles.map((roleType) =>
       assignment(unownedProject.id, roleType),
     );
 
@@ -114,7 +103,6 @@ describe("customer project team helpers", () => {
     expect(
       filterProjectTeams([unownedProject], assignments, {
         query: "",
-        planCode: "all",
         managerId: "all",
         teamStatus: "incomplete",
       }),
@@ -123,12 +111,12 @@ describe("customer project team helpers", () => {
 
   it("treats a retained role slot with no engineer as unassigned", () => {
     const basicProject = project();
-    const assignments = coreRoles.map((roleType, index) =>
+    const assignments = allRoles.map((roleType, index) =>
       assignment(basicProject.id, roleType, index === 0 ? null : 100 + index),
     );
 
     expect(getMissingProjectRoleTypes(basicProject, assignments)).toEqual([
-      "monitoring_optimization_engineer",
+      "ai_operations_engineer",
     ]);
     expect(summarizeProjectTeams([basicProject], assignments)).toMatchObject({
       incompleteProjectCount: 1,
@@ -136,24 +124,22 @@ describe("customer project team helpers", () => {
     });
   });
 
-  it("filters by customer text, plan, manager, and completion state", () => {
+  it("filters by account text, manager, and completion state", () => {
     const projects = [
       project({ id: 1, displayName: "甲公司", username: "alpha" }),
       project({
         id: 2,
         displayName: "乙公司",
         username: "beta",
-        planCode: "advanced",
         managerId: 20,
         requiredRoleTypes: allRoles,
       }),
     ];
-    const assignments = coreRoles.map((roleType) => assignment(1, roleType));
+    const assignments = allRoles.map((roleType) => assignment(1, roleType));
 
     expect(
       filterProjectTeams(projects, assignments, {
         query: "alpha",
-        planCode: "all",
         managerId: "all",
         teamStatus: "all",
       }).map((row) => row.id),
@@ -161,7 +147,6 @@ describe("customer project team helpers", () => {
     expect(
       filterProjectTeams(projects, assignments, {
         query: "",
-        planCode: "advanced",
         managerId: "20",
         teamStatus: "incomplete",
       }).map((row) => row.id),
@@ -169,7 +154,6 @@ describe("customer project team helpers", () => {
     expect(
       filterProjectTeams(projects, assignments, {
         query: "",
-        planCode: "all",
         managerId: "all",
         teamStatus: "complete",
       }).map((row) => row.id),

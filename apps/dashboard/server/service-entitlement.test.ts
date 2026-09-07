@@ -57,6 +57,8 @@ import {
   type ServicePortalStateInput,
 } from "./service-entitlement";
 import { UNCLASSIFIED_QUESTION_CANDIDATE_KEY } from "./question-selection-policy";
+import * as enterpriseQuestions from "./enterprise-project-questions";
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 
 const NOW = new Date("2026-07-26T08:00:00.000Z");
 
@@ -2408,5 +2410,24 @@ describe("question lifecycle rules", () => {
     );
     expect(error).toBeInstanceOf(Error);
     expect(error.code).toBe("QUESTION_TOTAL_QUOTA_EXCEEDED");
+  });
+});
+
+describe("operator project capability prerequisites", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const projectScope = { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", actorUserId: 99, ownerUserId: 7, isLegacyDefault: false };
+  it.each(["globalKeywords", "responseLogic", "contentAssets"] as const)("reports the knowledge prerequisite for %s without a plan upgrade", async (capability) => {
+    vi.spyOn(enterpriseQuestions, "getEnterpriseToolPortal").mockResolvedValue({
+      mode: "operator", service: { status: "active", planCode: null, validFrom: null },
+      capabilities: { [capability]: { allowed: false, effectiveStatus: "workflow_prerequisite", reason: "请先完成并发布当前项目的知识库" } },
+    } as never);
+    await expect(runWithEnterpriseProjectScope(projectScope, () => assertServiceCapability(7, capability))).rejects.toMatchObject({
+      code: "KNOWLEDGE_SNAPSHOT_NOT_FOUND", statusCode: 409, message: "请先完成并发布当前项目的知识库",
+    });
+  });
+  it("accepts an available project capability without subscription metadata", async () => {
+    const portal = { mode: "operator", service: { status: "active", planCode: null, validFrom: null }, capabilities: { contentAssets: { allowed: true } } };
+    vi.spyOn(enterpriseQuestions, "getEnterpriseToolPortal").mockResolvedValue(portal as never);
+    await expect(runWithEnterpriseProjectScope(projectScope, () => assertServiceCapability(7, "contentAssets"))).resolves.toBe(portal);
   });
 });

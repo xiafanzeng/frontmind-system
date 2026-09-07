@@ -1,3 +1,7 @@
+import {
+  monitoringProjectOwnerPredicate,
+  monitoringEnterpriseProjectIdForOwner,
+} from "./enterprise-scope.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   PublicationMode,
@@ -112,6 +116,7 @@ export class PublishingRepository {
       expiresAt: Date;
     },
   ) {
+    const enterpriseProjectId = monitoringEnterpriseProjectIdForOwner(ownerId);
     if (
       !input.operationId.trim() ||
       input.operationId.length > 191 ||
@@ -130,13 +135,17 @@ export class PublishingRepository {
       .where(eq(users.id, ownerId))
       .limit(1);
     if (!owner) throw new RepositoryError("NOT_FOUND", "User not found");
+    const scopedOperationId = enterpriseProjectId
+      ? `enterprise:${enterpriseProjectId}:${sha256(input.operationId)}`
+      : input.operationId;
     const id = randomUUID();
     await this.db
       .insert(publisherObjectLeases)
       .values({
         id,
         ownerId,
-        operationId: input.operationId,
+        enterpriseProjectId,
+        operationId: scopedOperationId,
         storageKey: input.storageKey,
         storageKeyHash: sha256(input.storageKey),
         kind: input.kind,
@@ -148,8 +157,8 @@ export class PublishingRepository {
       .from(publisherObjectLeases)
       .where(
         and(
-          eq(publisherObjectLeases.ownerId, ownerId),
-          eq(publisherObjectLeases.operationId, input.operationId),
+          monitoringProjectOwnerPredicate(publisherObjectLeases, ownerId),
+          eq(publisherObjectLeases.operationId, scopedOperationId),
           eq(publisherObjectLeases.storageKey, input.storageKey),
         ),
       )
@@ -168,7 +177,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherObjectLeases.id, leaseId),
-          eq(publisherObjectLeases.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherObjectLeases, ownerId),
         ),
       );
   }
@@ -187,11 +196,19 @@ export class PublishingRepository {
         sha256: publisherArticleAssets.sha256,
       })
       .from(publisherArticleAssets)
+      .innerJoin(
+        publisherArticles,
+        and(
+          eq(publisherArticles.id, publisherArticleAssets.articleId),
+          eq(publisherArticles.ownerId, publisherArticleAssets.ownerId),
+          sql`${publisherArticles.enterpriseProjectId} <=> ${publisherArticleAssets.enterpriseProjectId}`,
+        ),
+      )
       .where(
         and(
           eq(publisherArticleAssets.id, assetId),
           eq(publisherArticleAssets.articleId, articleId),
-          eq(publisherArticleAssets.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleAssets, ownerId),
         ),
       )
       .limit(1);
@@ -245,6 +262,7 @@ export class PublishingRepository {
   }
 
   async createPublisherArticle(ownerId: string, workingName: string) {
+    const enterpriseProjectId = monitoringEnterpriseProjectIdForOwner(ownerId);
     const normalized = workingName.trim();
     if (!normalized || normalized.length > 180) {
       throw new RepositoryError("INVALID_STATE", "Invalid article name");
@@ -254,6 +272,7 @@ export class PublishingRepository {
       id,
       ownerId,
       workingName: normalized,
+      enterpriseProjectId,
     });
     return this.getPublisherArticle(ownerId, id);
   }
@@ -270,6 +289,7 @@ export class PublishingRepository {
       expiresAt?: Date;
     },
   ) {
+    const enterpriseProjectId = monitoringEnterpriseProjectIdForOwner(ownerId);
     if (
       !input.originalName.trim() ||
       input.originalName.length > 255 ||
@@ -297,6 +317,7 @@ export class PublishingRepository {
       await tx.insert(publisherDocxImports).values({
         id,
         ownerId,
+        enterpriseProjectId,
         sourceFilename: input.originalName.trim(),
         sourceObjectKey: input.objectKey,
         sizeBytes: input.size,
@@ -313,6 +334,7 @@ export class PublishingRepository {
       });
       await tx.insert(publisherJobs).values({
         id: randomUUID(),
+        enterpriseProjectId,
         type: "import_docx",
         deterministicKey: `publisher:import:${id}`,
         aggregateId: id,
@@ -343,7 +365,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDocxImports.id, importId),
-            eq(publisherDocxImports.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDocxImports, ownerId),
           ),
         )
         .for("update")
@@ -368,7 +390,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDocxImports.id, importId),
-            eq(publisherDocxImports.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDocxImports, ownerId),
           ),
         );
       return { id: importId, status: "failed" as const };
@@ -393,7 +415,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherDocxImports.id, importId),
-          eq(publisherDocxImports.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherDocxImports, ownerId),
         ),
       )
       .limit(1);
@@ -406,7 +428,9 @@ export class PublishingRepository {
     ownerId: string,
     input: { cursor?: string; limit?: number } = {},
   ) {
-    const conditions = [eq(publisherDocxImports.ownerId, ownerId)];
+    const conditions = [
+      monitoringProjectOwnerPredicate(publisherDocxImports, ownerId),
+    ];
     if (input.cursor)
       conditions.push(gt(publisherDocxImports.id, input.cursor));
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
@@ -473,7 +497,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticleAssets.articleId, articleId),
-            eq(publisherArticleAssets.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticleAssets, ownerId),
             eq(publisherArticleAssets.sha256, input.sha256),
           ),
         )
@@ -519,7 +543,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticleVersions.id, articleVersionId),
-            eq(publisherArticleVersions.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
           ),
         )
         .limit(1);
@@ -532,7 +556,10 @@ export class PublishingRepository {
             .from(publisherArticleAssets)
             .where(
               and(
-                eq(publisherArticleAssets.ownerId, ownerId),
+                monitoringProjectOwnerPredicate(
+                  publisherArticleAssets,
+                  ownerId,
+                ),
                 inArray(publisherArticleAssets.id, uniqueIds),
               ),
             )
@@ -560,7 +587,7 @@ export class PublishingRepository {
           .set({ isFrozen: true })
           .where(
             and(
-              eq(publisherArticleAssets.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherArticleAssets, ownerId),
               inArray(publisherArticleAssets.id, uniqueIds),
             ),
           );
@@ -587,7 +614,7 @@ export class PublishingRepository {
       .from(publisherArticleAssets)
       .where(
         and(
-          eq(publisherArticleAssets.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleAssets, ownerId),
           eq(publisherArticleAssets.articleId, articleId),
         ),
       )
@@ -607,7 +634,29 @@ export class PublishingRepository {
       .from(publisherArticleAssets)
       .innerJoin(
         publisherArticleVersionAssets,
-        eq(publisherArticleVersionAssets.assetId, publisherArticleAssets.id),
+        and(
+          eq(publisherArticleVersionAssets.assetId, publisherArticleAssets.id),
+          eq(
+            publisherArticleVersionAssets.ownerId,
+            publisherArticleAssets.ownerId,
+          ),
+          sql`${publisherArticleVersionAssets.enterpriseProjectId} <=> ${publisherArticleAssets.enterpriseProjectId}`,
+        ),
+      )
+      .innerJoin(
+        publisherArticleVersions,
+        and(
+          eq(
+            publisherArticleVersions.id,
+            publisherArticleVersionAssets.articleVersionId,
+          ),
+          eq(publisherArticleVersions.ownerId, publisherArticleAssets.ownerId),
+          eq(
+            publisherArticleVersions.articleId,
+            publisherArticleAssets.articleId,
+          ),
+          sql`${publisherArticleVersions.enterpriseProjectId} <=> ${publisherArticleAssets.enterpriseProjectId}`,
+        ),
       )
       .where(
         and(
@@ -627,7 +676,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherBatches.id, batchId),
-          eq(publisherBatches.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherBatches, ownerId),
         ),
       )
       .limit(1);
@@ -649,7 +698,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherItems.batchId, batchId),
-          eq(publisherItems.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherItems, ownerId),
         ),
       )
       .orderBy(asc(publisherItems.id));
@@ -677,7 +726,9 @@ export class PublishingRepository {
       limit?: number;
     },
   ) {
-    const conditions = [eq(publisherArticles.ownerId, ownerId)];
+    const conditions = [
+      monitoringProjectOwnerPredicate(publisherArticles, ownerId),
+    ];
     if (input.query) {
       conditions.push(
         like(
@@ -705,7 +756,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherArticles.id, articleId),
-          eq(publisherArticles.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticles, ownerId),
         ),
       )
       .limit(1);
@@ -752,7 +803,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticles.id, input.articleId),
-            eq(publisherArticles.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticles, ownerId),
           ),
         );
       return { revision: article.revision + 1, contentHash };
@@ -768,21 +819,32 @@ export class PublishingRepository {
       actorId?: string | null;
     },
   ) {
+    const projectId = monitoringEnterpriseProjectIdForOwner(ownerId);
+    const scopedKey = projectId
+      ? `enterprise:${projectId}:${sha256(input.idempotencyKey)}`
+      : input.idempotencyKey;
     return this.db.transaction(async (tx) => {
       const [replay] = await tx
         .select()
         .from(publisherArticleVersions)
         .where(
           and(
-            eq(publisherArticleVersions.ownerId, ownerId),
-            eq(
-              publisherArticleVersions.freezeIdempotencyKey,
-              input.idempotencyKey,
-            ),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
+            inArray(publisherArticleVersions.freezeIdempotencyKey, [
+              ...new Set([scopedKey, input.idempotencyKey]),
+            ]),
           ),
         )
         .limit(1);
-      if (replay) return replay;
+      if (replay) {
+        if (replay.articleId !== input.articleId) {
+          throw new RepositoryError(
+            "CONFLICT",
+            "Freeze idempotency key is already bound to another article",
+          );
+        }
+        return replay;
+      }
       const article = await lockOwnedArticle(tx, ownerId, input.articleId);
       if (article.revision !== input.expectedRevision) {
         throw new RepositoryError("CONFLICT", "Article revision has changed");
@@ -804,7 +866,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticleVersions.articleId, article.id),
-            eq(publisherArticleVersions.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
           ),
         )
         .orderBy(desc(publisherArticleVersions.version))
@@ -821,7 +883,7 @@ export class PublishingRepository {
         plainText: article.plainText,
         contentHash: article.contentHash,
         containsImages: article.containsImages,
-        freezeIdempotencyKey: input.idempotencyKey,
+        freezeIdempotencyKey: scopedKey,
         createdBy: input.actorId ?? ownerId,
       });
       const referencedAssetIds = [
@@ -837,7 +899,10 @@ export class PublishingRepository {
             .from(publisherArticleAssets)
             .where(
               and(
-                eq(publisherArticleAssets.ownerId, ownerId),
+                monitoringProjectOwnerPredicate(
+                  publisherArticleAssets,
+                  ownerId,
+                ),
                 eq(publisherArticleAssets.articleId, article.id),
                 inArray(publisherArticleAssets.id, referencedAssetIds),
               ),
@@ -865,7 +930,7 @@ export class PublishingRepository {
           .set({ isFrozen: true })
           .where(
             and(
-              eq(publisherArticleAssets.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherArticleAssets, ownerId),
               inArray(
                 publisherArticleAssets.id,
                 orderedAssets.map(({ id }) => id),
@@ -879,7 +944,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticles.id, article.id),
-            eq(publisherArticles.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticles, ownerId),
           ),
         );
       return {
@@ -1295,7 +1360,7 @@ export class PublishingRepository {
       .from(publisherArticleVersions)
       .where(
         and(
-          eq(publisherArticleVersions.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
           eq(publisherArticleVersions.articleId, articleId),
         ),
       )
@@ -1316,7 +1381,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherArticleVersions.id, articleVersionId),
-          eq(publisherArticleVersions.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
         ),
       )
       .limit(1);
@@ -1333,7 +1398,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherDrafts.id, draftId),
-          eq(publisherDrafts.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
         ),
       )
       .limit(1);
@@ -1359,7 +1424,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherDraftItems.draftId, draftId),
-          eq(publisherDraftItems.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
         ),
       )
       .orderBy(asc(publisherDraftItems.id));
@@ -1384,7 +1449,9 @@ export class PublishingRepository {
     ownerId: string,
     input: Partial<PublisherBatchListInput> = {},
   ) {
-    const conditions = [eq(publisherBatches.ownerId, ownerId)];
+    const conditions = [
+      monitoringProjectOwnerPredicate(publisherBatches, ownerId),
+    ];
     if (input.status)
       conditions.push(eq(publisherBatches.status, input.status));
     if (input.from)
@@ -1395,7 +1462,7 @@ export class PublishingRepository {
         sql`EXISTS (
           SELECT 1 FROM ${publisherItems}
           WHERE ${publisherItems.batchId} = ${publisherBatches.id}
-            AND ${publisherItems.ownerId} = ${ownerId}
+            AND ${monitoringProjectOwnerPredicate(publisherItems, ownerId)}
             AND ${publisherItems.mediaKindSnapshot} = ${input.kind}
         )`,
       );
@@ -1409,9 +1476,9 @@ export class PublishingRepository {
             SELECT 1 FROM ${publisherArticleVersions}
             INNER JOIN ${publisherArticles}
               ON ${publisherArticles.id} = ${publisherArticleVersions.articleId}
-              AND ${publisherArticles.ownerId} = ${ownerId}
+              AND ${monitoringProjectOwnerPredicate(publisherArticles, ownerId)}
             WHERE ${publisherArticleVersions.id} = ${publisherBatches.articleVersionId}
-              AND ${publisherArticleVersions.ownerId} = ${ownerId}
+              AND ${monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId)}
               AND COALESCE(
                 NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(${publisherBatches.preflightSnapshot}, '$.articleSuggestedTitle'))), ''), 'null'),
                 NULLIF(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(${publisherBatches.preflightSnapshot}, '$.articleWorkingName'))), ''), 'null'),
@@ -1422,7 +1489,7 @@ export class PublishingRepository {
           OR EXISTS (
             SELECT 1 FROM ${publisherItems}
             WHERE ${publisherItems.batchId} = ${publisherBatches.id}
-              AND ${publisherItems.ownerId} = ${ownerId}
+              AND ${monitoringProjectOwnerPredicate(publisherItems, ownerId)}
               AND (
                 ${publisherItems.mediaNameSnapshot} LIKE ${query}
                 OR ${publisherItems.submissionTitle} LIKE ${query}
@@ -1458,14 +1525,14 @@ export class PublishingRepository {
         publisherArticleVersions,
         and(
           eq(publisherArticleVersions.id, publisherBatches.articleVersionId),
-          eq(publisherArticleVersions.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
         ),
       )
       .innerJoin(
         publisherArticles,
         and(
           eq(publisherArticles.id, publisherArticleVersions.articleId),
-          eq(publisherArticles.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticles, ownerId),
         ),
       )
       .where(and(...pageConditions))
@@ -1498,7 +1565,7 @@ export class PublishingRepository {
           )
           .where(
             and(
-              eq(publisherItems.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherItems, ownerId),
               inArray(
                 publisherItems.batchId,
                 pageRows.map(({ batch }) => batch.id),
@@ -1560,20 +1627,20 @@ export class PublishingRepository {
         publisherArticleVersions,
         and(
           eq(publisherArticleVersions.id, publisherBatches.articleVersionId),
-          eq(publisherArticleVersions.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
         ),
       )
       .innerJoin(
         publisherArticles,
         and(
           eq(publisherArticles.id, publisherArticleVersions.articleId),
-          eq(publisherArticles.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherArticles, ownerId),
         ),
       )
       .where(
         and(
           eq(publisherBatches.id, batchId),
-          eq(publisherBatches.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherBatches, ownerId),
         ),
       )
       .limit(1);
@@ -1592,7 +1659,7 @@ export class PublishingRepository {
       .where(
         and(
           eq(publisherItems.batchId, batchId),
-          eq(publisherItems.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherItems, ownerId),
         ),
       )
       .orderBy(asc(publisherItems.id));
@@ -1659,7 +1726,7 @@ export class PublishingRepository {
       .where(eq(publisherRuntimeState.id, "kol"))
       .limit(1);
     const resumableDraftCondition = and(
-      eq(publisherDrafts.ownerId, ownerId),
+      monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
       inArray(publisherDrafts.status, ["draft", "ready"]),
     );
     const [[resumableDraftTotal], drafts] = await Promise.all([
@@ -1681,14 +1748,14 @@ export class PublishingRepository {
           publisherArticleVersions,
           and(
             eq(publisherArticleVersions.id, publisherDrafts.articleVersionId),
-            eq(publisherArticleVersions.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
           ),
         )
         .innerJoin(
           publisherArticles,
           and(
             eq(publisherArticles.id, publisherArticleVersions.articleId),
-            eq(publisherArticles.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticles, ownerId),
           ),
         )
         .where(resumableDraftCondition)
@@ -1704,7 +1771,7 @@ export class PublishingRepository {
       .from(publisherBatches)
       .where(
         and(
-          eq(publisherBatches.ownerId, ownerId),
+          monitoringProjectOwnerPredicate(publisherBatches, ownerId),
           eq(publisherBatches.status, "action_required"),
         ),
       );
@@ -1788,6 +1855,7 @@ export class PublishingRepository {
       await tx.insert(publisherJobs).values({
         id: randomUUID(),
         type: "sync_kol_catalog",
+        enterpriseProjectId: null,
         deterministicKey: `publisher:catalog:admin-request:${syncRunId}`,
         aggregateId: syncRunId,
         payload: { requestedBy: actorId, syncRunId },
@@ -2284,6 +2352,7 @@ export class PublishingRepository {
         type: "poll_publication_item",
         deterministicKey: `publisher:poll-bound:${item.id}:${candidate.externalOrderId}`,
         aggregateId: item.id,
+        enterpriseProjectId: item.enterpriseProjectId,
         payload: { itemId: item.id },
         availableAt: boundAt,
       });
@@ -2362,6 +2431,7 @@ export class PublishingRepository {
         type: "submit_publication_item",
         deterministicKey: `publisher:resubmit:${item.id}:${item.attemptCount + 1}`,
         aggregateId: item.id,
+        enterpriseProjectId: item.enterpriseProjectId,
         payload: { itemId: item.id },
         availableAt: authorizedAt,
       });
@@ -2406,7 +2476,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherArticleVersions.id, input.articleVersionId),
-            eq(publisherArticleVersions.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
           ),
         )
         .limit(1);
@@ -2461,7 +2531,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDrafts.id, draftId),
-              eq(publisherDrafts.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
             ),
           )
           .for("update")
@@ -2484,7 +2554,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDraftItems.draftId, draftId),
-              eq(publisherDraftItems.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
             ),
           );
         previousTitleByMedia = new Map(
@@ -2502,7 +2572,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDraftItems.draftId, draftId),
-              eq(publisherDraftItems.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
             ),
           );
         await tx
@@ -2517,7 +2587,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDrafts.id, draftId),
-              eq(publisherDrafts.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
             ),
           );
       } else {
@@ -2596,7 +2666,7 @@ export class PublishingRepository {
         (titleMode === "per_media" ||
           Boolean(
             sharedTitle &&
-            values.every((item) => item.submissionTitle === sharedTitle),
+              values.every((item) => item.submissionTitle === sharedTitle),
           ));
       await tx
         .update(publisherDrafts)
@@ -2604,7 +2674,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         );
       return { id: draftId, revision: nextRevision };
@@ -2622,7 +2692,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, input.draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         )
         .for("update")
@@ -2656,7 +2726,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDraftItems.draftId, input.draftId),
-            eq(publisherDraftItems.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
           ),
         );
       if (
@@ -2693,7 +2763,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDraftItems.id, draftItem.id),
-              eq(publisherDraftItems.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
             ),
           );
       }
@@ -2708,9 +2778,10 @@ export class PublishingRepository {
         draft.titleMode !== "single" ||
         Boolean(
           draft.sharedTitle?.trim() &&
-          selections.every(
-            ({ draftItem }) => draftItem.submissionTitle === draft.sharedTitle,
-          ),
+            selections.every(
+              ({ draftItem }) =>
+                draftItem.submissionTitle === draft.sharedTitle,
+            ),
         );
       const revision = draft.revision + 1;
       await tx
@@ -2722,7 +2793,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, input.draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         );
       return { id: input.draftId, revision };
@@ -2740,7 +2811,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, input.draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         )
         .for("update")
@@ -2760,7 +2831,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDraftItems.draftId, input.draftId),
-            eq(publisherDraftItems.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
           ),
         );
       if (!items.length)
@@ -2804,7 +2875,7 @@ export class PublishingRepository {
           .where(
             and(
               eq(publisherDraftItems.id, item.id),
-              eq(publisherDraftItems.ownerId, ownerId),
+              monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
             ),
           );
       }
@@ -2820,7 +2891,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, input.draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         );
       return { id: input.draftId, revision };
@@ -2868,6 +2939,10 @@ export class PublishingRepository {
     options: PublisherExecutionOptions = new Date(),
   ) {
     const { now, requiredMode } = publisherExecutionOptions(options);
+    const projectId = monitoringEnterpriseProjectIdForOwner(ownerId);
+    const scopedKey = projectId
+      ? `enterprise:${projectId}:${sha256(input.idempotencyKey)}`
+      : input.idempotencyKey;
     return this.db.transaction(async (tx) => {
       await ensureAndLockPublisherWallet(tx, ownerId);
       const [replay] = await tx
@@ -2875,8 +2950,10 @@ export class PublishingRepository {
         .from(publisherBatches)
         .where(
           and(
-            eq(publisherBatches.ownerId, ownerId),
-            eq(publisherBatches.idempotencyKey, input.idempotencyKey),
+            monitoringProjectOwnerPredicate(publisherBatches, ownerId),
+            inArray(publisherBatches.idempotencyKey, [
+              ...new Set([scopedKey, input.idempotencyKey]),
+            ]),
           ),
         )
         .limit(1);
@@ -2901,7 +2978,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherPreflights.id, input.preflightRevision),
-            eq(publisherPreflights.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherPreflights, ownerId),
           ),
         )
         .for("update")
@@ -2966,7 +3043,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherPreflights.id, issuedPreflight!.id),
-            eq(publisherPreflights.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherPreflights, ownerId),
             isNull(publisherPreflights.consumedAt),
           ),
         );
@@ -2994,7 +3071,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, input.draftId),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         )
         .for("update")
@@ -3025,7 +3102,7 @@ export class PublishingRepository {
         quoteFingerprint: preflight.quoteFingerprint,
         preflightRevision: preflight.preflightRevision,
         preflightSnapshot: preflight,
-        idempotencyKey: input.idempotencyKey,
+        idempotencyKey: scopedKey,
         liveConfirmationAccepted: input.liveConfirmationAccepted === true,
         titleMode: draft.titleMode,
         confirmedAt: now,
@@ -3087,6 +3164,7 @@ export class PublishingRepository {
         await tx.insert(publisherJobs).values({
           id: randomUUID(),
           type: "submit_publication_item",
+          enterpriseProjectId: projectId,
           deterministicKey: `publisher:submit:${itemId}:1`,
           aggregateId: itemId,
           payload: { itemId },
@@ -3119,7 +3197,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherDrafts.id, draft.id),
-            eq(publisherDrafts.ownerId, ownerId),
+            monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
             eq(publisherDrafts.status, "ready"),
           ),
         );
@@ -3557,16 +3635,6 @@ export class PublishingRepository {
           reviewedAt,
         };
       }
-      const [wallet] = await tx
-        .select()
-        .from(mediaPublishingWallets)
-        .where(eq(mediaPublishingWallets.userId, order.ownerId))
-        .for("update")
-        .limit(1);
-      if (!wallet)
-        throw new RepositoryError("INVALID_STATE", "Wallet is missing");
-      const nextBalance =
-        wallet.balanceTenThousandths + order.amountTenThousandths;
       const payloadDigest = sha256(`bank:${review.id}:${providerTradeNo}`);
       await tx.insert(paymentReceiptClaims).values({
         id: randomUUID(),
@@ -3589,6 +3657,16 @@ export class PublishingRepository {
         payloadDigest,
         receivedAt: reviewedAt,
       });
+      const [wallet] = await tx
+        .select()
+        .from(mediaPublishingWallets)
+        .where(eq(mediaPublishingWallets.userId, order.ownerId))
+        .for("update")
+        .limit(1);
+      if (!wallet)
+        throw new RepositoryError("INVALID_STATE", "Wallet is missing");
+      const nextBalance =
+        wallet.balanceTenThousandths + order.amountTenThousandths;
       await tx
         .update(mediaPublishingWallets)
         .set({ balanceTenThousandths: nextBalance })
@@ -3712,7 +3790,7 @@ export class PublishingRepository {
         .where(
           and(
             eq(publisherItems.id, input.publicationItemId),
-            eq(publisherItems.ownerId, input.ownerId),
+            monitoringProjectOwnerPredicate(publisherItems, input.ownerId),
           ),
         )
         .for("update")
@@ -4013,7 +4091,7 @@ async function computePreflight(
     .where(
       and(
         eq(publisherDrafts.id, draftId),
-        eq(publisherDrafts.ownerId, ownerId),
+        monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
       ),
     );
   const drafts = lock
@@ -4030,7 +4108,7 @@ async function computePreflight(
     .where(
       and(
         eq(publisherArticleVersions.id, draft.articleVersionId),
-        eq(publisherArticleVersions.ownerId, ownerId),
+        monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
       ),
     )
     .limit(1);
@@ -4045,7 +4123,7 @@ async function computePreflight(
     .where(
       and(
         eq(publisherArticles.id, version.articleId),
-        eq(publisherArticles.ownerId, ownerId),
+        monitoringProjectOwnerPredicate(publisherArticles, ownerId),
       ),
     )
     .limit(1);
@@ -4597,6 +4675,7 @@ async function completedPublisherImageCanaryBlocker(
       tx,
       candidate.versionId,
       candidate.ownerId,
+      false,
     );
     if (
       !publisherFrozenImageEvidenceBlocker({
@@ -4629,6 +4708,7 @@ function loadPublisherVersionImageEvidence(
   tx: Transaction,
   versionId: string,
   ownerId: string,
+  scopeToProject = true,
 ) {
   return tx
     .select({
@@ -4647,12 +4727,18 @@ function loadPublisherVersionImageEvidence(
           publisherArticleAssets.ownerId,
           publisherArticleVersionAssets.ownerId,
         ),
+        sql`${publisherArticleAssets.enterpriseProjectId} <=> ${publisherArticleVersionAssets.enterpriseProjectId}`,
       ),
     )
     .where(
       and(
         eq(publisherArticleVersionAssets.articleVersionId, versionId),
-        eq(publisherArticleVersionAssets.ownerId, ownerId),
+        scopeToProject
+          ? monitoringProjectOwnerPredicate(
+              publisherArticleVersionAssets,
+              ownerId,
+            )
+          : eq(publisherArticleVersionAssets.ownerId, ownerId),
       ),
     );
 }
@@ -4685,7 +4771,7 @@ async function loadDraftSelections(
     .where(
       and(
         eq(publisherDraftItems.draftId, draftId),
-        eq(publisherDraftItems.ownerId, ownerId),
+        monitoringProjectOwnerPredicate(publisherDraftItems, ownerId),
       ),
     )
     .orderBy(asc(publisherDraftItems.id))
@@ -4731,7 +4817,7 @@ async function lockOwnedArticle(
     .where(
       and(
         eq(publisherArticles.id, articleId),
-        eq(publisherArticles.ownerId, ownerId),
+        monitoringProjectOwnerPredicate(publisherArticles, ownerId),
       ),
     )
     .for("update")

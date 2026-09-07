@@ -1,8 +1,10 @@
+import { currentEnterpriseProjectId } from "../server/enterprise-project-context";
 import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
   check,
+  datetime,
   decimal,
   foreignKey,
   index,
@@ -244,7 +246,8 @@ export const presalesApiCredentials = mysqlTable(
 export const agentOperations = mysqlTable(
   "agent_operations",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     provider: varchar("provider", { length: 16 }).default("manus").notNull(),
     scope: mysqlEnum("scope", ["managed_user", "website_frontend"]).notNull(),
     accountUserId: int("account_user_id"),
@@ -377,7 +380,8 @@ export const agentEvents = mysqlTable(
 export const localAssets = mysqlTable(
   "local_assets",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     scope: mysqlEnum("scope", ["managed_user", "website_frontend"]).notNull(),
     accountUserId: int("account_user_id"),
     presalesProjectId: varchar("presales_project_id", { length: 80 }),
@@ -2281,6 +2285,7 @@ export const workspaceQuestions = mysqlTable(
 export const knowledgeImportReceipts = mysqlTable(
   "knowledge_import_receipts",
   {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),
     id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
@@ -2326,6 +2331,7 @@ export const knowledgeImportReceipts = mysqlTable(
   },
   (table) => [
     uniqueIndex("knowledge_import_receipts_user_artifact_uq").on(
+      table.enterpriseProjectId,
       table.userId,
       table.artifactHash,
     ),
@@ -2611,7 +2617,8 @@ export const userDashboardContents = mysqlTable(
 export const workspaceContentRevisions = mysqlTable(
   "workspace_content_revisions",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -2635,7 +2642,7 @@ export const workspaceContentRevisions = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("workspace_content_revisions_user_module_revision_uq").on(
+    uniqueIndex("workspace_content_revisions_user_module_revision_uq").on(table.enterpriseProjectId,
       table.userId,
       table.module,
       table.revision,
@@ -2660,7 +2667,8 @@ export const workspaceContentRevisions = mysqlTable(
 export const monitoringBatches = mysqlTable(
   "monitoring_batches",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -2707,7 +2715,8 @@ export const monitoringBatches = mysqlTable(
 export const monitoringSamples = mysqlTable(
   "monitoring_samples",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -2754,7 +2763,8 @@ export const monitoringSamples = mysqlTable(
 export const monitoringCitationRecords = mysqlTable(
   "monitoring_citation_records",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -2857,7 +2867,8 @@ export type KnowledgeAssetRecord = {
 export const knowledgeBaseSnapshots = mysqlTable(
   "knowledge_base_snapshots",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -2889,7 +2900,7 @@ export const knowledgeBaseSnapshots = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("knowledge_base_snapshots_user_version_uq").on(
+    uniqueIndex("knowledge_base_snapshots_user_version_uq").on(table.enterpriseProjectId,
       table.userId,
       table.version,
     ),
@@ -2897,7 +2908,7 @@ export const knowledgeBaseSnapshots = mysqlTable(
       table.userId,
       table.status,
     ),
-    uniqueIndex("knowledge_base_snapshots_source_artifact_uq").on(
+    uniqueIndex("knowledge_base_snapshots_source_artifact_uq").on(table.enterpriseProjectId,
       table.userId,
       table.sourceBuildId,
       table.sourceBuildRevision,
@@ -2916,7 +2927,8 @@ export const knowledgeBaseSnapshots = mysqlTable(
 export const knowledgeBaseBuilds = mysqlTable(
   "knowledge_base_builds",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -3238,7 +3250,8 @@ export const knowledgeBaseWorkingSets = mysqlTable(
 export const knowledgeBaseResetRequests = mysqlTable(
   "knowledge_base_reset_requests",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     ticketId: varchar("ticketId", { length: 36 })
       .notNull()
       .references(() => deliveryTickets.id, { onDelete: "restrict" }),
@@ -3315,7 +3328,8 @@ export const knowledgeBaseResetStates = mysqlTable(
 export const knowledgeBaseConversationTombstones = mysqlTable(
   "knowledge_base_conversation_tombstones",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -3345,7 +3359,8 @@ export const knowledgeBaseConversationTombstones = mysqlTable(
 export const knowledgeBaseConversationRetentionTombstones = mysqlTable(
   "knowledge_base_conversation_retention_tombstones",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId").notNull(),
     publicConversationId: varchar("publicConversationId", {
       length: 191,
@@ -3370,6 +3385,7 @@ export const knowledgeBaseConversationRetentionTombstones = mysqlTable(
 export const knowledgeBaseResetCleanupJobs = mysqlTable(
   "knowledge_base_reset_cleanup_jobs",
   {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),
     id: varchar("id", { length: 36 }).primaryKey(),
     resetRequestId: varchar("resetRequestId", { length: 36 }),
     userId: int("userId").notNull(),
@@ -3427,7 +3443,8 @@ export const knowledgeBaseResetCleanupJobs = mysqlTable(
 export const responseLogicEntries = mysqlTable(
   "response_logic_entries",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -3475,7 +3492,8 @@ export const responseLogicEntries = mysqlTable(
 export const conversations = mysqlTable(
   "conversations",
   {
-    // Client-generated IDs are retained during the one-time local import.
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    // Client-generated IDs are retained during the one-time local import.
     id: varchar("id", { length: 191 }).primaryKey(),
     userId: int("userId")
       .notNull()
@@ -3534,7 +3552,8 @@ export const conversations = mysqlTable(
 export const conversationTurns = mysqlTable(
   "conversation_turns",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     conversationId: varchar("conversationId", { length: 191 })
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
@@ -3693,7 +3712,8 @@ export const attachments = mysqlTable(
 export const upstreamResources = mysqlTable(
   "upstream_resources",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -3971,7 +3991,8 @@ export const jenovaBrandTrackingTurns = mysqlTable(
 export const siteProjects = mysqlTable(
   "site_projects",
   {
-    id: varchar("id", { length: 36 }).primaryKey(),
+
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => currentEnterpriseProjectId() ?? sql`NULL`),    id: varchar("id", { length: 36 }).primaryKey(),
     userId: int("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -4024,7 +4045,8 @@ export const siteProjects = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   (table) => [
-    uniqueIndex("site_projects_user_uq").on(table.userId),
+    uniqueIndex("site_projects_user_uq").on(table.enterpriseProjectId, table.userId),
+    index("site_projects_legacy_owner_idx").on(table.userId),
     uniqueIndex("site_projects_conversation_uq").on(table.conversationId),
     index("site_projects_status_updated_idx").on(table.status, table.updatedAt),
     foreignKey({
@@ -4992,8 +5014,370 @@ export const monitoringAccountLinks = mysqlTable(
   },
   (table) => [
     primaryKey({ columns: [table.dashboardUserId] }),
+    uniqueIndex("monitoring_account_links_dashboardUserId_unique").on(table.dashboardUserId),
     uniqueIndex("monitoring_account_links_monitoring_user_uq").on(
       table.monitoringUserId,
+    ),
+  ],
+);
+
+
+/** Operator-owned enterprise projects; login, credentials and funds stay account-scoped. */
+export const enterpriseProjects = mysqlTable("enterprise_projects", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  ownerUserId: int("ownerUserId").notNull().references(() => users.id, { onDelete: "restrict" }),
+  name: varchar("name", { length: 120 }).notNull(),
+  isLegacyDefault: boolean("isLegacyDefault").default(false).notNull(),
+  clientRequestId: varchar("clientRequestId", { length: 128 }),
+  revision: int("revision", { unsigned: true }).default(1).notNull(),
+  archivedAt: timestamp("archivedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("enterprise_projects_owner_request_uq").on(table.ownerUserId, table.clientRequestId),
+  index("enterprise_projects_owner_active_idx").on(table.ownerUserId, table.archivedAt),
+]);
+
+/** Project content is independent of the historical userId-primary-key projection. */
+export const enterpriseProjectDashboardContents = mysqlTable("enterprise_project_dashboard_contents", {
+  enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => { const id = currentEnterpriseProjectId(); if (!id) throw new Error("ENTERPRISE_PROJECT_REQUIRED"); return id; }).primaryKey().references(() => enterpriseProjects.id, { onDelete: "restrict" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "restrict" }),
+  payload: json("payload").$type<Record<string, unknown>>().notNull(),
+  sourceName: varchar("sourceName", { length: 512 }),
+  enterpriseIdentityBoundAt: timestamp("enterpriseIdentityBoundAt"),
+  revision: int("revision", { unsigned: true }).default(0).notNull(),
+  updatedByUserId: int("updatedByUserId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index("enterprise_project_contents_owner_idx").on(table.userId),
+  index("user_dashboard_contents_updated_idx").on(table.updatedAt),
+  index("user_dashboard_contents_updatedByUserId_users_id_fk").on(table.updatedByUserId),
+]);
+
+export const enterpriseProjectQuestions = mysqlTable(
+  "enterprise_project_questions",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).notNull().$defaultFn(() => { const id = currentEnterpriseProjectId(); if (!id) throw new Error("ENTERPRISE_PROJECT_REQUIRED"); return id; }),
+    clientRequestId: varchar("clientRequestId", { length: 128 }),
+    requestHash: varchar("requestHash", { length: 64 }),
+    id: varchar("id", { length: 36 }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    contractId: varchar("contractId", { length: 36 })
+      .references(() => serviceContracts.id, { onDelete: "cascade" }),
+    quotaPeriodId: varchar("quotaPeriodId", { length: 36 })
+      .references(() => serviceQuotaPeriods.id, { onDelete: "cascade" }),
+    externalQuestionId: varchar("externalQuestionId", { length: 191 }),
+    sourceQuestionId: varchar("sourceQuestionId", { length: 36 }),
+    candidateKey: varchar("candidateKey", { length: 191 }),
+    category: mysqlEnum("category", [
+      "industry",
+      "competitor_comparison",
+      "reputation",
+      "product_scenario",
+    ]).notNull(),
+    question: text("question").notNull(),
+    intent: text("intent"),
+    intentRevision: int("intentRevision", { unsigned: true })
+      .default(1)
+      .notNull(),
+    intentConfirmedRevision: int("intentConfirmedRevision", {
+      unsigned: true,
+    }),
+    intentConfirmedAt: timestamp("intentConfirmedAt"),
+    intentConfirmedByUserId: int("intentConfirmedByUserId").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    rationale: text("rationale"),
+    evidence: json("evidence")
+      .$type<WorkspaceQuestionEvidenceRecord[]>()
+      .default([])
+      .notNull(),
+    risks: json("risks").$type<string[]>().default([]).notNull(),
+    source: mysqlEnum("source", [
+      "model",
+      "website",
+      "offline",
+      "admin",
+      "user",
+    ])
+      .default("model")
+      .notNull(),
+    status: mysqlEnum("status", ["candidate", "selected", "archived"])
+      .default("candidate")
+      .notNull(),
+    selectionApprovalStatus: mysqlEnum("selectionApprovalStatus", [
+      "not_requested",
+      "pending",
+      "approved",
+    ])
+      .default("not_requested")
+      .notNull(),
+    selectionRequestedAt: timestamp("selectionRequestedAt"),
+    selectionRequestedByUserId: int("selectionRequestedByUserId").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    selectionApprovedAt: timestamp("selectionApprovedAt"),
+    selectionApprovedByUserId: int("selectionApprovedByUserId").references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+    locked: boolean("locked").default(false).notNull(),
+    sourceTaskId: varchar("sourceTaskId", { length: 255 }),
+    knowledgeSnapshotId: varchar("knowledgeSnapshotId", {
+      length: 36,
+    }).references(() => knowledgeBaseSnapshots.id, { onDelete: "set null" }),
+    ordinal: int("ordinal", { unsigned: true }).default(0).notNull(),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    selectedAt: timestamp("selectedAt"),
+    archivedAt: timestamp("archivedAt"),
+    createdByUserId: int("createdByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("enterprise_questions_request_uq").on(table.enterpriseProjectId, table.clientRequestId),
+    index("enterprise_questions_project_status_idx").on(table.enterpriseProjectId, table.status),
+    uniqueIndex("enterprise_questions_generation_key_uq").on(
+      table.quotaPeriodId,
+      table.sourceTaskId,
+      table.candidateKey,
+    ),
+    index("enterprise_questions_user_period_status_idx").on(
+      table.userId,
+      table.quotaPeriodId,
+      table.status,
+    ),
+    index("enterprise_questions_user_category_status_idx").on(
+      table.userId,
+      table.category,
+      table.status,
+    ),
+    index("enterprise_questions_user_approval_status_idx").on(
+      table.userId,
+      table.selectionApprovalStatus,
+      table.updatedAt,
+    ),
+    index("enterprise_questions_external_idx").on(
+      table.userId,
+      table.externalQuestionId,
+    ),
+    index("enterprise_questions_source_question_idx").on(
+      table.userId,
+      table.sourceQuestionId,
+    ),
+  ],
+);
+
+/** Monitoring remains its own versioned domain, with explicit enterprise provenance. */
+export const enterpriseProjectMonitoringLinks = mysqlTable("enterprise_project_monitoring_links", {
+  monitoringProjectId: varchar("monitoringProjectId", { length: 36 }).primaryKey(),
+  enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).notNull().references(() => enterpriseProjects.id, { onDelete: "restrict" }),
+  ownerUserId: int("ownerUserId").notNull(),
+  sourceQuestions: json("sourceQuestions").$type<Array<{ questionId: string; revision: number; question: string }>>().notNull(),
+  clientRequestId: varchar("clientRequestId", { length: 128 }).notNull(),
+  requestHash: varchar("requestHash", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("enterprise_monitoring_request_uq").on(table.enterpriseProjectId, table.clientRequestId),
+  index("enterprise_monitoring_project_idx").on(table.enterpriseProjectId),
+]);
+
+/** Provider-native monetary facts are independent of task success and historical credits. */
+export const aiChargeCommands = mysqlTable("ai_charge_commands", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  localTaskId: varchar("local_task_id", { length: 36 }).notNull(),
+  commandKey: varchar("command_key", { length: 191 }).notNull(),
+  operationId: varchar("operation_id", { length: 36 }).notNull(),
+  accountUserId: int("account_user_id").notNull(),
+  walletUserId: varchar("wallet_user_id", { length: 36 }).notNull(),
+  enterpriseProjectId: varchar("enterprise_project_id", { length: 36 }),
+  sessionId: varchar("session_id", { length: 255 }).notNull(),
+  model: varchar("model", { length: 64 }).notNull(),
+  effort: varchar("effort", { length: 16 }).notNull(),
+  pricingVersion: varchar("pricing_version", { length: 64 }).notNull(),
+  reservedTenThousandths: bigint("reserved_ten_thousandths", { mode: "bigint", unsigned: true }).notNull().default(0n),
+  reserveWindowTenThousandths: bigint("reserve_window_ten_thousandths", { mode: "bigint", unsigned: true }).notNull().default(0n),
+  consumedTenThousandths: bigint("consumed_ten_thousandths", { mode: "bigint", unsigned: true }).notNull().default(0n),
+  state: varchar("state", { length: 24 }).notNull().default("authorized"),
+  observedAt: timestamp("observed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, table => [uniqueIndex("ai_commands_task_key_uq").on(table.localTaskId, table.commandKey), index("ai_commands_owner_state_idx").on(table.accountUserId, table.state),
+  foreignKey({name:"ai_commands_account_fk",columns:[table.accountUserId],foreignColumns:[users.id]}).onDelete("restrict"),
+  foreignKey({name:"ai_commands_wallet_fk",columns:[table.walletUserId],foreignColumns:[unifiedMoneyWallets.userId]}).onDelete("restrict"),
+]);
+
+export const aiCostEvents = mysqlTable("ai_cost_events", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  providerEventId: varchar("provider_event_id", { length: 255 }).notNull(),
+  sessionId: varchar("session_id", { length: 255 }).notNull(),
+  localTaskId: varchar("local_task_id", { length: 36 }).notNull(),
+  operationId: varchar("operation_id", { length: 36 }).notNull(),
+  commandId: varchar("command_id", { length: 36 }),
+  accountUserId: int("account_user_id"),
+  enterpriseProjectId: varchar("enterprise_project_id", { length: 36 }),
+  scope: varchar("scope", { length: 24 }).notNull(),
+  model: varchar("model", { length: 64 }).notNull(),
+  pricingVersion: varchar("pricing_version", { length: 64 }),
+  inputTokens: bigint("input_tokens", { mode: "bigint", unsigned: true }),
+  outputTokens: bigint("output_tokens", { mode: "bigint", unsigned: true }),
+  cacheReadInputTokens: bigint("cache_read_input_tokens", { mode: "bigint", unsigned: true }),
+  cacheCreationInputTokens: bigint("cache_creation_input_tokens", { mode: "bigint", unsigned: true }),
+  costNanos: bigint("cost_nanos", { mode: "bigint", unsigned: true }),
+  chargedTenThousandths: bigint("charged_ten_thousandths", { mode: "bigint", unsigned: true }).notNull().default(0n),
+  costState: varchar("cost_state", { length: 24 }).notNull(),
+  isError: boolean("is_error").notNull().default(false),
+  occurredAt: timestamp("occurred_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [uniqueIndex("ai_cost_event_session_uq").on(table.sessionId, table.providerEventId), index("ai_cost_owner_time_idx").on(table.accountUserId, table.occurredAt), index("ai_cost_scope_time_idx").on(table.scope, table.occurredAt)]);
+
+export const aiWalletLedger = mysqlTable("ai_wallet_ledger", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  userId: varchar("user_id", { length: 36 }).notNull(),
+  commandId: varchar("command_id", { length: 36 }).notNull(),
+  type: varchar("type", { length: 24 }).notNull(),
+  balanceDeltaTenThousandths: bigint("balance_delta_ten_thousandths", { mode: "bigint" }).notNull(),
+  reservedDeltaTenThousandths: bigint("reserved_delta_ten_thousandths", { mode: "bigint" }).notNull(),
+  balanceAfterTenThousandths: bigint("balance_after_ten_thousandths", { mode: "bigint" }).notNull(),
+  reason: varchar("reason", { length: 240 }).notNull(),
+  idempotencyKey: varchar("idempotency_key", { length: 191 }).notNull(),
+  referenceId: varchar("reference_id", { length: 255 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [uniqueIndex("ai_wallet_ledger_idempotency_uq").on(table.idempotencyKey), index("ai_wallet_ledger_owner_time_idx").on(table.userId, table.createdAt)]);
+
+/** Mirror the existing monitoring owner table in this Drizzle runtime for FK verification. */
+export const monitoringAccountUsers = mysqlTable("monitoring_users", {
+  id:varchar("id",{length:36}).primaryKey(),username:varchar("username",{length:64}).notNull(),passwordHash:varchar("password_hash",{length:255}).notNull(),
+  role:mysqlEnum("role",["user","admin"]).notNull().default("user"),status:mysqlEnum("status",["active","disabled"]).notNull().default("active"),
+  sessionVersion:int("session_version",{unsigned:true}).notNull().default(1),passwordChangedAt:datetime("password_changed_at",{fsp:3}).notNull(),lastLoginAt:datetime("last_login_at",{fsp:3}),
+  createdAt:timestamp("created_at",{fsp:3}).default(sql`CURRENT_TIMESTAMP(3)`).notNull(),updatedAt:timestamp("updated_at",{fsp:3}).default(sql`CURRENT_TIMESTAMP(3)`).onUpdateNow().notNull(),
+},table=>[uniqueIndex("users_username_uq").on(table.username),index("users_status_idx").on(table.status)]);
+
+/** Same physical account table used by both monitoring repositories; local Drizzle binding. */
+export const unifiedMoneyWallets = mysqlTable("unified_money_wallets", {
+  userId: varchar("user_id", {length:36}).primaryKey(),
+  currency: varchar("currency", {length:3}).notNull().default("CNY"),
+  balanceTenThousandths: bigint("balance_ten_thousandths",{mode:"bigint"}).notNull().default(0n),
+  reservedTenThousandths: bigint("reserved_ten_thousandths",{mode:"bigint",unsigned:true}).notNull().default(0n),
+  frozenTenThousandths: bigint("frozen_ten_thousandths",{mode:"bigint",unsigned:true}).notNull().default(0n),
+  spentTenThousandths: bigint("spent_ten_thousandths",{mode:"bigint",unsigned:true}).notNull().default(0n),
+  aiCostRemainderNanos: bigint("ai_cost_remainder_nanos",{mode:"bigint",unsigned:true}).notNull().default(0n),
+  updatedAt: timestamp("updated_at",{fsp:3}).default(sql`CURRENT_TIMESTAMP(3)`).onUpdateNow().notNull(),
+},table=>[
+  foreignKey({name:"unified_wallet_owner_fk",columns:[table.userId],foreignColumns:[monitoringAccountUsers.id]}).onDelete("cascade"),
+  check("unified_wallet_remainder_ck",sql`${table.aiCostRemainderNanos} < 100000`),
+]);
+
+/** Persistent finance control records are included in schema compatibility checks. */
+export const unifiedFinanceState = mysqlTable("unified_finance_state", {
+  id: int("id").primaryKey(),
+  mode: varchar("mode", {length:24}).notNull(),
+  minimumRuntimeVersion: int("minimum_runtime_version").notNull().default(2),
+  activatedAt: datetime("activated_at", {fsp:3}),
+});
+export const unifiedWalletOpenings = mysqlTable("unified_wallet_openings", {
+  userId: varchar("user_id",{length:36}).primaryKey(),
+  monitoringBalance: bigint("monitoring_balance",{mode:"bigint"}).notNull(),
+  monitoringReserved: bigint("monitoring_reserved",{mode:"bigint",unsigned:true}).notNull(),
+  monitoringSpent: bigint("monitoring_spent",{mode:"bigint",unsigned:true}).notNull(),
+  mediaBalance: bigint("media_balance",{mode:"bigint"}).notNull(),
+  mediaReserved: bigint("media_reserved",{mode:"bigint",unsigned:true}).notNull(),
+  mediaFrozen: bigint("media_frozen",{mode:"bigint",unsigned:true}).notNull(),
+  mediaSpent: bigint("media_spent",{mode:"bigint",unsigned:true}).notNull(),
+  createdAt: timestamp("created_at",{fsp:3}).default(sql`CURRENT_TIMESTAMP(3)`).notNull(),
+});
+export const aiBillingConfiguration = mysqlTable("ai_billing_configuration", {
+  id: int("id").primaryKey(),
+  mode: varchar("mode",{length:24}).notNull(),
+  enabledAt: datetime("enabled_at",{fsp:3}).notNull(),
+  pricingVersion: varchar("pricing_version",{length:64}).notNull(),
+  initialReserveTenThousandths: bigint("initial_reserve_ten_thousandths",{mode:"bigint",unsigned:true}).notNull(),
+  refillRatioBasisPoints: int("refill_ratio_basis_points",{unsigned:true}).notNull(),
+  syncToken: varchar("sync_token",{length:36}),
+  syncUntil: datetime("sync_until",{fsp:3}),
+});
+export const aiUsageSyncTargets = mysqlTable("ai_usage_sync_targets", {
+  localTaskId: varchar("local_task_id",{length:36}).primaryKey(),
+  nextSyncAt: datetime("next_sync_at",{fsp:3}).notNull(),
+  lastError: varchar("last_error",{length:64}),
+}, table=>[index("ai_usage_sync_due_idx").on(table.nextSyncAt)]);
+
+
+export const enterpriseProjectResetStates = mysqlTable(
+  "enterprise_project_reset_states",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => { const id = currentEnterpriseProjectId(); if (!id) throw new Error("ENTERPRISE_PROJECT_REQUIRED"); return id; }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    revision: int("revision", { unsigned: true }).default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+);
+
+export const enterpriseProjectSiteProfiles = mysqlTable(
+  "enterprise_project_site_profiles",
+  {
+    enterpriseProjectId: varchar("enterpriseProjectId", { length: 36 }).$defaultFn(() => { const id = currentEnterpriseProjectId(); if (!id) throw new Error("ENTERPRISE_PROJECT_REQUIRED"); return id; }).primaryKey(),
+    userId: int("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    domain: varchar("domain", { length: 255 }),
+    normalizedAsciiDomain: varchar("normalizedAsciiDomain", { length: 255 }),
+    unicodeDisplayDomain: varchar("unicodeDisplayDomain", { length: 255 }),
+    domainRevision: int("domainRevision", { unsigned: true })
+      .default(1)
+      .notNull(),
+    providerAccountUid: varchar("providerAccountUid", { length: 128 }),
+    domainOwnershipStatus: varchar("domainOwnershipStatus", { length: 64 }),
+    dnsStatus: varchar("dnsStatus", { length: 64 }),
+    icpDomainRevision: int("icpDomainRevision", { unsigned: true }),
+    siteMode: mysqlEnum("siteMode", ["managed", "external", "unknown"])
+      .default("unknown")
+      .notNull(),
+    domainStatus: mysqlEnum("domainStatus", [
+      "not_started",
+      "pending",
+      "completed",
+    ])
+      .default("not_started")
+      .notNull(),
+    domainVerifiedAt: timestamp("domainVerifiedAt"),
+    icpProvince: varchar("icpProvince", { length: 64 }),
+    icpNumber: varchar("icpNumber", { length: 128 }),
+    icpStatus: mysqlEnum("icpStatus", [
+      "not_submitted",
+      "preparing",
+      "submitted",
+      "approved",
+      "rejected",
+      "not_required",
+    ])
+      .default("not_submitted")
+      .notNull(),
+    icpVerifiedAt: timestamp("icpVerifiedAt"),
+    revision: int("revision", { unsigned: true }).default(1).notNull(),
+    updatedByUserId: int("updatedByUserId").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("workspace_site_profiles_domain_idx").on(table.domain),
+    index("workspace_site_profiles_ascii_domain_idx").on(
+      table.normalizedAsciiDomain,
+    ),
+    index("workspace_site_profiles_workflow_idx").on(
+      table.domainStatus,
+      table.icpStatus,
     ),
   ],
 );

@@ -1,3 +1,5 @@
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { and, desc, eq } from "drizzle-orm";
 
 import {
@@ -29,7 +31,7 @@ export type KnowledgeBaseServerOwnedMessageMetadata = {
 };
 
 function persistedMessageId(userId: number, publicMessageId: string) {
-  const value = `u${userId}:${publicMessageId}`;
+  const value = `${enterpriseConversationStoragePrefix(userId)}${publicMessageId}`;
   if (value.length > 191) {
     throw new TypeError("Knowledge-base message id exceeds database capacity");
   }
@@ -47,7 +49,7 @@ async function lockedConversation(
       .where(
         and(
           eq(conversations.id, input.conversationId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
         ),
       )
       .limit(1)
@@ -177,7 +179,7 @@ export async function persistKnowledgeBaseUserMessageInTransaction(input: {
       .where(
         and(
           eq(conversations.id, input.conversationId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
           eq(conversations.version, conversation.version),
         ),
       );
@@ -243,7 +245,7 @@ export async function persistKnowledgeBasePresentationInTransaction(input: {
       .where(
         and(
           eq(conversations.id, input.conversationId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
           eq(conversations.version, conversation.version),
         ),
       );
@@ -272,7 +274,7 @@ export async function markKnowledgeBaseConversationCompletedInTransaction(input:
     .where(
       and(
         eq(conversations.id, input.conversationId),
-        eq(conversations.userId, input.userId),
+        enterpriseOwnerPredicate(conversations, input.userId),
         eq(conversations.version, conversation.version),
       ),
     );
@@ -333,7 +335,7 @@ export async function persistKnowledgeBaseCompletionInTransaction(input: {
       .where(
         and(
           eq(conversations.id, input.conversationId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
           eq(conversations.version, conversation.version),
         ),
       );
@@ -362,7 +364,7 @@ export async function markKnowledgeBaseConversationFailedInTransaction(input: {
     .where(
       and(
         eq(conversations.id, input.conversationId),
-        eq(conversations.userId, input.userId),
+        enterpriseOwnerPredicate(conversations, input.userId),
         eq(conversations.version, conversation.version),
       ),
     );
@@ -389,7 +391,7 @@ export async function markKnowledgeBaseConversationAwaitingInputInTransaction(in
     .where(
       and(
         eq(conversations.id, input.conversationId),
-        eq(conversations.userId, input.userId),
+        enterpriseOwnerPredicate(conversations, input.userId),
         eq(conversations.version, conversation.version),
       ),
     );

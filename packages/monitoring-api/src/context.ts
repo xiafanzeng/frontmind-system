@@ -39,8 +39,8 @@ export async function createContext(
     session: authenticated?.session ?? null,
     tokenHash: authenticated?.tokenHash ?? null,
     audit: {
-      actorId: authenticated?.user.id ?? null,
-      actorRole: authenticated?.user.role ?? null,
+      actorId: authenticated?.auditActor?.id ?? authenticated?.user.id ?? null,
+      actorRole: authenticated?.auditActor?.role ?? authenticated?.user.role ?? null,
       ipHash: hashNetworkIdentifier(
         options.req.ip,
         dependencies.config.SESSION_SECRET,

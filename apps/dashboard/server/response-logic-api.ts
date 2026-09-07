@@ -1,3 +1,6 @@
+import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
+import { sendAiBillingError } from "./ai-billing-http";
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, desc, eq, gt } from "drizzle-orm";
@@ -429,10 +432,9 @@ export function responseLogicRecordMatchesConfiguredQuestion(input: {
 }
 
 /**
- * The authenticated user ID is the tenant workspace ID in this application.
- * Keeping the complete binding check in one pure function makes it impossible
- * to accidentally validate only the upstream task ledger and omit the
- * question/conversation binding.
+ * The authenticated actor must own the account or match the authorized
+ * enterprise project scope. Keep this check alongside the exact task,
+ * question and conversation binding.
  */
 export function assertResponseLogicTaskBinding(input: {
   authenticatedUserId: number;
@@ -451,7 +453,10 @@ export function assertResponseLogicTaskBinding(input: {
     summary: string;
   };
 }) {
-  if (input.authenticatedUserId !== input.workspaceUserId) {
+  const scope = getEnterpriseProjectScope();
+  if (scope
+    ? scope.actorUserId !== input.authenticatedUserId || scope.ownerUserId !== input.workspaceUserId
+    : input.authenticatedUserId !== input.workspaceUserId) {
     throw new ResponseLogicTaskBindingError(
       "RESPONSE_LOGIC_WORKSPACE_FORBIDDEN",
       "当前工作区与登录账号不匹配",
@@ -1172,11 +1177,12 @@ router.get("/tasks/:taskId/status", async (req, res) => {
     return;
   }
 
+  const workspaceUserId = enterpriseWorkspaceUserId(user.id);
   let logSecret = "";
   try {
-    await assertServiceCapability(user.id, "responseLogic");
+    await assertServiceCapability(workspaceUserId, "responseLogic");
     const configuredQuestion = await getDashboardQuestion(
-      user.id,
+      workspaceUserId,
       parsedQuery.data.questionId,
     );
     if (!configuredQuestion) {
@@ -1190,12 +1196,12 @@ router.get("/tasks/:taskId/status", async (req, res) => {
     }
 
     const [record, credential] = await Promise.all([
-      getResponseLogicEntry(user.id, parsedQuery.data.questionId),
-      getCredentialForUpstreamResource(user.id, "task", taskId),
+      getResponseLogicEntry(workspaceUserId, parsedQuery.data.questionId),
+      getCredentialForUpstreamResource(workspaceUserId, "task", taskId),
     ]);
     assertResponseLogicTaskBinding({
       authenticatedUserId: user.id,
-      workspaceUserId: user.id,
+      workspaceUserId: workspaceUserId,
       questionId: parsedQuery.data.questionId,
       conversationId: parsedQuery.data.conversationId,
       taskId,
@@ -1213,7 +1219,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
 
     const client = createCredentialAgentClient(credential, {
       baseUrl: getUpstreamBaseUrl(req),
-      accountUserId: user.id,
+      accountUserId: workspaceUserId,
     });
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const roundEvents = currentResponseLogicRoundEvents(events);
@@ -1231,7 +1237,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
     }
     if (status === "error") {
       await releaseResponseLogicTaskBinding({
-        userId: user.id,
+        userId: workspaceUserId,
         questionId: parsedQuery.data.questionId,
         taskId,
       });
@@ -1305,10 +1311,11 @@ router.get("/tasks/:taskId/status", async (req, res) => {
       }),
     );
   } catch (error) {
+    if (sendAiBillingError(res, error)) return;
     if (error instanceof ResponseLogicTaskBindingError) {
       if (error.code === "RESPONSE_LOGIC_QUESTION_FORBIDDEN") {
         await releaseResponseLogicTaskBinding({
-          userId: user.id,
+          userId: workspaceUserId,
           questionId: parsedQuery.data.questionId,
           taskId,
         });
@@ -1366,8 +1373,9 @@ router.post(["/start", "/turn"], async (req, res) => {
       return;
     }
   }
+  const workspaceUserId = enterpriseWorkspaceUserId(req.frontmindUser!.id);
   try {
-    await assertServiceCapability(req.frontmindUser!.id, "responseLogic");
+    await assertServiceCapability(workspaceUserId, "responseLogic");
   } catch (error) {
     if (error instanceof ServiceEntitlementError) {
       res.status(error.statusCode).json({
@@ -1416,7 +1424,7 @@ router.post(["/start", "/turn"], async (req, res) => {
   let logSecret = activeCredentials.apiKey;
   try {
     const configuredQuestion = await getDashboardQuestion(
-      req.frontmindUser.id,
+      workspaceUserId,
       parsed.data.questionId,
     );
     if (!configuredQuestion) {
@@ -1434,7 +1442,7 @@ router.post(["/start", "/turn"], async (req, res) => {
     };
     if (!isContinuation) {
       const existingRecord = await getResponseLogicEntry(
-        req.frontmindUser.id,
+        workspaceUserId,
         value.questionId,
       );
       assertResponseLogicRecordEditable(existingRecord);
@@ -1447,11 +1455,11 @@ router.post(["/start", "/turn"], async (req, res) => {
     if (value.taskId) {
       const [boundTaskCredential, record] = await Promise.all([
         getCredentialForUpstreamResource(
-          req.frontmindUser.id,
+          workspaceUserId,
           "task",
           value.taskId,
         ),
-        getResponseLogicEntry(req.frontmindUser.id, value.questionId),
+        getResponseLogicEntry(workspaceUserId, value.questionId),
       ]);
       if (!boundTaskCredential) {
         throw new ResponseLogicTaskBindingError(
@@ -1462,7 +1470,7 @@ router.post(["/start", "/turn"], async (req, res) => {
       assertResponseLogicRecordEditable(record);
       assertResponseLogicTaskBinding({
         authenticatedUserId: req.frontmindUser.id,
-        workspaceUserId: req.frontmindUser.id,
+        workspaceUserId: workspaceUserId,
         questionId: value.questionId,
         conversationId: value.conversationId,
         taskId: value.taskId,
@@ -1479,7 +1487,7 @@ router.post(["/start", "/turn"], async (req, res) => {
     // fresh conversation binding and exact response-logic revision agree.
     // The returned revision is consumed again by the final transactional CAS.
     const readiness = await requireResponseLogicProviderReadiness({
-      userId: req.frontmindUser.id,
+      userId: workspaceUserId,
       questionId: value.questionId,
       conversationId: value.conversationId,
       ...(value.taskId ? { taskId: value.taskId } : {}),
@@ -1521,7 +1529,7 @@ router.post(["/start", "/turn"], async (req, res) => {
             and(
               eq(localAssets.id, attachment.file_id),
               eq(localAssets.scope, "managed_user"),
-              eq(localAssets.accountUserId, req.frontmindUser.id),
+              enterpriseAccountOwnerPredicate(localAssets, workspaceUserId),
             ),
           )
           .limit(1)
@@ -1549,7 +1557,7 @@ router.post(["/start", "/turn"], async (req, res) => {
 
     const skillDescriptor = await getResponseLogicSkillDescriptor();
     const knowledgeSnapshot = await getLatestKnowledgeSnapshot(
-      req.frontmindUser.id,
+      workspaceUserId,
     );
     const generatedAttachmentPackages: Array<{
       filename: string;
@@ -1602,7 +1610,7 @@ router.post(["/start", "/turn"], async (req, res) => {
       },
     });
     const taskIdempotencyKey = createResponseLogicTaskIdempotencyKey({
-      userId: req.frontmindUser.id,
+      userId: workspaceUserId,
       conversationId: value.conversationId,
       questionId: value.questionId,
       taskId: value.taskId,
@@ -1623,7 +1631,7 @@ router.post(["/start", "/turn"], async (req, res) => {
     }> = [];
     const responseLogicClient = createCredentialAgentClient(taskCredential, {
       baseUrl: getUpstreamBaseUrl(req),
-      accountUserId: req.frontmindUser.id,
+      accountUserId: workspaceUserId,
       intentId: taskIdempotencyKey,
     });
     for (const attachmentPackage of generatedAttachmentPackages) {
@@ -1635,7 +1643,7 @@ router.post(["/start", "/turn"], async (req, res) => {
         observer: {
           onCandidateCreated: async ({ fileId }) => {
             await recordUpstreamResource({
-              userId: req.frontmindUser!.id,
+              userId: workspaceUserId,
               apiCredentialId: taskCredential.id,
               kind: "file",
               upstreamId: fileId,
@@ -1726,7 +1734,7 @@ router.post(["/start", "/turn"], async (req, res) => {
       baseUrl: getUpstreamBaseUrl(req),
       apiKey: taskApiKey,
       credential: taskCredential,
-      accountUserId: req.frontmindUser.id,
+      accountUserId: workspaceUserId,
       prompt,
       attachments: [
         ...generatedAttachments.map((item) => item.attachment),
@@ -1735,7 +1743,7 @@ router.post(["/start", "/turn"], async (req, res) => {
       taskId: value.taskId,
       idempotencyKey: taskIdempotencyKey,
       agentProfile: toUpstreamAgentProfile(taskCredential.agentProfile),
-      rateLimitScope: `managed-user:${req.frontmindUser.id}`,
+      rateLimitScope: `managed-user:${workspaceUserId}`,
     });
     if (!created.ok) {
       throw created.upstreamError;
@@ -1747,13 +1755,13 @@ router.post(["/start", "/turn"], async (req, res) => {
       // If the final CAS loses a race, the task remains attributable but can
       // never write into a reset/replaced record.
       await recordUpstreamResource({
-        userId: req.frontmindUser.id,
+        userId: workspaceUserId,
         apiCredentialId: taskCredential.id,
         kind: "task",
         upstreamId: String(created.task.id),
       });
       startedRecord = await recordResponseLogicTaskStart({
-        userId: req.frontmindUser.id,
+        userId: workspaceUserId,
         apiCredentialId: taskCredential.id,
         value: {
           questionId: value.questionId,
@@ -1790,6 +1798,7 @@ router.post(["/start", "/turn"], async (req, res) => {
       knowledgeVersion: knowledgeSnapshot?.version ?? null,
     });
   } catch (error) {
+    if (sendAiBillingError(res, error)) return;
     if (error instanceof ResponseLogicConfirmedError) {
       res.status(error.statusCode).json({
         error: { code: error.responseLogicCode, message: error.message },
@@ -1830,7 +1839,7 @@ router.post(["/start", "/turn"], async (req, res) => {
         req.frontmindUser
       ) {
         await releaseResponseLogicTaskBinding({
-          userId: req.frontmindUser.id,
+          userId: workspaceUserId,
           questionId: parsed.data.questionId,
           taskId: parsed.data.taskId,
         });

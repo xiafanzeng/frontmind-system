@@ -1,3 +1,6 @@
+import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
@@ -11,12 +14,10 @@ import {
   conversations,
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
-  knowledgeBaseResetStates,
   knowledgeBaseSnapshots,
   knowledgeImportReceipts,
   messages,
   upstreamResources,
-  userDashboardContents,
   users,
 } from "../drizzle/schema";
 import { dashboardPayloadSchema } from "../shared/dashboard";
@@ -155,9 +156,9 @@ async function collectInventory(
     await Promise.all([
       executor.select({ id: users.id }).from(users).where(eq(users.id, userId)),
       executor
-        .select({ payload: userDashboardContents.payload })
-        .from(userDashboardContents)
-        .where(eq(userDashboardContents.userId, userId)),
+        .select({ payload: enterpriseDashboardTable().payload })
+        .from(enterpriseDashboardTable())
+        .where(enterpriseDashboardOwnerPredicate(userId)),
       executor
         .select({
           id: knowledgeBaseBuilds.id,
@@ -168,7 +169,7 @@ async function collectInventory(
           packageFileId: knowledgeBaseBuilds.packageFileId,
         })
         .from(knowledgeBaseBuilds)
-        .where(eq(knowledgeBaseBuilds.userId, userId)),
+        .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId)),
       executor
         .select({
           id: knowledgeBaseSnapshots.id,
@@ -177,7 +178,7 @@ async function collectInventory(
           assets: knowledgeBaseSnapshots.assets,
         })
         .from(knowledgeBaseSnapshots)
-        .where(eq(knowledgeBaseSnapshots.userId, userId)),
+        .where(enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId)),
       executor
         .select({
           id: knowledgeImportReceipts.id,
@@ -185,7 +186,7 @@ async function collectInventory(
           fileId: knowledgeImportReceipts.fileId,
         })
         .from(knowledgeImportReceipts)
-        .where(eq(knowledgeImportReceipts.userId, userId)),
+        .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId)),
     ]);
 
   const dashboardBrandNames = dashboardRows.map((row: any) => {
@@ -231,7 +232,7 @@ async function collectInventory(
         .from(conversations)
         .where(
           and(
-            eq(conversations.userId, userId),
+            enterpriseOwnerPredicate(conversations, userId),
             inArray(conversations.id, storedConversationIds),
           ),
         )
@@ -245,7 +246,7 @@ async function collectInventory(
             .from(conversationTurns)
             .where(
               and(
-                eq(conversationTurns.userId, userId),
+                enterpriseOwnerPredicate(conversationTurns, userId),
                 inArray(
                   conversationTurns.conversationId,
                   existingConversationIds,
@@ -311,7 +312,7 @@ async function collectInventory(
     .from(upstreamResources)
     .where(
       and(
-        eq(upstreamResources.userId, userId),
+        enterpriseOwnerPredicate(upstreamResources, userId),
         or(
           existingConversationIds.length
             ? inArray(upstreamResources.conversationId, existingConversationIds)
@@ -361,9 +362,9 @@ async function collectInventory(
     })),
   );
   const resetRows = await executor
-    .select({ revision: knowledgeBaseResetStates.revision })
-    .from(knowledgeBaseResetStates)
-    .where(eq(knowledgeBaseResetStates.userId, userId))
+    .select({ revision: enterpriseResetStateTable().revision })
+    .from(enterpriseResetStateTable())
+    .where(enterpriseResetStateOwnerPredicate(userId))
     .limit(1);
   const identity = {
     userId,
@@ -464,28 +465,28 @@ export async function executeSiliconFlowKnowledgeBaseReset(input: {
     await tx
       .update(knowledgeBaseBuilds)
       .set({ publishedSnapshotId: null })
-      .where(eq(knowledgeBaseBuilds.userId, input.userId));
+      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId));
     await tx
       .delete(knowledgeImportReceipts)
-      .where(eq(knowledgeImportReceipts.userId, input.userId));
+      .where(enterpriseOwnerPredicate(knowledgeImportReceipts, input.userId));
     await tx
       .delete(knowledgeBaseSnapshots)
-      .where(eq(knowledgeBaseSnapshots.userId, input.userId));
+      .where(enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId));
     await tx
       .delete(knowledgeBaseBuilds)
-      .where(eq(knowledgeBaseBuilds.userId, input.userId));
+      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId));
     if (inventory.storedConversationIds.length > 0) {
       await tx
         .delete(conversations)
         .where(
           and(
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
             inArray(conversations.id, inventory.storedConversationIds),
           ),
         );
     }
     await tx
-      .insert(knowledgeBaseResetStates)
+      .insert(enterpriseResetStateTable())
       .values({
         userId: input.userId,
         revision: 1,
@@ -493,14 +494,14 @@ export async function executeSiliconFlowKnowledgeBaseReset(input: {
       })
       .onDuplicateKeyUpdate({
         set: {
-          revision: sql`${knowledgeBaseResetStates.revision} + 1`,
+          revision: sql`${enterpriseResetStateTable().revision} + 1`,
           updatedAt: new Date(),
         },
       });
     const revisionRows = await tx
-      .select({ revision: knowledgeBaseResetStates.revision })
-      .from(knowledgeBaseResetStates)
-      .where(eq(knowledgeBaseResetStates.userId, input.userId))
+      .select({ revision: enterpriseResetStateTable().revision })
+      .from(enterpriseResetStateTable())
+      .where(enterpriseResetStateOwnerPredicate(input.userId))
       .limit(1);
     return revisionRows[0]?.revision || inventory.resetRevision + 1;
   });
@@ -565,7 +566,7 @@ export async function executeSiliconFlowKnowledgeBaseReset(input: {
           .delete(upstreamResources)
           .where(
             and(
-              eq(upstreamResources.userId, input.userId),
+              enterpriseOwnerPredicate(upstreamResources, input.userId),
               eq(upstreamResources.kind, resource.kind),
               eq(upstreamResources.upstreamId, resource.upstreamId),
             ),

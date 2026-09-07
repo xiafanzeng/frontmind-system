@@ -34,6 +34,31 @@ import {
   writeWorkspaceAuditEvent,
 } from "./admin-control-plane-service";
 import { getDb } from "./db";
+
+/** All newly created customers are operators; historical contracts are not entitlements. */
+export async function createManagedOperatorUser(input: {
+  actor: AuthenticatedUser; username: string; password: string; displayName?: string | null;
+  marketEdition: AccountMarketEdition; deliveryAdminId: number; apiKey?: string;
+}) {
+  if (!hasDeliveryCapability(input.actor) || (!hasSystemAdminAccess(input.actor) && input.deliveryAdminId !== input.actor.id)) {
+    throw new AuthServiceError("INVALID_CREDENTIAL", "无权创建该操作员账号");
+  }
+  if (input.apiKey && !hasSystemAdminAccess(input.actor)) throw new AuthServiceError("INVALID_CREDENTIAL", "API Key 仅由系统管理员维护");
+  if (input.apiKey) await validateUpstreamApiKey(input.apiKey);
+  const passwordHash = await hashPassword(input.password);
+  const transaction = await defaultTransaction();
+  return transaction(async executor => {
+    const tx = executor as any;
+    const [admin] = await tx.select({ id: users.id, role: users.role, adminAccessLevel: users.adminAccessLevel, isActive: users.isActive }).from(users).where(eq(users.id, input.deliveryAdminId)).limit(1).for("update");
+    if (!admin?.isActive || admin.role !== "admin" || !isExplicitAdminAccessLevel(admin.adminAccessLevel)) throw new AuthServiceError("NOT_FOUND", "负责管理员不存在或已停用");
+    const user = await createManagedUserWithPasswordHash({ username: input.username, passwordHash, displayName: input.displayName, marketEdition: input.marketEdition, role: "user" }, tx);
+    if (input.apiKey) await replaceApiCredentialInTransaction({ executor: tx, userId: user.id, apiKey: input.apiKey });
+    await tx.insert(userAdminAssignments).values({ userId: user.id, adminId: input.deliveryAdminId, assignedByUserId: input.actor.id });
+    await tx.insert(userUsageOwners).values({ userId: user.id, deliveryAdminId: input.deliveryAdminId, revision: 1 });
+    await writeWorkspaceAuditEvent({ actor: input.actor, action: "account.created", targetType: "user", targetId: user.id, workspaceUserId: user.id, metadata: { accountType: "operator", assignedDeliveryAdminId: input.deliveryAdminId } }, tx);
+    return { user, contract: null, assignedToCreator: input.deliveryAdminId === input.actor.id, assignedDeliveryAdminId: input.deliveryAdminId };
+  });
+}
 import {
   createServiceQuotaWindows,
   getServiceContractTermEnd,

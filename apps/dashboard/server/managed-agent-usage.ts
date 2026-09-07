@@ -1,3 +1,10 @@
+import { readAiCostTotals } from "./ai-billing-service";
+import {
+  formatCostCny,
+  nativeTokens,
+  zhipuCostNanos,
+  ZHIPU_PRICING_SOURCE,
+} from "./zhipu-cost";
 import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import { agentOperations, agentTasks } from "../drizzle/schema";
 
@@ -8,6 +15,9 @@ export type ManagedNativeUsage = {
   outputTokens: number;
   cacheReadInputTokens: number;
   observedTasks: number;
+  costCny: string | null;
+  costStatus: "complete" | "partial" | "unknown";
+  pricingSourceUrl: string;
 };
 
 /** Native provider observations stay separate from the historical credit ledger. */
@@ -21,10 +31,26 @@ export function projectManagedNativeUsage(
     outputTokens: 0,
     cacheReadInputTokens: 0,
     observedTasks: 0,
+    costCny: null,
+    costStatus: "unknown",
+    pricingSourceUrl: ZHIPU_PRICING_SOURCE,
   };
+  let knownCost = 0n;
+  let priced = 0;
   for (const runtime of runtimes) {
     const usage = runtime?.usage;
     if (!usage || typeof usage !== "object" || Array.isArray(usage)) continue;
+    const managed = runtime?.dashboardManaged as
+      | Record<string, unknown>
+      | undefined;
+    const cost = zhipuCostNanos(
+      String(managed?.model ?? runtime?.model ?? ""),
+      nativeTokens(usage),
+    );
+    if (cost !== null) {
+      knownCost += cost;
+      priced++;
+    }
     let observed = false;
     for (const [field, target] of [
       ["input_tokens", "inputTokens"],
@@ -43,6 +69,9 @@ export function projectManagedNativeUsage(
     }
     if (observed) result.observedTasks += 1;
   }
+  result.costCny = priced ? formatCostCny(knownCost) : null;
+  // Session snapshots are historical projections; event timestamps produce complete period totals below.
+  result.costStatus = priced ? "partial" : "unknown";
   return result;
 }
 
@@ -58,10 +87,12 @@ export async function readManagedNativeUsageByAccounts(input: {
   const rows: Array<{
     accountUserId: number;
     runtime: Record<string, unknown> | null;
+    model: string;
   }> = await input.executor
     .select({
       accountUserId: agentOperations.accountUserId,
       runtime: agentTasks.providerRuntime,
+      model: agentOperations.upstreamModel,
     })
     .from(agentTasks)
     .innerJoin(agentOperations, eq(agentTasks.operationId, agentOperations.id))
@@ -80,8 +111,21 @@ export async function readManagedNativeUsageByAccounts(input: {
       projectManagedNativeUsage(
         rows
           .filter((row) => row.accountUserId === accountId)
-          .map((row) => row.runtime),
+          .map((row) =>
+            row.runtime ? { model: row.model, ...row.runtime } : null,
+          ),
       ),
     );
+  const costs = await readAiCostTotals({
+    executor: input.executor,
+    accountIds,
+    scope: "managed_user",
+    startAt: input.startAt,
+    endAt: input.endAt,
+  });
+  for (const accountId of accountIds) {
+    const cost = costs.get(accountId);
+    if (cost) Object.assign(result.get(accountId)!, cost);
+  }
   return result;
 }

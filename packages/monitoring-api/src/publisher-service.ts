@@ -79,6 +79,8 @@ export function createPublisherHttpService(
     },
 
     async createArticleAsset({ ownerId, articleId, upload, altText }) {
+      // Reject another enterprise project before writing any object bytes.
+      await dependencies.repository.getPublisherArticle(ownerId, articleId);
       const writer = requirePublisherWriter(dependencies.writer);
       const normalized = await normalizePublisherImage({
         bytes: upload.body,

@@ -1,3 +1,4 @@
+import { projectResourceUrl } from "@/lib/enterprise-project";
 import type { MonitorRun, MonitorSummary } from "../../domain";
 import {
   MONITORING_TABS,
@@ -341,6 +342,7 @@ export function monitoringExportHref(
   state: MonitoringQueryState,
   timezone: string,
 ) {
+  if (state.tab === "goods" || state.tab === "videos") return;
   if (!state.monitorId || !uuidPattern.test(state.monitorId)) return;
   const bounds = calendarDateRangeToUtc(state.from, state.to, timezone);
   const params = new URLSearchParams({
@@ -358,5 +360,7 @@ export function monitoringExportHref(
   if (state.model && uuidPattern.test(state.model)) {
     params.set("platformId", state.model);
   }
-  return `/api/monitoring/downloads/monitoring/${state.monitorId}.xlsx?${params.toString()}`;
+  return projectResourceUrl(
+    `/api/monitoring/downloads/monitoring/${state.monitorId}.xlsx?${params.toString()}`,
+  );
 }

@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, createHmac, hkdfSync, randomUUID } from "node:crypto";
 import { and, eq, inArray, max } from "drizzle-orm";
 import sharp from "sharp";
@@ -1080,7 +1081,7 @@ async function loadDefaultContext(
     .where(
       and(
         eq(siteProjects.id, operation.projectId),
-        eq(siteProjects.userId, operation.userId),
+        enterpriseOwnerPredicate(siteProjects, operation.userId),
       ),
     )
     .limit(1);
@@ -1157,7 +1158,7 @@ async function loadDefaultContext(
     .where(
       and(
         eq(knowledgeBaseSnapshots.id, input.knowledgeSnapshotId),
-        eq(knowledgeBaseSnapshots.userId, operation.userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, operation.userId),
       ),
     )
     .limit(1);
@@ -2729,7 +2730,7 @@ async function persistDefaultBoard(
       .where(
         and(
           eq(siteProjects.id, input.context.project.id),
-          eq(siteProjects.userId, input.operation.userId),
+          enterpriseOwnerPredicate(siteProjects, input.operation.userId),
         ),
       )
       .limit(1)
@@ -3121,7 +3122,7 @@ export async function persistDefaultStaticTemplateCatalogBoards(
         .where(
           and(
             eq(siteProjects.id, input.context.project.id),
-            eq(siteProjects.userId, input.operation.userId),
+            enterpriseOwnerPredicate(siteProjects, input.operation.userId),
           ),
         )
         .limit(1)
@@ -3947,7 +3948,7 @@ async function persistDefaultNativeTemplatePool(
         .where(
           and(
             eq(siteProjects.id, input.context.project.id),
-            eq(siteProjects.userId, input.operation.userId),
+            enterpriseOwnerPredicate(siteProjects, input.operation.userId),
           ),
         )
         .limit(1)

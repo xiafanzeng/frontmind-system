@@ -158,6 +158,7 @@ import EmbeddedKnowledgeBasePanel, {
 
 afterEach(() => {
   vi.useRealTimers();
+  window.history.replaceState(null, "", "/");
 });
 
 beforeEach(() => {
@@ -243,6 +244,13 @@ describe("knowledge-base progress projection ordering", () => {
 });
 
 describe("EmbeddedKnowledgeBasePanel reset action", () => {
+  it("keeps the enterprise project on the header archive download", () => {
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    window.history.replaceState(null, "", `/?enterpriseProjectId=${projectId}`);
+    mocks.knowledgeData = { snapshot: { id: "snapshot-1", sourceFileName: "knowledge.zip", archiveHash: "a".repeat(64), archiveAvailable: true } };
+    render(<EmbeddedKnowledgeBasePanel page="display" onPageChange={vi.fn()} />);
+    expect(screen.getByRole("link", { name: "下载成品 ZIP" })).toHaveAttribute("href", `/api/dashboard/knowledge/snapshots/snapshot-1/archive?enterpriseProjectId=${projectId}`);
+  });
   it("does not mount the build flow before reset status is known", () => {
     mocks.resetStatus = undefined;
 

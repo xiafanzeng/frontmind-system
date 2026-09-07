@@ -297,6 +297,10 @@ describe("engineer project authorization", () => {
     }
     expect(executor.select).not.toHaveBeenCalled();
   });
+  it("allows an assigned AI role for a domestic operator without a service contract", async () => {
+    const {executor} = queuedDeliveryExecutor([[{...assignment,roleType:"ai_operations_engineer"}],[]]);
+    await expect(assertDeliveryProjectContext({actor:{...actor,engineerRoleType:"ai_operations_engineer"},projectAssignmentId:"assignment-1",executor})).resolves.toMatchObject({customerUserId:42,roleType:"ai_operations_engineer"});
+  });
   it("rejects an assignment for a different customer", async () => {
     const { executor } = queuedDeliveryExecutor([[assignment]]);
     await expect(

@@ -1,3 +1,4 @@
+import { runWithEnterpriseProjectScope, type EnterpriseProjectScope } from "./enterprise-project-context";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createServer, type Server } from "node:http";
@@ -42,6 +43,7 @@ describe("General Agent runtime HTTP authorization", () => {
     adminAccessLevel = "delivery_admin",
     role: "admin" | "user" = "admin",
     configured = true,
+    projectScope?: EnterpriseProjectScope,
   ) {
     const app = express();
     app.use(express.json());
@@ -59,7 +61,8 @@ describe("General Agent runtime HTTP authorization", () => {
             apiKey: "synthetic-secret-must-not-be-returned",
           } as any)
         : undefined;
-      next();
+      if (projectScope) runWithEnterpriseProjectScope(projectScope, next);
+      else next();
     });
     app.use(chatRouter);
     const server = createServer(app);
@@ -103,9 +106,9 @@ describe("General Agent runtime HTTP authorization", () => {
       expect(await current.json()).toEqual({
         configured: true,
         source: "administrator",
-        publicProfile: "frontmind-pro",
+        publicProfile: "frontmind-base",
         upstreamModel: "glm-5.3",
-        upstreamEffort: "max",
+        upstreamEffort: "high",
         speed: "standard",
       });
       const existing = await fetch(`${ownerUrl}?localTaskId=${localTaskId}`);
@@ -182,7 +185,7 @@ describe("General Agent runtime HTTP authorization", () => {
       transaction: async (fn: any) => fn(chain),
     };
     runtimeMocks.getDb.mockResolvedValue(chain);
-    const url = await start(7, "delivery_admin", "user");
+    const url = await start(7, "delivery_admin", "user", true, { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 7, actorUserId: 7, isLegacyDefault: false });
     const response = await fetch(`${url}?purpose=enterprise_qa`);
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -345,7 +348,7 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
 
   it("freezes administrator execution settings while retaining browser dispatch evidence", () => {
     expect(serverSource).toContain(
-      "const execution = generalAgentRuntimeForCredential(input.credential)",
+      "generalAgentRuntimeForSelection(input.credential, input.value.modelProfile)",
     );
     expect(serverSource).toContain("publicProfile: execution.publicProfile");
     expect(serverSource).toContain("upstreamModel: execution.upstreamModel");
@@ -434,7 +437,7 @@ describe("Dashboard ordinary-chat v2 boundary", () => {
       serverSource.indexOf('router.post("/tasks"'),
     );
     expect(route).toContain("assertGeneralAgentActor(req.frontmindUser)");
-    expect(route).toContain("userId: req.frontmindUser.id");
+    expect(route).toContain("userId: enterpriseWorkspaceUserId(req.frontmindUser.id)");
     expect(route).toContain("findOwnedTask({");
     expect(route).toContain("generalAgentRuntimeForOperation(owned.operation)");
     expect(route).not.toContain("createTask(");

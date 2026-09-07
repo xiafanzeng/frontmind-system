@@ -1,3 +1,4 @@
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, eq } from "drizzle-orm";
@@ -171,7 +172,7 @@ async function getManagedLocalAsset(ownerUserId: number, fileId: string) {
           and(
             eq(localAssets.id, fileId),
             eq(localAssets.scope, "managed_user"),
-            eq(localAssets.accountUserId, ownerUserId),
+            enterpriseAccountOwnerPredicate(localAssets, ownerUserId),
           ),
         )
         .limit(1)

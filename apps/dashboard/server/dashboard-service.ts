@@ -1,3 +1,6 @@
+import { enterpriseProjectUrl, enterpriseProjectPredicate } from "./enterprise-project-scope";
+import { readEnterpriseDashboard, enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { readManagedNativeUsageByAccounts } from "./managed-agent-usage";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, or } from "drizzle-orm";
@@ -15,7 +18,6 @@ import {
   serviceProgressReports,
   upstreamResources,
   userAdminAssignments,
-  userDashboardContents,
   userUsageOwners,
   users,
   workspaceContentRevisions,
@@ -76,7 +78,7 @@ export class DashboardEnterpriseMismatchError extends AuthServiceError {
   constructor() {
     super(
       "CONFLICT",
-      "该账号已有企业数据。为避免知识库、监控和应答逻辑串库，请新建用户账号后再导入另一企业。",
+      "该账号已有企业数据。为避免知识库、监控和应答逻辑串库，请新建企业项目后再导入另一企业。",
     );
     this.name = "DashboardEnterpriseMismatchError";
   }
@@ -272,12 +274,14 @@ export function toPublicDashboardPayload(
 }
 
 export async function getDashboardWorkspace(userId: number) {
+  const projectDashboard = await readEnterpriseDashboard(userId);
+  if (projectDashboard) return projectDashboard;
   const db = await requireDb();
   const [contentRows, snapshotRows, userRows] = await Promise.all([
     db
       .select()
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, userId))
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(userId))
       .limit(1),
     db
       .select({
@@ -290,7 +294,7 @@ export async function getDashboardWorkspace(userId: number) {
       .from(knowledgeBaseSnapshots)
       .where(
         and(
-          eq(knowledgeBaseSnapshots.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
           eq(knowledgeBaseSnapshots.status, "active"),
         ),
       )
@@ -538,14 +542,14 @@ export async function updateDashboardWorkspace(input: {
     }
     const existingRows = await tx
       .select({
-        revision: userDashboardContents.revision,
-        payload: userDashboardContents.payload,
-        updatedAt: userDashboardContents.updatedAt,
+        revision: enterpriseDashboardTable().revision,
+        payload: enterpriseDashboardTable().payload,
+        updatedAt: enterpriseDashboardTable().updatedAt,
         enterpriseIdentityBoundAt:
-          userDashboardContents.enterpriseIdentityBoundAt,
+          enterpriseDashboardTable().enterpriseIdentityBoundAt,
       })
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, input.userId))
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(input.userId))
       .limit(1);
     const existing = existingRows[0];
     const currentRevision = existing?.revision ?? 0;
@@ -579,7 +583,7 @@ export async function updateDashboardWorkspace(input: {
     };
     await input.beforeWrite?.(tx, writeContext);
     if (!existing) {
-      await tx.insert(userDashboardContents).values({
+      await tx.insert(enterpriseDashboardTable()).values({
         userId: input.userId,
         payload,
         sourceName: input.sourceName,
@@ -589,7 +593,7 @@ export async function updateDashboardWorkspace(input: {
       });
     } else {
       await tx
-        .update(userDashboardContents)
+        .update(enterpriseDashboardTable())
         .set({
           payload,
           sourceName: input.sourceName,
@@ -601,7 +605,7 @@ export async function updateDashboardWorkspace(input: {
           updatedByUserId: input.actorUserId,
           updatedAt: now,
         })
-        .where(eq(userDashboardContents.userId, input.userId));
+        .where(enterpriseDashboardOwnerPredicate(input.userId));
     }
     await tx.insert(workspaceContentRevisions).values({
       id: randomUUID(),
@@ -664,7 +668,7 @@ export async function listDashboardContentRevisions(input: {
   const db = await requireDb();
   const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
   const conditions = [
-    eq(workspaceContentRevisions.userId, input.userId),
+    enterpriseOwnerPredicate(workspaceContentRevisions, input.userId),
     eq(workspaceContentRevisions.module, "dashboard"),
   ];
   if (input.beforeRevision !== undefined) {
@@ -674,9 +678,9 @@ export async function listDashboardContentRevisions(input: {
   }
   const [currentRows, rows] = await Promise.all([
     db
-      .select({ revision: userDashboardContents.revision })
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, input.userId))
+      .select({ revision: enterpriseDashboardTable().revision })
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(input.userId))
       .limit(1),
     db
       .select({
@@ -719,16 +723,16 @@ export async function getDashboardContentRevision(input: {
   const db = await requireDb();
   const [currentRows, rows] = await Promise.all([
     db
-      .select({ revision: userDashboardContents.revision })
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, input.userId))
+      .select({ revision: enterpriseDashboardTable().revision })
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(input.userId))
       .limit(1),
     db
       .select()
       .from(workspaceContentRevisions)
       .where(
         and(
-          eq(workspaceContentRevisions.userId, input.userId),
+          enterpriseOwnerPredicate(workspaceContentRevisions, input.userId),
           eq(workspaceContentRevisions.module, "dashboard"),
           eq(workspaceContentRevisions.revision, input.revision),
         ),
@@ -756,7 +760,7 @@ export async function getDashboardContentRevision(input: {
 
 export function prepareDashboardContentRollback(input: {
   current: Pick<
-    typeof userDashboardContents.$inferSelect,
+    ReturnType<typeof enterpriseDashboardTable>["$inferSelect"],
     "revision" | "payload" | "sourceName" | "enterpriseIdentityBoundAt"
   >;
   target: Pick<
@@ -822,8 +826,8 @@ export async function rollbackDashboardContentRevision(input: {
     }
     const currentRows = await tx
       .select()
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, input.userId))
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(input.userId))
       .limit(1)
       .for("update");
     const current = currentRows[0];
@@ -841,7 +845,7 @@ export async function rollbackDashboardContentRevision(input: {
       .from(workspaceContentRevisions)
       .where(
         and(
-          eq(workspaceContentRevisions.userId, input.userId),
+          enterpriseOwnerPredicate(workspaceContentRevisions, input.userId),
           eq(workspaceContentRevisions.module, "dashboard"),
           eq(workspaceContentRevisions.revision, input.targetRevision),
         ),
@@ -861,7 +865,7 @@ export async function rollbackDashboardContentRevision(input: {
     const now = new Date();
     nextRevision = rollback.nextRevision;
     await tx
-      .update(userDashboardContents)
+      .update(enterpriseDashboardTable())
       .set({
         payload: rollback.payload,
         sourceName: rollback.sourceName,
@@ -870,7 +874,7 @@ export async function rollbackDashboardContentRevision(input: {
         updatedByUserId: input.actor.id,
         updatedAt: now,
       })
-      .where(eq(userDashboardContents.userId, input.userId));
+      .where(enterpriseDashboardOwnerPredicate(input.userId));
     await tx.insert(workspaceContentRevisions).values({
       id: randomUUID(),
       userId: input.userId,
@@ -967,7 +971,7 @@ export function toKnowledgeSnapshotPublicJson<
       return {
         ...projected,
         // The public URL never embeds a raw provider-owned asset identifier.
-        url: `/api/dashboard/knowledge/assets/${snapshot.id}/${index}`,
+        url: enterpriseProjectUrl(`/api/dashboard/knowledge/assets/${snapshot.id}/${index}`),
       };
     }),
   };
@@ -1008,7 +1012,7 @@ export async function getLatestKnowledgeSnapshot(userId: number) {
     .from(knowledgeBaseSnapshots)
     .where(
       and(
-        eq(knowledgeBaseSnapshots.userId, userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
         eq(knowledgeBaseSnapshots.status, "active"),
       ),
     )
@@ -1028,7 +1032,7 @@ export async function getKnowledgeSnapshotById(input: {
     .where(
       and(
         eq(knowledgeBaseSnapshots.id, input.snapshotId),
-        eq(knowledgeBaseSnapshots.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
       ),
     )
     .limit(1);
@@ -1043,7 +1047,7 @@ export async function getKnowledgeSnapshotForWorkspace(input: {
   const rows = await db
     .select()
     .from(knowledgeBaseSnapshots)
-    .where(eq(knowledgeBaseSnapshots.id, input.snapshotId))
+    .where(and(eq(knowledgeBaseSnapshots.id, input.snapshotId), enterpriseProjectPredicate(knowledgeBaseSnapshots.enterpriseProjectId)))
     .limit(1);
   const snapshot = rows[0];
   if (!snapshot) return null;
@@ -1066,7 +1070,7 @@ export async function getKnowledgeAsset(input: {
       assets: knowledgeBaseSnapshots.assets,
     })
     .from(knowledgeBaseSnapshots)
-    .where(eq(knowledgeBaseSnapshots.id, input.snapshotId))
+    .where(and(eq(knowledgeBaseSnapshots.id, input.snapshotId), enterpriseProjectPredicate(knowledgeBaseSnapshots.enterpriseProjectId)))
     .limit(1);
   const snapshot = rows[0];
   const asset = snapshot?.assets[input.assetIndex];
@@ -1085,7 +1089,7 @@ export async function getKnowledgeAssetById(input: {
       assets: knowledgeBaseSnapshots.assets,
     })
     .from(knowledgeBaseSnapshots)
-    .where(eq(knowledgeBaseSnapshots.id, input.snapshotId))
+    .where(and(eq(knowledgeBaseSnapshots.id, input.snapshotId), enterpriseProjectPredicate(knowledgeBaseSnapshots.enterpriseProjectId)))
     .limit(1);
   const snapshot = rows[0];
   const asset = snapshot?.assets.find(
@@ -1217,7 +1221,7 @@ export async function createKnowledgeSnapshot(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.sourceBuildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -1257,7 +1261,7 @@ export async function createKnowledgeSnapshot(input: {
     const latest = await tx
       .select({ version: knowledgeBaseSnapshots.version })
       .from(knowledgeBaseSnapshots)
-      .where(eq(knowledgeBaseSnapshots.userId, input.userId))
+      .where(enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId))
       .orderBy(desc(knowledgeBaseSnapshots.version))
       .limit(1);
     const version = (latest[0]?.version ?? 0) + 1;
@@ -1266,7 +1270,7 @@ export async function createKnowledgeSnapshot(input: {
       .set({ status: "archived" })
       .where(
         and(
-          eq(knowledgeBaseSnapshots.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
           eq(knowledgeBaseSnapshots.status, "active"),
         ),
       );
@@ -1307,7 +1311,7 @@ export async function createKnowledgeSnapshot(input: {
         .where(
           and(
             eq(knowledgeImportReceipts.id, input.importReceiptClaim.receiptId),
-            eq(knowledgeImportReceipts.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeImportReceipts, input.userId),
             eq(knowledgeImportReceipts.status, "processing"),
             eq(
               knowledgeImportReceipts.revision,
@@ -1342,7 +1346,7 @@ export async function createKnowledgeSnapshot(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.sourceBuildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.status, "ready_to_publish"),
             eq(knowledgeBaseBuilds.revision, input.sourceBuildRevision!),
             eq(knowledgeBaseBuilds.stateEpoch, publicationStateEpoch!),
@@ -1445,13 +1449,13 @@ export async function listManagedWorkspaceUsers(actor: AuthenticatedUser) {
       ? []
       : await db
           .select({
-            userId: userDashboardContents.userId,
-            payload: userDashboardContents.payload,
-            sourceName: userDashboardContents.sourceName,
-            revision: userDashboardContents.revision,
+            userId: enterpriseDashboardTable().userId,
+            payload: enterpriseDashboardTable().payload,
+            sourceName: enterpriseDashboardTable().sourceName,
+            revision: enterpriseDashboardTable().revision,
           })
-          .from(userDashboardContents)
-          .where(inArray(userDashboardContents.userId, visibleUserIds));
+          .from(enterpriseDashboardTable())
+          .where(inArray(enterpriseDashboardTable().userId, visibleUserIds));
   const contractRows =
     visibleUserIds.length === 0
       ? []

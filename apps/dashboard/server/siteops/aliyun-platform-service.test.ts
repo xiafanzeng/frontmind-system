@@ -192,6 +192,33 @@ describe("Aliyun OAuth-only platform service", () => {
     expect(JSON.stringify(result)).not.toContain("access-token-memory-only");
   });
 
+  it("freezes actor, owner and enterprise scope in signed state before any provider exchange", async () => {
+    const row = storedCredential();
+    dependencies.getDb.mockResolvedValue(credentialDb(row));
+    const identity = { projectId: randomUUID(), userId: 42, actorUserId: 99, enterpriseProjectId: randomUUID() };
+    const state = buildAliyunOAuthState({ ...identity, credentialId: row.id, clientSecret: oauthCredential.clientSecret, expiresAt: Date.now() + 60_000 });
+    const authorizeProject = vi.fn().mockResolvedValue(undefined);
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async url => {
+      expect(authorizeProject).toHaveBeenCalledWith(identity);
+      return url === ALIYUN_OAUTH_TOKEN_ENDPOINT
+        ? jsonResponse({ access_token: "access-token-memory-only", refresh_token: "refresh-token-to-seal", token_type: "Bearer", expires_in: 3600, scope: "openid aliuid /acs/alidns" })
+        : jsonResponse({ aid: "1234567890123456" });
+    });
+    await expect(exchangeAliyunOAuthCode({ code: "authorization-code", state, userId: 99, authorizeProject, fetchImpl, probeAccessToken: vi.fn() })).resolves.toMatchObject(identity);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    fetchImpl.mockClear();
+    await expect(exchangeAliyunOAuthCode({ code: "authorization-code", state, userId: 42, authorizeProject, fetchImpl, probeAccessToken: vi.fn() })).rejects.toMatchObject({ code: "INVALID_CREDENTIAL" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    authorizeProject.mockRejectedValueOnce(new Error("project access revoked"));
+    await expect(exchangeAliyunOAuthCode({ code: "authorization-code", state, userId: 99, authorizeProject, fetchImpl, probeAccessToken: vi.fn() })).rejects.toThrow("project access revoked");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const [payload, signature] = state.split(".");
+    const altered = { ...JSON.parse(Buffer.from(payload!, "base64url").toString("utf8")), enterpriseProjectId: randomUUID() };
+    const tampered = `${Buffer.from(JSON.stringify(altered)).toString("base64url")}.${signature}`;
+    await expect(exchangeAliyunOAuthCode({ code: "authorization-code", state: tampered, userId: 99, authorizeProject, fetchImpl, probeAccessToken: vi.fn() })).rejects.toMatchObject({ code: "INVALID_CREDENTIAL" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("rejects token responses missing refresh_token or AliDNS scope", async () => {
     const row = storedCredential();
     dependencies.getDb.mockResolvedValue(credentialDb(row));

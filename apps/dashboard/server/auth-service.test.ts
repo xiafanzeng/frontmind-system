@@ -1,3 +1,4 @@
+import { enterpriseProjects, enterpriseProjectDashboardContents, enterpriseProjectQuestions, enterpriseProjectMonitoringLinks, enterpriseProjectResetStates, enterpriseProjectSiteProfiles } from "../drizzle/schema";
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -109,7 +110,7 @@ describe("managed account deletion", () => {
 
     await permanentlyDeleteManagedUserRows({ delete: deleteFrom, select }, 42);
 
-    expect(deleteFrom).toHaveBeenCalledTimes(10);
+    expect(deleteFrom).toHaveBeenCalledTimes(16);
     expect(deleteFrom).toHaveBeenNthCalledWith(1, visualCandidatePools);
     expect(deleteFrom).toHaveBeenNthCalledWith(2, websiteStyleSamples);
     expect(deleteFrom).toHaveBeenNthCalledWith(3, websiteStyleSampleBatches);
@@ -119,8 +120,14 @@ describe("managed account deletion", () => {
     expect(deleteFrom).toHaveBeenNthCalledWith(7, deliveryTickets);
     expect(deleteFrom).toHaveBeenNthCalledWith(8, upstreamResources);
     expect(deleteFrom).toHaveBeenNthCalledWith(9, apiKeyOwnership);
-    expect(deleteFrom).toHaveBeenNthCalledWith(10, users);
-    expect(where).toHaveBeenCalledTimes(10);
+    expect(deleteFrom).toHaveBeenNthCalledWith(10, enterpriseProjectMonitoringLinks);
+    expect(deleteFrom).toHaveBeenNthCalledWith(11, enterpriseProjectQuestions);
+    expect(deleteFrom).toHaveBeenNthCalledWith(12, enterpriseProjectDashboardContents);
+    expect(deleteFrom).toHaveBeenNthCalledWith(13, enterpriseProjectResetStates);
+    expect(deleteFrom).toHaveBeenNthCalledWith(14, enterpriseProjectSiteProfiles);
+    expect(deleteFrom).toHaveBeenNthCalledWith(15, enterpriseProjects);
+    expect(deleteFrom).toHaveBeenNthCalledWith(16, users);
+    expect(where).toHaveBeenCalledTimes(16);
   });
 
   it("rejects deleting the administrator's current account", async () => {

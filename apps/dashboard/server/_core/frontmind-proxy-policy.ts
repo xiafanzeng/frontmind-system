@@ -2,10 +2,6 @@ import type { NextFunction, Response } from "express";
 import { hasExplicitAdminRole } from "../../shared/admin-access";
 
 import type { FrontMindRequest } from "./express-auth";
-import {
-  assertServiceWriteAccess,
-  ServiceEntitlementError,
-} from "../service-entitlement";
 import { assertDeliveryProjectContext } from "../delivery-role-service";
 
 const ORDINARY_USER_SUPPORT_OPERATIONS = new Set([
@@ -66,27 +62,10 @@ export function ordinaryUserMayUseFrontMindProxy(
   );
 }
 
-export function ordinaryUserProxyWriteRequiresActiveService(
-  req: Pick<FrontMindRequest, "method" | "originalUrl">,
-) {
-  const operation = `${req.method.toUpperCase()} ${proxyPath(req)}`;
-  return (
-    ordinaryUserGeneralAgentWrite(req) ||
-    operation === "POST /v2/assets" ||
-    operation === "POST /v1/files" ||
-    operation === "POST /v1/managed-uploads" ||
-    operation === "POST /v1/managed-uploads/recovery" ||
-    operation === "PUT /proxy-upload" ||
-    (req.method.toUpperCase() === "POST" &&
-      /^\/v1\/files\/[^/]+\/upload-recovery$/u.test(proxyPath(req)))
-  );
-}
-
 export function createFrontMindProxyAccessMiddleware(
   dependencies: {
-    assertWriteAccess: typeof assertServiceWriteAccess;
     assertProjectContext?: typeof assertDeliveryProjectContext;
-  } = { assertWriteAccess: assertServiceWriteAccess },
+  } = {},
 ) {
   return async (req: FrontMindRequest, res: Response, next: NextFunction) => {
     const user = req.frontmindUser;
@@ -123,19 +102,8 @@ export function createFrontMindProxyAccessMiddleware(
       });
       return;
     }
-    if (ordinaryUserProxyWriteRequiresActiveService(req)) {
-      try {
-        await dependencies.assertWriteAccess(user.id);
-      } catch (error) {
-        if (error instanceof ServiceEntitlementError) {
-          res.status(error.statusCode).json({
-            error: { message: error.message, code: error.code },
-          });
-          return;
-        }
-        throw error;
-      }
-    }
+    // Tool operations are authorized by tenant ownership and their billing
+    // command. Historical subscription status never gates the account agent.
     next();
   };
 }

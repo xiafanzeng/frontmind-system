@@ -1,3 +1,7 @@
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { sendAiBillingError } from "./ai-billing-http";
+import { enterpriseProjectPredicate, enterpriseOwnerPredicate, enterpriseProjectUrl } from "./enterprise-project-scope";
+import { currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 
@@ -101,6 +105,7 @@ import {
 import {
   generalAgentRuntimeForCredential,
   generalAgentRuntimeForOperation,
+  generalAgentRuntimeForSelection,
 } from "./general-agent-runtime";
 import { getUpstreamBaseUrl } from "./upstream-config";
 import {
@@ -158,7 +163,7 @@ const taskCreateSchema = z
     conversationId: z.string().trim().min(1).max(191),
     clientRequestId: z.string().trim().min(1).max(128),
     prompt: z.string().trim().min(1).max(2_000_000),
-    modelProfile: generalAgentModelProfileSchema.default("frontmind-pro"),
+    modelProfile: generalAgentModelProfileSchema.default("frontmind-base"),
     purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
     contentProduction: contentProductionInputSchema.optional(),
     localAssetIds: z
@@ -208,7 +213,7 @@ function assertGeneralAgentActor(user: Express.Request["frontmindUser"]) {
   const allowed =
     user?.role === "user" ||
     user?.role === "delivery_member" ||
-    (user?.role === "admin" && user.adminAccessLevel === "delivery_admin");
+    (user?.role === "admin" && (user.adminAccessLevel === "delivery_admin" || Boolean(getEnterpriseProjectScope())));
   if (!allowed) throw new ChatV2HttpError("GENERAL_AGENT_ROLE_FORBIDDEN", 403);
 }
 
@@ -339,7 +344,7 @@ async function currentSiteOpsComposerUploadEpoch(
     await db
       .select()
       .from(siteProjects)
-      .where(eq(siteProjects.userId, userId))
+      .where(enterpriseOwnerPredicate(siteProjects, userId))
       .limit(1)
   )[0];
   if (!project?.currentBuildId || !project.knowledgeInputEpochId) return null;
@@ -432,6 +437,7 @@ async function findOwnedTask(input: { userId: number; localTaskId: string }) {
         eq(agentTasks.id, input.localTaskId),
         eq(agentOperations.scope, "managed_user"),
         eq(agentOperations.accountUserId, input.userId),
+            enterpriseProjectPredicate(agentOperations.enterpriseProjectId),
         eq(agentOperations.contractName, CHAT_CONTRACT),
         eq(agentOperations.contractRevision, CHAT_CONTRACT_REVISION),
       ),
@@ -457,6 +463,7 @@ async function readOwnedLocalAssets(input: {
             eq(localAssets.id, id),
             eq(localAssets.scope, "managed_user"),
             eq(localAssets.accountUserId, input.userId),
+            enterpriseProjectPredicate(localAssets.enterpriseProjectId),
           ),
         )
         .limit(1)
@@ -878,6 +885,7 @@ async function generalChatLocalAttachmentManifests(input: {
             inArray(localAssets.id, ids),
             eq(localAssets.scope, "managed_user"),
             eq(localAssets.accountUserId, input.userId),
+            enterpriseProjectPredicate(localAssets.enterpriseProjectId),
             isNull(localAssets.presalesProjectId),
             or(
               isNull(localAssets.retainUntil),
@@ -1093,14 +1101,14 @@ async function persistAssistantProjection(input: {
   const outputFiles = input.localized
     .filter((artifact) => !artifact.mimeType.startsWith("image/"))
     .map((artifact) => ({
-      fileUrl: `/api/frontmind/v2/artifacts/${encodeURIComponent(artifact.artifactId)}/content`,
+      fileUrl: enterpriseProjectUrl(`/api/frontmind/v2/artifacts/${encodeURIComponent(artifact.artifactId)}/content`),
       fileName: artifact.filename,
       mimeType: artifact.mimeType,
     }));
   const inlineImages = input.localized
     .filter((artifact) => artifact.mimeType.startsWith("image/"))
     .map((artifact) => ({
-      src: `/api/frontmind/v2/artifacts/${encodeURIComponent(artifact.artifactId)}/content`,
+      src: enterpriseProjectUrl(`/api/frontmind/v2/artifacts/${encodeURIComponent(artifact.artifactId)}/content`),
       alt: artifact.filename,
     }));
   const metadata = {
@@ -2247,7 +2255,7 @@ async function cachedOutput(taskId: string) {
       const mimeType = cleanMimeType(resource.mimeType);
       content.push({
         type: mimeType.startsWith("image/") ? "output_image" : "output_file",
-        file_url: `/api/frontmind/v2/artifacts/${encodeURIComponent(artifactId)}/content`,
+        file_url: enterpriseProjectUrl(`/api/frontmind/v2/artifacts/${encodeURIComponent(artifactId)}/content`),
         file_name: cleanFilename(resource.filename),
         mime_type: mimeType,
       });
@@ -3346,9 +3354,7 @@ function persistedConversationResourceId(
   publicId: string,
   projectAssignmentId: string | null,
 ) {
-  const prefix = projectAssignmentId
-    ? `p${projectAssignmentId}:`
-    : `u${userId}:`;
+  const prefix = enterpriseConversationStoragePrefix(userId, projectAssignmentId);
   return publicId.startsWith(prefix) ? publicId : `${prefix}${publicId}`;
 }
 
@@ -3408,7 +3414,7 @@ async function reservePersistedGeneralChatTurn(input: {
     await input.executor
       .select()
       .from(conversations)
-      .where(eq(conversations.id, persistedConversationId))
+      .where(and(eq(conversations.id, persistedConversationId), enterpriseProjectPredicate(conversations.enterpriseProjectId)))
       .limit(1)
       .for("update")
   )[0] as typeof conversations.$inferSelect | undefined;
@@ -3635,7 +3641,7 @@ async function reservePersistedGeneralChatTurn(input: {
       status: "running",
       startedAt: conversation.startedAt ?? now,
     })
-    .where(eq(conversations.id, persistedConversationId));
+    .where(and(eq(conversations.id, persistedConversationId), enterpriseProjectPredicate(conversations.enterpriseProjectId)));
   return {
     conversation,
     turn: {
@@ -3655,34 +3661,45 @@ async function reserveCreate(input: {
 }) {
   const db = await requireDb();
   const idempotencyKeyHash = hash(
-    `${input.userId}\0${input.value.clientRequestId}`,
+    currentEnterpriseProjectId()
+      ? `${input.userId}\0${currentEnterpriseProjectId()}\0${input.value.clientRequestId}`
+      : `${input.userId}\0${input.value.clientRequestId}`,
   );
-  const frozenRequestHash = requestHash({
+  const requestCoordinates = {
     conversationId: input.value.conversationId,
     prompt: input.value.prompt,
     localAssetIds: input.value.localAssetIds,
     modelProfile: input.value.modelProfile,
     ...(input.value.purpose ? { purpose: input.value.purpose } : {}),
-    ...(input.value.contentProduction
-      ? { contentProduction: input.value.contentProduction }
-      : {}),
+    ...(input.value.contentProduction ? { contentProduction: input.value.contentProduction } : {}),
+  };
+  let frozenRequestHash = requestHash({
+    ...(currentEnterpriseProjectId() ? { enterpriseProjectId: currentEnterpriseProjectId() } : {}),
+    ...requestCoordinates,
   });
-  const existing = (
-    await db
-      .select({ operation: agentOperations, task: agentTasks })
-      .from(agentOperations)
-      .innerJoin(agentTasks, eq(agentTasks.operationId, agentOperations.id))
-      .where(
-        and(
-          eq(agentOperations.scope, "managed_user"),
-          eq(agentOperations.idempotencyKeyHash, idempotencyKeyHash),
-        ),
-      )
-      .limit(1)
-  )[0];
+  // Only a migrated default can own a pre-project replay key. New projects
+  // always use their own namespace, even for the same client request UUID.
+  const legacyIdempotencyKeyHash = getEnterpriseProjectScope()?.isLegacyDefault
+    ? hash(`${input.userId}\0${input.value.clientRequestId}`) : null;
+  const existingRows = await db
+    .select({ operation: agentOperations, task: agentTasks })
+    .from(agentOperations)
+    .innerJoin(agentTasks, eq(agentTasks.operationId, agentOperations.id))
+    .where(and(
+      eq(agentOperations.scope, "managed_user"),
+      eq(agentOperations.accountUserId, input.userId),
+      enterpriseProjectPredicate(agentOperations.enterpriseProjectId),
+      or(eq(agentOperations.idempotencyKeyHash, idempotencyKeyHash), legacyIdempotencyKeyHash ? eq(agentOperations.idempotencyKeyHash, legacyIdempotencyKeyHash) : undefined),
+    )).limit(2);
+  if (existingRows.length > 1) throw new ChatV2HttpError("IDEMPOTENCY_CONFLICT", 409);
+  const existing = existingRows[0];
+  if (existing && legacyIdempotencyKeyHash && existing.operation.idempotencyKeyHash === legacyIdempotencyKeyHash) {
+    frozenRequestHash = requestHash(requestCoordinates);
+  }
   if (existing) {
     if (
       existing.operation.accountUserId !== input.userId ||
+      (existing.operation.enterpriseProjectId ?? null) !== currentEnterpriseProjectId() ||
       existing.operation.requestHash !== frozenRequestHash
     ) {
       throw new ChatV2HttpError("IDEMPOTENCY_CONFLICT", 409);
@@ -3723,7 +3740,9 @@ async function reserveCreate(input: {
     return { ...owned, ...claim, created: false as const };
   }
 
-  const execution = generalAgentRuntimeForCredential(input.credential);
+  const execution = input.value.purpose
+    ? generalAgentRuntimeForCredential(input.credential)
+    : generalAgentRuntimeForSelection(input.credential, input.value.modelProfile);
   if (
     Boolean(input.value.contentProduction) !==
     (input.value.purpose === "content_production")
@@ -3760,6 +3779,7 @@ async function reserveCreate(input: {
         purposeContext = {
           revision: 1,
           accountUserId: input.userId,
+          enterpriseProjectId: currentEnterpriseProjectId(),
           purpose: input.value.purpose,
           knowledgeBase: knowledge?.knowledgeBase ?? null,
           knowledgeText: knowledge?.knowledgeText ?? null,
@@ -3778,6 +3798,7 @@ async function reserveCreate(input: {
               and(
                 eq(localAssets.scope, "managed_user"),
                 eq(localAssets.accountUserId, input.userId),
+            enterpriseProjectPredicate(localAssets.enterpriseProjectId),
                 inArray(localAssets.id, input.value.localAssetIds),
               ),
             );
@@ -3800,8 +3821,7 @@ async function reserveCreate(input: {
         schemaHash: CHAT_SCHEMA_HASH,
         apiCredentialId: input.credential.id,
         credentialVersion: input.credential.version,
-        // The browser profile stays in request/dispatch evidence for replay,
-        // but only the administrator's credential controls new execution.
+        // Freeze the selected general profile or the workflow credential profile.
         publicProfile: execution.publicProfile,
         upstreamModel: execution.upstreamModel,
         status: "queued",
@@ -3853,6 +3873,7 @@ async function reserveCreate(input: {
     if (!raced) throw error;
     if (
       raced.operation.accountUserId !== input.userId ||
+      (raced.operation.enterpriseProjectId ?? null) !== currentEnterpriseProjectId() ||
       raced.operation.requestHash !== frozenRequestHash
     ) {
       throw new ChatV2HttpError("IDEMPOTENCY_CONFLICT", 409);
@@ -4341,6 +4362,7 @@ async function sendProviderMessage(input: {
 }
 
 function sendError(res: Response, error: unknown) {
+  if (sendAiBillingError(res, error)) return;
   if (error instanceof OwnedFileContentError) {
     res.status(error.statusCode).json({
       error: {
@@ -4423,7 +4445,7 @@ router.post("/assets", async (req, res) => {
   > = null;
   try {
     if (!req.frontmindUser) throw new ChatV2HttpError("UNAUTHORIZED", 401);
-    const ownerUserId = req.frontmindUser.id;
+    const ownerUserId = enterpriseWorkspaceUserId(req.frontmindUser.id);
     const filename = cleanFilename(req.headers["x-frontmind-filename"]);
     const mimeType = cleanMimeType(
       req.headers["x-frontmind-mime"] ?? req.headers["content-type"],
@@ -4576,6 +4598,7 @@ router.post("/assets", async (req, res) => {
                     eq(localAssets.id, deterministicIdentity.localAssetId),
                     eq(localAssets.scope, "managed_user"),
                     eq(localAssets.accountUserId, ownerUserId),
+            enterpriseProjectPredicate(localAssets.enterpriseProjectId),
                   ),
                 )
                 .limit(1)
@@ -4732,6 +4755,7 @@ router.post("/assets", async (req, res) => {
                     eq(localAssets.id, existing.id),
                     eq(localAssets.scope, "managed_user"),
                     eq(localAssets.accountUserId, ownerUserId),
+            enterpriseProjectPredicate(localAssets.enterpriseProjectId),
                     isNull(localAssets.presalesProjectId),
                     eq(localAssets.filename, existing.filename),
                     eq(localAssets.mimeType, existing.mimeType),
@@ -4964,7 +4988,7 @@ router.get("/assets/:localAssetId/content", async (req, res) => {
   try {
     if (!req.frontmindUser) throw new ChatV2HttpError("UNAUTHORIZED", 401);
     const asset = await ownedFileContentResolver.resolve({
-      ownerUserId: req.frontmindUser.id,
+      ownerUserId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       fileId: req.params.localAssetId,
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
@@ -5000,7 +5024,7 @@ router.get("/runtime-config", async (req, res) => {
       .parse(req.query);
     if (localTaskId) {
       const owned = await findOwnedTask({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         localTaskId,
       });
       res.json({
@@ -5008,15 +5032,16 @@ router.get("/runtime-config", async (req, res) => {
         source: "task",
         ...generalAgentRuntimeForOperation(owned.operation),
         ...generalAgentPurposePublic(
-          frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id),
+          frozenGeneralAgentPurpose(owned.task, enterpriseWorkspaceUserId(req.frontmindUser.id)),
         ),
       });
       return;
     }
+    if (purpose && !currentEnterpriseProjectId()) throw new ChatV2HttpError("ENTERPRISE_PROJECT_REQUIRED", 400);
     const knowledge = purpose
       ? await publishedGeneralAgentKnowledge(
           await requireDb(),
-          req.frontmindUser.id,
+          enterpriseWorkspaceUserId(req.frontmindUser.id),
         )
       : null;
     const purposePublic = purpose
@@ -5033,7 +5058,9 @@ router.get("/runtime-config", async (req, res) => {
     res.json({
       configured: true,
       source: "administrator",
-      ...generalAgentRuntimeForCredential(req.frontmindCredential),
+      ...(purpose
+        ? generalAgentRuntimeForCredential(req.frontmindCredential)
+        : generalAgentRuntimeForSelection(req.frontmindCredential)),
       ...purposePublic,
     });
   } catch (error) {
@@ -5051,8 +5078,11 @@ router.post("/tasks", async (req, res) => {
       throw new ChatV2HttpError("API_CREDENTIAL_REQUIRED", 428);
     }
     const value = taskCreateSchema.parse(req.body ?? {});
+    if (Boolean(value.purpose) !== Boolean(currentEnterpriseProjectId())) {
+      throw new ChatV2HttpError(value.purpose ? "ENTERPRISE_PROJECT_REQUIRED" : "GENERAL_AGENT_ACCOUNT_SCOPE_REQUIRED", 400);
+    }
     const reserved = await reserveCreate({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       credential: req.frontmindCredential,
@@ -5075,7 +5105,7 @@ router.post("/tasks", async (req, res) => {
         });
         await freezeCreateReconcileEvidence({
           taskId: reserved.task.id,
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           clientRequestId: value.clientRequestId,
           requestHash: reserved.operation.requestHash,
           claimToken: reserved.claimToken,
@@ -5135,7 +5165,7 @@ router.post("/tasks", async (req, res) => {
       try {
         created = await clientFor(
           req.frontmindCredential,
-          req.frontmindUser.id,
+          enterpriseWorkspaceUserId(req.frontmindUser.id),
           reserved.operation,
           reserved.task,
         ).createTask({
@@ -5203,7 +5233,7 @@ router.post("/tasks", async (req, res) => {
     }
     const synced = await assertCreateTaskDtoMaySettle(
       await syncTask({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         localTaskId: reserved.task.id,
       }),
     );
@@ -5221,10 +5251,10 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
     assertGeneralAgentActor(req.frontmindUser);
     const value = taskMessageSchema.parse(req.body ?? {});
     let owned = await syncTask({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       localTaskId: req.params.localTaskId,
     });
-    const purpose = frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id);
+    const purpose = frozenGeneralAgentPurpose(owned.task, enterpriseWorkspaceUserId(req.frontmindUser.id));
     const contentProduction = contentProductionPublicDto(
       purpose,
       owned.task.providerRuntime,
@@ -5236,7 +5266,7 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
       throw new ChatV2HttpError("CONTENT_PRODUCTION_TASK_REQUIRED", 400);
     }
     const credential = await getDecryptedCredentialForAccountById(
-      req.frontmindUser.id,
+      enterpriseWorkspaceUserId(req.frontmindUser.id),
       owned.operation.apiCredentialId,
     );
     if (
@@ -5250,7 +5280,7 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
     ).transaction((tx) =>
       reservePersistedGeneralChatTurn({
         executor: tx,
-        userId: req.frontmindUser!.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser!.id),
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
         credentialId: credential.id,
@@ -5280,7 +5310,7 @@ router.post("/tasks/:localTaskId/messages", async (req, res) => {
       contentProductionAction: value.contentProductionAction,
     });
     owned = await syncTask({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       localTaskId: req.params.localTaskId,
     });
     res.json(await taskDto(owned.operation, owned.task));
@@ -5294,7 +5324,7 @@ router.get("/tasks/:localTaskId", async (req, res) => {
     if (!req.frontmindUser) throw new ChatV2HttpError("UNAUTHORIZED", 401);
     assertGeneralAgentActor(req.frontmindUser);
     const owned = await syncTask({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       localTaskId: req.params.localTaskId,
     });
     res.json(await taskDto(owned.operation, owned.task));
@@ -5316,7 +5346,8 @@ router.get("/tasks", async (req, res) => {
       .where(
         and(
           eq(agentOperations.scope, "managed_user"),
-          eq(agentOperations.accountUserId, req.frontmindUser.id),
+          eq(agentOperations.accountUserId, enterpriseWorkspaceUserId(req.frontmindUser.id)),
+            enterpriseProjectPredicate(agentOperations.enterpriseProjectId),
           eq(agentOperations.contractName, CHAT_CONTRACT),
         ),
       )
@@ -5343,7 +5374,7 @@ router.post(
       assertGeneralAgentActor(req.frontmindUser);
       const value = actionSchema.parse(req.body ?? {});
       const owned = await findOwnedTask({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         localTaskId: req.params.localTaskId,
       });
       if (!owned.task.providerTaskId) {
@@ -5372,7 +5403,7 @@ router.post(
       const providerEventId = String(action?.eventId ?? "");
       if (!providerEventId) throw new ChatV2HttpError("ACTION_NOT_FOUND", 404);
       const credential = await getDecryptedCredentialForAccountById(
-        req.frontmindUser.id,
+        enterpriseWorkspaceUserId(req.frontmindUser.id),
         owned.operation.apiCredentialId,
       );
       if (
@@ -5423,7 +5454,7 @@ router.post(
         try {
           await clientFor(
             credential,
-            req.frontmindUser.id,
+            enterpriseWorkspaceUserId(req.frontmindUser.id),
             owned.operation,
             owned.task,
             marker.id,
@@ -5465,7 +5496,7 @@ router.post(
         }
       }
       const synced = await syncTask({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         localTaskId: owned.task.id,
       });
       res.json(await taskDto(synced.operation, synced.task));
@@ -5499,7 +5530,8 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
           and(
             eq(artifacts.operationId, agentOperations.id),
             eq(agentOperations.scope, "managed_user"),
-            eq(agentOperations.accountUserId, req.frontmindUser.id),
+            eq(agentOperations.accountUserId, enterpriseWorkspaceUserId(req.frontmindUser.id)),
+            enterpriseProjectPredicate(agentOperations.enterpriseProjectId),
           ),
         )
         .innerJoin(
@@ -5514,14 +5546,14 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
           and(
             eq(conversationTurns.upstreamTaskId, agentTasks.id),
             eq(conversationTurns.operationType, GENERAL_CHAT_TURN_TYPE),
-            eq(conversationTurns.userId, req.frontmindUser.id),
+            eq(conversationTurns.userId, enterpriseWorkspaceUserId(req.frontmindUser.id)),
           ),
         )
         .innerJoin(
           conversations,
           and(
             eq(conversations.id, conversationTurns.conversationId),
-            eq(conversations.userId, req.frontmindUser.id),
+            eq(conversations.userId, enterpriseWorkspaceUserId(req.frontmindUser.id)),
             projectAssignmentId
               ? eq(conversations.projectAssignmentId, projectAssignmentId)
               : isNull(conversations.projectAssignmentId),
@@ -5541,7 +5573,7 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
     projectOwnership = row ? "matched" : "denied_or_missing";
     if (
       owned &&
-      frozenGeneralAgentPurpose(owned.task, req.frontmindUser.id)?.purpose ===
+      frozenGeneralAgentPurpose(owned.task, enterpriseWorkspaceUserId(req.frontmindUser.id))?.purpose ===
         "content_production" &&
       isContentWorkflowInternalFilename(owned.artifact.filename)
     ) {

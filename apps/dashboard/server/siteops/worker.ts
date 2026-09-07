@@ -1,3 +1,7 @@
+import { runWithStoredEnterpriseProjectScope } from "../enterprise-project-recovery";
+import { enterpriseAccountOwnerPredicate } from "../enterprise-project-scope";
+import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, like, lt, max, or } from "drizzle-orm";
 import {
@@ -10,7 +14,6 @@ import {
   socialPackages,
   websiteStyleSampleBatches,
   websiteStyleSamples,
-  workspaceSiteProfiles,
 } from "../../drizzle/schema";
 import { visualSearchOperationInputSchema } from "../../shared/siteops-workflow";
 import {
@@ -561,7 +564,7 @@ async function operationPredatesCurrentResetEpoch(tx: any, operation: Claimed) {
     .where(
       and(
         eq(siteProjects.id, operation.projectId),
-        eq(siteProjects.userId, operation.userId),
+        enterpriseOwnerPredicate(siteProjects, operation.userId),
       ),
     )
     .limit(1);
@@ -840,12 +843,12 @@ export async function enqueueAutomaticDomainSuccessor(
   ) {
     const profileRows = await tx
       .select({
-        domain: workspaceSiteProfiles.normalizedAsciiDomain,
-        revision: workspaceSiteProfiles.domainRevision,
-        dnsStatus: workspaceSiteProfiles.dnsStatus,
+        domain: enterpriseSiteProfileTable().normalizedAsciiDomain,
+        revision: enterpriseSiteProfileTable().domainRevision,
+        dnsStatus: enterpriseSiteProfileTable().dnsStatus,
       })
-      .from(workspaceSiteProfiles)
-      .where(eq(workspaceSiteProfiles.userId, operation.userId))
+      .from(enterpriseSiteProfileTable())
+      .where(enterpriseSiteProfileOwnerPredicate(operation.userId))
       .limit(1);
     const profile = profileRows[0];
     if (
@@ -1193,7 +1196,7 @@ async function verifiedBuildArtifactProjection(
       and(
         inArray(localAssets.id, ids),
         eq(localAssets.scope, "managed_user"),
-        eq(localAssets.accountUserId, operation.userId),
+        enterpriseAccountOwnerPredicate(localAssets, operation.userId),
       ),
     );
   return {
@@ -2003,10 +2006,12 @@ export async function runSiteOpsWorkerSweep(options?: { max?: number }) {
     const operation = await claimOne(db);
     if (!operation) break;
     summary.claimed += 1;
-    const result =
-      stagedBuildCheckpointResult(operation) ??
-      (await invokeProvider(db, operation));
-    const finalizedStatus = await finalize(db, operation, result);
+    const [pinnedProject] = await db.select().from(siteProjects).where(eq(siteProjects.id, operation.projectId)).limit(1);
+    if (!pinnedProject) { summary.failed += 1; continue; }
+    const finalizedStatus = await runWithStoredEnterpriseProjectScope(pinnedProject.userId, pinnedProject.enterpriseProjectId, async () => {
+      const result = stagedBuildCheckpointResult(operation) ?? (await invokeProvider(db, operation));
+      return finalize(db, operation, result);
+    });
     if (finalizedStatus === "pending") summary.deferred += 1;
     else if (finalizedStatus === "succeeded") summary.succeeded += 1;
     else if (finalizedStatus === "failed") summary.failed += 1;

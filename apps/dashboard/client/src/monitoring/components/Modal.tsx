@@ -35,6 +35,7 @@ export default function Modal({
         <Dialog.Content
           ref={contentRef}
           className={`modal-card modal-${size}`}
+          {...(!description ? { "aria-describedby": undefined } : {})}
           onOpenAutoFocus={(event) => {
             const firstEditableControl =
               contentRef.current?.querySelector<HTMLElement>(

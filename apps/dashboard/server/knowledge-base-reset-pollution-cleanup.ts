@@ -1,3 +1,6 @@
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
@@ -11,7 +14,6 @@ import {
   knowledgeBaseConversationTombstones,
   knowledgeBaseResetCleanupJobs,
   knowledgeBaseResetRequests,
-  knowledgeBaseResetStates,
   messages,
   upstreamResources,
   type Conversation,
@@ -463,7 +465,7 @@ function validateFacts(
   const metadata = record(facts.turn.metadata);
   const localLedger = strictLocalStagedLedger(metadata);
   const operationToken = text(metadata.operationToken);
-  const persistedConversationId = `u${input.userId}:${input.conversationId}`;
+  const persistedConversationId = `${enterpriseConversationStoragePrefix(input.userId)}${input.conversationId}`;
   if (
     facts.resetRevision !== input.expectedResetRevision ||
     facts.resetRequest.id !== input.resetRequestId ||
@@ -603,8 +605,8 @@ async function loadFacts(
   const resetState = (
     await tx
       .select()
-      .from(knowledgeBaseResetStates)
-      .where(eq(knowledgeBaseResetStates.userId, input.userId))
+      .from(enterpriseResetStateTable())
+      .where(enterpriseResetStateOwnerPredicate(input.userId))
       .limit(1)
       .for("update")
   )[0];
@@ -628,14 +630,14 @@ async function loadFacts(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.conversationId, input.conversationId),
         ),
       )
       .limit(1)
       .for("update")
   )[0] as KnowledgeBaseBuild | undefined;
-  const persistedId = `u${input.userId}:${input.conversationId}`;
+  const persistedId = `${enterpriseConversationStoragePrefix(input.userId)}${input.conversationId}`;
   const conversation = (
     await tx
       .select()
@@ -643,7 +645,7 @@ async function loadFacts(
       .where(
         and(
           eq(conversations.id, persistedId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
         ),
       )
       .limit(1)
@@ -654,7 +656,7 @@ async function loadFacts(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.conversationId, persistedId),
       ),
     )
@@ -728,7 +730,7 @@ async function loadFacts(
         .from(upstreamResources)
         .where(
           and(
-            eq(upstreamResources.userId, input.userId),
+            enterpriseOwnerPredicate(upstreamResources, input.userId),
             eq(upstreamResources.conversationId, persistedId),
           ),
         )
@@ -903,7 +905,7 @@ export async function previewResetPollutionCleanup(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
       ),
     );
@@ -952,7 +954,7 @@ export async function executeResetPollutionCleanup(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
       ),
     );
@@ -1053,7 +1055,7 @@ export async function executeResetPollutionCleanup(
       .delete(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, input.buildId),
         ),
       );
@@ -1062,7 +1064,7 @@ export async function executeResetPollutionCleanup(
       .where(
         and(
           eq(conversations.id, facts.conversation.id),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
         ),
       );
     await tx
@@ -1070,19 +1072,19 @@ export async function executeResetPollutionCleanup(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         ),
       );
     const revised = await tx
-      .update(knowledgeBaseResetStates)
+      .update(enterpriseResetStateTable())
       .set({
         revision: plan.nextResetRevision,
         updatedAt: new Date(),
       })
       .where(
         and(
-          eq(knowledgeBaseResetStates.userId, input.userId),
-          eq(knowledgeBaseResetStates.revision, input.expectedResetRevision),
+          enterpriseResetStateOwnerPredicate(input.userId),
+          eq(enterpriseResetStateTable().revision, input.expectedResetRevision),
         ),
       );
     if (revised[0]?.affectedRows !== 1) {

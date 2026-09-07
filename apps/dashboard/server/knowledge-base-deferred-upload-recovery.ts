@@ -1,3 +1,4 @@
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 
 import { and, eq, isNull } from "drizzle-orm";
@@ -152,7 +153,7 @@ export async function findRetainedKnowledgeBaseLocalAsset(
               and(
                 eq(localAssets.id, coordinate.localAssetId),
                 eq(localAssets.scope, "managed_user"),
-                eq(localAssets.accountUserId, coordinate.userId),
+                enterpriseAccountOwnerPredicate(localAssets, coordinate.userId),
                 isNull(localAssets.presalesProjectId),
               ),
             )

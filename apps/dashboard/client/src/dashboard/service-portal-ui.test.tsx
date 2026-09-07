@@ -243,7 +243,7 @@ describe("service workflow UI gates", () => {
       />,
     );
 
-    expect(screen.getAllByText("已解锁")).toHaveLength(3);
+    expect(screen.getAllByText("已解锁")).toHaveLength(2);
     expect(screen.getByText("未解锁")).toBeInTheDocument();
     expect(screen.queryByText("已完成")).not.toBeInTheDocument();
     expect(screen.queryByText("可进行")).not.toBeInTheDocument();

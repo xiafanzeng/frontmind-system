@@ -2,6 +2,7 @@ import type { AppRouter } from "@frontmind/monitoring-api";
 import { httpBatchLink } from "@trpc/client";
 import { createContext } from "react";
 import { createTRPCReact } from "@trpc/react-query";
+import { enterpriseProjectHeaders } from "@/lib/enterprise-project";
 
 // Keep module procedures distinct from Dashboard procedures with the same names.
 export const trpc = createTRPCReact<AppRouter>({
@@ -13,6 +14,7 @@ export function createTrpcClient() {
     links: [
       httpBatchLink({
         url: "/api/monitoring/trpc",
+        headers: enterpriseProjectHeaders(),
         async fetch(url, options) {
           const response = await fetch(url, {
             ...options,

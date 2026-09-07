@@ -1,3 +1,4 @@
+import { enterpriseAccountOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { and, eq } from "drizzle-orm";
@@ -137,7 +138,7 @@ export async function persistSiteOpsArtifact(input: {
           and(
             eq(localAssets.id, id),
             eq(localAssets.scope, "managed_user"),
-            eq(localAssets.accountUserId, input.userId),
+            enterpriseAccountOwnerPredicate(localAssets, input.userId),
           ),
         )
         .limit(1);
@@ -207,7 +208,7 @@ export async function persistSiteOpsArtifact(input: {
             and(
               eq(localAssets.id, id),
               eq(localAssets.scope, "managed_user"),
-              eq(localAssets.accountUserId, input.userId),
+              enterpriseAccountOwnerPredicate(localAssets, input.userId),
             ),
           )
           .limit(1)
@@ -247,7 +248,7 @@ export async function persistSiteOpsArtifact(input: {
           and(
             eq(localAssets.id, id),
             eq(localAssets.scope, "managed_user"),
-            eq(localAssets.accountUserId, input.userId),
+            enterpriseAccountOwnerPredicate(localAssets, input.userId),
           ),
         )
         .limit(1);
@@ -279,7 +280,7 @@ export async function readSiteOpsArtifact(input: {
       and(
         eq(localAssets.id, input.localAssetId),
         eq(localAssets.scope, "managed_user"),
-        eq(localAssets.accountUserId, input.userId),
+        enterpriseAccountOwnerPredicate(localAssets, input.userId),
       ),
     )
     .limit(1);

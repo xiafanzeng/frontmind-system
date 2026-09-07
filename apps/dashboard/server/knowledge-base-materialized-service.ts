@@ -1,3 +1,5 @@
+import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, asc, eq } from "drizzle-orm";
@@ -8,7 +10,6 @@ import {
   knowledgeBaseBuildNodes,
   knowledgeBaseBuilds,
   knowledgeBaseExecutions,
-  knowledgeBaseResetStates,
   knowledgeBaseWorkingSets,
   type KnowledgeBaseBuild,
   type KnowledgeBaseBuildNode,
@@ -433,7 +434,7 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -479,7 +480,7 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -720,6 +721,48 @@ export type ConfirmMaterializedKnowledgeBaseInput = {
 };
 
 /** Pure local confirmation. This module has no provider client dependency. */
+/** Select an already materialized node for editing, entirely locally. Published
+ * snapshots and the immutable Working Set are left intact until a new patch. */
+export async function selectMaterializedKnowledgeBaseNode(input: {
+  userId: number; conversationId: string; clientRequestId: string;
+  expectedGeneration: number; expectedRevision: number; expectedStateEpoch: number;
+  leafId: string;
+}) {
+  const db = await requireDb();
+  const storedConversationId = knowledgeBaseObservationConversationStorageId(input.userId, input.conversationId);
+  const requestHash = sha256(stableJson(input));
+  return db.transaction(async (tx: any) => {
+    const existing = (await tx.select().from(conversationTurns).where(and(enterpriseOwnerPredicate(conversationTurns, input.userId), eq(conversationTurns.conversationId, storedConversationId), eq(conversationTurns.clientRequestId, input.clientRequestId))).limit(1).for("update"))[0];
+    if (existing) {
+      if (existing.operationType !== "local_select" || existing.requestHash !== requestHash) fail("IDEMPOTENCY_CONFLICT", "本地节点选择标识已被使用");
+      return { accepted: true, execution: "local", disposition: "idempotent" };
+    }
+    const build = (await tx.select().from(knowledgeBaseBuilds).where(and(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId), eq(knowledgeBaseBuilds.conversationId, input.conversationId))).limit(1).for("update"))[0] as KnowledgeBaseBuild | undefined;
+    if (!build) fail("BUILD_NOT_FOUND", "知识库构建不存在");
+    materializedBuild(build);
+    if (build.generation !== input.expectedGeneration || build.revision !== input.expectedRevision || build.stateEpoch !== input.expectedStateEpoch) fail("STALE_COORDINATES", "知识库状态已更新，请刷新后选择节点");
+    if (build.activeTurnId || !isMaterializedBuildPublishable(build) || !["confirming", "ready_to_publish", "published"].includes(build.status)) fail("INVALID_BUILD_STATE", "请等待当前操作结束后再编辑节点");
+    const nodes = await tx.select().from(knowledgeBaseBuildNodes).where(eq(knowledgeBaseBuildNodes.buildId, build.id)).orderBy(asc(knowledgeBaseBuildNodes.ordinal)).for("update") as KnowledgeBaseBuildNode[];
+    const target = nodes.find((node) => node.leafId === input.leafId);
+    if (!target?.contentMarkdown?.trim() || target.contentVersion !== build.contentVersion) fail("INVALID_BUILD_STATE", "该节点没有可编辑的完整正文");
+    if (build.currentLeafId === target.leafId) return { accepted: true, execution: "local", disposition: "unchanged" };
+    const now = new Date();
+    const revision = build.revision + 1;
+    const turnId = randomUUID();
+    const operation = operationKey("select", requestHash);
+    const presentationKey = knowledgeBasePresentationKey({ buildId: build.id, generation: build.generation, revision, leafId: target.leafId, content: target.contentMarkdown });
+    const nextNodes = nodes.map((node) => ({ ...node, status: node.id === target.id ? "needs_verification" : node.leafId === build.currentLeafId && ["current", "needs_verification"].includes(node.status) ? "pending" : node.status }));
+    for (const node of nextNodes) {
+      const old = nodes.find((item) => item.id === node.id)!;
+      if (node.status !== old.status || node.id === target.id) await tx.update(knowledgeBaseBuildNodes).set({ status: node.status, ...(node.id === target.id ? { presentationKey, confirmedAt: null } : {}), transitionReason: "local_node_selection", updatedAt: now }).where(eq(knowledgeBaseBuildNodes.id, node.id));
+    }
+    await tx.insert(conversationTurns).values({ id: turnId, userId: input.userId, conversationId: storedConversationId, apiCredentialId: null, clientRequestId: input.clientRequestId, buildId: build.id, buildGeneration: build.generation, operationKey: operation, operationType: "local_select", expectedRevision: build.revision, expectedLeafId: target.leafId, requestHash, attachmentFileIds: [], metadata: { execution: "local", providerRequestCount: 0 }, status: "completed", startedAt: now, completedAt: now, createdAt: now, updatedAt: now });
+    await tx.update(knowledgeBaseBuilds).set({ status: "confirming", currentLeafId: target.leafId, currentPresentationKey: presentationKey, revision, stateEpoch: build.stateEpoch + 1, confirmedCount: nextNodes.filter((node) => node.status === "confirmed").length, directPrefilledCount: nextNodes.filter((node) => node.status === "direct_prefilled").length, needsVerificationCount: nextNodes.filter((node) => node.status === "needs_verification").length, lastAppliedOperationKey: operation, contentCompletedAt: null, packageStatus: "not_started", packageRevision: null, packageStorageKey: null, packageArchiveSha256: null, packageSizeBytes: null, packageNextRetryAt: null, packageAttemptCount: 0, packageLastErrorCode: null, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
+    await persistKnowledgeBasePresentationInTransaction({ tx, userId: input.userId, conversationId: storedConversationId, turnId, buildId: build.id, generation: build.generation, operationKey: operation, presentationKey, revision, leafId: target.leafId, content: target.contentMarkdown, authoritativeTaskId: null, sentAt: now });
+    return { accepted: true, execution: "local", disposition: "selected" };
+  });
+}
+
 export async function confirmMaterializedKnowledgeBaseNode(
   input: ConfirmMaterializedKnowledgeBaseInput,
 ) {
@@ -750,7 +793,7 @@ export async function confirmMaterializedKnowledgeBaseNode(
           and(
             eq(conversationTurns.conversationId, storedConversationId),
             eq(conversationTurns.clientRequestId, input.clientRequestId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
           ),
         )
         .limit(1)
@@ -780,7 +823,7 @@ export async function confirmMaterializedKnowledgeBaseNode(
         .from(knowledgeBaseBuilds)
         .where(
           and(
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.conversationId, input.conversationId),
           ),
         )
@@ -798,8 +841,8 @@ export async function confirmMaterializedKnowledgeBaseNode(
     const resetState = (
       await tx
         .select()
-        .from(knowledgeBaseResetStates)
-        .where(eq(knowledgeBaseResetStates.userId, input.userId))
+        .from(enterpriseResetStateTable())
+        .where(enterpriseResetStateOwnerPredicate(input.userId))
         .limit(1)
         .for("update")
     )[0];
@@ -854,9 +897,10 @@ export async function confirmMaterializedKnowledgeBaseNode(
         .where(
           and(
             eq(knowledgeBaseBuildNodes.buildId, build.id),
-            eq(knowledgeBaseBuildNodes.ordinal, current.ordinal + 1),
+            eq(knowledgeBaseBuildNodes.status, "pending"),
           ),
         )
+        .orderBy(asc(knowledgeBaseBuildNodes.ordinal))
         .limit(1)
         .for("update")
     )[0] as KnowledgeBaseBuildNode | undefined;
@@ -1106,7 +1150,7 @@ export async function bindMaterializedKnowledgeBaseOfficialLogoLocally(
             and(
               eq(conversationTurns.conversationId, storedConversationId),
               eq(conversationTurns.clientRequestId, input.clientRequestId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
             ),
           )
           .limit(1)
@@ -1151,7 +1195,7 @@ export async function bindMaterializedKnowledgeBaseOfficialLogoLocally(
           .where(
             and(
               eq(knowledgeBaseBuilds.id, input.buildId),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
               eq(knowledgeBaseBuilds.conversationId, input.conversationId),
             ),
           )
@@ -1666,12 +1710,19 @@ export async function composeKnowledgeBaseWorkingSetRevision(input: {
  * activation are deliberately separate so no partial patch can replace the
  * last good Working Set.
  */
+export function hasKnowledgeNodeEditPatchAuthority(metadata: unknown, archiveBytes: Buffer, providerTaskId: string | null, baseWorkingSetId: string, baseContentVersion: number) {
+  const value = record(metadata);
+  const authority = record(value?.applicationNodeEdit);
+  return record(value?.recovery)?.nodeEditMode === "low_v1" && authority?.schemaVersion === 1 && authority.mode === "low_v1" && authority.patchSha256 === sha256(archiveBytes) && authority.providerTaskId === providerTaskId && authority.baseWorkingSetId === baseWorkingSetId && authority.baseContentVersion === baseContentVersion;
+}
+
 export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input: {
   userId: number;
   buildId: string;
   generation: number;
   turnId: string;
-  providerTaskId: string;
+  providerTaskId: string | null;
+  resultSource?: "local_node_edit";
   targetLeafId: string;
   operationId: string;
   archiveBytes: Buffer;
@@ -1685,7 +1736,7 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         ),
       )
       .limit(1)
@@ -1743,7 +1794,7 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
       .where(
         and(
           eq(conversationTurns.id, input.turnId),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
         ),
@@ -1755,7 +1806,9 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
     sourceTurn.operationKey !== input.operationId ||
     sourceTurn.operationType !== "revise" ||
     sourceTurn.upstreamTaskId !== input.providerTaskId ||
-    !["queued", "running"].includes(sourceTurn.status)
+    !["queued", "running"].includes(sourceTurn.status) ||
+    (input.resultSource === "local_node_edit" && !hasKnowledgeNodeEditPatchAuthority(sourceTurn.metadata, input.archiveBytes, input.providerTaskId, base.id, base.contentVersion)) ||
+    (input.resultSource !== "local_node_edit" && !input.providerTaskId)
   ) {
     fail("PATCH_CONFLICT", "Revision turn has lost active task ownership");
   }
@@ -1778,13 +1831,15 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
     archiveBytes: input.archiveBytes,
     authority: patchExpectation,
     provenance: {
-      exactBoundTask: true,
-      directAssistantOutput: true,
+      exactBoundTask: input.resultSource !== "local_node_edit",
+      directAssistantOutput: input.resultSource !== "local_node_edit",
+      ...(input.resultSource === "local_node_edit" ? { applicationAuthoredPatch: true as const } : {}),
       descriptorFilename,
     },
     base: baseValidated,
   });
   if (
+    input.resultSource !== "local_node_edit" &&
     normalization.kind === "rejected" &&
     normalization.stage === "manifest_parse"
   ) {
@@ -1796,7 +1851,7 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
           .where(
             and(
               eq(knowledgeBaseBuilds.id, input.buildId),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             ),
           )
           .limit(1)
@@ -1817,7 +1872,7 @@ export async function validateKnowledgeBaseRevisionAgainstActiveWorkingSet(input
           .where(
             and(
               eq(conversationTurns.id, input.turnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, input.buildId),
               eq(conversationTurns.buildGeneration, input.generation),
             ),
@@ -1913,7 +1968,8 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
   generation: number;
   turnId: string;
   operationId: string;
-  providerTaskId: string;
+  providerTaskId: string | null;
+  resultSource?: "local_node_edit";
   targetLeafId: string;
   archiveBytes: Buffer;
   normalization?: AcceptedKnowledgeBaseNormalization;
@@ -1976,7 +2032,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
       .where(
         and(
           eq(conversationTurns.id, input.turnId),
-          eq(conversationTurns.userId, input.userId),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
           eq(conversationTurns.buildId, input.buildId),
           eq(conversationTurns.buildGeneration, input.generation),
         ),
@@ -2025,7 +2081,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, input.buildId),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           ),
         )
         .limit(1)
@@ -2057,7 +2113,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
         .where(
           and(
             eq(conversationTurns.id, input.turnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -2087,6 +2143,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
       !turn ||
       turn.operationKey !== input.operationId ||
       turn.upstreamTaskId !== input.providerTaskId ||
+      (input.resultSource === "local_node_edit" && !hasKnowledgeNodeEditPatchAuthority(turn.metadata, input.archiveBytes, input.providerTaskId, base.id, base.contentVersion)) ||
       stableJson(lockedAttachmentSourceProofs) !==
         stableJson(prepared.attachmentSourceProofs) ||
       !["queued", "running"].includes(turn.status) ||
@@ -2385,7 +2442,7 @@ export async function readActiveKnowledgeBaseWorkingSet(input: {
       .where(
         and(
           eq(knowledgeBaseBuilds.id, input.buildId),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         ),
       )
       .limit(1)

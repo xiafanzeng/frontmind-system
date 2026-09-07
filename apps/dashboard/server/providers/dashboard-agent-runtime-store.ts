@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import {
   agentOperations,
   agentTasks,
@@ -13,6 +13,9 @@ export type DashboardProviderIdentity = {
   credentialId: string;
   credentialVersion: number;
   credentialOwnerUserId?: number;
+  /** Captured when the client is created; asynchronous work never follows UI scope. */
+  enterpriseProjectId?: string | null;
+  enterpriseProjectLegacyDefault?: boolean;
 };
 export type DashboardManagedMutation = {
   requestHash: string;
@@ -115,12 +118,16 @@ const intentHash = (identity: DashboardProviderIdentity, intentId: string) =>
       identity.accountUserId,
       identity.credentialId,
       identity.credentialVersion,
+      ...(identity.enterpriseProjectId ? [identity.enterpriseProjectId] : []),
       intentId,
     ]),
   );
 const owned = (identity: DashboardProviderIdentity) =>
   and(
     eq(agentOperations.scope, "managed_user"),
+    identity.enterpriseProjectId
+      ? eq(agentOperations.enterpriseProjectId, identity.enterpriseProjectId)
+      : isNull(agentOperations.enterpriseProjectId),
     eq(agentOperations.accountUserId, identity.accountUserId),
     eq(agentOperations.apiCredentialId, identity.credentialId),
     eq(agentOperations.credentialVersion, identity.credentialVersion),
@@ -223,6 +230,16 @@ export const dashboardAgentRuntimeStore: DashboardAgentRuntimeStore = {
         throw new Error("DASHBOARD_PROVIDER_CREDENTIAL_OWNERSHIP");
       const binding = intentHash(input.identity, input.intentId);
       let localTaskId = input.localTaskId;
+      if (!localTaskId && !input.operationId && input.identity.enterpriseProjectLegacyDefault && input.identity.enterpriseProjectId) {
+        const legacyBinding = intentHash({ ...input.identity, enterpriseProjectId: null }, input.intentId);
+        const prior = await tx.select({ id: agentTasks.id })
+          .from(agentTasks).innerJoin(agentOperations, eq(agentOperations.id, agentTasks.operationId))
+          .where(and(owned(input.identity), or(eq(agentOperations.idempotencyKeyHash, binding), eq(agentOperations.idempotencyKeyHash, legacyBinding))))
+          .limit(2).for("update");
+        if (prior.length > 1) throw new Error("DASHBOARD_PROVIDER_INTENT_AMBIGUOUS");
+        if (prior[0]) localTaskId = prior[0].id;
+      }
+
       if (!localTaskId && input.operationId) {
         const candidates = await tx
           .select({ id: agentTasks.id })
@@ -256,6 +273,7 @@ export const dashboardAgentRuntimeStore: DashboardAgentRuntimeStore = {
             provider: "zhipu",
             scope: "managed_user",
             accountUserId: input.identity.accountUserId,
+            enterpriseProjectId: input.identity.enterpriseProjectId ?? null,
             operationType: "dashboard.provider.transport",
             idempotencyKeyHash: binding,
             requestHash: binding,

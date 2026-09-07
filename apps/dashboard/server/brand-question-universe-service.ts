@@ -1,3 +1,7 @@
+import { currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
+import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
+import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
@@ -11,7 +15,6 @@ import {
   agentTasks,
   artifacts,
   localAssets,
-  userDashboardContents,
   users,
 } from "../drizzle/schema";
 import {
@@ -419,11 +422,13 @@ function digest(value: unknown) {
     .digest("hex");
 }
 
-function operationIdempotencyKeyHash(userId: number, clientRequestId: string) {
+export function operationIdempotencyKeyHash(userId: number, clientRequestId: string) {
+  const scope = getEnterpriseProjectScope();
   return digest([
     BRAND_QUESTION_UNIVERSE_OPERATION_TYPE,
     userId,
     clientRequestId,
+    ...(scope && !scope.isLegacyDefault ? [scope.enterpriseProjectId] : []),
   ]);
 }
 
@@ -485,7 +490,7 @@ async function persistStoredBody(input: {
   }
 }
 
-async function persistImmutableResultArtifact(input: {
+export async function persistImmutableResultArtifact(input: {
   owned: OwnedOperation;
   sourceEventId: string;
   attachmentIndex: number;
@@ -561,6 +566,7 @@ async function persistImmutableResultArtifact(input: {
     if (
       existingLocal.scope !== "managed_user" ||
       existingLocal.accountUserId !== input.owned.operation.accountUserId ||
+      (existingLocal.enterpriseProjectId ?? null) !== (input.owned.operation.enterpriseProjectId ?? null) ||
       existingLocal.contentSha256 !== sha256 ||
       existingLocal.sizeBytes !== input.bytes.byteLength ||
       existingLocal.mimeType !== input.mimeType ||
@@ -584,6 +590,7 @@ async function persistImmutableResultArtifact(input: {
           id: localAssetId,
           scope: "managed_user" as const,
           accountUserId: input.owned.operation.accountUserId,
+          enterpriseProjectId: input.owned.operation.enterpriseProjectId ?? null,
           presalesProjectId: null,
           filename: input.filename,
           mimeType: input.mimeType,
@@ -605,6 +612,7 @@ async function persistImmutableResultArtifact(input: {
       if (
         !raced ||
         raced.accountUserId !== input.owned.operation.accountUserId ||
+        (raced.enterpriseProjectId ?? null) !== (input.owned.operation.enterpriseProjectId ?? null) ||
         raced.contentSha256 !== sha256 ||
         raced.sizeBytes !== input.bytes.byteLength ||
         raced.storageKey !== localStorageKey
@@ -635,7 +643,9 @@ async function requireDb() {
 }
 
 function assertCustomer(actor: AuthenticatedUser) {
-  if (actor.role !== "user") {
+  const scope = getEnterpriseProjectScope();
+  if (scope?.actorUserId === actor.id) return;
+  if (scope || actor.role !== "user") {
     throw new BrandQuestionUniverseServiceError(
       "CUSTOMER_ONLY",
       403,
@@ -646,10 +656,10 @@ function assertCustomer(actor: AuthenticatedUser) {
 
 async function authenticatedSnapshot(userId: number) {
   const portal = await assertServiceCapability(userId, "globalKeywords");
-  if (!portal.service.validFrom) return null;
+  if (portal.mode !== "operator" && !portal.service.validFrom) return null;
   return getLatestAuthenticatedKnowledgeSnapshot({
     userId,
-    notBefore: new Date(portal.service.validFrom),
+    notBefore: portal.mode === "operator" ? new Date(0) : new Date(portal.service.validFrom!),
   });
 }
 
@@ -675,7 +685,7 @@ async function findLatestOperation(userId: number, activeOnly = false) {
   const db = await requireDb();
   const conditions: SQL[] = [
     eq(agentOperations.scope, "managed_user"),
-    eq(agentOperations.accountUserId, userId),
+    enterpriseAccountOwnerPredicate(agentOperations, userId),
     eq(agentOperations.operationType, BRAND_QUESTION_UNIVERSE_OPERATION_TYPE),
     eq(agentOperations.contractName, BRAND_QUESTION_UNIVERSE_OPERATION_TYPE),
     eq(
@@ -712,7 +722,7 @@ async function findOperationByClientRequest(
       .where(
         and(
           eq(agentOperations.scope, "managed_user"),
-          eq(agentOperations.accountUserId, userId),
+          enterpriseAccountOwnerPredicate(agentOperations, userId),
           eq(
             agentOperations.idempotencyKeyHash,
             operationIdempotencyKeyHash(userId, clientRequestId),
@@ -978,7 +988,7 @@ async function reserveOperation(input: {
 }) {
   const db = await requireDb();
   const idempotencyKeyHash = operationIdempotencyKeyHash(
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
     input.value.clientRequestId,
   );
   const operationId = input.context.operationToken.split(":").at(-1)!;
@@ -990,7 +1000,7 @@ async function reserveOperation(input: {
       await tx
         .select({ id: users.id })
         .from(users)
-        .where(eq(users.id, input.actor.id))
+        .where(eq(users.id, enterpriseWorkspaceUserId(input.actor.id)))
         .limit(1)
         .for("update")
     )[0];
@@ -1016,7 +1026,8 @@ async function reserveOperation(input: {
     )[0];
     if (existing) {
       if (
-        existing.operation.accountUserId !== input.actor.id ||
+        existing.operation.accountUserId !== enterpriseWorkspaceUserId(input.actor.id) ||
+        existing.operation.enterpriseProjectId !== currentEnterpriseProjectId() ||
         existing.operation.requestHash !== input.requestHash
       ) {
         throw new BrandQuestionUniverseServiceError(
@@ -1031,11 +1042,11 @@ async function reserveOperation(input: {
     const dashboard = (
       await tx
         .select({
-          revision: userDashboardContents.revision,
-          payload: userDashboardContents.payload,
+          revision: enterpriseDashboardTable().revision,
+          payload: enterpriseDashboardTable().payload,
         })
-        .from(userDashboardContents)
-        .where(eq(userDashboardContents.userId, input.actor.id))
+        .from(enterpriseDashboardTable())
+        .where(enterpriseDashboardOwnerPredicate(enterpriseWorkspaceUserId(input.actor.id)))
         .limit(1)
     )[0];
     const revision = dashboard?.revision ?? 0;
@@ -1063,7 +1074,7 @@ async function reserveOperation(input: {
         .where(
           and(
             eq(agentOperations.scope, "managed_user"),
-            eq(agentOperations.accountUserId, input.actor.id),
+            enterpriseAccountOwnerPredicate(agentOperations, enterpriseWorkspaceUserId(input.actor.id)),
             eq(
               agentOperations.operationType,
               BRAND_QUESTION_UNIVERSE_OPERATION_TYPE,
@@ -1084,7 +1095,8 @@ async function reserveOperation(input: {
     await tx.insert(agentOperations).values({
       id: operationId,
       scope: "managed_user",
-      accountUserId: input.actor.id,
+      accountUserId: enterpriseWorkspaceUserId(input.actor.id),
+      enterpriseProjectId: currentEnterpriseProjectId(),
       presalesProjectId: null,
       operationType: BRAND_QUESTION_UNIVERSE_OPERATION_TYPE,
       idempotencyKeyHash,
@@ -2195,10 +2207,10 @@ function publicOperation(
 
 export async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
   assertCustomer(actor);
-  let active = await findLatestOperation(actor.id, true);
+  let active = await findLatestOperation(enterpriseWorkspaceUserId(actor.id), true);
   if (active) active = await reconcileOperation(active);
   if (!active) {
-    const failed = await findLatestOperation(actor.id);
+    const failed = await findLatestOperation(enterpriseWorkspaceUserId(actor.id));
     const failedContext = failed
       ? await readOperationContext(failed.task.id).catch(() => null)
       : null;
@@ -2215,10 +2227,10 @@ export async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
     }
   }
   const [snapshot, workspace, credential, latest] = await Promise.all([
-    authenticatedSnapshot(actor.id),
-    getDashboardWorkspace(actor.id),
-    validPersonalCredential(actor.id),
-    findLatestOperation(actor.id),
+    authenticatedSnapshot(enterpriseWorkspaceUserId(actor.id)),
+    getDashboardWorkspace(enterpriseWorkspaceUserId(actor.id)),
+    validPersonalCredential(enterpriseWorkspaceUserId(actor.id)),
+    findLatestOperation(enterpriseWorkspaceUserId(actor.id)),
   ]);
   const operation = active ?? latest;
   const context = operation
@@ -2266,7 +2278,7 @@ export async function startBrandQuestionUniverse(input: {
   assertCustomer(input.actor);
   const value = brandQuestionUniverseStartInputSchema.parse(input.value);
   const replay = await findOperationByClientRequest(
-    input.actor.id,
+    enterpriseWorkspaceUserId(input.actor.id),
     value.clientRequestId,
   );
   if (replay) {
@@ -2278,9 +2290,9 @@ export async function startBrandQuestionUniverse(input: {
     return observeBrandQuestionUniverse(input.actor);
   }
   const [snapshot, workspace, credential] = await Promise.all([
-    authenticatedSnapshot(input.actor.id),
-    getDashboardWorkspace(input.actor.id),
-    validPersonalCredential(input.actor.id),
+    authenticatedSnapshot(enterpriseWorkspaceUserId(input.actor.id)),
+    getDashboardWorkspace(enterpriseWorkspaceUserId(input.actor.id)),
+    validPersonalCredential(enterpriseWorkspaceUserId(input.actor.id)),
   ]);
   if (!snapshot || snapshot.id !== value.knowledgeSnapshotId) {
     throw new BrandQuestionUniverseServiceError(
@@ -2326,7 +2338,7 @@ export async function startBrandQuestionUniverse(input: {
     throw knowledgeReadinessError(knowledgeReadiness);
   }
   const operationId = deterministicUuid(
-    `${BRAND_QUESTION_UNIVERSE_OPERATION_TYPE}:${input.actor.id}:${value.clientRequestId}`,
+    `${BRAND_QUESTION_UNIVERSE_OPERATION_TYPE}:${enterpriseWorkspaceUserId(input.actor.id)}:${value.clientRequestId}${getEnterpriseProjectScope() && !getEnterpriseProjectScope()!.isLegacyDefault ? `:${currentEnterpriseProjectId()}` : ""}`,
   );
   const operationToken = `brand-question-universe:${operationId}`;
   const runtimeContext: BrandQuestionUniverseRuntimeContext = {
@@ -2342,7 +2354,7 @@ export async function startBrandQuestionUniverse(input: {
   };
   const { upstream, adapter, knowledge } =
     await prepareBrandQuestionUniverseArchives({
-      actorId: input.actor.id,
+      actorId: enterpriseWorkspaceUserId(input.actor.id),
       runtimeContext,
       classification,
     });
@@ -2436,7 +2448,11 @@ export async function runBrandQuestionUniverseWorkerSweep(options?: {
   let failed = 0;
   for (const candidate of candidates) {
     try {
-      await reconcileOperation(candidate as OwnedOperation);
+      await runWithStoredEnterpriseProjectScope(
+        candidate.operation.accountUserId!,
+        candidate.operation.enterpriseProjectId,
+        () => reconcileOperation(candidate as OwnedOperation),
+      );
       reconciled += 1;
     } catch {
       // Transient provider/database failures stay retryable. A sweep never

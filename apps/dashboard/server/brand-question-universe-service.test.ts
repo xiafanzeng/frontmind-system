@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { artifacts, localAssets } from "../drizzle/schema";
+import * as fileStore from "./presales-file-store";
+import * as database from "./db";
+import * as auth from "./auth-service";
+import * as dashboard from "./dashboard-service";
+import * as entitlement from "./service-entitlement";
+import * as knowledge from "./authenticated-knowledge-service";
+import * as recovery from "./enterprise-project-recovery";
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 
 import { brandQuestionUniverseStartInputSchema } from "../shared/brand-question-universe";
 import {
@@ -14,6 +24,9 @@ import {
   brandQuestionUniverseCanRecheckFailedResult,
   brandQuestionUniverseTerminalResultAction,
   observeBrandQuestionUniverse,
+  operationIdempotencyKeyHash,
+  persistImmutableResultArtifact,
+  runBrandQuestionUniverseWorkerSweep,
   projectBrandQuestionUniversePublicOperation,
   startBrandQuestionUniverse,
 } from "./brand-question-universe-service";
@@ -357,5 +370,94 @@ describe("brand question universe public API boundary", () => {
         outcomeUnknown: true,
       }),
     ).toBe("failed");
+  });
+});
+
+describe("enterprise brand question universe scope", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const scope = {
+    enterpriseProjectId: "11111111-1111-4111-8111-111111111111",
+    ownerUserId: 7,
+    actorUserId: 99,
+    isLegacyDefault: false,
+  };
+  function chain(rows: unknown[]) {
+    const query: any = {};
+    for (const method of ["select", "from", "innerJoin", "where", "orderBy", "limit"])
+      query[method] = vi.fn(() => query);
+    query.then = (resolve: (value: unknown) => unknown) => Promise.resolve(rows).then(resolve);
+    return query;
+  }
+
+  it("uses a published project snapshot without subscription dates and keeps administrator ownership separate", async () => {
+    vi.spyOn(database, "getDb").mockResolvedValue({ select: () => chain([]) } as never);
+    const capability = vi.spyOn(entitlement, "assertServiceCapability").mockResolvedValue({ mode: "operator", service: { validFrom: null } } as never);
+    const snapshot = vi.spyOn(knowledge, "getLatestAuthenticatedKnowledgeSnapshot").mockResolvedValue({ id: replayValue.knowledgeSnapshotId, version: 3, documents: [] } as never);
+    const workspace = vi.spyOn(dashboard, "getDashboardWorkspace").mockResolvedValue({ revision: 7, payload: { keywordTables: [] } } as never);
+    vi.spyOn(auth, "getApiCredentialStatus").mockResolvedValue({ status: "missing" } as never);
+    const credential = vi.spyOn(auth, "getDecryptedCredentialForUser").mockResolvedValue(null);
+    const actor = { id: 99, role: "admin" } as auth.AuthenticatedUser;
+    const result = await runWithEnterpriseProjectScope(scope, () => observeBrandQuestionUniverse(actor));
+    expect(result.knowledgeSnapshotId).toBe(replayValue.knowledgeSnapshotId);
+    expect(result.reason).toBe("credential_required");
+    expect(capability).toHaveBeenCalledWith(7, "globalKeywords");
+    expect(snapshot).toHaveBeenCalledWith({ userId: 7, notBefore: new Date(0) });
+    expect(workspace).toHaveBeenCalledWith(7);
+    expect(credential).toHaveBeenCalledWith(7);
+    expect(actor.id).toBe(99);
+  });
+
+  it("isolates repeated client request ids by project while preserving migrated default replay keys", () => {
+    const original = operationIdempotencyKeyHash(7, "request-1");
+    const first = runWithEnterpriseProjectScope(scope, () => operationIdempotencyKeyHash(7, "request-1"));
+    const second = runWithEnterpriseProjectScope({ ...scope, enterpriseProjectId: "22222222-2222-4222-8222-222222222222" }, () => operationIdempotencyKeyHash(7, "request-1"));
+    expect(first).not.toBe(original);
+    expect(first).not.toBe(second);
+    expect(runWithEnterpriseProjectScope({ ...scope, isLegacyDefault: true }, () => operationIdempotencyKeyHash(7, "request-1"))).toBe(original);
+  });
+
+  it("restores the stored project before background reconciliation", async () => {
+    const candidate = { operation: { accountUserId: 7, enterpriseProjectId: scope.enterpriseProjectId }, task: { id: "task-1" } };
+    vi.spyOn(database, "getDb").mockResolvedValue({ select: () => chain([candidate]) } as never);
+    const restore = vi.spyOn(recovery, "runWithStoredEnterpriseProjectScope").mockResolvedValue(undefined);
+    expect(await runBrandQuestionUniverseWorkerSweep()).toEqual({ reconciled: 1, failed: 0 });
+    expect(restore).toHaveBeenCalledWith(7, scope.enterpriseProjectId, expect.any(Function));
+  });
+});
+
+describe("enterprise brand question result assets", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("pins local artifacts to the stored operation project and rejects a mismatched replay", async () => {
+    const bytes = Buffer.from('{"result":"same content"}');
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const rows = new Map<any, any[]>();
+    const db = {
+      insert: (table: any) => ({ values: (value: any) => {
+        if (!rows.has(table)) rows.set(table, [value]);
+        return { onDuplicateKeyUpdate: async () => undefined };
+      } }),
+      select: () => {
+        const query: any = {
+          from: (table: any) => { query.table = table; return query; },
+          where: () => query,
+          limit: async () => rows.get(query.table) ?? [],
+        };
+        return query;
+      },
+    };
+    vi.spyOn(database, "getDb").mockResolvedValue(db as never);
+    vi.spyOn(fileStore, "readStoredPresalesFile").mockResolvedValue({ sizeBytes: bytes.length, sha256 } as never);
+    const projectId = "11111111-1111-4111-8111-111111111111";
+    const input = {
+      owned: { operation: { id: "operation-1", accountUserId: 7, enterpriseProjectId: projectId }, task: { id: "task-1" } } as never,
+      sourceEventId: "event-1", attachmentIndex: 0, kind: "json" as const,
+      filename: "result.json", mimeType: "application/json", bytes, maxBytes: 1000,
+    };
+    const coordinate = await runWithEnterpriseProjectScope({ enterpriseProjectId: "22222222-2222-4222-8222-222222222222", actorUserId: 99, ownerUserId: 7, isLegacyDefault: false }, () => persistImmutableResultArtifact(input));
+    expect(rows.get(artifacts)).toHaveLength(1);
+    expect(rows.get(localAssets)?.[0]).toMatchObject({ id: coordinate.localAssetId, accountUserId: 7, enterpriseProjectId: projectId });
+    await expect(persistImmutableResultArtifact(input)).resolves.toEqual(coordinate);
+    rows.get(localAssets)![0].enterpriseProjectId = "22222222-2222-4222-8222-222222222222";
+    await expect(persistImmutableResultArtifact(input)).rejects.toThrow("BRAND_QUESTION_UNIVERSE_LOCAL_ASSET_CONFLICT");
   });
 });

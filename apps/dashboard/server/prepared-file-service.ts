@@ -1,3 +1,6 @@
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { enterpriseProjectIdForOwner } from "./enterprise-project-scope";
+import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
 import axios from "axios";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -38,6 +41,9 @@ export interface PreparedFileManifest {
   sourceResolverVersion?: number;
   id: string;
   ownerUserId: number;
+  /** Omitted only on historical manifests; explicit null means account-only. */
+  enterpriseScopeVersion?: 1;
+  enterpriseProjectId?: string | null;
   /** Legacy Provider authority; absent for Dashboard-managed local assets. */
   credentialId?: string;
   sourceKind?: "managed_local_asset" | "provider_file" | "external";
@@ -164,6 +170,8 @@ type PreparedFileProcessingClaim = {
 };
 
 type PreparedManifestWriteOptions = {
+  /** Only requireOwned may adopt a historical file cache after source authorization. */
+  allowEnterpriseScopeBinding?: boolean;
   /** Only the first registration may create a previously absent manifest. */
   allowCreate?: boolean;
   /** Revision observed before a non-worker mutation was calculated. */
@@ -436,6 +444,7 @@ export function createPreparedAssetId(
   credentialId: string,
   source: PreparedFileSource,
   projectAssignmentId?: string | null,
+  enterpriseProjectId?: string | null,
 ) {
   const sourceIdentity =
     source.kind === "file"
@@ -445,7 +454,7 @@ export function createPreparedAssetId(
     .update(
       `frontmind-pdf-v1\0${ownerUserId}\0${credentialId}\0${sourceIdentity}${
         projectAssignmentId ? `\0project-assignment:${projectAssignmentId}` : ""
-      }`,
+      }${enterpriseProjectId ? `\0enterprise-project:${enterpriseProjectId}` : ""}`,
     )
     .digest("hex")
     .slice(0, 40);
@@ -515,6 +524,43 @@ export function migratePreparedManifestResolver(
   return { changed: true, requeued };
 }
 
+function hasValidPreparedEnterpriseScope(manifest: PreparedFileManifest) {
+  if (manifest.enterpriseScopeVersion === undefined)
+    return manifest.enterpriseProjectId === undefined;
+  return (
+    manifest.enterpriseScopeVersion === 1 &&
+    Object.hasOwn(manifest, "enterpriseProjectId") &&
+    (manifest.enterpriseProjectId === null ||
+      (typeof manifest.enterpriseProjectId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          manifest.enterpriseProjectId,
+        )))
+  );
+}
+function preparedManifestMatchesEnterpriseScope(
+  manifest: PreparedFileManifest,
+  ownerUserId: number,
+  allowLegacyFile = false,
+) {
+  if (!hasValidPreparedEnterpriseScope(manifest)) return false;
+  const scope = getEnterpriseProjectScope();
+  if (
+    scope &&
+    (scope.ownerUserId !== ownerUserId || manifest.ownerUserId !== ownerUserId)
+  )
+    return false;
+  if (manifest.enterpriseScopeVersion === 1) {
+    return (
+      (manifest.enterpriseProjectId ?? null) ===
+      (scope?.enterpriseProjectId ?? null)
+    );
+  }
+  // An unversioned non-null project is malformed, never a legacy account grant.
+  if (manifest.enterpriseProjectId != null) return false;
+  if (!scope) return true;
+  return allowLegacyFile && manifest.source.kind === "file";
+}
+
 export function preparedManifestMatchesOwnedFileSource(
   manifest: PreparedFileManifest,
   input: {
@@ -525,7 +571,8 @@ export function preparedManifestMatchesOwnedFileSource(
 ) {
   if (
     manifest.source.kind !== "file" ||
-    manifest.source.fileId !== input.fileId
+    manifest.source.fileId !== input.fileId ||
+    !preparedManifestMatchesEnterpriseScope(manifest, input.ownerUserId)
   ) {
     return false;
   }
@@ -790,6 +837,7 @@ export class PreparedFileService {
       if (
         parsed.version !== 1 ||
         parsed.id !== assetId ||
+        !hasValidPreparedEnterpriseScope(parsed) ||
         !["queued", "processing", "ready", "failed"].includes(parsed.status)
       ) {
         throw new Error("PREPARED_FILE_MANIFEST_INVALID");
@@ -1135,6 +1183,7 @@ export class PreparedFileService {
   }
 
   async registerFile(input: RegisterFileInput) {
+    const enterpriseProjectId = enterpriseProjectIdForOwner(input.ownerUserId);
     await this.initialize();
     const source: PreparedFileSource = { kind: "file", fileId: input.fileId };
     const sourceKind = input.sourceKind ?? "provider_file";
@@ -1151,7 +1200,9 @@ export class PreparedFileService {
         sourceAuthorityId,
         source,
         input.projectAssignmentId,
+        enterpriseProjectId,
       ),
+      enterpriseProjectId,
       ownerUserId: input.ownerUserId,
       credentialId: input.credentialId,
       sourceKind,
@@ -1164,6 +1215,7 @@ export class PreparedFileService {
   }
 
   async registerExternal(input: RegisterExternalInput) {
+    const enterpriseProjectId = enterpriseProjectIdForOwner(input.ownerUserId);
     await this.initialize();
     const source: PreparedFileSource = {
       kind: "external",
@@ -1175,7 +1227,9 @@ export class PreparedFileService {
         input.credentialId,
         source,
         input.projectAssignmentId,
+        enterpriseProjectId,
       ),
+      enterpriseProjectId,
       ownerUserId: input.ownerUserId,
       credentialId: input.credentialId,
       sourceKind: "external",
@@ -1188,6 +1242,7 @@ export class PreparedFileService {
 
   private async register(input: {
     id: string;
+    enterpriseProjectId: string | null;
     ownerUserId: number;
     credentialId?: string;
     sourceKind: "managed_local_asset" | "provider_file" | "external";
@@ -1202,7 +1257,9 @@ export class PreparedFileService {
       (await this.loadSharedManifest(input.id)) ?? this.manifests.get(input.id);
     if (existing) {
       if (
-        (existing.projectAssignmentId ?? null) !== input.projectAssignmentId
+        (existing.projectAssignmentId ?? null) !== input.projectAssignmentId ||
+        existing.ownerUserId !== input.ownerUserId ||
+        !preparedManifestMatchesEnterpriseScope(existing, input.ownerUserId)
       ) {
         throw new PreparedFileError(
           "SOURCE_FORBIDDEN",
@@ -1259,6 +1316,8 @@ export class PreparedFileService {
           : undefined,
       id: input.id,
       ownerUserId: input.ownerUserId,
+      enterpriseScopeVersion: 1,
+      enterpriseProjectId: input.enterpriseProjectId,
       credentialId: input.credentialId,
       sourceKind: input.sourceKind,
       sourceAuthorityId: input.sourceAuthorityId,
@@ -1446,7 +1505,11 @@ export class PreparedFileService {
       ? manifest?.projectAssignmentId === projectAssignmentId
       : manifest?.ownerUserId === ownerUserId &&
         (manifest.projectAssignmentId ?? null) === null;
-    if (!manifest || !owned) {
+    if (
+      !manifest ||
+      !owned ||
+      !preparedManifestMatchesEnterpriseScope(manifest, ownerUserId, true)
+    ) {
       throw new PreparedFileError("ASSET_NOT_FOUND", "文件不存在");
     }
     if (await this.isSharedDeletionRequested(assetId)) {
@@ -1478,6 +1541,17 @@ export class PreparedFileService {
         });
         manifest.sourceExpiresAt = authorization.expiresAt;
         this.refreshExpiry(manifest, manifest.lastAccessedAt);
+        const scope = getEnterpriseProjectScope();
+        if (manifest.enterpriseScopeVersion !== 1 && scope) {
+          const expectedUpdatedAt = manifest.updatedAt;
+          manifest.enterpriseScopeVersion = 1;
+          manifest.enterpriseProjectId = scope.enterpriseProjectId;
+          manifest.updatedAt = Date.now();
+          await this.persistManifest(manifest, undefined, {
+            expectedUpdatedAt,
+            allowEnterpriseScopeBinding: true,
+          });
+        }
       } catch (error) {
         if (error instanceof OwnedFileContentError) {
           throw preparedErrorFromOwned(error);
@@ -1548,6 +1622,11 @@ export class PreparedFileService {
   }
 
   private async assertPublishStillAllowed(manifest: PreparedFileManifest) {
+    await runWithStoredEnterpriseProjectScope(
+      manifest.ownerUserId,
+      manifest.enterpriseProjectId,
+      () => undefined,
+    );
     if (await this.isSharedDeletionRequested(manifest.id)) {
       throw new PreparedFileError(
         "ASSET_DELETE_REQUESTED",
@@ -1627,91 +1706,123 @@ export class PreparedFileService {
     this.active.add(assetId);
 
     try {
-      await claim.assertOwned();
-      manifest.status = "processing";
-      manifest.phase = "downloading";
-      manifest.updatedAt = Date.now();
-      delete manifest.errorCode;
-      delete manifest.errorMessage;
-      delete manifest.retryable;
-      delete manifest.recoveryAction;
-      await this.persistManifest(manifest, claim);
-
-      await this.ensureDiskSpace();
-      const sourceBytes = await this.downloadSource(
-        manifest,
-        sourcePath,
-        async (downloadedBytes) => {
+      await runWithStoredEnterpriseProjectScope(
+        manifest.ownerUserId,
+        manifest.enterpriseProjectId,
+        async () => {
+          if (
+            !preparedManifestMatchesEnterpriseScope(
+              manifest,
+              manifest.ownerUserId,
+            )
+          ) {
+            throw new PreparedFileError(
+              "SOURCE_FORBIDDEN",
+              "文件项目归属无效",
+              { statusCode: 403 },
+            );
+          }
           await claim.assertOwned();
-          manifest.sourceBytes = downloadedBytes;
+          manifest.status = "processing";
+          manifest.phase = "downloading";
           manifest.updatedAt = Date.now();
+          delete manifest.errorCode;
+          delete manifest.errorMessage;
+          delete manifest.retryable;
+          delete manifest.recoveryAction;
           await this.persistManifest(manifest, claim);
+
+          await this.ensureDiskSpace();
+          const sourceBytes = await this.downloadSource(
+            manifest,
+            sourcePath,
+            async (downloadedBytes) => {
+              await claim.assertOwned();
+              manifest.sourceBytes = downloadedBytes;
+              manifest.updatedAt = Date.now();
+              await this.persistManifest(manifest, claim);
+            },
+          );
+          manifest.sourceBytes = sourceBytes;
+          manifest.phase = "sanitizing";
+          manifest.updatedAt = Date.now();
+          await claim.assertOwned();
+          await this.persistManifest(manifest, claim);
+
+          const result = await this.runWorker(
+            manifest,
+            sourcePath,
+            preparedTempPath,
+            workDir,
+            claim,
+          );
+          manifest.phase = "optimizing";
+          manifest.updatedAt = Date.now();
+          await claim.assertOwned();
+          await this.persistManifest(manifest, claim);
+
+          const outputStat = await fs.stat(preparedTempPath);
+          if (outputStat.size < 5) {
+            throw new PreparedFileError("INVALID_PDF", "处理后的 PDF 文件为空");
+          }
+          const handle = await fs.open(preparedTempPath, "r");
+          try {
+            const header = Buffer.alloc(5);
+            await handle.read(header, 0, 5, 0);
+            if (header.toString("ascii") !== "%PDF-") {
+              throw new PreparedFileError(
+                "INVALID_PDF",
+                "处理结果不是有效的 PDF",
+              );
+            }
+          } finally {
+            await handle.close();
+          }
+
+          const etag = await hashFile(preparedTempPath);
+          await claim.assertOwned();
+          await this.assertPublishStillAllowed(manifest);
+          await claim.assertOwned();
+          await fs.rename(preparedTempPath, this.pdfPath(assetId));
+          await fs.chmod(this.pdfPath(assetId), 0o600).catch(() => undefined);
+          // A cleanup request can race the rename. Recheck the shared marker and
+          // immutable source clock before publishing a ready manifest.
+          await claim.assertOwned();
+          await this.assertPublishStillAllowed(manifest);
+
+          manifest.status = "ready";
+          manifest.phase = "ready";
+          manifest.size = outputStat.size;
+          manifest.pageCount = result.pageCount;
+          manifest.etag = etag;
+          manifest.updatedAt = Date.now();
+          manifest.lastAccessedAt = Date.now();
+          this.refreshExpiry(manifest, manifest.lastAccessedAt);
+          await claim.assertOwned();
+          await this.persistManifest(manifest, claim);
+          published = true;
+          await this.cleanup();
         },
       );
-      manifest.sourceBytes = sourceBytes;
-      manifest.phase = "sanitizing";
-      manifest.updatedAt = Date.now();
-      await claim.assertOwned();
-      await this.persistManifest(manifest, claim);
-
-      const result = await this.runWorker(
-        manifest,
-        sourcePath,
-        preparedTempPath,
-        workDir,
-        claim,
-      );
-      manifest.phase = "optimizing";
-      manifest.updatedAt = Date.now();
-      await claim.assertOwned();
-      await this.persistManifest(manifest, claim);
-
-      const outputStat = await fs.stat(preparedTempPath);
-      if (outputStat.size < 5) {
-        throw new PreparedFileError("INVALID_PDF", "处理后的 PDF 文件为空");
-      }
-      const handle = await fs.open(preparedTempPath, "r");
-      try {
-        const header = Buffer.alloc(5);
-        await handle.read(header, 0, 5, 0);
-        if (header.toString("ascii") !== "%PDF-") {
-          throw new PreparedFileError("INVALID_PDF", "处理结果不是有效的 PDF");
-        }
-      } finally {
-        await handle.close();
-      }
-
-      const etag = await hashFile(preparedTempPath);
-      await claim.assertOwned();
-      await this.assertPublishStillAllowed(manifest);
-      await claim.assertOwned();
-      await fs.rename(preparedTempPath, this.pdfPath(assetId));
-      await fs.chmod(this.pdfPath(assetId), 0o600).catch(() => undefined);
-      // A cleanup request can race the rename. Recheck the shared marker and
-      // immutable source clock before publishing a ready manifest.
-      await claim.assertOwned();
-      await this.assertPublishStillAllowed(manifest);
-
-      manifest.status = "ready";
-      manifest.phase = "ready";
-      manifest.size = outputStat.size;
-      manifest.pageCount = result.pageCount;
-      manifest.etag = etag;
-      manifest.updatedAt = Date.now();
-      manifest.lastAccessedAt = Date.now();
-      this.refreshExpiry(manifest, manifest.lastAccessedAt);
-      await claim.assertOwned();
-      await this.persistManifest(manifest, claim);
-      published = true;
-      await this.cleanup();
     } catch (error) {
       const preparedError =
         error instanceof PreparedFileError
           ? error
-          : new PreparedFileError(
-              "PDF_PREPARATION_FAILED",
-              error instanceof Error ? error.message : "PDF 处理失败",
-            );
+          : error instanceof Error &&
+              error.message === "ENTERPRISE_PROJECT_RECOVERY_OWNER_MISMATCH"
+            ? new PreparedFileError(
+                "SOURCE_FORBIDDEN",
+                "文件所属企业项目已失效或无权访问",
+                {
+                  statusCode: 403,
+                  retryable: false,
+                  recoveryAction: "contact_admin",
+                },
+              )
+            : new PreparedFileError(
+                "PDF_PREPARATION_FAILED",
+                error instanceof Error ? error.message : "PDF 处理失败",
+              );
       let stillOwnsClaim = true;
       await claim.assertOwned().catch(() => {
         stillOwnsClaim = false;
@@ -2085,6 +2196,25 @@ export class PreparedFileService {
               "ASSET_NOT_FOUND",
               "文件准备记录已被删除",
               { retryable: false, recoveryAction: "reupload", statusCode: 410 },
+            );
+          }
+          if (
+            current &&
+            (current.ownerUserId !== manifest.ownerUserId ||
+              (current.projectAssignmentId ?? null) !==
+                (manifest.projectAssignmentId ?? null) ||
+              (current.enterpriseScopeVersion === 1 &&
+                (manifest.enterpriseScopeVersion !== 1 ||
+                  (current.enterpriseProjectId ?? null) !==
+                    (manifest.enterpriseProjectId ?? null))) ||
+              (current.enterpriseScopeVersion !== 1 &&
+                manifest.enterpriseScopeVersion === 1 &&
+                !options.allowEnterpriseScopeBinding))
+          ) {
+            throw new PreparedFileError(
+              "SOURCE_FORBIDDEN",
+              "文件项目归属不能修改",
+              { statusCode: 403, retryable: false },
             );
           }
           if (

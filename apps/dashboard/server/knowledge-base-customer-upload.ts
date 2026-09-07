@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import type { ConversationTurn } from "../drizzle/schema";
 import { conversationTurns } from "../drizzle/schema";
 import type { KnowledgeAsset } from "../shared/dashboard";
@@ -810,7 +811,7 @@ export async function verifiedKnowledgeBaseCustomerUploadsForBuild(input: {
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
@@ -906,7 +907,7 @@ export async function verifiedKnowledgeBaseOfficialLogoUploadForBuild(input: {
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
@@ -981,7 +982,7 @@ export async function persistedKnowledgeBaseOfficialLogoProvenanceForBuild(input
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),
@@ -1183,7 +1184,7 @@ export async function declaredKnowledgeBaseCustomerUploadsForBuild(input: {
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, input.userId),
+        enterpriseOwnerPredicate(conversationTurns, input.userId),
         eq(conversationTurns.buildId, input.buildId),
         eq(conversationTurns.buildGeneration, input.generation),
         eq(conversationTurns.status, "completed"),

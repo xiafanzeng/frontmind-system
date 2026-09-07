@@ -1,3 +1,7 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
+import { getEnterpriseProjectScope } from "./enterprise-project-scope";
+import { getEnterpriseToolPortal, listEnterpriseQuestions, selectEnterpriseQuestion, confirmEnterpriseQuestionIntent } from "./enterprise-project-questions";
 import { createHash, randomUUID } from "node:crypto";
 
 import {
@@ -24,7 +28,6 @@ import {
   serviceContracts,
   serviceProgressReports,
   serviceQuotaPeriods,
-  userDashboardContents,
   users,
   workspaceQuestions,
   type WorkspaceQuestion,
@@ -1945,7 +1948,7 @@ async function loadPortalStateFromDatabase(
         .from(knowledgeBaseSnapshots)
         .where(
           and(
-            eq(knowledgeBaseSnapshots.userId, userId),
+            enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
             eq(knowledgeBaseSnapshots.status, "active"),
           ),
         )
@@ -1960,7 +1963,7 @@ async function loadPortalStateFromDatabase(
         .from(knowledgeBaseBuilds)
         .where(
           and(
-            eq(knowledgeBaseBuilds.userId, userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
             inArray(knowledgeBaseBuilds.status, ACTIVE_BUILD_STATUSES),
           ),
         )
@@ -1969,7 +1972,7 @@ async function loadPortalStateFromDatabase(
       db
         .select({ status: knowledgeImportReceipts.status })
         .from(knowledgeImportReceipts)
-        .where(eq(knowledgeImportReceipts.userId, userId))
+        .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId))
         .orderBy(desc(knowledgeImportReceipts.createdAt))
         .limit(1),
       db
@@ -1977,7 +1980,7 @@ async function loadPortalStateFromDatabase(
         .from(responseLogicEntries)
         .where(
           and(
-            eq(responseLogicEntries.userId, userId),
+            enterpriseOwnerPredicate(responseLogicEntries, userId),
             eq(responseLogicEntries.status, "confirmed"),
           ),
         ),
@@ -1989,11 +1992,11 @@ async function loadPortalStateFromDatabase(
               monitoringBatches,
               and(
                 eq(monitoringBatches.id, monitoringSamples.batchId),
-                eq(monitoringBatches.userId, userId),
+                enterpriseOwnerPredicate(monitoringBatches, userId),
                 inArray(monitoringBatches.quotaPeriodId, activePeriodIds),
               ),
             )
-            .where(eq(monitoringSamples.userId, userId))
+            .where(enterpriseOwnerPredicate(monitoringSamples, userId))
         : Promise.resolve([]),
       activePeriodIds.length
         ? db
@@ -2003,11 +2006,11 @@ async function loadPortalStateFromDatabase(
               monitoringBatches,
               and(
                 eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-                eq(monitoringBatches.userId, userId),
+                enterpriseOwnerPredicate(monitoringBatches, userId),
                 inArray(monitoringBatches.quotaPeriodId, activePeriodIds),
               ),
             )
-            .where(eq(monitoringCitationRecords.userId, userId))
+            .where(enterpriseOwnerPredicate(monitoringCitationRecords, userId))
         : Promise.resolve([]),
       activePeriodIds.length
         ? db
@@ -2021,9 +2024,9 @@ async function loadPortalStateFromDatabase(
             )
         : Promise.resolve([]),
       db
-        .select({ payload: userDashboardContents.payload })
-        .from(userDashboardContents)
-        .where(eq(userDashboardContents.userId, userId))
+        .select({ payload: enterpriseDashboardTable().payload })
+        .from(enterpriseDashboardTable())
+        .where(enterpriseDashboardOwnerPredicate(userId))
         .limit(1),
     ]);
     const questionCollections = partitionSelectedQuestionsForPortal({
@@ -2397,6 +2400,7 @@ export async function getServicePortal(
     repository?: ServiceEntitlementRepository;
   } = {},
 ): Promise<ServicePortal> {
+  if (getEnterpriseProjectScope() && !options.repository) return getEnterpriseToolPortal(userId);
   const now = options.now ?? new Date();
   if (!options.repository) {
     try {
@@ -2487,6 +2491,17 @@ export async function assertServiceCapability(
   const portal = assertWritableServicePortal(
     await getServicePortal(userId, options),
   );
+  if (portal.mode === "operator") {
+    const availability = portal.capabilities[capability];
+    if (!availability.allowed) {
+      throw new ServiceEntitlementError(
+        "KNOWLEDGE_SNAPSHOT_NOT_FOUND",
+        availability.reason ?? "请先完成并发布当前企业项目的知识库。",
+        409,
+      );
+    }
+    return portal;
+  }
   if (
     capability === "contentAssets" &&
     portal.capabilities[capability].effectiveStatus === "not_in_plan"
@@ -3211,7 +3226,7 @@ export async function upsertServiceContract(
         .from(responseLogicEntries)
         .where(
           and(
-            eq(responseLogicEntries.userId, input.userId),
+            enterpriseOwnerPredicate(responseLogicEntries, input.userId),
             inArray(
               responseLogicEntries.questionId,
               carryoverQuestions.map((question) => question.id),
@@ -3596,7 +3611,7 @@ export async function replaceGeneratedQuestionCandidates(
         .where(
           and(
             eq(knowledgeBaseSnapshots.id, input.knowledgeSnapshotId),
-            eq(knowledgeBaseSnapshots.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
           ),
         )
         .limit(1);
@@ -3749,6 +3764,7 @@ export async function listWorkspaceQuestions(input: {
   quotaPeriodId?: string;
   includeArchived?: boolean;
 }): Promise<ServicePortalQuestion[]> {
+  if (getEnterpriseProjectScope()) return listEnterpriseQuestions(input.userId, input.includeArchived);
   const db = await requireServiceDb();
   const predicates = [eq(workspaceQuestions.userId, input.userId)];
   if (input.quotaPeriodId) {
@@ -4091,6 +4107,7 @@ export async function confirmWorkspaceQuestionIntent(input: {
   expectedIntentRevision: number;
   now?: Date;
 }): Promise<ServicePortalQuestion> {
+  if (getEnterpriseProjectScope()) return confirmEnterpriseQuestionIntent(input);
   const now = input.now ?? new Date();
   const portal = await assertServiceCapability(
     input.userId,
@@ -4421,6 +4438,7 @@ export async function requestWorkspaceQuestionSelection(
   input: WorkspaceQuestionSelectionRequest,
   options?: { afterWrite?: WorkspaceQuestionTransactionHook },
 ): Promise<ServicePortalQuestion> {
+  if (getEnterpriseProjectScope()) return selectEnterpriseQuestion(input);
   const now = input.now ?? new Date();
   const portal = await assertServiceCapability(
     input.userId,
@@ -4717,6 +4735,15 @@ export async function confirmWorkspaceBrandKeywordSelection(
   },
   options?: { afterWrite?: WorkspaceQuestionTransactionHook },
 ): Promise<ServicePortalQuestion> {
+  if (getEnterpriseProjectScope()) {
+    const { readEnterpriseDashboard } = await import("./enterprise-project-service");
+    const workspace = await readEnterpriseDashboard(input.userId);
+    const selected = resolveBrandKeywordSelection({ workspace: workspace!, reference: input });
+    if (!selected.ok || selected.selection.question !== input.expectedQuestion || selected.selection.category !== input.expectedCategory) {
+      throw new ServiceEntitlementError("QUESTION_NOT_CURRENT", "品牌词库已更新，请刷新后重试");
+    }
+    return selectEnterpriseQuestion({ userId: input.userId, actorUserId: input.actorUserId, question: selected.selection.question, category: selected.selection.category });
+  }
   const now = input.now ?? new Date();
   const portal = await assertServiceCapability(
     input.userId,
@@ -4812,11 +4839,11 @@ export async function confirmWorkspaceBrandKeywordSelection(
 
     const dashboardRows = await tx
       .select({
-        revision: userDashboardContents.revision,
-        payload: userDashboardContents.payload,
+        revision: enterpriseDashboardTable().revision,
+        payload: enterpriseDashboardTable().payload,
       })
-      .from(userDashboardContents)
-      .where(eq(userDashboardContents.userId, input.userId))
+      .from(enterpriseDashboardTable())
+      .where(enterpriseDashboardOwnerPredicate(input.userId))
       .limit(1)
       .for("update");
     const dashboard = dashboardRows[0];

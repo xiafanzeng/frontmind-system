@@ -1,3 +1,5 @@
+import { enterpriseProjectHeaders } from "./enterprise-project";
+
 export const DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY =
   "frontmind.delivery.projectAssignmentId";
 
@@ -8,7 +10,7 @@ export function deliveryProjectHeaders(
     .getItem(DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY)
     ?.trim();
   return {
-    ...headers,
+    ...enterpriseProjectHeaders(headers),
     ...(projectAssignmentId
       ? { "x-delivery-project-assignment-id": projectAssignmentId }
       : {}),

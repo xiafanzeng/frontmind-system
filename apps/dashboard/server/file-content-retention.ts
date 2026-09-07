@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import {
   and,
   asc,
@@ -343,7 +344,7 @@ export async function markUploadedFileRetention(input: {
     .where(
       and(
         eq(upstreamResources.kind, "file"),
-        eq(upstreamResources.userId, input.userId),
+        enterpriseOwnerPredicate(upstreamResources, input.userId),
         eq(upstreamResources.upstreamId, input.fileId),
       ),
     )
@@ -635,7 +636,7 @@ async function hasLiveFileReference(
     .from(conversationTurns)
     .where(
       and(
-        eq(conversationTurns.userId, resource.userId),
+        enterpriseOwnerPredicate(conversationTurns, resource.userId),
         sql`JSON_CONTAINS(${conversationTurns.attachmentFileIds}, JSON_QUOTE(${resource.upstreamId}), '$')`,
       ),
     )

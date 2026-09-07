@@ -240,23 +240,9 @@ describe("shared Admin and website user creation path", () => {
       deliveryAdminId: db.deliveryAdminId,
       apiKey: "sk-admin-created-customer-credential-000001",
     });
-    expect(adminResult.contract).toMatchObject({
-      planCode: "advanced",
-      quotaPeriodCount: 1,
-    });
-    expect(
-      db.inserts.find(({ table }) => table === serviceContracts)?.values,
-    ).toMatchObject({
-      userId: adminResult.user.id,
-      status: "active",
-      orderReference: null,
-      externalContractReference: null,
-      signedAt: null,
-      signingEvidence: null,
-    });
-    expect(
-      db.inserts.find(({ table }) => table === serviceQuotaPeriods)?.values,
-    ).toHaveLength(1);
+    expect(adminResult.contract).toBeNull();
+    expect(db.inserts.some(({ table }) => table === serviceContracts)).toBe(false);
+    expect(db.inserts.some(({ table }) => table === serviceQuotaPeriods)).toBe(false);
     expect(
       db.inserts.find(({ table }) => table === apiCredentials)?.values,
     ).toMatchObject({
@@ -446,7 +432,7 @@ describe("shared Admin and website user creation path", () => {
         role: "user",
         marketEdition: "overseas",
       },
-      contract: { planCode: "luxury" },
+      contract: null,
     });
     expect(
       db.inserts.find(({ table }) => table === userAdminAssignments)?.values,

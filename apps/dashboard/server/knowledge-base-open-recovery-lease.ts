@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, eq, isNull, lte, or } from "drizzle-orm";
@@ -137,7 +138,7 @@ export async function claimKnowledgeBaseOpenRecoveryBuild(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, build.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, build.userId),
           eq(knowledgeBaseBuilds.generation, input.expectedGeneration),
           eq(knowledgeBaseBuilds.stateEpoch, input.expectedStateEpoch),
           build.canonicalTaskId

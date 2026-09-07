@@ -5,12 +5,10 @@ import {
   createFrontMindProxyAccessMiddleware,
   enforceFrontMindProxyAccess,
   ordinaryUserMayUseFrontMindProxy,
-  ordinaryUserProxyWriteRequiresActiveService,
   rejectDeliveryMemberKnowledgeBaseProjectScope,
 } from "./_core/frontmind-proxy-policy";
 import type { FrontMindRequest } from "./_core/express-auth";
 import type { AuthenticatedUser } from "./auth-service";
-import { ServiceEntitlementError } from "./service-entitlement";
 
 function actor(
   role: "user" | "admin" | "delivery_member",
@@ -51,7 +49,6 @@ describe("ordinary-user FrontMind proxy policy", () => {
       customerName: "示例客户",
     }));
     const middleware = createFrontMindProxyAccessMiddleware({
-      assertWriteAccess: vi.fn(),
       assertProjectContext,
     });
     const req = {
@@ -108,110 +105,14 @@ describe("ordinary-user FrontMind proxy policy", () => {
     ["POST", "/api/frontmind/v1/files/file-1/upload-recovery"],
     ["POST", "/api/frontmind/v1/managed-uploads"],
     ["POST", "/api/frontmind/v1/managed-uploads/recovery"],
-  ])(
-    "marks customer writes %s %s as requiring an active service",
-    (method, originalUrl) => {
-      expect(
-        ordinaryUserProxyWriteRequiresActiveService({ method, originalUrl }),
-      ).toBe(true);
-    },
-  );
-
-  it.each([
-    "/api/frontmind/v2/assets",
-    "/api/frontmind/v2/tasks",
-    "/api/frontmind/v2/tasks/task-1/messages",
-    "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm",
-  ])(
-    "rejects %s for an expired customer before reaching upstream",
-    async (originalUrl) => {
-      const middleware = createFrontMindProxyAccessMiddleware({
-        assertWriteAccess: vi.fn(async () => {
-          throw new ServiceEntitlementError(
-            "SERVICE_PLAN_EXPIRED",
-            "当前服务已到期或取消，请续费后继续使用。",
-            403,
-          );
-        }),
-      });
-      const req = {
-        method: "POST",
-        originalUrl,
-        frontmindUser: actor("user"),
-      } as FrontMindRequest;
-      const res = response();
-      const next = vi.fn();
-
-      await middleware(req, res as never, next);
-
-      expect(next).not.toHaveBeenCalled();
-      expect(res.status).toHaveBeenCalledWith(403);
-      expect(res.json).toHaveBeenCalledWith({
-        error: expect.objectContaining({ code: "SERVICE_PLAN_EXPIRED" }),
-      });
-    },
-  );
-
-  it.each([
-    "/api/frontmind/v2/tasks",
-    "/api/frontmind/v2/tasks/task-1/messages",
-    "/api/frontmind/v2/tasks/task-1/actions/message-1/confirm",
-  ])(
-    "allows an entitled customer through the owned General contract %s",
-    async (originalUrl) => {
-      const assertWriteAccess = vi.fn();
-      const middleware = createFrontMindProxyAccessMiddleware({
-        assertWriteAccess,
-      });
-      const req = {
-        method: "POST",
-        originalUrl,
-        frontmindUser: actor("user"),
-      } as FrontMindRequest;
-      const res = response();
-      const next = vi.fn();
-      await middleware(req, res as never, next);
-      expect(assertWriteAccess).toHaveBeenCalledWith(8);
-      expect(next).toHaveBeenCalledOnce();
-      expect(res.status).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps historical file downloads available after expiry", async () => {
-    const assertWriteAccess = vi.fn();
-    const middleware = createFrontMindProxyAccessMiddleware({
-      assertWriteAccess,
-    });
-    const req = {
-      method: "GET",
-      originalUrl: "/api/frontmind/v1/files/file-1/content",
-      frontmindUser: actor("user"),
-    } as FrontMindRequest;
+    ["GET", "/api/frontmind/v1/files/file-1/content"],
+    ["DELETE", "/api/frontmind/v1/files/file-1/discard"],
+  ])("allows account tools without subscription entitlement lookup: %s %s", async (method, originalUrl) => {
+    const middleware = createFrontMindProxyAccessMiddleware();
+    const req = { method, originalUrl, frontmindUser: actor("user") } as FrontMindRequest;
     const res = response();
     const next = vi.fn();
-
     await middleware(req, res as never, next);
-
-    expect(assertWriteAccess).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalledOnce();
-  });
-
-  it("allows an expired customer to discard an owned unbound upload", async () => {
-    const assertWriteAccess = vi.fn();
-    const middleware = createFrontMindProxyAccessMiddleware({
-      assertWriteAccess,
-    });
-    const req = {
-      method: "DELETE",
-      originalUrl: "/api/frontmind/v1/files/file-1/discard",
-      frontmindUser: actor("user"),
-    } as FrontMindRequest;
-    const res = response();
-    const next = vi.fn();
-
-    await middleware(req, res as never, next);
-
-    expect(assertWriteAccess).not.toHaveBeenCalled();
     expect(next).toHaveBeenCalledOnce();
     expect(res.status).not.toHaveBeenCalled();
   });

@@ -1,3 +1,5 @@
+import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
+import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   resolve4,
@@ -18,7 +20,6 @@ import {
   siteProjects,
   siteProviderConnections,
   presalesApiCredentials,
-  workspaceSiteProfiles,
   type SiteDnsRecord,
   type SiteOperation,
   type SiteProviderConnection,
@@ -743,7 +744,7 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
         .where(
           and(
             eq(siteProjects.id, input.projectId),
-            eq(siteProjects.userId, input.userId),
+            enterpriseOwnerPredicate(siteProjects, input.userId),
           ),
         )
         .limit(1)
@@ -789,8 +790,8 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
         .for("update"),
       tx
         .select()
-        .from(workspaceSiteProfiles)
-        .where(eq(workspaceSiteProfiles.userId, input.userId))
+        .from(enterpriseSiteProfileTable())
+        .where(enterpriseSiteProfileOwnerPredicate(input.userId))
         .limit(1)
         .for("update"),
       tx
@@ -888,7 +889,7 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
     if (changingAccount) {
       if (profile) {
         await tx
-          .update(workspaceSiteProfiles)
+          .update(enterpriseSiteProfileTable())
           .set({
             domain: null,
             normalizedAsciiDomain: null,
@@ -908,7 +909,7 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
             updatedByUserId: input.userId,
             updatedAt: now,
           })
-          .where(eq(workspaceSiteProfiles.userId, input.userId));
+          .where(enterpriseSiteProfileOwnerPredicate(input.userId));
       }
     }
     await tx
@@ -1061,7 +1062,7 @@ type AliyunDnsExpectationGuard = {
 };
 
 type AliyunDnsTargetProfile = Pick<
-  typeof workspaceSiteProfiles.$inferSelect,
+  ReturnType<typeof enterpriseSiteProfileTable>["$inferSelect"],
   | "normalizedAsciiDomain"
   | "domainRevision"
   | "domainStatus"
@@ -1541,9 +1542,9 @@ async function loadDnsRows(
   let revision = requestedRevision;
   if (!revision) {
     const profiles = await db
-      .select({ revision: workspaceSiteProfiles.domainRevision })
-      .from(workspaceSiteProfiles)
-      .where(eq(workspaceSiteProfiles.userId, operation.userId))
+      .select({ revision: enterpriseSiteProfileTable().domainRevision })
+      .from(enterpriseSiteProfileTable())
+      .where(enterpriseSiteProfileOwnerPredicate(operation.userId))
       .limit(1);
     revision = profiles[0]?.revision;
   }
@@ -1638,13 +1639,13 @@ async function assertCurrentDnsTarget(
 ) {
   const profiles = await db
     .select({
-      normalizedAsciiDomain: workspaceSiteProfiles.normalizedAsciiDomain,
-      domainRevision: workspaceSiteProfiles.domainRevision,
-      domainStatus: workspaceSiteProfiles.domainStatus,
-      domainOwnershipStatus: workspaceSiteProfiles.domainOwnershipStatus,
+      normalizedAsciiDomain: enterpriseSiteProfileTable().normalizedAsciiDomain,
+      domainRevision: enterpriseSiteProfileTable().domainRevision,
+      domainStatus: enterpriseSiteProfileTable().domainStatus,
+      domainOwnershipStatus: enterpriseSiteProfileTable().domainOwnershipStatus,
     })
-    .from(workspaceSiteProfiles)
-    .where(eq(workspaceSiteProfiles.userId, operation.userId))
+    .from(enterpriseSiteProfileTable())
+    .where(enterpriseSiteProfileOwnerPredicate(operation.userId))
     .limit(1);
   assertAliyunDnsTargetCurrent(profiles[0] ?? null, expected);
 }
@@ -1954,15 +1955,15 @@ async function handleDomainSync(input: {
         .where(
           and(
             eq(siteProjects.id, input.operation.projectId),
-            eq(siteProjects.userId, input.operation.userId),
+            enterpriseOwnerPredicate(siteProjects, input.operation.userId),
           ),
         )
         .limit(1)
         .for("update"),
       tx
         .select()
-        .from(workspaceSiteProfiles)
-        .where(eq(workspaceSiteProfiles.userId, input.operation.userId))
+        .from(enterpriseSiteProfileTable())
+        .where(enterpriseSiteProfileOwnerPredicate(input.operation.userId))
         .limit(1)
         .for("update"),
       tx
@@ -2012,7 +2013,7 @@ async function handleDomainSync(input: {
       return nextDomainRevision;
     }
     await tx
-      .update(workspaceSiteProfiles)
+      .update(enterpriseSiteProfileTable())
       .set({
         domain: selected.displayDomain,
         normalizedAsciiDomain: selected.domain,
@@ -2036,7 +2037,7 @@ async function handleDomainSync(input: {
         updatedByUserId: input.operation.userId,
         updatedAt: now,
       })
-      .where(eq(workspaceSiteProfiles.userId, input.operation.userId));
+      .where(enterpriseSiteProfileOwnerPredicate(input.operation.userId));
     await tx
       .update(siteProjects)
       .set({
@@ -2256,12 +2257,12 @@ export function createAliyunDnsProviderHandler(options?: {
           });
         }
         await db
-          .update(workspaceSiteProfiles)
+          .update(enterpriseSiteProfileTable())
           .set({ dnsStatus: "rolled_back", updatedAt: new Date() })
           .where(
             and(
-              eq(workspaceSiteProfiles.userId, operation.userId),
-              eq(workspaceSiteProfiles.domainRevision, expected.revision),
+              enterpriseSiteProfileOwnerPredicate(operation.userId),
+              eq(enterpriseSiteProfileTable().domainRevision, expected.revision),
             ),
           );
         return finish({
@@ -2380,15 +2381,15 @@ export function createAliyunDnsProviderHandler(options?: {
         (record) => record.recordType.toUpperCase() === "CNAME",
       );
       await db
-        .update(workspaceSiteProfiles)
+        .update(enterpriseSiteProfileTable())
         .set({
           dnsStatus: hasCanonicalCname ? "active" : "pending_esa_binding",
           updatedAt: new Date(),
         })
         .where(
           and(
-            eq(workspaceSiteProfiles.userId, operation.userId),
-            eq(workspaceSiteProfiles.domainRevision, expected.revision),
+            enterpriseSiteProfileOwnerPredicate(operation.userId),
+            eq(enterpriseSiteProfileTable().domainRevision, expected.revision),
           ),
         );
       return finish({

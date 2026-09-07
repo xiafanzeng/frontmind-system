@@ -1,9 +1,9 @@
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import {
-  userDashboardContents,
   websiteUserProvisions,
   users,
   type WebsiteUserProvision,
@@ -433,7 +433,7 @@ class DrizzleWebsiteProvisioningRepository
         },
         tx,
       );
-      await tx.insert(userDashboardContents).values({
+      await tx.insert(enterpriseDashboardTable()).values({
         userId: user.id,
         payload: createDefaultDashboardPayload(request.project.companyName),
         sourceName: `官网售前开通 · ${request.project.id}`.slice(0, 512),

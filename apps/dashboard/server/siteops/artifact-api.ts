@@ -1,9 +1,11 @@
+import { enterpriseOwnerPredicate, enterpriseProjectUrl, getEnterpriseProjectScope } from "../enterprise-project-scope";
+import { enterpriseWorkspaceUserId } from "../enterprise-project-context";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { Readable } from "node:stream";
 import express from "express";
 import JSZip from "jszip";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql, type SQLWrapper } from "drizzle-orm";
 
 import {
   siteBuilds,
@@ -17,6 +19,7 @@ import { getDb } from "../db";
 import { readSiteOpsArtifact } from "./artifact-store";
 import { exchangeAliyunOAuthCode } from "./aliyun-platform-service";
 import { completeSiteOpsAliyunOAuth } from "./service";
+import { runWithSiteOpsOAuthProjectScope } from "./oauth-project-context";
 import { previewNavigationBridgeSource } from "./preview-routing";
 import { customerVisibleStyleBatchStatusCondition } from "./visual-batch-visibility";
 
@@ -561,9 +564,18 @@ export async function createSandboxedPreviewDocument(input: {
       `<style${attributes}>${await embedCssUrls(css, input.entryName)}</style>`,
   );
   html = addPreviewExecutableNonces(html, nonce).replace(
-    /\bhref(\s*=\s*)(["'])(\/(?!\/)[^"']*)\2/giu,
-    (_match, equals: string, quote: string, url: string) =>
-      `href${equals}${quote}${prefixPreviewRootUrl(url, input.previewPrefix)}${quote}`,
+    /\bhref(\s*=\s*)(["'])([^"']*)\2/giu,
+    (_match, equals: string, quote: string, url: string) => {
+      const prefixed = prefixPreviewRootUrl(url, input.previewPrefix);
+      if (!getEnterpriseProjectScope()) return `href${equals}${quote}${prefixed}${quote}`;
+      let resolved: URL;
+      try { resolved = new URL(prefixed, `https://frontmind.invalid${input.previewPrefix}${input.entryName}`); }
+      catch { return `href${equals}${quote}${prefixed}${quote}`; }
+      const scoped = resolved.origin === "https://frontmind.invalid" && resolved.pathname.startsWith(input.previewPrefix)
+        ? enterpriseProjectUrl(`${resolved.pathname}${resolved.search}${resolved.hash}`)
+        : prefixed;
+      return `href${equals}${quote}${scoped}${quote}`;
+    },
   );
   return { bytes: Buffer.from(html, "utf8"), nonce };
 }
@@ -637,6 +649,10 @@ export function rewriteSiteOpsPreviewDocument(input: {
   return Buffer.from(rewriteCssRootUrls(text, input.previewPrefix), "utf8");
 }
 
+function ownedSiteProjectCondition(projectId: SQLWrapper, userId: number) {
+  return sql`EXISTS (SELECT 1 FROM ${siteProjects} WHERE ${siteProjects.id} = ${projectId} AND ${enterpriseOwnerPredicate(siteProjects, userId)})`;
+}
+
 async function ownedBuild(userId: number, buildId: string) {
   const db = await requireDb();
   const rows = await db
@@ -647,7 +663,7 @@ async function ownedBuild(userId: number, buildId: string) {
       and(
         eq(siteBuilds.id, buildId),
         eq(siteBuilds.userId, userId),
-        eq(siteProjects.userId, userId),
+        enterpriseOwnerPredicate(siteProjects, userId),
       ),
     )
     .limit(1);
@@ -941,12 +957,18 @@ siteOpsArtifactApi.get("/aliyun/oauth/callback", async (req, res) => {
       code,
       state,
       userId: actor.id,
+      authorizeProject: async (verifiedIdentity) => {
+        await runWithSiteOpsOAuthProjectScope(actor, verifiedIdentity, async () => undefined);
+      },
     });
     stage = "account_bind";
     await completeSiteOpsAliyunOAuth({
       actor,
       credentialId: identity.credentialId,
       projectId: identity.projectId,
+      userId: identity.userId,
+      actorUserId: identity.actorUserId,
+      enterpriseProjectId: identity.enterpriseProjectId,
       accountUid: identity.accountUid,
       refreshToken: identity.refreshToken,
     });
@@ -965,7 +987,7 @@ siteOpsArtifactApi.get("/aliyun/oauth/callback", async (req, res) => {
 
 siteOpsArtifactApi.get("/style-previews/:sampleId", async (req, res) => {
   try {
-    const userId = req.frontmindUser?.id;
+    const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
     if (!userId) return notFound(res);
     const db = await requireDb();
     const rows = await db
@@ -982,6 +1004,7 @@ siteOpsArtifactApi.get("/style-previews/:sampleId", async (req, res) => {
         and(
           eq(websiteStyleSamples.id, req.params.sampleId),
           eq(websiteStyleSampleBatches.userId, userId),
+          ownedSiteProjectCondition(websiteStyleSampleBatches.siteProjectId, userId),
           eq(websiteStyleSampleBatches.sourceKind, "siteops_21st"),
           customerVisibleStyleBatchStatusCondition(),
         ),
@@ -1069,7 +1092,7 @@ siteOpsArtifactApi.get("/style-previews/:sampleId", async (req, res) => {
 
 siteOpsArtifactApi.get("/builds/:buildId/source", async (req, res) => {
   try {
-    const userId = req.frontmindUser?.id;
+    const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
     if (!userId) return notFound(res);
     const owned = await ownedBuild(userId, req.params.buildId);
     if (!owned?.build.sourceLocalAssetId) return notFound(res);
@@ -1086,7 +1109,7 @@ siteOpsArtifactApi.get("/builds/:buildId/source", async (req, res) => {
 
 siteOpsArtifactApi.get("/builds/:buildId/qa", async (req, res) => {
   try {
-    const userId = req.frontmindUser?.id;
+    const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
     if (!userId) return notFound(res);
     const owned = await ownedBuild(userId, req.params.buildId);
     if (!owned?.build.qaLocalAssetId) return notFound(res);
@@ -1102,7 +1125,7 @@ siteOpsArtifactApi.get("/builds/:buildId/qa", async (req, res) => {
 
 siteOpsArtifactApi.get("/builds/:buildId/preview/*", async (req, res) => {
   try {
-    const userId = req.frontmindUser?.id;
+    const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
     if (!userId) return notFound(res);
     const owned = await ownedBuild(userId, req.params.buildId);
     if (!owned?.build.distLocalAssetId || !owned.build.distHash) {
@@ -1189,7 +1212,7 @@ siteOpsArtifactApi.get(
   "/social-packages/:packageId/archive",
   async (req, res) => {
     try {
-      const userId = req.frontmindUser?.id;
+      const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
       if (!userId) return notFound(res);
       const db = await requireDb();
       const rows = await db
@@ -1199,6 +1222,7 @@ siteOpsArtifactApi.get(
           and(
             eq(socialPackages.id, req.params.packageId),
             eq(socialPackages.userId, userId),
+            ownedSiteProjectCondition(socialPackages.projectId, userId),
             eq(socialPackages.status, "ready"),
           ),
         )
@@ -1230,7 +1254,7 @@ siteOpsArtifactApi.get(
   "/social-packages/:packageId/preview/:index",
   async (req, res) => {
     try {
-      const userId = req.frontmindUser?.id;
+      const userId = req.frontmindUser ? enterpriseWorkspaceUserId(req.frontmindUser.id) : undefined;
       if (!userId) return notFound(res);
       const index = Number(req.params.index);
       if (!Number.isSafeInteger(index) || index < 0 || index > 8) {
@@ -1244,6 +1268,7 @@ siteOpsArtifactApi.get(
           and(
             eq(socialPackages.id, req.params.packageId),
             eq(socialPackages.userId, userId),
+            ownedSiteProjectCondition(socialPackages.projectId, userId),
             eq(socialPackages.status, "ready"),
           ),
         )

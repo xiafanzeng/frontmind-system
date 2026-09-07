@@ -1,3 +1,4 @@
+import { projectResourceUrl } from "@/lib/enterprise-project";
 import { safeArchivedMediaUrl } from "../mediaUrls";
 import {
   ArrowLeft,
@@ -845,7 +846,7 @@ export default function RunDetailPage({
           <div className="detail-actions">
             <a
               className="secondary-button"
-              href={`/api/monitoring/downloads/runs/${run.id}.xlsx`}
+              href={projectResourceUrl(`/api/monitoring/downloads/runs/${run.id}.xlsx`)}
             >
               <Download size={15} />
               导出 XLSX

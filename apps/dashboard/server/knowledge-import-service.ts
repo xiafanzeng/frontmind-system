@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -406,7 +407,7 @@ async function reserveReceipt(input: {
       .from(knowledgeImportReceipts)
       .where(
         and(
-          eq(knowledgeImportReceipts.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeImportReceipts, input.userId),
           eq(
             knowledgeImportReceipts.artifactHash,
             knowledgeImportArtifactSha256(input.value).toLowerCase(),

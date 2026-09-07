@@ -6,7 +6,7 @@ import { lazy, Suspense } from "react";
 import NotFound from "@/pages/NotFound";
 import Login from "@/pages/Login";
 import { Loader2, RefreshCw } from "lucide-react";
-import { Redirect, Route, Switch, useLocation } from "wouter";
+import { Redirect, Route, Switch, useLocation, useSearch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ConversationProvider } from "./contexts/ConversationContext";
@@ -23,6 +23,10 @@ import {
 import { hasExplicitAdminRole } from "@shared/admin-access";
 import { userFacingErrorMessage } from "@/lib/user-facing-error";
 
+const MonitoringDemo = lazy(() => import("./monitoring/MonitoringDemo"));
+const KnowledgeFrontendSettings = lazy(
+  () => import("./dashboard/knowledge-frontend/KnowledgeFrontendSettings"),
+);
 const UserDashboard = lazy(() =>
   import("./pages/UserDashboard").then(({ default: component }) => ({
     default: component,
@@ -85,6 +89,12 @@ export function adminHomePath(
 
 function RoleLanding() {
   const { user } = useAuth();
+  const search = useSearch();
+  if (
+    user?.role === "admin" &&
+    /^\d+$/.test(new URLSearchParams(search).get("operatorOwnerId") || "")
+  )
+    return <UserDashboard />;
   const adminHome = adminHomePath(user);
   if (adminHome === "/") return <AdminDashboard />;
   if (adminHome === "/admin/workspace") {
@@ -137,7 +147,16 @@ function DeliveryAdminOnly({ children }: { children: React.ReactNode }) {
 
 function UserOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  return user?.role === "user" ? children : <Redirect to="/" />;
+  const search = useSearch();
+  return user?.role === "user" ||
+    (canAccessAdminRoutes(user) &&
+      /^\d+$/.test(
+        new URLSearchParams(search).get("operatorOwnerId") || "",
+      )) ? (
+    children
+  ) : (
+    <Redirect to="/" />
+  );
 }
 
 export function GeneralAgentLanding() {
@@ -154,7 +173,13 @@ export function GeneralAgentLanding() {
 
 function MonitoringCustomerOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
-  return user?.role === "user" || isSystemAdminAccount(user) ? (
+  return user?.role === "user" ||
+    isSystemAdminAccount(user) ||
+    (user?.role === "admin" &&
+      /^\d+$/.test(
+        new URLSearchParams(window.location.search).get("operatorOwnerId") ||
+          "",
+      )) ? (
     children
   ) : (
     <Redirect to="/" />
@@ -203,6 +228,11 @@ function Router() {
       </Route>
       <Route path={"/agent"}>
         <GeneralAgentLanding />
+      </Route>
+      <Route path="/account">
+        <UserOnly>
+          <UserDashboard />
+        </UserOnly>
       </Route>
       <Route path={"/enterprise-qa"}>
         <UserOnly>
@@ -393,7 +423,20 @@ function App() {
         <DevelopmentPreviewRouter location={location} />
       </Suspense>
     ) : null;
-  const publicPage = location === "/setup-password" ? <SetupPassword /> : null;
+  const publicPage =
+    location === "/setup-password" ? (
+      <SetupPassword />
+    ) : location === "/monitoring" ? (
+      <Suspense fallback={<WorkspaceLoadingState />}>
+        <MonitoringDemo />
+      </Suspense>
+    ) : location === "/knowledge-frontend-demo" ? (
+      <Suspense fallback={<WorkspaceLoadingState />}>
+        <div className="knowledge-frontend-demo">
+          <KnowledgeFrontendSettings demo ownerId="demo" projectId="demo" />
+        </div>
+      </Suspense>
+    ) : null;
 
   return (
     <ErrorBoundary>

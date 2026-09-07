@@ -18,6 +18,7 @@ export default function GeneralAgentRuntimeBadge({
   onProfile: (profile: string) => void;
 }) {
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
+  const [selected, setSelected] = useState("frontmind-base");
   useEffect(() => {
     let disposed = false;
     let requestVersion = 0;
@@ -50,7 +51,7 @@ export default function GeneralAgentRuntimeBadge({
           throw new Error("RUNTIME_CONFIG_INVALID");
         if (disposed || version !== requestVersion) return;
         setRuntime(value);
-        if (value.configured && value.publicProfile)
+        if (value.configured && value.publicProfile && (localTaskId || purpose))
           onProfile(value.publicProfile);
       } catch {
         if (!disposed && version === requestVersion) setRuntime(null);
@@ -63,6 +64,25 @@ export default function GeneralAgentRuntimeBadge({
       window.removeEventListener("focus", refresh);
     };
   }, [localTaskId, onProfile, purpose]);
+
+  useEffect(() => {
+    if (!localTaskId && !purpose) onProfile(selected);
+  }, [localTaskId, purpose, selected, onProfile]);
+
+  if (!localTaskId && !purpose) return (
+    <select
+      aria-label="智能体推理档位"
+      title="选择新会话的推理档位"
+      value={selected}
+      disabled={runtime?.configured === false}
+      onChange={(event) => setSelected(event.target.value)}
+      className="rounded-xl border border-border bg-secondary/80 px-2 py-2 text-xs font-medium"
+    >
+      <option value="frontmind-lite">Low</option>
+      <option value="frontmind-base">High</option>
+      <option value="frontmind-pro">Max</option>
+    </select>
+  );
 
   const label = runtime?.upstreamEffort
     ? { low: "Low", high: "High", max: "Max" }[runtime.upstreamEffort]

@@ -47,11 +47,6 @@ import {
   type DeliveryRoleType,
 } from "@shared/delivery-roles";
 import {
-  QUESTION_QUOTA_CATEGORY_MAX,
-  type ServiceQuotaLimits,
-  type ServiceQuotaUsage,
-} from "@shared/service-portal";
-import {
   BRAND_TRACKING_CREDITS_INPUT_PATTERN,
   brandTrackingAmountToCredits,
   formatBrandTrackingCredits,
@@ -59,33 +54,6 @@ import {
 import { keywordCategoryKey } from "@shared/keyword-categories";
 const CUSTOMER_DASHBOARD_BUTTON_CLASS =
   "border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700 hover:text-white focus-visible:border-blue-600 focus-visible:ring-blue-600/30 dark:border-blue-500 dark:bg-blue-600 dark:hover:bg-blue-700";
-
-const QUESTION_QUOTA_FIELDS = [
-  {
-    category: "industry",
-    limitKey: "industryLimit",
-    usageKey: "industry",
-    label: "行业排名词",
-  },
-  {
-    category: "competitor_comparison",
-    limitKey: "competitorComparisonLimit",
-    usageKey: "competitorComparison",
-    label: "竞品对比词",
-  },
-  {
-    category: "reputation",
-    limitKey: "reputationLimit",
-    usageKey: "reputation",
-    label: "美誉舆情词",
-  },
-  {
-    category: "product_scenario",
-    limitKey: "productScenarioLimit",
-    usageKey: "productScenario",
-    label: "产品场景词",
-  },
-] as const;
 
 const QUESTION_MIRROR_GROUPS = {
   industry: {
@@ -140,24 +108,7 @@ function registerMirrorQuestionIdentity(
   identities.set(legacyId, matches);
 }
 
-type QuestionQuotaLimitKey = (typeof QUESTION_QUOTA_FIELDS)[number]["limitKey"];
-type QuestionCategory = (typeof QUESTION_QUOTA_FIELDS)[number]["category"];
-type QuestionQuotaDraft = Record<QuestionQuotaLimitKey, string>;
-
-type WorkbenchQuestionQuota = {
-  periodId: string;
-  revision: number;
-  validFrom: number;
-  validUntil: number;
-  limits: ServiceQuotaLimits;
-  unlockedLimits?: ServiceQuotaLimits;
-  unlockStage?: { current: number; total: number };
-  nextUnlockAt?: number | null;
-  progressiveUnlock?: boolean;
-  selectedUsage: ServiceQuotaUsage;
-  reservedUsage: ServiceQuotaUsage;
-  remaining: ServiceQuotaUsage;
-};
+type QuestionCategory = keyof typeof QUESTION_MIRROR_GROUPS;
 
 type WorkbenchBrandTrackingUsage = {
   rolling30DayCost: string;
@@ -173,15 +124,6 @@ type WorkbenchBrandTrackingUsage = {
   blocked: boolean;
   blockReason: string | null;
 };
-
-function questionQuotaDraft(limits: ServiceQuotaLimits): QuestionQuotaDraft {
-  return {
-    industryLimit: String(limits.industryLimit),
-    competitorComparisonLimit: String(limits.competitorComparisonLimit),
-    reputationLimit: String(limits.reputationLimit),
-    productScenarioLimit: String(limits.productScenarioLimit),
-  };
-}
 
 export const deliveryMemberNav: PortalNavItem[] = [
   {
@@ -270,264 +212,6 @@ export default function DeliveryMemberDashboard({
   systemAdminMode?: boolean;
 }) {
   return <CustomerWorkbenchView systemAdminMode={systemAdminMode} />;
-}
-
-function QuestionQuotaEditor({
-  projectAssignmentId,
-  quota,
-  systemAdminMode,
-  onSaved,
-}: {
-  projectAssignmentId: string;
-  quota: WorkbenchQuestionQuota;
-  systemAdminMode: boolean;
-  onSaved: () => Promise<unknown>;
-}) {
-  const adjustQuestionQuota =
-    trpc.delivery.mine.adjustQuestionQuota.useMutation();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<QuestionQuotaDraft>(() =>
-    questionQuotaDraft(quota.limits),
-  );
-  const [reason, setReason] = useState("");
-
-  useEffect(() => {
-    setDraft(questionQuotaDraft(quota.limits));
-    setReason("");
-    setEditing(false);
-  }, [
-    quota.limits.competitorComparisonLimit,
-    quota.limits.industryLimit,
-    quota.limits.productScenarioLimit,
-    quota.limits.reputationLimit,
-    quota.periodId,
-    quota.revision,
-  ]);
-
-  const validation = useMemo(() => {
-    const values = {} as Record<QuestionQuotaLimitKey, number>;
-    for (const field of QUESTION_QUOTA_FIELDS) {
-      const raw = draft[field.limitKey].trim();
-      const value = Number(raw);
-      const minimum = quota.reservedUsage[field.usageKey];
-      const maximum = quota.progressiveUnlock
-        ? (quota.unlockedLimits?.[field.limitKey] ??
-          quota.limits[field.limitKey])
-        : QUESTION_QUOTA_CATEGORY_MAX;
-      if (!raw || !Number.isInteger(value)) {
-        return { message: `${field.label}额度必须是整数`, values: null };
-      }
-      if (value < minimum) {
-        return {
-          message: `${field.label}额度不能低于已确认与待审核预留数量 ${minimum}`,
-          values: null,
-        };
-      }
-      if (value > maximum) {
-        return {
-          message: `${field.label}额度不能超过当前已解锁上限 ${maximum}`,
-          values: null,
-        };
-      }
-      if (value > QUESTION_QUOTA_CATEGORY_MAX) {
-        return {
-          message: `${field.label}额度不能超过 ${QUESTION_QUOTA_CATEGORY_MAX}`,
-          values: null,
-        };
-      }
-      values[field.limitKey] = value;
-    }
-    return { message: "", values };
-  }, [
-    draft,
-    quota.limits,
-    quota.progressiveUnlock,
-    quota.reservedUsage,
-    quota.unlockedLimits,
-  ]);
-
-  const resetDraft = () => {
-    setDraft(questionQuotaDraft(quota.limits));
-    setReason("");
-    setEditing(false);
-  };
-  const formMessage =
-    validation.message ||
-    (reason.trim().length < 2 ? "请填写至少 2 个字的调整原因" : "");
-
-  return (
-    <Card className="mt-5" data-testid="question-quota-editor">
-      <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
-        <div>
-          <CardTitle>客户问题额度</CardTitle>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            {quota.progressiveUnlock
-              ? `豪华版按季度自动解锁，当前第 ${quota.unlockStage?.current ?? 1}/${quota.unlockStage?.total ?? 4} 档；可下调但不能超过当前已解锁上限。`
-              : "当前额度按四类问题分别管理；已确认与待审核预留中的问题不会因下调额度而被挤出。"}
-          </p>
-          {quota.progressiveUnlock && quota.nextUnlockAt && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              下一档将于{" "}
-              {new Date(quota.nextUnlockAt).toLocaleDateString("zh-CN", {
-                timeZone: "Asia/Shanghai",
-              })}{" "}
-              自动解锁。
-            </p>
-          )}
-        </div>
-        <Button
-          type="button"
-          size="sm"
-          variant={editing ? "ghost" : "outline"}
-          disabled={adjustQuestionQuota.isPending}
-          onClick={() => {
-            if (editing) {
-              resetDraft();
-            } else {
-              setDraft(questionQuotaDraft(quota.limits));
-              setEditing(true);
-            }
-          }}
-        >
-          {editing ? "取消修改" : "修改额度"}
-        </Button>
-      </CardHeader>
-      <CardContent>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {QUESTION_QUOTA_FIELDS.map((field) => {
-            const selected = quota.selectedUsage[field.usageKey];
-            const reserved = quota.reservedUsage[field.usageKey];
-            const pending = Math.max(0, reserved - selected);
-            const maximum = quota.progressiveUnlock
-              ? (quota.unlockedLimits?.[field.limitKey] ??
-                quota.limits[field.limitKey])
-              : QUESTION_QUOTA_CATEGORY_MAX;
-            return (
-              <div
-                key={field.limitKey}
-                data-category={field.category}
-                className="fm-question-category-surface rounded-xl border p-4"
-              >
-                <label
-                  className="fm-question-category-ink text-sm font-medium"
-                  htmlFor={`question-quota-${field.limitKey}`}
-                >
-                  {field.label}
-                </label>
-                {editing ? (
-                  <Input
-                    id={`question-quota-${field.limitKey}`}
-                    className="mt-3"
-                    type="number"
-                    inputMode="numeric"
-                    min={reserved}
-                    max={maximum}
-                    step={1}
-                    value={draft[field.limitKey]}
-                    aria-label={`${field.label}额度`}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        [field.limitKey]: event.target.value,
-                      }))
-                    }
-                  />
-                ) : (
-                  <p className="fm-question-category-ink mt-2 text-2xl font-semibold tabular-nums">
-                    {quota.limits[field.limitKey]}
-                    <span className="ml-1 text-xs font-normal text-muted-foreground">
-                      个问题
-                    </span>
-                  </p>
-                )}
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  已确认 {selected} · 待审核预留 {pending}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 flex flex-col gap-3 rounded-xl bg-muted/35 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <span>
-            当前周期总额度 {quota.limits.totalQuestionLimit}，已占用及预留{" "}
-            {quota.reservedUsage.total}，剩余 {quota.remaining.total}
-          </span>
-          <span>
-            有效期至 {new Date(quota.validUntil).toLocaleDateString("zh-CN")}
-          </span>
-        </div>
-
-        {editing && (
-          <div className="mt-4 space-y-3">
-            <div>
-              <label
-                className="text-sm font-medium"
-                htmlFor="question-quota-reason"
-              >
-                调整原因
-              </label>
-              <Input
-                id="question-quota-reason"
-                className="mt-2"
-                value={reason}
-                maxLength={2_000}
-                placeholder={
-                  systemAdminMode
-                    ? "例如：根据客户本期补充需求调整"
-                    : "例如：根据客户确认的本期需求调整"
-                }
-                onChange={(event) => setReason(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p
-                className={`text-xs ${formMessage ? "text-destructive" : "text-muted-foreground"}`}
-                role={formMessage ? "alert" : undefined}
-              >
-                {formMessage ||
-                  (quota.progressiveUnlock
-                    ? "保存后立即用于当前客户；系统会继续按权益周期自动解锁后续额度。"
-                    : `每类最多 ${QUESTION_QUOTA_CATEGORY_MAX} 个问题，保存后立即用于当前客户本周期。`)}
-              </p>
-              <Button
-                type="button"
-                className="shrink-0"
-                disabled={adjustQuestionQuota.isPending || Boolean(formMessage)}
-                onClick={async () => {
-                  if (!validation.values || formMessage) return;
-                  try {
-                    await adjustQuestionQuota.mutateAsync({
-                      projectAssignmentId,
-                      quotaPeriodId: quota.periodId,
-                      expectedRevision: quota.revision,
-                      ...validation.values,
-                      reason: reason.trim(),
-                    });
-                    await onSaved();
-                    setReason("");
-                    setEditing(false);
-                    toast.success("客户问题额度已更新");
-                  } catch (error) {
-                    toast.error(
-                      error instanceof Error
-                        ? error.message
-                        : "客户问题额度更新失败",
-                    );
-                  }
-                }}
-              >
-                {adjustQuestionQuota.isPending && (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                )}
-                保存额度
-              </Button>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
 }
 
 function BrandTrackingUsageEditor({
@@ -1101,16 +785,6 @@ function CustomerWorkbenchView({
           </CardContent>
         </Card>
       </div>
-
-      {currentAssignment?.roleType === "monitoring_optimization_engineer" &&
-        workbench.data?.questionQuota && (
-          <QuestionQuotaEditor
-            projectAssignmentId={currentAssignment.projectAssignmentId}
-            quota={workbench.data.questionQuota}
-            systemAdminMode={systemAdminMode}
-            onSaved={() => workbench.refetch()}
-          />
-        )}
 
       {currentAssignment && workbench.data?.brandTrackingUsage && (
         <BrandTrackingUsageEditor

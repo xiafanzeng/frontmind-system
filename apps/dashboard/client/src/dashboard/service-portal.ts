@@ -94,6 +94,8 @@ export type ServiceWorkflowStep = {
 };
 
 export type ServicePortalView = {
+  mode?: "operator";
+  enterpriseProjectId?: string;
   schemaVersion: number;
   known: boolean;
   account: {
@@ -1025,7 +1027,7 @@ export function normalizeServicePortal(raw: unknown): ServicePortalView {
 
   // Front-end defense in depth: the basic product never starts or mounts the
   // conversational knowledge-base builder, even if a stale payload says so.
-  if (planCode === "basic") {
+  if (portal.mode !== "operator" && planCode === "basic") {
     capabilities.knowledgeBuild = {
       allowed: false,
       effectiveStatus: "locked",
@@ -1074,7 +1076,8 @@ export function normalizeServicePortal(raw: unknown): ServicePortalView {
   return {
     schemaVersion:
       numberValue(firstValue(portal, ["schemaVersion", "schema_version"])) || 1,
-    known: planCode !== "unknown",
+    ...(portal.mode === "operator" ? { mode: "operator" as const, enterpriseProjectId: textValue(portal.enterpriseProjectId) } : {}),
+    known: portal.mode === "operator" || planCode !== "unknown",
     account: {
       displayName: textValue(
         firstValue(accountRecord, [

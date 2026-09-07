@@ -449,7 +449,7 @@ describe("administrator channel navigation", () => {
     expect(rows.map((row) => row.sharedKeyAccountCount)).toEqual([1, 2, 2]);
   });
 
-  it("shows observed native tokens without translating historical credits", () => {
+  it("shows authoritative currency without translating historical credits", () => {
     const normalized = normalizeAgentUsageFields({
       provider: "zhipu",
       nativeUsage: {
@@ -458,14 +458,16 @@ describe("administrator channel navigation", () => {
         outputTokens: 30,
         cacheReadInputTokens: 20,
         observedTasks: 1,
+        costCny: "0.001840",
+        costStatus: "complete",
       },
     });
     expect(managedUsageDisplay({ ...normalized, rolling30DayUsed: 900 })).toBe(
-      "150 Token",
+      "¥0.00184",
     );
     expect(
       managedUsageDisplay({ provider: "zhipu", rolling30DayUsed: 900 }),
-    ).toBe("暂无 Token 记录");
+    ).toBe("待核算");
     expect(
       managedUsageDisplay({ provider: "unavailable", rolling30DayUsed: 900 }),
     ).toBe("请配置智谱 Key");

@@ -1,3 +1,5 @@
+import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import type { DecryptedCredential } from "./auth-service";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import { createHash, randomUUID } from "node:crypto";
@@ -16,7 +18,6 @@ import {
 
 import {
   knowledgeBaseBuildNodes,
-  userDashboardContents,
 } from "../drizzle/schema";
 import {
   dashboardContentAssetSchema,
@@ -6935,7 +6936,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     userId?: number;
   };
   const targetUserId =
-    body.userId === undefined ? actor.id : Number(body.userId);
+    body.userId === undefined ? enterpriseWorkspaceUserId(actor.id) : Number(body.userId);
   const conversationId = String(body.conversationId || "").trim();
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     res.status(400).json({
@@ -7235,7 +7236,7 @@ router.put(
   async (req: FrontMindRequest, res) => {
     const actor = req.frontmindUser!;
     const targetUserId =
-      req.params.userId === "me" ? actor.id : Number(req.params.userId);
+      req.params.userId === "me" ? enterpriseWorkspaceUserId(actor.id) : Number(req.params.userId);
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
       res
         .status(400)
@@ -7415,9 +7416,9 @@ router.put(
             })),
             beforeWrite: async (tx) => {
               const dashboardRows = await tx
-                .select({ revision: userDashboardContents.revision })
-                .from(userDashboardContents)
-                .where(eq(userDashboardContents.userId, targetUserId))
+                .select({ revision: enterpriseDashboardTable().revision })
+                .from(enterpriseDashboardTable())
+                .where(enterpriseDashboardOwnerPredicate(targetUserId))
                 .limit(1)
                 .for("update");
               assertDashboardImportRevision({
@@ -7516,9 +7517,9 @@ router.put(
             })),
             beforeWrite: async (tx) => {
               const dashboardRows = await tx
-                .select({ revision: userDashboardContents.revision })
-                .from(userDashboardContents)
-                .where(eq(userDashboardContents.userId, targetUserId))
+                .select({ revision: enterpriseDashboardTable().revision })
+                .from(enterpriseDashboardTable())
+                .where(enterpriseDashboardOwnerPredicate(targetUserId))
                 .limit(1)
                 .for("update");
               assertDashboardImportRevision({
@@ -7609,9 +7610,9 @@ router.put(
             batches: template.batches,
             beforeWrite: async (tx) => {
               const dashboardRows = await tx
-                .select({ revision: userDashboardContents.revision })
-                .from(userDashboardContents)
-                .where(eq(userDashboardContents.userId, targetUserId))
+                .select({ revision: enterpriseDashboardTable().revision })
+                .from(enterpriseDashboardTable())
+                .where(enterpriseDashboardOwnerPredicate(targetUserId))
                 .limit(1)
                 .for("update");
               assertDashboardImportRevision({
@@ -7899,9 +7900,9 @@ router.put(
           const transactionHooks = {
             beforeWrite: async (tx: any) => {
               const dashboardRows = await tx
-                .select({ revision: userDashboardContents.revision })
-                .from(userDashboardContents)
-                .where(eq(userDashboardContents.userId, targetUserId))
+                .select({ revision: enterpriseDashboardTable().revision })
+                .from(enterpriseDashboardTable())
+                .where(enterpriseDashboardOwnerPredicate(targetUserId))
                 .limit(1)
                 .for("update");
               assertDashboardImportRevision({

@@ -130,7 +130,7 @@ describe("General Agent administrator runtime display", () => {
     sessionStorage.clear();
   });
 
-  it("displays the administrator High setting without a customer model selector", async () => {
+  it("defaults a new general session to High and offers all three choices", async () => {
     vi.stubGlobal("sessionStorage", {
       getItem: (key: string) =>
         key === DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY
@@ -163,7 +163,7 @@ describe("General Agent administrator runtime display", () => {
     );
   });
 
-  it("keeps a historical Low session visible and refreshes administrator settings for a new task", async () => {
+  it("keeps historical Low frozen and starts a new session at High", async () => {
     const onProfile = vi.fn();
     const fetchMock = vi
       .fn()
@@ -198,13 +198,15 @@ describe("General Agent administrator runtime display", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("Max"),
     );
+    expect(screen.getByRole("combobox", { name: "智能体推理档位" })).toHaveValue("frontmind-base");
+    fireEvent.change(screen.getByRole("combobox", { name: "智能体推理档位" }), { target: { value: "frontmind-pro" } });
     expect(onProfile).toHaveBeenLastCalledWith("frontmind-pro");
   });
 
   it("does not invent an effort when the runtime read fails", async () => {
     const onProfile = vi.fn();
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    render(<GeneralAgentRuntimeBadge onProfile={onProfile} />);
+    render(<GeneralAgentRuntimeBadge localTaskId="591ebbb6-a8a4-439c-8f90-9d5b9b073471" onProfile={onProfile} />);
     await act(async () => {});
     expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent(
       "管理员配置",
@@ -816,13 +818,13 @@ describe("knowledge-base ChatInput actions", () => {
     fireEvent.change(input, {
       target: {
         files: [
-          new File(["12345"], "企业资料.pdf", {
-            type: "application/pdf",
+          new File(["12345"], "企业图片.png", {
+            type: "image/png",
           }),
         ],
       },
     });
-    expect(screen.getByText("企业资料.pdf")).toBeInTheDocument();
+    expect(screen.getByText("企业图片.png")).toBeInTheDocument();
     expect(screen.getByText("5 B")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认当前内容" })).toBeDisabled();
   });

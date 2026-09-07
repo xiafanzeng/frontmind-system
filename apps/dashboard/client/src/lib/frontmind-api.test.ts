@@ -1693,7 +1693,7 @@ describe("ordinary chat local v2 contract", () => {
     await createTask([{ role: "user", content: "产品适用场景？" }], options);
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
       purpose: "enterprise_qa",
-      modelProfile: "frontmind-pro",
+      modelProfile: "frontmind-base",
     });
     await createTask([{ role: "user", content: "请展开" }], {
       ...options,

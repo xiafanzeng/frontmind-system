@@ -1,3 +1,5 @@
+import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
 import {
   and,
@@ -18,7 +20,6 @@ import {
   monitoringCitationRecords,
   monitoringSamples,
   users,
-  workspaceQuestions,
 } from "../drizzle/schema";
 import type {
   ListMonitoringCitationsInput,
@@ -439,21 +440,21 @@ export async function resolveQuestionMonitoringScopeWithDb(
 ) {
   const matches = await db
     .select({
-      id: workspaceQuestions.id,
-      externalQuestionId: workspaceQuestions.externalQuestionId,
-      sourceQuestionId: workspaceQuestions.sourceQuestionId,
-      question: workspaceQuestions.question,
-      status: workspaceQuestions.status,
-      selectionApprovalStatus: workspaceQuestions.selectionApprovalStatus,
+      id: workspaceQuestionTable().id,
+      externalQuestionId: workspaceQuestionTable().externalQuestionId,
+      sourceQuestionId: workspaceQuestionTable().sourceQuestionId,
+      question: workspaceQuestionTable().question,
+      status: workspaceQuestionTable().status,
+      selectionApprovalStatus: workspaceQuestionTable().selectionApprovalStatus,
     })
-    .from(workspaceQuestions)
+    .from(workspaceQuestionTable())
     .where(
       and(
-        eq(workspaceQuestions.userId, userId),
+        workspaceQuestionOwnerPredicate(userId),
         or(
-          eq(workspaceQuestions.id, requestedQuestionId),
-          eq(workspaceQuestions.externalQuestionId, requestedQuestionId),
-          eq(workspaceQuestions.sourceQuestionId, requestedQuestionId),
+          eq(workspaceQuestionTable().id, requestedQuestionId),
+          eq(workspaceQuestionTable().externalQuestionId, requestedQuestionId),
+          eq(workspaceQuestionTable().sourceQuestionId, requestedQuestionId),
         ),
       ),
     );
@@ -491,16 +492,16 @@ export async function resolveQuestionMonitoringScopeWithDb(
   const lineageRows = rootIds.size
     ? await db
         .select({
-          id: workspaceQuestions.id,
-          externalQuestionId: workspaceQuestions.externalQuestionId,
+          id: workspaceQuestionTable().id,
+          externalQuestionId: workspaceQuestionTable().externalQuestionId,
         })
-        .from(workspaceQuestions)
+        .from(workspaceQuestionTable())
         .where(
           and(
-            eq(workspaceQuestions.userId, userId),
+            workspaceQuestionOwnerPredicate(userId),
             or(
-              inArray(workspaceQuestions.id, [...rootIds]),
-              inArray(workspaceQuestions.sourceQuestionId, [...rootIds]),
+              inArray(workspaceQuestionTable().id, [...rootIds]),
+              inArray(workspaceQuestionTable().sourceQuestionId, [...rootIds]),
             ),
           ),
         )
@@ -599,6 +600,7 @@ export async function resolveMonitoringReadQuotaPeriodIds(
   userId: number,
 ): Promise<string[] | undefined> {
   const portal = await getServicePortal(userId);
+  if (portal.mode === "operator") return undefined;
   const compatibilityMode = portal.entitlementRollout.mode === "compatibility";
   const needsHistoricalPeriods =
     portal.capabilities.monitoring.allowed &&
@@ -609,7 +611,7 @@ export async function resolveMonitoringReadQuotaPeriodIds(
         await (await requireDb())
           .select({ quotaPeriodId: monitoringBatches.quotaPeriodId })
           .from(monitoringBatches)
-          .where(eq(monitoringBatches.userId, userId))
+          .where(enterpriseOwnerPredicate(monitoringBatches, userId))
           .groupBy(monitoringBatches.quotaPeriodId)
       ).map((row) => row.quotaPeriodId)
     : undefined;
@@ -813,7 +815,7 @@ async function monitoringCurrentTemplateBatchesFromExecutor(input: {
     .from(monitoringBatches)
     .where(
       and(
-        eq(monitoringBatches.userId, input.userId),
+        enterpriseOwnerPredicate(monitoringBatches, input.userId),
         inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
       ),
     )
@@ -850,7 +852,7 @@ async function monitoringCurrentTemplateBatchesFromExecutor(input: {
       .from(monitoringSamples)
       .where(
         and(
-          eq(monitoringSamples.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringSamples, input.userId),
           inArray(monitoringSamples.batchId, batchIds),
         ),
       )
@@ -876,7 +878,7 @@ async function monitoringCurrentTemplateBatchesFromExecutor(input: {
       .from(monitoringCitationRecords)
       .where(
         and(
-          eq(monitoringCitationRecords.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringCitationRecords, input.userId),
           inArray(monitoringCitationRecords.batchId, batchIds),
         ),
       )
@@ -1078,7 +1080,7 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
       .from(monitoringBatches)
       .where(
         and(
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
           inArray(
             monitoringBatches.batchKey,
             changed.map((batch) => batch.batchKey),
@@ -1120,7 +1122,7 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
         .delete(monitoringCitationRecords)
         .where(
           and(
-            eq(monitoringCitationRecords.userId, input.userId),
+            enterpriseOwnerPredicate(monitoringCitationRecords, input.userId),
             eq(monitoringCitationRecords.batchId, batchId),
           ),
         );
@@ -1128,7 +1130,7 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
         .delete(monitoringSamples)
         .where(
           and(
-            eq(monitoringSamples.userId, input.userId),
+            enterpriseOwnerPredicate(monitoringSamples, input.userId),
             eq(monitoringSamples.batchId, batchId),
           ),
         );
@@ -1147,7 +1149,7 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
         .where(
           and(
             eq(monitoringBatches.id, batchId),
-            eq(monitoringBatches.userId, input.userId),
+            enterpriseOwnerPredicate(monitoringBatches, input.userId),
           ),
         );
       for (let offset = 0; offset < rows.samples.length; offset += 500) {
@@ -1293,7 +1295,7 @@ export async function replaceMonitoringBatch(input: {
       .from(monitoringBatches)
       .where(
         and(
-          eq(monitoringBatches.userId, input.value.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.value.userId),
           eq(monitoringBatches.quotaPeriodId, quotaPeriodId),
           eq(monitoringBatches.batchKey, input.value.batchKey),
         ),
@@ -1332,7 +1334,7 @@ export async function replaceMonitoringBatch(input: {
         .delete(monitoringCitationRecords)
         .where(
           and(
-            eq(monitoringCitationRecords.userId, input.value.userId),
+            enterpriseOwnerPredicate(monitoringCitationRecords, input.value.userId),
             eq(monitoringCitationRecords.batchId, batchId),
           ),
         );
@@ -1340,7 +1342,7 @@ export async function replaceMonitoringBatch(input: {
         .delete(monitoringSamples)
         .where(
           and(
-            eq(monitoringSamples.userId, input.value.userId),
+            enterpriseOwnerPredicate(monitoringSamples, input.value.userId),
             eq(monitoringSamples.batchId, batchId),
           ),
         );
@@ -1358,7 +1360,7 @@ export async function replaceMonitoringBatch(input: {
         .where(
           and(
             eq(monitoringBatches.id, batchId),
-            eq(monitoringBatches.userId, input.value.userId),
+            enterpriseOwnerPredicate(monitoringBatches, input.value.userId),
           ),
         );
     } else {
@@ -1467,7 +1469,7 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
       .from(monitoringBatches)
       .where(
         and(
-          eq(monitoringBatches.userId, input.targetUserId),
+          enterpriseOwnerPredicate(monitoringBatches, input.targetUserId),
           eq(monitoringBatches.batchKey, input.targetBatchKey),
           inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds),
         ),
@@ -1499,7 +1501,7 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
         .from(monitoringSamples)
         .where(
           and(
-            eq(monitoringSamples.userId, input.targetUserId),
+            enterpriseOwnerPredicate(monitoringSamples, input.targetUserId),
             eq(monitoringSamples.batchId, batch.id),
           ),
         ),
@@ -1519,7 +1521,7 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
         .from(monitoringCitationRecords)
         .where(
           and(
-            eq(monitoringCitationRecords.userId, input.targetUserId),
+            enterpriseOwnerPredicate(monitoringCitationRecords, input.targetUserId),
             eq(monitoringCitationRecords.batchId, batch.id),
           ),
         ),
@@ -1695,7 +1697,7 @@ export async function listMonitoringSamples(input: {
       pageSize: filters.pageSize,
     };
   }
-  const conditions = [eq(monitoringSamples.userId, input.userId)];
+  const conditions = [enterpriseOwnerPredicate(monitoringSamples, input.userId)];
   if (input.quotaPeriodIds) {
     conditions.push(
       inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
@@ -1757,7 +1759,7 @@ export async function listMonitoringSamples(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringSamples.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(and(...conditions))
@@ -1782,7 +1784,7 @@ export async function listMonitoringSamples(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringSamples.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(where),
@@ -1808,7 +1810,7 @@ export async function listMonitoringSamples(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringSamples.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(where)
@@ -1901,8 +1903,8 @@ async function requireScopedMonitoringSample(input: {
     monitoringSampleNotFound();
   }
   const conditions = [
-    eq(monitoringSamples.userId, input.userId),
-    eq(monitoringBatches.userId, input.userId),
+    enterpriseOwnerPredicate(monitoringSamples, input.userId),
+    enterpriseOwnerPredicate(monitoringBatches, input.userId),
     input.strictInternalId
       ? eq(monitoringSamples.id, input.sampleId)
       : or(
@@ -1940,7 +1942,7 @@ async function requireScopedMonitoringSample(input: {
       monitoringBatches,
       and(
         eq(monitoringBatches.id, monitoringSamples.batchId),
-        eq(monitoringBatches.userId, input.userId),
+        enterpriseOwnerPredicate(monitoringBatches, input.userId),
       ),
     )
     .where(and(...conditions))
@@ -1996,7 +1998,7 @@ export async function listMonitoringCitations(input: {
         quotaPeriodIds: input.quotaPeriodIds,
       })
     : undefined;
-  const conditions = [eq(monitoringCitationRecords.userId, input.userId)];
+  const conditions = [enterpriseOwnerPredicate(monitoringCitationRecords, input.userId)];
   if (input.quotaPeriodIds) {
     conditions.push(
       inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
@@ -2066,7 +2068,7 @@ export async function listMonitoringCitations(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(and(...conditions))
@@ -2103,7 +2105,7 @@ export async function listMonitoringCitations(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(where),
@@ -2130,7 +2132,7 @@ export async function listMonitoringCitations(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(where)
@@ -2180,7 +2182,7 @@ export async function listMonitoringSampleCitations(input: {
     strictInternalId: true,
   });
   const baseConditions = [
-    eq(monitoringCitationRecords.userId, input.userId),
+    enterpriseOwnerPredicate(monitoringCitationRecords, input.userId),
     eq(monitoringCitationRecords.batchId, sample.batchId),
     eq(monitoringCitationRecords.questionId, sample.questionId),
     eq(monitoringCitationRecords.sampleId, sample.id),
@@ -2257,8 +2259,8 @@ export async function getMonitoringCitationSummary(input: {
     input.value.questionId,
   );
   const citationConditions = [
-    eq(monitoringCitationRecords.userId, input.userId),
-    eq(monitoringBatches.userId, input.userId),
+    enterpriseOwnerPredicate(monitoringCitationRecords, input.userId),
+    enterpriseOwnerPredicate(monitoringBatches, input.userId),
     inArray(monitoringCitationRecords.questionId, questionScope.questionIds),
     ...(questionScope.currentQuestion
       ? [eq(monitoringCitationRecords.question, questionScope.currentQuestion)]
@@ -2298,7 +2300,7 @@ export async function getMonitoringCitationSummary(input: {
         monitoringBatches,
         and(
           eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-          eq(monitoringBatches.userId, input.userId),
+          enterpriseOwnerPredicate(monitoringBatches, input.userId),
         ),
       )
       .where(and(...citationConditions))
@@ -2326,7 +2328,7 @@ export async function getMonitoringCitationSummary(input: {
       monitoringBatches,
       and(
         eq(monitoringBatches.id, monitoringCitationRecords.batchId),
-        eq(monitoringBatches.userId, input.userId),
+        enterpriseOwnerPredicate(monitoringBatches, input.userId),
       ),
     )
     .where(and(...citationConditions));
@@ -2375,7 +2377,7 @@ export async function getMonitoringFilterOptions(
     .from(monitoringBatches)
     .where(
       and(
-        eq(monitoringBatches.userId, userId),
+        enterpriseOwnerPredicate(monitoringBatches, userId),
         ...(quotaPeriodIds
           ? [inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds)]
           : []),
@@ -2407,7 +2409,7 @@ export async function getMonitoringFilterOptions(
         .from(monitoringSamples)
         .where(
           and(
-            eq(monitoringSamples.userId, userId),
+            enterpriseOwnerPredicate(monitoringSamples, userId),
             inArray(
               monitoringSamples.batchId,
               batches.map((batch) => batch.id),
@@ -2424,7 +2426,7 @@ export async function getMonitoringFilterOptions(
         .from(monitoringCitationRecords)
         .where(
           and(
-            eq(monitoringCitationRecords.userId, userId),
+            enterpriseOwnerPredicate(monitoringCitationRecords, userId),
             inArray(
               monitoringCitationRecords.batchId,
               batches.map((batch) => batch.id),
@@ -2471,7 +2473,7 @@ export async function getMonitoringFilterOptions(
     }),
   );
   const sampleScope = and(
-    eq(monitoringSamples.userId, userId),
+    enterpriseOwnerPredicate(monitoringSamples, userId),
     inArray(monitoringSamples.batchId, selectedBatchIds),
     ...(questionIds
       ? [inArray(monitoringSamples.questionId, questionIds)]
@@ -2481,7 +2483,7 @@ export async function getMonitoringFilterOptions(
       : []),
   );
   const citationScope = and(
-    eq(monitoringCitationRecords.userId, userId),
+    enterpriseOwnerPredicate(monitoringCitationRecords, userId),
     inArray(monitoringCitationRecords.batchId, selectedBatchIds),
     ...(questionIds
       ? [inArray(monitoringCitationRecords.questionId, questionIds)]

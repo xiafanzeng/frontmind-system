@@ -7,6 +7,10 @@ import {
   type DecryptedCredential,
 } from "../auth-service";
 import type { DeliveryRoleType } from "../../shared/delivery-roles";
+import { enterpriseWorkspaceUserId } from "../enterprise-project-context";
+import { requestEnterpriseProjectId } from "../enterprise-project-request";
+import { resolveEnterpriseProjectScope } from "../enterprise-project-service";
+import { runWithEnterpriseProjectScope } from "../enterprise-project-scope";
 
 export type FrontMindRequest = Request & {
   frontmindUser?: AuthenticatedUser;
@@ -40,6 +44,15 @@ export async function requireExpressAuth(
       return;
     }
     req.frontmindUser = user;
+    let projectId: string | null;
+    try { projectId = requestEnterpriseProjectId(req); }
+    catch { sendAuthError(res, 400, "企业项目参数无效", "INVALID_PROJECT"); return; }
+    if (projectId) {
+      const scope = await resolveEnterpriseProjectScope(user, projectId).catch(() => null);
+      if (!scope) { sendAuthError(res, 404, "企业项目不存在或无权访问", "PROJECT_NOT_FOUND"); return; }
+      runWithEnterpriseProjectScope(scope, next);
+      return;
+    }
     next();
   } catch (error) {
     console.error("[Auth] Express authentication failed", error);
@@ -59,7 +72,7 @@ export async function attachActiveCredential(
 
   try {
     const credential = await getEffectiveDecryptedCredentialForAccount(
-      req.frontmindUser.id,
+      enterpriseWorkspaceUserId(req.frontmindUser.id),
     );
     if (!credential) {
       const customerCredentialRequired = req.frontmindUser.role === "user";
@@ -109,7 +122,7 @@ export async function attachOptionalActiveCredential(
 
   try {
     const credential = await getEffectiveDecryptedCredentialForAccount(
-      req.frontmindUser.id,
+      enterpriseWorkspaceUserId(req.frontmindUser.id),
     );
     if (credential) req.frontmindCredential = credential;
     next();

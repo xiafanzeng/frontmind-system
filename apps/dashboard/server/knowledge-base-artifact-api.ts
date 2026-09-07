@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { Router, type Response } from "express";
@@ -297,7 +298,7 @@ async function serveWorkingSetResource(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, buildId),
-          eq(knowledgeBaseBuilds.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         ),
       )
       .limit(1)
@@ -372,7 +373,7 @@ async function serveBuildArtifact(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, buildId),
-          eq(knowledgeBaseBuilds.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         ),
       )
       .limit(1)
@@ -853,7 +854,7 @@ async function serveCustomerUploadPreview(
       .where(
         and(
           eq(knowledgeBaseBuilds.id, buildId),
-          eq(knowledgeBaseBuilds.userId, userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         ),
       )
       .limit(1)
@@ -872,7 +873,7 @@ async function serveCustomerUploadPreview(
       .where(
         and(
           eq(conversationTurns.id, turnId),
-          eq(conversationTurns.userId, userId),
+          enterpriseOwnerPredicate(conversationTurns, userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           eq(conversationTurns.status, "completed"),
@@ -972,7 +973,7 @@ async function serveOpaqueKnowledgeBaseResource(
   const builds = await db
     .select()
     .from(knowledgeBaseBuilds)
-    .where(eq(knowledgeBaseBuilds.userId, userId));
+    .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId));
   const build = builds.find(
     (candidate: typeof knowledgeBaseBuilds.$inferSelect) =>
       knowledgeBasePublicBuildSelectorMatches({
@@ -1056,7 +1057,7 @@ async function serveOpaqueKnowledgeBaseResource(
       .from(conversationTurns)
       .where(
         and(
-          eq(conversationTurns.userId, userId),
+          enterpriseOwnerPredicate(conversationTurns, userId),
           eq(conversationTurns.buildId, build.id),
           eq(conversationTurns.buildGeneration, build.generation),
           eq(conversationTurns.status, "completed"),

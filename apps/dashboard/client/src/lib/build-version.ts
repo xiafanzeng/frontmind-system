@@ -1,3 +1,4 @@
+import { enterpriseProjectHeaders } from "./enterprise-project";
 declare const __FRONTMIND_BUILD_VERSION__: string;
 
 export type FrontMindBuildInfo = {
@@ -9,6 +10,7 @@ export type FrontMindBuildInfo = {
 
 const initialVersion = __FRONTMIND_BUILD_VERSION__;
 const PENDING_BUILD_DRAFT_KEY = "frontmind.pending-build-draft";
+const pendingDraftKey = () => { const id = enterpriseProjectHeaders()["x-enterprise-project-id"]; return id ? `${PENDING_BUILD_DRAFT_KEY}:${id}` : PENDING_BUILD_DRAFT_KEY; };
 export const FRONTMIND_BUILD_VERSION_CHECK_MAX_WAIT_MS = 500;
 const FRONTMIND_BUILD_VERSION_CHECK_CACHE_MS = 30_000;
 let reloadStarted = false;
@@ -65,7 +67,7 @@ export async function checkFrontMindBuildVersion(options?: {
       const pendingDraft = options?.pendingDraft;
       if (pendingDraft?.trim()) {
         sessionStorage.setItem(
-          PENDING_BUILD_DRAFT_KEY,
+          pendingDraftKey(),
           JSON.stringify({
             text: pendingDraft,
             savedAt: Date.now(),
@@ -88,8 +90,8 @@ export async function checkFrontMindBuildVersion(options?: {
 
 export function consumePendingFrontMindBuildDraft() {
   try {
-    const raw = sessionStorage.getItem(PENDING_BUILD_DRAFT_KEY);
-    sessionStorage.removeItem(PENDING_BUILD_DRAFT_KEY);
+    const raw = sessionStorage.getItem(pendingDraftKey());
+    sessionStorage.removeItem(pendingDraftKey());
     if (!raw) return "";
     const value = JSON.parse(raw) as { text?: unknown; savedAt?: unknown };
     if (

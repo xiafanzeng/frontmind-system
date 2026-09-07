@@ -1,10 +1,11 @@
+import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
 import {
   responseLogicEntries,
   upstreamResources,
-  workspaceQuestions,
 } from "../drizzle/schema";
 import type {
   ConfirmedResponseLogic,
@@ -46,11 +47,11 @@ async function lockResponseLogicQuestionForWrite(input: {
 }) {
   const rows = await input.executor
     .select()
-    .from(workspaceQuestions)
+    .from(workspaceQuestionTable())
     .where(
       and(
-        eq(workspaceQuestions.id, input.questionId),
-        eq(workspaceQuestions.userId, input.userId),
+        eq(workspaceQuestionTable().id, input.questionId),
+        workspaceQuestionOwnerPredicate(input.userId),
       ),
     )
     .limit(1)
@@ -71,7 +72,7 @@ async function lockResponseLogicQuestionForWrite(input: {
     (input.expectedScope &&
       (question.revision !== input.expectedScope.revision ||
         question.contractId !== input.expectedScope.contractId ||
-        question.quotaPeriodId !== input.expectedScope.quotaPeriodId))
+        (question.quotaPeriodId ?? "") !== input.expectedScope.quotaPeriodId))
   ) {
     throw new AuthServiceError(
       "CONFLICT",
@@ -87,11 +88,11 @@ async function lockResponseLogicQuestionsForBatch(input: {
 }) {
   const rows = await input.executor
     .select()
-    .from(workspaceQuestions)
+    .from(workspaceQuestionTable())
     .where(
       and(
-        eq(workspaceQuestions.userId, input.userId),
-        inArray(workspaceQuestions.id, input.questionIds),
+        workspaceQuestionOwnerPredicate(input.userId),
+        inArray(workspaceQuestionTable().id, input.questionIds),
       ),
     )
     .for("update");
@@ -353,7 +354,7 @@ export async function listResponseLogicEntries(
   const rows = await db
     .select()
     .from(responseLogicEntries)
-    .where(eq(responseLogicEntries.userId, userId))
+    .where(enterpriseOwnerPredicate(responseLogicEntries, userId))
     .orderBy(
       asc(responseLogicEntries.groupId),
       asc(responseLogicEntries.questionId),
@@ -373,7 +374,7 @@ export async function listResponseLogicEntriesByQuestionIds(
     .from(responseLogicEntries)
     .where(
       and(
-        eq(responseLogicEntries.userId, userId),
+        enterpriseOwnerPredicate(responseLogicEntries, userId),
         inArray(responseLogicEntries.questionId, uniqueQuestionIds),
       ),
     )
@@ -394,7 +395,7 @@ export async function getResponseLogicEntry(
     .from(responseLogicEntries)
     .where(
       and(
-        eq(responseLogicEntries.userId, userId),
+        enterpriseOwnerPredicate(responseLogicEntries, userId),
         eq(responseLogicEntries.questionId, questionId),
       ),
     )
@@ -418,11 +419,11 @@ export async function requireResponseLogicProviderReadiness(input: {
   const db = await requireDb();
   const questionRows = await db
     .select()
-    .from(workspaceQuestions)
+    .from(workspaceQuestionTable())
     .where(
       and(
-        eq(workspaceQuestions.id, input.questionId),
-        eq(workspaceQuestions.userId, input.userId),
+        eq(workspaceQuestionTable().id, input.questionId),
+        workspaceQuestionOwnerPredicate(input.userId),
       ),
     )
     .limit(1);
@@ -434,7 +435,7 @@ export async function requireResponseLogicProviderReadiness(input: {
     !question.locked ||
     question.revision !== input.expectedQuestionScope.revision ||
     question.contractId !== input.expectedQuestionScope.contractId ||
-    question.quotaPeriodId !== input.expectedQuestionScope.quotaPeriodId
+    (question.quotaPeriodId ?? "") !== input.expectedQuestionScope.quotaPeriodId
   ) {
     throw new ResponseLogicProviderReadinessError();
   }
@@ -444,7 +445,7 @@ export async function requireResponseLogicProviderReadiness(input: {
     .from(responseLogicEntries)
     .where(
       and(
-        eq(responseLogicEntries.userId, input.userId),
+        enterpriseOwnerPredicate(responseLogicEntries, input.userId),
         eq(responseLogicEntries.questionId, input.questionId),
       ),
     )
@@ -513,7 +514,7 @@ export async function saveResponseLogicEntry(input: {
       .from(responseLogicEntries)
       .where(
         and(
-          eq(responseLogicEntries.userId, input.userId),
+          enterpriseOwnerPredicate(responseLogicEntries, input.userId),
           eq(responseLogicEntries.questionId, input.value.questionId),
         ),
       )
@@ -602,7 +603,7 @@ export async function saveResponseLogicEntry(input: {
     .from(responseLogicEntries)
     .where(
       and(
-        eq(responseLogicEntries.userId, input.userId),
+        enterpriseOwnerPredicate(responseLogicEntries, input.userId),
         eq(responseLogicEntries.questionId, input.value.questionId),
       ),
     )
@@ -651,7 +652,7 @@ export async function saveResponseLogicEntriesBatch(input: {
       .from(responseLogicEntries)
       .where(
         and(
-          eq(responseLogicEntries.userId, input.userId),
+          enterpriseOwnerPredicate(responseLogicEntries, input.userId),
           inArray(responseLogicEntries.questionId, questionIds),
         ),
       )
@@ -764,7 +765,7 @@ export async function saveResponseLogicEntriesBatch(input: {
             .from(responseLogicEntries)
             .where(
               and(
-                eq(responseLogicEntries.userId, input.userId),
+                enterpriseOwnerPredicate(responseLogicEntries, input.userId),
                 inArray(responseLogicEntries.questionId, changedQuestionIds),
               ),
             )
@@ -820,7 +821,7 @@ export async function recordResponseLogicTaskStart(input: {
       .from(responseLogicEntries)
       .where(
         and(
-          eq(responseLogicEntries.userId, input.userId),
+          enterpriseOwnerPredicate(responseLogicEntries, input.userId),
           eq(responseLogicEntries.questionId, input.value.questionId),
         ),
       )
@@ -949,7 +950,7 @@ export async function releaseResponseLogicTaskBinding(input: {
     })
     .where(
       and(
-        eq(responseLogicEntries.userId, input.userId),
+        enterpriseOwnerPredicate(responseLogicEntries, input.userId),
         eq(responseLogicEntries.questionId, input.questionId),
         eq(responseLogicEntries.lastTaskId, input.taskId),
       ),

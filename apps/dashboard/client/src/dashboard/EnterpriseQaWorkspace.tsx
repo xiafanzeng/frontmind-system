@@ -7,6 +7,7 @@ import {
   useConversation,
 } from "@/contexts/ConversationContext";
 import { deliveryProjectHeaders } from "@/lib/delivery-project";
+import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import type { TaskResponse } from "@/lib/frontmind-api";
 
 type SourceState = {
@@ -91,7 +92,7 @@ export function EnterpriseQaSourceNote() {
           <>
             尚无可用的已发布企业知识库。请先
             <Link
-              href="/knowledge-base"
+              href={projectWorkspaceUrl("/?view=knowledge")}
               className="ml-1 font-medium text-primary underline underline-offset-2"
             >
               构建并发布知识库

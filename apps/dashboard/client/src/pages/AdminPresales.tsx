@@ -1,3 +1,4 @@
+import { agentCostDisplay, type AgentCost } from "@/lib/agent-cost";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
 import {
@@ -63,7 +64,7 @@ export function websiteCredentialProviderLabel(status: {
   return status.configured ? "智谱 Managed Agents" : "等待配置";
 }
 
-type WebsiteNativeTokenUsage = {
+type WebsiteNativeTokenUsage = AgentCost & {
   provider: "zhipu";
   unit: "tokens";
   inputTokens: number;
@@ -79,19 +80,20 @@ export function WebsiteNativeUsage({
 }) {
   return (
     <section
-      aria-label="智谱原生 Token 用量"
+      aria-label="官网智谱消耗金额"
       className="rounded-2xl border border-primary/10 bg-primary/[0.055] p-5"
     >
-      <p className="text-sm font-medium">智谱原生 Token 用量</p>
+      <p className="text-sm font-medium">近30天官网智能体消耗</p>
+      <p className="mt-3 font-mono text-3xl font-semibold">{agentCostDisplay(usage)}</p>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">
-        按近 30 天官网任务的实际用量上报累计，输入、输出与缓存读取分别记录。
+        按官方标准价核算，由平台承担；输入、输出与缓存读取分别计费。
       </p>
       {!usage || usage.observedTasks === 0 ? (
         <p className="mt-4 text-sm text-muted-foreground">
           暂无任务上报 Token 用量。
         </p>
       ) : (
-        <dl className="mt-4 grid grid-cols-2 gap-4">
+        <details className="mt-4"><summary className="cursor-pointer text-xs text-muted-foreground">Token 用量明细</summary><dl className="mt-3 grid grid-cols-2 gap-4">
           {[
             ["输入 Token", usage.inputTokens],
             ["输出 Token", usage.outputTokens],
@@ -105,7 +107,7 @@ export function WebsiteNativeUsage({
               </dd>
             </div>
           ))}
-        </dl>
+        </dl></details>
       )}
     </section>
   );
@@ -616,7 +618,7 @@ export default function AdminPresales() {
             官网任务与用量
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            管理官网任务专用智谱 Key 与近 30 天真实 Token 用量。
+            管理官网任务专用智谱 Key 与近 30 天消耗金额。
           </p>
         </div>
 

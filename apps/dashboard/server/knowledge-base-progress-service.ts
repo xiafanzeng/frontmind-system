@@ -1,3 +1,5 @@
+import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
@@ -300,7 +302,7 @@ export function knowledgeBaseObservationConversationStorageId(
   userId: number,
   publicConversationId: string,
 ) {
-  return `u${userId}:${normalizeConversationId(publicConversationId)}`;
+  return `${enterpriseConversationStoragePrefix(userId)}${normalizeConversationId(publicConversationId)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1800,6 +1802,7 @@ function buildDto(
       overallPercent: total === 0 ? 0 : Math.round((handled / total) * 100),
     },
     branches: [...branchMap.values()],
+    ...(build.activeTurnId && ["AI_BALANCE_PAUSED","AI_COST_PENDING"].includes(String(build.protocolErrorCode)) ? {billingPause:{reason:build.protocolErrorCode==="AI_BALANCE_PAUSED"?"balance" as const:"cost" as const,turnId:build.activeTurnId}} : {}),
     ...(resultQuality ? { resultQuality } : {}),
     ...(materializedV5
       ? {
@@ -1971,7 +1974,7 @@ async function loadBuild(
     .from(knowledgeBaseBuilds)
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         eq(knowledgeBaseBuilds.conversationId, conversationId),
       ),
     )
@@ -2016,10 +2019,7 @@ export async function createKnowledgeBaseBuild(input: {
         .from(knowledgeBaseConversationRetentionTombstones)
         .where(
           and(
-            eq(
-              knowledgeBaseConversationRetentionTombstones.userId,
-              input.userId,
-            ),
+            enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, input.userId),
             eq(
               knowledgeBaseConversationRetentionTombstones.publicConversationId,
               conversationId,
@@ -2074,7 +2074,7 @@ export async function attachKnowledgeBaseBuildTask(input: {
     .set({ upstreamTaskId: taskId })
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.conversationId, conversationId),
       ),
     );
@@ -2103,7 +2103,7 @@ export async function recordKnowledgeBaseTurn(input: {
     })
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.conversationId, conversationId),
       ),
     );
@@ -2143,7 +2143,7 @@ export async function claimKnowledgeBaseTurn(input: {
     })
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(knowledgeBaseBuilds.conversationId, conversationId),
         eq(knowledgeBaseBuilds.upstreamTaskId, input.taskId),
         eq(knowledgeBaseBuilds.status, "confirming"),
@@ -2180,7 +2180,7 @@ export async function releaseKnowledgeBaseTurnClaim(input: {
     })
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(
           knowledgeBaseBuilds.conversationId,
           normalizeConversationId(input.conversationId),
@@ -2225,7 +2225,7 @@ export async function getKnowledgeBaseProgress(input: {
         .from(knowledgeBaseBuilds)
         .where(
           and(
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(
               knowledgeBaseBuilds.conversationId,
               normalizeConversationId(input.conversationId),
@@ -2236,7 +2236,7 @@ export async function getKnowledgeBaseProgress(input: {
     : await db
         .select()
         .from(knowledgeBaseBuilds)
-        .where(eq(knowledgeBaseBuilds.userId, input.userId))
+        .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId))
         // Background reconciliation can touch an older build long after a
         // newer conversation was created. Creation time is the stable notion
         // of "current" when the caller has no conversation id; id breaks the
@@ -2266,7 +2266,7 @@ export async function getKnowledgeBaseProgress(input: {
         .where(
           and(
             eq(conversationTurns.id, build.activeTurnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -2284,7 +2284,7 @@ export async function getKnowledgeBaseProgress(input: {
           .from(conversationTurns)
           .where(
             and(
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(conversationTurns.buildGeneration, build.generation),
               eq(conversationTurns.status, "failed"),
@@ -2492,7 +2492,7 @@ async function readKnowledgeBaseObservationProjection(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
             eq(conversationTurns.status, "completed"),
@@ -2516,7 +2516,7 @@ async function readKnowledgeBaseObservationProjection(
         .from(conversationTurns)
         .where(
           and(
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
             eq(conversationTurns.status, "completed"),
@@ -2545,7 +2545,7 @@ async function readKnowledgeBaseObservationProjection(
           .from(conversationTurns)
           .where(
             and(
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(conversationTurns.buildGeneration, build.generation),
               eq(conversationTurns.status, "failed"),
@@ -2586,7 +2586,7 @@ async function readKnowledgeBaseObservationProjection(
           .where(
             and(
               eq(conversationTurns.id, build.activeTurnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(conversationTurns.buildGeneration, build.generation),
             ),
@@ -2604,7 +2604,7 @@ async function readKnowledgeBaseObservationProjection(
           .where(
             and(
               eq(conversationTurns.id, currentRow.sourceTurnId),
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               eq(
                 conversationTurns.buildGeneration,
@@ -2624,7 +2624,7 @@ async function readKnowledgeBaseObservationProjection(
       .where(
         and(
           eq(conversations.id, persistedConversationId),
-          eq(conversations.userId, input.userId),
+          enterpriseOwnerPredicate(conversations, input.userId),
         ),
       )
       .limit(1)
@@ -2702,7 +2702,7 @@ async function readKnowledgeBaseObservationProjection(
           .from(conversationTurns)
           .where(
             and(
-              eq(conversationTurns.userId, input.userId),
+              enterpriseOwnerPredicate(conversationTurns, input.userId),
               eq(conversationTurns.buildId, build.id),
               inArray(conversationTurns.id, acceptedReceiptTurnIds),
             ),
@@ -3550,6 +3550,10 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     };
   }
 
+  const nodeEditFailure = (build.handoffProvenance as Record<string, unknown> | null)?.nodeEditFailure as { schemaVersion?: number; stateEpoch?: number; message?: string; turnId?: string; createdAt?: number } | undefined;
+  if (!activeTurnRow && nodeEditFailure?.schemaVersion === 1 && nodeEditFailure.stateEpoch === build.stateEpoch && typeof nodeEditFailure.message === "string") {
+    notice = { key: `${build.id}:${build.stateEpoch}:node-edit-failed`, code: "KNOWLEDGE_NODE_EDIT_FAILED", severity: "warning", message: nodeEditFailure.message, retryable: false, failureClass: "terminal_nonregenerable", recoveryAction: "stopped", canRegenerate: false, turnId: nodeEditFailure.turnId ?? null, createdAt: nodeEditFailure.createdAt ?? build.updatedAt.getTime() };
+  }
   return {
     progress: businessProgress,
     stateEpoch: build.stateEpoch,
@@ -3873,7 +3877,7 @@ export async function observeKnowledgeBaseOperationalFailure(input: {
         .where(
           and(
             eq(conversationTurns.id, build.activeTurnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -4013,7 +4017,7 @@ export async function observeKnowledgeBaseProtocolFailure(input: {
         .where(
           and(
             eq(conversationTurns.id, build.activeTurnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -4147,7 +4151,7 @@ export async function resumeKnowledgeBaseFinalPackageMissing(input: {
         .where(
           and(
             eq(conversationTurns.id, build.activeTurnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -4234,7 +4238,7 @@ export async function resumeKnowledgeBaseFinalPackageMissing(input: {
       .where(
         and(
           eq(knowledgeBaseBuilds.id, build.id),
-          eq(knowledgeBaseBuilds.userId, input.userId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
           eq(knowledgeBaseBuilds.generation, build.generation),
           eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
           eq(knowledgeBaseBuilds.activeTurnId, turn.id),
@@ -4275,7 +4279,7 @@ export async function resumeKnowledgeBaseFinalPackageMissing(input: {
         .where(
           and(
             eq(conversations.id, persistedConversationId),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
           ),
         )
         .limit(1)
@@ -4295,7 +4299,7 @@ export async function resumeKnowledgeBaseFinalPackageMissing(input: {
         .where(
           and(
             eq(conversations.id, persistedConversationId),
-            eq(conversations.userId, input.userId),
+            enterpriseOwnerPredicate(conversations, input.userId),
             eq(conversations.version, conversation.version),
           ),
         );
@@ -4508,7 +4512,7 @@ async function finishLegacyKnowledgeBaseReconcileNoopByConversation(input: {
         .where(
           and(
             eq(conversationTurns.id, build.activeTurnId),
-            eq(conversationTurns.userId, input.userId),
+            enterpriseOwnerPredicate(conversationTurns, input.userId),
             eq(conversationTurns.buildId, build.id),
             eq(conversationTurns.buildGeneration, build.generation),
           ),
@@ -4573,7 +4577,7 @@ export async function reconcileKnowledgeBaseProgress(input: {
               .where(
                 and(
                   eq(conversationTurns.id, build.activeTurnId),
-                  eq(conversationTurns.userId, input.userId),
+                  enterpriseOwnerPredicate(conversationTurns, input.userId),
                   eq(conversationTurns.buildId, build.id),
                   eq(conversationTurns.buildGeneration, build.generation),
                 ),
@@ -4975,7 +4979,7 @@ export async function reconcileKnowledgeBaseProgress(input: {
           .where(
             and(
               eq(knowledgeBaseBuilds.id, build.id),
-              eq(knowledgeBaseBuilds.userId, input.userId),
+              enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
               eq(knowledgeBaseBuilds.generation, build.generation),
               eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
               build.skillVersion === "4" && activeTurn
@@ -5508,7 +5512,7 @@ export async function reconcileKnowledgeBaseProgress(input: {
         .where(
           and(
             eq(knowledgeBaseBuilds.id, build.id),
-            eq(knowledgeBaseBuilds.userId, input.userId),
+            enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
             eq(knowledgeBaseBuilds.generation, build.generation),
             eq(knowledgeBaseBuilds.stateEpoch, build.stateEpoch),
             build.skillVersion === "4" && activeTurn
@@ -5732,7 +5736,7 @@ export async function markKnowledgeBasePublished(input: {
     })
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(
           knowledgeBaseBuilds.conversationId,
           normalizeConversationId(input.conversationId),
@@ -5747,7 +5751,7 @@ export async function markKnowledgeBasePublished(input: {
     .from(knowledgeBaseBuilds)
     .where(
       and(
-        eq(knowledgeBaseBuilds.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
         eq(
           knowledgeBaseBuilds.conversationId,
           normalizeConversationId(input.conversationId),

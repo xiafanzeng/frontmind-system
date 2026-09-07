@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { and, desc, eq, gte } from "drizzle-orm";
 
 import {
@@ -115,13 +116,13 @@ export async function getLatestAuthenticatedKnowledgeSnapshot(input: {
       knowledgeBaseBuilds,
       and(
         eq(knowledgeBaseBuilds.id, knowledgeBaseSnapshots.sourceBuildId),
-        eq(knowledgeBaseBuilds.userId, knowledgeBaseSnapshots.userId),
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, knowledgeBaseSnapshots.userId),
         eq(knowledgeBaseBuilds.publishedSnapshotId, knowledgeBaseSnapshots.id),
       ),
     )
     .where(
       and(
-        eq(knowledgeBaseSnapshots.userId, input.userId),
+        enterpriseOwnerPredicate(knowledgeBaseSnapshots, input.userId),
         eq(knowledgeBaseSnapshots.status, "active"),
         gte(knowledgeBaseSnapshots.createdAt, input.notBefore),
       ),

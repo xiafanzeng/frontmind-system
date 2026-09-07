@@ -507,8 +507,10 @@ describe("knowledge-base reply snapshots", () => {
   });
 });
 
+let workspaceFixture = 0;
 describe("ConversationProvider cloud hydration", () => {
   beforeEach(() => {
+    window.history.replaceState(null, "", `/?enterpriseProjectId=fixture-${++workspaceFixture}`);
     vi.clearAllMocks();
     mocks.auth.user = { id: 1 };
     mocks.auth.loading = false;
@@ -519,6 +521,88 @@ describe("ConversationProvider cloud hydration", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("retains an unacknowledged message and browser attachment only in its original workspace", async () => {
+    const projectA = window.location.href;
+    const file = new File(["draft"], "draft.txt", { type: "text/plain" });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    let rejectOld!: (error: Error) => void;
+    mocks.syncSnapshot.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    act(() => first.result.current.addMessage("account-1", { id: "draft-message", role: "user", content: "尚未保存的消息", timestamp: Date.now(), attachments: [{ id: "draft-file", type: "file", name: "draft.txt", file, blobUrl: "blob:scope-draft" }] }));
+    await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1));
+    first.unmount();
+    expect(revoke).not.toHaveBeenCalledWith("blob:scope-draft");
+
+    window.history.replaceState(null, "", "/?enterpriseProjectId=isolated-project-b");
+    const second = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(second.result.current.hydrated).toBe(true));
+    expect(second.result.current.state.conversations[0].messages).toEqual([]);
+    await act(async () => rejectOld(new Error("scope disposed")));
+    expect(second.result.current.syncError).toBeNull();
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1);
+    second.unmount();
+
+    window.history.replaceState(null, "", projectA);
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    const message = restored.result.current.state.conversations[0].messages[0];
+    expect(message.content).toBe("尚未保存的消息");
+    expect(message.attachments?.[0]).toMatchObject({ file, blobUrl: "blob:scope-draft" });
+    expect(restored.result.current.syncError).toContain("消息和附件已保留");
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1);
+    await act(async () => { expect(await restored.result.current.flushConversation("account-1")).toBe(true); });
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.syncSnapshot.mock.calls[1][0].conversation.messages[0].content).toBe("尚未保存的消息");
+    restored.unmount();
+    expect(revoke).toHaveBeenCalledWith("blob:scope-draft");
+  });
+
+  it("restores a pending delete without resurrecting it or executing in another account", async () => {
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    act(() => first.result.current.deleteConversation("account-1"));
+    first.unmount();
+    mocks.auth.user = { id: 2 };
+    const other = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(other.result.current.hydrated).toBe(true));
+    expect(other.result.current.state.conversations.map(row => row.id)).toEqual(["account-1"]);
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
+    other.unmount();
+    mocks.auth.user = { id: 1 };
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    expect(restored.result.current.state.conversations).toEqual([]);
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
+    await act(async () => { expect(await restored.result.current.flushConversation("account-1")).toBe(true); });
+    expect(mocks.deleteConversation).toHaveBeenCalledWith({ id: "account-1" });
+  });
+
+  it("retains a specialized blank draft across account navigation without dispatching it", async () => {
+    const projectA = window.location.href;
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    let id!: string;
+    act(() => { id = first.result.current.createConversation({ title: "内容草稿", purpose: "content_production" }); });
+    first.unmount();
+    window.history.replaceState(null, "", "/agent");
+    const account = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(account.result.current.hydrated).toBe(true));
+    expect(account.result.current.state.conversations.some(row => row.id === id)).toBe(false);
+    account.unmount();
+    window.history.replaceState(null, "", projectA);
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    expect(restored.result.current.state.conversations.find(row => row.id === id)).toMatchObject({ title: "内容草稿", purpose: "content_production", messages: [] });
+    expect(restored.result.current.activeConversation?.id).toBe(id);
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    await act(async () => { await restored.result.current.refreshConversations(); });
+    expect(restored.result.current.activeConversation?.id).toBe(id);
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
   });
 
   it("isolates General, QA and content histories while preserving the cloud persistence owner", async () => {

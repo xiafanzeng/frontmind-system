@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const context = vi.hoisted(() => ({
   commitKnowledgeBaseObservation: vi.fn(),
   refreshConversations: vi.fn(async () => {}),
@@ -10,6 +11,10 @@ vi.mock("@/contexts/ConversationContext", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
+import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
+import { toast } from "sonner";
+let disposeScope: (() => void) | undefined;
+afterEach(() => { disposeScope?.(); disposeScope = undefined; vi.unstubAllGlobals(); });
 
 const coordinates = {
   conversationId: "conversation",
@@ -27,7 +32,24 @@ const observation = {
 };
 beforeEach(() => vi.clearAllMocks());
 describe("local knowledge node controls", () => {
-  it("selects a confirmed node locally without reset or model submission", async () => {
+  it("does not select the old node when the project changes while its library response is parsing", async () => {
+    disposeScope = activateWorkspaceRestScope("1:project-a", "project-a");
+    let resolveLibrary!: (value: unknown) => void;
+    const json = vi.fn(() => new Promise(resolve => { resolveLibrary = resolve; }));
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json });
+    vi.stubGlobal("fetch", fetcher);
+    render(<KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />);
+    fireEvent.click(screen.getByRole("button", { name: "编辑文字 / 上传图片" }));
+    await waitFor(() => expect(json).toHaveBeenCalled());
+    disposeScope = activateWorkspaceRestScope("1:project-b", "project-b");
+    await act(async () => resolveLibrary({ coordinates, images: [] }));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetcher.mock.calls[0][1].headers).get("x-enterprise-project-id")).toBe("project-a");
+    expect(context.commitKnowledgeBaseObservation).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+  it("selects a confirmed node locally after StrictMode effect replay without reset or model submission", async () => {
     const fetcher = vi.fn(
       async (url: string) =>
         new Response(
@@ -41,7 +63,7 @@ describe("local knowledge node controls", () => {
     );
     vi.stubGlobal("fetch", fetcher);
     render(
-      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
+      <StrictMode><KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" /></StrictMode>,
     );
     fireEvent.click(
       screen.getByRole("button", { name: "编辑文字 / 上传图片" }),

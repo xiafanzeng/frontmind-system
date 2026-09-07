@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -10,7 +11,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 
-const projectMocks = vi.hoisted(() => ({ id: "11111111-1111-4111-8111-111111111111", list: vi.fn(), create: vi.fn(), select: vi.fn() }));
+const projectMocks = vi.hoisted(() => ({ id: "11111111-1111-4111-8111-111111111111", list: vi.fn(), create: vi.fn(), delete: vi.fn(), select: vi.fn() }));
 vi.mock("./HistoricalResultsReadOnly", () => ({ default: ({ questionId, onBack }: { questionId: string; onBack: () => void }) => <section data-testid="historical-question-result">{questionId}<button onClick={onBack}>返回优化问题</button></section> }));
 vi.mock("@/components/EmbeddedKnowledgeBasePanel", () => ({ default: () => <div data-testid="knowledge-agent">知识库节点工作区</div> }));
 vi.mock("@/lib/enterprise-project", async original => ({ ...await original<typeof import("@/lib/enterprise-project")>(), switchEnterpriseProject: projectMocks.select }));
@@ -55,6 +56,7 @@ const {
   brandQuestionUniverseObserveUseQuery: vi.fn(),
   brandQuestionUniverseStartUseMutation: vi.fn(),
   trpcUtils: {
+    enterpriseProjects: { list: { setData: vi.fn(), invalidate: vi.fn() } },
     workspace: {
       brandQuestionUniverse: { observe: { invalidate: vi.fn() } },
       dashboard: { invalidate: vi.fn() },
@@ -132,6 +134,7 @@ vi.mock("@/lib/trpc", () => ({
       list: { useQuery: projectMocks.list },
       create: { useMutation: () => ({ mutateAsync: projectMocks.create }) },
       rename: { useMutation: () => ({ mutateAsync: vi.fn() }) },
+      delete: { useMutation: () => ({ mutateAsync: projectMocks.delete }) },
       monitoringProgress: { useQuery: () => ({ data: { projects: [], runs: [], summary: { projectCount: 0, runCount: 0, expectedAttempts: 0, completedAttempts: 0, failedAttempts: 0 } }, isLoading: false }) },
       createMonitoringProject: { useMutation: () => ({ mutateAsync: vi.fn() }) },
     },
@@ -394,6 +397,12 @@ describe("UserBrandDashboard formal workspace", () => {
   });
 
   beforeEach(() => {
+    projectMocks.delete.mockReset();
+    projectMocks.select.mockClear();
+    trpcUtils.enterpriseProjects.list.setData.mockReset().mockImplementation((_input, update) => {
+      const query = projectMocks.list();
+      projectMocks.list.mockReturnValue({ ...query, data: update(query.data) });
+    });
     window.history.replaceState(null, "", `/?enterpriseProjectId=${projectMocks.id}`);
     projectMocks.list.mockReturnValue({ data: { projects: [{ id: projectMocks.id, name: "企业项目A", ownerUserId: 7, revision: 1 }] }, isLoading: false, refetch: vi.fn() });
     authState.marketEdition = "domestic";
@@ -502,7 +511,7 @@ describe("UserBrandDashboard formal workspace", () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
     expect(within(screen.getByRole("tablist", { name: "项目板块" })).getAllByRole("tab")).toHaveLength(6);
-    expect(screen.getByText("MindPromise")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();
     expect(screen.queryByText("续费套餐")).toBeNull();
@@ -519,7 +528,7 @@ describe("UserBrandDashboard formal workspace", () => {
   });
   it("keeps monitoring and publishing in the same project shell", async () => {
     render(<UserBrandDashboard />);
-    const sidebar = screen.getByRole("button", { name: "AI智能品牌优化方案" }).closest("aside");
+    const sidebar = screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside");
     fireEvent.click(screen.getByRole("tab", { name: /进度监控/ }));
     expect(await screen.findByTestId("embedded-monitoring-business")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "从优化问题新建监控项目" })).toBeEnabled();
@@ -527,7 +536,7 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(screen.getByRole("tab", { name: "稿件" }));
     expect(window.location.pathname).toBe("/publishing/articles");
     expect(new URLSearchParams(window.location.search).get("enterpriseProjectId")).toBe(projectMocks.id);
-    expect(screen.getByRole("button", { name: "AI智能品牌优化方案" }).closest("aside")).toBe(sidebar);
+    expect(screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside")).toBe(sidebar);
   });
   it("opens enterprise QA under extensions while preserving project navigation", async () => {
     render(<UserBrandDashboard />);
@@ -561,6 +570,31 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
     await waitFor(() => expect(projectMocks.create).toHaveBeenCalledWith(expect.objectContaining({ name: "新品牌", ownerUserId: 7 })));
     expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
+  });
+  it("removes a confirmed deletion from cache before leaving the last project", async () => {
+    projectMocks.delete.mockResolvedValue({ enterpriseProjectId: projectMocks.id, revision: 2 });
+    render(<UserBrandDashboard />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "项目管理" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除当前项目" }));
+    expect(projectMocks.delete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
+    await waitFor(() => expect(projectMocks.delete).toHaveBeenCalledWith({ enterpriseProjectId: projectMocks.id, expectedRevision: 1 }));
+    await waitFor(() => expect(trpcUtils.enterpriseProjects.list.setData).toHaveBeenCalled());
+    const update = trpcUtils.enterpriseProjects.list.setData.mock.calls.at(-1)![1];
+    expect(update({ projects: [{ id: projectMocks.id }, { id: "remaining" }] })).toEqual({ projects: [{ id: "remaining" }] });
+    expect(new URLSearchParams(window.location.search).has("enterpriseProjectId")).toBe(false);
+  });
+  it("does not override a new destination after deletion completes", async () => {
+    let finish!: (value: unknown) => void;
+    projectMocks.delete.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    render(<UserBrandDashboard />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "项目管理" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除当前项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
+    window.history.replaceState(null, "", "/agent");
+    await act(async () => finish({ enterpriseProjectId: projectMocks.id, revision: 2 }));
+    expect(window.location.pathname).toBe("/agent");
+    expect(projectMocks.select).not.toHaveBeenCalled();
   });
   it("keeps the customer dashboard chunk free of the private tracker brand", () => {
     const source = readFileSync(

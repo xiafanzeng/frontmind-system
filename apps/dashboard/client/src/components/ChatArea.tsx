@@ -42,6 +42,7 @@ import {
   UploadCloud,
 } from "lucide-react";
 import { cn, copyToClipboard } from "@/lib/utils";
+import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import {
   creditEventBus,
   cancelKnowledgeBaseStartReservation,
@@ -606,10 +607,13 @@ type KnowledgeBaseStarterUploadImplementation = (
 
 export async function uploadKnowledgeBaseStarterFiles(
   files: File[],
-  lifecycle: KnowledgeBaseStarterLifecycle,
+  incomingLifecycle: KnowledgeBaseStarterLifecycle,
   responseStartedAt: number,
   uploadImplementation: KnowledgeBaseStarterUploadImplementation = uploadKnowledgeBaseLocalAsset,
 ) {
+  const operation = captureWorkspaceRestOperation(incomingLifecycle.signal);
+  const lifecycle = { ...incomingLifecycle, signal: operation.signal };
+  operation.assertActive();
   const receipts = new Map(lifecycle.uploadedReceipts);
   const uploadedAttachments: Array<{
     file_id: string;
@@ -985,16 +989,18 @@ export async function fetchKnowledgeBaseStartRequest(
     onRequestStarted?: () => void;
   },
 ) {
-  if (options.signal.aborted) {
+  const operation = captureWorkspaceRestOperation(options.signal);
+  const signal = operation.signal;
+  if (signal.aborted) {
     throw new DOMException("上传已停止", "AbortError");
   }
 
   const controller = new AbortController();
   const abortFromLifecycle = () => controller.abort();
-  options.signal.addEventListener("abort", abortFromLifecycle, { once: true });
-  if (options.signal.aborted) controller.abort();
+  signal.addEventListener("abort", abortFromLifecycle, { once: true });
+  if (signal.aborted) controller.abort();
   if (controller.signal.aborted) {
-    options.signal.removeEventListener("abort", abortFromLifecycle);
+    signal.removeEventListener("abort", abortFromLifecycle);
     throw new DOMException("上传已停止", "AbortError");
   }
   const timeoutMs = options.timeoutMs ?? KNOWLEDGE_BASE_START_TIMEOUT_MS;
@@ -1013,22 +1019,25 @@ export async function fetchKnowledgeBaseStartRequest(
       throw new DOMException("上传已停止", "AbortError");
     }
     options.onRequestStarted?.();
-    return await Promise.race([
+    const response = await Promise.race([
       (options.fetchImplementation ?? fetch)(
         options.endpoint ?? "/api/knowledge-base/start/reserve",
         {
           ...init,
+          headers: operation.headers(Object.fromEntries(new Headers(init.headers).entries())),
           signal: controller.signal,
         },
       ),
       timeout,
     ]);
+    operation.assertActive();
+    return response;
   } catch (error) {
     if (timedOut) throw knowledgeBaseStartTimeoutError();
     throw error;
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
-    options.signal.removeEventListener("abort", abortFromLifecycle);
+    signal.removeEventListener("abort", abortFromLifecycle);
   }
 }
 
@@ -1348,8 +1357,11 @@ export default function ChatArea({
         operatorNotes,
         files,
       }: DeepReportStartInput,
-      lifecycle: KnowledgeBaseStarterLifecycle,
+      incomingLifecycle: KnowledgeBaseStarterLifecycle,
     ): Promise<KnowledgeBaseStarterStartOutcome> => {
+      const operation = captureWorkspaceRestOperation(incomingLifecycle.signal);
+      const lifecycle = { ...incomingLifecycle, signal: operation.signal };
+      operation.assertActive();
       if (!activeConversation) {
         throw new Error("当前知识库会话不可用，请刷新后重试");
       }
@@ -1436,6 +1448,7 @@ export default function ChatArea({
         }
 
         const data = (await response.json()) as OneClickTaskStartResponse;
+        operation.assertActive();
         const observation = data.observation
           ? knowledgeBaseObservationFromPayload(data)
           : undefined;
@@ -1769,7 +1782,9 @@ export default function ChatArea({
               {executionModel && (
                 <span className="inline-flex items-center gap-1">
                   <Bot className="h-3 w-3" />
-                  {getModelDisplayName(executionModel)}
+                  {syncKnowledgeBaseSnapshot || responseLogicContext || purpose || fixedAgentProfile
+                    ? "FrontMind Agent"
+                    : getModelDisplayName(executionModel)}
                 </span>
               )}
               {startedAt && (
@@ -2883,6 +2898,7 @@ export function EmptyConversationHint({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const operation = captureWorkspaceRestOperation(controller.signal);
     setIsStarting(true);
     try {
       const payload = {
@@ -2893,7 +2909,7 @@ export function EmptyConversationHint({
         files,
       };
       const outcome = await onStartKnowledgeBase(payload, {
-        signal: controller.signal,
+        signal: operation.signal,
         clientRequestId,
         expectedResetRevision: resetRevision,
         startedAt,

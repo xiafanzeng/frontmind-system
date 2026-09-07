@@ -1,4 +1,5 @@
-import { enterpriseProjectHeaders, projectResourceUrl } from "@/lib/enterprise-project";
+import { monitoringClientRestOperation } from "../../trpc";
+import { projectResourceUrl } from "@/lib/enterprise-project";
 import type { AppRouter } from "@frontmind/monitoring-api";
 import type { TRPCClient } from "@trpc/client";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -83,7 +84,9 @@ export function createServerBackedPublisherGateway(
   client: PublisherTrpcClient,
   options: ServerBackedPublisherGatewayOptions = {},
 ): PublisherGateway {
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const rawFetch = options.fetch ?? globalThis.fetch;
+  const fetchImpl: typeof globalThis.fetch = (input, init) =>
+    monitoringClientRestOperation(client).fetch(input, init, rawFetch);
   const importPollIntervalMs =
     options.importPollIntervalMs ?? DEFAULT_IMPORT_POLL_MS;
   const importTimeoutMs = options.importTimeoutMs ?? DEFAULT_IMPORT_TIMEOUT_MS;
@@ -232,6 +235,7 @@ export function createServerBackedPublisherGateway(
 
   return {
     getDashboard(signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const [dashboard, articles, facets, queuedBatches, processingBatches] =
           await Promise.all([
@@ -297,6 +301,7 @@ export function createServerBackedPublisherGateway(
     },
 
     listArticles(signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () =>
         (await loadArticleSummaries(signal))
           .map(mapArticleSummary)
@@ -305,6 +310,7 @@ export function createServerBackedPublisherGateway(
     },
 
     getArticle(articleId, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const detail = mapArticleDetail(
           await loadArticleBundle(articleId, signal, true),
@@ -314,6 +320,7 @@ export function createServerBackedPublisherGateway(
     },
 
     importDocx(file, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         if (!file.name.toLowerCase().endsWith(".docx")) {
           throw new PublisherGatewayError("请选择 DOCX 文件", "validation");
@@ -336,7 +343,7 @@ export function createServerBackedPublisherGateway(
           "/api/monitoring/publisher/docx-imports",
           {
             method: "POST",
-            headers: enterpriseProjectHeaders(),
+            headers: {},
             body,
             credentials: "same-origin",
             signal,
@@ -389,6 +396,7 @@ export function createServerBackedPublisherGateway(
     },
 
     uploadArticleImage(articleId, file, altText, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         if (typeof fetchImpl !== "function") {
           throw new PublisherGatewayError(
@@ -403,7 +411,7 @@ export function createServerBackedPublisherGateway(
           `/api/monitoring/publisher/articles/${encodeURIComponent(articleId)}/assets`,
           {
             method: "POST",
-            headers: enterpriseProjectHeaders(),
+            headers: {},
             body,
             credentials: "same-origin",
             signal,
@@ -443,6 +451,7 @@ export function createServerBackedPublisherGateway(
     },
 
     saveArticle(input) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const canonicalHtml = sanitizePublisherEditorHtml(
           input.bodyHtml,
@@ -465,6 +474,7 @@ export function createServerBackedPublisherGateway(
     },
 
     freezeArticle(articleId, expectedRevision) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         await client.publisher.articles.freeze.mutate({
           articleId,
@@ -479,6 +489,7 @@ export function createServerBackedPublisherGateway(
     },
 
     getMediaFacets(kind, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const mediaApi = client.publisher.media as unknown as {
           facets: {
@@ -584,6 +595,7 @@ export function createServerBackedPublisherGateway(
     },
 
     listMedia(filters, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const result = await rawMediaPage(filters, signal);
         return {
@@ -597,6 +609,7 @@ export function createServerBackedPublisherGateway(
     },
 
     createDraft(articleVersionId, mediaIds) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const context = await resolveVersion(articleVersionId);
         const defaultTitle = articleTitle(context.article);
@@ -616,12 +629,14 @@ export function createServerBackedPublisherGateway(
     },
 
     getDraft(draftId, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () =>
         mapDraft(await getRawDraft(draftId, signal), signal),
       );
     },
 
     updateDraftMedia(draftId, mediaIds, expectedRevision) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const draft = draftCache.get(draftId) ?? (await getRawDraft(draftId));
         if (draft.revision !== expectedRevision) {
@@ -655,6 +670,7 @@ export function createServerBackedPublisherGateway(
     },
 
     refreshDraftMedia(draftId, expectedRevision) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const saved = await client.publisher.drafts.refreshMedia.mutate({
           draftId,
@@ -666,6 +682,7 @@ export function createServerBackedPublisherGateway(
     },
 
     saveDraftTitles(draftId, input) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const draft = draftCache.get(draftId) ?? (await getRawDraft(draftId));
         const modern = isSaveDraftTitlesInput(input) ? input : undefined;
@@ -726,6 +743,7 @@ export function createServerBackedPublisherGateway(
     },
 
     preflightDraft(draftId, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const draft =
           draftCache.get(draftId) ?? (await getRawDraft(draftId, signal));
@@ -751,6 +769,7 @@ export function createServerBackedPublisherGateway(
     },
 
     submitDraft(input) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const expectedDraftRevision =
           preflightRevisionCache.get(
@@ -776,6 +795,7 @@ export function createServerBackedPublisherGateway(
     },
 
     listBatches(filters, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const resolved = filters ?? {
           query: "",
@@ -815,6 +835,7 @@ export function createServerBackedPublisherGateway(
     },
 
     getBatch(batchId, signal) {
+      monitoringClientRestOperation(client);
       return translateGatewayErrors(async () =>
         mapBatch(
           await client.publisher.batches.get.query({ batchId }, { signal }),
@@ -1493,7 +1514,7 @@ async function fetchPrivateArticlePreview(
       {
         method: "POST",
         credentials: "same-origin",
-        headers: enterpriseProjectHeaders({ "content-type": "application/json" }),
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ assetId: image.id }),
         signal,
       },

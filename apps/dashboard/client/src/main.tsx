@@ -1,20 +1,16 @@
 import { trpc } from "@/lib/trpc";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
-import superjson from "superjson";
 import App from "./App";
 import { AuthSessionProvider } from "@/_core/hooks/useAuth";
 import { checkFrontMindBuildVersion } from "@/lib/build-version";
-import { shouldIsolateAuthOperation } from "@/lib/trpc-link-routing";
 import "./index.css";
-import { enterpriseProjectHeaders } from "@/lib/enterprise-project";
+import { createDashboardTransport } from "@/lib/dashboard-transport";
 
 const isLocalDemo = ["/monitoring", "/knowledge-frontend-demo"].includes(
   window.location.pathname,
 );
 const queryClient = new QueryClient();
-const workspaceHeaders = enterpriseProjectHeaders();
 
 function loadOptionalAnalytics() {
   const endpoint = import.meta.env.VITE_ANALYTICS_ENDPOINT;
@@ -51,34 +47,8 @@ queryClient.getMutationCache().subscribe((event) => {
   }
 });
 
-const trpcClient = trpc.createClient({
-  links: [
-    splitLink({
-      condition(operation) {
-        return shouldIsolateAuthOperation(operation.path);
-      },
-      true: httpLink({
-        url: "/api/trpc",
-        transformer: superjson,
-        fetch: credentialedFetch,
-        headers: {},
-      }),
-      false: httpBatchLink({
-        url: "/api/trpc",
-        transformer: superjson,
-        fetch: credentialedFetch,
-        headers: workspaceHeaders,
-      }),
-    }),
-  ],
-});
-
-function credentialedFetch(input: RequestInfo | URL, init?: RequestInit) {
-  return globalThis.fetch(input, {
-    ...(init ?? {}),
-    credentials: "include",
-  });
-}
+// Authentication is account-scoped. Protected workspaces own separate, frozen transports.
+const trpcClient = createDashboardTransport();
 
 // ============================================================
 // Version check on focus (Stale-While-Revalidate pattern)

@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { Router } from "wouter";
-import { memoryLocation } from "wouter/memory-location";
 const auth = vi.hoisted(() => ({
   user: { id: 42, role: "user", adminAccessLevel: null as string | null },
   loading: false,
@@ -30,12 +28,8 @@ vi.mock("@/pages/DeliveryMemberDashboard", () => ({
 }));
 import App from "@/App";
 function open(path: string) {
-  const { hook } = memoryLocation({ path });
-  return render(
-    <Router hook={hook}>
-      <App />
-    </Router>,
-  );
+  window.history.replaceState(null, "", path);
+  return render(<App />);
 }
 beforeEach(() => {
   auth.user = { id: 42, role: "user", adminAccessLevel: null };

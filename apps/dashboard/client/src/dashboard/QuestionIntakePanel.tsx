@@ -230,6 +230,7 @@ function QuestionIntakeView({
     quota: portal.quotas.find((quota) => quota.key === option.quotaKey),
   }));
   const hasCapacity = (value: WorkspaceQuestionCategory) => {
+    if (portal.mode === "operator") return true;
     const quota = options.find((option) => option.value === value)?.quota;
     return Boolean(
       quota &&
@@ -267,7 +268,7 @@ function QuestionIntakeView({
         <div>
           <span>目标问题</span>
           <h3>从品牌全域词库选择或自主填写需要优化的问题</h3>
-          <p>选择类别并确认后立即进入服务。您可以直接修改或删除自己的问题。</p>
+          <p>{portal.mode === "operator" ? "添加问题后即可开展应答优化与进度监控，支持随时修改或删除。" : "选择类别并确认后立即进入服务。您可以直接修改或删除自己的问题。"}</p>
         </div>
         <button
           type="button"
@@ -363,8 +364,8 @@ function QuestionIntakeView({
         </p>
       )}
       {portal.purchasedQuestions.length > 0 && (
-        <section className="mt-5 grid gap-3" aria-label="服务问题管理">
-          <strong className="text-sm">已进入服务的问题</strong>
+        <section className="mt-5 grid gap-3" aria-label={portal.mode === "operator" ? "优化问题管理" : "服务问题管理"}>
+          <strong className="text-sm">{portal.mode === "operator" ? "优化问题" : "已进入服务的问题"}</strong>
           {portal.purchasedQuestions.map((item) => (
             <article
               key={item.id}
@@ -407,7 +408,7 @@ function QuestionIntakeView({
           <AlertDialogHeader>
             <AlertDialogTitle>确认优化问题？</AlertDialogTitle>
             <AlertDialogDescription>
-              确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。
+              {portal.mode === "operator" ? "保存到当前企业项目后即可开展应答优化与监控；后续仍可修改或删除。" : "确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <p className="rounded-xl border bg-muted/40 px-4 py-3 text-sm">

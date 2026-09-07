@@ -177,7 +177,7 @@ export default function ChatInput({
 
   // Retain the legacy dispatch field for idempotency; execution is server-owned.
   const [selectedModel, setSelectedModel] = useState(() => {
-    return fixedAgentProfile || "frontmind-pro";
+    return fixedAgentProfile || "frontmind-base";
   });
 
   useEffect(() => {
@@ -382,6 +382,7 @@ export default function ChatInput({
   const addFiles = useCallback(
     async (newFiles: File[]) => {
       if (responseLogicInitialPromptLocked) return;
+      if (syncKnowledgeBaseSnapshot && newFiles.some((file) => !isSupportedOfficialLogoFile(file))) { toast.error("节点附件仅支持 PNG、JPEG、WebP、AVIF 或 GIF 图片；文字修改请填写修改要求"); return; }
       if (officialLogoRequired && newFiles.length !== 1) {
         toast.error("请只选择一张企业主 Logo");
         return;
@@ -412,7 +413,7 @@ export default function ChatInput({
         );
       }
     },
-    [officialLogoRequired, responseLogicInitialPromptLocked],
+    [officialLogoRequired, responseLogicInitialPromptLocked, syncKnowledgeBaseSnapshot],
   );
 
   const removeFile = useCallback((id: string) => {
@@ -1011,6 +1012,7 @@ export default function ChatInput({
             <div className="flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
               {/* File buttons */}
               <div className="flex items-center gap-1 pb-0.5">
+                {syncKnowledgeBaseSnapshot && !knowledgeBaseNotStarted && !inputLocked && <span className="mr-1 whitespace-nowrap rounded-md bg-violet-50 px-2 py-1 text-xs text-violet-700" title="文字修改固定 Low；图片仅在本地处理">Low</span>}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1061,7 +1063,7 @@ export default function ChatInput({
                         : officialLogoRequired
                           ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
                           : syncKnowledgeBaseSnapshot
-                            ? "输入修改意见，或上传资料；提交后仍停留当前节点"
+                            ? "输入文字修改要求（Low）；仅上传图片会直接本地保存"
                             : purpose === "enterprise_qa"
                               ? "输入企业相关问题，按 Enter 提问…"
                               : "输入你的内容需求，按 Enter 开始编排..."
@@ -1141,7 +1143,7 @@ export default function ChatInput({
         type="file"
         multiple={!officialLogoRequired}
         accept={
-          officialLogoRequired
+          officialLogoRequired || syncKnowledgeBaseSnapshot
             ? "image/png,image/jpeg,image/webp,image/avif,image/gif"
             : undefined
         }

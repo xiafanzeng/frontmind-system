@@ -53,6 +53,7 @@ export function userFacingErrorMessage(
   const status = errorStatus(value);
   if (status === 400 || status === 422) return "提交内容有误，请检查后重试";
   if (status === 401) return "登录状态无效，请重新登录";
+  if (status === 402) return "账户余额不足，请充值后继续";
   if (status === 403) return "当前账号无权执行此操作";
   if (status === 404) return "请求的内容不存在";
   if (status === 409) return "当前数据已变化，请刷新后重试";

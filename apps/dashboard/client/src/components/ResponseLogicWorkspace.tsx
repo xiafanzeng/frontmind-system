@@ -785,8 +785,8 @@ export default function ResponseLogicWorkspace(
   if (!props.questionGroups?.length) {
     return (
       <ResponseLogicConfirmationState
-        title="当前周期尚无服务问题"
-        description="服务问题同步后，可在这里逐题对话、核验并确认应答逻辑。"
+        title="当前项目尚无优化问题"
+        description="在优化问题中添加问题后，可在这里逐题对话、核验并确认应答逻辑。"
       />
     );
   }
@@ -1026,8 +1026,8 @@ function ResponseLogicConfirmationBoardContent({
   if (questionEntries.length === 0 || !selectedEntry) {
     return (
       <ResponseLogicConfirmationState
-        title="当前周期尚无服务问题"
-        description="服务问题同步后，这里会按问题展示应答逻辑智能体确认的正式内容。"
+        title="当前项目尚无优化问题"
+        description="在优化问题中添加问题后，这里会按问题展示应答逻辑智能体确认的正式内容。"
       />
     );
   }
@@ -1359,8 +1359,8 @@ function ResponseLogicWorkspaceContent({
   if (!selectedEntry) {
     return (
       <ResponseLogicConfirmationState
-        title="当前周期尚无服务问题"
-        description="服务问题同步后，这里会按问题载入应答逻辑草稿与正式确认内容。"
+        title="当前项目尚无优化问题"
+        description="在优化问题中添加问题后，这里会按问题载入应答逻辑草稿与正式确认内容。"
       />
     );
   }

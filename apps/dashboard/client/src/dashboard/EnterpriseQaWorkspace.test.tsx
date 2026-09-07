@@ -26,9 +26,11 @@ vi.mock("@/pages/Home", () => ({
 describe("Enterprise QA source binding", () => {
   beforeEach(() => {
     state.activeConversation = null;
+    window.history.replaceState(null, "", "/");
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.history.replaceState(null, "", "/");
   });
 
   it("opens real scoped chat and shows the published source used by a new task", async () => {
@@ -123,6 +125,7 @@ describe("Enterprise QA source binding", () => {
   });
 
   it("directs an account without a published knowledge base to the real knowledge workspace", async () => {
+    window.history.replaceState(null, "", "/enterprise-qa?enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7");
     vi.stubGlobal(
       "fetch",
       vi
@@ -135,7 +138,7 @@ describe("Enterprise QA source binding", () => {
     render(<EnterpriseQaSourceNote />);
     expect(
       await screen.findByRole("link", { name: "构建并发布知识库" }),
-    ).toHaveAttribute("href", "/knowledge-base");
+    ).toHaveAttribute("href", "/?view=knowledge&enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7");
     expect(screen.getByRole("status")).toHaveTextContent(
       "尚无可用的已发布企业知识库",
     );

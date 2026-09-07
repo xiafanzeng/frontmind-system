@@ -27,7 +27,6 @@ import {
   DELIVERY_ROLE_LABELS,
   type DeliveryRoleType,
 } from "@shared/delivery-roles";
-import type { ProvisionableServicePlanCode } from "@shared/service-portal";
 import { trpc } from "@/lib/trpc";
 import {
   isProtectedBuiltinAdminUsername,
@@ -209,7 +208,7 @@ export default function AdminUsers() {
   if (deliveryAdmin) {
     return (
       <PortalShell
-        eyebrow="管理中心 · 客户与服务"
+        eyebrow="管理中心 · 账号与权限"
         title="账号与权限"
         navItems={getAdminNav(false)}
         toolbar={
@@ -507,7 +506,7 @@ export default function AdminUsers() {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {accessLevelChange?.adminAccessLevel === "system_admin"
-                ? `${accessLevelChange?.user.displayName || accessLevelChange?.user.username} 将可以管理全部客户、套餐合同、账号权限和官网全局凭据。`
+                ? `${accessLevelChange?.user.displayName || accessLevelChange?.user.username} 将可以管理全部客户、账户余额、账号权限和官网全局凭据。`
                 : `${
                     accessLevelChange?.user.displayName ||
                     accessLevelChange?.user.username
@@ -852,9 +851,6 @@ export function CreateUserDialog({
   const [engineerRoleType, setEngineerRoleType] = useState<
     DeliveryRoleType | ""
   >("");
-  const [planCode, setPlanCode] = useState<ProvisionableServicePlanCode | "">(
-    "",
-  );
   const [marketEdition, setMarketEdition] = useState<AccountMarketEdition | "">(
     "",
   );
@@ -881,7 +877,6 @@ export function CreateUserDialog({
     setConfirmPassword("");
     setRole("user");
     setEngineerRoleType("");
-    setPlanCode("");
     setMarketEdition("");
     setDeliveryAdminId("");
     setAdminAccessLevel("delivery_admin");
@@ -915,10 +910,6 @@ export function CreateUserDialog({
     }
     if (password !== confirmPassword) {
       toast.error("两次输入的初始密码不一致");
-      return;
-    }
-    if (role === "user" && !planCode) {
-      toast.error("请选择客户套餐");
       return;
     }
     if (role === "user" && !marketEdition) {
@@ -957,7 +948,6 @@ export function CreateUserDialog({
                 displayName: displayName.trim() || undefined,
                 password,
                 role: "user",
-                planCode: planCode as ProvisionableServicePlanCode,
                 marketEdition: marketEdition as AccountMarketEdition,
                 deliveryAdminId: Number(effectiveDeliveryAdminId),
               });
@@ -987,9 +977,9 @@ export function CreateUserDialog({
               {userOnly && allowEngineer
                 ? "创建客户或工程师账号并安排交付归属；所有 Key 由系统管理员在 API 与人员管理统一配置。"
                 : userOnly && fixedDeliveryAdmin
-                  ? "设置客户初始密码和套餐；创建后自动归属当前交付管理员，Key 由系统管理员统一配置。"
+                  ? "设置客户初始密码；创建后自动归属当前交付管理员，Key 由系统管理员统一配置。"
                   : userOnly
-                    ? "设置客户初始密码、套餐和主负责人；Key 可由系统管理员稍后在 API 与人员管理配置。"
+                    ? "设置客户初始密码和主负责人；Key 可由系统管理员稍后在 API 与人员管理配置。"
                     : "创建客户、管理员或工程师账号；所有账号 Key 统一由系统管理员维护。"}
             </DialogDescription>
           </DialogHeader>
@@ -1005,7 +995,6 @@ export function CreateUserDialog({
                     value={role}
                     onValueChange={(value) => {
                       setRole(value as CreatableAccountRole);
-                      setPlanCode("");
                       setMarketEdition("");
                       setEngineerRoleType("");
                     }}
@@ -1115,25 +1104,7 @@ export function CreateUserDialog({
               )}
               {role === "user" && (
                 <>
-                  <div className="space-y-2">
-                    <Label>客户套餐</Label>
-                    <Select
-                      value={planCode}
-                      onValueChange={(value) =>
-                        setPlanCode(value as ProvisionableServicePlanCode)
-                      }
-                      disabled={createMutation.isPending}
-                    >
-                      <SelectTrigger className="w-full" aria-label="客户套餐">
-                        <SelectValue placeholder="请选择客户套餐" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="basic">普通版</SelectItem>
-                        <SelectItem value="advanced">进阶版</SelectItem>
-                        <SelectItem value="luxury">豪华版</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-3 text-sm">客户账号 · 按账户余额使用工具</div>
                   <div className="space-y-2">
                     <Label>客户版本</Label>
                     <Select
@@ -1262,8 +1233,7 @@ export function CreateUserDialog({
                   !password ||
                   password !== confirmPassword ||
                   (role === "user" &&
-                    (!planCode ||
-                      !marketEdition ||
+                    (!marketEdition ||
                       !effectiveDeliveryAdminId)) ||
                   (role === "delivery_member" && !engineerRoleType)
                 }

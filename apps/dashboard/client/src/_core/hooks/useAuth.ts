@@ -1,6 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useQueryClient } from "@tanstack/react-query";
+import { activeEnterpriseProjectId, clearEnterpriseProject } from "@/lib/enterprise-project";
 import {
   createContext,
   createElement,
@@ -75,6 +76,10 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
       // avoids an immediate follow-up auth.me request before the workspace can
       // render.
       utils.auth.me.setData(undefined, user);
+      clearEnterpriseProject();
+      // Recreate transports after login; a previous expired session may have
+      // left a project-scoped client mounted on the login route.
+      window.location.replace("/");
     },
   });
 
@@ -110,6 +115,9 @@ export function AuthSessionProvider({ children }: { children: ReactNode }) {
       predicate: (query) => !isAuthSessionQuery(query.queryKey),
     });
     logoutMutation.reset();
+    const hadProject = activeEnterpriseProjectId();
+    clearEnterpriseProject();
+    if (hadProject) window.location.replace("/login");
   }, [logoutMutation, queryClient, utils]);
 
   const state = useMemo<AuthSession>(

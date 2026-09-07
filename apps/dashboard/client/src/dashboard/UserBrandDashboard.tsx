@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { EnterpriseMonitoringWorkspace, EnterpriseProgressReport } from "./EnterpriseMonitoringWorkspace";
 import { Link, useLocation, useSearch } from "wouter";
 import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import {
@@ -48,6 +49,7 @@ import QuestionIntakePanel, {
 } from "./QuestionIntakePanel";
 import ProgressReportWorkspace from "./ProgressReportWorkspace";
 import HistoricalResultsReadOnly from "./HistoricalResultsReadOnly";
+import KnowledgeFrontendSettings from "./knowledge-frontend/KnowledgeFrontendSettings";
 import ConnectedSiteOpsConversationPanel from "./siteops/ConnectedSiteOpsConversationPanel";
 import { trpc } from "@/lib/trpc";
 import { ConversationPurposeProvider } from "@/contexts/ConversationContext";
@@ -78,6 +80,10 @@ import {
   ServiceQuotaOverview,
 } from "./service-portal-ui";
 import "./dashboard-styles.css";
+import { OperatorSidebar, OperatorTabs, OperatorEmptyProject } from "./OperatorNavigation";
+import AdminAccountBalance from "@/components/AdminAccountBalance";
+import { operatorRouteForView, operatorViewFromRoute, operatorViewPath } from "./operator-navigation";
+import { activeEnterpriseProjectId, projectWorkspaceUrl, rememberedEnterpriseProject, rememberEnterpriseProject, switchEnterpriseProject } from "@/lib/enterprise-project";
 import {
   customerMonitoringPages,
   customerPublishingPages,
@@ -104,6 +110,7 @@ const QUESTION_QUOTA_KEY_BY_CATEGORY = {
 };
 
 export function buildKeywordQuotaAvailability(portal) {
+  if (portal.mode === "operator") return {};
   const unlock =
     portal.plan.code === "luxury" &&
     portal.quotaUnlock?.total !== null &&
@@ -571,8 +578,41 @@ export function PreviewUserBrandDashboard({
 
 function PersistentUserBrandDashboard({ initialSection }) {
   const { user } = useAuth();
+  const [location] = useLocation();
+  const search = useSearch();
+  const requestedOwner = Number(new URLSearchParams(search).get("operatorOwnerId"));
+  const workspaceOwnerId = user?.role === "admin" && Number.isSafeInteger(requestedOwner) && requestedOwner > 0 ? requestedOwner : user?.id;
+  const projectsQuery = trpc.enterpriseProjects.list.useQuery({ ownerUserId: workspaceOwnerId }, { retry: false, enabled: Boolean(user) });
+  const createProject = trpc.enterpriseProjects.create.useMutation();
+  const renameProject = trpc.enterpriseProjects.rename.useMutation();
+  const projects = projectsQuery.data?.projects || [];
+  const selectedProjectId = activeEnterpriseProjectId();
+  const activeProject = projects.find(project => project.id === selectedProjectId);
+  const accountLevel = location === "/agent" || location === "/account";
+  useEffect(() => {
+    if (!user || !projectsQuery.data || accountLevel) return;
+    const explicit = new URLSearchParams(search).get("enterpriseProjectId");
+    if (explicit) { if (activeProject) rememberEnterpriseProject(workspaceOwnerId, activeProject.id); return; }
+    const remembered = rememberedEnterpriseProject(workspaceOwnerId);
+    const next = projects.find(project => project.id === remembered) || projects.find(project => project.isLegacyDefault) || projects[0];
+    if (next) {
+      rememberEnterpriseProject(workspaceOwnerId, next.id);
+      window.location.replace(projectWorkspaceUrl(`${location}${search ? `?${search}` : ""}`, next.id));
+    }
+  }, [user?.id, projectsQuery.data, search, location, activeProject?.id]);
+  const onCreateProject = async name => {
+    const result = await createProject.mutateAsync({ name, clientRequestId: crypto.randomUUID(), ownerUserId: workspaceOwnerId });
+    const project = result.project || result;
+    switchEnterpriseProject(workspaceOwnerId, project.id);
+  };
+  const onRenameProject = async name => {
+    if (!activeProject) return;
+    await renameProject.mutateAsync({ enterpriseProjectId: activeProject.id, name, expectedRevision: activeProject.revision });
+    await projectsQuery.refetch();
+  };
   const [editingSection, setEditingSection] = useState(null);
   const queryOptions = {
+    enabled: Boolean(activeProject) && !accountLevel,
     retry: false,
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
@@ -608,6 +648,15 @@ function PersistentUserBrandDashboard({ initialSection }) {
   return (
     <UserBrandDashboardContent
       preview={false}
+      workspaceOwnerId={workspaceOwnerId}
+      operatorProjects={projects}
+      operatorProject={activeProject}
+      operatorProjectsLoading={projectsQuery.isLoading}
+      operatorProjectsError={projectsQuery.error?.message || (new URLSearchParams(search).has("enterpriseProjectId") && projectsQuery.data && !activeProject ? "该企业项目不存在或无权访问，请在左侧选择可用项目。" : undefined)}
+      onCreateProject={onCreateProject}
+      onRenameProject={onRenameProject}
+      onSelectProject={id => switchEnterpriseProject(workspaceOwnerId, id)}
+      administratorOwnerId={user?.role === "admin" ? workspaceOwnerId : null}
       marketEdition={user?.marketEdition || "domestic"}
       initialSection={initialSection}
       servicePortalPayload={portal.data}
@@ -625,6 +674,15 @@ function PersistentUserBrandDashboard({ initialSection }) {
 
 function UserBrandDashboardContent({
   preview,
+  workspaceOwnerId,
+  operatorProjects,
+  operatorProject,
+  operatorProjectsLoading,
+  operatorProjectsError,
+  onCreateProject,
+  onRenameProject,
+  onSelectProject,
+  administratorOwnerId,
   marketEdition = "domestic",
   initialSection,
   servicePortalPayload,
@@ -644,12 +702,16 @@ function UserBrandDashboardContent({
   buildPreviewHistoricalResults = null,
 }) {
   const previewMode = import.meta.env.DEV && preview;
+  const operatorMode = operatorProjects !== undefined;
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("frontmind.operator.sidebarCollapsed") === "1");
+  const toggleSidebar = () => setSidebarCollapsed(value => { localStorage.setItem("frontmind.operator.sidebarCollapsed", value ? "0" : "1"); return !value; });
   const [location, setLocation] = useLocation();
   const search = useSearch();
   const moduleRoute = previewMode ? null : dashboardModuleRoute(location);
   const insightsRoute =
     new URLSearchParams(search).get("view") === "content-insights";
   const agentRoute = location === "/agent";
+  const accountRoute = location === "/account";
   const enterpriseQaRoute = location === "/enterprise-qa";
   const contentProductionRoute = location === "/content-production";
   const [localRoute, setRoute] = useState(
@@ -657,6 +719,7 @@ function UserBrandDashboardContent({
       ? { section: "knowledge-agent", sub: "build" }
       : { section: "service", sub: null },
   );
+  const operatorLocalRoute = operatorMode ? operatorRouteForView(new URLSearchParams(search).get("view"), new URLSearchParams(search).get("questionId")) : null;
   const route =
     moduleRoute ||
     (enterpriseQaRoute
@@ -665,9 +728,11 @@ function UserBrandDashboardContent({
         ? { section: "general-agent", sub: null }
         : contentProductionRoute
           ? { section: "content-production", sub: null }
-          : insightsRoute
-            ? { section: "semantic", sub: "content-insights" }
-            : localRoute);
+          : accountRoute
+            ? { section: "account", sub: null }
+            : insightsRoute
+              ? { section: "semantic", sub: "content-insights" }
+              : operatorLocalRoute || localRoute);
   const [accountOpen, setAccountOpen] = useState(false);
   const [salesAdvisorOpen, setSalesAdvisorOpen] = useState(false);
   const [responseQuestionId, setResponseQuestionId] = useState(null);
@@ -712,7 +777,21 @@ function UserBrandDashboardContent({
   const responseLogicWorkspaceState =
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const navigatePath = path => {
+    const next = projectWorkspaceUrl(path, operatorProject?.id);
+    const accountPage = value => ["/agent", "/account"].includes(value.split("?")[0]);
+    if (accountPage(path) !== accountPage(location)) { window.location.assign(next); return; }
+    setLocation(next); setMobileNavOpen(false);
+  };
   const navigate = (section, sub = null) => {
+    if (operatorMode) {
+      if (section === "general-agent") { navigatePath("/agent"); return; }
+      if (section === "account") { navigatePath("/account"); return; }
+      if (section === "monitoring-module" || section === "publishing-module") { navigatePath(sub); return; }
+      if (section === "historical-results") { navigatePath(`/?view=historical-results&questionId=${encodeURIComponent(sub || "")}`); return; }
+      navigatePath(operatorViewPath(operatorViewFromRoute({ section, sub })));
+      return;
+    }
     if (
       section === "general-agent" ||
       section === "content-production" ||
@@ -796,7 +875,7 @@ function UserBrandDashboardContent({
   const routeAccess = capabilityKey
     ? getCapability(servicePortal, capabilityKey)
     : null;
-  const routeLocked = Boolean(routeAccess && !routeAccess.allowed);
+  const routeLocked = !operatorMode && Boolean(routeAccess && !routeAccess.allowed);
   const knowledgeBuildWorkspace =
     route.section === "knowledge-agent" && route.sub !== "display";
   const brandTrackingWorkspace =
@@ -833,7 +912,7 @@ function UserBrandDashboardContent({
                   : "服务页面";
   return (
     <div
-      className={`user-brand-dashboard ${
+      className={`user-brand-dashboard ${operatorMode ? `operator-mode ${sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
         immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
       }`}
     >
@@ -857,7 +936,13 @@ function UserBrandDashboardContent({
             onClick={() => setMobileNavOpen(false)}
           />
         )}
-        <Sidebar
+        {operatorMode ? <OperatorSidebar
+          projects={operatorProjects} activeProject={operatorProject}
+          activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
+          collapsed={sidebarCollapsed} onCollapse={toggleSidebar}
+          onNavigate={navigatePath} onSelectProject={onSelectProject}
+          onCreateProject={onCreateProject} onRenameProject={onRenameProject}
+        /> : <Sidebar
           route={route}
           onNavigate={navigate}
           brandName={
@@ -870,13 +955,14 @@ function UserBrandDashboardContent({
           marketEdition={marketEdition}
           accountOpen={accountOpen}
           onAccountOpenChange={setAccountOpen}
-        />
+        />}
         <main
           className={`dashboard-main ${
             immersiveAgentWorkspace ? "knowledge-build-main" : ""
           }`}
         >
-          {!immersiveAgentWorkspace && (
+          {operatorMode && !agentRoute && !accountRoute && operatorProject && <OperatorTabs view={operatorViewFromRoute(route)} projectName={operatorProject.name} onSelect={view => navigatePath(operatorViewPath(view))} />}
+          {!operatorMode && !immersiveAgentWorkspace && (
             <ProjectRibbon
               brandName={
                 managedPayload?.brandName ||
@@ -885,7 +971,7 @@ function UserBrandDashboardContent({
               }
             />
           )}
-          {!immersiveAgentWorkspace &&
+          {!operatorMode && !immersiveAgentWorkspace &&
             !moduleRoute &&
             !insightsRoute &&
             onEditDashboard && (
@@ -898,7 +984,11 @@ function UserBrandDashboardContent({
                 </Button>
               </div>
             )}
-          {moduleRoute ? (
+          {accountRoute ? (
+            administratorOwnerId ? <div className="p-7"><a href={`/admin/customers/${administratorOwnerId}/workspace`} className="text-sm text-muted-foreground">返回客户管理</a><AdminAccountBalance userId={administratorOwnerId} /></div> : <Suspense fallback={<div role="status">正在读取账号与余额…</div>}><MonitoringModule /></Suspense>
+          ) : operatorMode && !agentRoute && !operatorProject ? (
+            operatorProjectsLoading ? <div className="operator-empty-project" role="status">正在读取企业项目…</div> : operatorProjectsError ? <div className="operator-empty-project" role="alert">{operatorProjectsError}</div> : <OperatorEmptyProject onCreate={() => window.dispatchEvent(new CustomEvent("operator-create-project"))} />
+          ) : moduleRoute ? (
             <div className="dashboard-module-content">
               <Suspense
                 fallback={
@@ -907,7 +997,7 @@ function UserBrandDashboardContent({
                   </div>
                 }
               >
-                <MonitoringModule />
+                {operatorMode && moduleRoute.section === "monitoring-module" ? <EnterpriseMonitoringWorkspace enterpriseProjectId={operatorProject.id} questions={servicePortal.purchasedQuestions} /> : <MonitoringModule />}
               </Suspense>
             </div>
           ) : agentRoute ? (
@@ -961,7 +1051,7 @@ function UserBrandDashboardContent({
                 <HistoricalResultsReadOnly
                   questionId={route.sub || ""}
                   portal={servicePortal}
-                  onBack={() => navigate("service")}
+                  onBack={() => navigate(operatorMode ? "intent" : "service", operatorMode ? "question-optimization" : null)}
                   resultOverride={
                     previewMode
                       ? (() => {
@@ -1031,11 +1121,11 @@ function UserBrandDashboardContent({
                 ) : (
                   <ManagedModuleEmpty
                     title="应答逻辑智能体"
-                    description="当前账号没有已购问题。服务问题同步后，可在这里逐题对话、核验并确认应答逻辑。"
+                    description="先在优化问题中添加目标问题，再逐题对话、核验并确认应答逻辑。"
                   />
                 ))}
               {route.section === "progress" &&
-                (route.sub === "monitor" ? (
+                (operatorMode ? <EnterpriseProgressReport enterpriseProjectId={operatorProject.id} historical={managedPayload?.optimizationReport || managedPayload?.progressReports?.length ? <ProgressSection sub="optimization" preview={false} questionGroups={progressQuestionGroups} optimizationReport={managedPayload?.optimizationReport || null} progressReports={managedPayload?.progressReports || []} /> : null} /> : route.sub === "monitor" ? (
                   <IntentSection
                     preview={previewMode}
                     questionGroups={progressQuestionGroups}
@@ -1069,24 +1159,13 @@ function UserBrandDashboardContent({
                     <ContentInsightsWorkspace />
                   </Suspense>
                 ) : route.sub === "website-management" ? (
-                  <section className="page-shell">
-                    <PageHeader
-                      title={SITEOPS_CUSTOMER_DISPLAY_NAME}
-                      desc="管理官网及已发布内容。"
-                    />
-                    {!previewMode && <ConnectedSiteOpsConversationPanel />}
-                    {onEditDashboard && (
-                      <Button
-                        variant="outline"
-                        onClick={() => onEditDashboard("website")}
-                      >
-                        编辑官网内容
-                      </Button>
-                    )}
-                    <PublishedContentAssets
-                      assets={managedPayload?.contentAssets || []}
-                    />
-                  </section>
+                  <KnowledgeFrontendSettings
+                    ownerId={workspaceOwnerId ?? administratorOwnerId ?? 'preview'}
+                    projectId={operatorProject?.id ?? activeEnterpriseProjectId() ?? 'preview'}
+                    demo={previewMode}
+                    legacyWorkflow={!previewMode ? <><ConnectedSiteOpsConversationPanel />{onEditDashboard && <Button variant="outline" onClick={() => onEditDashboard("website")}>编辑官网内容</Button>}</> : undefined}
+                    publishedContent={<PublishedContentAssets assets={managedPayload?.contentAssets || []} />}
+                  />
                 ) : null)}
               {route.section === "knowledge-agent" && (
                 <Suspense
@@ -2180,7 +2259,7 @@ function ProblemOptimizationResults({
         </div>
       </header>
 
-      <ServiceQuotaOverview portal={displayedPortal} className="mb-5" />
+      {displayedPortal.mode !== "operator" && <ServiceQuotaOverview portal={displayedPortal} className="mb-5" />}
 
       <QuestionIntakePanel
         preview={preview}

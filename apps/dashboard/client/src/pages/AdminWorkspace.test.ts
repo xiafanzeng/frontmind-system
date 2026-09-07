@@ -4,13 +4,13 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  ADMIN_WORKSPACE_TAB_IDS,
   defaultAdminServiceCarryQuestionIds,
   isAdminProgressiveLuxuryRenewal,
   isFutureDatedServiceCancellation,
   resolveAdminServiceStartsAtEpoch,
   resolveAdminTargetLuxuryPlanVersion,
-} from "./AdminWorkspace";
+} from "@/lib/legacy-service-renewal";
+import { ADMIN_WORKSPACE_TAB_IDS } from "./AdminWorkspace";
 
 describe("admin customer workspace", () => {
   it("allows only immediate service cancellation", () => {
@@ -48,7 +48,7 @@ describe("admin customer workspace", () => {
     expect(source).not.toContain("创建客户");
     expect(source).not.toContain('get("action") === "create"');
     expect(source).toContain(
-      'title={isSystemAdmin ? "客户交付工作台" : "客户管理"}',
+      'title={isSystemAdmin ? "客户工作台" : "客户管理"}',
     );
   });
 
@@ -60,7 +60,7 @@ describe("admin customer workspace", () => {
     );
     expect(source).not.toContain("ADMIN_WORKSPACE_TABS");
     expect(source).not.toContain("adminWorkspaceTabsForAccess");
-    expect(source).toContain("进入客户看板");
+    expect(source).toContain("进入客户工作区");
     expect(source).toContain('variant="operatorOutline"');
   });
 
@@ -75,42 +75,6 @@ describe("admin customer workspace", () => {
     expect(source).not.toContain("本月积分使用");
     expect(source).not.toContain("creditUsage.useQuery");
     expect(source).not.toContain("replaceCredential.useMutation");
-  });
-
-  it("combines service management with direct dashboard editing", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"),
-      "utf8",
-    );
-
-    expect(source).not.toContain('{tab === "workspace" &&');
-    expect(source).not.toContain("setTab(");
-    expect(source).not.toContain('{tab === "service" &&');
-    expect(source).not.toContain('{tab === "tickets" &&');
-    expect(source).not.toContain("AdminDeliveryTicketWorkspace");
-    expect(source).toContain("<DashboardVersionHistory");
-    expect(source).not.toContain("onOpenCustomerDashboard=");
-    expect(source).toContain('mode="fullscreen"');
-    expect(source).toContain("<DashboardSkeletonEditor");
-    expect(source).toContain('dashboardLayout="workspace"');
-    expect(source).toContain("onExitDashboard={() => setDashboardOpen(false)}");
-    expect(source).toContain("<CustomerDashboardMirror");
-    expect(source).toContain('layout="workspace"');
-    expect(source).toContain("servicePortal={serviceQuery.data}");
-    expect(source).toContain("servicePortalLoading={serviceQuery.isLoading}");
-    expect(source).not.toContain('heading="客户实际页面"');
-    expect(source).not.toContain("这里与客户账号看到的完整看板一致。");
-    expect(source).not.toContain("正式版本 R");
-    expect(source).not.toContain("websiteWorkspacePreview");
-    expect(source).toContain("knowledgePreview={customerKnowledgePreview}");
-    expect(source).toContain("activity: knowledgeActivityQuery.data");
-    expect(source).not.toContain('{tab === "knowledge"');
-    expect(source).not.toContain('label: "知识库流程"');
-    expect(source).not.toContain('{tab === "delivery"');
-    expect(source).not.toContain('{tab === "activity"');
-    expect(source).not.toContain("客户工作区操作记录");
-    expect(source).not.toContain("只读验收");
-    expect(source).not.toContain("/preview");
   });
 
   it("does not request or render the removed manual-order queue", () => {
@@ -154,23 +118,6 @@ describe("admin customer workspace", () => {
       "utf8",
     );
     expect(source).not.toContain('<option value="knowledge">');
-  });
-
-  it("describes Luxury as an annual progressively unlocked entitlement", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"),
-      "utf8",
-    );
-
-    expect(source).toContain("豪华版 v2 为 12 个月权益");
-    expect(source).toContain("按季度自动解锁问题额度");
-    expect(source).toContain("预付月份仍按 3");
-    expect(source).toContain("豪华版年度续费默认不结转");
-    expect(source).toContain("取消合同会立即终止当前问题工作流");
-    expect(source).toMatch(
-      /progressiveLuxuryRenewal\s*\|\|\s*serviceTermination/,
-    );
-    expect(source).not.toContain("进阶版与豪华版合同均按 3 个月服务周期建立");
   });
 
   it("defaults only Luxury-to-Luxury renewal to no question carryover", () => {
@@ -349,15 +296,10 @@ describe("admin customer workspace", () => {
     );
   });
 
-  it("uses the canonical brand-tracking manager scoped to the selected customer", () => {
-    const source = readFileSync(
-      resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"),
-      "utf8",
-    );
-
-    expect(source).toContain("<AdminBrandTrackingKeyManager");
-    expect(source).toContain("restrictedUserId={selectedUser.id}");
-    expect(source).not.toContain("JenovaSentimentManagementPanel");
-    expect(source).not.toContain("jenovaSentiment");
+  it("uses the same operator workspace with one balance and no plan mutations", () => {
+    const source = readFileSync(resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"), "utf8");
+    expect(source).toContain("<AdminAccountBalance userId={selectedUser.id}");
+    expect(source).toContain("/?operatorOwnerId=${selectedUser.id}");
+    expect(source).not.toMatch(/updateService|servicePlan|豪华版|进阶版|套餐|CustomerDashboardMirror/);
   });
 });

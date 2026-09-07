@@ -399,6 +399,8 @@ export type ServicePortalQuotaPeriod = z.infer<
 >;
 
 export const servicePortalSchema = z.object({
+  mode: z.enum(["operator", "service"]).optional(),
+  enterpriseProjectId: z.string().uuid().optional(),
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   entitlementRollout: z.object({

@@ -79,7 +79,7 @@ describe("CreateUserDialog", () => {
       />,
     );
 
-    expect(screen.getByText("客户套餐")).toBeInTheDocument();
+    expect(screen.queryByText("客户套餐")).not.toBeInTheDocument();
     expect(screen.getByText(/设置客户初始密码/)).toBeInTheDocument();
     expect(screen.queryByText("账号角色")).toBeNull();
     expect(screen.getByText("初始密码")).toBeInTheDocument();
@@ -107,14 +107,7 @@ describe("CreateUserDialog", () => {
       screen.getByRole("combobox", { name: "客户主负责人" }),
     ).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "客户版本" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("combobox", { name: "客户套餐" }));
-    expect(screen.getByRole("option", { name: "普通版" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "知识库版" })).toBeNull();
-    expect(screen.getByRole("option", { name: "进阶版" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "豪华版" })).toBeInTheDocument();
-    expect(screen.getAllByRole("option")).toHaveLength(3);
-
-    fireEvent.click(screen.getByRole("option", { name: "普通版" }));
+    expect(screen.queryByRole("combobox", { name: "客户套餐" })).toBeNull();
     fireEvent.click(screen.getByRole("combobox", { name: "客户版本" }));
     expect(screen.getByRole("option", { name: "国内版" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "海外版" })).toBeInTheDocument();
@@ -143,7 +136,7 @@ describe("CreateUserDialog", () => {
     render(<CreateUserDialog open onOpenChange={() => undefined} />);
 
     expect(screen.getByText("账号角色")).toBeInTheDocument();
-    expect(screen.getByText("客户套餐")).toBeInTheDocument();
+    expect(screen.queryByText("客户套餐")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("combobox", { name: "账号角色" }));
     expect(screen.getByRole("option", { name: "客户" })).toBeInTheDocument();

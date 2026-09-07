@@ -33,10 +33,6 @@ type ProjectTeamProject = {
   username: string | null;
   displayName: string | null;
   isActive: boolean;
-  planCode: string | null;
-  contractStatus: string | null;
-  contractStartsAt: Date | string | number | null;
-  contractEndsAt: Date | string | number | null;
   managerId: number | null;
   managerUsername: string | null;
   managerDisplayName: string | null;
@@ -91,7 +87,7 @@ export function getMissingProjectRoleTypes(
       )
       .map((assignment) => assignment.roleType),
   );
-  return project.requiredRoleTypes.filter(
+  return ROLE_TYPES.filter(
     (roleType) => !assignedRoleTypes.has(roleType),
   );
 }
@@ -128,7 +124,6 @@ export function filterProjectTeams(
   assignments: ProjectTeamAssignment[],
   filters: {
     query: string;
-    planCode: string;
     managerId: string;
     teamStatus: TeamStatusFilter;
   },
@@ -144,9 +139,6 @@ export function filterProjectTeams(
             .includes(normalizedQuery),
       )
     ) {
-      return false;
-    }
-    if (filters.planCode !== "all" && project.planCode !== filters.planCode) {
       return false;
     }
     if (
@@ -179,7 +171,6 @@ export default function AdminDeliveryRoles() {
   const setProjectEngineer =
     trpc.delivery.management.setProjectEngineer.useMutation();
   const [query, setQuery] = useState("");
-  const [planCode, setPlanCode] = useState("all");
   const [managerId, setManagerId] = useState("all");
   const [teamStatus, setTeamStatus] = useState<TeamStatusFilter>("all");
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
@@ -213,11 +204,10 @@ export default function AdminDeliveryRoles() {
     () =>
       filterProjectTeams(projects, assignments, {
         query,
-        planCode,
         managerId,
         teamStatus,
       }),
-    [assignments, managerId, planCode, projects, query, teamStatus],
+    [assignments, managerId, projects, query, teamStatus],
   );
   const summary = useMemo(
     () => summarizeProjectTeams(projects, assignments),
@@ -302,7 +292,7 @@ export default function AdminDeliveryRoles() {
           <CardHeader>
             <CardTitle>筛选客户项目</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <CardContent className="grid gap-3 md:grid-cols-3">
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
@@ -312,16 +302,6 @@ export default function AdminDeliveryRoles() {
                 placeholder="搜索客户名称或账号"
               />
             </div>
-            <NativeSelect
-              value={planCode}
-              onChange={setPlanCode}
-              options={[
-                { value: "all", label: "全部套餐" },
-                { value: "basic", label: "普通版" },
-                { value: "advanced", label: "进阶版" },
-                { value: "luxury", label: "豪华版" },
-              ]}
-            />
             <NativeSelect
               value={managerId}
               onChange={setManagerId}
@@ -369,9 +349,11 @@ export default function AdminDeliveryRoles() {
                     (assignment) => assignment.customerUserId === project.id,
                   );
                   const requiredAssignmentCount =
-                    project.requiredRoleTypes.filter((roleType) =>
+                    ROLE_TYPES.filter((roleType) =>
                       projectAssignments.some(
-                        (assignment) => assignment.roleType === roleType,
+                        (assignment) =>
+                          assignment.roleType === roleType &&
+                          assignment.engineerUserId != null,
                       ),
                     ).length;
                   const missing = getMissingProjectRoleTypes(
@@ -431,12 +413,6 @@ export default function AdminDeliveryRoles() {
                         </Badge>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge variant="outline">
-                          {planLabel(project.planCode)}
-                        </Badge>
-                        <Badge variant="outline">
-                          {contractStatusLabel(project.contractStatus)}
-                        </Badge>
                         {!project.isActive && (
                           <Badge variant="destructive">账号已停用</Badge>
                         )}
@@ -450,7 +426,7 @@ export default function AdminDeliveryRoles() {
                         </span>
                         <span>
                           {requiredAssignmentCount}/
-                          {project.requiredRoleTypes.length} 岗
+                          {ROLE_TYPES.length} 岗
                         </span>
                       </div>
                     </button>
@@ -520,7 +496,6 @@ function ProjectDetails({
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">{projectName(project)}</h2>
-          <Badge variant="outline">{planLabel(project.planCode)}</Badge>
           <Badge
             variant={managerMissing || missing.length ? "outline" : "secondary"}
             className={
@@ -537,9 +512,7 @@ function ProjectDetails({
           </Badge>
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          {project.username || `客户 #${project.id}`} · 服务期{" "}
-          {formatDate(project.contractStartsAt)} 至{" "}
-          {formatDate(project.contractEndsAt)}
+          账号：{project.username || `#${project.id}`}
         </p>
       </div>
 
@@ -603,7 +576,6 @@ function ProjectRoleCard({
     expectedRevision: number;
   }) => Promise<void>;
 }) {
-  const enabled = project.requiredRoleTypes.includes(roleType);
   const matchingEngineers = engineers.filter(
     (engineer) => engineer.isActive && engineer.engineerRoleType === roleType,
   );
@@ -615,7 +587,6 @@ function ProjectRoleCard({
     currentEngineer?.apiKeyConfigured ??
     false;
   const assigned = assignment?.engineerUserId != null;
-  const disabledRoleWithAssignment = !enabled && assigned;
   const currentEngineerLabel = currentEngineer
     ? engineerName(currentEngineer)
     : assigned
@@ -630,9 +601,7 @@ function ProjectRoleCard({
     if (assignment) {
       const confirmed = window.confirm(
         engineerUserId == null
-          ? disabledRoleWithAssignment
-            ? `确认解除已停用岗位 ${DELIVERY_ROLE_LABELS[roleType]} 的遗留负责人？`
-            : `确认解除 ${DELIVERY_ROLE_LABELS[roleType]}？`
+          ? `确认解除 ${DELIVERY_ROLE_LABELS[roleType]}？`
           : `确认更换 ${DELIVERY_ROLE_LABELS[roleType]}？`,
       );
       if (!confirmed) return;
@@ -646,29 +615,12 @@ function ProjectRoleCard({
   };
 
   return (
-    <div
-      className={cn(
-        "rounded-xl border p-4 transition-shadow",
-        !enabled && "bg-muted/25 opacity-75",
-      )}
-    >
+    <div className="rounded-xl border p-4 transition-shadow">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-medium">{DELIVERY_ROLE_LABELS[roleType]}</p>
-            {!enabled ? (
-              <>
-                <Badge variant="outline">当前套餐未启用</Badge>
-                {assigned && (
-                  <Badge
-                    variant="outline"
-                    className="border-amber-300 text-amber-700"
-                  >
-                    遗留负责人
-                  </Badge>
-                )}
-              </>
-            ) : assigned ? (
+            {assigned ? (
               <Badge variant="secondary" className="text-emerald-700">
                 <CheckCircle2 className="mr-1 h-3 w-3" />
                 已分配
@@ -682,15 +634,11 @@ function ProjectRoleCard({
               </Badge>
             )}
           </div>
-          {(enabled || assigned) && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {!enabled
-                ? `当前负责人：${currentEngineerLabel}。该岗位已随套餐停用，可以解除负责人。`
-                : assigned
-                  ? `由${project.managerDisplayName || project.managerUsername || "项目管理员"}统一管理`
-                  : "请分配负责人"}
-            </p>
-          )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {assigned
+              ? `由${project.managerDisplayName || project.managerUsername || "项目管理员"}统一管理`
+              : "请分配负责人"}
+          </p>
         </div>
         {assigned && (
           <Badge
@@ -706,46 +654,36 @@ function ProjectRoleCard({
         )}
       </div>
 
-      {(enabled || assigned) && (
-        <select
-          className="mt-3 h-10 w-full rounded-md border bg-background px-3 text-sm"
-          aria-label={`${DELIVERY_ROLE_LABELS[roleType]}负责人`}
-          value={assigned ? String(assignment.engineerUserId) : ""}
-          disabled={mutationPending}
-          onChange={(event) => void handleChange(event.target.value)}
-        >
-          <option value="">
-            {disabledRoleWithAssignment
-              ? "解除已停用岗位"
-              : assigned
-                ? "解除岗位分配"
-                : "选择匹配岗位的工程师"}
+      <select
+        className="mt-3 h-10 w-full rounded-md border bg-background px-3 text-sm"
+        aria-label={`${DELIVERY_ROLE_LABELS[roleType]}负责人`}
+        value={assigned ? String(assignment.engineerUserId) : ""}
+        disabled={mutationPending}
+        onChange={(event) => void handleChange(event.target.value)}
+      >
+        <option value="">
+          {assigned ? "解除岗位分配" : "选择匹配岗位的工程师"}
+        </option>
+        {assigned &&
+          !matchingEngineers.some(
+            (engineer) => engineer.id === assignment.engineerUserId,
+          ) && (
+            <option value={assignment.engineerUserId!}>
+              {currentEngineerLabel}（账号已停用）
+            </option>
+          )}
+        {matchingEngineers.map((engineer) => (
+          <option key={engineer.id} value={engineer.id}>
+            {engineerName(engineer)}
+            {!engineer.apiKeyConfigured
+              ? "（Key 未配置）"
+              : engineer.apiKeyManageable === false
+                ? "（Key 由系统管理员维护）"
+                : ""}
           </option>
-          {assigned &&
-            (!enabled ||
-              !currentEngineer ||
-              !matchingEngineers.some(
-                (engineer) => engineer.id === assignment.engineerUserId,
-              )) && (
-              <option value={assignment.engineerUserId!}>
-                {currentEngineerLabel}
-                {enabled ? "（账号已停用）" : "（当前负责人）"}
-              </option>
-            )}
-          {enabled &&
-            matchingEngineers.map((engineer) => (
-              <option key={engineer.id} value={engineer.id}>
-                {engineerName(engineer)}
-                {!engineer.apiKeyConfigured
-                  ? "（Key 未配置）"
-                  : engineer.apiKeyManageable === false
-                    ? "（Key 由系统管理员维护）"
-                    : ""}
-              </option>
-            ))}
-        </select>
-      )}
-      {enabled && !matchingEngineers.length && !assigned && (
+        ))}
+      </select>
+      {!matchingEngineers.length && !assigned && (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-700">
           <AlertTriangle className="h-3.5 w-3.5" />
           暂无可分配的同岗位工程师，请先到“账号与权限”创建工程师账号。
@@ -845,27 +783,4 @@ function engineerName(engineer: {
   username: string | null;
 }) {
   return engineer.displayName || engineer.username || `账号 ${engineer.id}`;
-}
-
-function planLabel(planCode: string | null) {
-  if (planCode === "basic") return "普通版";
-  if (planCode === "advanced") return "进阶版";
-  if (planCode === "luxury") return "豪华版";
-  return "套餐未配置";
-}
-
-function contractStatusLabel(status: string | null) {
-  if (status === "pending_confirmation") return "待确认";
-  if (status === "scheduled") return "待生效";
-  if (status === "active") return "服务中";
-  if (status === "suspended") return "已暂停";
-  if (status === "expired") return "已到期";
-  if (status === "cancelled") return "已取消";
-  return "服务未配置";
-}
-
-function formatDate(value: Date | string | number | null) {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("zh-CN");
 }

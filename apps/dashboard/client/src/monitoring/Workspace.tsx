@@ -21,6 +21,7 @@ import {
   mapAdminBankTransfer,
   mapAdminBillingUser,
   mapBillingLedgerViews,
+  mapBillingActivityViews,
   mapBillingPaymentMethodViews,
   mapBillingPricingViews,
   mapBillingSummaryView,
@@ -253,12 +254,14 @@ function ServerBackedWorkspace({
   publishingEnabled,
   legalRegistration,
   localServerBacked,
+  questionSources,
 }: {
   user: SessionUser;
   initialBilling: ApiOutputs["auth"]["me"]["billing"];
   publishingEnabled: boolean;
   legalRegistration?: { number: string; link: string };
   localServerBacked: boolean;
+  questionSources?: Record<string, string[]>;
 }) {
   const [location, navigate] = useLocation();
   const utils = trpc.useUtils();
@@ -308,7 +311,8 @@ function ServerBackedWorkspace({
       refetchInterval: customerEnabled && publishingEnabled ? 10_000 : false,
     });
   const settingsEnabled =
-    customerEnabled && location === "/monitoring-system/settings";
+    customerEnabled && ["/account", "/monitoring-system/settings"].includes(location);
+  const billingActivityQuery = trpc.billing.activity.useQuery({ limit: 100 }, { enabled: settingsEnabled, refetchInterval: settingsEnabled ? 10_000 : false });
   const billingPricingQuery = trpc.billing.pricing.useQuery(undefined, {
     enabled: settingsEnabled,
   });
@@ -659,7 +663,7 @@ function ServerBackedWorkspace({
     mediaPublishingTopupStatusQuery.error,
   ].find(Boolean)?.message;
 
-  const { logout } = useAuth();
+  const { logout, user: dashboardUser } = useAuth();
   const renderPublisherAdmin = (section: PublishingAdminSection) =>
     user.role === "admin" ? (
       <PublishingAdminPage section={section} />
@@ -695,6 +699,7 @@ function ServerBackedWorkspace({
         localServerBacked ? "本地真实联调 · Server-backed" : undefined
       }
     >
+      {location === "/account" && <div className="operator-account-info"><div><strong>{dashboardUser?.displayName || dashboardUser?.username}</strong><small>@{dashboardUser?.username} · 客户账号</small></div><button onClick={() => void logout().catch(error => setOperationError(error instanceof Error ? error.message : "退出失败，请重试。"))}>退出登录</button></div>}
       {(operationError || queryError) && (
         <div className="operation-banner" role="alert">
           {operationError || `数据加载失败：${queryError}`}
@@ -744,7 +749,7 @@ function ServerBackedWorkspace({
               />
             )}
           </Route>
-          <Route path="/monitoring-system/settings">
+          <Route path={/^\/(?:account|monitoring-system\/settings)$/}>
             <SettingsPage
               billingLoading={
                 billingSummaryQuery.isPending ||
@@ -759,6 +764,7 @@ function ServerBackedWorkspace({
                 billingPricingQuery.data?.items || [],
               )}
               ledger={mapBillingLedgerViews(billingLedgerQuery.data || [])}
+              activity={billingActivityQuery.data ? mapBillingActivityViews(billingActivityQuery.data) : undefined}
               mediaPublishingLedger={mapMediaPublishingLedgerViews(
                 mediaPublishingLedgerQuery.data || [],
               )}
@@ -966,6 +972,7 @@ function ServerBackedWorkspace({
           <Route path="/monitoring-system">
             {user.role === "user" ? (
               <MonitoringPage
+                seedQuestions={activeProject ? questionSources?.[activeProject.id] : undefined}
                 serverData
                 project={activeProject}
                 monitors={monitors}
@@ -1940,7 +1947,7 @@ function numericProperty(value: object | null | undefined, key: string) {
 }
 
 /** Resolve the linked tenant using the existing Dashboard cookie. Authentication belongs to Dashboard. */
-function LinkedMonitoringWorkspace() {
+function LinkedMonitoringWorkspace({ questionSources }: { questionSources?: Record<string, string[]> }) {
   const [location] = useLocation();
   const me = trpc.auth.me.useQuery(undefined, {
     retry: false,
@@ -1975,11 +1982,12 @@ function LinkedMonitoringWorkspace() {
       initialBilling={me.data.billing}
       publishingEnabled={me.data.features?.mediaPublishing === true}
       localServerBacked={false}
+      questionSources={questionSources}
     />
   );
 }
 
-export default function MonitoringModule() {
+export default function MonitoringModule({ questionSources }: { questionSources?: Record<string, string[]> } = {}) {
   const { user } = useAuth();
   const [client] = useState(createTrpcClient);
   const queryClient = useMemo(createModuleQueryClient, [user?.id]);
@@ -1992,7 +2000,7 @@ export default function MonitoringModule() {
   return (
     <QueryClientProvider client={queryClient}>
       <trpc.Provider client={client} queryClient={queryClient}>
-        <LinkedMonitoringWorkspace />
+        <LinkedMonitoringWorkspace questionSources={questionSources} />
       </trpc.Provider>
     </QueryClientProvider>
   );

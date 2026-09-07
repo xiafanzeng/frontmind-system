@@ -10,6 +10,8 @@ import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { RunAttempt } from "../../domain";
 import { archivedMediaAttachmentUrl, safeArchivedMediaUrl } from "./selectors";
+import { useMonitoringDemo } from "../../MonitoringDemoContext";
+import { AnswerReader } from "./AnswerWorkspace";
 
 export default function ScreenshotViewerDialog({
   open,
@@ -20,6 +22,7 @@ export default function ScreenshotViewerDialog({
   attempt: RunAttempt;
   onOpenChange: (open: boolean) => void;
 }) {
+  const demo = useMonitoringDemo();
   const [index, setIndex] = useState(0);
   const [imageState, setImageState] = useState<"loading" | "ready" | "failed">(
     "loading",
@@ -82,7 +85,9 @@ export default function ScreenshotViewerDialog({
             <div>
               <Dialog.Title>回答截图</Dialog.Title>
               <Dialog.Description>
-                仅展示由服务端归档的回答截图，不会在浏览器请求供应商资源。
+                {demo
+                  ? "本地演示截图预览，内容来自当前合成回答。"
+                  : "仅展示由服务端归档的回答截图，不会在浏览器请求供应商资源。"}
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
@@ -102,7 +107,13 @@ export default function ScreenshotViewerDialog({
               undefined
             }
           >
-            {!screenshots.length ? (
+            {demo ? (
+              <div className="fm-demo-screenshot">
+                <div>回答快照 · 本地演示</div>
+                <h3>{attempt.question}</h3>
+                <AnswerReader attempt={attempt} />
+              </div>
+            ) : !screenshots.length ? (
               <div className="fm-dialog-empty">
                 <ImageIcon size={30} />
                 <strong>没有回答截图</strong>

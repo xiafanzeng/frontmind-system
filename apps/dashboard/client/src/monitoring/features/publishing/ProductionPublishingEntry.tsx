@@ -1,3 +1,4 @@
+import { enterpriseProjectHeaders, projectResourceUrl } from "@/lib/enterprise-project";
 import type { AppRouter } from "@frontmind/monitoring-api";
 import type { TRPCClient } from "@trpc/client";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -335,6 +336,7 @@ export function createServerBackedPublisherGateway(
           "/api/monitoring/publisher/docx-imports",
           {
             method: "POST",
+            headers: enterpriseProjectHeaders(),
             body,
             credentials: "same-origin",
             signal,
@@ -401,6 +403,7 @@ export function createServerBackedPublisherGateway(
           `/api/monitoring/publisher/articles/${encodeURIComponent(articleId)}/assets`,
           {
             method: "POST",
+            headers: enterpriseProjectHeaders(),
             body,
             credentials: "same-origin",
             signal,
@@ -820,7 +823,7 @@ export function createServerBackedPublisherGateway(
     },
 
     batchCsvUrl(batchId) {
-      return `/api/monitoring/publisher/batches/${encodeURIComponent(batchId)}.csv`;
+      return projectResourceUrl(`/api/monitoring/publisher/batches/${encodeURIComponent(batchId)}.csv`);
     },
   };
 }
@@ -1490,7 +1493,7 @@ async function fetchPrivateArticlePreview(
       {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: enterpriseProjectHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({ assetId: image.id }),
         signal,
       },

@@ -1,3 +1,4 @@
+import { activeEnterpriseProjectId } from "@/lib/enterprise-project";
 import { ArchiveRestore, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
@@ -28,6 +29,7 @@ export type MonitoringRunResult = void | { runId: string };
 
 export type MonitoringPageProps = {
   project?: ProjectSummary;
+  seedQuestions?: string[];
   monitors: MonitorSummary[];
   deletedMonitors?: Array<{
     id: string;
@@ -43,6 +45,8 @@ export type MonitoringPageProps = {
   loading?: boolean;
   /** Use the owner-checked monitoring read models instead of preview runs. */
   serverData?: boolean;
+  /** Explicit synthetic demo, distinct from caller-provided preview data. */
+  demoMode?: boolean;
   onCreateProject: (
     project: Omit<ProjectSummary, "id">,
   ) => void | Promise<void>;
@@ -102,6 +106,7 @@ function monitorInputScheduleLabel(value: MonitorInput) {
 
 export default function MonitoringPage({
   project,
+  seedQuestions,
   monitors,
   deletedMonitors = [],
   models,
@@ -111,6 +116,7 @@ export default function MonitoringPage({
   regions = [],
   loading,
   serverData = false,
+  demoMode = false,
   onCreateProject,
   onUpdateProject,
   onSaveMonitor,
@@ -151,12 +157,31 @@ export default function MonitoringPage({
   const editorRequestId = useRef(0);
   const hasCompletedInitialLoadRef = useRef(!loading || monitors.length > 0);
 
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (
+      !loading &&
+      project &&
+      seedQuestions &&
+      url.searchParams.get("newMonitor") === "1"
+    ) {
+      setMonitorEditor({ kind: "create" });
+      url.searchParams.delete("newMonitor");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}`,
+      );
+    }
+  }, [loading, project?.id, seedQuestions]);
+
   const initialLoading = Boolean(
     loading && !hasCompletedInitialLoadRef.current && monitors.length === 0,
   );
 
   useEffect(() => {
-    if (!loading && !project) setProjectModal(true);
+    if (!loading && !project && !activeEnterpriseProjectId())
+      setProjectModal(true);
   }, [loading, project]);
 
   useEffect(() => {
@@ -378,8 +403,8 @@ export default function MonitoringPage({
       )}
       {success && (
         <div className="fm-workspace-toast" role="status">
-          <span>{success.message}</span>
-          {success.runId && (
+          <span>{demoMode ? `演示：${success.message}` : success.message}</span>
+          {success.runId && !demoMode && (
             <Link
               href={`/monitoring-system/${success.monitorId}/runs/${success.runId}`}
             >
@@ -419,7 +444,9 @@ export default function MonitoringPage({
           onOpenRecycle={() => setRecycleModal(true)}
           onOpenDetails={(monitor) => void openEditMonitor(monitor)}
           onOpenRun={(monitor, runId) =>
-            navigate(`/monitoring-system/${monitor.id}/runs/${runId}`)
+            demoMode
+              ? onSelectedRunChange?.(runId)
+              : navigate(`/monitoring-system/${monitor.id}/runs/${runId}`)
           }
           onRun={prepareExistingRun}
           onToggle={(monitor) =>
@@ -512,6 +539,8 @@ export default function MonitoringPage({
                   : "create"
               }
               project={project}
+              demoMode={demoMode}
+              seedQuestions={seedQuestions}
               models={models}
               availableBalanceTenThousandths={availableBalanceTenThousandths}
               quoteRunCost={quoteRunCost}

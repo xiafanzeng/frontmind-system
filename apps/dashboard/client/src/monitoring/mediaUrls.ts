@@ -1,3 +1,4 @@
+import { projectResourceUrl, enterpriseProjectHeaders } from "@/lib/enterprise-project";
 /** Browser media must stay on the authenticated, tenant-checked module API. */
 const archivedMediaPathPattern =
   /^\/api\/monitoring\/media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\?variant=(?:display|thumbnail))?$/iu;
@@ -10,7 +11,16 @@ function safePath(value: string | undefined, pattern: RegExp) {
 }
 
 export function safeArchivedMediaUrl(value?: string) {
-  return safePath(value, archivedMediaPathPattern);
+  if (!value || /[\r\n#]/.test(value) || !value.startsWith("/api/monitoring/media/")) return undefined;
+  const parsed = new URL(value, "https://frontmind.invalid");
+  const project = parsed.searchParams.get("enterpriseProjectId");
+  if (project) {
+    if (project !== enterpriseProjectHeaders()["x-enterprise-project-id"]) return undefined;
+    parsed.searchParams.delete("enterpriseProjectId");
+    value = `${parsed.pathname}${parsed.search}`;
+  }
+  const safe = safePath(value, archivedMediaPathPattern);
+  return safe ? projectResourceUrl(safe) : undefined;
 }
 
 export function safePublisherLogoUrl(value?: string) {

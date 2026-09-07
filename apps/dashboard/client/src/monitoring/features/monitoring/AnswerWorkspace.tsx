@@ -5,6 +5,8 @@ import {
   Copy,
   Expand,
   Image as ImageIcon,
+  Link2,
+  SquarePen,
 } from "lucide-react";
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -20,6 +22,8 @@ import ScreenshotViewerDialog from "./ScreenshotViewerDialog";
 import { safeExternalUrl } from "./selectors";
 import { attemptModelLabel } from "./types";
 import type { SourceScope } from "./types";
+import { useMonitoringDemo } from "../../MonitoringDemoContext";
+import AnswerCorrectionDialog from "./AnswerCorrectionDialog";
 
 const safeMarkdownComponents = {
   a: ({
@@ -142,6 +146,9 @@ export default function AnswerWorkspace({
   onLoadMoreAnswers?: () => void | Promise<void>;
 }) {
   const [screenshotOpen, setScreenshotOpen] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const demo = useMonitoringDemo();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
@@ -245,6 +252,31 @@ export default function AnswerWorkspace({
             <ImageIcon size={14} /> 截图
           </button>
           <button
+            type="button"
+            className="fm-tool-button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(window.location.href);
+                setLinkCopied(true);
+                window.setTimeout(() => setLinkCopied(false), 1800);
+              } catch {
+                setCopyState("failed");
+              }
+            }}
+          >
+            <Link2 size={14} />
+            {linkCopied ? "链接已复制" : "链接"}
+          </button>
+          <button
+            type="button"
+            className="fm-tool-button"
+            disabled={!demo || detailLoading}
+            title={demo ? "仅纠正本页演示数据" : "纠正功能暂未开放"}
+            onClick={() => setCorrectionOpen(true)}
+          >
+            <SquarePen size={14} /> 纠正{!demo ? " · 待开放" : ""}
+          </button>
+          <button
             ref={fullscreenTriggerRef}
             type="button"
             className="fm-tool-button"
@@ -308,6 +340,12 @@ export default function AnswerWorkspace({
         open={screenshotOpen}
         attempt={selected}
         onOpenChange={setScreenshotOpen}
+      />
+      <AnswerCorrectionDialog
+        key={selected.id}
+        attempt={selected}
+        open={correctionOpen}
+        onOpenChange={setCorrectionOpen}
       />
       <AnswerFullscreenDialog
         open={fullscreen && !detailLoading}

@@ -7,6 +7,7 @@ import {
   subtractMoneyTenThousandths,
 } from "../billingView";
 import Modal from "./Modal";
+import { useMonitoringDemo } from "../MonitoringDemoContext";
 
 export type RunConfirmationDialogProps = {
   open: boolean;
@@ -58,6 +59,7 @@ export default function RunConfirmationDialog({
   onCancel,
   onConfirm,
 }: RunConfirmationDialogProps) {
+  const demo = useMonitoringDemo();
   const attemptCount = calculateAttempts(
     questionCount,
     platformCount,
@@ -92,7 +94,11 @@ export default function RunConfirmationDialog({
     <Modal
       open={open}
       title="确认立即执行"
-      description="本次执行将沿用当前监控配置并进入任务队列。"
+      description={
+        demo
+          ? "本次只模拟运行并生成合成回答，不调用监控服务、不产生费用。"
+          : "本次执行将沿用当前监控配置并进入任务队列。"
+      }
       onClose={() => {
         if (!loading) onCancel();
       }}

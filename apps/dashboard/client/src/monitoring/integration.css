@@ -61,3 +61,12 @@
   min-width: 0;
   min-height: calc(100vh - 150px);
 }
+
+.monitoring-module .account-consumption-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px; }
+.monitoring-module .account-consumption-card {display:flex;flex-direction:column;gap:8px;padding:18px;border:1px solid var(--border,#e5e7eb);border-radius:14px;}
+.monitoring-module .account-consumption-card strong {font-size:24px;}
+.monitoring-module .account-consumption-card small {color:#64748b;font-size:12px;}
+.monitoring-module .account-consumption-filters {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;}
+.monitoring-module .account-consumption-filters button {border:1px solid #e2e8f0;border-radius:8px;background:transparent;padding:7px 12px;font-size:13px;}
+.monitoring-module .account-consumption-filters button[aria-pressed="true"] {background:#eef2ff;border-color:#818cf8;color:#4338ca;}
+@media(max-width:700px){.monitoring-module .account-consumption-grid {grid-template-columns:1fr;}}

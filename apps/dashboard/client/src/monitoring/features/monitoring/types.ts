@@ -13,6 +13,8 @@ export const MONITORING_TABS = [
   { id: "competitors", label: "竞品排名" },
   { id: "citations", label: "引用分析" },
   { id: "sources", label: "信源分布" },
+  { id: "goods", label: "商品统计" },
+  { id: "videos", label: "视频统计" },
 ] as const;
 
 export type MonitoringTab = (typeof MONITORING_TABS)[number]["id"];

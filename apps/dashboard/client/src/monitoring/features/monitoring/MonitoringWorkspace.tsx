@@ -1,5 +1,7 @@
 import {
   ChevronRight,
+  Download,
+  Table2,
   Edit3,
   Pause,
   Play,
@@ -28,6 +30,7 @@ import MetricDetailPanel from "./panels/MetricDetailPanel";
 import OverviewPanel from "./panels/OverviewPanel";
 import SourceDistributionPanel from "./panels/SourceDistributionPanel";
 import TrendPanel from "./panels/TrendPanel";
+import MediaStatisticsPanel from "./panels/MediaStatisticsPanel";
 import {
   monitoringDateWindow,
   monitoringExportHref,
@@ -48,6 +51,7 @@ import type {
 import { attemptModelKey } from "./types";
 import { useMonitoringDataSource } from "./useMonitoringDataSource";
 import "./monitoring.css";
+import "./reference-ui.css";
 
 type MonitoringWorkspaceProps = {
   project: ProjectSummary;
@@ -232,6 +236,7 @@ function MonitoringWorkspaceController({
   const [refreshing, setRefreshing] = useState(false);
   const [listCollapsed, setListCollapsed] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState("");
+  const [tableView, setTableView] = useState(false);
   const detailRef = useRef<HTMLElement>(null);
 
   const normalize = useCallback(
@@ -488,6 +493,37 @@ function MonitoringWorkspaceController({
                 </p>
               </div>
               <div className="fm-monitor-actions">
+                {exportHref ? (
+                  <a
+                    className="fm-primary-button fm-report-button"
+                    href={exportHref}
+                    download={
+                      serverData
+                        ? "monitoring-report.xlsx"
+                        : "monitoring-demo.csv"
+                    }
+                  >
+                    <Download size={14} /> 下载报告
+                  </a>
+                ) : (
+                  <button
+                    className="fm-primary-button fm-report-button"
+                    disabled
+                  >
+                    <Download size={14} /> 下载报告
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="fm-secondary-button"
+                  aria-pressed={tableView}
+                  onClick={() => {
+                    setTableView((value) => !value);
+                    updateQuery({ tab: tableView ? "overview" : "metrics" });
+                  }}
+                >
+                  <Table2 size={14} /> {tableView ? "指标浏览" : "表格浏览"}
+                </button>
                 <span aria-live="polite">
                   {refreshing ? "正在刷新" : refreshMessage}
                 </span>
@@ -665,6 +701,9 @@ function MonitoringWorkspaceController({
                     analysis={serverData ? live.analysis : undefined}
                     exportHref={exportHref}
                   />
+                )}
+                {(query.tab === "goods" || query.tab === "videos") && (
+                  <MediaStatisticsPanel kind={query.tab} />
                 )}
               </div>
               {run?.id && (

@@ -38,6 +38,7 @@ import {
   type RunCostQuoteView,
 } from "../runBilling";
 import ModelBrandIcon from "./ModelBrandIcon";
+import { DemoBrandPicker, DemoKeywordPanel } from "./DemoMonitorFields";
 import "./MonitorForm.css";
 
 type MonitorFormProps = {
@@ -47,6 +48,8 @@ type MonitorFormProps = {
   quoteRunCost: QuoteRunCost;
   regions?: RegionOption[];
   initial?: MonitorInput;
+  seedQuestions?: string[];
+  demoMode?: boolean;
   submitting?: boolean;
   onCancel: () => void;
   onSubmit: (
@@ -172,6 +175,8 @@ export default function MonitorForm({
   quoteRunCost,
   regions = [],
   initial,
+  seedQuestions,
+  demoMode = false,
   submitting,
   onCancel,
   onSubmit,
@@ -186,7 +191,7 @@ export default function MonitorForm({
     competitorDrafts(initial ? initial.competitors : project.competitors),
   );
   const [questionText, setQuestionText] = useState(
-    initial?.questions.join("\n") || "",
+    (initial?.questions ?? seedQuestions)?.join("\n") || "",
   );
   const [questionDraft, setQuestionDraft] = useState("");
   const [questionMode, setQuestionMode] = useState<"list" | "batch">("list");
@@ -278,9 +283,9 @@ export default function MonitorForm({
   const nameInvalid = Boolean(error && !name.trim());
   const questionsInvalid = Boolean(
     error &&
-    (!normalized.questions.length ||
-      normalized.questions.length > 50 ||
-      normalized.questions.some((question) => question.length > 4_000)),
+      (!normalized.questions.length ||
+        normalized.questions.length > 50 ||
+        normalized.questions.some((question) => question.length > 4_000)),
   );
   const modelsInvalid = Boolean(error && !selectedModels.length);
   const normalizedCompetitors = useMemo(
@@ -292,15 +297,15 @@ export default function MonitorForm({
   );
   const competitorsInvalid = Boolean(
     error &&
-    (competitors.some((competitor) => !competitor.name.trim()) ||
-      normalizedCompetitors.length > 50 ||
-      new Set(competitorNames).size !== competitorNames.length ||
-      normalizedCompetitors.some(
-        (competitor) =>
-          competitor.name.length > 120 ||
-          competitor.aliases.length > 50 ||
-          competitor.aliases.some((alias) => alias.length > 120),
-      )),
+      (competitors.some((competitor) => !competitor.name.trim()) ||
+        normalizedCompetitors.length > 50 ||
+        new Set(competitorNames).size !== competitorNames.length ||
+        normalizedCompetitors.some(
+          (competitor) =>
+            competitor.name.length > 120 ||
+            competitor.aliases.length > 50 ||
+            competitor.aliases.some((alias) => alias.length > 120),
+        )),
   );
   const availableModels = models.filter(
     (model) => model.enabled && model.verified,
@@ -364,16 +369,16 @@ export default function MonitorForm({
     quoteState.fingerprint === quoteFingerprint ? quoteState.quote : undefined;
   const quoteLoading = Boolean(
     quoteEligible &&
-    (quoteState.fingerprint !== quoteFingerprint || quoteState.loading),
+      (quoteState.fingerprint !== quoteFingerprint || quoteState.loading),
   );
   const quoteError =
     quoteState.fingerprint === quoteFingerprint ? quoteState.error : undefined;
   const balanceSufficient = Boolean(
     currentQuote &&
-    hasEnoughMoneyTenThousandths(
-      availableBalanceTenThousandths,
-      currentQuote.totalAmountTenThousandths,
-    ),
+      hasEnoughMoneyTenThousandths(
+        availableBalanceTenThousandths,
+        currentQuote.totalAmountTenThousandths,
+      ),
   );
   const estimatedRemaining = currentQuote
     ? subtractMoneyTenThousandths(
@@ -793,12 +798,20 @@ export default function MonitorForm({
                 aria-describedby={nameInvalid ? errorId : undefined}
               />
             </label>
-            <label className="field">
-              <span>
-                监控品牌 <small>继承项目</small>
-              </span>
-              <input value={project.brandName} readOnly aria-readonly="true" />
-            </label>
+            {demoMode ? (
+              <DemoBrandPicker projectBrand={project.brandName} />
+            ) : (
+              <label className="field">
+                <span>
+                  监控品牌 <small>继承项目</small>
+                </span>
+                <input
+                  value={project.brandName}
+                  readOnly
+                  aria-readonly="true"
+                />
+              </label>
+            )}
           </div>
           <section
             className="monitor-competitor-section"
@@ -874,7 +887,10 @@ export default function MonitorForm({
               )}
             </div>
           </section>
-          <div className="question-workbench">
+          <div
+            className={`question-workbench ${demoMode ? "with-demo-keywords" : ""}`}
+          >
+            {demoMode && <DemoKeywordPanel />}
             <section className="questions-section question-editor-panel">
               <div className="section-heading">
                 <div>

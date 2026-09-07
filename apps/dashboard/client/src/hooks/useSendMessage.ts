@@ -610,6 +610,9 @@ export function useSendMessage() {
       }
 
       const workspaceOperation = captureWorkspaceRestOperation();
+      // Bind the destination before the version check can yield. In particular,
+      // a content confirmation must never follow a later task selection.
+      const requestedConversation = activeConvRef.current;
       sendInFlightRef.current = true;
       const requestedResumeAttempt =
         resumeKnowledgeBaseAttachmentAttemptRef.current;
@@ -630,13 +633,17 @@ export function useSendMessage() {
           return false;
         }
         workspaceOperation.assertActive();
+        if (activeConvRef.current?.id !== requestedConversation?.id) {
+          toast.info("当前会话已切换，请在原任务中重新提交。");
+          return false;
+        }
         const retryConfig = options?.retryConfig || defaultRetryConfig;
         const agentProfile =
           durableGeneralChatRetry?.message.modelName ?? options?.agentProfile;
 
         // Ensure we have an active conversation
-        let convId = activeConvRef.current?.id;
-        let conv = activeConvRef.current;
+        let convId = requestedConversation?.id;
+        let conv = requestedConversation;
 
         if (!convId) {
           convId = createConversation();

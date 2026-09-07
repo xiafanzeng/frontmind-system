@@ -175,6 +175,11 @@ export function reduceContentProductionProgress(
   if (current) {
     const old = current.lastObservation;
     if (
+      // A Session owns one original Job. A native P0/article route may change
+      // job_kind to reference_pack, but must never replace its job_id or rewind
+      // the revision to adopt another task's confirmation or terminal result.
+      observation.state.job_id !== old.state.job_id ||
+      observation.state.revision < old.state.revision ||
       observation.providerRank < old.providerRank ||
       compareContentRunnerObservations(observation, old) <= 0
     )

@@ -39,6 +39,9 @@ vi.mock("@/lib/frontmind-api", () => ({
   retrieveTask: mocks.retrieve,
   getModelDisplayName: () => "High",
 }));
+vi.mock("@/components/FilePreview", () => ({
+  default: ({ file }: any) => <div data-testid="deliverable">{file.name}</div>,
+}));
 vi.mock("@/pages/Home", () => ({
   default: (props: any) => {
     mocks.home(props);
@@ -47,6 +50,8 @@ vi.mock("@/pages/Home", () => ({
 }));
 import ContentProductionWorkspace, {
   contentProductionLane,
+  contentProductionFinished,
+  contentArtifactUrl,
 } from "./ContentProductionWorkspace";
 
 function progress(
@@ -616,7 +621,7 @@ describe("内容制作 v4.11 原流程界面", () => {
     expect(screen.queryByLabelText("标题数量")).toBeNull();
   });
 
-  it("shows real intermediate Pack progress without claiming the original P0 or article goal has finished", async () => {
+  it("finishes the actual Pack job and requires a separate article task without claiming the original P0 goal has finished", async () => {
     paused("awaiting_core_positioning_confirmation", {
       mode: "p0",
       jobKind: "reference_pack",
@@ -627,9 +632,14 @@ describe("内容制作 v4.11 原流程界面", () => {
     });
     const view = render(<ContentProductionWorkspace />);
     await screen.findByText("企业知识库 v2 · 55 份资料");
+    expect(view.container.querySelector('[aria-current="step"]')).toBeNull();
+    expect(screen.getByText("Reference Pack 已完成")).toBeInTheDocument();
     expect(
-      view.container.querySelector('[aria-current="step"]')?.textContent,
-    ).toContain("交付 Reference Pack");
+      screen.getByText(/本次选择先创建资料包，文章尚未制作/),
+    ).toBeInTheDocument();
+    expect(
+      contentProductionLane("p0", "reference_pack").map((step) => step.title),
+    ).not.toContain("确认 P0 蓝图");
     expect(screen.queryByText("本次任务已完成")).toBeNull();
     expect(contentProductionLane("p0").map((step) => step.title)).toContain(
       "确认 P0 蓝图",
@@ -641,4 +651,331 @@ describe("内容制作 v4.11 原流程界面", () => {
       contentProductionLane("single_article").map((step) => step.title),
     ).not.toContain("候选优化");
   });
+});
+
+describe("内容任务隔离与交付复用", () => {
+  it("recognizes only authoritative terminal jobs, including P0, and does not confuse a completed turn with a completed job", () => {
+    expect(
+      contentProductionFinished(
+        progress({
+          jobKind: "p0",
+          workflowStatus: "p0_ready",
+          confirmation: null,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      contentProductionFinished(
+        progress({
+          jobKind: "reference_pack",
+          workflowStatus: "positioning_ready",
+          confirmation: null,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      contentProductionFinished(
+        progress({
+          jobKind: "article",
+          workflowStatus: "completed",
+          confirmation: null,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      contentProductionFinished(
+        progress({
+          jobKind: "p0",
+          workflowStatus: "positioning_ready",
+          confirmation: null,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      contentProductionFinished(progress({ workflowStatus: "completed" })),
+    ).toBe(false);
+    expect(
+      contentProductionFinished(
+        progress({
+          workflowStatus: "completed",
+          confirmation: null,
+          source: "awaiting_runner",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts only owned same-origin artifact URLs for results and Pack handoff", () => {
+    expect(
+      contentArtifactUrl(
+        "/api/frontmind/v2/artifacts/owned-opaque/content?enterpriseProjectId=project",
+      ),
+    ).toBe(
+      "/api/frontmind/v2/artifacts/owned-opaque/content?enterpriseProjectId=project",
+    );
+    expect(
+      contentArtifactUrl(
+        "https://attacker.test/api/frontmind/v2/artifacts/owned/content",
+      ),
+    ).toBeNull();
+    expect(
+      contentArtifactUrl("/api/frontmind/v2/artifacts/owned/other"),
+    ).toBeNull();
+    expect(contentArtifactUrl("javascript:alert(1)")).toBeNull();
+  });
+
+  it("does not briefly expose the previous task confirmation while the next task status is loading", async () => {
+    paused("awaiting_blueprint_confirmation");
+    const view = render(<ContentProductionWorkspace />);
+    await screen.findByRole("button", { name: "确认蓝图，开始正文" });
+    const firstSignal = mocks.retrieve.mock.calls[0][1].signal as AbortSignal;
+    let resolveNext!: (value: unknown) => void;
+    mocks.retrieve.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNext = resolve;
+        }),
+    );
+    mocks.conversation = {
+      id: "job-2",
+      taskId: "task-2",
+      title: "第二任务",
+      messages: [],
+      status: "completed",
+    };
+    view.rerender(<ContentProductionWorkspace />);
+    expect(
+      screen.queryByRole("button", { name: "确认蓝图，开始正文" }),
+    ).toBeNull();
+    expect(firstSignal.aborted).toBe(true);
+    await act(async () =>
+      resolveNext({
+        id: "task-1",
+        purpose: "content_production",
+        status: "completed",
+        contentProduction: progress(),
+      }),
+    );
+    expect(
+      await screen.findByText("任务状态与当前内容任务不匹配，请重新读取。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "确认蓝图，开始正文" }),
+    ).toBeNull();
+  });
+
+  it("retains startup text and files when sending fails instead of silently discarding the new task", async () => {
+    mocks.send.mockResolvedValue(false);
+    const view = render(<ContentProductionWorkspace />);
+    fireEvent.click(screen.getByRole("button", { name: "新建任务" }));
+    fireEvent.click(screen.getByRole("radio", { name: /创建或导入 P0/ }));
+    fireEvent.change(screen.getByLabelText("企业名称"), {
+      target: { value: "保留企业" },
+    });
+    const file = new File(["企业材料"], "company.md", {
+      type: "text/markdown",
+    });
+    fireEvent.change(screen.getByLabelText(/上传材料或 Reference Pack/), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建并开始" }));
+    mocks.conversation = {
+      id: "new-job",
+      title: "保留任务",
+      messages: [],
+      status: "idle",
+    };
+    mocks.conversations = [mocks.conversation];
+    view.rerender(<ContentProductionWorkspace />);
+    expect(await screen.findByText("查看已保留的开场信息")).toBeInTheDocument();
+    expect(screen.getByText("文件：company.md")).toBeInTheDocument();
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    view.rerender(<ContentProductionWorkspace />);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    const originalArgs = mocks.send.mock.calls[0];
+    mocks.send.mockResolvedValue(true);
+    fireEvent.click(screen.getByText("查看已保留的开场信息"));
+    fireEvent.click(screen.getByRole("button", { name: "重试本次开场请求" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
+    expect(mocks.send.mock.calls[1]).toEqual(originalArgs);
+    expect(mocks.send.mock.calls[1][1]?.[0]).toBe(file);
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("查看已保留的开场信息")).toBeNull();
+  });
+
+  it("requires explicit Pack selection, fetches owned ZIP bytes, and starts a separate P0 task with that original File", async () => {
+    paused("awaiting_core_positioning_confirmation", {
+      mode: "new_reference_pack",
+      jobKind: "reference_pack",
+      workflowStatus: "positioning_ready",
+      confirmation: null,
+      availableActions: [],
+      progressPosition: 7,
+    });
+    mocks.conversation.messages = [
+      {
+        id: "pack-output",
+        role: "assistant",
+        content: "资料包已交付",
+        outputFiles: [
+          {
+            fileUrl: "/api/frontmind/v2/artifacts/pack/content",
+            fileName: "Reference_Pack_v5.zip",
+            mimeType: "application/zip",
+          },
+          {
+            fileUrl: "/api/frontmind/v2/artifacts/private/content",
+            fileName: "frontmind_workflow_job_snapshot_123.zip",
+            mimeType: "application/zip",
+          },
+          {
+            fileUrl: "https://provider.test/private.zip",
+            fileName: "private.zip",
+            mimeType: "application/zip",
+          },
+        ],
+      },
+    ];
+    const fetchMock = vi.fn(
+      async (_url: string, _init: RequestInit) =>
+        new Response(new Uint8Array([80, 75, 3, 4, 1, 2, 3, 4]), {
+          status: 200,
+          headers: { "Content-Type": "application/zip" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const view = render(<ContentProductionWorkspace />);
+      const next = await screen.findByRole("button", {
+        name: "使用此资料包创建 P0",
+      });
+      expect(next).toBeDisabled();
+      expect(screen.getAllByTestId("deliverable")).toHaveLength(1);
+      fireEvent.change(screen.getByLabelText("用于下一任务的资料包"), {
+        target: { value: "/api/frontmind/v2/artifacts/pack/content" },
+      });
+      fireEvent.click(next);
+      const dialog = await screen.findByRole("dialog");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        "/api/frontmind/v2/artifacts/pack/content",
+      );
+      expect(
+        within(dialog).getByRole("radio", { name: /创建或导入 P0/ }),
+      ).toBeChecked();
+      expect(within(dialog).getByLabelText("企业名称")).toHaveValue("测试企业");
+      expect(
+        within(dialog).getByText(/已带入资料包：Reference_Pack_v5.zip/),
+      ).toBeInTheDocument();
+      expect(mocks.create).not.toHaveBeenCalled();
+      const supplement = new File(["补充企业事实"], "supplement.pdf", {
+        type: "application/pdf",
+      });
+      fireEvent.change(within(dialog).getByLabelText(/补充企业材料/), {
+        target: { files: [supplement] },
+      });
+      expect(
+        within(dialog).getByText(
+          /已选择：Reference_Pack_v5.zip、supplement.pdf/,
+        ),
+      ).toBeInTheDocument();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "创建并开始" }),
+      );
+      mocks.conversation = {
+        id: "new-job",
+        title: "新的 P0",
+        messages: [],
+        status: "idle",
+      };
+      mocks.conversations.push(mocks.conversation);
+      view.rerender(<ContentProductionWorkspace />);
+      await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1));
+      const [prompt, files, options] = mocks.send.mock.calls[0];
+      expect(prompt).toContain("Reference_Pack_v5.zip");
+      expect(files?.[0]).toBeInstanceOf(File);
+      expect(files?.[0].name).toBe("Reference_Pack_v5.zip");
+      expect(files).toHaveLength(2);
+      expect(files?.[1]).toBe(supplement);
+      expect(options.contentProduction).toMatchObject({
+        mode: "p0",
+        knowledgeSource: "files",
+      });
+      expect(options).not.toHaveProperty("contentProductionAction");
+      expect(options.contentProduction).not.toHaveProperty(
+        "referencePackRoute",
+      );
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reuseEmpty: false,
+          purpose: "content_production",
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+it("locks the opposite composer during a confirmation submission and preserves fields on failure", async () => {
+  paused("awaiting_blueprint_confirmation");
+  let finish!: (value: boolean) => void;
+  mocks.send.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  render(<ContentProductionWorkspace />);
+  fireEvent.change(await screen.findByLabelText("蓝图调整（可选）"), {
+    target: { value: "保留这个修改" },
+  });
+  const button = screen.getByRole("button", { name: "提交蓝图修改" });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.home).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      operatorWorkspace: true,
+      knowledgeEditingBlocked: true,
+    }),
+  );
+  await act(async () => finish(false));
+  expect(screen.getByLabelText("蓝图调整（可选）")).toHaveValue("保留这个修改");
+  expect(mocks.home).toHaveBeenLastCalledWith(
+    expect.objectContaining({ knowledgeEditingBlocked: false }),
+  );
+});
+
+it("shows neutral loading for an unknown historical task instead of inventing Reference Pack stages", async () => {
+  paused("awaiting_blueprint_confirmation");
+  let finish!: (value: unknown) => void;
+  mocks.retrieve.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const view = render(<ContentProductionWorkspace />);
+  expect(screen.getByText("正在读取任务信息")).toBeInTheDocument();
+  expect(
+    screen.getByText("制作阶段将在本任务的信息读取后显示。"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("交付 Reference Pack")).toBeNull();
+  expect(view.container.querySelector('[aria-current="step"]')).toBeNull();
+  await act(async () =>
+    finish({
+      id: "task-1",
+      status: "completed",
+      purpose: "content_production",
+      contentProduction: progress(),
+    }),
+  );
+  expect(
+    await screen.findByRole("button", { name: "确认蓝图，开始正文" }),
+  ).toBeInTheDocument();
+  expect(
+    view.container.querySelector('[aria-current="step"]')?.textContent,
+  ).toContain("确认文章蓝图");
 });

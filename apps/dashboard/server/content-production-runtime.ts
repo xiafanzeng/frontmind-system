@@ -26,7 +26,9 @@ export function isContentWorkflowSnapshotFilename(filename: string) {
 }
 export function isContentWorkflowInternalFilename(filename: string) {
   return (
-    isContentWorkflowStateFilename(filename) ||
+    filename === CONTENT_WORKFLOW_FILENAME ||
+    filename === CONTENT_WORKFLOW_STATE_FILENAME ||
+    filename.startsWith("frontmind_workflow_job_state_") ||
     filename.startsWith("frontmind_workflow_job_snapshot_")
   );
 }

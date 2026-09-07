@@ -327,6 +327,60 @@ describe("useSendMessage", () => {
     }));
   });
 
+  it.each(["original-content-task", null])(
+    "does not retarget a submission from %s after switching tasks during the version check",
+    async (originalId) => {
+      const original = originalId
+        ? {
+            id: originalId,
+            taskId: "original-job",
+            previousResponseId: "original-job",
+            purpose: "content_production",
+            status: "completed",
+            messages: [],
+          }
+        : null;
+      mocks.useConversation.mockReturnValue(
+        mockConversationContext({ activeConversation: original }),
+      );
+      let finishVersionCheck!: (current: boolean) => void;
+      mocks.requireCurrentFrontMindBuild.mockReturnValueOnce(
+        new Promise<boolean>((resolve) => { finishVersionCheck = resolve; }),
+      );
+      const hook = renderHook(() => useSendMessage());
+      let submitted!: Promise<boolean>;
+      await act(async () => {
+        submitted = hook.result.current.sendMessage("确认当前蓝图", [], {
+          contentProductionAction: { kind: "confirm_blueprint", revision: 7 },
+        });
+      });
+      mocks.useConversation.mockReturnValue(
+        mockConversationContext({
+          activeConversation: {
+            id: "newly-selected-content-task",
+            taskId: "another-job",
+            previousResponseId: "another-job",
+            purpose: "content_production",
+            status: "completed",
+            messages: [],
+          },
+        }),
+      );
+      hook.rerender();
+      await act(async () => {
+        finishVersionCheck(true);
+        expect(await submitted).toBe(false);
+      });
+      expect(mocks.createConversation).not.toHaveBeenCalled();
+      expect(mocks.addMessage).not.toHaveBeenCalled();
+      expect(mocks.prepareUploadFiles).not.toHaveBeenCalled();
+      expect(mocks.flushConversation).not.toHaveBeenCalled();
+      expect(mocks.createTask).not.toHaveBeenCalled();
+      expect(mocks.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
+      hook.unmount();
+    },
+  );
+
   it("explains a missing published knowledge source without losing the pending question", async () => {
     mocks.createTask.mockRejectedValueOnce(
       Object.assign(new Error("ENTERPRISE_QA_KNOWLEDGE_REQUIRED"), {

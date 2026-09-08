@@ -15,9 +15,13 @@ type SourceState = {
   knowledgeBase: TaskResponse["knowledgeBase"];
   loaded: boolean;
   failed: boolean;
+  refreshFailed?: boolean;
 };
 
-function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
+function useKnowledgeSource(
+  localTaskId?: string | null,
+  enabled = true,
+): { source: SourceState; retry: () => void } {
   const search = useSearch();
   const headers = deliveryProjectHeaders();
   const requestKey = JSON.stringify([search, headers, localTaskId ?? null]);
@@ -33,10 +37,22 @@ function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
     let disposed = false;
     let requestVersion = 0;
     let controller: AbortController | undefined;
+    let timeoutId: number | undefined;
     const refresh = async () => {
       const version = ++requestVersion;
       controller?.abort();
-      controller = new AbortController();
+      window.clearTimeout(timeoutId);
+      const requestController = new AbortController();
+      controller = requestController;
+      let temporaryFailure = true;
+      const deadline = new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          temporaryFailure = true;
+          requestController.abort();
+          reject(new Error("知识库状态读取超时"));
+        }, 15000);
+      });
+      const requestTimeoutId = timeoutId;
       // Revalidate a known source without unmounting the chat or losing an unsent draft.
       // A different scope never reuses it because requestKey is checked during render.
       setSource((current) =>
@@ -48,18 +64,27 @@ function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
         const query = localTaskId
           ? `localTaskId=${encodeURIComponent(localTaskId)}`
           : "purpose=enterprise_qa";
-        const response = await fetch(
-          `/api/frontmind/v2/runtime-config?${query}`,
-          {
+        const response = await Promise.race([
+          fetch(`/api/frontmind/v2/runtime-config?${query}`, {
             credentials: "same-origin",
             cache: "no-store",
             headers,
-            signal: controller.signal,
-          },
-        );
-        if (!response.ok) throw new Error("知识库来源读取失败");
-        const result: Pick<TaskResponse, "knowledgeBase"> =
-          await response.json();
+            signal: requestController.signal,
+          }),
+          deadline,
+        ]);
+        if (!response.ok) {
+          temporaryFailure =
+            response.status >= 500 ||
+            response.status === 408 ||
+            response.status === 429;
+          throw new Error("知识库来源读取失败");
+        }
+        temporaryFailure = false;
+        const result: Pick<TaskResponse, "knowledgeBase"> = await Promise.race([
+          response.json(),
+          deadline,
+        ]);
         const knowledgeBase = result.knowledgeBase ?? null;
         if (
           knowledgeBase &&
@@ -76,15 +101,22 @@ function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
         if (!disposed && version === requestVersion) {
           setSource({ requestKey, knowledgeBase, loaded: true, failed: false });
         }
-      } catch {
+      } catch (error) {
+        // Fetch can reject while reading a successful response body as well as before headers.
+        if (error instanceof TypeError) temporaryFailure = true;
         if (!disposed && version === requestVersion) {
-          setSource({
-            requestKey,
-            knowledgeBase: null,
-            loaded: true,
-            failed: true,
-          });
+          setSource((current) =>
+            temporaryFailure &&
+            current.requestKey === requestKey &&
+            current.loaded &&
+            !current.failed &&
+            current.knowledgeBase
+              ? { ...current, refreshFailed: true }
+              : { requestKey, knowledgeBase: null, loaded: true, failed: true },
+          );
         }
+      } finally {
+        window.clearTimeout(requestTimeoutId);
       }
     };
     void refresh();
@@ -92,6 +124,7 @@ function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
     return () => {
       disposed = true;
       controller?.abort();
+      window.clearTimeout(timeoutId);
       window.removeEventListener("focus", refresh);
     };
     // The key freezes all project/owner transport headers and the selected task for this request.
@@ -107,11 +140,12 @@ function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
 
 export function EnterpriseQaSourceNote({
   currentPublication,
-}: { currentPublication?: SourceState } = {}) {
+  onRetryPublication,
+}: { currentPublication?: SourceState; onRetryPublication?: () => void } = {}) {
   const { activeConversation } = useConversation();
   const localTaskId =
     activeConversation?.previousResponseId ?? activeConversation?.taskId;
-  const { source: taskSource } = useKnowledgeSource(
+  const { source: taskSource, retry: retryTaskSource } = useKnowledgeSource(
     localTaskId,
     !!localTaskId || !currentPublication,
   );
@@ -152,6 +186,24 @@ export function EnterpriseQaSourceNote({
           </>
         )}
       </p>
+      {(source.refreshFailed || currentPublication?.refreshFailed) && (
+        <div
+          role="alert"
+          className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-700"
+        >
+          <span>知识库状态暂时无法刷新，已保留当前会话和草稿。</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (currentPublication?.refreshFailed) onRetryPublication?.();
+              if (taskSource.refreshFailed) retryTaskSource();
+            }}
+          >
+            重新检查知识库
+          </Button>
+        </div>
+      )}
     </header>
   );
 }
@@ -209,7 +261,10 @@ function EnterpriseQaPublishedWorkspace() {
   }
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <EnterpriseQaSourceNote currentPublication={source} />
+      <EnterpriseQaSourceNote
+        currentPublication={source}
+        onRetryPublication={retry}
+      />
       <div className="min-h-0 flex-1">
         <Home
           embedded

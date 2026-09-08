@@ -29,6 +29,7 @@ vi.mock("@/pages/Home", () => ({
     >
       <button>新建会话</button>
       <button>开始企业问答</button>
+      <textarea aria-label="问答草稿" defaultValue="" />
     </div>
   ),
 }));
@@ -40,6 +41,7 @@ describe("Enterprise QA source binding", () => {
   });
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     window.history.replaceState(null, "", "/");
   });
@@ -156,8 +158,10 @@ describe("Enterprise QA source binding", () => {
       "href",
       "/?view=knowledge&enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7",
     );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "当前企业项目尚无可用的已发布知识库",
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "当前企业项目尚无可用的已发布知识库",
+      ),
     );
   });
   it("keeps chat and creation controls unmounted until publication is confirmed, then allows entry", async () => {
@@ -418,5 +422,140 @@ describe("Enterprise QA source binding", () => {
       "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
       "/api/frontmind/v2/runtime-config?localTaskId=frozen-task",
     ]);
+  });
+  it.each(["network", "503"])(
+    "preserves an unlocked chat and draft on a temporary %s refresh failure, then retries locally",
+    async (failure) => {
+      const published = {
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "published",
+            version: 8,
+            sourceFileName: "资料.md",
+            documentCount: 4,
+          },
+        }),
+      };
+      const fetchMock = vi.fn().mockResolvedValueOnce(published);
+      if (failure === "network")
+        fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      else fetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
+      fetchMock.mockResolvedValueOnce(published);
+      vi.stubGlobal("fetch", fetchMock);
+      render(<EnterpriseQaWorkspace />);
+      const chat = await screen.findByTestId("chat");
+      fireEvent.change(screen.getByLabelText("问答草稿"), {
+        target: { value: "尚未发送的问题" },
+      });
+      fireEvent(window, new Event("focus"));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "已保留当前会话和草稿",
+      );
+      expect(screen.getByTestId("chat")).toBe(chat);
+      expect(screen.getByLabelText("问答草稿")).toHaveValue("尚未发送的问题");
+      fireEvent.click(screen.getByRole("button", { name: "重新检查知识库" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+      );
+      expect(screen.getByTestId("chat")).toBe(chat);
+      expect(screen.getByLabelText("问答草稿")).toHaveValue("尚未发送的问题");
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("locks an unlocked chat when the server explicitly denies access", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            knowledgeBase: {
+              snapshotId: "published",
+              version: 8,
+              sourceFileName: "资料.md",
+              documentCount: 4,
+            },
+          }),
+        })
+        .mockResolvedValueOnce({ ok: false, status: 403 }),
+    );
+    render(<EnterpriseQaWorkspace />);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    fireEvent(window, new Event("focus"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "知识库状态读取失败",
+    );
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+  });
+
+  it("times out an initial hung check into a retryable locked page", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ knowledgeBase: null }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<EnterpriseQaWorkspace />);
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeDisabled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("知识库状态读取失败");
+    expect(screen.getByRole("button", { name: "重新检查" })).not.toBeDisabled();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    });
+    expect(
+      screen.getByRole("heading", { name: "先构建并发布企业知识库" }),
+    ).toBeInTheDocument();
+  });
+
+  it("retains an unlocked chat and draft when a background source check times out", async () => {
+    const published = {
+      ok: true,
+      json: async () => ({
+        knowledgeBase: {
+          snapshotId: "published",
+          version: 8,
+          sourceFileName: "资料.md",
+          documentCount: 4,
+        },
+      }),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(published)
+        .mockImplementationOnce(() => new Promise(() => {}))
+        .mockResolvedValueOnce(published),
+    );
+    render(<EnterpriseQaWorkspace />);
+    const chat = await screen.findByTestId("chat");
+    fireEvent.change(screen.getByLabelText("问答草稿"), {
+      target: { value: "保留草稿" },
+    });
+    vi.useFakeTimers();
+    fireEvent(window, new Event("focus"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("已保留当前会话和草稿");
+    expect(screen.getByTestId("chat")).toBe(chat);
+    expect(screen.getByLabelText("问答草稿")).toHaveValue("保留草稿");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "重新检查知识库" }));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat")).toBe(chat);
+    expect(screen.getByLabelText("问答草稿")).toHaveValue("保留草稿");
   });
 });

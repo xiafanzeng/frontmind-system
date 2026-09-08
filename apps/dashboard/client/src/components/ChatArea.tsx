@@ -1,3 +1,4 @@
+import { projectFrontMindIdentityMessages } from "@shared/frontmind-general-identity";
 import type { ContentProductionInput } from "@shared/content-production";
 /**
  * ChatArea Component - Main chat interface
@@ -1715,15 +1716,12 @@ export default function ChatArea({
     wakeKnowledgeBaseConversation,
   ]);
 
-  const messages = useMemo(
-    () =>
-      activeConversation
-        ? messageProjection
-          ? activeConversation.messages.map(messageProjection)
-          : activeConversation.messages
-        : [],
-    [activeConversation, messageProjection],
-  );
+  const messages = useMemo(() => {
+    const rows = activeConversation ? messageProjection
+      ? activeConversation.messages.map(messageProjection) : activeConversation.messages : [];
+    return activeConversation?.executionKind === "general_chat_v2" && !purpose
+      ? projectFrontMindIdentityMessages(rows) : rows;
+  }, [activeConversation, messageProjection, purpose]);
   const finalAssistantMessageId = useMemo(
     () =>
       [...messages].reverse().find((message) => message.role === "assistant")

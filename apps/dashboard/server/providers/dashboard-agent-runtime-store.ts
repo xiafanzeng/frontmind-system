@@ -43,6 +43,8 @@ export type DashboardManagedCommand = {
   intentId: string;
   prompt: string;
   providerPromptHash: string;
+  turnContext?: string | null;
+  productIdentityContext?: string | null;
   attachments: Array<{ fileId: string; filename: string; sha256: string }>;
   schema?: Record<string, unknown>;
   beforeEventIds: string[];
@@ -52,6 +54,7 @@ export type DashboardManagedCommand = {
 };
 export type DashboardManagedRuntime = {
   revision: 1;
+  generalIdentitySystem?: string;
   model: string;
   effort: "low" | "high" | "max";
   intentId: string;
@@ -73,6 +76,7 @@ export type DashboardRuntimeRecord = {
   runtime: DashboardManagedRuntime;
 };
 export type DashboardRuntimeReservation = {
+  generalIdentitySystem?: string;
   identity: DashboardProviderIdentity;
   intentId: string;
   model: string;
@@ -158,7 +162,8 @@ export function assertDashboardManagedRuntimeImmutable(
     before.revision !== after.revision ||
     before.model !== after.model ||
     before.effort !== after.effort ||
-    before.intentId !== after.intentId
+    before.intentId !== after.intentId ||
+    before.generalIdentitySystem !== after.generalIdentitySystem
   )
     throw new Error("DASHBOARD_PROVIDER_RUNTIME_CONFLICT");
   for (const key of ["agentId", "environmentId", "sessionId"] as const)
@@ -331,6 +336,9 @@ export const dashboardAgentRuntimeStore: DashboardAgentRuntimeStore = {
       }
       const runtime: DashboardManagedRuntime = {
         revision: 1,
+        ...(input.generalIdentitySystem
+          ? { generalIdentitySystem: input.generalIdentitySystem }
+          : {}),
         model: input.model,
         effort: input.effort,
         intentId: input.intentId,

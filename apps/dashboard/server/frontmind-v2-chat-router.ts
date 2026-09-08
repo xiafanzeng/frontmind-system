@@ -392,6 +392,7 @@ function clientFor(
   const purpose = task ? frozenGeneralAgentPurpose(task, accountUserId) : null;
   return createCredentialAgentClient(credential, {
     accountUserId,
+    generalIdentity: !purpose && operation?.operationType === CHAT_CONTRACT,
     ...(purpose?.purpose === "enterprise_qa"
       ? {
           systemContext: enterpriseQaSystemContext(purpose),
@@ -2313,7 +2314,7 @@ async function taskDto(operation: AgentOperation, task: AgentTask) {
       task_title:
         purpose?.purpose === "enterprise_qa"
           ? "企业问答"
-          : "FrontMind 内容流程",
+          : purpose?.purpose === "content_production" ? "FrontMind 内容流程" : "FrontMind 通用智能体",
     },
     output: await cachedOutput(task.id),
     ...(!task.providerTaskId &&

@@ -64,6 +64,9 @@ function memoryStore() {
         operationId: input.operationId ?? `operation_${id}`,
         runtime: {
           revision: 1 as const,
+          ...(input.generalIdentitySystem
+            ? { generalIdentitySystem: input.generalIdentitySystem }
+            : {}),
           model: input.model,
           effort: input.effort,
           intentId: input.intentId,
@@ -321,12 +324,71 @@ const request = {
 };
 
 describe("tenant-owned Dashboard Managed Agents transport", () => {
+  it("freezes product identity for new sessions and only adds it to new legacy-session commands", async () => {
+    const fresh = fixture();
+    await fresh
+      .client({ generalIdentity: true, tools: [] })
+      .createTask({ title: "Identity", prompt: "你是谁" });
+    expect(
+      fresh.calls.find((c) => c.path === "/v1/agents")?.body.system,
+    ).toContain("你是 FrontMind 通用智能体");
+    expect(
+      fresh.calls.find((c) => c.path === "/v1/agents")?.body.tools,
+    ).toEqual([]);
+    const legacy = fixture();
+    await legacy.client().createTask(request);
+    const before = [...legacy.rows.values()][0].runtime.commands[0];
+    // A create replay after deploying branding must retain the original Agent and prompt hash.
+    await legacy.client({ generalIdentity: true }).createTask(request);
+    expect([...legacy.rows.values()][0].runtime.commands[0]).toEqual(before);
+    legacy.finish();
+    const record = [...legacy.rows.values()][0];
+    const opts = {
+      localTaskId: record.localTaskId,
+      operationId: record.operationId,
+      intentId: "identity-next",
+      generalIdentity: true,
+    };
+    await legacy
+      .client(opts)
+      .sendMessage({ taskId: "session_1", prompt: "你是谁" });
+    const command = legacy.rows
+      .get(record.localTaskId)!
+      .runtime.commands.at(-1)!;
+    expect(command.productIdentityContext).toContain("frontmind-general-v1");
+    const sends = legacy.calls.filter(
+      (c) => c.path.endsWith("/events") && c.method === "POST",
+    ).length;
+    await legacy
+      .client({ ...opts, generalIdentity: false })
+      .sendMessage({ taskId: "session_1", prompt: "你是谁" });
+    expect(
+      legacy.calls.filter(
+        (c) => c.path.endsWith("/events") && c.method === "POST",
+      ),
+    ).toHaveLength(sends);
+    expect(
+      legacy.rows.get(record.localTaskId)!.runtime.commands.at(-1),
+    ).toEqual(command);
+  });
+
   it("keeps an explicitly account-scoped general agent outside an ambient enterprise project", async () => {
     const f = fixture();
-    await runWithEnterpriseProjectScope({ enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 7, actorUserId: 7, isLegacyDefault: true }, async () => {
-      await f.client({ enterpriseProjectId: null }).createTask(request);
+    await runWithEnterpriseProjectScope(
+      {
+        enterpriseProjectId: "11111111-1111-4111-8111-111111111111",
+        ownerUserId: 7,
+        actorUserId: 7,
+        isLegacyDefault: true,
+      },
+      async () => {
+        await f.client({ enterpriseProjectId: null }).createTask(request);
+      },
+    );
+    expect([...f.rows.values()][0].identity).toMatchObject({
+      enterpriseProjectId: null,
+      enterpriseProjectLegacyDefault: false,
     });
-    expect([...f.rows.values()][0].identity).toMatchObject({ enterpriseProjectId: null, enterpriseProjectLegacyDefault: false });
   });
   it("reuses the unsent High session after recharge without duplicating provider resources", async () => {
     const f = fixture();

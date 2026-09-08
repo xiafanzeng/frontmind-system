@@ -1,0 +1,54 @@
+name: frontmind-analytics
+services:
+  umami:
+    image: ${FRONTMIND_UMAMI_IMAGE:?pin the Umami 3.3.1 image digest}
+    env_file: /etc/frontmind-system/umami.env
+    ports: ["127.0.0.1:3010:3000"]
+    depends_on:
+      umami-db: {condition: service_healthy}
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1536m
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent http://localhost:3000/api/heartbeat >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks: [analytics, applications]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  umami-db:
+    image: ${FRONTMIND_UMAMI_POSTGRES_IMAGE:?pin PostgreSQL 17 image digest}
+    env_file: /etc/frontmind-system/umami-postgres.env
+    volumes: [/srv/frontmind-system/runtime/umami-postgres:/var/lib/postgresql/data]
+    restart: unless-stopped
+    mem_limit: 1024m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [analytics]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+  umami-backup:
+    image: ${FRONTMIND_UMAMI_POSTGRES_IMAGE:?pin PostgreSQL 17 image digest}
+    env_file: /etc/frontmind-system/umami-postgres.env
+    entrypoint: [/bin/sh, /opt/umami-backup.sh]
+    volumes:
+      - ./backup.sh:/opt/umami-backup.sh:ro
+      - /srv/frontmind-system/backups/umami:/backups
+    depends_on:
+      umami-db: {condition: service_healthy}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    networks: [analytics]
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+networks:
+  analytics: {internal: true}
+  applications: {external: true, name: frontmind-system-applications}

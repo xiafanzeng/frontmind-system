@@ -1,3 +1,4 @@
+import { frontmindGeneralIdentity } from "../frontmind-general-identity";
 import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import {
   AiBillingPausedError,
@@ -65,6 +66,9 @@ export type DashboardAgentClientOptions = DashboardProviderIdentity & {
   rateLimitScope?: string;
   /** Frozen server-owned purpose context, never supplied directly by the browser. */
   systemContext?: string;
+  generalIdentity?: boolean;
+  /** Server-only native tool selection for bounded operator diagnostics. */
+  tools?: Array<{ type: "agent_toolset_20260601" }>;
   /** Server-validated action for this turn, separate from original user text. */
   turnContext?: string;
   /** Server-owned workflow inputs mount in the same session, outside user-turn evidence. */
@@ -263,11 +267,11 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       enterpriseProjectId:
         options.enterpriseProjectId !== undefined
           ? options.enterpriseProjectId
-          : getEnterpriseProjectScope()?.enterpriseProjectId ?? null,
+          : (getEnterpriseProjectScope()?.enterpriseProjectId ?? null),
       enterpriseProjectLegacyDefault:
         options.enterpriseProjectLegacyDefault ??
         (options.enterpriseProjectId === undefined
-          ? getEnterpriseProjectScope()?.isLegacyDefault ?? false
+          ? (getEnterpriseProjectScope()?.isLegacyDefault ?? false)
           : false),
     };
   }
@@ -289,6 +293,9 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       intentId: this.intent(),
       model,
       effort,
+      ...(this.options.generalIdentity
+        ? { generalIdentitySystem: frontmindGeneralIdentity(model) }
+        : {}),
       localTaskId: this.options.localTaskId,
       operationId: this.options.operationId,
     });
@@ -654,9 +661,9 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         speed: "standard",
       },
       system: this.options.systemContext
-        ? `${SYSTEM}\n\n${this.options.systemContext}`
-        : SYSTEM,
-      tools: [{ type: "agent_toolset_20260601" }],
+        ? `${record.runtime.generalIdentitySystem ?? SYSTEM}\n\n${this.options.systemContext}`
+        : (record.runtime.generalIdentitySystem ?? SYSTEM),
+      tools: this.options.tools ?? [{ type: "agent_toolset_20260601" }],
     };
     const agent = await this.once(
       record,
@@ -856,9 +863,24 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     const key = initial ? "initial" : `turn:${sha(intentId)}`;
     const sessionId = record.runtime.sessionId!;
     const originalProviderPrompt = zhipuTaskPrompt(input);
-    const providerPrompt = this.options.turnContext
-      ? `${originalProviderPrompt}\n\n${this.options.turnContext}`
-      : originalProviderPrompt;
+    let command = record.runtime.commands.find((c) => c.key === key);
+    const turnContext =
+      command && "turnContext" in command
+        ? command.turnContext
+        : this.options.turnContext;
+    // Older commands keep their original bytes; only a new explicit user turn receives identity context.
+    const identityContext = command
+      ? command.productIdentityContext
+      : this.options.generalIdentity
+        ? frontmindGeneralIdentity(record.runtime.model)
+        : undefined;
+    const providerPrompt = [
+      originalProviderPrompt,
+      turnContext,
+      identityContext,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const request = {
       sessionId,
       prompt: providerPrompt,
@@ -870,7 +892,6 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       JSON.stringify(
         command.attachments.map((f) => [f.fileId, f.sha256, f.filename]),
       ) === JSON.stringify(request.attachments);
-    let command = record.runtime.commands.find((c) => c.key === key);
     if (command && !matchesRequest(command))
       fail("task.sendMessage", "PROVIDER_COMMAND_CONFLICT");
     if (command?.eventId) return command;
@@ -923,6 +944,8 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
         intentId,
         prompt: input.prompt,
         providerPromptHash: sha(providerPrompt),
+        turnContext: turnContext ?? null,
+        productIdentityContext: identityContext ?? null,
         attachments: files.map((f) => ({
           fileId: f.id,
           filename: f.filename,

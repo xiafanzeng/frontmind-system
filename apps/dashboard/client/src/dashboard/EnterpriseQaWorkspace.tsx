@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Link } from "wouter";
-import { BookOpen } from "lucide-react";
+import { Link, useSearch } from "wouter";
+import { BookOpen, LockKeyhole, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import Home from "@/pages/Home";
 import {
   ConversationPurposeProvider,
@@ -16,21 +17,33 @@ type SourceState = {
   failed: boolean;
 };
 
-export function EnterpriseQaSourceNote() {
-  const { activeConversation } = useConversation();
-  const localTaskId =
-    activeConversation?.previousResponseId ?? activeConversation?.taskId;
-  const [source, setSource] = useState<SourceState>({
+function useKnowledgeSource(localTaskId?: string | null, enabled = true) {
+  const search = useSearch();
+  const headers = deliveryProjectHeaders();
+  const requestKey = JSON.stringify([search, headers, localTaskId ?? null]);
+  const [attempt, setAttempt] = useState(0);
+  const [source, setSource] = useState<SourceState & { requestKey: string }>({
+    requestKey: "",
     knowledgeBase: null,
     loaded: false,
     failed: false,
   });
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false;
     let requestVersion = 0;
-    setSource({ knowledgeBase: null, loaded: false, failed: false });
+    let controller: AbortController | undefined;
     const refresh = async () => {
       const version = ++requestVersion;
+      controller?.abort();
+      controller = new AbortController();
+      // Revalidate a known source without unmounting the chat or losing an unsent draft.
+      // A different scope never reuses it because requestKey is checked during render.
+      setSource((current) =>
+        current.requestKey === requestKey && current.loaded && !current.failed
+          ? current
+          : { requestKey, knowledgeBase: null, loaded: false, failed: false },
+      );
       try {
         const query = localTaskId
           ? `localTaskId=${encodeURIComponent(localTaskId)}`
@@ -40,22 +53,37 @@ export function EnterpriseQaSourceNote() {
           {
             credentials: "same-origin",
             cache: "no-store",
-            headers: deliveryProjectHeaders(),
+            headers,
+            signal: controller.signal,
           },
         );
         if (!response.ok) throw new Error("知识库来源读取失败");
         const result: Pick<TaskResponse, "knowledgeBase"> =
           await response.json();
+        const knowledgeBase = result.knowledgeBase ?? null;
+        if (
+          knowledgeBase &&
+          (typeof knowledgeBase.snapshotId !== "string" ||
+            !knowledgeBase.snapshotId.trim() ||
+            !Number.isInteger(knowledgeBase.version) ||
+            knowledgeBase.version < 1 ||
+            !Number.isInteger(knowledgeBase.documentCount) ||
+            knowledgeBase.documentCount < 1 ||
+            typeof knowledgeBase.sourceFileName !== "string")
+        ) {
+          throw new Error("知识库来源无效");
+        }
         if (!disposed && version === requestVersion) {
-          setSource({
-            knowledgeBase: result.knowledgeBase ?? null,
-            loaded: true,
-            failed: false,
-          });
+          setSource({ requestKey, knowledgeBase, loaded: true, failed: false });
         }
       } catch {
         if (!disposed && version === requestVersion) {
-          setSource({ knowledgeBase: null, loaded: true, failed: true });
+          setSource({
+            requestKey,
+            knowledgeBase: null,
+            loaded: true,
+            failed: true,
+          });
         }
       }
     };
@@ -63,9 +91,32 @@ export function EnterpriseQaSourceNote() {
     window.addEventListener("focus", refresh);
     return () => {
       disposed = true;
+      controller?.abort();
       window.removeEventListener("focus", refresh);
     };
-  }, [localTaskId]);
+    // The key freezes all project/owner transport headers and the selected task for this request.
+  }, [requestKey, attempt, enabled]);
+  return {
+    source:
+      source.requestKey === requestKey
+        ? source
+        : { knowledgeBase: null, loaded: false, failed: false },
+    retry: () => setAttempt((value) => value + 1),
+  };
+}
+
+export function EnterpriseQaSourceNote({
+  currentPublication,
+}: { currentPublication?: SourceState } = {}) {
+  const { activeConversation } = useConversation();
+  const localTaskId =
+    activeConversation?.previousResponseId ?? activeConversation?.taskId;
+  const { source: taskSource } = useKnowledgeSource(
+    localTaskId,
+    !!localTaskId || !currentPublication,
+  );
+  const source =
+    !localTaskId && currentPublication ? currentPublication : taskSource;
 
   return (
     <header className="border-b border-border/60 bg-background px-5 py-3 pl-16 lg:pl-5">
@@ -105,23 +156,79 @@ export function EnterpriseQaSourceNote() {
   );
 }
 
+function EnterpriseQaPublishedWorkspace() {
+  // A historical conversation's frozen snapshot cannot unlock a project with no current publication.
+  const { source, retry } = useKnowledgeSource();
+  if (!source.loaded || source.failed || !source.knowledgeBase) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto bg-background p-6">
+        <section
+          aria-label="企业问答暂未解锁"
+          className="w-full max-w-md rounded-2xl border border-border/70 bg-card p-8 text-center shadow-sm"
+        >
+          <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            {!source.loaded ? (
+              <Loader2 className="h-6 w-6 animate-spin" />
+            ) : (
+              <LockKeyhole className="h-6 w-6" />
+            )}
+          </div>
+          <p className="text-sm font-medium text-muted-foreground">
+            企业问答智能体
+          </p>
+          <h1 className="mt-2 text-xl font-semibold">
+            {!source.loaded
+              ? "正在确认知识库状态"
+              : source.failed
+                ? "暂时无法确认知识库状态"
+                : "先构建并发布企业知识库"}
+          </h1>
+          <p
+            role={source.failed ? "alert" : "status"}
+            className="mt-3 text-sm leading-6 text-muted-foreground"
+          >
+            {!source.loaded
+              ? "确认当前企业项目已发布知识库后，即可进入企业问答。"
+              : source.failed
+                ? "知识库状态读取失败，请重新检查后再进入企业问答。"
+                : "当前企业项目尚无可用的已发布知识库。请先完成构建并发布，再开始企业问答。"}
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <Button asChild>
+              <Link href={projectWorkspaceUrl("/?view=knowledge")}>
+                构建并发布知识库
+              </Link>
+            </Button>
+            <Button variant="outline" disabled={!source.loaded} onClick={retry}>
+              重新检查
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <EnterpriseQaSourceNote currentPublication={source} />
+      <div className="min-h-0 flex-1">
+        <Home
+          embedded
+          purpose="enterprise_qa"
+          hidePortalNavigation
+          showKnowledgeBaseStarter={false}
+          showAccountMenu={false}
+          showSettings={false}
+          standardWelcomeVariant="enterprise_qa"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function EnterpriseQaWorkspace() {
   return (
     <ConversationPurposeProvider purpose="enterprise_qa">
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        <EnterpriseQaSourceNote />
-        <div className="min-h-0 flex-1">
-          <Home
-            embedded
-            purpose="enterprise_qa"
-            hidePortalNavigation
-            showKnowledgeBaseStarter={false}
-            showAccountMenu={false}
-            showSettings={false}
-            standardWelcomeVariant="enterprise_qa"
-          />
-        </div>
-      </div>
+      <EnterpriseQaPublishedWorkspace />
     </ConversationPurposeProvider>
   );
 }

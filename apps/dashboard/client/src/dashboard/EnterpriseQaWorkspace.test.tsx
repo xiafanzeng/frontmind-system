@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EnterpriseQaWorkspace, {
   EnterpriseQaSourceNote,
@@ -19,7 +26,10 @@ vi.mock("@/pages/Home", () => ({
       data-testid="chat"
       data-purpose={props.purpose}
       data-starter={String(props.showKnowledgeBaseStarter)}
-    />
+    >
+      <button>新建会话</button>
+      <button>开始企业问答</button>
+    </div>
   ),
 }));
 
@@ -29,25 +39,24 @@ describe("Enterprise QA source binding", () => {
     window.history.replaceState(null, "", "/");
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     window.history.replaceState(null, "", "/");
   });
 
   it("opens real scoped chat and shows the published source used by a new task", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          knowledgeBase: {
-            snapshotId: "snapshot-new",
-            version: 8,
-            sourceFileName: "企业知识库.md",
-            documentCount: 12,
-            contentHash: "server-only-hash",
-          },
-        }),
-      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        knowledgeBase: {
+          snapshotId: "snapshot-new",
+          version: 8,
+          sourceFileName: "企业知识库.md",
+          documentCount: 12,
+          contentHash: "server-only-hash",
+        },
+      }),
+    });
     vi.stubGlobal("fetch", fetchMock);
     render(<EnterpriseQaWorkspace />);
     await waitFor(() =>
@@ -89,6 +98,7 @@ describe("Enterprise QA source binding", () => {
         ok: true,
         json: async () => ({
           knowledgeBase: {
+            snapshotId: "snapshot-current",
             version: 3,
             sourceFileName: "历史资料.md",
             documentCount: 5,
@@ -110,6 +120,7 @@ describe("Enterprise QA source binding", () => {
         ok: true,
         json: async () => ({
           knowledgeBase: {
+            snapshotId: "snapshot-old",
             version: 1,
             sourceFileName: "过期资料.md",
             documentCount: 1,
@@ -125,22 +136,287 @@ describe("Enterprise QA source binding", () => {
   });
 
   it("directs an account without a published knowledge base to the real knowledge workspace", async () => {
-    window.history.replaceState(null, "", "/enterprise-qa?enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7");
+    window.history.replaceState(
+      null,
+      "",
+      "/enterprise-qa?enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ knowledgeBase: null }),
+      }),
+    );
+    render(<EnterpriseQaWorkspace />);
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "构建并发布知识库" }),
+    ).toHaveAttribute(
+      "href",
+      "/?view=knowledge&enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7",
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "当前企业项目尚无可用的已发布知识库",
+    );
+  });
+  it("keeps chat and creation controls unmounted until publication is confirmed, then allows entry", async () => {
+    let resolve!: (response: unknown) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      ),
+    );
+    render(<EnterpriseQaWorkspace />);
+    expect(
+      screen.getByRole("heading", { name: "正在确认知识库状态" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "新建会话" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "开始企业问答" }),
+    ).not.toBeInTheDocument();
+    await act(async () =>
+      resolve({
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "published",
+            version: 2,
+            sourceFileName: "资料.md",
+            documentCount: 4,
+          },
+        }),
+      }),
+    );
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "新建会话" }),
+    ).toBeInTheDocument();
+  });
+
+  it("stays locked on failed or invalid source responses and unlocks only after a successful retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ knowledgeBase: { version: 8 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "published",
+            version: 8,
+            sourceFileName: "资料.md",
+            documentCount: 4,
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<EnterpriseQaWorkspace />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "知识库状态读取失败",
+    );
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "开始企业问答" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+  });
+
+  it("does not let an old conversation snapshot unlock an unpublished project", async () => {
+    state.activeConversation = { taskId: "historical-task" };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ knowledgeBase: null }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<EnterpriseQaWorkspace />);
+    expect(
+      await screen.findByRole("heading", { name: "先构建并发布企业知识库" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
+    );
+  });
+
+  it("immediately isolates project switches and ignores delayed responses from the old project", async () => {
+    let resolveOldRefresh!: (response: unknown) => void;
+    let resolveCurrent!: (response: unknown) => void;
+    const published = {
+      ok: true,
+      json: async () => ({
+        knowledgeBase: {
+          snapshotId: "project-a-published",
+          version: 4,
+          sourceFileName: "A资料.md",
+          documentCount: 3,
+        },
+      }),
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(published)
+      .mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolveOldRefresh = done;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolveCurrent = done;
+          }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState(
+      null,
+      "",
+      "/enterprise-qa?enterpriseProjectId=project-a",
+    );
+    const { rerender } = render(<EnterpriseQaWorkspace />);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    fireEvent(window, new Event("focus"));
+    expect(screen.getByTestId("chat")).toBeInTheDocument();
+    act(() =>
+      window.history.replaceState(
+        null,
+        "",
+        "/enterprise-qa?enterpriseProjectId=project-b",
+      ),
+    );
+    rerender(<EnterpriseQaWorkspace />);
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    await act(async () => resolveOldRefresh(published));
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+    await act(async () =>
+      resolveCurrent({ ok: true, json: async () => ({ knowledgeBase: null }) }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "先构建并发布企业知识库" }),
+    ).toBeInTheDocument();
+    expect(fetchMock.mock.calls.at(-1)?.[1].headers).toMatchObject({
+      "x-enterprise-project-id": "project-b",
+    });
+    expect(
+      screen.getByRole("link", { name: "构建并发布知识库" }),
+    ).toHaveAttribute("href", "/?view=knowledge&enterpriseProjectId=project-b");
+  });
+
+  it("rechecks publication when returning to the page and locks again after it becomes unavailable", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "published",
+            version: 8,
+            sourceFileName: "资料.md",
+            documentCount: 4,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ knowledgeBase: null }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<EnterpriseQaWorkspace />);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    fireEvent(window, new Event("focus"));
+    expect(
+      await screen.findByRole("heading", { name: "先构建并发布企业知识库" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+  });
+  it("keeps an unlocked chat mounted while a same-project focus check is pending", async () => {
+    let resolveRefresh!: (response: unknown) => void;
+    const published = {
+      ok: true,
+      json: async () => ({
+        knowledgeBase: {
+          snapshotId: "published",
+          version: 8,
+          sourceFileName: "资料.md",
+          documentCount: 4,
+        },
+      }),
+    };
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ knowledgeBase: null }),
-        }),
+        .mockResolvedValueOnce(published)
+        .mockImplementationOnce(
+          () =>
+            new Promise((done) => {
+              resolveRefresh = done;
+            }),
+        ),
     );
-    render(<EnterpriseQaSourceNote />);
-    expect(
-      await screen.findByRole("link", { name: "构建并发布知识库" }),
-    ).toHaveAttribute("href", "/?view=knowledge&enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7");
+    render(<EnterpriseQaWorkspace />);
+    const chat = await screen.findByTestId("chat");
+    fireEvent(window, new Event("focus"));
+    expect(screen.getByTestId("chat")).toBe(chat);
     expect(screen.getByRole("status")).toHaveTextContent(
-      "尚无可用的已发布企业知识库",
+      "新会话使用已发布知识库 v8",
     );
+    await act(async () => resolveRefresh(published));
+    expect(screen.getByTestId("chat")).toBe(chat);
+  });
+  it("unlocks using current publication while preserving an existing conversation's frozen source note", async () => {
+    state.activeConversation = { taskId: "frozen-task" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "current",
+            version: 8,
+            sourceFileName: "当前资料.md",
+            documentCount: 4,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          knowledgeBase: {
+            snapshotId: "frozen",
+            version: 3,
+            sourceFileName: "历史资料.md",
+            documentCount: 2,
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<EnterpriseQaWorkspace />);
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "本会话绑定已发布知识库 v3",
+      ),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("历史资料.md");
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
+      "/api/frontmind/v2/runtime-config?localTaskId=frozen-task",
+    ]);
   });
 });

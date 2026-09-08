@@ -33,6 +33,30 @@ describe("AI usage reconciliation", () => {
       aiUsageReportInput.safeParse({ ...filter, to: "2028-01-01" }).success,
     ).toBe(false);
   });
+  it("accepts recorded names and unassigned owners as distinct filters", () => {
+    expect(
+      aiUsageReportInput.parse({
+        ...filter,
+        owner: { kind: "unassigned" },
+        state: "failed",
+      }),
+    ).toMatchObject({ owner: { kind: "unassigned" }, state: "failed" });
+    expect(
+      aiUsageReportInput.parse({
+        ...filter,
+        owner: { kind: "name", value: "  负责人甲  " },
+      }).owner,
+    ).toEqual({ kind: "name", value: "负责人甲" });
+    expect(
+      aiUsageReportInput.safeParse({
+        ...filter,
+        owner: { kind: "name", value: "   " },
+      }).success,
+    ).toBe(false);
+    expect(aiUsageReportInput.safeParse({ ...filter, state: "" }).success).toBe(
+      false,
+    );
+  });
   it("keeps per-account tokens and money on the same events including failed and incomplete usage", () => {
     const result = projectAiCostTotals([
       {
@@ -128,12 +152,119 @@ describe("AI usage reconciliation", () => {
       inputTokens: "10",
       credentialVersion: 9,
     });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
     for (const call of calls) {
       expect(call.sql).toContain("e.occurred_at >=");
       expect(call.sql).not.toContain("o.created_at");
       expect(call.params).toContainEqual(new Date("2026-09-06T16:00:00Z"));
     }
+  });
+  it.each([
+    { kind: "unassigned" as const },
+    { kind: "name" as const, value: "负责人 O'Neil" },
+  ])(
+    "uses identical owner/state filters for summary, tasks and CSV: $kind",
+    async (owner) => {
+      const dialect = new MySqlDialect();
+      const calls: ReturnType<typeof dialect.sqlToQuery>[] = [];
+      const db = {
+        execute: vi.fn(async (statement) => {
+          calls.push(dialect.sqlToQuery(statement));
+          return [[]];
+        }),
+      };
+      const input = aiUsageReportInput.parse({
+        ...filter,
+        fingerprint: "fp_1234567890abcdef",
+        model: "glm-5.3",
+        owner,
+        state: "failed",
+        page: 3,
+      });
+      await readAiUsageReport(input, db);
+      await exportAiUsageReport(input, db);
+
+      const summary = calls.find((call) =>
+        call.sql.includes("COUNT(DISTINCT"),
+      )!;
+      const tasks = calls.find((call) => call.sql.includes("GROUP BY"))!;
+      const exported = calls.find((call) => call.sql.includes(" AS taskId"))!;
+      const whereClause = (query: typeof summary) =>
+        query.sql
+          .match(/\bWHERE\s+([\s\S]*?)(?=\s+GROUP BY|\s+ORDER BY|$)/)![1]!
+          .replace(/\s+/g, " ")
+          .trim();
+      expect(whereClause(tasks)).toBe(whereClause(summary));
+      expect(whereClause(exported)).toBe(whereClause(summary));
+      const recordedOwner =
+        "COALESCE(NULLIF(TRIM(w.business_owner_name),''),NULLIF(TRIM(u.displayName),''),NULLIF(TRIM(u.username),''))";
+      expect(whereClause(summary)).toContain(
+        `${recordedOwner}${owner.kind === "unassigned" ? " IS NULL" : "=?"}`,
+      );
+      expect(whereClause(summary)).toContain("t.provider_state=?");
+      const params = [
+        new Date("2026-09-06T16:00:00Z"),
+        new Date("2026-09-07T16:00:00Z"),
+        "website_frontend",
+        input.fingerprint,
+        "glm-5.3",
+        ...(owner.kind === "name" ? [owner.value] : []),
+        "failed",
+      ];
+      expect(summary.params).toEqual(params);
+      expect(tasks.params).toEqual([...params, 20, 40]);
+      expect(exported.params).toEqual([...params, 50001]);
+      if (owner.kind === "name") expect(summary.sql).not.toContain(owner.value);
+
+      const options = calls.filter((call) =>
+        call.sql.includes("SELECT DISTINCT"),
+      );
+      expect(options.length).toBeGreaterThanOrEqual(3);
+      for (const option of options) {
+        expect(option.params).toEqual(params.slice(0, 2));
+        expect(whereClause(option)).not.toContain("t.provider_state");
+        expect(whereClause(option)).not.toContain(recordedOwner);
+      }
+    },
+  );
+  it("keeps actual owner and provider-state choices available across a narrowed report", async () => {
+    const dialect = new MySqlDialect();
+    const db = {
+      execute: vi.fn(async (statement) => {
+        const query = dialect.sqlToQuery(statement);
+        if (
+          query.sql.includes("SELECT DISTINCT") &&
+          query.sql.includes(" AS owner")
+        ) {
+          return [
+            [
+              { owner: "负责人甲", state: "succeeded" },
+              { owner: "负责人甲", state: "running" },
+              { owner: "负责人乙", state: "running" },
+              { owner: null, state: "failed" },
+            ],
+          ];
+        }
+        return [[]];
+      }),
+    };
+    const report = await readAiUsageReport(
+      aiUsageReportInput.parse({
+        ...filter,
+        owner: { kind: "name", value: "负责人甲" },
+        state: "succeeded",
+      }),
+      db,
+    );
+    expect(report.tasks).toEqual([]);
+    expect(report.owners).toHaveLength(2);
+    expect(report.owners).toEqual(
+      expect.arrayContaining(["负责人甲", "负责人乙"]),
+    );
+    expect(report.states).toHaveLength(3);
+    expect(report.states).toEqual(
+      expect.arrayContaining(["succeeded", "running", "failed"]),
+    );
   });
   it("exports identifiers and exact prices while preventing spreadsheet formulas", async () => {
     const db = {
@@ -143,6 +274,7 @@ describe("AI usage reconciliation", () => {
             occurredAt: new Date("2026-09-07T01:00:00Z"),
             owner: "=WEBSERVICE(1)",
             title: '报"告',
+            state: "failed",
             taskId: "task_1",
             eventId: "event_1",
             inputTokens: "1",
@@ -159,6 +291,15 @@ describe("AI usage reconciliation", () => {
     expect(result.csv).toContain("' =".replace(" ", "") + "WEBSERVICE(1)");
     expect(result.csv).toContain('"报""告"');
     expect(result.csv).toContain('"0.000008"');
+    const cells = (line: string) =>
+      line
+        .match(/"(?:[^"]|"")*"/g)!
+        .map((cell) => cell.slice(1, -1).replace(/""/g, '"'));
+    const [header, row] = result.csv.split("\r\n").map(cells);
+    expect(row).toHaveLength(header!.length);
+    expect(row![header!.indexOf("任务状态")]).toBe("failed");
+    expect(row![header!.indexOf("任务ID")]).toBe("task_1");
+    expect(row![header!.indexOf("Event ID")]).toBe("event_1");
     expect(aiUsageCsvCell(" @command")).toBe('"\' @command"');
     expect(providerKeyIdMask("abcd1234.secret-fixture")).toBe("abcd...1234");
     expect(providerKeyIdMask("opaque-secret-fixture")).toBeNull();

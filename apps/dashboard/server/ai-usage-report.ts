@@ -22,6 +22,8 @@ const joins = sql`FROM ai_cost_events e
   LEFT JOIN users u ON u.id=o.account_user_id
   LEFT JOIN ai_usage_sync_targets sync ON sync.local_task_id=t.id`;
 const fingerprint = sql`COALESCE(a.fingerprint,p.fingerprint)`;
+// Use only recorded attribution/account names; blank values remain unassigned.
+const ownerName = sql`COALESCE(NULLIF(TRIM(w.business_owner_name),''),NULLIF(TRIM(u.displayName),''),NULLIF(TRIM(u.username),''))`;
 function where(input: AiUsageReportInput, onlyWindow = false) {
   const window = aiUsageReportWindow(input);
   const conditions: SQL[] = [
@@ -33,6 +35,11 @@ function where(input: AiUsageReportInput, onlyWindow = false) {
     if (input.fingerprint)
       conditions.push(sql`${fingerprint}=${input.fingerprint}`);
     if (input.model) conditions.push(sql`e.model=${input.model}`);
+    if (input.owner?.kind === "unassigned")
+      conditions.push(sql`${ownerName} IS NULL`);
+    if (input.owner?.kind === "name")
+      conditions.push(sql`${ownerName}=${input.owner.value}`);
+    if (input.state) conditions.push(sql`t.provider_state=${input.state}`);
   }
   return sql`WHERE ${sql.join(conditions, sql` AND `)}`;
 }
@@ -144,6 +151,26 @@ async function keyOptions(db: any, input: AiUsageReportInput) {
   };
 }
 
+async function taskFilterOptions(db: any, input: AiUsageReportInput) {
+  const rows = await query(
+    db,
+    sql`SELECT DISTINCT ${ownerName} AS owner,t.provider_state AS state
+    ${joins} ${where(input, true)} ORDER BY owner,state`,
+  );
+  return {
+    owners: [
+      ...new Set<string>(
+        rows.flatMap((row) => (row.owner == null ? [] : [String(row.owner)])),
+      ),
+    ],
+    states: [
+      ...new Set<string>(
+        rows.flatMap((row) => (row.state == null ? [] : [String(row.state)])),
+      ),
+    ],
+  };
+}
+
 export async function readAiUsageReport(
   input: AiUsageReportInput,
   executor?: any,
@@ -155,7 +182,7 @@ export async function readAiUsageReport(
 }
 async function readAiUsageReportSnapshot(input: AiUsageReportInput, db: any) {
   const filter = where(input);
-  const [totals, tasks, options] = await Promise.all([
+  const [totals, tasks, options, taskOptions] = await Promise.all([
     query(
       db,
       sql`SELECT COUNT(*) AS observedEvents,COUNT(DISTINCT e.local_task_id) AS observedTasks,
@@ -168,7 +195,7 @@ async function readAiUsageReportSnapshot(input: AiUsageReportInput, db: any) {
     query(
       db,
       sql`SELECT e.local_task_id AS id,e.session_id AS sessionId,e.scope,t.title,t.provider_state AS state,
-      COALESCE(w.business_owner_name,u.displayName,u.username) AS businessOwnerName,
+      ${ownerName} AS businessOwnerName,
       o.api_credential_id AS credentialId,o.credential_version AS credentialVersion,${fingerprint} AS fingerprint,
       e.model,JSON_UNQUOTE(COALESCE(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.effort'),JSON_EXTRACT(t.provider_runtime,'$.effort'))) AS effort,
       GROUP_CONCAT(DISTINCT e.pricing_version) AS pricingVersions,
@@ -184,6 +211,7 @@ async function readAiUsageReportSnapshot(input: AiUsageReportInput, db: any) {
       ORDER BY lastEventAt DESC,e.local_task_id DESC LIMIT ${PAGE_SIZE} OFFSET ${(input.page - 1) * PAGE_SIZE}`,
     ),
     keyOptions(db, input),
+    taskFilterOptions(db, input),
   ]);
   const total = totals[0] ?? {};
   return {
@@ -226,6 +254,7 @@ async function readAiUsageReportSnapshot(input: AiUsageReportInput, db: any) {
     })),
     keys: options.keys,
     models: options.models,
+    ...taskOptions,
     pricing: {
       version: ZHIPU_PRICING_VERSION,
       sourceUrl: ZHIPU_PRICING_SOURCE,
@@ -250,7 +279,7 @@ export async function exportAiUsageReport(
   const rows = await query(
     db,
     sql`SELECT e.occurred_at AS occurredAt,e.scope,
-    COALESCE(w.business_owner_name,u.displayName,u.username) AS owner,t.title,e.local_task_id AS taskId,
+    ${ownerName} AS owner,t.title,t.provider_state AS state,e.local_task_id AS taskId,
     e.session_id AS sessionId,e.provider_event_id AS eventId,${fingerprint} AS fingerprint,o.credential_version AS credentialVersion,
     e.model,e.pricing_version AS pricingVersion,CAST(e.input_tokens AS CHAR) AS inputTokens,CAST(e.output_tokens AS CHAR) AS outputTokens,
     CAST(e.cache_read_input_tokens AS CHAR) AS cacheTokens,CAST(e.cost_nanos AS CHAR) AS costNanos,CAST(e.charged_ten_thousandths AS CHAR) AS chargedUnits,e.cost_state AS costState,e.is_error AS isError,
@@ -268,6 +297,7 @@ export async function exportAiUsageReport(
     "来源",
     "负责人",
     "任务",
+    "任务状态",
     "任务ID",
     "Session ID",
     "Event ID",
@@ -296,6 +326,7 @@ export async function exportAiUsageReport(
       row.scope,
       row.owner,
       row.title,
+      row.state,
       row.taskId,
       row.sessionId,
       row.eventId,
@@ -321,4 +352,79 @@ export async function exportAiUsageReport(
     csv:
       "\uFEFF" + [headers.map(aiUsageCsvCell).join(","), ...lines].join("\r\n"),
   };
+}
+
+/** Native events in the report window, never a cumulative Session snapshot. */
+export async function readAiUsageTaskEvents(
+  input: AiUsageReportInput & { taskId: string; eventPage: number },
+  executor?: any,
+): Promise<{
+  taskId: string;
+  eventPage: number;
+  pageSize: number;
+  totalEvents: number;
+  events: Array<{
+    id: string;
+    eventId: string;
+    sessionId: string;
+    occurredAt: number | null;
+    recordedAt: number | null;
+    model: string;
+    effort: string | null;
+    inputTokens: string;
+    outputTokens: string;
+    cacheReadInputTokens: string;
+    costCny: string | null;
+    chargedCny: string;
+    costState: string;
+    isError: boolean;
+    syncIssue: string | null;
+    pricingVersion: string;
+  }>;
+}> {
+  const db = executor ?? (await database());
+  const readSnapshot = async (tx: any) => {
+    const filter = sql`${where(input)} AND e.local_task_id=${input.taskId}`;
+    const [totals, rows] = await Promise.all([
+      query(tx, sql`SELECT COUNT(*) AS totalEvents ${joins} ${filter}`),
+      query(
+        tx,
+        sql`SELECT e.id,e.provider_event_id AS eventId,e.session_id AS sessionId,
+        e.occurred_at AS occurredAt,e.created_at AS recordedAt,e.model,
+        JSON_UNQUOTE(COALESCE(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.effort'),JSON_EXTRACT(t.provider_runtime,'$.effort'))) AS effort,
+        CAST(e.input_tokens AS CHAR) AS inputTokens,CAST(e.output_tokens AS CHAR) AS outputTokens,
+        CAST(e.cache_read_input_tokens AS CHAR) AS cacheReadInputTokens,
+        CAST(e.cost_nanos AS CHAR) AS costNanos,CAST(e.charged_ten_thousandths AS CHAR) AS chargedUnits,
+        e.cost_state AS costState,e.is_error AS isError,sync.last_error AS syncIssue,e.pricing_version AS pricingVersion
+        ${joins} ${filter} ORDER BY e.occurred_at ASC,e.id ASC
+        LIMIT ${PAGE_SIZE} OFFSET ${(input.eventPage - 1) * PAGE_SIZE}`,
+      ),
+    ]);
+    return {
+      taskId: input.taskId,
+      eventPage: input.eventPage,
+      pageSize: PAGE_SIZE,
+      totalEvents: Number(totals[0]?.totalEvents ?? 0),
+      events: rows.map((row) => ({
+        id: String(row.id),
+        eventId: String(row.eventId),
+        sessionId: String(row.sessionId),
+        occurredAt: timestamp(row.occurredAt),
+        recordedAt: timestamp(row.recordedAt),
+        model: String(row.model),
+        effort: row.effort ? String(row.effort) : null,
+        inputTokens: count(row.inputTokens),
+        outputTokens: count(row.outputTokens),
+        cacheReadInputTokens: count(row.cacheReadInputTokens),
+        costCny:
+          row.costNanos == null ? null : formatCostCny(BigInt(row.costNanos)),
+        chargedCny: formatCostCny(BigInt(row.chargedUnits ?? 0) * 100000n),
+        costState: String(row.costState),
+        isError: row.isError === true || Number(row.isError) === 1,
+        syncIssue: row.syncIssue ? String(row.syncIssue) : null,
+        pricingVersion: String(row.pricingVersion ?? ""),
+      })),
+    };
+  };
+  return executor ? readSnapshot(db) : db.transaction(readSnapshot);
 }

@@ -23,6 +23,16 @@ export const aiUsageReportInput = z
       .string()
       .regex(/^[a-zA-Z0-9._-]{1,64}$/)
       .optional(),
+    owner: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("unassigned") }),
+        z.object({
+          kind: z.literal("name"),
+          value: z.string().trim().min(1).max(255),
+        }),
+      ])
+      .optional(),
+    state: z.string().min(1).max(64).optional(),
     page: z.number().int().min(1).max(10000).default(1),
   })
   .refine((input) => {
@@ -41,3 +51,10 @@ export function aiUsageReportWindow(
 export function chinaDate(now: number) {
   return new Date(now + 8 * 3600000).toISOString().slice(0, 10);
 }
+
+export const aiUsageTaskEventsInput = aiUsageReportInput.and(
+  z.object({
+    taskId: z.string().min(1).max(128),
+    eventPage: z.number().int().min(1).max(100000).default(1),
+  }),
+);

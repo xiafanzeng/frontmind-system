@@ -1,5 +1,5 @@
-import { aiUsageReportInput } from "../shared/ai-usage-report";
-import { readAiUsageReport, exportAiUsageReport } from "./ai-usage-report";
+import { aiUsageReportInput, aiUsageTaskEventsInput } from "../shared/ai-usage-report";
+import { readAiUsageReport, exportAiUsageReport, readAiUsageTaskEvents } from "./ai-usage-report";
 import { getMonitoringRuntime } from "./monitoring-module";
 import { ensureDashboardAccountLink } from "@frontmind/monitoring-db";
 import { assertWorkspaceAccess } from "./dashboard-service";
@@ -294,6 +294,10 @@ export function managedMonitoringCitationSummaryValue(input: {
 
 export const adminRouter = router({
   aiUsage: router({
+    taskEvents: adminProcedure.input(aiUsageTaskEventsInput).query(async ({ ctx, input }) => {
+      requireSystemAdmin(ctx.user);
+      return readAiUsageTaskEvents(input);
+    }),
     report: adminProcedure.input(aiUsageReportInput).query(async ({ ctx, input }) => {
       requireSystemAdmin(ctx.user);
       return readAiUsageReport(input);

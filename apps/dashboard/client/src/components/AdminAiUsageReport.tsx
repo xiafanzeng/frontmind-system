@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import {
   type AiUsageReportInput,
 } from "../../../shared/ai-usage-report";
 import { agentCostDisplay } from "@/lib/agent-cost";
+import { AdminAiTaskUsageEvents } from "./AdminAiTaskUsageEvents";
 
 const tokenCount = (value: string) => BigInt(value).toLocaleString("zh-CN");
 const dateTime = (value: number | null) =>
@@ -33,6 +34,7 @@ export function AdminAiUsageReport({
     page: 1,
   }));
   const [exporting, setExporting] = useState(false);
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const valid = aiUsageReportInput.safeParse(filter).success;
   const report = trpc.admin.aiUsage.report.useQuery(filter, {
@@ -144,6 +146,63 @@ export function AdminAiUsageReport({
             <option value="all">官网与后台</option>
             <option value="website_frontend">Website 官网</option>
             <option value="managed_user">Dashboard 后台</option>
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs">
+          负责人
+          <select
+            aria-label="用量负责人"
+            className={selectClass}
+            value={
+              filter.owner?.kind === "name"
+                ? `name:${filter.owner.value}`
+                : (filter.owner?.kind ?? "")
+            }
+            onChange={(event) =>
+              update({
+                owner:
+                  event.target.value === "unassigned"
+                    ? { kind: "unassigned" }
+                    : event.target.value.startsWith("name:")
+                      ? { kind: "name", value: event.target.value.slice(5) }
+                      : undefined,
+              })
+            }
+          >
+            <option value="">全部负责人</option>
+            <option value="unassigned">未归属</option>
+            {data?.owners.map((owner) => (
+              <option key={owner} value={`name:${owner}`}>
+                {owner}
+              </option>
+            ))}
+            {filter.owner?.kind === "name" &&
+              !data?.owners.includes(filter.owner.value) && (
+                <option value={`name:${filter.owner.value}`}>
+                  {filter.owner.value}
+                </option>
+              )}
+          </select>
+        </label>
+        <label className="grid gap-1 text-xs">
+          任务状态
+          <select
+            aria-label="用量任务状态"
+            className={selectClass}
+            value={filter.state ?? ""}
+            onChange={(event) =>
+              update({ state: event.target.value || undefined })
+            }
+          >
+            <option value="">全部状态</option>
+            {data?.states.map((state) => (
+              <option key={state} value={state}>
+                {state}
+              </option>
+            ))}
+            {filter.state && !data?.states.includes(filter.state) && (
+              <option value={filter.state}>{filter.state}</option>
+            )}
           </select>
         </label>
         <label className="grid gap-1 text-xs">
@@ -270,65 +329,93 @@ export function AdminAiUsageReport({
                 </thead>
                 <tbody>
                   {data.tasks.map((task) => (
-                    <tr
-                      key={`${task.id}:${task.model}`}
-                      className="border-t align-top"
-                    >
-                      <td className="max-w-[260px] p-3">
-                        <p className="truncate font-medium" title={task.title}>
-                          {task.title}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          负责人：{task.businessOwnerName ?? "未登记"} ·{" "}
-                          {task.scope === "website_frontend" ? "官网" : "后台"}
-                        </p>
-                      </td>
-                      <td className="whitespace-nowrap p-3 text-xs">
-                        {dateTime(task.lastEventAt)}
-                      </td>
-                      <td className="whitespace-nowrap p-3 font-mono">
-                        {agentCostDisplay(task)}
-                      </td>
-                      <td className="min-w-[180px] p-3">
-                        <details>
-                          <summary className="cursor-pointer text-primary">
-                            Token 与核对信息
-                          </summary>
-                          <div className="mt-2 max-w-xs space-y-1 break-all text-xs text-muted-foreground">
-                            <p>
-                              {task.model} · {task.effort ?? "档位未记录"}
-                            </p>
-                            <p>
-                              输入 {tokenCount(task.inputTokens)} / 输出{" "}
-                              {tokenCount(task.outputTokens)} / 缓存{" "}
-                              {tokenCount(task.cacheReadInputTokens)}
-                            </p>
-                            <p>
-                              模型请求 {task.observedEvents} 条 · 已扣钱包 ¥
-                              {task.chargedCny}
-                            </p>
-                            <p>
-                              Key{" "}
-                              {data.keys.find(
-                                (key) => key.fingerprint === task.fingerprint,
-                              )?.providerKeyId ??
-                                task.fingerprint ??
-                                "未识别"}{" "}
-                              · v{task.credentialVersion}
-                            </p>
-                            <p>Session：{task.sessionId}</p>
-                            <p>任务：{task.id}</p>
-                            <p>价格：{task.pricingVersions || "待核价"}</p>
-                            <p>状态：{task.state}</p>
-                            {task.syncIssue && (
-                              <p className="text-amber-700">
-                                最近同步未完成：{task.syncIssue}
+                    <Fragment key={`${task.id}:${task.model}`}>
+                      <tr className="border-t align-top">
+                        <td className="max-w-[260px] p-3">
+                          <p
+                            className="truncate font-medium"
+                            title={task.title}
+                          >
+                            {task.title}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            负责人：{task.businessOwnerName ?? "未归属"} ·{" "}
+                            {task.scope === "website_frontend"
+                              ? "官网"
+                              : "后台"}
+                          </p>
+                        </td>
+                        <td className="whitespace-nowrap p-3 text-xs">
+                          {dateTime(task.lastEventAt)}
+                        </td>
+                        <td className="whitespace-nowrap p-3 font-mono">
+                          {agentCostDisplay(task)}
+                        </td>
+                        <td className="p-3">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-expanded={expandedTask === task.id}
+                            aria-label={`查看 ${task.title} 用量明细`}
+                            onClick={() =>
+                              setExpandedTask((current) =>
+                                current === task.id ? null : task.id,
+                              )
+                            }
+                          >
+                            {expandedTask === task.id
+                              ? "收起明细"
+                              : "查看各轮调用"}
+                          </Button>
+                        </td>
+                      </tr>
+                      {expandedTask === task.id && (
+                        <tr className="border-t bg-muted/20">
+                          <td colSpan={4} className="p-4">
+                            <div className="mb-4 grid gap-2 break-all text-xs text-muted-foreground sm:grid-cols-2">
+                              <p>
+                                {task.model} · {task.effort ?? "档位未记录"} ·
+                                状态：{task.state}
                               </p>
-                            )}
-                          </div>
-                        </details>
-                      </td>
-                    </tr>
+                              <p>
+                                所选日期内：输入 {tokenCount(task.inputTokens)}{" "}
+                                / 输出 {tokenCount(task.outputTokens)} / 缓存{" "}
+                                {tokenCount(task.cacheReadInputTokens)}
+                              </p>
+                              <p>
+                                模型请求 {task.observedEvents} 条 · 已扣钱包 ¥
+                                {task.chargedCny}
+                              </p>
+                              <p>
+                                Key{" "}
+                                {data.keys.find(
+                                  (key) => key.fingerprint === task.fingerprint,
+                                )?.providerKeyId ??
+                                  task.fingerprint ??
+                                  "未识别"}{" "}
+                                · v{task.credentialVersion}
+                              </p>
+                              <p>Session：{task.sessionId}</p>
+                              <p>任务：{task.id}</p>
+                              <p>价格：{task.pricingVersions || "待核价"}</p>
+                              {task.syncIssue && (
+                                <p className="text-amber-700">
+                                  最近同步未完成：{task.syncIssue}
+                                </p>
+                              )}
+                            </div>
+                            <AdminAiTaskUsageEvents
+                              key={JSON.stringify({
+                                ...filter,
+                                taskId: task.id,
+                              })}
+                              filter={filter}
+                              taskId={task.id}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

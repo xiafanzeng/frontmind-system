@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
+  Circle,
+  CircleDot,
+  CircleHelp,
+  FileCheck2,
   ChevronDown,
   ChevronRight,
   Crosshair,
   Pencil,
   Search,
+  X,
 } from "lucide-react";
 import type {
   KnowledgeBaseLeafStatus,
@@ -29,6 +35,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import MarkdownRenderer from "./MarkdownRenderer";
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
 import "./knowledge-node-workspace.css";
@@ -132,7 +144,7 @@ function KnowledgeNodeWorkspaceSession({
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(
     () => new Set(),
   );
-  const [directoryOpen, setDirectoryOpen] = useState(true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [details, setDetails] = useState<KnowledgeNodeDetailsDto | null>(null);
   const [readPending, setReadPending] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
@@ -153,9 +165,11 @@ function KnowledgeNodeWorkspaceSession({
   const [manualEditedLeafIds, setManualEditedLeafIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [pendingDestination, setPendingDestination] = useState<{
-    leafId: string | null;
-  } | null>(null);
+  const [pendingDestination, setPendingDestination] = useState<
+    { kind: "node"; leafId: string } | { kind: "close" | "editor" } | null
+  >(null);
+  const workspaceElement = useRef<HTMLElement>(null);
+  const returnToComposer = useRef(false);
   const lifetime = useRef(new AbortController());
   const saveLock = useRef(false);
   const saveAttempt = useRef<{ signature: string; requestId: string } | null>(
@@ -224,7 +238,7 @@ function KnowledgeNodeWorkspaceSession({
     setDetails(null);
   }, [leaves, selectedLeafId, progress?.build.currentLeafId, editBase]);
   useEffect(() => {
-    if (initiallyLocated.current || !directoryOpen || !selectedLeafId) return;
+    if (initiallyLocated.current || !selectedLeafId) return;
     const frame = window.requestAnimationFrame(() => {
       const node = nodeElements.current.get(selectedLeafId);
       if (lifetime.current.signal.aborted || !node?.isConnected) return;
@@ -232,7 +246,7 @@ function KnowledgeNodeWorkspaceSession({
       initiallyLocated.current = true;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [directoryOpen, selectedLeafId, leaves]);
+  }, [selectedLeafId, leaves]);
 
   const acceptErrorObservation = (result: Record<string, unknown>) => {
     const observation = result.observation as
@@ -258,7 +272,7 @@ function KnowledgeNodeWorkspaceSession({
   };
 
   useEffect(() => {
-    if (!selectedLeafId) return;
+    if (!drawerOpen || !selectedLeafId) return;
     if (readonlyPreview) {
       setDetails(
         previewDetails?.find((item) => item.node.leafId === selectedLeafId) ??
@@ -329,6 +343,7 @@ function KnowledgeNodeWorkspaceSession({
     conversationId,
     generation,
     resetRevision,
+    drawerOpen,
     selectedLeafId,
     expectedContentVersion,
     progress?.build.id,
@@ -345,7 +360,6 @@ function KnowledgeNodeWorkspaceSession({
     setSaveError(null);
     setConflicted(false);
     setShowLatest(false);
-    setDirectoryOpen(true);
     saveAttempt.current = null;
     callbacks.current.onEditTargetChange?.(null);
   };
@@ -467,30 +481,82 @@ function KnowledgeNodeWorkspaceSession({
     save: saveDraft,
   });
 
+  const openLeaf = (leafId: string) => {
+    if (editing) finishEditing();
+    if (leafId !== selectedLeafId) {
+      setSelectedLeafId(leafId);
+      setDetails(null);
+      setReadError(null);
+      setSavedMessage(null);
+    }
+    setDrawerOpen(true);
+  };
   const selectLeaf = (leafId: string) => {
-    if (mutationPending || leafId === selectedLeafId) return;
+    if (mutationPending || imageDirty) return;
+    if (drawerOpen && leafId === selectedLeafId) return;
     if (dirty) {
-      setPendingDestination({ leafId });
+      setPendingDestination({ kind: "node", leafId });
+      return;
+    }
+    openLeaf(leafId);
+  };
+  const closeDrawer = () => {
+    if (mutationPending || imageDirty) return;
+    if (dirty) {
+      setPendingDestination({ kind: "close" });
       return;
     }
     if (editing) finishEditing();
-    setSelectedLeafId(leafId);
-    setDetails(null);
-    setSavedMessage(null);
+    setDrawerOpen(false);
   };
   const leaveEditor = () => {
     if (mutationPending) return;
-    if (dirty) setPendingDestination({ leafId: null });
+    if (dirty) setPendingDestination({ kind: "editor" });
     else finishEditing();
   };
   const completeDestination = () => {
     const destination = pendingDestination;
     finishEditing();
-    if (destination?.leafId) {
+    if (destination?.kind === "node") {
       setSelectedLeafId(destination.leafId);
       setDetails(null);
+      setReadError(null);
+      setSavedMessage(null);
+    } else if (destination?.kind === "close") {
+      setDrawerOpen(false);
     }
     setPendingDestination(null);
+  };
+  const restoreDrawerFocus = (event: Event) => {
+    event.preventDefault();
+    if (returnToComposer.current) {
+      returnToComposer.current = false;
+      workspaceElement.current
+        ?.closest(".knowledge-workspace-surfaces")
+        ?.querySelector<HTMLTextAreaElement>(
+          ".knowledge-workspace-task textarea",
+        )
+        ?.focus();
+      return;
+    }
+    if (selectedLeafId) {
+      const branch = branches.find((item) =>
+        item.leaves.some((leaf) => leaf.id === selectedLeafId),
+      );
+      if (branch)
+        setCollapsedBranches((old) => {
+          const next = new Set(old);
+          next.delete(branch.id);
+          return next;
+        });
+      requestAnimationFrame(() => {
+        if (!lifetime.current.signal.aborted)
+          (
+            nodeElements.current.get(selectedLeafId) ??
+            workspaceElement.current?.querySelector<HTMLButtonElement>("button")
+          )?.focus({ preventScroll: true });
+      });
+    }
   };
   const beginDirectEdit = () => {
     if (
@@ -509,7 +575,6 @@ function KnowledgeNodeWorkspaceSession({
         currentDetails.node.title,
       ),
     );
-    setDirectoryOpen(false);
     setSavedMessage(null);
     setSaveError(null);
     callbacks.current.onEditTargetChange?.({
@@ -522,7 +587,6 @@ function KnowledgeNodeWorkspaceSession({
     const currentId = progress?.build.currentLeafId;
     if (!currentId || mutationPending) return;
     setSearch("");
-    setDirectoryOpen(true);
     const branch = branches.find((item) =>
       item.leaves.some((leaf) => leaf.id === currentId),
     );
@@ -630,6 +694,7 @@ function KnowledgeNodeWorkspaceSession({
   return (
     <section
       className={`knowledge-node-workspace ${editing ? "is-editing" : ""} ${className}`}
+      ref={workspaceElement}
       aria-label="知识节点工作区"
     >
       <header className="knowledge-node-workspace__header">
@@ -664,395 +729,510 @@ function KnowledgeNodeWorkspaceSession({
         </div>
       ) : (
         <>
-          {editing && (
-            <button
-              type="button"
-              className="knowledge-node-workspace__directory-toggle"
-              onClick={() => setDirectoryOpen((open) => !open)}
-              aria-expanded={directoryOpen}
+          <div className="knowledge-node-workspace__directory">
+            <div className="knowledge-node-workspace__search">
+              <Search aria-hidden="true" />
+              <Input
+                aria-label="搜索节点标题"
+                placeholder="搜索节点标题"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <nav
+              aria-label="知识节点目录"
+              className="knowledge-node-workspace__tree"
+              ref={(node) => {
+                if (node) node.scrollTop = directoryScrollTop.current;
+              }}
+              onScroll={(event) => {
+                directoryScrollTop.current = event.currentTarget.scrollTop;
+              }}
             >
-              {directoryOpen ? (
-                <ChevronDown aria-hidden="true" />
-              ) : (
-                <ChevronRight aria-hidden="true" />
-              )}
-              {directoryOpen ? "收起目录" : "打开目录"}
-              <span>
-                {selectedBranch?.title} /{" "}
-                {selectedLeaf?.title ?? editBase?.node.title}
-              </span>
-            </button>
-          )}
-          {directoryOpen && (
-            <div className="knowledge-node-workspace__directory">
-              <div className="knowledge-node-workspace__search">
-                <Search aria-hidden="true" />
-                <Input
-                  aria-label="搜索节点标题"
-                  placeholder="搜索节点标题"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
-              <nav
-                aria-label="知识节点目录"
-                className="knowledge-node-workspace__tree"
-                ref={(node) => {
-                  if (node) node.scrollTop = directoryScrollTop.current;
-                }}
-                onScroll={(event) => {
-                  directoryScrollTop.current = event.currentTarget.scrollTop;
-                }}
-              >
-                {visibleBranches.length === 0 ? (
-                  <p className="knowledge-node-workspace__notice">
-                    没有匹配的知识节点。
-                  </p>
-                ) : (
-                  <ul>
-                    {visibleBranches.map((branch) => {
-                      const expanded =
-                        Boolean(searchTerm) ||
-                        !collapsedBranches.has(branch.id);
-                      return (
-                        <li key={branch.id}>
-                          <button
-                            type="button"
-                            className="knowledge-node-workspace__branch"
-                            aria-expanded={expanded}
-                            onClick={() =>
-                              setCollapsedBranches((old) => {
-                                const next = new Set(old);
-                                next.has(branch.id)
-                                  ? next.delete(branch.id)
-                                  : next.add(branch.id);
-                                return next;
-                              })
-                            }
-                          >
-                            {expanded ? (
-                              <ChevronDown aria-hidden="true" />
-                            ) : (
-                              <ChevronRight aria-hidden="true" />
-                            )}
-                            {branch.title}
-                          </button>
-                          {expanded && (
-                            <ul>
-                              {branch.leaves.map((leaf) => (
-                                <li key={leaf.id}>
-                                  <button
-                                    type="button"
-                                    ref={(node) => {
-                                      if (node)
-                                        nodeElements.current.set(leaf.id, node);
-                                      else nodeElements.current.delete(leaf.id);
-                                    }}
-                                    className="knowledge-node-workspace__leaf"
-                                    aria-label={`${leaf.title} ${leafStatusLabel(leaf)}`}
-                                    aria-current={
-                                      leaf.id === selectedLeafId
-                                        ? "true"
-                                        : undefined
-                                    }
-                                    onClick={() => selectLeaf(leaf.id)}
-                                    disabled={mutationPending}
-                                  >
-                                    <span>{leaf.title}</span>
-                                    <span
-                                      className={`knowledge-node-workspace__status is-${leaf.status}`}
-                                    >
-                                      {leafStatusLabel(leaf)}
-                                    </span>
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </nav>
-            </div>
-          )}
-          <div className="knowledge-node-workspace__detail">
-            <div className="knowledge-node-workspace__detail-heading">
-              <div>
-                <p>{selectedBranch?.title}</p>
-                <h3>
-                  {selectedLeaf?.title ??
-                    editBase?.node.title ??
-                    "选择节点查看正文"}
-                </h3>
-              </div>
-              {!editing && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={beginDirectEdit}
-                  disabled={
-                    actionsDisabled ||
-                    !currentDetails?.capabilities.directEdit.allowed
-                  }
-                >
-                  <Pencil aria-hidden="true" />
-                  直接编辑
-                </Button>
-              )}
-            </div>
-            {readPending && (
-              <p role="status" className="knowledge-node-workspace__notice">
-                正在读取节点正文…
-              </p>
-            )}
-            {generation === undefined && !readonlyPreview && (
-              <p className="knowledge-node-workspace__notice">
-                等待知识库会话状态同步后读取正文。
-              </p>
-            )}
-            {readError && (
-              <div role="alert" className="knowledge-node-workspace__error">
-                <p>{readError}</p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setReload((value) => value + 1)}
-                  disabled={readPending}
-                >
-                  重新读取
-                </Button>
-              </div>
-            )}
-            {savedMessage && (
-              <p role="status" className="knowledge-node-workspace__notice">
-                {savedMessage}
-              </p>
-            )}
-            {editing ? (
-              <>
+              {visibleBranches.length === 0 ? (
                 <p className="knowledge-node-workspace__notice">
-                  节点标题保持不变。修改先保存到工作稿，确认并更新知识库后供后续任务使用。
+                  没有匹配的知识节点。
                 </p>
-                <div
-                  className="knowledge-node-workspace__editor-tabs"
-                  role="group"
-                  aria-label="编辑正文视图"
-                >
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={!editorPreview ? "secondary" : "ghost"}
-                    aria-pressed={!editorPreview}
-                    onClick={() => setEditorPreview(false)}
-                  >
-                    编辑 Markdown
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={editorPreview ? "secondary" : "ghost"}
-                    aria-pressed={editorPreview}
-                    onClick={() => setEditorPreview(true)}
-                  >
-                    预览修改
-                  </Button>
-                </div>
-                {!editorPreview && (
-                  <div
-                    className="knowledge-node-workspace__editor-formatting"
-                    role="group"
-                    aria-label="Markdown 格式工具"
-                  >
-                    {(
-                      [
-                        ["heading", "二级标题", "插入二级标题"],
-                        ["bold", "加粗", "加粗所选文字"],
-                        ["list", "列表", "插入无序列表"],
-                        ["link", "链接", "插入链接"],
-                      ] as const
-                    ).map(([kind, label, accessibleName]) => (
-                      <Button
-                        key={kind}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        aria-label={accessibleName}
-                        disabled={savePending || disabled}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => insertMarkdown(kind)}
+              ) : (
+                <ul>
+                  {visibleBranches.map((branch) => {
+                    const expanded =
+                      Boolean(searchTerm) || !collapsedBranches.has(branch.id);
+                    const percent =
+                      branch.total > 0
+                        ? Math.min(
+                            100,
+                            Math.round((branch.handled / branch.total) * 100),
+                          )
+                        : 0;
+                    return (
+                      <li
+                        key={branch.id}
+                        className="knowledge-node-workspace__branch-card"
                       >
-                        {label}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-                {editorPreview ? (
-                  <div className="knowledge-node-workspace__markdown knowledge-node-workspace__draft-preview">
-                    <MarkdownRenderer content={draft} />
-                  </div>
-                ) : (
-                  <Textarea
-                    ref={editorElement}
-                    className="knowledge-node-workspace__editor"
-                    aria-label={`编辑${editBase?.node.title}正文`}
-                    value={draft}
-                    maxLength={300000 - (editBase?.node.title.length ?? 0) - 4}
-                    onChange={(event) => setDraft(event.target.value)}
-                    onCompositionStart={() => {
-                      composingEditor.current = true;
-                    }}
-                    onCompositionEnd={() => {
-                      composingEditor.current = false;
-                    }}
-                    disabled={savePending}
-                    autoFocus
-                  />
-                )}
-                {saveError && (
-                  <p role="alert" className="knowledge-node-workspace__error">
-                    {saveError}
+                        <button
+                          type="button"
+                          className="knowledge-node-workspace__branch"
+                          aria-expanded={expanded}
+                          onClick={() =>
+                            setCollapsedBranches((old) => {
+                              const next = new Set(old);
+                              next.has(branch.id)
+                                ? next.delete(branch.id)
+                                : next.add(branch.id);
+                              return next;
+                            })
+                          }
+                        >
+                          <span className="knowledge-node-workspace__branch-number">
+                            {String(
+                              branches.findIndex(
+                                (item) => item.id === branch.id,
+                              ) + 1,
+                            ).padStart(2, "0")}
+                          </span>
+                          <span className="knowledge-node-workspace__branch-summary">
+                            <span className="knowledge-node-workspace__branch-heading">
+                              <strong>{branch.title}</strong>
+                              <span>
+                                {branch.handled} / {branch.total} · {percent}%
+                              </span>
+                            </span>
+                            <span
+                              className="knowledge-node-workspace__branch-progress"
+                              aria-hidden="true"
+                            >
+                              <span style={{ width: `${percent}%` }} />
+                            </span>
+                          </span>
+                          {expanded ? (
+                            <ChevronDown aria-hidden="true" />
+                          ) : (
+                            <ChevronRight aria-hidden="true" />
+                          )}
+                        </button>
+                        {expanded && (
+                          <div className="knowledge-node-workspace__branch-body">
+                            <div
+                              className="knowledge-node-workspace__branch-counts"
+                              aria-label={`${branch.title}节点状态`}
+                            >
+                              <span data-status="confirmed">
+                                确认 {branch.confirmed}
+                              </span>
+                              <span data-status="direct_prefilled">
+                                预填 {branch.directPrefilled}
+                              </span>
+                              <span data-status="needs_verification">
+                                待再次确认 {branch.needsVerification}
+                              </span>
+                              <span data-status="pending">
+                                待处理 {branch.pending}
+                              </span>
+                            </div>
+                            <ul>
+                              {branch.leaves.map((leaf) => {
+                                const StatusIcon = {
+                                  confirmed: Check,
+                                  direct_prefilled: FileCheck2,
+                                  current: CircleDot,
+                                  needs_verification: CircleHelp,
+                                  pending: Circle,
+                                }[leaf.status];
+                                return (
+                                  <li key={leaf.id}>
+                                    <button
+                                      type="button"
+                                      ref={(node) => {
+                                        if (node)
+                                          nodeElements.current.set(
+                                            leaf.id,
+                                            node,
+                                          );
+                                        else
+                                          nodeElements.current.delete(leaf.id);
+                                      }}
+                                      className="knowledge-node-workspace__leaf"
+                                      data-status={leaf.status}
+                                      aria-label={`${leaf.title} ${leafStatusLabel(leaf)}`}
+                                      aria-current={
+                                        leaf.id === selectedLeafId
+                                          ? "true"
+                                          : undefined
+                                      }
+                                      aria-haspopup="dialog"
+                                      onClick={() => selectLeaf(leaf.id)}
+                                      disabled={mutationPending}
+                                    >
+                                      <span className="knowledge-node-workspace__leaf-icon">
+                                        <StatusIcon aria-hidden="true" />
+                                      </span>
+                                      <span className="knowledge-node-workspace__leaf-title">
+                                        {leaf.title}
+                                      </span>
+                                      <span
+                                        className={`knowledge-node-workspace__status is-${leaf.status}`}
+                                      >
+                                        {leafStatusLabel(leaf)}
+                                      </span>
+                                      <ChevronRight aria-hidden="true" />
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </nav>
+          </div>
+          <Sheet
+            open={drawerOpen}
+            onOpenChange={(open) => {
+              if (!open) closeDrawer();
+            }}
+          >
+            <SheetContent
+              side="right"
+              className="knowledge-node-workspace knowledge-node-workspace-drawer"
+              overlayClassName="knowledge-node-workspace-overlay"
+              showCloseButton={false}
+              onCloseAutoFocus={restoreDrawerFocus}
+              onEscapeKeyDown={(event) => {
+                if (mutationPending || imageDirty || pendingDestination)
+                  event.preventDefault();
+              }}
+              onPointerDownOutside={(event) => {
+                if (mutationPending || imageDirty || pendingDestination)
+                  event.preventDefault();
+              }}
+            >
+              <header className="knowledge-node-workspace__drawer-header">
+                <div>
+                  <p>{selectedBranch?.title}</p>
+                  <SheetTitle>
+                    {selectedLeaf?.title ??
+                      editBase?.node.title ??
+                      "知识节点正文"}
+                  </SheetTitle>
+                </div>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label="关闭节点详情"
+                  onClick={closeDrawer}
+                  disabled={mutationPending || imageDirty}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+                <SheetDescription className="sr-only">
+                  查看节点正文，直接编辑、使用 AI 修改或管理本地图片。
+                </SheetDescription>
+              </header>
+              <label className="knowledge-node-workspace__node-switch">
+                切换节点
+                <select
+                  aria-label="切换知识节点"
+                  value={selectedLeafId ?? ""}
+                  onChange={(event) => selectLeaf(event.target.value)}
+                  disabled={mutationPending || imageDirty}
+                >
+                  {branches.map((branch) => (
+                    <optgroup key={branch.id} label={branch.title}>
+                      {branch.leaves.map((leaf) => (
+                        <option key={leaf.id} value={leaf.id}>
+                          {leaf.title} · {leafStatusLabel(leaf)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <div className="knowledge-node-workspace__detail">
+                <div className="knowledge-node-workspace__detail-heading">
+                  {!editing && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={beginDirectEdit}
+                      disabled={
+                        actionsDisabled ||
+                        !currentDetails?.capabilities.directEdit.allowed
+                      }
+                    >
+                      <Pencil aria-hidden="true" />
+                      直接编辑
+                    </Button>
+                  )}
+                </div>
+                {readPending && (
+                  <p role="status" className="knowledge-node-workspace__notice">
+                    正在读取节点正文…
                   </p>
                 )}
-                {(conflicted || latestDiffers) && (
-                  <div className="knowledge-node-workspace__conflict">
-                    <p>
-                      节点状态已更新，你的编辑内容仍保留。查看最新正文后，可取消本次编辑并重新修改，避免覆盖其他更新。
-                    </p>
+                {generation === undefined && !readonlyPreview && (
+                  <p className="knowledge-node-workspace__notice">
+                    等待知识库会话状态同步后读取正文。
+                  </p>
+                )}
+                {readError && (
+                  <div role="alert" className="knowledge-node-workspace__error">
+                    <p>{readError}</p>
                     <Button
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setShowLatest((show) => !show);
-                        setReload((value) => value + 1);
-                      }}
+                      onClick={() => setReload((value) => value + 1)}
+                      disabled={readPending}
                     >
-                      查看最新正文
+                      重新读取
                     </Button>
-                    {showLatest && currentDetails && (
-                      <div className="knowledge-node-workspace__markdown">
-                        <h4>最新已保存正文</h4>
+                  </div>
+                )}
+                {savedMessage && (
+                  <p role="status" className="knowledge-node-workspace__notice">
+                    {savedMessage}
+                  </p>
+                )}
+                {editing ? (
+                  <>
+                    <p className="knowledge-node-workspace__notice">
+                      节点标题保持不变。修改先保存到工作稿，确认并更新知识库后供后续任务使用。
+                    </p>
+                    <div
+                      className="knowledge-node-workspace__editor-tabs"
+                      role="group"
+                      aria-label="编辑正文视图"
+                    >
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={!editorPreview ? "secondary" : "ghost"}
+                        aria-pressed={!editorPreview}
+                        onClick={() => setEditorPreview(false)}
+                      >
+                        编辑 Markdown
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={editorPreview ? "secondary" : "ghost"}
+                        aria-pressed={editorPreview}
+                        onClick={() => setEditorPreview(true)}
+                      >
+                        预览修改
+                      </Button>
+                    </div>
+                    {!editorPreview && (
+                      <div
+                        className="knowledge-node-workspace__editor-formatting"
+                        role="group"
+                        aria-label="Markdown 格式工具"
+                      >
+                        {(
+                          [
+                            ["heading", "二级标题", "插入二级标题"],
+                            ["bold", "加粗", "加粗所选文字"],
+                            ["list", "列表", "插入无序列表"],
+                            ["link", "链接", "插入链接"],
+                          ] as const
+                        ).map(([kind, label, accessibleName]) => (
+                          <Button
+                            key={kind}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            aria-label={accessibleName}
+                            disabled={savePending || disabled}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => insertMarkdown(kind)}
+                          >
+                            {label}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {editorPreview ? (
+                      <div className="knowledge-node-workspace__markdown knowledge-node-workspace__draft-preview">
+                        <MarkdownRenderer content={draft} />
+                      </div>
+                    ) : (
+                      <Textarea
+                        ref={editorElement}
+                        className="knowledge-node-workspace__editor"
+                        aria-label={`编辑${editBase?.node.title}正文`}
+                        value={draft}
+                        maxLength={
+                          300000 - (editBase?.node.title.length ?? 0) - 4
+                        }
+                        onChange={(event) => setDraft(event.target.value)}
+                        onCompositionStart={() => {
+                          composingEditor.current = true;
+                        }}
+                        onCompositionEnd={() => {
+                          composingEditor.current = false;
+                        }}
+                        disabled={savePending}
+                        autoFocus
+                      />
+                    )}
+                    {saveError && (
+                      <p
+                        role="alert"
+                        className="knowledge-node-workspace__error"
+                      >
+                        {saveError}
+                      </p>
+                    )}
+                    {(conflicted || latestDiffers) && (
+                      <div className="knowledge-node-workspace__conflict">
+                        <p>
+                          节点状态已更新，你的编辑内容仍保留。查看最新正文后，可取消本次编辑并重新修改，避免覆盖其他更新。
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setShowLatest((show) => !show);
+                            setReload((value) => value + 1);
+                          }}
+                        >
+                          查看最新正文
+                        </Button>
+                        {showLatest && currentDetails && (
+                          <div className="knowledge-node-workspace__markdown">
+                            <h4>最新已保存正文</h4>
+                            <MarkdownRenderer
+                              content={editableBody(
+                                currentDetails.node.contentMarkdown,
+                                currentDetails.node.title,
+                              )}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="knowledge-node-workspace__editor-footer">
+                      <span>{dirty ? "尚未保存" : "没有未保存修改"}</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={leaveEditor}
+                        disabled={mutationPending}
+                      >
+                        取消编辑
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={() => void saveDraft()}
+                        disabled={
+                          disabled ||
+                          !dirty ||
+                          !draft.trim() ||
+                          savePending ||
+                          conflicted
+                        }
+                      >
+                        {savePending ? "正在保存…" : "保存修改"}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="knowledge-node-workspace__markdown">
+                      {currentDetails?.node.contentMarkdown ? (
                         <MarkdownRenderer
                           content={editableBody(
                             currentDetails.node.contentMarkdown,
                             currentDetails.node.title,
                           )}
                         />
+                      ) : !readPending && !readError ? (
+                        <p className="knowledge-node-workspace__notice">
+                          该节点暂时没有可展示的正文。
+                        </p>
+                      ) : null}
+                    </div>
+                    {currentDetails?.resources.filter((resource) =>
+                      resource.mimeType.startsWith("image/"),
+                    ).length ? (
+                      <div className="knowledge-node-workspace__resources">
+                        {currentDetails.resources
+                          .filter((resource) =>
+                            resource.mimeType.startsWith("image/"),
+                          )
+                          .map((resource) => (
+                            <figure key={resource.id}>
+                              <img
+                                src={resource.sameOriginUrl}
+                                alt={resource.caption}
+                                loading="lazy"
+                              />
+                              <figcaption>{resource.caption}</figcaption>
+                            </figure>
+                          ))}
                       </div>
+                    ) : null}
+                    {currentDetails && (
+                      <>
+                        {!currentDetails.capabilities.directEdit.allowed && (
+                          <p className="knowledge-node-workspace__notice">
+                            {currentDetails.capabilities.directEdit.reason}
+                          </p>
+                        )}
+                        <KnowledgeNodeLocalActions
+                          conversationId={conversationId}
+                          leafId={currentDetails.node.leafId}
+                          disabled={actionsDisabled}
+                          editDisabled={
+                            !currentDetails.capabilities.aiEdit.allowed
+                          }
+                          imagesDisabled={
+                            !currentDetails.capabilities.manageImages.allowed
+                          }
+                          editLabel="AI 修改"
+                          onBusyChange={setLocalActionPending}
+                          onDirtyChange={setImageDirty}
+                          onEditTargetSelected={() => {
+                            callbacks.current.onEditTargetChange?.({
+                              leafId: currentDetails.node.leafId,
+                              title: currentDetails.node.title,
+                              mode: "ai",
+                            });
+                            returnToComposer.current = true;
+                            setDrawerOpen(false);
+                          }}
+                        />
+                        {!currentDetails.capabilities.aiEdit.allowed &&
+                          currentDetails.capabilities.aiEdit.reason !==
+                            currentDetails.capabilities.directEdit.reason && (
+                            <p className="knowledge-node-workspace__notice">
+                              AI 修改：
+                              {currentDetails.capabilities.aiEdit.reason}
+                            </p>
+                          )}
+                        {!currentDetails.capabilities.manageImages.allowed &&
+                          currentDetails.capabilities.manageImages.reason !==
+                            currentDetails.capabilities.directEdit.reason && (
+                            <p className="knowledge-node-workspace__notice">
+                              图片操作：
+                              {currentDetails.capabilities.manageImages.reason}
+                            </p>
+                          )}
+                      </>
                     )}
-                  </div>
-                )}
-                <div className="knowledge-node-workspace__editor-footer">
-                  <span>{dirty ? "尚未保存" : "没有未保存修改"}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={leaveEditor}
-                    disabled={mutationPending}
-                  >
-                    取消编辑
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void saveDraft()}
-                    disabled={
-                      disabled ||
-                      !dirty ||
-                      !draft.trim() ||
-                      savePending ||
-                      conflicted
-                    }
-                  >
-                    {savePending ? "正在保存…" : "保存修改"}
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="knowledge-node-workspace__markdown">
-                  {currentDetails?.node.contentMarkdown ? (
-                    <MarkdownRenderer
-                      content={editableBody(
-                        currentDetails.node.contentMarkdown,
-                        currentDetails.node.title,
-                      )}
-                    />
-                  ) : !readPending && !readError ? (
-                    <p className="knowledge-node-workspace__notice">
-                      该节点暂时没有可展示的正文。
-                    </p>
-                  ) : null}
-                </div>
-                {currentDetails?.resources.filter((resource) =>
-                  resource.mimeType.startsWith("image/"),
-                ).length ? (
-                  <div className="knowledge-node-workspace__resources">
-                    {currentDetails.resources
-                      .filter((resource) =>
-                        resource.mimeType.startsWith("image/"),
-                      )
-                      .map((resource) => (
-                        <figure key={resource.id}>
-                          <img
-                            src={resource.sameOriginUrl}
-                            alt={resource.caption}
-                            loading="lazy"
-                          />
-                          <figcaption>{resource.caption}</figcaption>
-                        </figure>
-                      ))}
-                  </div>
-                ) : null}
-                {currentDetails && (
-                  <>
-                    {!currentDetails.capabilities.directEdit.allowed && (
-                      <p className="knowledge-node-workspace__notice">
-                        {currentDetails.capabilities.directEdit.reason}
-                      </p>
-                    )}
-                    <KnowledgeNodeLocalActions
-                      conversationId={conversationId}
-                      leafId={currentDetails.node.leafId}
-                      disabled={actionsDisabled}
-                      editDisabled={!currentDetails.capabilities.aiEdit.allowed}
-                      imagesDisabled={
-                        !currentDetails.capabilities.manageImages.allowed
-                      }
-                      editLabel="AI 修改"
-                      onBusyChange={setLocalActionPending}
-                      onDirtyChange={setImageDirty}
-                      onEditTargetSelected={() =>
-                        callbacks.current.onEditTargetChange?.({
-                          leafId: currentDetails.node.leafId,
-                          title: currentDetails.node.title,
-                          mode: "ai",
-                        })
-                      }
-                    />
-                    {!currentDetails.capabilities.aiEdit.allowed &&
-                      currentDetails.capabilities.aiEdit.reason !==
-                        currentDetails.capabilities.directEdit.reason && (
-                        <p className="knowledge-node-workspace__notice">
-                          AI 修改：{currentDetails.capabilities.aiEdit.reason}
-                        </p>
-                      )}
-                    {!currentDetails.capabilities.manageImages.allowed &&
-                      currentDetails.capabilities.manageImages.reason !==
-                        currentDetails.capabilities.directEdit.reason && (
-                        <p className="knowledge-node-workspace__notice">
-                          图片操作：
-                          {currentDetails.capabilities.manageImages.reason}
-                        </p>
-                      )}
                   </>
                 )}
-              </>
-            )}
-          </div>
+              </div>
+            </SheetContent>
+          </Sheet>
         </>
       )}
       <Dialog
@@ -1061,7 +1241,16 @@ function KnowledgeNodeWorkspaceSession({
           if (!open && !mutationPending) setPendingDestination(null);
         }}
       >
-        <DialogContent className="knowledge-node-workspace-dialog">
+        <DialogContent
+          className="knowledge-node-workspace-dialog"
+          showCloseButton={!mutationPending}
+          onEscapeKeyDown={(event) => {
+            if (mutationPending) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (mutationPending) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>当前节点有未保存修改</DialogTitle>
             <DialogDescription>

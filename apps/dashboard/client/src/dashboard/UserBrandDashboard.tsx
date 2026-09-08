@@ -607,6 +607,9 @@ function PersistentUserBrandDashboard({ initialSection }) {
   const onCreateProject = async name => {
     const result = await createProject.mutateAsync({ name, clientRequestId: crypto.randomUUID(), ownerUserId: workspaceOwnerId });
     const project = result.project || result;
+    projectUtils.enterpriseProjects.list.setData({ ownerUserId: workspaceOwnerId }, current =>
+      current ? { ...current, projects: [...current.projects.filter(item => item.id !== project.id), project] } : { projects: [project] });
+    void projectUtils.enterpriseProjects.list.invalidate({ ownerUserId: workspaceOwnerId });
     switchEnterpriseProject(workspaceOwnerId, project.id);
   };
   const onRenameProject = async (name, target) => {
@@ -977,6 +980,7 @@ function UserBrandDashboardContent({
         )}
         {operatorMode ? <OperatorSidebar
           projects={operatorProjects} activeProject={operatorProject}
+          projectsLoading={operatorProjectsLoading} projectsError={operatorProjectsError}
           activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
           collapsed={compactViewport ? !mobileNavOpen : sidebarCollapsed} onCollapse={compactViewport ? () => setMobileNavOpen(value => !value) : toggleSidebar}
           accountName={operatorAccountLabel}

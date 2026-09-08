@@ -397,6 +397,7 @@ describe("UserBrandDashboard formal workspace", () => {
   });
 
   beforeEach(() => {
+    localStorage.removeItem("frontmind.operator.sidebarCollapsed");
     projectMocks.delete.mockReset();
     projectMocks.select.mockClear();
     trpcUtils.enterpriseProjects.list.setData.mockReset().mockImplementation((_input, update) => {
@@ -552,30 +553,44 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.getByText(/尚无监控运行记录/)).toBeInTheDocument();
     expect(screen.getByText("运行次数")).toBeInTheDocument();
   });
+  it("keeps loading separate from an authoritative empty project list", () => {
+    projectMocks.list.mockReturnValue({ data: undefined, isLoading: true });
+    const view = render(<UserBrandDashboard />);
+    const sidebar = screen.getByRole("complementary", { name: "工作区导航" });
+    expect(within(sidebar).getByRole("status")).toHaveTextContent("正在读取企业项目");
+    expect(screen.queryByText(/从项目管理中|点击上方加号新建企业项目/)).toBeNull();
+    expect(screen.queryByText("从一个企业项目开始")).toBeNull();
+    projectMocks.list.mockReturnValue({ data: { projects: [] }, isLoading: false });
+    act(() => window.history.replaceState(null, "", "/"));
+    view.rerender(<UserBrandDashboard />);
+    expect(screen.getByText(/点击上方加号新建企业项目/)).toBeVisible();
+  });
+
   it("keeps project modules unmounted when project access is denied", () => {
     projectMocks.list.mockReturnValue({ error: new Error("无权访问企业项目"), isLoading: false });
     render(<UserBrandDashboard />);
-    expect(screen.getByRole("alert")).toHaveTextContent("无权访问企业项目");
+    expect(within(screen.getByRole("main")).getByRole("alert")).toHaveTextContent("无权访问企业项目");
     expect(screen.queryByTestId("knowledge-agent")).toBeNull();
     expect(portalUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: false }));
   });
   it("lets a new operator create the first enterprise project even with a collapsed sidebar", async () => {
     window.history.replaceState(null, "", "/");
     projectMocks.list.mockReturnValue({ data: { projects: [] }, isLoading: false });
-    projectMocks.create.mockResolvedValue({ id: projectMocks.id });
+    projectMocks.create.mockResolvedValue({ id: projectMocks.id, name: "新品牌", ownerUserId: 7, revision: 1 });
     render(<UserBrandDashboard />);
     fireEvent.click(screen.getByRole("button", { name: "收起侧边栏" }));
-    fireEvent.click(screen.getByRole("button", { name: "新建企业项目" }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "工作区导航" })).getByRole("button", { name: "新建企业项目" }));
     fireEvent.change(screen.getByRole("textbox", { name: "项目名称" }), { target: { value: "新品牌" } });
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
     await waitFor(() => expect(projectMocks.create).toHaveBeenCalledWith(expect.objectContaining({ name: "新品牌", ownerUserId: 7 })));
     expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
+    expect(projectMocks.list().data.projects).toEqual([expect.objectContaining({ id: projectMocks.id, name: "新品牌" })]);
   });
   it("removes a confirmed deletion from cache before leaving the last project", async () => {
     projectMocks.delete.mockResolvedValue({ enterpriseProjectId: projectMocks.id, revision: 2 });
     render(<UserBrandDashboard />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "项目管理" }), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "删除当前项目" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除项目" }));
     expect(projectMocks.delete).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
     await waitFor(() => expect(projectMocks.delete).toHaveBeenCalledWith({ enterpriseProjectId: projectMocks.id, expectedRevision: 1 }));
@@ -588,8 +603,8 @@ describe("UserBrandDashboard formal workspace", () => {
     let finish!: (value: unknown) => void;
     projectMocks.delete.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     render(<UserBrandDashboard />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "项目管理" }), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "删除当前项目" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "删除项目" }));
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
     window.history.replaceState(null, "", "/agent");
     await act(async () => finish({ enterpriseProjectId: projectMocks.id, revision: 2 }));

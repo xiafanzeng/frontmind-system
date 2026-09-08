@@ -20,9 +20,9 @@ function Content() {
   useEffect(() => { mounts++; }, []);
   return <Link href="/publishing/media">媒体资源</Link>;
 }
-function Workspace() {
+function Workspace({ userId = 7 }: { userId?: number } = {}) {
   return <Router hook={useWorkspaceLocation} hrefs={href => projectWorkspaceUrl(href)}>
-    <WorkspaceQueryProvider userId={7}><Content /></WorkspaceQueryProvider>
+    <WorkspaceQueryProvider userId={userId}><Content /></WorkspaceQueryProvider>
   </Router>;
 }
 beforeEach(() => {
@@ -33,6 +33,46 @@ beforeEach(() => {
 afterEach(async () => { cleanup(); await act(async () => {}); window.history.replaceState(null, "", "/"); });
 
 describe("workspace request lifetime", () => {
+  const directoryKey = (ownerUserId = 7) => [["enterpriseProjects", "list"], { input: { ownerUserId }, type: "query" }] as const;
+  it("retains only the same viewer-owner project directory through account and project transitions", async () => {
+    render(<Workspace />);
+    const key = directoryKey();
+    const projects = { projects: [{ id: "project-a", name: "企业甲" }] };
+    act(() => {
+      currentClient.setQueryData(key, projects);
+      currentClient.setQueryData(["private-content"], "A only");
+    });
+    await act(async () => navigate("/agent"));
+    expect(currentClient.getQueryData(key)).toEqual(projects);
+    expect(currentClient.getQueryData(["private-content"])).toBeUndefined();
+    await act(async () => navigate("/?enterpriseProjectId=project-a"));
+    expect(currentClient.getQueryData(key)).toEqual(projects);
+    const sameScope = currentClient;
+    await act(async () => navigate("/publishing?enterpriseProjectId=project-a"));
+    expect(currentClient).toBe(sameScope);
+    expect(currentClient.getQueryData(key)).toEqual(projects);
+    act(() => currentClient.setQueryData(key, { projects: [] }));
+    await act(async () => navigate("/account"));
+    expect(currentClient.getQueryData(key)).toEqual({ projects: [] });
+  });
+
+  it("does not transfer the directory or late old-owner updates across owner and authenticated account boundaries", async () => {
+    const view = render(<Workspace />);
+    const oldClient = currentClient;
+    act(() => currentClient.setQueryData(directoryKey(), { projects: [{ id: "private-a" }] }));
+    await act(async () => navigate("/?enterpriseProjectId=project-b&operatorOwnerId=8"));
+    expect(currentClient.getQueryData(directoryKey())).toBeUndefined();
+    act(() => {
+      oldClient.setQueryData(directoryKey(), { projects: [{ id: "late-private-a" }] });
+      currentClient.setQueryData(directoryKey(8), { projects: [{ id: "private-b" }] });
+    });
+    await act(async () => navigate("/account?operatorOwnerId=8"));
+    expect(currentClient.getQueryData(directoryKey())).toBeUndefined();
+    expect(currentClient.getQueryData(directoryKey(8))).toEqual({ projects: [{ id: "private-b" }] });
+    view.rerender(<Workspace userId={9} />);
+    expect(currentClient.getQueryData(directoryKey(8))).toBeUndefined();
+  });
+
   it("preserves the client and mounted shell within a project and scopes native links", async () => {
     render(<Workspace />);
     const original = currentClient;

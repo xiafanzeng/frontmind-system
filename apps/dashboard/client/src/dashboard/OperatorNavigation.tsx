@@ -2,7 +2,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type FormEvent, type MouseEvent } from "react";
 import { Bot, ChartNoAxesCombined, ChevronDown, Database, Folder, FolderOpen, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, Plus, Send, Sparkles, Target, Trash2, Wallet, Wrench } from "lucide-react";
@@ -15,8 +15,8 @@ export type EnterpriseProjectView = { id: string; name: string; ownerUserId: num
 type ProjectDialog = "create" | "rename" | "delete";
 type ProjectDialogState = { kind: ProjectDialog; project?: EnterpriseProjectView; activeProjectId?: string };
 
-export function OperatorSidebar({ projects, activeProject, activeEntry, collapsed, onCollapse, onNavigate, onSelectProject, onCreateProject, onRenameProject, onDeleteProject, mobileOpen = false, onCloseMobile, accountName }: {
-  projects: EnterpriseProjectView[]; activeProject?: EnterpriseProjectView; activeEntry: "project" | "agent" | "account";
+export function OperatorSidebar({ projects, activeProject, activeEntry, collapsed, onCollapse, onNavigate, onSelectProject, onCreateProject, onRenameProject, onDeleteProject, mobileOpen = false, onCloseMobile, accountName, projectsLoading = false, projectsError }: {
+  projects: EnterpriseProjectView[]; projectsLoading?: boolean; projectsError?: string; activeProject?: EnterpriseProjectView; activeEntry: "project" | "agent" | "account";
   collapsed: boolean; onCollapse: () => void; onNavigate: (path: string) => void;
   mobileOpen?: boolean; onCloseMobile?: () => void; accountName?: string;
   onSelectProject: (id: string) => void; onCreateProject: (name: string) => Promise<void>;
@@ -63,7 +63,6 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
   const returnFocus = useRef<HTMLElement | null>(null);
   const submitting = useRef(false);
   const [expanded, setExpanded] = useState(true);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<ProjectDialogState | null>(null);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -71,7 +70,6 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
   const open = useCallback((kind: ProjectDialog, project = activeProject, trigger: HTMLElement | null = projectMenuTrigger.current) => {
     if (submitting.current) return;
     returnFocus.current = trigger;
-    setMenuOpen(false);
     setDialog({ kind, project: project ? { ...project } : undefined, activeProjectId: activeProject?.id });
     setName(kind === "rename" ? project?.name || "" : "");
     setError("");
@@ -120,26 +118,12 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
           <button type="button" className={`operator-nav-entry operator-project-entry ${activeEntry === "project" ? "active" : ""}`} title="AI智能品牌优化" aria-label="AI智能品牌优化" onClick={() => { if (collapsed) onCollapse(); setExpanded(!expanded || collapsed); if (activeEntry !== "project") requestWorkspaceNavigation(() => onNavigate("/?view=knowledge")); }} aria-expanded={expanded && !collapsed} aria-controls="operator-project-list">
             <Sparkles size={20} /><span>AI智能品牌优化</span><ChevronDown size={16} className={expanded ? "is-open" : ""} />
           </button>
-          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <button ref={projectMenuTrigger} type="button" className="operator-project-menu-trigger" aria-label="项目管理" title="项目管理" disabled={saving}><MoreHorizontal size={18} /></button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="operator-project-menu" align="start" side={collapsed ? "right" : "bottom"} sideOffset={8} onCloseAutoFocus={event => { if (dialog) event.preventDefault(); }}>
-              <DropdownMenuLabel className="operator-project-menu-label">项目管理</DropdownMenuLabel>
-              <DropdownMenuItem onSelect={() => open("create")}><Plus />新建企业项目</DropdownMenuItem>
-              {activeProject && <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="operator-project-menu-current" title={activeProject.name}>{activeProject.name}</DropdownMenuLabel>
-                <DropdownMenuItem onSelect={() => open("rename")}><Pencil />重命名当前项目</DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" disabled={!onDeleteProject} onSelect={() => open("delete")}><Trash2 />删除当前项目</DropdownMenuItem>
-              </>}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <button ref={projectMenuTrigger} type="button" className="operator-project-menu-trigger" aria-label="新建企业项目" title="新建企业项目" disabled={saving} onClick={() => open("create")}><Plus size={18} /></button>
         </div>
         {expanded && !collapsed && <div id="operator-project-list" className="operator-projects" aria-label="企业项目">
-          <div className="operator-projects-caption"><span>企业项目</span><span>{projects.length}</span></div>
+          <div className="operator-projects-caption"><span>企业项目</span><span>{projectsLoading && !projects.length ? "—" : projects.length}</span></div>
           {projects.map(project => <ProjectRow key={project.id} project={project} selected={project.id === activeProject?.id} saving={saving} canDelete={Boolean(onDeleteProject)} onSelect={() => requestWorkspaceNavigation(() => onSelectProject(project.id))} onAction={(kind, trigger) => open(kind, project, trigger)} dialogOpen={Boolean(dialog)} />)}
-          {!projects.length && <p className="operator-project-hint">从项目管理中新建企业项目，开始整理品牌知识。</p>}
+          {!projects.length && (projectsLoading ? <p className="operator-project-hint" role="status">正在读取企业项目…</p> : projectsError ? <p className="operator-project-hint" role="alert">企业项目暂时无法读取</p> : <p className="operator-project-hint">点击上方加号新建企业项目，开始整理品牌知识。</p>)}
         </div>}
       </div>
       <div className="operator-general-nav">

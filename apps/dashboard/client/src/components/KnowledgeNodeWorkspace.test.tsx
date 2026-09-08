@@ -181,8 +181,9 @@ function fixtureFetch() {
 }
 function renderWorkspace(
   props: Partial<React.ComponentProps<typeof KnowledgeNodeWorkspace>> = {},
+  open = true,
 ) {
-  return render(
+  const view = render(
     <KnowledgeNodeWorkspace
       progress={progress}
       conversationId="conversation"
@@ -190,6 +191,18 @@ function renderWorkspace(
       {...props}
     />,
   );
+  if (open)
+    fireEvent.click(screen.getByRole("button", { name: "企业简介 当前节点" }));
+  return view;
+}
+async function closeDetails() {
+  fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+}
+function switchNode(leafId: string) {
+  fireEvent.change(screen.getByRole("combobox", { name: "切换知识节点" }), {
+    target: { value: leafId },
+  });
 }
 async function openEditor() {
   const button = await screen.findByRole("button", { name: "直接编辑" });
@@ -199,14 +212,192 @@ async function openEditor() {
 }
 
 describe("unified knowledge node workspace", () => {
+  it("shows grouped progress without fetching content until a node is opened, and restores the tree on close", async () => {
+    const fetcher = fixtureFetch();
+    renderWorkspace({}, false);
+    const tree = screen.getByRole("navigation", { name: "知识节点目录" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(within(tree).getByText("01")).toBeVisible();
+    expect(within(tree).getByText("1 / 2 · 50%")).toBeVisible();
+    expect(within(tree).getByText("确认 1")).toBeVisible();
+    tree.scrollTop = 145;
+    fireEvent.scroll(tree);
+    const node = screen.getByRole("button", { name: "产品服务 已确认" });
+    fireEvent.click(node);
+    const drawer = await screen.findByRole("dialog", { name: "产品服务" });
+    expect(within(drawer).getByText("产品服务正文。")).toBeVisible();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await closeDetails();
+    expect(screen.getByRole("navigation", { name: "知识节点目录" })).toBe(tree);
+    expect(tree.scrollTop).toBe(145);
+    await waitFor(() => expect(node).toHaveFocus());
+    expect(
+      screen.getByRole("button", { name: /企业身份/ }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("guards Escape and close with an unsaved draft, and saves exactly once before closing", async () => {
+    const fetcher = fixtureFetch();
+    renderWorkspace();
+    fireEvent.change(await openEditor(), {
+      target: { value: "保存后关闭详情" },
+    });
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "企业简介" }), {
+      key: "Escape",
+    });
+    let prompt = await screen.findByRole("dialog", {
+      name: "当前节点有未保存修改",
+    });
+    fireEvent.click(within(prompt).getByRole("button", { name: "继续编辑" }));
+    expect(
+      screen.getByRole("textbox", { name: "编辑企业简介正文" }),
+    ).toHaveValue("保存后关闭详情");
+    fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+    prompt = await screen.findByRole("dialog", {
+      name: "当前节点有未保存修改",
+    });
+    fireEvent.click(within(prompt).getByRole("button", { name: "保存后继续" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      fetcher.mock.calls.filter(([, init]) => init?.method === "POST"),
+    ).toHaveLength(1);
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "企业简介 当前节点" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("keeps the drawer and edit draft mounted while a save is in flight", async () => {
+    let resolveSave!: (response: Response) => void;
+    const fetcher = fixtureFetch();
+    fetcher.mockImplementation(async (input, init) => {
+      if (init?.method === "POST")
+        return new Promise((resolve) => {
+          resolveSave = resolve;
+        });
+      const url = new URL(String(input), "https://frontmind.invalid");
+      return json(
+        details(
+          url.searchParams.get("leafId") ?? "1.1",
+          Number(url.searchParams.get("expectedContentVersion") ?? 3),
+        ),
+      );
+    });
+    renderWorkspace();
+    fireEvent.change(await openEditor(), {
+      target: { value: "正在保存的内容" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(resolveSave).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "关闭节点详情" })).toBeDisabled();
+    expect(
+      screen.getByRole("combobox", { name: "切换知识节点" }),
+    ).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "企业简介" }), {
+      key: "Escape",
+    });
+    expect(
+      screen.getByRole("textbox", { name: "编辑企业简介正文" }),
+    ).toHaveValue("正在保存的内容");
+    expect(
+      screen.queryByRole("dialog", { name: "当前节点有未保存修改" }),
+    ).toBeNull();
+    await act(async () =>
+      resolveSave(
+        json({ accepted: true, unchanged: false, observation: observation() }),
+      ),
+    );
+    expect(
+      await screen.findByText("修改已保存，请确认后更新知识库。"),
+    ).toBeVisible();
+    await closeDetails();
+  });
+
+  it("retains a failed save when closing, and allows explicit discard without a second POST", async () => {
+    const fetcher = fixtureFetch();
+    fetcher.mockImplementation(async (_input, init) => {
+      if (init?.method === "POST") throw new Error("保存暂时失败");
+      return json(details());
+    });
+    renderWorkspace();
+    fireEvent.change(await openEditor(), {
+      target: { value: "失败后仍需保留的内容" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存后继续" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "继续编辑" })).toBeEnabled(),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "当前节点有未保存修改" }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect(
+      screen.getByRole("textbox", { name: "编辑企业简介正文" }),
+    ).toHaveValue("失败后仍需保留的内容");
+    expect(screen.getByRole("alert")).toHaveTextContent("保存暂时失败");
+    fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+    fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      fetcher.mock.calls.filter(([, init]) => init?.method === "POST"),
+    ).toHaveLength(1);
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+  });
+
+  it("keeps dirty image selection in its own dialog and does not close the node drawer with Escape", async () => {
+    const fetcher = fixtureFetch();
+    fetcher.mockImplementation(async (input) => {
+      if (String(input).includes("/node/images"))
+        return json({
+          coordinates: {},
+          images: [
+            {
+              assetId: "image-1",
+              url: "/private-image",
+              caption: "企业原图",
+              attached: true,
+              removable: true,
+              selectable: true,
+            },
+          ],
+        });
+      return json(details());
+    });
+    renderWorkspace();
+    await screen.findByText("原有企业介绍。");
+    fireEvent.click(screen.getByRole("button", { name: "本地图片" }));
+    const images = await screen.findByRole("dialog", {
+      name: "当前节点的本地图片",
+    });
+    fireEvent.click(within(images).getByRole("checkbox"));
+    fireEvent.keyDown(images, { key: "Escape" });
+    expect(
+      screen.getByRole("dialog", { name: "当前节点的本地图片" }),
+    ).toBeVisible();
+    expect(getUnsavedWorkspaceDrafts().map((draft) => draft.label)).toContain(
+      "知识节点图片",
+    );
+    fireEvent.click(within(images).getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("dialog", { name: "企业简介" })).toBeVisible();
+    await closeDetails();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(
+      false,
+    );
+  });
+
   it("browses, searches and locates nodes without any select or turn mutation", async () => {
     const fetcher = fixtureFetch();
     renderWorkspace();
     expect(await screen.findByText("原有企业介绍。")).toBeVisible();
     expect(screen.getByText("当前节点")).toBeVisible();
     expect(screen.queryByText("待确认")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    switchNode("1.2");
     expect(await screen.findByText("产品服务正文。")).toBeVisible();
+    await closeDetails();
     fireEvent.change(screen.getByRole("textbox", { name: "搜索节点标题" }), {
       target: { value: "不存在" },
     });
@@ -247,6 +438,8 @@ describe("unified knowledge node workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "预览修改" }));
     expect(screen.getByText("原有企业介绍。")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "取消编辑" }));
+    expect(screen.getByRole("button", { name: "直接编辑" })).toBeVisible();
+    await closeDetails();
     expect(
       screen.getByRole("navigation", { name: "知识节点目录" }),
     ).toBeVisible();
@@ -501,15 +694,14 @@ describe("unified knowledge node workspace", () => {
     expect(getUnsavedWorkspaceDrafts().map((item) => item.label)).toContain(
       "知识节点：企业简介",
     );
-    fireEvent.click(screen.getByRole("button", { name: /打开目录/ }));
-    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    switchNode("1.2");
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("当前节点有未保存修改")).toBeVisible();
     fireEvent.click(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(
       screen.getByRole("textbox", { name: "编辑企业简介正文" }),
     ).toHaveValue("未保存修改");
-    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    switchNode("1.2");
     fireEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", {
         name: "放弃修改",
@@ -600,7 +792,7 @@ describe("unified knowledge node workspace", () => {
     vi.stubGlobal("fetch", fetcher);
     renderWorkspace();
     await waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
-    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    switchNode("1.2");
     await screen.findByText("产品服务正文。");
     await act(async () => resolveFirst(details()));
     expect(screen.queryByText("原有企业介绍。")).not.toBeInTheDocument();
@@ -623,13 +815,13 @@ describe("unified knowledge node workspace", () => {
       "fetch",
       vi.fn(async () => json(limited)),
     );
-    const { container } = renderWorkspace();
+    renderWorkspace();
     await screen.findByText("当前仅有部分内容，暂不可编辑。");
     expect(screen.getByRole("button", { name: "直接编辑" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "AI 修改" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "本地图片" })).toBeDisabled();
-    expect(container.querySelector("script")).toBeNull();
-    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(document.body.querySelector("script")).toBeNull();
+    expect(document.body.querySelector('a[href^="javascript:"]')).toBeNull();
   });
 
   it("keeps the development preview read-only without making network calls", async () => {
@@ -654,6 +846,7 @@ describe("unified knowledge node workspace", () => {
         />
       </StrictMode>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "企业简介 当前节点" }));
     await screen.findByText("原有企业介绍。");
     expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled();
     expect(
@@ -693,6 +886,7 @@ describe("unified knowledge node workspace", () => {
         mode: "ai",
       }),
     );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
     await screen.findByText("产品服务正文。");
     expect(target).toHaveBeenCalledTimes(1);
@@ -721,6 +915,8 @@ describe("unified knowledge node workspace", () => {
         resetRevision={3}
       />,
     );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "企业简介 当前节点" }));
     expect(await screen.findByText("新构建正文。")).toBeVisible();
     expect(screen.queryByDisplayValue("旧构建草稿")).not.toBeInTheDocument();
     expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);

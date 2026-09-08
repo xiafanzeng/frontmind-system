@@ -6,12 +6,30 @@ import { canonicalKnowledgeWorkspaceUrl, operatorRouteForView, operatorViewFromR
 const project: EnterpriseProjectView = { id: "project-a", name: "企业甲", ownerUserId: 1, revision: 1 };
 const sidebarProps = () => ({ projects: [project], activeProject: project, activeEntry: "project" as const, collapsed: false, onCollapse: vi.fn(), onNavigate: vi.fn(), onSelectProject: vi.fn(), onCreateProject: vi.fn().mockResolvedValue(undefined), onRenameProject: vi.fn().mockResolvedValue(undefined), onDeleteProject: vi.fn().mockResolvedValue(undefined) });
 async function chooseProjectAction(name: string) {
-  fireEvent.keyDown(screen.getByRole("button", { name: "项目管理" }), { key: "Enter" });
-  fireEvent.click(await screen.findByRole("menuitem", { name }));
+  if (name === "新建企业项目") {
+    fireEvent.click(screen.getByRole("button", { name }));
+  } else {
+    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业甲" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: name.replace("当前", "") }));
+  }
   return screen.findByRole("dialog");
 }
 
 describe("operator workspace navigation", () => {
+  it("never presents an empty project hint during loading or a failed initial request, and retains known rows while refreshing", () => {
+    const props = sidebarProps();
+    const view = render(<OperatorSidebar {...props} projects={[]} activeProject={undefined} projectsLoading />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取企业项目");
+    expect(screen.queryByText(/点击上方加号新建企业项目/)).toBeNull();
+    view.rerender(<OperatorSidebar {...props} projects={[]} activeProject={undefined} projectsError="连接失败" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("企业项目暂时无法读取");
+    expect(screen.queryByText(/点击上方加号新建企业项目/)).toBeNull();
+    view.rerender(<OperatorSidebar {...props} projectsLoading />);
+    expect(screen.getByRole("button", { name: "企业甲" })).toBeVisible();
+    expect(screen.queryByRole("status")).toBeNull();
+    view.rerender(<OperatorSidebar {...props} projects={[]} activeProject={undefined} />);
+    expect(screen.getByText(/点击上方加号新建企业项目/)).toBeVisible();
+  });
   it("reveals a full project name on keyboard focus without selecting it", async () => {
     vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
     const props = sidebarProps();
@@ -48,14 +66,16 @@ describe("operator workspace navigation", () => {
     expect(screen.getByText("AI智能品牌优化")).toBeInTheDocument();
   });
 
-  it("reuses the FrontMind logo and puts project actions inside project management", async () => {
+  it("opens creation directly from the plus button and reuses the FrontMind logo", async () => {
     const props = sidebarProps();
     render(<OperatorSidebar {...props} projects={[]} activeProject={undefined} />);
     expect(screen.getByRole("img", { name: "FrontMind" })).toHaveAttribute("src", "/frontmind-contract-logo-white.svg");
     expect(screen.queryByText(/MindPromise|智诺|AI智能品牌优化方案/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "新建企业项目" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建企业项目" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "项目管理" })).not.toBeInTheDocument();
     const dialog = await chooseProjectAction("新建企业项目");
     expect(dialog.closest("aside")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: " 企业乙 " } });
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -86,7 +106,7 @@ describe("operator workspace navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(props.onDeleteProject).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "项目管理" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "管理项目：企业甲" })).toHaveFocus();
     await chooseProjectAction("删除当前项目");
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -123,7 +143,7 @@ describe("operator workspace navigation", () => {
     expect(within(screen.getByRole("dialog")).getByText("企业甲")).toBeInTheDocument();
   });
 
-  it("keeps project management and empty-state creation available when collapsed", async () => {
+  it("keeps direct creation and empty-state creation available when collapsed", async () => {
     const props = sidebarProps();
     render(<OperatorSidebar {...props} collapsed />);
     expect(screen.getByRole("complementary")).toHaveAttribute("data-collapsed", "true");

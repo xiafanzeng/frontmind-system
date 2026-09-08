@@ -29,7 +29,7 @@ function ActivityLine({ item }: { item: ExecutionDisplayEntry }) {
         ? Check
         : Circle;
   return (
-    <div className="flex min-w-0 items-center gap-2 py-1 text-xs leading-5 text-muted-foreground">
+    <div className="flex min-w-0 items-center gap-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground">
       <Icon
         aria-hidden
         className={`h-3 w-3 shrink-0 ${spinning ? "animate-spin" : ""}`}
@@ -68,13 +68,13 @@ function ActivityGroup({
     <div>
       <button
         type="button"
-        className="flex items-center gap-1.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+        className="flex items-center gap-1 py-0.5 text-left text-[10px] leading-4 text-muted-foreground hover:text-foreground"
         aria-expanded={expanded}
         onClick={() => (onToggle ? onToggle() : setExpanded((value) => !value))}
       >
         <ChevronRight
           aria-hidden
-          className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+          className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
         />
         <span>
           {items.length} 项工具调用 · 已完成 {completed} · 失败 {failed}
@@ -116,7 +116,7 @@ export function GeneralExecutionActivity({
     else groups.push([item]);
   }
   return (
-    <div className="my-2 pl-1" aria-label="执行过程">
+    <div className="-mt-4 mb-2 pl-1 first:mt-0" aria-label="执行过程">
       {groups.map((group) => (
         <ActivityGroup
           key={group[0]!.id}

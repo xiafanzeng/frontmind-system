@@ -535,7 +535,7 @@ export async function observeManagedAiUsage(
           reservedDelta: -fromReserve,
           balanceAfter,
           key: `ai:cost:${values.id}`,
-          reason: "智谱 AI 原价用量",
+          reason: "智能体用量结算",
           referenceId: native.id,
         });
         if (

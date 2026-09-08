@@ -157,7 +157,7 @@ export default function RunConfirmationDialog({
             : attemptCount === 0
               ? "当前配置没有可执行任务，请先完善问题和平台。"
               : quoteLoading
-                ? "正在按官方资费计算本次最大预计费用。"
+                ? "正在按FrontMind 资费计算本次最大预计费用。"
                 : quoteError || !hasQuote
                   ? "暂无法获取官方费用估算，请稍后重试。"
                   : shortfall

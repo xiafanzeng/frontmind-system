@@ -34,7 +34,7 @@ export default function SettingsDialog({
           <DialogDescription className="text-sm leading-6 text-muted-foreground">
             {systemAdministrator
               ? "请前往“API 与人员管理”统一配置所有账号智谱 API Key，并查看近 30 天 Token 用量。"
-              : "API Key 由系统管理员统一维护，您可以直接使用当前账号已开放的功能。"}
+              : "FrontMind 智能服务由系统管理员统一维护，您可以直接使用当前账号已开放的功能。"}
           </DialogDescription>
         </DialogHeader>
         {systemAdministrator && (

@@ -27,7 +27,10 @@ import { createDatabase } from "../../../packages/monitoring-db/src/client";
 import { MonitoringRepository } from "../../../packages/monitoring-db/src/repositories";
 import { PublishingRepository } from "../../../packages/monitoring-db/src/publisher-repository";
 import { dashboardMonitoringUserId } from "../../../packages/monitoring-db/src/dashboard-account-links";
-import { accountActivityOutputSchema } from "../../../packages/monitoring-contracts/src/billing";
+import {
+  accountActivityOutputSchema,
+  accountActivityPageOutputSchema,
+} from "../../../packages/monitoring-contracts/src/billing";
 import {
   authorizeManagedAiCommand,
   observeManagedAiUsage,
@@ -475,6 +478,76 @@ const url = process.env.FRONTMIND_FINANCE_TEST_MYSQL_URL;
       ]);
       expect(await repository.listAccountActivity(other)).toEqual([]);
     });
+    it("paginates the complete account history and filtered AI consumption beyond 100 entries", async () => {
+      const values: unknown[] = [];
+      const placeholders = Array.from({ length: 117 }, (_, index) => {
+        values.push(
+          `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          index === 116 ? other : owner,
+          "test-command",
+          index < 115 ? "consume" : "reserve",
+          index < 115 ? -1 : 0,
+          index < 115 ? 0 : 10,
+          19999 - index,
+          "智谱 AI 原价用量",
+          `pagination:${index}`,
+          "2026-09-08 00:00:00",
+        );
+        return "(?,?,?,?,?,?,?,?,?,?)";
+      });
+      await query(
+        `INSERT INTO ai_wallet_ledger(id,user_id,command_id,type,balance_delta_ten_thousandths,reserved_delta_ten_thousandths,balance_after_ten_thousandths,reason,idempotency_key,created_at) VALUES ${placeholders.join(",")}`,
+        values,
+      );
+      const repository = new MonitoringRepository(domainDb.db);
+      const pages = await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          repository.listAccountActivityPage(owner, {
+            source: "ai",
+            page: index + 1,
+          }),
+        ),
+      );
+      pages.forEach((page) => accountActivityPageOutputSchema.parse(page));
+      expect(pages.map((page) => page.items.length)).toEqual([
+        ...Array(11).fill(10),
+        5,
+      ]);
+      expect(
+        pages.every((page) => page.total === 115 && page.pageSize === 10),
+      ).toBe(true);
+      const items = pages.flatMap((page) => page.items);
+      expect(new Set(items.map((item) => item.id)).size).toBe(115);
+      expect(items[0]?.id).toBe("00000000-0000-4000-8000-000000000114");
+      expect(items.at(-1)?.id).toBe("00000000-0000-4000-8000-000000000000");
+      expect(
+        items.every(
+          (item) => item.type === "consume" && item.reason === "智能体用量结算",
+        ),
+      ).toBe(true);
+      const all = await repository.listAccountActivityPage(owner);
+      expect(all.total).toBe(116);
+      expect(all.items[0]?.type).toBe("reserve");
+      expect(
+        await repository.listAccountActivityPage(owner, {
+          source: "ai",
+          page: 999,
+        }),
+      ).toMatchObject({ page: 12, total: 115 });
+      expect(
+        await repository.listAccountActivityPage(owner, {
+          source: "monitoring",
+          page: 5,
+        }),
+      ).toEqual({ page: 1, total: 0, pageSize: 10, items: [] });
+      expect(
+        await repository.listAccountActivityPage(other, { source: "ai" }),
+      ).toMatchObject({ total: 0, items: [] });
+      // Historical ledger entries are retained for reconciliation; only their customer presentation changes.
+      expect(
+        (await query("SELECT DISTINCT reason FROM ai_wallet_ledger"))[0].reason,
+      ).toBe("智谱 AI 原价用量");
+    });
     it("does not release a running session based on a stale idle event", async () => {
       await authorizeManagedAiCommand(input);
       const request = observation();
@@ -566,19 +639,33 @@ const url = process.env.FRONTMIND_FINANCE_TEST_MYSQL_URL;
     });
 
     it("blocks new authorization after project deletion while still accounting for late incurred usage", async () => {
-      await query("UPDATE agent_operations SET enterpriseProjectId='project-a' WHERE id='op-1'");
+      await query(
+        "UPDATE agent_operations SET enterpriseProjectId='project-a' WHERE id='op-1'",
+      );
       const identity = { ...input.identity, enterpriseProjectId: "project-a" };
-      const usage = { input_tokens: 1000, output_tokens: 0, cache_read_input_tokens: 0 };
+      const usage = {
+        input_tokens: 1000,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+      };
       await authorizeManagedAiCommand({ ...input, identity });
       await observeManagedAiUsage({ ...observation(1, usage), identity });
-      await query("UPDATE enterprise_projects SET archivedAt=NOW() WHERE id='project-a'");
+      await query(
+        "UPDATE enterprise_projects SET archivedAt=NOW() WHERE id='project-a'",
+      );
       try {
-        await expect(authorizeManagedAiCommand({ ...input, identity, commandKey: "new" })).rejects.toThrow("AI_BILLING_PROJECT_OWNERSHIP");
+        await expect(
+          authorizeManagedAiCommand({ ...input, identity, commandKey: "new" }),
+        ).rejects.toThrow("AI_BILLING_PROJECT_OWNERSHIP");
         await observeManagedAiUsage({ ...observation(2, usage), identity });
         expect(Number((await wallet()).balance_ten_thousandths)).toBe(19840);
-        expect((await query("SELECT * FROM ai_charge_commands")).length).toBe(1);
+        expect((await query("SELECT * FROM ai_charge_commands")).length).toBe(
+          1,
+        );
       } finally {
-        await query("UPDATE enterprise_projects SET archivedAt=NULL WHERE id='project-a'");
+        await query(
+          "UPDATE enterprise_projects SET archivedAt=NULL WHERE id='project-a'",
+        );
       }
     });
 

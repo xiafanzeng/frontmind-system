@@ -107,7 +107,7 @@ describe("SettingsDialog", () => {
 
     expect(screen.getByText("智能服务设置")).toBeInTheDocument();
     expect(
-      screen.getByText(/API Key.*由系统管理员统一维护/),
+      screen.getByText(/FrontMind 智能服务.*由系统管理员统一维护/),
     ).toBeInTheDocument();
     expect(screen.queryByText("API Key 使用教程")).not.toBeInTheDocument();
     expect(screen.queryByText("当前 Key 本月总积分")).not.toBeInTheDocument();

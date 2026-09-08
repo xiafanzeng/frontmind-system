@@ -963,7 +963,7 @@ export function knowledgeBaseUpstreamModelForCredential(credential: {
   }
   throw new KnowledgeBaseLocalPreparationError(
     "KNOWLEDGE_BASE_CREDENTIAL_PROFILE_MISSING",
-    "知识库任务缺少已冻结的 Base/Pro 模型配置",
+    "当前知识库任务缺少 FrontMind 服务配置，请联系管理员处理",
   );
 }
 
@@ -2603,7 +2603,7 @@ async function ensureKnowledgeBaseRecoveryDispatch(input: {
   if (recordedAgentProfile && recordedAgentProfile !== agentProfile) {
     throw new KnowledgeBaseLocalPreparationError(
       "KNOWLEDGE_BASE_CREDENTIAL_PROFILE_CHANGED",
-      "知识库任务冻结的模型配置与凭证版本不一致",
+      "当前知识库任务的 FrontMind 服务配置已变更，请联系管理员处理",
     );
   }
   const stagedIds = [...claim.turn.attachmentFileIds];

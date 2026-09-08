@@ -76,6 +76,16 @@ export const accountActivityOutputSchema = z.object({
   referenceId: z.string().nullable(),
   createdAt: z.coerce.date(),
 });
+export const accountActivityPageInputSchema = z.object({
+  page: z.number().int().min(1).max(1_000_000).default(1),
+  source: accountConsumptionSourceSchema.optional(),
+});
+export const accountActivityPageOutputSchema = z.object({
+  items: z.array(accountActivityOutputSchema).max(10),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.literal(10),
+});
 
 export const billingSummaryOutputSchema = z.object({
   userId: idSchema,

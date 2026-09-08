@@ -20,14 +20,12 @@ import {
   bankTransferInputForApi,
   mapAdminBankTransfer,
   mapAdminBillingUser,
-  mapBillingLedgerViews,
   mapBillingActivityViews,
   mapBillingPaymentMethodViews,
   mapBillingPricingViews,
   mapBillingSummaryView,
   mapBillingTopupView,
   mapMediaPublishingBillingSummaryView,
-  mapMediaPublishingLedgerViews,
 } from "./billingAdapters";
 import { formatCnyTenThousandths } from "./billingView";
 import {
@@ -313,26 +311,18 @@ function ServerBackedWorkspace({
       enabled: settingsEnabled && publishingEnabled,
       refetchInterval: settingsEnabled && publishingEnabled ? 10_000 : false,
     });
-  const billingActivityQuery = trpc.billing.activity.useQuery({ limit: 100 }, { enabled: settingsEnabled, refetchInterval: settingsEnabled ? 10_000 : false });
+  const [activityRequest, setActivityRequest] = useState<{ page: number; source?: "monitoring" | "media_publishing" | "ai" }>({ page: 1 });
+  const billingActivityQuery = trpc.billing.activityPage.useQuery(activityRequest, { enabled: settingsEnabled, refetchInterval: settingsEnabled ? 10_000 : false });
   const billingPricingQuery = trpc.billing.pricing.useQuery(undefined, {
     enabled: settingsEnabled,
   });
   const billingMethodsQuery = trpc.billing.methods.useQuery(undefined, {
     enabled: settingsEnabled,
   });
-  const billingLedgerQuery = trpc.billing.ledger.useQuery(
-    { limit: 100 },
-    { enabled: settingsEnabled },
-  );
   const topupOrdersQuery = trpc.billing.topups.list.useQuery(
     { limit: 10 },
     { enabled: settingsEnabled },
   );
-  const mediaPublishingLedgerQuery =
-    trpc.mediaPublishing.billing.ledger.useQuery(
-      { limit: 100 },
-      { enabled: settingsEnabled && publishingEnabled },
-    );
   const mediaPublishingTopupOrdersQuery =
     trpc.mediaPublishing.billing.topups.list.useQuery(
       { limit: 10 },
@@ -545,6 +535,7 @@ function ServerBackedWorkspace({
     await Promise.all([
       utils.billing.summary.invalidate(),
       utils.billing.ledger.invalidate(),
+      utils.billing.activityPage.invalidate(),
       utils.billing.topups.list.invalidate(),
       activeTopup?.id
         ? utils.billing.topups.status.invalidate({ orderId: activeTopup.id })
@@ -555,6 +546,7 @@ function ServerBackedWorkspace({
     await Promise.all([
       utils.mediaPublishing.billing.summary.invalidate(),
       utils.mediaPublishing.billing.ledger.invalidate(),
+      utils.billing.activityPage.invalidate(),
       utils.mediaPublishing.billing.topups.list.invalidate(),
       mediaPublishingActiveTopup?.id
         ? utils.mediaPublishing.billing.topups.status.invalidate({
@@ -654,11 +646,10 @@ function ServerBackedWorkspace({
     billingSummaryQuery.error,
     billingPricingQuery.error,
     billingMethodsQuery.error,
-    billingLedgerQuery.error,
+    billingActivityQuery.error,
     topupOrdersQuery.error,
     topupStatusQuery.error,
     mediaPublishingSummaryQuery.error,
-    mediaPublishingLedgerQuery.error,
     mediaPublishingTopupOrdersQuery.error,
     mediaPublishingTopupStatusQuery.error,
   ].find(Boolean)?.message;
@@ -755,7 +746,7 @@ function ServerBackedWorkspace({
                 billingSummaryQuery.isPending ||
                 billingPricingQuery.isPending ||
                 billingMethodsQuery.isPending ||
-                billingLedgerQuery.isPending
+                billingActivityQuery.isPending
               }
               billingError={settingsBillingError}
               summary={billing}
@@ -763,11 +754,13 @@ function ServerBackedWorkspace({
               pricing={mapBillingPricingViews(
                 billingPricingQuery.data?.items || [],
               )}
-              ledger={mapBillingLedgerViews(billingLedgerQuery.data || [])}
-              activity={billingActivityQuery.data ? mapBillingActivityViews(billingActivityQuery.data) : undefined}
-              mediaPublishingLedger={mapMediaPublishingLedgerViews(
-                mediaPublishingLedgerQuery.data || [],
-              )}
+              activity={mapBillingActivityViews(billingActivityQuery.data?.items ?? [])}
+              activityTotal={billingActivityQuery.data?.total ?? 0}
+              activityPage={billingActivityQuery.data?.page ?? activityRequest.page}
+              activityLoading={billingActivityQuery.isFetching}
+              activityFilter={activityRequest.source ?? "all"}
+              onActivityPageChange={(page) => setActivityRequest(current => ({ ...current, page }))}
+              onActivityFilterChange={(source) => setActivityRequest({ page: 1, ...(source === "all" ? {} : { source }) })}
               paymentMethods={paymentMethodViews}
               activeTopup={settingsTopup}
               mediaPublishingActiveTopup={settingsMediaPublishingTopup}

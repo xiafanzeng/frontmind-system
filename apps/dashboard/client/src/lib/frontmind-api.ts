@@ -70,7 +70,7 @@ export type GeneralAgentModelProfile = (typeof MODEL_OPTIONS)[number]["value"];
 export function getModelDisplayName(modelValue: string | undefined): string {
   if (!modelValue) return "FrontMind Agent";
   const found = MODEL_OPTIONS.find((m) => m.value === modelValue);
-  return found ? found.label : sanitizeBrandText(modelValue);
+  return found ? found.label : "FrontMind Agent";
 }
 
 // Non-sensitive, device-local display preference. API credentials are stored

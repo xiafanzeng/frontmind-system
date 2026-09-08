@@ -1304,7 +1304,7 @@ describe("Manus SiteOps provider boundary", () => {
           { provider, apiKey: "retired" } as never,
           createClient,
         ),
-      ).toThrow("请配置智谱凭证");
+      ).toThrow("请联系管理员更新 FrontMind 服务配置");
       expect(createClient).not.toHaveBeenCalled();
     },
   );

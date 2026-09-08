@@ -877,7 +877,7 @@ function KnowledgeActivityPanel({
                 >
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-xs font-semibold text-[#484057]">
-                      {sanitizeBrandText(turn.model || "模型未记录")}
+                      FrontMind 智能体
                     </span>
                     <span className="text-xs text-[#857e91]">
                       {sanitizeBrandText(turn.status)}

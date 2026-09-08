@@ -1,4 +1,4 @@
-import { accountActivityInputSchema, accountActivityOutputSchema } from "@frontmind/monitoring-contracts";
+import { accountActivityInputSchema, accountActivityOutputSchema, accountActivityPageInputSchema, accountActivityPageOutputSchema } from "@frontmind/monitoring-contracts";
 import {
   adminBankTransferOutputSchema,
   adminBillingAdjustmentInputSchema,
@@ -1316,6 +1316,8 @@ export const appRouter = t.router({
   billing: t.router({
     activity: customerProcedure.input(accountActivityInputSchema.optional()).output(z.array(accountActivityOutputSchema))
       .query(({ctx,input})=>translateRepositoryErrors(()=>ctx.repository.listAccountActivity(ctx.user.id,input))),
+    activityPage: customerProcedure.input(accountActivityPageInputSchema).output(accountActivityPageOutputSchema)
+      .query(({ctx,input})=>translateRepositoryErrors(()=>ctx.repository.listAccountActivityPage(ctx.user.id,input))),
 
     summary: customerProcedure
       .output(billingSummaryOutputSchema)

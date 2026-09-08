@@ -1161,7 +1161,7 @@ export async function ensureKnowledgeBaseManusV2Attachments(input: {
   if (input.credential.provider !== "zhipu") {
     throw new KnowledgeBaseLocalPreparationError(
       "RESET_REQUIRED",
-      "请配置智谱凭证，重置后重新上传资料并开始新构建",
+      "请联系管理员完成智能服务配置，重置后重新上传资料并开始新构建",
     );
   }
   const client = createDashboardAgentClient({

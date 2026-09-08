@@ -553,10 +553,8 @@ describe("ConversationProvider cloud hydration", () => {
     const message = restored.result.current.state.conversations[0].messages[0];
     expect(message.content).toBe("尚未保存的消息");
     expect(message.attachments?.[0]).toMatchObject({ file, blobUrl: "blob:scope-draft" });
-    expect(restored.result.current.syncError).toContain("消息和附件已保留");
-    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1);
-    await act(async () => { expect(await restored.result.current.flushConversation("account-1")).toBe(true); });
-    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2);
+    expect(restored.result.current.syncError).toBeNull();
+    await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2));
     expect(mocks.syncSnapshot.mock.calls[1][0].conversation.messages[0].content).toBe("尚未保存的消息");
     restored.unmount();
     expect(revoke).toHaveBeenCalledWith("blob:scope-draft");
@@ -577,9 +575,87 @@ describe("ConversationProvider cloud hydration", () => {
     const restored = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
     expect(restored.result.current.state.conversations).toEqual([]);
-    expect(mocks.deleteConversation).not.toHaveBeenCalled();
-    await act(async () => { expect(await restored.result.current.flushConversation("account-1")).toBe(true); });
+    expect(restored.result.current.syncError).toBeNull();
     expect(mocks.deleteConversation).toHaveBeenCalledWith({ id: "account-1" });
+  });
+
+  it("settles a restored delete whose earlier response was lost after the server deleted it", async () => {
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    act(() => first.result.current.deleteConversation("account-1"));
+    first.unmount();
+    mocks.listRefetch.mockResolvedValue({ data: [] });
+    mocks.deleteConversation.mockRejectedValueOnce(Object.assign(new Error("会话不存在"), {
+      data: { code: "NOT_FOUND" },
+    }));
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    expect(mocks.deleteConversation).toHaveBeenCalledTimes(1);
+    expect(restored.result.current.syncError).toBeNull();
+    await act(async () => { await restored.result.current.refreshConversations(); });
+    expect(mocks.deleteConversation).toHaveBeenCalledTimes(1);
+    expect(restored.result.current.state.conversations).toEqual([]);
+  });
+
+  it("keeps a restored draft and attachment when its automatic save really fails", async () => {
+    const file = new File(["draft"], "draft.txt", { type: "text/plain" });
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    act(() => first.result.current.addMessage("account-1", {
+      id: "unsaved-message",
+      role: "user",
+      content: "恢复失败仍需保留",
+      timestamp: Date.now(),
+      attachments: [{ id: "unsaved-file", type: "file", name: "draft.txt", file }],
+    }));
+    first.unmount();
+    mocks.syncSnapshot.mockRejectedValueOnce(Object.assign(new Error("保存被拒绝"), {
+      data: { code: "FORBIDDEN" },
+    }));
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.syncError).toContain("消息和附件已保留"));
+    expect(restored.result.current.activeConversation?.messages[0]).toMatchObject({
+      id: "unsaved-message",
+      content: "恢复失败仍需保留",
+      attachments: [{ file }],
+    });
+    await act(async () => {
+      expect(await restored.result.current.flushConversation("account-1")).toBe(true);
+    });
+    expect(restored.result.current.syncError).toBeNull();
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not turn a server-owned knowledge-base observation into an unsaved snapshot on navigation", async () => {
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+    act(() => first.result.current.commitKnowledgeBaseObservation("account-1", {
+      generation: 1,
+      stateEpoch: 1,
+      authoritativeTaskId: "knowledge-task",
+      activeTurn: null,
+      completedTurn: null,
+      approvedPresentation: null,
+      progress: null,
+      notice: null,
+      interaction: {
+        interactionState: "executing",
+        canReply: false,
+        canPublish: false,
+        lockReason: "任务仍在执行",
+        progress: null,
+      },
+    } as any));
+    expect(first.result.current.activeConversation?.taskId).toBe("knowledge-task");
+    await act(async () => {
+      expect(await first.result.current.flushConversation("account-1")).toBe(true);
+    });
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    first.unmount();
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    expect(restored.result.current.syncError).toBeNull();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
   });
 
   it("retains a specialized blank draft across account navigation without dispatching it", async () => {
@@ -733,7 +809,7 @@ describe("ConversationProvider cloud hydration", () => {
   });
 
   it("settles a failed initial list read and can explicitly retry it", async () => {
-    mocks.listRefetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    mocks.listRefetch.mockRejectedValue(new TypeError("Failed to fetch"));
     const { result } = renderHook(() => useConversation(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -743,7 +819,9 @@ describe("ConversationProvider cloud hydration", () => {
       "会话尚未同步，消息和附件已保留。请重试，请勿重复发送。",
     );
     expect(result.current.state.conversations).toEqual([]);
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(3);
 
+    mocks.listRefetch.mockResolvedValue({ data: [conversation("account-1")] });
     await act(async () => {
       await result.current.refreshConversations();
     });
@@ -751,6 +829,36 @@ describe("ConversationProvider cloud hydration", () => {
     expect(result.current.state.conversations.map((item) => item.id)).toEqual([
       "account-1",
     ]);
+  });
+
+  it("recovers a transient initial read without showing a sync failure", async () => {
+    mocks.listRefetch.mockResolvedValueOnce({ error: new TypeError("Failed to fetch") });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    expect(result.current.loading).toBe(true);
+    expect(result.current.syncError).toBeNull();
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    expect(result.current.syncError).toBeNull();
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(2);
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not retry access failures or continue a read retry after leaving the workspace", async () => {
+    mocks.listRefetch.mockResolvedValueOnce({ error: Object.assign(new Error("forbidden"), {
+      data: { code: "FORBIDDEN" },
+    }) });
+    const denied = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(denied.result.current.loading).toBe(false));
+    expect(denied.result.current.syncError).toContain("消息和附件已保留");
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(1);
+    denied.unmount();
+
+    vi.useFakeTimers();
+    mocks.listRefetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const abandoned = renderHook(() => useConversation(), { wrapper });
+    await act(async () => { await Promise.resolve(); });
+    abandoned.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(2);
   });
 
   it("gives an invalidated initial hydration a finite retryable outcome", async () => {

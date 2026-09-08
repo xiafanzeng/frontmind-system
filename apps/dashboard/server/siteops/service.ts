@@ -3906,7 +3906,7 @@ export function freezeSiteOpsCustomerAiCredential(input: {
   if (credential.provider !== "zhipu") {
     throw new SiteOpsServiceError(
       "PROVIDER_NOT_CONFIGURED",
-      "当前账号尚未配置有效的智谱 AI 建站 API Key。",
+      "当前账号的智能建站服务尚未配置，请联系管理员。",
       412,
     );
   }

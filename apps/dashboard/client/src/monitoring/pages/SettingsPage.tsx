@@ -38,6 +38,7 @@ export type MediaPublishingBillingSummaryView = BillingSummaryView & {
   frozenTenThousandths: string;
 };
 export type WalletScope = "monitoring" | "media_publishing";
+export type BillingActivityFilter = "all" | "monitoring" | "media_publishing" | "ai";
 export type BillingPricingView = {
   id: string;
   platformType: string;
@@ -87,9 +88,13 @@ type SettingsPageProps = {
   summary?: BillingSummaryView;
   mediaPublishingSummary?: MediaPublishingBillingSummaryView;
   pricing?: BillingPricingView[];
-  ledger?: BillingLedgerEntryView[];
-  mediaPublishingLedger?: BillingLedgerEntryView[];
   activity?: BillingLedgerEntryView[];
+  activityTotal?: number;
+  activityPage?: number;
+  activityLoading?: boolean;
+  activityFilter?: BillingActivityFilter;
+  onActivityPageChange?: (page: number) => void;
+  onActivityFilterChange?: (filter: BillingActivityFilter) => void;
   paymentMethods?: BillingPaymentMethodView[];
   activeTopup?: BillingTopupView;
   mediaPublishingActiveTopup?: BillingTopupView;
@@ -189,9 +194,13 @@ export default function SettingsPage({
   summary,
   mediaPublishingSummary,
   pricing = [],
-  ledger = [],
-  mediaPublishingLedger = [],
-  activity,
+  activity = [],
+  activityTotal = 0,
+  activityPage = 1,
+  activityLoading = false,
+  activityFilter = "all",
+  onActivityPageChange,
+  onActivityFilterChange,
   paymentMethods = [],
   activeTopup,
   mediaPublishingActiveTopup,
@@ -218,25 +227,7 @@ export default function SettingsPage({
       ? mediaPublishingActiveTopup
       : activeTopup;
   const [currentTopup, setCurrentTopup] = useState(selectedActiveTopup);
-  const [consumptionFilter,setConsumptionFilter] = useState<"all"|"monitoring"|"media_publishing"|"ai">("all");
-  const combinedLedger = useMemo(
-    () =>
-      (activity ?? [
-        ...ledger.map((entry) => ({
-          ...entry,
-          walletScope: entry.walletScope ?? ("monitoring" as const),
-        })),
-        ...mediaPublishingLedger.map((entry) => ({
-          ...entry,
-          walletScope: "media_publishing" as const,
-        })),
-      ]).filter(entry=>consumptionFilter==="all" || (entry.type==="spend" && (entry.source??entry.walletScope??"monitoring")===consumptionFilter)).sort((left, right) =>
-        String(right.createdAt ?? "").localeCompare(
-          String(left.createdAt ?? ""),
-        ),
-      ),
-    [ledger, mediaPublishingLedger,activity,consumptionFilter],
-  );
+  const activityPages = Math.max(1, Math.ceil(activityTotal / 10));
   useEffect(() => setCurrentTopup(selectedActiveTopup), [selectedActiveTopup]);
 
   const openTopup = (scope: WalletScope) => {
@@ -293,8 +284,7 @@ export default function SettingsPage({
         <PricingTable rows={pricing} />
         <small className="billing-section-note">
           <Info size={13} />
-          问题监控以运行创建时资费版本为准；媒体发布以提交前 API
-          市场价快照为准。智能体依据智谱原生用量按模型官方原价计费，无加价。
+          问题监控以任务创建时的资费为准；媒体发布以提交前确认的价格为准；智能体按实际用量结算。
         </small>
       </section>
 
@@ -302,10 +292,21 @@ export default function SettingsPage({
         <SectionTitle icon={<ListChecks size={20} />} title="资金明细" />
         <div className="account-consumption-filters" aria-label="消费分类">
           {([["all","全部收支"],["monitoring","问题监控消耗"],["media_publishing","媒体投放消耗"],["ai","智能体消耗"]] as const).map(([value,label])=>(
-            <button type="button" key={value} aria-pressed={consumptionFilter===value} onClick={()=>setConsumptionFilter(value)}>{label}</button>
+            <button type="button" key={value} aria-pressed={activityFilter===value} onClick={()=>onActivityFilterChange?.(value)}>{label}</button>
           ))}
         </div>
-        <LedgerTable rows={combinedLedger} />
+        <div aria-busy={activityLoading || undefined}>
+          {activityLoading && activity.length === 0
+            ? <p role="status">正在读取资金明细…</p>
+            : <LedgerTable rows={activity} />}
+        </div>
+        <nav className="source-pagination" aria-label="资金明细分页">
+          <p>共 {activityTotal} 条 · 第 {activityPage} / {activityPages} 页 · 每页 10 条</p>
+          <div>
+            <button type="button" disabled={activityLoading || activityPage <= 1} onClick={()=>onActivityPageChange?.(activityPage - 1)}>上一页</button>
+            <button type="button" disabled={activityLoading || activityPage >= activityPages} onClick={()=>onActivityPageChange?.(activityPage + 1)}>下一页</button>
+          </div>
+        </nav>
       </section>
 
       {onChangePassword && (
@@ -443,7 +444,7 @@ function PricingTable({ rows }: { rows: BillingPricingView[] }) {
     <div
       className="billing-pricing-table"
       role="region"
-      aria-label="官方资费，可横向滚动"
+      aria-label="FrontMind 资费，可横向滚动"
       tabIndex={0}
     >
       <div className="billing-pricing-head" role="row">
@@ -503,7 +504,7 @@ function LedgerTable({ rows }: { rows: BillingLedgerEntryView[] }) {
           const positive =
             !signedAmount.startsWith("-") && signedAmount !== "0";
           return (
-            <div className="billing-ledger-row" key={entry.id} role="row">
+            <div className="billing-ledger-row" key={`${entry.source ?? entry.walletScope}:${entry.id}`} role="row">
               <span data-label="时间" role="cell">
                 {formatDateTime(entry.createdAt)}
               </span>

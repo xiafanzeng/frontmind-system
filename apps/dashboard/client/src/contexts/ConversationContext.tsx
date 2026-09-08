@@ -1673,6 +1673,17 @@ function getTrpcErrorCode(error: unknown): string | undefined {
   return typeof data?.code === "string" ? data.code : undefined;
 }
 
+function isRetryableConversationSyncError(error: unknown): boolean {
+  return ![
+    "BAD_REQUEST",
+    "CONFLICT",
+    "FORBIDDEN",
+    "NOT_FOUND",
+    "PRECONDITION_FAILED",
+    "UNAUTHORIZED",
+  ].includes(getTrpcErrorCode(error) ?? "");
+}
+
 /**
  * Convert an optimistic browser conversation into the JSON snapshot accepted by
  * the server. Browser-only File/blob/base64 values and the legacy API-key
@@ -2360,26 +2371,24 @@ export function ConversationProvider({
             ? { projectAssignmentId: projectAssignmentIdRef.current }
             : {}),
         }),
-      deleteConversation: (id) =>
-        deleteRemoteRef.current({
-          id,
-          ...(projectAssignmentIdRef.current
-            ? { projectAssignmentId: projectAssignmentIdRef.current }
-            : {}),
-        }),
+      deleteConversation: async (id) => {
+        try {
+          return await deleteRemoteRef.current({
+            id,
+            ...(projectAssignmentIdRef.current
+              ? { projectAssignmentId: projectAssignmentIdRef.current }
+              : {}),
+          });
+        } catch (error) {
+          // The previous delete may have committed before navigation aborted
+          // its response. An absent conversation satisfies that same intent.
+          if (getTrpcErrorCode(error) === "NOT_FOUND") return;
+          throw error;
+        }
+      },
       onError: (error) => setSyncError(conversationSyncErrorMessage(error)),
       onSuccess: () => setSyncError(null),
-      shouldRetry: (error) => {
-        const code = getTrpcErrorCode(error);
-        return ![
-          "BAD_REQUEST",
-          "CONFLICT",
-          "FORBIDDEN",
-          "NOT_FOUND",
-          "PRECONDITION_FAILED",
-          "UNAUTHORIZED",
-        ].includes(code ?? "");
-      },
+      shouldRetry: isRetryableConversationSyncError,
       // A write rejection is not authoritative deletion evidence. The queue
       // retains the operation as blocked/dirty for an explicit retry.
       onPermanentError: () => undefined,
@@ -2432,14 +2441,18 @@ export function ConversationProvider({
       );
       if (!after || after === before) return;
       replaceState(nextState);
-      if (canSyncRef.current) {
-        syncQueueRef.current!.enqueueSnapshot(
-          prepareConversationForCloud(after),
-        );
-      } else {
-        syncQueueRef.current!.restorePending([
-          { kind: "snapshot", conversation: prepareConversationForCloud(after) },
-        ]);
+      // An observation is already persisted by the knowledge-base service.
+      // Reading it must not create a browser write (and an unsaved draft on
+      // navigation). Only refresh a snapshot when real local edits are pending.
+      if (syncQueueRef.current!.isDirty(conversationId)) {
+        const snapshot = prepareConversationForCloud(after);
+        if (canSyncRef.current) {
+          syncQueueRef.current!.enqueueSnapshot(snapshot);
+        } else {
+          syncQueueRef.current!.restorePending([
+            { kind: "snapshot", conversation: snapshot },
+          ]);
+        }
       }
       dispatchKnowledgeBaseProgressUpdated(observation);
     },
@@ -2620,8 +2633,31 @@ export function ConversationProvider({
       }
 
       try {
-        const result = await listRefetchRef.current();
-        if (result.error) throw result.error;
+        const readConversations = async () => {
+          for (let attempt = 0; ; attempt += 1) {
+            if (
+              accountIdRef.current !== expectedUserId ||
+              hydrationGenerationRef.current !== generation
+            ) {
+              return null;
+            }
+            try {
+              const result = await listRefetchRef.current();
+              if (result.error) throw result.error;
+              return result;
+            } catch (error) {
+              if (attempt >= 2 || !isRetryableConversationSyncError(error)) {
+                throw error;
+              }
+              // A brief connection interruption during navigation should settle
+              // automatically. Retrying this read never resends a user message.
+              await new Promise((resolve) =>
+                setTimeout(resolve, 250 * 2 ** attempt),
+              );
+            }
+          }
+        };
+        const result = await readConversations();
         if (accountIdRef.current !== expectedUserId) {
           return;
         }
@@ -2637,6 +2673,7 @@ export function ConversationProvider({
           }
           return;
         }
+        if (!result) return;
 
         const remoteConversations = (result.data ?? [])
           .filter(
@@ -2692,10 +2729,11 @@ export function ConversationProvider({
             );
           }
         }
-        if (restoredPendingIdsRef.current.size > 0) {
-          setSyncError("会话尚未同步，消息和附件已保留。请重试，请勿重复发送。");
-          restoredPendingIdsRef.current.clear();
-        }
+        restoredPendingIdsRef.current.clear();
+        // Restored saves/deletes are the same idempotent operations, scoped to
+        // the same authenticated workspace. Resume them once its read succeeds;
+        // retaining a draft during navigation is not itself a sync failure.
+        if (initial) void syncQueueRef.current!.flushAll();
       } catch (error: unknown) {
         if (
           accountIdRef.current === expectedUserId &&

@@ -242,7 +242,7 @@ describe("CustomerDashboardMirror", () => {
             turns: [
               {
                 id: "turn-1",
-                model: "FrontMind Agent",
+                model: "glm-5.3",
                 status: "completed",
                 durationMs: 12_000,
               },
@@ -260,7 +260,8 @@ describe("CustomerDashboardMirror", () => {
     );
 
     expect(screen.getByText("当前知识库构建")).toBeInTheDocument();
-    expect(screen.getByText("FrontMind Agent")).toBeInTheDocument();
+    expect(screen.getByText("FrontMind 智能体")).toBeInTheDocument();
+    expect(screen.queryByText("glm-5.3")).not.toBeInTheDocument();
     expect(screen.getByText("已完成资料核验。")).toBeInTheDocument();
     expect(screen.getByText("知识库构建进度用户页")).toBeInTheDocument();
   });

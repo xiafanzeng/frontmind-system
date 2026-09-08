@@ -104,7 +104,7 @@ describe("knowledge base execution provider", () => {
           provider,
           upstreamModel: "manus-1.6-max",
         }),
-      ).toThrow("已冻结");
+      ).toThrow("FrontMind 服务配置");
     }
   });
 });

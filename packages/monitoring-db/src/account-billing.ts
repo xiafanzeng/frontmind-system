@@ -38,17 +38,59 @@ export async function readAccountActivity(
   input: { limit?: number; source?: ConsumptionSource } = {},
 ) {
   const limit = Math.max(1, Math.min(500, input.limit ?? 100));
+  return readAccountActivityRows(db, userId, { ...input, limit });
+}
+
+function activitySources(source?: ConsumptionSource) {
+  return (["monitoring", "media_publishing", "ai"] as const).filter(
+    (value) => !source || value === source,
+  );
+}
+
+/** Customer presentation only; immutable ledger reasons remain available to administrators. */
+export function customerAccountActivityReason(
+  source: ConsumptionSource,
+  type: string,
+  reason: string,
+) {
+  if (source !== "ai") return reason;
+  return (
+    (
+      {
+        consume: "智能体用量结算",
+        reserve: "智能体任务预留",
+        release: "智能体未使用预留释放",
+      } as Record<string, string>
+    )[type] ?? reason
+  );
+}
+
+async function readAccountActivityRows(
+  db: Pick<Database, "execute">,
+  userId: string,
+  input: { limit: number; offset?: number; source?: ConsumptionSource },
+) {
+  const consumption = input.source ? sql`AND type='consume'` : sql``;
+  const branches = {
+    monitoring: sql`SELECT id,'monitoring' AS source,type,balance_delta_ten_thousandths AS balanceDeltaTenThousandths,
+      reserved_delta_ten_thousandths AS reservedDeltaTenThousandths,0 AS frozenDeltaTenThousandths,
+      balance_after_ten_thousandths AS balanceAfterTenThousandths,reason,reference_type AS referenceType,reference_id AS referenceId,created_at AS createdAt
+      FROM money_ledger WHERE user_id=${userId} ${consumption}`,
+    media_publishing: sql`SELECT id,'media_publishing' AS source,type,balance_delta_ten_thousandths AS balanceDeltaTenThousandths,
+      reserved_delta_ten_thousandths AS reservedDeltaTenThousandths,frozen_delta_ten_thousandths AS frozenDeltaTenThousandths,
+      balance_after_ten_thousandths AS balanceAfterTenThousandths,reason,reference_type AS referenceType,reference_id AS referenceId,created_at AS createdAt
+      FROM media_publishing_ledger WHERE owner_id=${userId} ${consumption}`,
+    ai: sql`SELECT id,'ai' AS source,type,balance_delta_ten_thousandths AS balanceDeltaTenThousandths,
+      reserved_delta_ten_thousandths AS reservedDeltaTenThousandths,0 AS frozenDeltaTenThousandths,
+      balance_after_ten_thousandths AS balanceAfterTenThousandths,reason,'ai_command' AS referenceType,command_id AS referenceId,created_at AS createdAt
+      FROM ai_wallet_ledger WHERE user_id=${userId} ${consumption}`,
+  };
   const [rows] = (await db.execute(sql`
-    SELECT * FROM (
-      SELECT id,'monitoring' AS source,type,balance_delta_ten_thousandths AS balanceDeltaTenThousandths,
-       reserved_delta_ten_thousandths AS reservedDeltaTenThousandths,0 AS frozenDeltaTenThousandths,
-       balance_after_ten_thousandths AS balanceAfterTenThousandths,reason,reference_type AS referenceType,reference_id AS referenceId,created_at AS createdAt
-       FROM money_ledger WHERE user_id=${userId}
-      UNION ALL SELECT id,'media_publishing',type,balance_delta_ten_thousandths,reserved_delta_ten_thousandths,frozen_delta_ten_thousandths,
-       balance_after_ten_thousandths,reason,reference_type,reference_id,created_at FROM media_publishing_ledger WHERE owner_id=${userId}
-      UNION ALL SELECT id,'ai',type,balance_delta_ten_thousandths,reserved_delta_ten_thousandths,0,
-       balance_after_ten_thousandths,reason,'ai_command',command_id,created_at FROM ai_wallet_ledger WHERE user_id=${userId}
-    ) activity ${input.source ? sql`WHERE source=${input.source} AND type='consume'` : sql``} ORDER BY createdAt DESC,id DESC LIMIT ${limit}
+    SELECT * FROM (${sql.join(
+      activitySources(input.source).map((source) => branches[source]),
+      sql` UNION ALL `,
+    )}) activity
+    ORDER BY createdAt DESC,id DESC,source DESC LIMIT ${input.limit} OFFSET ${input.offset ?? 0}
   `)) as unknown as [Array<Record<string, unknown>>];
   return rows.map((row) => ({
     id: String(row.id),
@@ -58,7 +100,11 @@ export async function readAccountActivity(
     reservedDeltaTenThousandths: String(row.reservedDeltaTenThousandths),
     frozenDeltaTenThousandths: String(row.frozenDeltaTenThousandths),
     balanceAfterTenThousandths: String(row.balanceAfterTenThousandths),
-    reason: String(row.reason),
+    reason: customerAccountActivityReason(
+      row.source as ConsumptionSource,
+      String(row.type),
+      String(row.reason),
+    ),
     referenceType:
       row.referenceType === null ? null : String(row.referenceType),
     referenceId: row.referenceId === null ? null : String(row.referenceId),
@@ -67,4 +113,37 @@ export async function readAccountActivity(
         ? row.createdAt
         : new Date(String(row.createdAt)),
   }));
+}
+
+export async function readAccountActivityPage(
+  db: Database,
+  userId: string,
+  input: { page?: number; source?: ConsumptionSource } = {},
+) {
+  return db.transaction(async (tx) => {
+    const consumption = input.source ? sql`AND type='consume'` : sql``;
+    const counts = {
+      monitoring: sql`SELECT COUNT(*) AS total FROM money_ledger WHERE user_id=${userId} ${consumption}`,
+      media_publishing: sql`SELECT COUNT(*) AS total FROM media_publishing_ledger WHERE owner_id=${userId} ${consumption}`,
+      ai: sql`SELECT COUNT(*) AS total FROM ai_wallet_ledger WHERE user_id=${userId} ${consumption}`,
+    };
+    const [rows] = (await tx.execute(sql`SELECT SUM(total) AS total FROM (
+      ${sql.join(
+        activitySources(input.source).map((source) => counts[source]),
+        sql` UNION ALL `,
+      )}
+    ) counts`)) as unknown as [Array<{ total: string | number }>];
+    const total = Number(rows[0]?.total ?? 0);
+    const pageSize = 10 as const;
+    const page = Math.min(
+      Math.max(1, Math.floor(input.page ?? 1)),
+      Math.max(1, Math.ceil(total / pageSize)),
+    );
+    const items = await readAccountActivityRows(tx, userId, {
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      source: input.source,
+    });
+    return { items, total, page, pageSize };
+  });
 }

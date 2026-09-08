@@ -691,14 +691,73 @@
   .publishing-media-table-detailed
   .publishing-media-row {
   position: relative;
-  min-height: 82px;
+  min-height: 92px;
   grid-template-columns:
-    28px minmax(270px, 1.25fr) minmax(120px, 0.7fr) minmax(95px, 0.45fr)
+    28px minmax(294px, 1.4fr) minmax(120px, 0.7fr) minmax(95px, 0.45fr)
     minmax(145px, 0.7fr) minmax(120px, 0.58fr) minmax(110px, 0.5fr);
   gap: 12px;
   padding: 10px 16px;
   color: #4a4c5d;
   font-size: var(--operator-caption-size, 12px);
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark {
+  box-sizing: border-box;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  border: 1px solid #e5e6ee;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark.has-image {
+  padding: 2px;
+  background: #fff;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark img {
+  object-fit: contain;
+  object-position: center;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark.is-placeholder b {
+  max-width: 100%;
+  font-size: 13px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark.is-placeholder small,
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-mark .publishing-media-mark-label {
+  color: #fff;
+  font-size: 8px;
+}
+
+.monitoring-module
+  :where(.publishing-page)
+  .publishing-media-table-detailed
+  .publishing-media-name strong {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .monitoring-module
@@ -1088,7 +1147,7 @@
     .publishing-media-row {
     grid-template-areas: "choice resource category price capability";
     grid-template-columns:
-      28px minmax(250px, 1.25fr) minmax(120px, 0.6fr)
+      28px minmax(274px, 1.4fr) minmax(120px, 0.6fr)
       minmax(90px, 0.4fr) minmax(110px, 0.48fr);
     padding-right: 76px;
   }
@@ -1338,6 +1397,15 @@
     label.publishing-media-row
     > .publishing-media-name {
     grid-column: 2 / -1;
+  }
+  .monitoring-module
+    :where(.publishing-page)
+    .publishing-media-table-detailed
+    .publishing-media-mark {
+    width: 64px;
+    height: 64px;
+    flex-basis: 64px;
+    border-radius: 8px;
   }
   .monitoring-module
     :where(.publishing-page)

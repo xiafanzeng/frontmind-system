@@ -73,7 +73,7 @@ describe("sanitizeBrandText", () => {
       "独立 FrontMind 凭证 · FrontMind Brand Tracker · https://api.frontmind.ai",
     );
     expect(visible.toLowerCase()).not.toContain(sourceBrand.toLowerCase());
-    expect(getModelDisplayName(`${sourceBrand} Pro`)).toBe("FrontMind Pro");
+    expect(getModelDisplayName(`${sourceBrand} Pro`)).toBe("FrontMind Agent");
   });
 
   it("removes knowledge-base protocol envelopes from visible assistant text", () => {

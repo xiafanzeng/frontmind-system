@@ -1718,7 +1718,7 @@ export default function MonitorForm({
                 : attemptCount > 500
                   ? "超过单次 500 个任务上限，请减少问题、模型或次数"
                   : quoteLoading
-                    ? "正在按官方资费估算"
+                    ? "正在按FrontMind 资费估算"
                     : quoteError || !currentQuote
                       ? "费用暂无法估算，仍可保存配置"
                       : balanceShortfall

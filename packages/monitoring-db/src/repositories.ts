@@ -1,6 +1,6 @@
 import { assertMonitoringEnterpriseProjectActive } from "./enterprise-lifecycle.js";
 import { currentMonitoringEnterpriseProjectId, monitoringProjectOwnerPredicate, monitoringChildOwnerPredicate } from "./enterprise-scope.js";
-import { readAccountActivity, readAccountConsumption } from "./account-billing.js";
+import { readAccountActivity, readAccountActivityPage, readAccountConsumption } from "./account-billing.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AdminOperationsListInput,
@@ -607,6 +607,11 @@ export class MonitoringRepository {
     // Canonical account ownership is resolved server-side; no caller-selected wallet UUID.
     await this.getBillingSummary(userId);
     return readAccountActivity(this.db,userId,input);
+  }
+
+  async listAccountActivityPage(userId: string, input: { page?: number; source?: "monitoring" | "media_publishing" | "ai" } = {}) {
+    await this.getBillingSummary(userId);
+    return readAccountActivityPage(this.db, userId, input);
   }
 
   async getActivePricing() {

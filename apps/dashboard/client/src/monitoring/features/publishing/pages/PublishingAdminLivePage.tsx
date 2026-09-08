@@ -118,7 +118,10 @@ export default function PublishingAdminLivePage({
     { limit: 50 },
     {
       enabled: section === "catalog",
-      refetchInterval: 2_500,
+      refetchInterval: (query) =>
+        activeSyncRunId || query.state.data?.some((run) => run.status === "running")
+          ? 5_000
+          : 30_000,
     },
   );
   const capabilitiesQuery = trpc.publisherAdmin.capabilities.useQuery(

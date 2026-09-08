@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PublishingAdminLivePage from "./PublishingAdminLivePage";
 
@@ -7,29 +7,52 @@ const queryState = vi.hoisted(() => ({
   error: null as Error | null,
   disabledError: null as Error | null,
   refetch: vi.fn(),
+  requestSync: vi.fn(),
+  invalidateCatalog: vi.fn(),
+  catalogInterval: undefined as
+    | undefined
+    | ((query: { state: { data?: Array<{ status: string }> } }) => number),
 }));
 
 vi.mock("../../../trpc", () => {
-  const query = (data: unknown) => ({
-    useQuery: (_input: unknown, options: { enabled: boolean }) => ({
-      data: options.enabled && !queryState.pending ? data : undefined,
-      isPending: !options.enabled || queryState.pending,
-      error: options.enabled ? queryState.error : queryState.disabledError,
-      refetch: queryState.refetch,
-    }),
+  const query = (data: unknown, catalog = false) => ({
+    useQuery: (
+      _input: unknown,
+      options: {
+        enabled: boolean;
+        refetchInterval?: typeof queryState.catalogInterval;
+      },
+    ) => {
+      if (catalog) queryState.catalogInterval = options.refetchInterval;
+      return {
+        data: options.enabled && !queryState.pending ? data : undefined,
+        isPending: !options.enabled || queryState.pending,
+        error: options.enabled ? queryState.error : queryState.disabledError,
+        refetch: queryState.refetch,
+      };
+    },
   });
   const mutation = { useMutation: () => ({ isPending: false }) };
   return {
     trpc: {
-      useUtils: () => ({}),
+      useUtils: () => ({
+        publisherAdmin: {
+          catalogRuns: { invalidate: queryState.invalidateCatalog },
+        },
+      }),
       publisherAdmin: {
         runtime: query({ mode: "test", credentialStatus: "healthy" }),
-        catalogRuns: query([]),
+        catalogRuns: query([], true),
         capabilities: query([]),
         unknownItems: query([]),
         updateRuntime: mutation,
         emergencyStop: mutation,
-        requestCatalogSync: mutation,
+        requestCatalogSync: {
+          useMutation: () => ({
+            isPending: false,
+            mutateAsync: queryState.requestSync,
+          }),
+        },
         setCapability: mutation,
         setLiveWhitelist: mutation,
         bindUnknown: mutation,
@@ -41,6 +64,10 @@ vi.mock("../../../trpc", () => {
 
 describe("publishing administrator page readiness", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    queryState.catalogInterval = undefined;
+    queryState.requestSync.mockResolvedValue({ syncRunId: "requested-run" });
+    queryState.invalidateCatalog.mockResolvedValue(undefined);
     queryState.pending = false;
     queryState.error = null;
     queryState.disabledError = null;
@@ -62,6 +89,27 @@ describe("publishing administrator page readiness", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     },
   );
+
+  it("refreshes idle catalog and logo progress every 30 seconds, active sync every 5 seconds", () => {
+    render(<PublishingAdminLivePage section="catalog" />);
+    expect(queryState.catalogInterval!({ state: {} })).toBe(30_000);
+    expect(
+      queryState.catalogInterval!({ state: { data: [{ status: "success" }] } }),
+    ).toBe(30_000);
+    expect(
+      queryState.catalogInterval!({ state: { data: [{ status: "running" }] } }),
+    ).toBe(5_000);
+  });
+
+  it("retains manual sync and polls its pending acknowledgement every 5 seconds", async () => {
+    render(<PublishingAdminLivePage section="catalog" />);
+    fireEvent.click(screen.getByRole("button", { name: "立即同步" }));
+    await waitFor(() =>
+      expect(queryState.invalidateCatalog).toHaveBeenCalledTimes(1),
+    );
+    expect(queryState.requestSync).toHaveBeenCalledTimes(1);
+    expect(queryState.catalogInterval!({ state: { data: [] } })).toBe(5_000);
+  });
 
   it("clears the loading notice when the active query finishes", () => {
     queryState.pending = true;

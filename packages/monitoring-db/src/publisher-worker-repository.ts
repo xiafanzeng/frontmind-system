@@ -149,39 +149,63 @@ export class PublisherWorkerRepository {
   }) {
     if (input.allowedTypes?.length === 0) return [];
     return this.db.transaction(async (tx) => {
-      const candidates = await tx
-        .select()
-        .from(publisherJobs)
-        .where(
-          and(
-            or(
-              and(
-                inArray(publisherJobs.status, ["ready", "retry_wait"]),
-                lte(publisherJobs.availableAt, input.now),
+      const limit = Math.min(Math.max(input.limit, 1), 100);
+      const candidates: Array<typeof publisherJobs.$inferSelect> = [];
+      // Keep the original business priority without sorting every historical
+      // Logo job together with orders. Existing type/claim indexes cover these
+      // separate ranges, including the large paused Logo backlog.
+      const priorityGroups = [
+        ["submit_publication_item", "poll_publication_item", "reconcile_publication_unknown"],
+        ["sync_kol_catalog"],
+        ["import_docx", "purge_publisher_assets"],
+        ["archive_publisher_media_logo"],
+      ] as const;
+      for (const group of priorityGroups) {
+        const allowedTypes = group.filter(type => !input.allowedTypes || input.allowedTypes.includes(type));
+        if (!allowedTypes.length) continue;
+        const remaining = limit - candidates.length;
+        if (group[0] === "archive_publisher_media_logo") {
+          const logoCandidates: Array<typeof publisherJobs.$inferSelect> = [];
+          for (const status of ["ready", "retry_wait", "leased"] as const) {
+            const rows = await tx.select()
+              .from(publisherJobs, { forceIndex: "pub_jobs_claim_idx" })
+              .where(and(
+                eq(publisherJobs.type, "archive_publisher_media_logo"),
+                eq(publisherJobs.status, status),
+                status === "leased"
+                  ? lte(publisherJobs.leaseExpiresAt, input.now)
+                  : lte(publisherJobs.availableAt, input.now),
+                sql`${publisherJobs.attempts} < ${publisherJobs.maxAttempts}`,
+              ))
+              // Match the existing (status, available_at, lease_expires_at)
+              // index. Equal-time Logo tasks are interchangeable background
+              // work; orders retain their original created_at tie breaker.
+              .orderBy(asc(publisherJobs.availableAt), asc(publisherJobs.leaseExpiresAt))
+              .limit(remaining)
+              .for("update", { skipLocked: true });
+            logoCandidates.push(...rows);
+          }
+          logoCandidates.sort((a, b) => a.availableAt.getTime() - b.availableAt.getTime()
+            || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+          candidates.push(...logoCandidates.slice(0, remaining));
+        } else {
+          const rows = await tx.select()
+            .from(publisherJobs, { forceIndex: "pub_jobs_type_aggregate_idx" })
+            .where(and(
+              inArray(publisherJobs.type, allowedTypes),
+              or(
+                and(inArray(publisherJobs.status, ["ready", "retry_wait"]), lte(publisherJobs.availableAt, input.now)),
+                and(eq(publisherJobs.status, "leased"), lte(publisherJobs.leaseExpiresAt, input.now)),
               ),
-              and(
-                eq(publisherJobs.status, "leased"),
-                lte(publisherJobs.leaseExpiresAt, input.now),
-              ),
-            ),
-            sql`${publisherJobs.attempts} < ${publisherJobs.maxAttempts}`,
-            input.allowedTypes
-              ? inArray(publisherJobs.type, [...input.allowedTypes])
-              : undefined,
-          ),
-        )
-        .orderBy(
-          sql`case
-            when ${publisherJobs.type} in ('submit_publication_item', 'poll_publication_item', 'reconcile_publication_unknown') then 0
-            when ${publisherJobs.type} = 'sync_kol_catalog' then 1
-            when ${publisherJobs.type} = 'archive_publisher_media_logo' then 3
-            else 2
-          end`,
-          asc(publisherJobs.availableAt),
-          asc(publisherJobs.createdAt),
-        )
-        .limit(Math.min(Math.max(input.limit, 1), 100))
-        .for("update", { skipLocked: true });
+              sql`${publisherJobs.attempts} < ${publisherJobs.maxAttempts}`,
+            ))
+            .orderBy(asc(publisherJobs.availableAt), asc(publisherJobs.createdAt))
+            .limit(remaining)
+            .for("update", { skipLocked: true });
+          candidates.push(...rows);
+        }
+        if (candidates.length >= limit) break;
+      }
       if (!candidates.length) return [];
       const leasedUntil = new Date(input.now.getTime() + input.leaseMs);
       await tx

@@ -1938,12 +1938,14 @@ export class PublishingRepository {
       .orderBy(desc(publisherMediaSyncRuns.startedAt))
       .limit(Math.min(Math.max(limit, 1), 100));
     if (!runs.length) return [];
+    // Audit URLs and timestamps vary per media. Count the one required flag
+    // without making the full JSON document a high-cardinality grouping key.
     const logoProgress = await this.db
       .select({
         runId: publisherMediaLogoResolutions.syncRunId,
         status: publisherMediaLogoResolutions.status,
         sourceKind: publisherMediaLogoResolutions.sourceKind,
-        reviewAudit: publisherMediaLogoResolutions.reviewAudit,
+        unverifiedTotal: sql<number>`sum(case when JSON_UNQUOTE(JSON_EXTRACT(${publisherMediaLogoResolutions.reviewAudit}, '$.verification')) = 'unverified' then 1 else 0 end)`.mapWith(Number),
         total: count(),
       })
       .from(publisherMediaLogoResolutions)
@@ -1957,7 +1959,6 @@ export class PublishingRepository {
         publisherMediaLogoResolutions.syncRunId,
         publisherMediaLogoResolutions.status,
         publisherMediaLogoResolutions.sourceKind,
-        publisherMediaLogoResolutions.reviewAudit,
       );
     type LogoProgress = {
       total: number;
@@ -2015,10 +2016,9 @@ export class PublishingRepository {
       }
       if (
         progress.status === "archived" &&
-        progress.sourceKind !== "manual_verified" &&
-        progress.reviewAudit?.verification === "unverified"
+        progress.sourceKind !== "manual_verified"
       ) {
-        summary.logoPendingReview += progress.total;
+        summary.logoPendingReview += progress.unverifiedTotal;
       }
       if (progress.status === "failed") summary.logoFailed += progress.total;
       if (progress.status === "missing") summary.logoMissing += progress.total;

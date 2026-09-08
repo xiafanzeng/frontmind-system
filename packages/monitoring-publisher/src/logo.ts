@@ -15,7 +15,12 @@ export async function normalizePublisherLogo(input: { bytes: Uint8Array; sourceM
   if (!input.bytes.length || input.bytes.length > 2 * 1024 * 1024) {
     throw new PublisherImageError("logo_too_large", "Logo SVG exceeds 2 MiB", 413);
   }
-  const source = Buffer.from(input.bytes).toString("utf8");
+  // Older static supplier icons include this standard declaration. Remove it
+  // before parsing so no DTD is fetched; all other declarations remain denied.
+  const source = Buffer.from(input.bytes).toString("utf8").replace(
+    /<!DOCTYPE\s+svg\s+PUBLIC\s+(["'])-\/\/W3C\/\/DTD SVG 1\.1\/\/EN\1\s+(["'])https?:\/\/www\.w3\.org\/Graphics\/SVG\/1\.1\/DTD\/svg11\.dtd\2\s*>/iu,
+    "",
+  );
   if (/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/iu.test(source)) {
     throw new PublisherImageError("unsafe_logo_svg", "Logo SVG contains external declarations");
   }

@@ -119,8 +119,17 @@ describe("private Logo SVG rasterization and URL reuse", () => {
     expect(await sharp(result.bytes).metadata()).toMatchObject({ width: 120, height: 80 });
     await expect(normalizePublisherImage(input)).rejects.toMatchObject({ code: "unsupported_image_format" });
   });
+  it("rasterizes legacy static icons after removing the exact standard W3C SVG 1.1 declaration", async () => {
+    const source = '<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">' + svg.toString("utf8");
+    const result = await normalizePublisherLogo({ bytes: Buffer.from(source), sourceMimeType: "image/svg+xml" });
+    expect(result.mimeType).toBe("image/png");
+    expect(await sharp(result.bytes).metadata()).toMatchObject({ width: 120, height: 80 });
+  });
   it.each([
     '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg/>',
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg/>',
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "https://example.test/svg11.dtd"><svg/>',
+    '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><!ENTITY x SYSTEM "file:///etc/passwd"><svg/>',
     '<svg><use href="https://example.test/x.svg#logo"/></svg>',
     '<svg><use href="&#104;ttps://example.test/x.svg"/></svg>',
     '<svg><rect fill="url(https://example.test/paint)"/></svg>',

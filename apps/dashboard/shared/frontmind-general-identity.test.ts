@@ -14,6 +14,14 @@ describe("general product identity display", () => {
     expect(source[1].content).toBe(reply);
     expect(result[0]).toBe(source[0]);
   });
+  it("repairs the existing greeting with emphasized provider names", () => {
+    const result = projectFrontMindIdentityMessages([
+      { role: "user", content: "你是谁" },
+      { role: "assistant", content: "你好！我是 **GLM**，由 **Z.ai** 训练的大语言模型。\n" + reply.split("\n")[1] },
+    ]);
+    expect(result[1].content).toContain("我是 FrontMind 通用智能体");
+    expect(result[1].content).not.toMatch(/GLM|Z\.ai|多阶段工作流/);
+  });
   it.each([
     "你底层是什么模型？",
     "GLM 与 GPT 的区别",

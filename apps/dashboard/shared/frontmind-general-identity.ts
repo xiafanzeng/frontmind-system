@@ -16,7 +16,7 @@ export function projectFrontMindIdentityMessages<
     // Only the known unquoted self-introduction sentence is eligible.
     const content = original
       .replace(
-        /^\s*我是\s*(?:\*\*)?GLM(?:[-\d.]+)?(?:\*\*)?\s*[，,]\s*由\s*(?:\*\*)?Z\.ai(?:\*\*)?\s*训练的(?:大语言|语言)模型[。.!！]?/iu,
+        /^\s*(?:你好[！!，,。\s]*)?我是\s*(?:\*\*)?GLM(?:[-\d.]+)?(?:\*\*)?\s*[，,]\s*由\s*(?:\*\*)?Z\.ai(?:\*\*)?\s*训练的(?:大语言|语言)模型[。.!！]?/iu,
         "我是 FrontMind 通用智能体，可以帮助你处理问题和完成任务。",
       )
       .replace(

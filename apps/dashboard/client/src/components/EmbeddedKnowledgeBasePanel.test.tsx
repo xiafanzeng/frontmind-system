@@ -635,6 +635,38 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     expect(screen.queryByTestId("knowledge-home")).not.toBeInTheDocument();
   });
 
+  it("opens reset confirmation directly from the named toolbar button without resetting data", async () => {
+    mocks.progressIsError = true;
+    mocks.resetStatus = { ...mocks.resetStatus, canReset: true, hasKnowledge: true, unavailableReason: null };
+    render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={vi.fn()} />);
+    const resetButton = screen.getByRole("button", { name: "重置知识库" });
+    expect(screen.queryByRole("button", { name: "知识库更多操作" })).not.toBeInTheDocument();
+    fireEvent.click(resetButton);
+    expect(screen.getByRole("dialog", { name: "重置知识库" })).toBeVisible();
+    expect(mocks.resetMutation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(resetButton).toHaveFocus());
+    expect(mocks.resetMutation).not.toHaveBeenCalled();
+  });
+
+  it("keeps the named reset button unavailable when there is no resettable knowledge", () => {
+    mocks.progressIsError = true;
+    render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "重置知识库" })).toBeDisabled();
+  });
+
+  it("keeps legacy display selections inside the unified node workspace", () => {
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.progressData = { progress: activeBuild() };
+    mocks.knowledgeData = { snapshot: publishedSnapshot };
+    render(<EmbeddedKnowledgeBasePanel mode="workspace" page="display" onPageChange={vi.fn()} />);
+    expect(screen.getByTestId("knowledge-home")).toBeInTheDocument();
+    expect(screen.getByTestId("knowledge-progress-panel")).toBeInTheDocument();
+    expect(screen.queryByText("knowledge viewer")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "下载已更新版本" })).toBeInTheDocument();
+  });
+
   it("opens the direct reset dialog from a failed build reset CTA", () => {
     mocks.progressIsError = true;
     mocks.resetStatus = {

@@ -4,7 +4,6 @@ import {
   Circle,
   CircleDot,
   CircleHelp,
-  FileCheck2,
   ChevronDown,
   ChevronRight,
   Crosshair,
@@ -68,7 +67,7 @@ export interface KnowledgeNodeWorkspaceProps {
 
 const statusLabels: Record<KnowledgeBaseLeafStatus, string> = {
   confirmed: "已确认",
-  direct_prefilled: "已预填",
+  direct_prefilled: "待确认",
   current: "当前节点",
   needs_verification: "需再核实",
   pending: "待处理",
@@ -820,21 +819,21 @@ function KnowledgeNodeWorkspaceSession({
                               <span data-status="confirmed">
                                 确认 {branch.confirmed}
                               </span>
-                              <span data-status="direct_prefilled">
-                                预填 {branch.directPrefilled}
-                              </span>
                               <span data-status="needs_verification">
                                 待再次确认 {branch.needsVerification}
                               </span>
-                              <span data-status="pending">
-                                待处理 {branch.pending}
+                              <span
+                                data-status="pending"
+                                title="包含当前节点和待确认的资料草稿"
+                              >
+                                待处理 {branch.pending + branch.current + branch.directPrefilled}
                               </span>
                             </div>
                             <ul>
                               {branch.leaves.map((leaf) => {
                                 const StatusIcon = {
                                   confirmed: Check,
-                                  direct_prefilled: FileCheck2,
+                                  direct_prefilled: CircleHelp,
                                   current: CircleDot,
                                   needs_verification: CircleHelp,
                                   pending: Circle,

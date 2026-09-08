@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Download,
   Loader2,
-  MoreHorizontal,
   RefreshCw,
   Send,
   Trash2,
@@ -15,7 +14,6 @@ import KnowledgeNodeWorkspace from "@/components/KnowledgeNodeWorkspace";
 import KnowledgeWorkspaceStatus from "@/components/KnowledgeWorkspaceStatus";
 import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import { getUnsavedWorkspaceDrafts } from "@/lib/workspace-navigation-guard";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { KnowledgeNodeDetailsDto } from "@shared/knowledge-node-workspace";
 import "./KnowledgeWorkspace.css";
 import KnowledgeBaseViewer, {
@@ -358,6 +356,7 @@ function KnowledgeResetButton({
   const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
   const resetMutation = trpc.workspace.knowledgeReset.reset.useMutation();
   const submittingRef = useRef(false);
+  const resetButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const openReset = () => {
       if (disabled || getUnsavedWorkspaceDrafts().length) {
@@ -391,22 +390,38 @@ function KnowledgeResetButton({
   };
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild><Button variant="outline" size="icon" aria-label="知识库更多操作"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={disabled || !status.canReset || resetMutation.isPending} onSelect={() => {
-            if (getUnsavedWorkspaceDrafts().length) { toast.info("请先保存或清空未提交内容，再重置知识库"); return; }
-            setExpectedRevision(status.revision); setOpen(true);
-          }}><Trash2 className="h-4 w-4" />重置知识库</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Button
+        ref={resetButtonRef}
+        type="button"
+        variant="outline"
+        disabled={disabled || !status.canReset || resetMutation.isPending}
+        title={!status.canReset ? status.unavailableReason || undefined : undefined}
+        onClick={() => {
+          if (getUnsavedWorkspaceDrafts().length) {
+            toast.info("请先保存或清空未提交内容，再重置知识库");
+            return;
+          }
+          setExpectedRevision(status.revision);
+          setOpen(true);
+        }}
+      >
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
+        重置知识库
+      </Button>
       <Dialog
         open={open}
         onOpenChange={(next) => {
           if (!resetMutation.isPending) setOpen(next);
         }}
       >
-        <DialogContent onEscapeKeyDown={(event) => { if (resetMutation.isPending) event.preventDefault(); }} onInteractOutside={(event) => { if (resetMutation.isPending) event.preventDefault(); }}>
+        <DialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            resetButtonRef.current?.focus();
+          }}
+          onEscapeKeyDown={(event) => { if (resetMutation.isPending) event.preventDefault(); }}
+          onInteractOutside={(event) => { if (resetMutation.isPending) event.preventDefault(); }}
+        >
           <DialogHeader>
             <DialogTitle>重置知识库</DialogTitle>
             <DialogDescription>

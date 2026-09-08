@@ -237,6 +237,24 @@ describe("unified knowledge node workspace", () => {
     ).toHaveAttribute("aria-expanded", "true");
   });
 
+  it("groups prefilled drafts and the current node under pending without changing their stored status", () => {
+    const withDraft = structuredClone(progress);
+    const branch = withDraft.branches[0]!;
+    branch.confirmed = 0;
+    branch.directPrefilled = 1;
+    branch.leaves[1]!.status = "direct_prefilled";
+    withDraft.summary.confirmed = 0;
+    withDraft.summary.directPrefilled = 1;
+    renderWorkspace({ progress: withDraft }, false);
+    const tree = screen.getByRole("navigation", { name: "知识节点目录" });
+    expect(within(tree).getByText("确认 0")).toBeVisible();
+    expect(within(tree).getByText("待再次确认 0")).toBeVisible();
+    expect(within(tree).getByText("待处理 2")).toBeVisible();
+    expect(within(tree).queryByText(/预填/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "产品服务 待确认" })).toHaveAttribute("data-status", "direct_prefilled");
+    expect(branch.leaves[1]!.status).toBe("direct_prefilled");
+  });
+
   it("guards Escape and close with an unsaved draft, and saves exactly once before closing", async () => {
     const fetcher = fixtureFetch();
     renderWorkspace();

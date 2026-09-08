@@ -101,6 +101,27 @@ describe("dirty hydration fencing", () => {
       ).map(({ id }) => id),
     ).toEqual(["new-local"]);
   });
+
+  it("keeps local delete tombstones when a stale cloud list still contains the message", () => {
+    const local: Conversation = {
+      ...conversation("dirty-delete"),
+      messages: [
+        { id: "kept", role: "assistant", content: "保留", timestamp: 1 },
+      ],
+      deletedMessageIds: ["removed"],
+    };
+    const remote: Conversation = {
+      ...conversation("dirty-delete"),
+      messages: [
+        { id: "removed", role: "user", content: "旧消息", timestamp: 1 },
+        { id: "kept", role: "assistant", content: "保留", timestamp: 1 },
+      ],
+    };
+
+    const merged = mergeDirtyConversationHydration(local, remote);
+    expect(merged.messages.map((message) => message.id)).toEqual(["kept"]);
+    expect(merged.deletedMessageIds).toEqual(["removed"]);
+  });
 });
 
 describe("knowledge-base attachment payload reconciliation", () => {
@@ -806,6 +827,37 @@ describe("ConversationProvider cloud hydration", () => {
     expect(result.current.state.conversations.map((item) => item.id)).toEqual([
       "account-1",
     ]);
+  });
+
+  it("preserves a dirty message delete when remount reads the earlier cloud snapshot", async () => {
+    const source = {
+      ...conversation("account-1"),
+      messages: [
+        { id: "stale-message", role: "assistant" as const, content: "旧消息", timestamp: 1 },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValue({ data: [source] });
+    const first = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(first.result.current.hydrated).toBe(true));
+
+    act(() => first.result.current.deleteMessage("account-1", "stale-message"));
+    let current = first.result.current.state.conversations[0];
+    expect(current.messages).toEqual([]);
+    expect(current.deletedMessageIds).toContain("stale-message");
+
+    first.unmount();
+    mocks.listRefetch.mockResolvedValue({ data: [source] });
+    const restored = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
+    current = restored.result.current.state.conversations[0];
+    expect(current.messages).toEqual([]);
+    expect(current.deletedMessageIds).toContain("stale-message");
+    expect(restored.result.current.syncError).toBeNull();
+    await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalled());
+    expect(mocks.syncSnapshot.mock.calls.at(-1)?.[0].conversation).toMatchObject({
+      messages: [],
+      deletedMessageIds: ["stale-message"],
+    });
   });
 
   it("settles a failed initial list read and can explicitly retry it", async () => {

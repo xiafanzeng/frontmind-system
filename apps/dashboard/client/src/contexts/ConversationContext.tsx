@@ -1766,6 +1766,13 @@ export function mergeDirtyConversationHydration(
   local: Conversation,
   remote: Conversation,
 ): Conversation {
+  // The browser tombstone is authoritative until the corresponding snapshot
+  // is acknowledged. A stale cloud list may still contain the deleted row;
+  // merging it back would resurrect messages after navigation.
+  const deletedMessageIds = new Set([
+    ...(remote.deletedMessageIds ?? []),
+    ...(local.deletedMessageIds ?? []),
+  ]);
   const messages = [...local.messages];
   const idToIndex = new Map(
     messages.map((message, index) => [message.id, index]),
@@ -1801,7 +1808,11 @@ export function mergeDirtyConversationHydration(
 
   return {
     ...remote,
-    messages: repairConversationMessageIds(messages),
+    messages: repairConversationMessageIds(
+      messages.filter((message) => !deletedMessageIds.has(message.id)),
+    ),
+    deletedMessageIds:
+      deletedMessageIds.size > 0 ? [...deletedMessageIds] : undefined,
     title: local.title,
     status: local.status,
     executionKind: local.executionKind ?? remote.executionKind,

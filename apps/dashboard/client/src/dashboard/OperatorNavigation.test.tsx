@@ -63,7 +63,8 @@ describe("operator workspace navigation", () => {
     fireEvent.click(nativeLink, { ctrlKey: true });
     expect(select).not.toHaveBeenCalled();
     expect(screen.queryByText("服务首页")).not.toBeInTheDocument();
-    expect(screen.getByText("AI智能品牌优化")).toBeInTheDocument();
+    expect(screen.queryByText("AI智能品牌优化")).not.toBeInTheDocument();
+    expect(screen.queryByText("企业甲")).not.toBeInTheDocument();
   });
 
   it("opens creation directly from the plus button and reuses the FrontMind logo", async () => {

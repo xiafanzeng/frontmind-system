@@ -180,7 +180,7 @@ function ProjectRow({ project, selected, saving, canDelete, onSelect, onAction, 
 
 const moduleIcons = { brand: Database, intent: Target, progress: ChartNoAxesCombined, content: PenLine, publishing: Send, extensions: Wrench };
 
-export function OperatorTabs({ view, projectName, onSelect }: { view: OperatorView; projectName?: string; onSelect: (view: OperatorView) => void }) {
+export function OperatorTabs({ view, onSelect }: { view: OperatorView; projectName?: string; onSelect: (view: OperatorView) => void }) {
   const selectedView = view === "knowledge-display" ? "knowledge" : view;
   const activeModule = OPERATOR_MODULES.find(module => module.views.some(item => item.id === selectedView)) || OPERATOR_MODULES[0];
   const tabsRef = useRef<HTMLElement>(null);
@@ -206,7 +206,6 @@ export function OperatorTabs({ view, projectName, onSelect }: { view: OperatorVi
     onSelect(next);
   };
   return <header className="operator-workspace-header" style={{ "--module-accent": activeModule.color } as CSSProperties}>
-    <div className="operator-workspace-caption"><span>AI智能品牌优化</span>{projectName && <><span aria-hidden="true">/</span><strong title={projectName}>{projectName}</strong></>}</div>
     <nav ref={tabsRef} className="operator-module-tabs" aria-label="项目板块">
       {OPERATOR_MODULES.map(module => {
         const Icon = moduleIcons[module.id];

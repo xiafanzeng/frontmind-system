@@ -117,9 +117,6 @@
 .user-brand-dashboard .operator-sidebar[data-collapsed="true"] .operator-nav-entry { justify-content: center; padding: 12px; }
 .user-brand-dashboard .operator-sidebar[data-collapsed="true"] .operator-sidebar-footer button { justify-content: center; padding: 10px; }
 .operator-workspace-header { position: sticky; top: 0; z-index: 20; flex-shrink: 0; padding: 0 28px; background: var(--operator-canvas, #F6F7F9); border-bottom: 1px solid var(--operator-line, #E2E5EB); }
-.operator-workspace-caption { display: flex; align-items: center; gap: 12px; height: 56px; min-width: 0; color: #5D6573; font-size: 14px; }
-.operator-workspace-caption > span { flex-shrink: 0; }
-.operator-workspace-caption strong { max-width: 440px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24px; line-height: 32px; font-weight: 600; color: #20232B; }
 .operator-module-tabs { display: flex; align-items: stretch; gap: 4px; position: relative; z-index: 1; overflow-x: auto; scrollbar-width: thin; padding-top: 3px; margin-bottom: -1px; }
 .operator-module-tabs > a {
   --tab-fill: color-mix(in srgb, var(--tab-color) 9%, white);
@@ -215,9 +212,8 @@
   .user-brand-dashboard.operator-mode .operator-sidebar { position: fixed; top: 0; left: 0; z-index: 80; width: 280px; max-width: calc(100vw - 48px); transform: translateX(-100%); visibility: hidden; transition: transform .18s ease, visibility .18s ease; }
   .user-brand-dashboard.operator-mode .operator-sidebar[data-collapsed="true"] { width: 72px; }
   .user-brand-dashboard.operator-mode .nav-open .operator-sidebar { transform: translateX(0); visibility: visible; }
-  .operator-workspace-caption { padding-left: 48px; }
-  .operator-workspace-caption strong { max-width: 45vw; }
-  .user-brand-dashboard.operator-mode .mobile-menu-btn { z-index: 90; display: flex; }
+  .operator-module-tabs { margin-left: 56px; }
+  .user-brand-dashboard.operator-mode .mobile-menu-btn { z-index: 90; display: flex; top: 6px; }
   .user-brand-dashboard.operator-mode .mobile-nav-overlay { position: fixed; inset: 0; z-index: 70; display: block; background: #11141b66; }
 }
 @media (min-width: 1024px) {
@@ -225,8 +221,6 @@
 }
 @media (max-width: 767px) {
   .operator-workspace-header { padding: 0 12px; }
-  .operator-workspace-caption { gap: 8px; font-size: 13px; }
-  .operator-workspace-caption > span:first-child { display: none; }
   .operator-sub-tabs { flex-wrap: nowrap; overflow-x: auto; padding: 10px 8px; }
   .operator-sub-tabs > a { flex-shrink: 0; }
   .operator-empty-project { padding: 80px 24px 32px; }

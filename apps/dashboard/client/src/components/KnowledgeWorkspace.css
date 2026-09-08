@@ -40,7 +40,7 @@
 .knowledge-preview-message[data-role="user"] { margin-left: 32px; background: #f2edf6; }
 @container (min-width: 916px) {
   .knowledge-workspace-view-switch { display: none; }
-  .knowledge-workspace-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .knowledge-workspace-grid { grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
   .knowledge-workspace-grid[data-view] > .knowledge-workspace-collaboration, .knowledge-workspace-grid[data-view] > .knowledge-workspace-knowledge { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) { .knowledge-workspace * { scroll-behavior: auto; } }

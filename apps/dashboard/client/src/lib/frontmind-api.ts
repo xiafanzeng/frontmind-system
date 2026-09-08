@@ -1798,6 +1798,8 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     expectedLeafId: string;
     expectedPresentationKey?: string;
     attachmentManifest: KnowledgeBaseAttachmentManifestItem[];
+    /** Node image replacement keeps removals in the same frozen local turn. */
+    removeAssetIds?: string[];
     resumeExisting?: boolean;
   },
   signal?: AbortSignal,
@@ -1845,6 +1847,7 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     expectedPresentationKey: context.expectedPresentationKey,
     userMessage: buildPromptText(input),
     attachmentManifest: context.attachmentManifest,
+    ...(context.removeAssetIds?.length ? { removeAssetIds: context.removeAssetIds } : {}),
     resumeExisting: context.resumeExisting === true,
   });
   let lastError: unknown;

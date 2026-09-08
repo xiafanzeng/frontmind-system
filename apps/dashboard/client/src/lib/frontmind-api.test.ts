@@ -801,7 +801,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     );
   });
 
-  it("reserves the logical turn before any file id exists", async () => {
+  it("reserves the logical turn and image removals before any file id exists", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -844,6 +844,7 @@ describe("createKnowledgeBaseTurnTask", () => {
         expectedLeafId: "1.6",
         expectedPresentationKey: "presentation-5",
         attachmentManifest: manifest,
+        removeAssetIds: ["old-node-image"],
       },
     );
 
@@ -858,6 +859,7 @@ describe("createKnowledgeBaseTurnTask", () => {
       expectedPresentationKey: "presentation-5",
       userMessage: "修订",
       attachmentManifest: manifest,
+      removeAssetIds: ["old-node-image"],
       resumeExisting: false,
     });
   });

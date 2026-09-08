@@ -13,6 +13,29 @@ const register = (save?: () => Promise<boolean>) => { const dispose = registerWo
 const request = (action: () => void) => act(() => requestWorkspaceNavigation(action));
 
 describe("workspace unsaved changes dialog", () => {
+  it("waits for an upload reservation to be cancelled before discarding and navigating", async () => {
+    let resolve!: (value: boolean) => void;
+    const discard = vi.fn(() => new Promise<boolean>(done => { resolve = done; }));
+    render(<WorkspaceNavigationBoundary />);
+    act(() => { disposeDrafts.push(registerWorkspaceDraft({ isDirty: () => true, label: "知识节点图片", discard })); });
+    const action = vi.fn(); request(action);
+    fireEvent.click(screen.getByRole("button", { name: "放弃并离开" }));
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(action).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "放弃并离开" })).toBeDisabled();
+    await act(async () => resolve(true));
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the project and image draft when cancellation is not acknowledged", async () => {
+    const discard = vi.fn().mockResolvedValue(false);
+    render(<WorkspaceNavigationBoundary />);
+    act(() => { disposeDrafts.push(registerWorkspaceDraft({ isDirty: () => true, label: "知识节点图片", discard })); });
+    const action = vi.fn(); request(action);
+    fireEvent.click(screen.getByRole("button", { name: "放弃并离开" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("尚未安全取消");
+    expect(action).not.toHaveBeenCalled();
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(1);
+  });
   it("keeps the current work when cancelled and discards only on explicit leave", async () => {
     render(<WorkspaceNavigationBoundary />); act(() => { register(); });
     const action = vi.fn(); request(action);

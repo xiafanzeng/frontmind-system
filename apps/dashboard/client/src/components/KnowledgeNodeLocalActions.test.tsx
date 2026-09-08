@@ -12,9 +12,17 @@ const context = vi.hoisted(() => ({
   refreshConversations: vi.fn(async () => {}),
   wakeKnowledgeBaseConversation: vi.fn(),
 }));
+const api = vi.hoisted(() => ({
+  reserveKnowledgeBaseTurnWithAttachments: vi.fn(),
+  uploadKnowledgeBaseLocalAsset: vi.fn(),
+  stageKnowledgeBaseTurnAttachment: vi.fn(),
+  createKnowledgeBaseTurnTask: vi.fn(),
+  cancelKnowledgeBaseTurnAttachments: vi.fn(),
+}));
 vi.mock("@/contexts/ConversationContext", () => ({
   useConversation: () => context,
 }));
+vi.mock("@/lib/frontmind-api", () => api);
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
 import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
@@ -26,7 +34,6 @@ afterEach(() => {
   disposeScope = undefined;
   vi.unstubAllGlobals();
 });
-
 const coordinates = {
   conversationId: "conversation",
   expectedGeneration: 1,
@@ -41,60 +48,345 @@ const observation = {
   interaction: { progress: { build: { revision: 9 } } },
   approvedPresentation: { presentationKey: "presentation-selected" },
 };
-beforeEach(() => vi.clearAllMocks());
-describe("local knowledge node controls", () => {
-  it("protects changed local image selections and saves them through the existing navigation guard", async () => {
-    const fetcher = vi.fn(
-      async (url: string) =>
-        new Response(
-          JSON.stringify(
-            url.includes("node/images")
-              ? {
-                  coordinates,
-                  images: [
-                    {
-                      assetId: "new-image",
-                      url: "/image.png",
-                      caption: "测试图片",
-                      attached: false,
-                      removable: false,
-                      selectable: true,
-                    },
-                  ],
-                }
-              : { observation },
-          ),
-          { status: 200 },
-        ),
-    );
-    vi.stubGlobal("fetch", fetcher);
-    render(
-      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "本地图片" }));
-    fireEvent.click(await screen.findByRole("checkbox"));
-    const drafts = getUnsavedWorkspaceDrafts();
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]!.label).toBe("知识节点图片");
-    let saved = false;
-    await act(async () => {
-      saved = await drafts[0]!.save!();
+const oldImage = {
+  assetId: "old-image",
+  url: "/old.png",
+  caption: "旧图片",
+  attached: true,
+  removable: true,
+  selectable: true,
+};
+function installFetch(
+  images: unknown[] = [oldImage],
+  selectError?: { status: number; message: string },
+) {
+  const calls: Array<{ url: string; body: any }> = [];
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({
+      url,
+      body: init?.body ? JSON.parse(String(init.body)) : null,
     });
-    expect(saved).toBe(true);
-    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
-    expect(context.wakeKnowledgeBaseConversation).toHaveBeenCalledWith(
-      "conversation",
+    const isLibrary = url.includes("node/images");
+    const failure = !isLibrary && selectError;
+    return new Response(
+      JSON.stringify(
+        isLibrary
+          ? { coordinates, images }
+          : failure
+            ? { error: { message: failure.message } }
+            : { observation },
+      ),
+      { status: failure ? failure.status : 200 },
     );
   });
-
+  vi.stubGlobal("fetch", fetcher);
+  return { calls, fetcher };
+}
+function renderActions() {
+  return render(
+    <KnowledgeNodeLocalActions
+      conversationId="conversation"
+      leafId="1.2"
+      resetRevision={2}
+    />,
+  );
+}
+async function open() {
+  fireEvent.click(screen.getByRole("button", { name: "图片管理" }));
+  await screen.findByRole("dialog", { name: "当前节点的图片" });
+}
+function choose() {
+  fireEvent.change(screen.getByLabelText("上传当前节点图片"), {
+    target: {
+      files: [
+        new File(["pixels"], "产品.png", {
+          type: "image/png",
+          lastModified: 4,
+        }),
+      ],
+    },
+  });
+}
+async function submit() {
+  fireEvent.click(screen.getByRole("button", { name: "保存图片" }));
+  await waitFor(() =>
+    expect(api.reserveKnowledgeBaseTurnWithAttachments).toHaveBeenCalled(),
+  );
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:preview-image"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  api.reserveKnowledgeBaseTurnWithAttachments.mockResolvedValue({
+    reservation: { turnId: "image-turn", sourceResetRevision: 2 },
+    knowledgeObservation: observation,
+  });
+  api.uploadKnowledgeBaseLocalAsset.mockResolvedValue({
+    fileId: "new-local-image",
+    filename: "产品.png",
+    sizeBytes: 6,
+    contentSha256: "a".repeat(64),
+  });
+  api.stageKnowledgeBaseTurnAttachment.mockResolvedValue({ observation });
+  api.createKnowledgeBaseTurnTask.mockResolvedValue({
+    status: "running",
+    knowledgeObservation: observation,
+  });
+  api.cancelKnowledgeBaseTurnAttachments.mockResolvedValue({
+    cancelled: true,
+    knowledgeObservation: observation,
+  });
+});
+describe("node image management", () => {
+  it("shows only this node's attached images and removes them through the existing local turn", async () => {
+    const { calls } = installFetch([
+      oldImage,
+      {
+        ...oldImage,
+        assetId: "unrelated",
+        attached: false,
+        caption: "历史项目图",
+      },
+    ]);
+    renderActions();
+    await open();
+    expect(screen.queryByAltText("历史项目图")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "移除 旧图片" }));
+    const draft = getUnsavedWorkspaceDrafts()[0]!;
+    await act(async () => expect(await draft.save!()).toBe(true));
+    expect(
+      calls.find((call) => call.url === "/api/knowledge-base/turn")?.body,
+    ).toMatchObject({
+      userMessage: "",
+      attachments: [],
+      removeAssetIds: ["old-image"],
+      selectedAssetIds: [],
+      expectedLeafId: "1.2",
+      expectedRevision: 9,
+    });
+    expect(api.uploadKnowledgeBaseLocalAsset).not.toHaveBeenCalled();
+  });
+  it("previews selected files and binds upload plus removal to one frozen node reservation", async () => {
+    installFetch();
+    renderActions();
+    await open();
+    choose();
+    expect(screen.getByAltText("产品.png")).toHaveAttribute(
+      "src",
+      "blob:preview-image",
+    );
+    expect(api.uploadKnowledgeBaseLocalAsset).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "移除 旧图片" }));
+    await submit();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    const reserved =
+      api.reserveKnowledgeBaseTurnWithAttachments.mock.calls[0]![1];
+    expect(reserved).toMatchObject({
+      conversationId: "conversation",
+      expectedGeneration: 1,
+      expectedRevision: 9,
+      expectedResetRevision: 2,
+      expectedLeafId: "1.2",
+      removeAssetIds: ["old-image"],
+      attachmentManifest: [
+        {
+          filename: "产品.png",
+          sizeBytes: 6,
+          mimeType: "image/png",
+          ordinal: 1,
+          total: 1,
+        },
+      ],
+    });
+    expect(api.uploadKnowledgeBaseLocalAsset.mock.calls[0]![3]).toMatchObject({
+      itemId: reserved.attachmentManifest[0].itemId,
+      resumeScope: {
+        turnId: "image-turn",
+        clientRequestId: reserved.clientRequestId,
+        expectedResetRevision: 2,
+      },
+    });
+    expect(api.stageKnowledgeBaseTurnAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachment: { file_id: "new-local-image", filename: "产品.png" },
+        turnId: "image-turn",
+        attachmentManifest: reserved.attachmentManifest,
+      }),
+    );
+    expect(api.createKnowledgeBaseTurnTask).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({
+        clientRequestId: reserved.clientRequestId,
+        attachmentReservation: {
+          turnId: "image-turn",
+          attachmentManifest: reserved.attachmentManifest,
+        },
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "图片修改已提交，保存完成后会自动更新",
+    );
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+  });
+  it("reuses the reservation and upload item after an upload response is lost", async () => {
+    installFetch();
+    api.uploadKnowledgeBaseLocalAsset.mockRejectedValueOnce(
+      new Error("网络中断"),
+    );
+    renderActions();
+    await open();
+    choose();
+    await submit();
+    await screen.findByRole("alert");
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(1);
+    const options = api.uploadKnowledgeBaseLocalAsset.mock.calls[0]![3];
+    fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
+    await waitFor(() =>
+      expect(api.createKnowledgeBaseTurnTask).toHaveBeenCalledTimes(1),
+    );
+    expect(api.reserveKnowledgeBaseTurnWithAttachments).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(api.uploadKnowledgeBaseLocalAsset.mock.calls[1]![3]).toMatchObject({
+      itemId: options.itemId,
+      resumeScope: options.resumeScope,
+    });
+  });
+  it("replays only the same dispatch after a lost response, without uploading or selecting again", async () => {
+    const { calls } = installFetch();
+    api.createKnowledgeBaseTurnTask.mockRejectedValueOnce(
+      new Error("response lost"),
+    );
+    renderActions();
+    await open();
+    choose();
+    await submit();
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "放弃修改" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "重试保存" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(api.uploadKnowledgeBaseLocalAsset).toHaveBeenCalledTimes(1);
+    expect(
+      calls.filter((call) => call.url.endsWith("node/select")),
+    ).toHaveLength(1);
+    expect(api.createKnowledgeBaseTurnTask.mock.calls[1]![1]).toEqual(
+      api.createKnowledgeBaseTurnTask.mock.calls[0]![1],
+    );
+  });
+  it("allows a definitively rejected dispatch to cancel its reservation and leave", async () => {
+    installFetch();
+    api.createKnowledgeBaseTurnTask.mockRejectedValueOnce(
+      Object.assign(new Error("版本冲突"), { status: 409, code: "CONFLICT" }),
+    );
+    renderActions();
+    await open();
+    choose();
+    await submit();
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "放弃修改" })).toBeEnabled();
+    const draft = getUnsavedWorkspaceDrafts()[0]!;
+    await act(async () => expect(await draft.discard!()).toBe(true));
+    expect(api.cancelKnowledgeBaseTurnAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conversation",
+        turnId: "image-turn",
+        expectedResetRevision: 2,
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+  });
+  it("cancels an interrupted upload before the navigation guard discards its files", async () => {
+    installFetch();
+    api.uploadKnowledgeBaseLocalAsset.mockRejectedValueOnce(
+      new Error("网络中断"),
+    );
+    renderActions();
+    await open();
+    choose();
+    await submit();
+    await screen.findByRole("alert");
+    api.cancelKnowledgeBaseTurnAttachments.mockRejectedValueOnce(
+      new Error("取消失败"),
+    );
+    const draft = getUnsavedWorkspaceDrafts()[0]!;
+    await act(async () => expect(await draft.discard!()).toBe(false));
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(1);
+    await act(async () => expect(await draft.discard!()).toBe(true));
+    expect(api.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview-image");
+  });
+  it("keeps drafts after a stale node selection and does not upload or reserve", async () => {
+    installFetch([], { status: 409, message: "节点版本变化" });
+    renderActions();
+    await open();
+    choose();
+    fireEvent.click(screen.getByRole("button", { name: "保存图片" }));
+    await screen.findByRole("alert");
+    expect(screen.getByAltText("产品.png")).toBeVisible();
+    expect(api.reserveKnowledgeBaseTurnWithAttachments).not.toHaveBeenCalled();
+    expect(api.uploadKnowledgeBaseLocalAsset).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
+  it("aborts the old upload and never stages it into a newly selected project", async () => {
+    disposeScope = activateWorkspaceRestScope("1:project-a", "project-a");
+    installFetch();
+    let finish!: (value: unknown) => void;
+    api.uploadKnowledgeBaseLocalAsset.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderActions();
+    await open();
+    choose();
+    await submit();
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    const signal = api.uploadKnowledgeBaseLocalAsset.mock.calls[0]![3].signal;
+    disposeScope = activateWorkspaceRestScope("1:project-b", "project-b");
+    await act(async () =>
+      finish({ fileId: "old-upload", filename: "产品.png" }),
+    );
+    expect(signal.aborted).toBe(true);
+    expect(api.stageKnowledgeBaseTurnAttachment).not.toHaveBeenCalled();
+    expect(api.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
+  });
+  it("rejects unsupported files without any reservation or upload", async () => {
+    installFetch([]);
+    renderActions();
+    await open();
+    fireEvent.change(screen.getByLabelText("上传当前节点图片"), {
+      target: {
+        files: [new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })],
+      },
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("请选择 PNG");
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+    expect(api.uploadKnowledgeBaseLocalAsset).not.toHaveBeenCalled();
+  });
   it("does not activate a stale AI target after the selected leaf changes", async () => {
     const selected = vi.fn();
-    let resolveLibrary!: (value: unknown) => void;
+    let resolve!: (value: unknown) => void;
     const fetcher = vi.fn(async () => ({
       ok: true,
       json: () =>
-        new Promise((resolve) => {
-          resolveLibrary = resolve;
+        new Promise((done) => {
+          resolve = done;
         }),
     }));
     vi.stubGlobal("fetch", fetcher);
@@ -103,144 +395,36 @@ describe("local knowledge node controls", () => {
         conversationId="conversation"
         leafId="1.2"
         onEditTargetSelected={selected}
-        editLabel="AI 修改"
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "AI 修改" }));
-    await waitFor(() => expect(resolveLibrary).toBeTypeOf("function"));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
     rerender(
       <KnowledgeNodeLocalActions
         conversationId="conversation"
         leafId="2.1"
         onEditTargetSelected={selected}
-        editLabel="AI 修改"
       />,
     );
-    await act(async () => resolveLibrary({ coordinates, images: [] }));
+    await act(async () => resolve({ coordinates, images: [] }));
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(selected).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalled();
   });
-  it("does not select the old node when the project changes while its library response is parsing", async () => {
-    disposeScope = activateWorkspaceRestScope("1:project-a", "project-a");
-    let resolveLibrary!: (value: unknown) => void;
-    const json = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveLibrary = resolve;
-        }),
-    );
-    const fetcher = vi.fn().mockResolvedValue({ ok: true, json });
-    vi.stubGlobal("fetch", fetcher);
-    render(
-      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "编辑文字 / 上传图片" }),
-    );
-    await waitFor(() => expect(json).toHaveBeenCalled());
-    disposeScope = activateWorkspaceRestScope("1:project-b", "project-b");
-    await act(async () => resolveLibrary({ coordinates, images: [] }));
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(
-      new Headers(fetcher.mock.calls[0][1].headers).get(
-        "x-enterprise-project-id",
-      ),
-    ).toBe("project-a");
-    expect(context.commitKnowledgeBaseObservation).not.toHaveBeenCalled();
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-  it("selects a confirmed node locally after StrictMode effect replay without reset or model submission", async () => {
-    const fetcher = vi.fn(
-      async (url: string) =>
-        new Response(
-          JSON.stringify(
-            url.includes("node/images")
-              ? { coordinates, images: [] }
-              : { observation },
-          ),
-          { status: 200 },
-        ),
-    );
-    vi.stubGlobal("fetch", fetcher);
+  it("retains ordinary AI targeting after StrictMode effect replay", async () => {
+    const { calls } = installFetch([]);
     render(
       <StrictMode>
         <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />
       </StrictMode>,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "编辑文字 / 上传图片" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "AI 修改" }));
     await waitFor(() =>
       expect(context.commitKnowledgeBaseObservation).toHaveBeenCalledWith(
         "conversation",
         observation,
       ),
     );
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(fetcher.mock.calls[1]![0]).toBe("/api/knowledge-base/node/select");
-  });
-  it("sends image replacement as an empty text turn with exact local selections", async () => {
-    const calls: Array<{ url: string; body: any }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        calls.push({
-          url,
-          body: init?.body ? JSON.parse(String(init.body)) : null,
-        });
-        const value = url.includes("node/images")
-          ? {
-              coordinates,
-              images: [
-                {
-                  assetId: "old-image",
-                  url: "/old.png",
-                  caption: "旧图片",
-                  attached: true,
-                  removable: true,
-                  selectable: true,
-                },
-                {
-                  assetId: "new-image",
-                  url: "/new.png",
-                  caption: "新图片",
-                  attached: false,
-                  removable: false,
-                  selectable: true,
-                },
-              ],
-            }
-          : { observation };
-        return new Response(JSON.stringify(value), { status: 200 });
-      }),
-    );
-    render(
-      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "本地图片" }));
-    const boxes = await screen.findAllByRole("checkbox");
-    fireEvent.click(boxes[0]!);
-    fireEvent.click(boxes[1]!);
-    fireEvent.click(screen.getByRole("button", { name: "保存图片" }));
-    await waitFor(() =>
-      expect(context.wakeKnowledgeBaseConversation).toHaveBeenCalledWith(
-        "conversation",
-      ),
-    );
-    expect(
-      calls.find((call) => call.url === "/api/knowledge-base/turn")?.body,
-    ).toMatchObject({
-      userMessage: "",
-      attachments: [],
-      removeAssetIds: ["old-image"],
-      selectedAssetIds: ["new-image"],
-      expectedRevision: 9,
-      expectedPresentationKey: "presentation-selected",
-    });
-    expect(
-      calls.some((call) => /reset|frontmind\/v2|provider/.test(call.url)),
-    ).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.url).toBe("/api/knowledge-base/node/select");
   });
 });

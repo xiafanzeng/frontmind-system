@@ -65,6 +65,33 @@ export default function WorkspaceNavigationBoundary() {
       if (mounted.current) setSaving(false);
     }
   };
+  const discard = async () => {
+    if (!pending || savingRef.current) return;
+    const request = pending;
+    savingRef.current = true; setSaving(true); setError("");
+    const discarded = new Set<WorkspaceDraft>();
+    try {
+      for (const draft of getUnsavedWorkspaceDrafts()) {
+        if (!getUnsavedWorkspaceDrafts().includes(draft)) continue;
+        if (draft.discard && !(await draft.discard())) {
+          if (mounted.current) setError("本次修改尚未安全取消，请继续编辑并处理提示。");
+          return;
+        }
+        discarded.add(draft);
+        if (!mounted.current) return;
+      }
+      if (getUnsavedWorkspaceDrafts().some(draft => !discarded.has(draft))) {
+        setError("仍有新修改尚未处理，请继续编辑。");
+        return;
+      }
+      leave(request);
+    } catch {
+      if (mounted.current) setError("取消失败，内容仍保留在当前页面。");
+    } finally {
+      savingRef.current = false;
+      if (mounted.current) setSaving(false);
+    }
+  };
   return <Dialog open={Boolean(pending)} onOpenChange={open => { if (!open && !savingRef.current) setPending(null); }}>
     <DialogContent className="operator-dialog" showCloseButton={!saving} onEscapeKeyDown={event => { if (savingRef.current) event.preventDefault(); }} onPointerDownOutside={event => { if (savingRef.current) event.preventDefault(); }}>
       <DialogHeader><DialogTitle>还有未保存的内容</DialogTitle><DialogDescription>
@@ -73,7 +100,7 @@ export default function WorkspaceNavigationBoundary() {
       {error && <p role="alert">{error}</p>}
       <DialogFooter>
         <Button variant="outline" disabled={saving} onClick={() => setPending(null)}>继续编辑</Button>
-        <Button variant="outline" disabled={saving} onClick={() => { if (pending && !savingRef.current) leave(pending); }}>放弃并离开</Button>
+        <Button variant="outline" disabled={saving} onClick={() => void discard()}>放弃并离开</Button>
         {pending?.drafts.every(draft => draft.save) && <Button disabled={saving} onClick={() => void save()}>{saving ? "正在保存…" : "保存后离开"}</Button>}
       </DialogFooter>
     </DialogContent>

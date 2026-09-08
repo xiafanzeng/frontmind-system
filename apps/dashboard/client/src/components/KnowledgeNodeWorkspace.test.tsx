@@ -405,19 +405,19 @@ describe("unified knowledge node workspace", () => {
     });
     renderWorkspace();
     await screen.findByText("原有企业介绍。");
-    fireEvent.click(screen.getByRole("button", { name: "本地图片" }));
+    fireEvent.click(screen.getByRole("button", { name: "图片管理" }));
     const images = await screen.findByRole("dialog", {
-      name: "当前节点的本地图片",
+      name: "当前节点的图片",
     });
-    fireEvent.click(within(images).getByRole("checkbox"));
+    fireEvent.click(within(images).getByRole("button", { name: "移除 企业原图" }));
     fireEvent.keyDown(images, { key: "Escape" });
     expect(
-      screen.getByRole("dialog", { name: "当前节点的本地图片" }),
+      screen.getByRole("dialog", { name: "当前节点的图片" }),
     ).toBeVisible();
     expect(getUnsavedWorkspaceDrafts().map((draft) => draft.label)).toContain(
       "知识节点图片",
     );
-    fireEvent.click(within(images).getByRole("button", { name: "取消" }));
+    fireEvent.click(within(images).getByRole("button", { name: "放弃修改" }));
     expect(screen.getByRole("dialog", { name: "企业简介" })).toBeVisible();
     await closeDetails();
     expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(
@@ -855,7 +855,7 @@ describe("unified knowledge node workspace", () => {
     await screen.findByText("当前仅有部分内容，暂不可编辑。");
     expect(screen.getByRole("button", { name: "直接编辑" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "AI 修改" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "本地图片" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "图片管理" })).toBeDisabled();
     expect(document.body.querySelector("script")).toBeNull();
     expect(document.body.querySelector('a[href^="javascript:"]')).toBeNull();
   });

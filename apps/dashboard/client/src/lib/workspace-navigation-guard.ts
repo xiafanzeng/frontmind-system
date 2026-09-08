@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-export type WorkspaceDraft = { isDirty: () => boolean; label: string; save?: () => Promise<boolean> };
+export type WorkspaceDraft = { isDirty: () => boolean; label: string; save?: () => Promise<boolean>; discard?: () => Promise<boolean> };
 const drafts = new Set<WorkspaceDraft>();
 const listeners = new Set<() => void>();
 let navigatePrompt: ((action: () => void, drafts: WorkspaceDraft[]) => void) | null = null;
@@ -27,14 +27,15 @@ export function performApprovedWorkspaceNavigation(action: () => void) {
   bypass = true;
   try { action(); } finally { bypass = previous; }
 }
-export function useWorkspaceDraftGuard(input: { dirty: boolean; label: string; save?: () => Promise<boolean> }) {
+export function useWorkspaceDraftGuard(input: { dirty: boolean; label: string; save?: () => Promise<boolean>; discard?: () => Promise<boolean> }) {
   const current = useRef(input);
   current.current = input;
   useEffect(() => registerWorkspaceDraft({
     isDirty: () => current.current.dirty,
     label: input.label,
     ...(input.save ? { save: () => current.current.save?.() ?? Promise.resolve(false) } : {}),
-  }), [input.label, Boolean(input.save)]);
+    ...(input.discard ? { discard: () => current.current.discard?.() ?? Promise.resolve(false) } : {}),
+  }), [input.label, Boolean(input.save), Boolean(input.discard)]);
   useEffect(changed, [input.dirty]);
 }
 

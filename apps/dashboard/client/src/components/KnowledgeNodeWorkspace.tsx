@@ -1190,6 +1190,7 @@ function KnowledgeNodeWorkspaceSession({
                         <KnowledgeNodeLocalActions
                           conversationId={conversationId}
                           leafId={currentDetails.node.leafId}
+                          resetRevision={currentDetails.coordinates.resetRevision}
                           disabled={actionsDisabled}
                           editDisabled={
                             !currentDetails.capabilities.aiEdit.allowed
@@ -1200,6 +1201,7 @@ function KnowledgeNodeWorkspaceSession({
                           editLabel="AI 修改"
                           onBusyChange={setLocalActionPending}
                           onDirtyChange={setImageDirty}
+                          onImagesSaved={() => setReload((value) => value + 1)}
                           onEditTargetSelected={() => {
                             callbacks.current.onEditTargetChange?.({
                               leafId: currentDetails.node.leafId,

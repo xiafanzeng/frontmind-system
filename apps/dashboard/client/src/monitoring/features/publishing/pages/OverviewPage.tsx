@@ -27,7 +27,7 @@ export default function PublishingOverviewPage() {
     (signal: AbortSignal) => gateway.getDashboard(signal),
     [gateway],
   );
-  const query = usePublisherQuery(load);
+  const query = usePublisherQuery(load, "overview");
 
   return (
     <PublishingPage

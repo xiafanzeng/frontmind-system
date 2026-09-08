@@ -176,6 +176,25 @@ function clientWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe("createProductionPublisherGateway", () => {
+  it("loads exact dashboard totals in one request without catalog or article fanout", async () => {
+    const client = clientWith();
+    vi.mocked(client.publisher.dashboard.query).mockResolvedValue({
+      catalogRevision: "catalog-2", catalogSyncedAt: date, kindComplete: true, catalogStale: false,
+      catalogCounts: { news: 91822, selfMedia: 20 }, articleCount: 2500,
+      resumableArticles: [article], processingBatchCount: 0, processingBatches: [],
+      wallet: { availableTenThousandths: "10000", reservedTenThousandths: "0", frozenTenThousandths: "0" },
+      actionRequiredCount: 0, resumableDraftCount: 0, resumableDrafts: [], recentBatches: [],
+    });
+    const result = await createProductionPublisherGateway(client).getDashboard();
+    expect(result.articleCount).toBe(2500);
+    expect(result.catalog.mediaCount).toBe(91842);
+    expect(result.resumableArticles).toHaveLength(1);
+    expect(client.publisher.dashboard.query).toHaveBeenCalledTimes(1);
+    expect(client.publisher.media.facets.query).not.toHaveBeenCalled();
+    expect(client.publisher.articles.list.query).not.toHaveBeenCalled();
+    expect(client.publisher.batches.list.query).not.toHaveBeenCalled();
+  });
+
   it("maps page filters to the owner-scoped cursor API", async () => {
     const client = clientWith();
     const gateway = createProductionPublisherGateway(client);
@@ -239,6 +258,7 @@ describe("createProductionPublisherGateway", () => {
   it("maps resumable drafts and counts all queued or processing batches for the overview", async () => {
     const client = clientWith();
     vi.mocked(client.publisher.dashboard.query).mockResolvedValue({
+      catalogCounts: { news: 1, selfMedia: 1 }, articleCount: 1, resumableArticles: [article], processingBatchCount: 3, processingBatches: [],
       catalogRevision: "catalog-2",
       catalogSyncedAt: date.toISOString(),
       catalogStale: false,
@@ -261,15 +281,6 @@ describe("createProductionPublisherGateway", () => {
       actionRequiredCount: 0,
       recentBatches: [],
     });
-    vi.mocked(client.publisher.batches.list.query).mockImplementation(
-      async (input) => ({
-        items: [],
-        nextCursor: null,
-        total: input?.status === "queued" ? 1 : 2,
-        page: 1,
-        pageSize: 3,
-      }),
-    );
     const gateway = createProductionPublisherGateway(client);
 
     const dashboard = await gateway.getDashboard();
@@ -282,14 +293,7 @@ describe("createProductionPublisherGateway", () => {
       }),
     ]);
     expect(dashboard.processingBatchCount).toBe(3);
-    expect(client.publisher.batches.list.query).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "queued", pageSize: 3 }),
-      { signal: undefined },
-    );
-    expect(client.publisher.batches.list.query).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "processing", pageSize: 3 }),
-      { signal: undefined },
-    );
+    expect(client.publisher.batches.list.query).not.toHaveBeenCalled();
   });
 
   it("does not invent customer-facing values when optional catalog facts are missing", async () => {

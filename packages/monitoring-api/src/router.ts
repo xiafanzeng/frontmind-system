@@ -2073,13 +2073,14 @@ async function publicPublisherArticleSummary(
     suggestedTitle: string | null;
     status: "draft" | "ready" | "archived";
     currentVersionId: string | null;
+    currentVersion?: number | null;
     containsImages: boolean;
     revision: number;
     updatedAt: Date;
     createdAt: Date;
   },
 ) {
-  const versions = article.currentVersionId
+  const versions = article.currentVersion === undefined && article.currentVersionId
     ? await repository.listPublisherArticleVersions(ownerId, article.id)
     : [];
   const currentVersion = versions.find(
@@ -2091,7 +2092,7 @@ async function publicPublisherArticleSummary(
     suggestedTitle: article.suggestedTitle,
     status: article.status,
     currentVersionId: article.currentVersionId,
-    currentVersion: currentVersion?.version ?? null,
+    currentVersion: article.currentVersion ?? currentVersion?.version ?? null,
     containsImages: article.containsImages,
     revision: article.revision,
     updatedAt: article.updatedAt,

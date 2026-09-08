@@ -237,31 +237,10 @@ export function createServerBackedPublisherGateway(
     getDashboard(signal) {
       monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
-        const [dashboard, articles, facets, queuedBatches, processingBatches] =
-          await Promise.all([
-            client.publisher.dashboard.query(undefined, { signal }),
-            loadArticleSummaries(signal),
-            client.publisher.media.facets.query(undefined, { signal }),
-            client.publisher.batches.list.query(
-              { status: "queued", page: 1, pageSize: 3, limit: 3 },
-              { signal },
-            ),
-            client.publisher.batches.list.query(
-              { status: "processing", page: 1, pageSize: 3, limit: 3 },
-              { signal },
-            ),
-          ]);
+        const dashboard = await client.publisher.dashboard.query(undefined, { signal });
         const recentBatches = dashboard.recentBatches.map(mapApiBatchSummary);
-        const activeBatches = [
-          ...queuedBatches.items,
-          ...processingBatches.items,
-        ]
-          .map(mapApiBatchSummary)
-          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-          .slice(0, 3);
-        const articleViews = articles
-          .map(mapArticleSummary)
-          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const activeBatches = dashboard.processingBatches.map(mapApiBatchSummary);
+        const articleViews = dashboard.resumableArticles.map(mapArticleSummary);
         return {
           wallet: {
             availableTenThousandths: dashboard.wallet.availableTenThousandths,
@@ -269,18 +248,18 @@ export function createServerBackedPublisherGateway(
             frozenTenThousandths: dashboard.wallet.frozenTenThousandths,
           },
           catalog: {
-            activeRevision: facets.catalogRevision ?? "等待首次完整同步",
-            mediaCount: facets.kindCounts.news + facets.kindCounts.selfMedia,
-            newsCount: facets.kindCounts.news,
-            selfMediaCount: facets.kindCounts.selfMedia,
-            kindComplete: facets.kindComplete,
-            lastSyncedAt: toIso(facets.catalogSyncedAt),
+            activeRevision: dashboard.catalogRevision ?? "等待首次完整同步",
+            mediaCount: dashboard.catalogCounts.news + dashboard.catalogCounts.selfMedia,
+            newsCount: dashboard.catalogCounts.news,
+            selfMediaCount: dashboard.catalogCounts.selfMedia,
+            kindComplete: dashboard.kindComplete,
+            lastSyncedAt: toIso(dashboard.catalogSyncedAt),
             stale:
-              !facets.catalogSyncedAt ||
-              Date.now() - new Date(facets.catalogSyncedAt).getTime() >
+              !dashboard.catalogSyncedAt ||
+              Date.now() - new Date(dashboard.catalogSyncedAt).getTime() >
                 12 * 60 * 60_000,
           },
-          articleCount: articles.length,
+          articleCount: dashboard.articleCount,
           actionableItemCount: dashboard.actionRequiredCount,
           resumableDraftCount: dashboard.resumableDraftCount,
           resumableDrafts: (dashboard.resumableDrafts ?? []).map((draft) => ({
@@ -290,7 +269,7 @@ export function createServerBackedPublisherGateway(
             status: draft.status,
             updatedAt: toIso(draft.updatedAt),
           })),
-          processingBatchCount: queuedBatches.total + processingBatches.total,
+          processingBatchCount: dashboard.processingBatchCount,
           processingBatches: activeBatches,
           recentBatches,
           resumableArticles: articleViews

@@ -23,6 +23,7 @@ import {
   desc,
   eq,
   gt,
+  getTableColumns,
   gte,
   inArray,
   isNotNull,
@@ -98,6 +99,8 @@ const PUBLISHER_IMAGE_CANARY_MAX_TEN_THOUSANDTHS = 100_000n;
 
 export class PublishingRepository {
   constructor(public readonly db: Database) {}
+  private mediaFacetsCache = new Map<string, { expiresAt: number; value: ReturnType<PublishingRepository["loadPublisherMediaFacets"]> }>();
+
 
   async ensureMediaPublishingWallet(ownerId: string) {
     await this.db
@@ -743,8 +746,13 @@ export class PublishingRepository {
     if (input.cursor) conditions.push(gt(publisherArticles.id, input.cursor));
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
     return this.db
-      .select()
+      .select({ ...getTableColumns(publisherArticles), currentVersion: publisherArticleVersions.version })
       .from(publisherArticles)
+      .leftJoin(publisherArticleVersions, and(
+        eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
+        eq(publisherArticleVersions.articleId, publisherArticles.id),
+        monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
+      ))
       .where(and(...conditions))
       .orderBy(asc(publisherArticles.id))
       .limit(limit + 1);
@@ -1132,6 +1140,21 @@ export class PublishingRepository {
   }
 
   async getPublisherMediaFacets(input: Partial<PublisherMediaListInput> = {}) {
+    const runtime = await this.getPublisherRuntimeState();
+    const key = JSON.stringify([runtime?.activeCatalogRevision, runtime?.catalogSyncedAt, input.kind ?? "all"]);
+    const cached = this.mediaFacetsCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (this.mediaFacetsCache.size >= 3) this.mediaFacetsCache.clear();
+    const value = this.loadPublisherMediaFacets(input);
+    const entry = { expiresAt: Date.now() + 60_000, value };
+    this.mediaFacetsCache.set(key, entry);
+    try { return await value; } catch (error) {
+      if (this.mediaFacetsCache.get(key) === entry) this.mediaFacetsCache.delete(key);
+      throw error;
+    }
+  }
+
+  private async loadPublisherMediaFacets(input: Partial<PublisherMediaListInput> = {}) {
     const conditions = [
       eq(publisherMediaResources.isActive, true),
       isNotNull(publisherMediaResources.mediaKind),
@@ -1448,7 +1471,7 @@ export class PublishingRepository {
 
   async listPublisherBatches(
     ownerId: string,
-    input: Partial<PublisherBatchListInput> = {},
+    input: Partial<PublisherBatchListInput> & { activeOnly?: boolean } = {},
   ) {
     const conditions = [
       monitoringProjectOwnerPredicate(publisherBatches, ownerId),
@@ -1506,6 +1529,7 @@ export class PublishingRepository {
     const page = Math.max(input.page ?? 1, 1);
     const legacyCursorMode =
       input.page === undefined && input.pageSize === undefined;
+    if (input.activeOnly) conditions.push(inArray(publisherBatches.status, ["queued", "processing"]));
     const [{ total = 0 } = { total: 0 }] = await this.db
       .select({ total: count() })
       .from(publisherBatches)
@@ -1776,8 +1800,39 @@ export class PublishingRepository {
           eq(publisherBatches.status, "action_required"),
         ),
       );
+    // Lightweight covering-index counts; the overview never loads catalog facets.
+    const [kindRows, [articleTotal], articles, processing] = await Promise.all([
+      this.db.select({ kind: publisherMediaResources.mediaKind, total: count() })
+        .from(publisherMediaResources).where(and(
+          eq(publisherMediaResources.isActive, true),
+          isNotNull(publisherMediaResources.mediaKind),
+        ))
+        .groupBy(publisherMediaResources.mediaKind),
+      this.db.select({ total: count() }).from(publisherArticles)
+        .where(monitoringProjectOwnerPredicate(publisherArticles, ownerId)),
+      this.db.select({
+        id: publisherArticles.id, workingName: publisherArticles.workingName,
+        suggestedTitle: publisherArticles.suggestedTitle, status: publisherArticles.status,
+        currentVersionId: publisherArticles.currentVersionId, currentVersion: publisherArticleVersions.version,
+        containsImages: publisherArticles.containsImages, revision: publisherArticles.revision,
+        updatedAt: publisherArticles.updatedAt, createdAt: publisherArticles.createdAt,
+      }).from(publisherArticles).leftJoin(publisherArticleVersions, and(
+        eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
+        eq(publisherArticleVersions.articleId, publisherArticles.id),
+        monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
+      )).where(and(monitoringProjectOwnerPredicate(publisherArticles, ownerId),
+        inArray(publisherArticles.status, ["draft", "ready"])))
+        .orderBy(desc(publisherArticles.updatedAt), desc(publisherArticles.id)).limit(3),
+      this.listPublisherBatches(ownerId, { page: 1, pageSize: 3, activeOnly: true }),
+    ]);
     const now = new Date();
     return {
+      catalogCounts: { news: Number(kindRows.find(row => row.kind === "news")?.total ?? 0),
+        selfMedia: Number(kindRows.find(row => row.kind === "self_media")?.total ?? 0) },
+      articleCount: Number(articleTotal?.total ?? 0),
+      resumableArticles: articles,
+      processingBatchCount: processing.total,
+      processingBatches: processing.items,
       catalogRevision: runtime?.activeCatalogRevision ?? null,
       catalogSyncedAt: runtime?.catalogSyncedAt ?? null,
       catalogStale:

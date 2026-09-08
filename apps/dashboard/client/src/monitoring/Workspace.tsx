@@ -285,8 +285,9 @@ function ServerBackedWorkspace({
     { fingerprint: string; idempotencyKey: string } | undefined
   >(undefined);
   const customerEnabled = user.role === "user";
+  const monitoringEnabled = customerEnabled && location.startsWith("/monitoring-system");
   const projectsQuery = trpc.projects.list.useQuery(undefined, {
-    enabled: customerEnabled,
+    enabled: monitoringEnabled,
   });
   const projects = useMemo(
     () => (projectsQuery.data || []).map(mapProject),
@@ -295,10 +296,10 @@ function ServerBackedWorkspace({
   const [activeProjectId, selectActiveProject] =
     useMonitoringProjectSelection(projects);
   const platformQuery = trpc.platforms.list.useQuery(undefined, {
-    enabled: customerEnabled,
+    enabled: monitoringEnabled,
   });
   const regionQuery = trpc.regions.list.useQuery(undefined, {
-    enabled: customerEnabled,
+    enabled: monitoringEnabled,
   });
   const billingSummaryQuery = trpc.billing.summary.useQuery(undefined, {
     enabled: customerEnabled,
@@ -408,12 +409,12 @@ function ServerBackedWorkspace({
   const monitorsQuery = trpc.monitors.list.useQuery(
     activeProjectId ? { projectId: activeProjectId } : undefined,
     {
-      enabled: Boolean(activeProjectId && customerEnabled),
-      refetchInterval: activeProjectId && customerEnabled ? 10_000 : false,
+      enabled: Boolean(activeProjectId && monitoringEnabled),
+      refetchInterval: activeProjectId && monitoringEnabled ? 10_000 : false,
     },
   );
   const deletedMonitorsQuery = trpc.monitors.listDeleted.useQuery(undefined, {
-    enabled: customerEnabled,
+    enabled: monitoringEnabled,
   });
   const recentRunsQuery = trpc.runs.list.useQuery(
     {
@@ -421,8 +422,8 @@ function ServerBackedWorkspace({
       limit: 100,
     },
     {
-      enabled: Boolean(selectedMonitorId && customerEnabled),
-      refetchInterval: selectedMonitorId && customerEnabled ? 15_000 : false,
+      enabled: Boolean(selectedMonitorId && monitoringEnabled),
+      refetchInterval: selectedMonitorId && monitoringEnabled ? 15_000 : false,
     },
   );
   const latestRunQuery = trpc.runs.get.useQuery(
@@ -430,9 +431,9 @@ function ServerBackedWorkspace({
       runId: selectedLatestRunId || "00000000-0000-0000-0000-000000000000",
     },
     {
-      enabled: Boolean(selectedLatestRunId && customerEnabled),
+      enabled: Boolean(selectedLatestRunId && monitoringEnabled),
       refetchInterval: (state) =>
-        state.state.data && shouldPollRun(state.state.data.run.status)
+        monitoringEnabled && state.state.data && shouldPollRun(state.state.data.run.status)
           ? 3_000
           : false,
     },

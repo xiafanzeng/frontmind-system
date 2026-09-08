@@ -15,6 +15,7 @@ import {
   mediaPublishingItemPriceSnapshots,
 } from "../../../packages/monitoring-db/src/schema";
 import { createPublisherHttpService } from "../../../packages/monitoring-api/src/publisher-service";
+import { publisherDashboardOutputSchema } from "../../../packages/monitoring-contracts/src/publishing";
 
 // Uses an already bootstrapped, disposable operator acceptance database. Never
 // drops tables, rewrites existing records, calls a provider, or writes media.
@@ -197,6 +198,164 @@ const hash = (value: string) =>
           repo.createPublisherArticle(randomUUID(), "foreign owner"),
         ),
       ).rejects.toThrow("MONITORING_PROJECT_OWNER_MISMATCH");
+    });
+    it("returns complete overview counts and only the latest scoped previews with joined article versions", async () => {
+      const overviewProject = randomUUID(),
+        foreignProject = randomUUID();
+      await connection.execute(
+        "INSERT INTO enterprise_projects(id,ownerUserId,name) VALUES(?,101,?),(?,101,?)",
+        [
+          overviewProject,
+          `Overview ${marker}`,
+          foreignProject,
+          `Foreign overview ${marker}`,
+        ],
+      );
+      const createdAt = new Date("2026-01-01T00:00:00.000Z");
+      async function seedBatch(
+        project: string,
+        index: number,
+        status: "queued" | "processing" | "success" | "action_required",
+      ) {
+        return inProject(project, async () => {
+          const article = await repo.createPublisherArticle(
+            owner,
+            `Overview ${project} ${index}`,
+          );
+          const saved = await repo.savePublisherArticle(owner, {
+            articleId: article.id,
+            expectedRevision: article.revision,
+            workingName: article.workingName,
+            editorJson: { type: "doc" },
+            canonicalHtml: "<p>Overview fixture</p>",
+            plainText: "Overview fixture",
+          });
+          const version = await repo.freezePublisherArticle(owner, {
+            articleId: article.id,
+            expectedRevision: saved.revision,
+            idempotencyKey: randomUUID(),
+          });
+          const draft = await repo.savePublisherDraft(owner, {
+            articleVersionId: version.id,
+            expectedRevision: 0,
+            items: [],
+          });
+          const batchId = randomUUID();
+          await domain.db.insert(publisherBatches).values({
+            id: batchId,
+            ownerId: owner,
+            draftId: draft.id,
+            articleVersionId: version.id,
+            status,
+            mode: "mock",
+            quotedTotalTenThousandths: 10000n,
+            quoteFingerprint: hash(batchId),
+            preflightRevision: randomUUID(),
+            preflightSnapshot: {},
+            idempotencyKey: randomUUID(),
+            createdAt: new Date(createdAt.getTime() + index * 1000),
+          });
+          await connection.execute(
+            "UPDATE publisher_articles SET updated_at=?,status=? WHERE id=?",
+            [
+              new Date(createdAt.getTime() + index * 1000),
+              status === "success" ? "archived" : "ready",
+              article.id,
+            ],
+          );
+          return { articleId: article.id, batchId, versionId: version.id };
+        });
+      }
+      const fixtures = [];
+      for (const [index, status] of (
+        [
+          "queued",
+          "processing",
+          "queued",
+          "processing",
+          "success",
+          "action_required",
+        ] as const
+      ).entries()) {
+        fixtures.push(await seedBatch(overviewProject, index, status));
+      }
+      const emptyArticle = await inProject(overviewProject, () =>
+        repo.createPublisherArticle(owner, `Unfrozen overview ${marker}`),
+      );
+      const foreign = await seedBatch(foreignProject, 10, "queued");
+      const [overview, otherOverview] = await Promise.all([
+        inProject(overviewProject, () => repo.getPublisherDashboard(owner)),
+        inProject(foreignProject, () => repo.getPublisherDashboard(owner)),
+      ]);
+      const parsed = publisherDashboardOutputSchema.parse(overview);
+      expect(parsed.articleCount).toBe(7);
+      expect(parsed.processingBatchCount).toBe(4);
+      expect(parsed.actionRequiredCount).toBe(1);
+      expect(parsed.processingBatches.map((batch) => batch.id)).toEqual([
+        fixtures[3]!.batchId,
+        fixtures[2]!.batchId,
+        fixtures[1]!.batchId,
+      ]);
+      expect(
+        parsed.processingBatches.every((batch) =>
+          ["queued", "processing"].includes(batch.status),
+        ),
+      ).toBe(true);
+      expect(parsed.resumableArticles.map((article) => article.id)).toEqual([
+        emptyArticle.id,
+        fixtures[5]!.articleId,
+        fixtures[3]!.articleId,
+      ]);
+      expect(
+        parsed.resumableArticles.map((article) => article.currentVersion),
+      ).toEqual([null, 1, 1]);
+      expect(parsed.recentBatches).toHaveLength(5);
+      expect(
+        parsed.recentBatches.some((batch) => batch.status === "success"),
+      ).toBe(true);
+      expect(
+        parsed.recentBatches.some((batch) => batch.id === foreign.batchId),
+      ).toBe(false);
+      expect(publisherDashboardOutputSchema.parse(otherOverview)).toMatchObject(
+        {
+          articleCount: 1,
+          processingBatchCount: 1,
+          actionRequiredCount: 0,
+          processingBatches: [{ id: foreign.batchId }],
+          resumableArticles: [{ id: foreign.articleId, currentVersion: 1 }],
+          catalogCounts: parsed.catalogCounts,
+        },
+      );
+      const catalogCounts = await rows(
+        "SELECT media_kind,COUNT(*) AS total FROM publisher_media_resources WHERE is_active=1 AND media_kind IS NOT NULL GROUP BY media_kind",
+      );
+      expect(parsed.catalogCounts).toEqual({
+        news: Number(
+          catalogCounts.find((row) => row.media_kind === "news")?.total ?? 0,
+        ),
+        selfMedia: Number(
+          catalogCounts.find((row) => row.media_kind === "self_media")?.total ??
+            0,
+        ),
+      });
+      const listed = await inProject(overviewProject, () =>
+        repo.listPublisherArticles(owner, { limit: 100 }),
+      );
+      expect(listed).toHaveLength(7);
+      expect(
+        listed.find((article) => article.id === emptyArticle.id),
+      ).toMatchObject({ currentVersionId: null, currentVersion: null });
+      for (const fixture of fixtures) {
+        expect(
+          listed.find((article) => article.id === fixture.articleId),
+        ).toMatchObject({
+          currentVersionId: fixture.versionId,
+          currentVersion: 1,
+        });
+      }
+      expect(listed.some((article) => article.id === foreign.articleId)).toBe(
+        false,
+      );
     });
     it("rejects foreign-project image upload before object writes and private image reads before object reads", async () => {
       const put = vi.fn(),
@@ -461,3 +620,127 @@ const hash = (value: string) =>
     });
   },
 );
+
+describe("publisher public catalog facet cache", () => {
+  type Facets = Awaited<
+    ReturnType<PublishingRepository["getPublisherMediaFacets"]>
+  >;
+  type Runtime = Awaited<
+    ReturnType<PublishingRepository["getPublisherRuntimeState"]>
+  >;
+  const facets = (news = 0): Facets => ({
+    kindCounts: { news, selfMedia: 0 },
+    platforms: [],
+    taxonomies: [],
+    mediaTypes: [],
+    areas: [],
+    includeTypes: [],
+    publishSpeeds: [],
+    entryTypes: [],
+    entryLevels: [],
+    linkTypes: [],
+    imageSupports: [],
+    pcWeightThresholds: [],
+    includeRateThresholds: [],
+    successRateThresholds: [],
+    recommendedOptions: [],
+    authenticatedOptions: [],
+    festivalPublishableOptions: [],
+    minimumPriceTenThousandths: null,
+    maximumPriceTenThousandths: null,
+  });
+  function setup() {
+    const repository = new PublishingRepository(
+      {} as ConstructorParameters<typeof PublishingRepository>[0],
+    );
+    const runtime = vi
+      .spyOn(repository, "getPublisherRuntimeState")
+      .mockResolvedValue(null);
+    const load = vi.spyOn(
+      repository as unknown as {
+        loadPublisherMediaFacets: () => Promise<Facets>;
+      },
+      "loadPublisherMediaFacets",
+    );
+    return { repository, runtime, load };
+  }
+
+  it("coalesces concurrent catalog requests and reuses the resolved result", async () => {
+    const { repository, load } = setup();
+    let release!: (value: Facets) => void;
+    load.mockReturnValue(
+      new Promise<Facets>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const first = repository.getPublisherMediaFacets({ kind: "news" });
+    const concurrent = repository.getPublisherMediaFacets({ kind: "news" });
+    await Promise.resolve();
+    expect(load).toHaveBeenCalledTimes(1);
+    const result = facets(4);
+    release(result);
+    expect(await first).toBe(result);
+    expect(await concurrent).toBe(result);
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      result,
+    );
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("separates media kinds and refreshes when the catalog revision or sync time changes", async () => {
+    const { repository, runtime, load } = setup();
+    const runtimeKey = (revision: string, syncedAt: string) =>
+      ({
+        activeCatalogRevision: revision,
+        catalogSyncedAt: new Date(syncedAt),
+      }) as Runtime;
+    runtime.mockResolvedValue(runtimeKey("one", "2026-01-01T00:00:00Z"));
+    const initial = facets(1),
+      otherKind = facets(2),
+      revised = facets(3),
+      resynced = facets(4);
+    load
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(otherKind)
+      .mockResolvedValueOnce(revised)
+      .mockResolvedValueOnce(resynced);
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      initial,
+    );
+    expect(
+      await repository.getPublisherMediaFacets({ kind: "self_media" }),
+    ).toBe(otherKind);
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      initial,
+    );
+    runtime.mockResolvedValue(runtimeKey("two", "2026-01-01T00:00:00Z"));
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      revised,
+    );
+    runtime.mockResolvedValue(runtimeKey("two", "2026-01-01T00:01:00Z"));
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      resynced,
+    );
+    expect(load).toHaveBeenCalledTimes(4);
+  });
+
+  it("evicts a failed shared request so a retry can load the catalog", async () => {
+    const { repository, load } = setup();
+    const failure = new Error("Transient catalog query failure"),
+      recovered = facets(1);
+    load.mockRejectedValueOnce(failure).mockResolvedValueOnce(recovered);
+    const requests = await Promise.allSettled([
+      repository.getPublisherMediaFacets({ kind: "news" }),
+      repository.getPublisherMediaFacets({ kind: "news" }),
+    ]);
+    expect(requests).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(await repository.getPublisherMediaFacets({ kind: "news" })).toBe(
+      recovered,
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});

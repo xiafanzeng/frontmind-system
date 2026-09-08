@@ -225,9 +225,9 @@ function percentage(value: unknown): string | undefined {
 
 function booleanValue(value: unknown): boolean | undefined {
   if (value === null || value === undefined || value === "") return undefined;
-  if (value === true || value === 1 || value === "1" || value === "true")
+  if (value === true || value === 1 || value === "1" || value === "true" || value === "是")
     return true;
-  if (value === false || value === 0 || value === "0" || value === "false")
+  if (value === false || value === 0 || value === "0" || value === "false" || value === "否")
     return false;
   return undefined;
 }

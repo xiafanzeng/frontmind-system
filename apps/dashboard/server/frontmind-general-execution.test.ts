@@ -178,7 +178,10 @@ describe("Managed public execution evidence", () => {
     const system = frontmindGeneralIdentity("glm-5.3");
     expect(system).toContain("我是 FrontMind 通用智能体");
     expect(system).not.toMatch(/glm-5\.3|Z\.ai|智谱提供/);
-    expect(system).toContain("不得编造模型训练归属");
+    expect(system).toContain(
+      "身份回答仅介绍 FrontMind，不追加底层模型、供应商、训练机构或产品层关系的说明",
+    );
+    expect(system).toContain("不编造训练或研发归属");
     expect(system).toContain("没有实际执行的操作不能声称完成");
     expect(system).toContain("开始和关键进展处用一到两句话");
     expect(system).toContain("正文不要重复工具调用日志");

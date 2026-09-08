@@ -1,5 +1,4 @@
-import { setTimeout as delay } from "node:timers/promises";
-import type { PublisherJobType } from "./job-types.js";
+import { publisherJobTypes, type PublisherJobType } from "./job-types.js";
 import {
   DeferPublisherJobError,
   TerminalPublisherJobError,
@@ -66,46 +65,123 @@ export class PublisherWorkerEngine {
 
   async run(signal: AbortSignal): Promise<void> {
     let lastMaintenance = 0;
+    const running = new Set<Promise<void>>();
+    const runningByType = new Map<PublisherJobType, number>();
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort(signal.reason);
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener("abort", forwardAbort, { once: true });
+    const runSignal = controller.signal;
+    let failure: { error: unknown } | undefined;
+    let wake: (() => void) | undefined;
+    const waitForCapacityOrPoll = () =>
+      new Promise<void>((resolve) => {
+        const finish = () => {
+          clearTimeout(timer);
+          runSignal.removeEventListener("abort", finish);
+          wake = undefined;
+          resolve();
+        };
+        const timer = setTimeout(finish, this.pollMs);
+        wake = finish;
+        runSignal.addEventListener("abort", finish, { once: true });
+        if (runSignal.aborted) finish();
+      });
     this.logger.info("Publisher worker started", {
       workerId: this.options.workerId,
       concurrency: this.options.concurrency,
     });
-    while (!signal.aborted) {
-      const now = new Date();
-      if (now.valueOf() - lastMaintenance >= this.maintenanceMs) {
-        if (this.options.providerEnabled !== false) {
-          await this.repository.enqueuePublisherMaintenanceJobs(now);
+    try {
+      while (!runSignal.aborted) {
+        const now = new Date();
+        if (now.valueOf() - lastMaintenance >= this.maintenanceMs) {
+          if (this.options.providerEnabled !== false) {
+            await this.repository.enqueuePublisherMaintenanceJobs(now);
+          }
+          const recovered =
+            await this.repository.recoverExpiredPublisherSubmissions(now, 500);
+          if (recovered)
+            this.logger.warn(
+              "Recovered expired publisher submissions as unknown",
+              { recovered },
+            );
+          const objectCleanup =
+            await this.processor.cleanupExpiredObjectLeases(runSignal);
+          if (objectCleanup.deleted) {
+            this.logger.info("Cleaned expired publisher object leases", {
+              claimed: objectCleanup.claimed,
+              deleted: objectCleanup.deleted,
+            });
+          }
+          lastMaintenance = now.valueOf();
         }
-        const recovered =
-          await this.repository.recoverExpiredPublisherSubmissions(now, 500);
-        if (recovered)
-          this.logger.warn(
-            "Recovered expired publisher submissions as unknown",
-            { recovered },
+        // Refill free slots independently of long-running catalog synchronization.
+        // Reserve each type's capacity before leasing so queued Logo work cannot
+        // occupy all global slots while waiting for its in-process semaphore.
+        let claims = 0;
+        while (
+          !runSignal.aborted &&
+          running.size < this.options.concurrency &&
+          claims < this.options.concurrency
+        ) {
+          const allowedTypes = (
+            this.options.allowedTypes ?? publisherJobTypes
+          ).filter(
+            (type) =>
+              (runningByType.get(type) ?? 0) <
+              (this.options.typeConcurrency?.[type] ??
+                this.options.concurrency),
           );
-        const objectCleanup =
-          await this.processor.cleanupExpiredObjectLeases(signal);
-        if (objectCleanup.deleted) {
-          this.logger.info("Cleaned expired publisher object leases", {
-            claimed: objectCleanup.claimed,
-            deleted: objectCleanup.deleted,
+          if (!allowedTypes.length) break;
+          const jobs = await this.repository.leasePublisherJobs({
+            workerId: this.options.workerId,
+            now: new Date(),
+            limit: 1,
+            leaseMs: this.leaseMs,
+            allowedTypes,
           });
+          if (!jobs.length) break;
+          claims += jobs.length;
+          for (const job of jobs) {
+            if (runSignal.aborted) {
+              // Shutdown may arrive while MySQL acquires the lease. Release
+              // work that has not started without entering a submission or
+              // incrementing an attempt solely because its signal is aborted.
+              await this.repository.deferPublisherJob(
+                job.id,
+                this.options.workerId,
+                new Date(),
+                "Worker stopped before the leased job started",
+              );
+              continue;
+            }
+            runningByType.set(job.type, (runningByType.get(job.type) ?? 0) + 1);
+            const task = this.processJob(job, runSignal)
+              .catch((error) => {
+                failure ??= { error };
+                controller.abort(error);
+              })
+              .finally(() => {
+                running.delete(task);
+                runningByType.set(
+                  job.type,
+                  (runningByType.get(job.type) ?? 1) - 1,
+                );
+                wake?.();
+              });
+            running.add(task);
+          }
         }
-        lastMaintenance = now.valueOf();
+        if (!runSignal.aborted) await waitForCapacityOrPoll();
       }
-      const jobs = await this.repository.leasePublisherJobs({
-        workerId: this.options.workerId,
-        now,
-        limit: this.options.concurrency,
-        leaseMs: this.leaseMs,
-        ...(this.options.allowedTypes ? { allowedTypes: this.options.allowedTypes } : {}),
-      });
-      if (!jobs.length) {
-        await delay(this.pollMs, undefined, { signal }).catch(() => undefined);
-        continue;
-      }
-      await Promise.all(jobs.map((job) => this.processJob(job, signal)));
+    } finally {
+      signal.removeEventListener("abort", forwardAbort);
+      controller.abort();
+      // Keep every acquired lease under this executor's existing completion /
+      // retry / UNKNOWN handling until its operation has finished shutting down.
+      await Promise.allSettled([...running]);
     }
+    if (failure) throw failure.error;
     this.logger.info("Publisher worker stopped", {
       workerId: this.options.workerId,
     });

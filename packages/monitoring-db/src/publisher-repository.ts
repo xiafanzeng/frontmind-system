@@ -80,6 +80,7 @@ import {
   publisherMediaSyncRuns,
   publisherReconciliationCandidates,
   publisherRuntimeState,
+  publisherSubmissionAttempts,
   users,
 } from "./schema.js";
 
@@ -2390,11 +2391,34 @@ export class PublishingRepository {
           "Item no longer needs reconciliation",
         );
       }
+      // UNKNOWN has no accepted-response timestamp. Recover the polling clock
+      // from the durable send attempt, never from the later admin binding time.
+      const [attempt] = item.submittedAt
+        ? []
+        : await tx
+            .select({ startedAt: publisherSubmissionAttempts.startedAt })
+            .from(publisherSubmissionAttempts)
+            .where(
+              and(
+                eq(publisherSubmissionAttempts.itemId, item.id),
+                eq(publisherSubmissionAttempts.ownerId, item.ownerId),
+                eq(publisherSubmissionAttempts.attemptNumber, item.attemptCount),
+              ),
+            )
+            .limit(1);
+      const submittedAt = item.submittedAt ?? attempt?.startedAt;
+      if (!submittedAt || !Number.isFinite(submittedAt.getTime())) {
+        throw new RepositoryError(
+          "CONFLICT",
+          "Submission time evidence is missing; the order cannot be bound",
+        );
+      }
       await tx
         .update(publisherItems)
         .set({
           status: "processing",
           externalOrderId: candidate.externalOrderId,
+          submittedAt,
           actionRequiredReason: null,
           nextPollAt: boundAt,
         })

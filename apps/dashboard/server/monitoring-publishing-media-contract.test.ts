@@ -13,6 +13,27 @@ import { normalizePublisherImage } from "../../../packages/monitoring-publisher/
 import { PublisherLogoArchiveCache } from "../../../apps/monitoring-worker/src/publishing/logo-archive-cache";
 
 describe("real catalog metadata", () => {
+  it("preserves the supplier's Chinese recommendation flag independently of platform and authentication labels", () => {
+    const raw = kolResourceSchema.parse({ id: 87347, name: "腾讯网新闻（账号随机）", is_zimeiti: 2, price: "18.5",
+      is_recommend: "是", recommend: ["急速出稿", "周末可发", "GEO排名"], platform_recommend: [],
+      auth: "否", festival: "是" });
+    const normalized = normalizeResource(raw, new URL("https://api.kol.cn"));
+    const stored = normalizeCatalogResource(normalized)!;
+    expect(stored).toMatchObject({ recommended: true, authenticated: false, festivalPublishable: true });
+    expect(stored.rawPayload.recommended).toBe(true);
+    expect(publisherMediaEditorialMetadata(stored.rawPayload)).toMatchObject({
+      recommendationTags: ["急速出稿", "周末可发", "GEO排名"], platformRecommendationTags: [],
+    });
+  });
+  it.each(["", null, "官方", "推荐", "未知", " 是 "])("keeps unrecognized boolean %j unknown even when platform tags are present", value => {
+    const raw = kolResourceSchema.parse({ id: 41004, name: "平阴新闻", is_zimeiti: 2, price: "18.5",
+      is_recommend: value, auth: value, festival: value, platform_recommend: ["官方"] });
+    const stored = normalizeCatalogResource(normalizeResource(raw))!;
+    expect(stored.recommended).toBeNull();
+    expect(stored.authenticated).toBeNull();
+    expect(stored.festivalPublishable).toBeNull();
+    expect(publisherMediaEditorialMetadata(stored.rawPayload).platformRecommendationTags).toEqual(["官方"]);
+  });
   it("preserves provider labels through staging and the explicit customer projection without inventing authentication", () => {
     const raw = kolResourceSchema.parse({ id: 42, name: "媒体甲", is_zimeiti: 1, price: "18.5",
       recommend: ["GEO排名", "GEO排名"], platform_recommend: ["官方"], is_recommend: "",

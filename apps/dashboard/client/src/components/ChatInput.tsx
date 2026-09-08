@@ -1147,7 +1147,9 @@ export default function ChatInput({
                           ? "正在根据你的补充资料更新当前节点…"
                           : purpose === "enterprise_qa"
                             ? "FrontMind 正在查阅企业知识库并回答…"
-                            : "FrontMind 正在编排内容制作流程..."
+                            : purpose === "content_production"
+                              ? "FrontMind 正在处理内容制作任务…"
+                              : "FrontMind 正在处理你的任务…"
                         : knowledgeBaseNotStarted
                           ? "请先点击上方“构建企业知识库”完成资料采集设置"
                           : officialLogoRequired
@@ -1156,7 +1158,9 @@ export default function ChatInput({
                               ? "输入文字修改要求；仅上传图片会直接本地保存"
                               : purpose === "enterprise_qa"
                                 ? "输入企业相关问题，按 Enter 提问…"
-                                : "输入你的内容需求，按 Enter 开始编排..."
+                                : purpose === "content_production"
+                                  ? "输入内容制作要求，按 Enter 发送…"
+                                  : "输入问题或任务，按 Enter 发送…"
                 }
                 disabled={
                   baseInputLocked ||

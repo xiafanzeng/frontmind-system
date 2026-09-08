@@ -1,6 +1,6 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 const identityQuestion =
-  /^\s*(?:你好[，,。!！\s]*)?(?:你是谁|你叫什么(?:名字)?|介绍(?:一下)?你自己|自我介绍|who are you|introduce yourself)[？?。!！.\s]*$/iu;
+  /^\s*(?:你好[，,。!！\s]*)?(?:你是谁|你是什么模型|你是哪个模型|你叫什么(?:名字)?|介绍(?:一下)?你自己|自我介绍|who are you|introduce yourself)[？?。!！.\s]*$/iu;
 
 /** Display-only repair for old identity replies, never a provider-name replacement. */
 export function projectFrontMindIdentityMessages<

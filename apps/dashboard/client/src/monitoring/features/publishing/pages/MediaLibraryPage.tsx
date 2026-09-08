@@ -116,10 +116,17 @@ export default function PublishingMediaLibraryPage({
       setSelection({ scope: selectionScope, items }),
     [selectionScope],
   );
-  const [draftState, setDraftState] = useState<{ scope: typeof selectionScope; value?: PublicationDraft }>();
-  const draft = draftState?.scope === selectionScope ? draftState.value : undefined;
-  const setDraft = useCallback((value?: PublicationDraft) =>
-    setDraftState({ scope: selectionScope, value }), [selectionScope]);
+  const [draftState, setDraftState] = useState<{
+    scope: typeof selectionScope;
+    value?: PublicationDraft;
+  }>();
+  const draft =
+    draftState?.scope === selectionScope ? draftState.value : undefined;
+  const setDraft = useCallback(
+    (value?: PublicationDraft) =>
+      setDraftState({ scope: selectionScope, value }),
+    [selectionScope],
+  );
   const [selectionError, setSelectionError] = useState("");
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -511,10 +518,9 @@ export default function PublishingMediaLibraryPage({
       actions={
         mediaQuery.data ? (
           <span className="publishing-catalog-count">
-            目录 <strong>{mediaQuery.data.catalog.activeRevision}</strong>
-            <small>
-              {mediaQuery.data.catalog.stale ? "已过期" : "已完成同步"}
-            </small>
+            {mediaQuery.data.catalog.stale
+              ? "媒体目录待更新"
+              : "媒体目录已同步"}
           </span>
         ) : undefined
       }
@@ -722,28 +728,32 @@ export default function PublishingMediaLibraryPage({
               </span>
             </div>
           </FilterLine>
-          <FilterLine label="媒体推荐">
-            <div className="publishing-filter-pills">
-              <button
-                type="button"
-                className={!filters.recommended ? "is-active" : ""}
-                onClick={() => updateFilter("recommended", "")}
-              >
-                不限
-              </button>
-              <button
-                type="button"
-                className={filters.recommended === "true" ? "is-active" : ""}
-                disabled={
-                  recommendedCount === 0 && filters.recommended !== "true"
-                }
-                onClick={() => updateFilter("recommended", "true")}
-              >
-                平台推荐
-                {recommendedCount === undefined ? "" : ` (${recommendedCount})`}
-              </button>
-            </div>
-          </FilterLine>
+          {recommendedCount !== 0 || filters.recommended === "true" ? (
+            <FilterLine label="媒体推荐">
+              <div className="publishing-filter-pills">
+                <button
+                  type="button"
+                  className={!filters.recommended ? "is-active" : ""}
+                  onClick={() => updateFilter("recommended", "")}
+                >
+                  不限
+                </button>
+                <button
+                  type="button"
+                  className={filters.recommended === "true" ? "is-active" : ""}
+                  disabled={
+                    recommendedCount === 0 && filters.recommended !== "true"
+                  }
+                  onClick={() => updateFilter("recommended", "true")}
+                >
+                  平台推荐
+                  {recommendedCount === undefined
+                    ? ""
+                    : ` (${recommendedCount})`}
+                </button>
+              </div>
+            </FilterLine>
+          ) : null}
         </div>
 
         <button
@@ -882,9 +892,8 @@ export default function PublishingMediaLibraryPage({
           <div>
             <strong>媒体目录已更新</strong>
             <p>
-              目录已从 {catalogRevisionChange.previous} 更新至{" "}
-              {catalogRevisionChange.current}。刷新后会回到第 1
-              页，并保留当前筛选与草稿中的已选媒体。
+              已有新的媒体信息与报价。刷新后会回到第 1 页，
+              并保留当前筛选与草稿中的已选媒体。
             </p>
           </div>
           <button
@@ -968,7 +977,10 @@ export default function PublishingMediaLibraryPage({
               const blocker = mediaSelectionBlocker(media, articleHasImages);
               const selectionLimitReached = !checked && selected.size >= 20;
               const disabled =
-                (!checked && Boolean(blocker)) || selectionLimitReached || selectionBusy || Boolean(draftId && !draft);
+                (!checked && Boolean(blocker)) ||
+                selectionLimitReached ||
+                selectionBusy ||
+                Boolean(draftId && !draft);
               return (
                 <div className="publishing-media-entry" key={media.id}>
                   <label

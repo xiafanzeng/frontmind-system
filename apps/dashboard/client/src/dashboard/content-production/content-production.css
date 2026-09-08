@@ -227,6 +227,8 @@
   display: flex;
 }
 .cp-dialogue {
+  container-type: inline-size;
+  container-name: content-dialogue;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -537,10 +539,24 @@
   font-size: 22px;
 }
 .cp-empty > p {
-  max-width: 580px;
+  max-width: 100%;
   margin: 0 0 24px;
   font-size: 16px;
   line-height: 1.8;
+}
+.cp-entry-description {
+  white-space: nowrap;
+}
+.cp-entry-description-full {
+  display: none;
+}
+@container content-dialogue (min-width: 620px) {
+  .cp-entry-description-full {
+    display: inline;
+  }
+  .cp-entry-description-short {
+    display: none;
+  }
 }
 .cp-entry-grid {
   display: grid;

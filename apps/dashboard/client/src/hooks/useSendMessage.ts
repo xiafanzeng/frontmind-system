@@ -1726,6 +1726,7 @@ export function useSendMessage() {
             effectiveStatus === "completed" || effectiveStatus === "error";
 
           updateStatus(convId, effectiveStatus as any, {
+            ...(response.execution ? { execution: response.execution } : {}),
             ...(response.clearTaskPointer
               ? { clearTaskPointer: true }
               : {

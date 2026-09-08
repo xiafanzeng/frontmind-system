@@ -1,3 +1,5 @@
+import { loadGeneralExecutions } from "./frontmind-general-execution";
+import type { GeneralExecutionDto } from "../shared/frontmind-general-execution";
 import { enterpriseProjectPredicate } from "./enterprise-project-scope";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
@@ -182,7 +184,7 @@ export const conversationSnapshotSchema = z.object({
   deletedMessageIds: z.array(z.string().max(128)).max(5_000).optional(),
 });
 
-export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
+export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema> & { execution?: GeneralExecutionDto };
 
 type KnowledgeBaseUserMessageAttachment = NonNullable<
   ConversationSnapshot["messages"][number]["attachments"]
@@ -3334,8 +3336,19 @@ export async function listSnapshots(
     ),
   );
 
+  const executionTaskIds = candidateGeneralChatTaskIds.filter(taskId => {
+    const binding = ownedGeneralChatTaskBindings.get(upstreamResourceKey("task", taskId));
+    return binding && !binding.purpose;
+  });
+  const executions = await loadGeneralExecutions(db, executionTaskIds);
   return conversationRows.map((row) => ({
     id: publicId(userId, row.id, projectAssignmentId),
+    ...(() => {
+      const taskIds = [...new Set([row.upstreamTaskId, row.previousResponseId, ...(durableTaskIdsByConversation.get(row.id) ?? [])].filter((id): id is string => Boolean(id)))];
+      const parts = taskIds.flatMap(id => executions.get(id) ? [executions.get(id)!] : []);
+      return parts.length ? { execution: { schemaVersion: 1 as const, taskId: parts[0]!.taskId, coverage: parts.every(part => part.coverage === "complete") ? "complete" as const : "pending" as const,
+        timeline: parts.flatMap(part => part.timeline).sort((a, b) => a.userSequence - b.userSequence || a.rank - b.rank) } } : {};
+    })(),
     ...(() => {
       const bound = [
         row.upstreamTaskId,

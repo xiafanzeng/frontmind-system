@@ -127,10 +127,6 @@ export default function RunConfirmationDialog({
 
         <dl className="run-confirmation-details">
           <div>
-            <dt>可用余额</dt>
-            <dd>{formatRunMoney(availableBalanceTenThousandths)}</dd>
-          </div>
-          <div>
             <dt>最大预计费用</dt>
             <dd>
               {quoteLoading
@@ -138,16 +134,6 @@ export default function RunConfirmationDialog({
                 : hasQuote
                   ? formatRunMoney(estimatedCostTenThousandths)
                   : "暂无法估算"}
-            </dd>
-          </div>
-          <div>
-            <dt>预计剩余</dt>
-            <dd>
-              {shortfall
-                ? `余额不足 ${formatRunMoney(shortfall)}`
-                : estimatedRemaining !== undefined
-                  ? formatRunMoney(estimatedRemaining)
-                  : "—"}
             </dd>
           </div>
           <div>

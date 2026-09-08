@@ -1,3 +1,4 @@
+import type { GeneralExecutionDto } from "@shared/frontmind-general-execution";
 import React, {
   createContext,
   useCallback,
@@ -227,6 +228,7 @@ export interface Conversation {
   messages: LocalMessage[];
   /** Server-derived boundary for provider tasks owned outside ordinary chat. */
   executionKind?: "general_chat_v2" | "response_logic";
+  execution?: GeneralExecutionDto;
   taskId?: string; // Upstream task ID
   previousResponseId?: string;
   status:
@@ -453,6 +455,7 @@ type Action =
         taskUrl?: string;
         previousResponseId?: string;
         executionKind?: "general_chat_v2" | "response_logic";
+  execution?: GeneralExecutionDto;
         clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;
@@ -596,6 +599,13 @@ function conversationReducer(
             ? undefined
             : (action.payload.previousResponseId ?? c.previousResponseId),
           executionKind: action.payload.executionKind ?? c.executionKind,
+          execution: action.payload.execution ? {
+            ...action.payload.execution,
+            timeline: [
+              ...(c.execution?.timeline.filter(entry => !entry.id.startsWith(`execution:${action.payload.execution!.taskId}:`)) ?? []),
+              ...action.payload.execution.timeline,
+            ].sort((a, b) => a.userSequence - b.userSequence || a.rank - b.rank),
+          } : c.execution,
           startedAt: action.payload.startedAt ?? c.startedAt,
           completedAt:
             action.payload.completedAt !== undefined
@@ -613,6 +623,7 @@ function conversationReducer(
           next.taskId === c.taskId &&
           next.previousResponseId === c.previousResponseId &&
           next.executionKind === c.executionKind &&
+          JSON.stringify(next.execution) === JSON.stringify(c.execution) &&
           next.startedAt === c.startedAt &&
           next.completedAt === c.completedAt &&
           next.lastKnownOutputLength === c.lastKnownOutputLength &&
@@ -1673,6 +1684,7 @@ export function prepareConversationForCloud(
   const {
     apiKeyFingerprint: _legacyFingerprint,
     taskUrl: _legacyProviderTaskUrl,
+    execution: _serverExecution,
     ...cloudConversation
   } = conversation;
   const repairedMessages = repairConversationMessageIds(conversation.messages);
@@ -2240,6 +2252,7 @@ interface ConversationContextType {
       taskUrl?: string;
       previousResponseId?: string;
       executionKind?: "general_chat_v2" | "response_logic";
+  execution?: GeneralExecutionDto;
       clearTaskPointer?: boolean;
       startedAt?: number;
       completedAt?: number;
@@ -2922,6 +2935,7 @@ export function ConversationProvider({
         taskUrl?: string;
         previousResponseId?: string;
         executionKind?: "general_chat_v2" | "response_logic";
+  execution?: GeneralExecutionDto;
         clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;

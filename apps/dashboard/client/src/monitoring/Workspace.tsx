@@ -301,18 +301,18 @@ function ServerBackedWorkspace({
   const regionQuery = trpc.regions.list.useQuery(undefined, {
     enabled: monitoringEnabled,
   });
+  const settingsEnabled =
+    customerEnabled && ["/account", "/monitoring-system/settings"].includes(location);
   const billingSummaryQuery = trpc.billing.summary.useQuery(undefined, {
-    enabled: customerEnabled,
-    refetchInterval: customerEnabled ? 10_000 : false,
+    enabled: monitoringEnabled || settingsEnabled,
+    refetchInterval: monitoringEnabled || settingsEnabled ? 10_000 : false,
     initialData: initialBilling,
   });
   const mediaPublishingSummaryQuery =
     trpc.mediaPublishing.billing.summary.useQuery(undefined, {
-      enabled: customerEnabled && publishingEnabled,
-      refetchInterval: customerEnabled && publishingEnabled ? 10_000 : false,
+      enabled: settingsEnabled && publishingEnabled,
+      refetchInterval: settingsEnabled && publishingEnabled ? 10_000 : false,
     });
-  const settingsEnabled =
-    customerEnabled && ["/account", "/monitoring-system/settings"].includes(location);
   const billingActivityQuery = trpc.billing.activity.useQuery({ limit: 100 }, { enabled: settingsEnabled, refetchInterval: settingsEnabled ? 10_000 : false });
   const billingPricingQuery = trpc.billing.pricing.useQuery(undefined, {
     enabled: settingsEnabled,
@@ -451,7 +451,6 @@ function ServerBackedWorkspace({
     platformQuery.error,
     regionQuery.error,
     billingSummaryQuery.error,
-    mediaPublishingSummaryQuery.error,
     deletedMonitorsQuery.error,
     recentRunsQuery.error,
     latestRunQuery.error,

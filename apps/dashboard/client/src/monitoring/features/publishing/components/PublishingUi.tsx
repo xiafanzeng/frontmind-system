@@ -205,9 +205,9 @@ export function MediaMark({
   const secondaryColor = colors[(index + 2) % colors.length];
   const monogram = name.replace(/[·（）()\s]/g, "").slice(0, 3) || "媒体";
   const sourceLabel = {
-    provider_logo: "供应商 Logo",
-    provider_icon: "供应商 Icon",
-    site_favicon: "站点 Favicon",
+    provider_logo: "媒体标识",
+    provider_icon: "平台图标",
+    site_favicon: "站点图标",
     web_search_verified: "名称检索验证 Logo",
     manual_verified: "人工核验 Logo",
     generated_fallback: "本地占位字标",
@@ -244,7 +244,7 @@ export function MediaMark({
           : isSiteFavicon
             ? `${sourceLabel}（仅作站点识别，不计入真实 Logo 覆盖率）`
             : showImage
-              ? `${sourceLabel}（真实、已归档）`
+              ? sourceLabel
               : `占位：${statusLabel}`
       }
       data-logo-source={resolvedSource}

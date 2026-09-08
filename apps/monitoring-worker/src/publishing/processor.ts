@@ -4,7 +4,6 @@ import type {
   PrivateObjectStore,
 } from "@frontmind/monitoring-object-store";
 import {
-  fetchRemoteMedia,
   ObjectStoreError,
   RemoteMediaFetchError,
   RemoteMediaRejectedError,
@@ -31,6 +30,7 @@ import {
 } from "./errors.js";
 import { publisherPayloadId, type PublisherJob } from "./job-types.js";
 import { publisherLogoSearchQueryHash } from "./logo-search.js";
+import { PublisherLogoArchiveCache } from "./logo-archive-cache.js";
 import type {
   PublisherLogoSearchAudit,
   PublisherLogoSearchCandidate,
@@ -49,12 +49,14 @@ const MAX_PUBLISHER_LOGO_BYTES = 2 * 1_024 * 1_024;
 
 export class PublisherWorkerProcessor {
   private readonly now: () => Date;
+  private readonly logoArchiveCache: PublisherLogoArchiveCache;
 
   constructor(
     private readonly dependencies: PublisherWorkerDependencies,
     private readonly config: PublisherRuntimeConfig,
   ) {
     this.now = dependencies.now ?? (() => new Date());
+    this.logoArchiveCache = new PublisherLogoArchiveCache(dependencies.objectStore, dependencies.mediaFetcher, () => this.now().valueOf());
   }
 
   async handle(job: PublisherJob, signal?: AbortSignal): Promise<void> {
@@ -527,24 +529,14 @@ export class PublisherWorkerProcessor {
       url: string;
       reviewAudit?: PublisherLogoSearchAudit;
     }) => {
-      const fetched = await (
-        this.dependencies.mediaFetcher ?? fetchRemoteMedia
-      )(source.url, {
-        maxBytes: MAX_PUBLISHER_LOGO_BYTES,
-        timeoutMs: 10_000,
-        maxRedirects: 3,
-        signal,
+      const file = await this.logoArchiveCache.resolve(source.url, signal);
+      await this.dependencies.repository.completeKolMediaLogoArchive({
+        mediaResourceId: candidate.mediaResourceId,
+        syncRunId: candidate.syncRunId, catalogRevision: candidate.catalogRevision,
+        candidateHash: candidate.candidateHash, sourceKind: source.kind,
+        ...file, checkedAt: this.now(),
+        ...(source.reviewAudit ? { reviewAudit: source.reviewAudit } : {}),
       });
-      const normalized = await normalizePublisherImage({
-        bytes: fetched.body,
-        sourceMimeType: fetched.contentType,
-      });
-      await persist(
-        normalized,
-        source.kind,
-        fetched.finalUrl,
-        source.reviewAudit,
-      );
     };
     const persist = async (
       normalized: Awaited<ReturnType<typeof normalizePublisherImage>>,

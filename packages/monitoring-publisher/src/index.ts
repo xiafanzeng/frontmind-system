@@ -2,6 +2,7 @@ export * from "./canonical-html.js";
 export * from "./docx.js";
 export * from "./hash.js";
 export * from "./image.js";
+export * from "./logo.js";
 export * from "./money.js";
 export * from "./polling.js";
 export * from "./preflight.js";

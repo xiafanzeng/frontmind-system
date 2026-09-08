@@ -185,10 +185,45 @@ describe("original v4.11 content workflow state", () => {
         runnerRevision: 1,
         confirmation: status,
         choices: ["原始选择"],
-        pauseTitle: "原始确认页",
+        pauseTitle: expect.any(String),
       });
     },
   );
+  it("localizes the public pause while preserving native state, revision and route choices", () => {
+    const raw = originalState(
+      "awaiting_reference_pack_route",
+      "reference_pack_route",
+      "p0",
+      2,
+    );
+    raw.current_pause!.title = "Reference Pack 路由";
+    raw.current_pause!.available_choices = [
+      "使用已有 Reference Pack",
+      "创建新的 Reference Pack",
+    ];
+    const state = parseContentRunnerState(Buffer.from(JSON.stringify(raw)))!;
+    const progress = reduceContentProductionProgress(
+      null,
+      { ...observation(2, raw.status, raw.stage, "p0"), state },
+      "p0",
+    );
+    expect(
+      contentProductionPublicDto(context("p0"), {
+        contentProductionProgress: progress,
+      }),
+    ).toMatchObject({
+      pauseTitle: "选择品牌资料包",
+      choices: ["使用已有品牌资料包", "创建新的品牌资料包"],
+      confirmation: "awaiting_reference_pack_route",
+      runnerRevision: 2,
+      jobKind: "p0",
+      availableActions: ["choose_reference_pack_route", "revise_current_step"],
+    });
+    expect(state.current_pause?.title).toBe("Reference Pack 路由");
+    expect(state.current_pause?.available_choices).toEqual(
+      raw.current_pause!.available_choices,
+    );
+  });
   it("accepts real research/synthesis statuses omitted from the ZIP's legacy JSON schema enum", () => {
     for (const status of [
       "running_positioning_market_research",

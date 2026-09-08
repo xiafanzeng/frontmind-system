@@ -71,6 +71,11 @@ type KolResourceInput = {
   remark?: string;
   description?: string;
   recommended?: boolean;
+  recommendationTags?: string[];
+  platformRecommendationTags?: string[];
+  recommendationRemark?: string;
+  authenticationType?: string;
+  authenticationDescription?: string;
   authenticated?: boolean;
   festivalPublishable?: boolean;
   fanCount?: bigint;
@@ -1962,6 +1967,13 @@ export class PublisherWorkerRepository {
               and r.logo_source_kind in ('site_favicon', 'generated_fallback')
             )
           )
+          and not exists (
+            select 1 from publisher_jobs pending_logo
+            where pending_logo.type = 'archive_publisher_media_logo'
+              and pending_logo.aggregate_id = r.id
+              and pending_logo.status in ('ready', 'leased', 'retry_wait')
+              and json_unquote(json_extract(pending_logo.payload, '$.candidateHash')) = r.logo_candidate_hash
+          )
         on duplicate key update deterministic_key = values(deterministic_key)
       `);
       await tx
@@ -2148,19 +2160,25 @@ export class PublisherWorkerRepository {
     }
     await this.db.transaction(async (tx) => {
       const [resource] = await tx
-        .select({ id: publisherMediaResources.id })
+        .select({
+          id: publisherMediaResources.id,
+          catalogRevision: publisherMediaResources.catalogRevision,
+          syncRunId: publisherMediaResources.lastSeenCompleteRunId,
+        })
         .from(publisherMediaResources)
         .where(
           and(
             eq(publisherMediaResources.id, input.mediaResourceId),
             eq(publisherMediaResources.logoCandidateHash, input.candidateHash),
-            eq(publisherMediaResources.catalogRevision, input.catalogRevision),
-            eq(publisherMediaResources.lastSeenCompleteRunId, input.syncRunId),
           ),
         )
         .for("update")
         .limit(1);
-      if (!resource) return;
+      if (!resource?.syncRunId) return;
+      // A complete catalog can advance during the download. Identical Logo
+      // candidates remain valid: associate the file with the current catalog
+      // under this row lock, so a reused leased job cannot leave pending work
+      // without a successor. A changed candidate never passes the CAS above.
       await tx
         .insert(publisherMediaLogoAssets)
         .values({
@@ -2170,7 +2188,7 @@ export class PublisherWorkerRepository {
           objectKey: input.objectKey,
           contentType: input.contentType,
           sizeBytes: BigInt(input.sizeBytes),
-          catalogRevision: input.catalogRevision,
+          catalogRevision: resource.catalogRevision,
           reviewAudit: input.reviewAudit ?? null,
           archivedAt: input.checkedAt,
         })
@@ -2219,7 +2237,7 @@ export class PublisherWorkerRepository {
         .insert(publisherMediaLogoResolutions)
         .values({
           id: randomUUID(),
-          syncRunId: input.syncRunId,
+          syncRunId: resource.syncRunId,
           mediaResourceId: input.mediaResourceId,
           candidateHash: input.candidateHash,
           status: "archived",
@@ -2261,6 +2279,7 @@ export class PublisherWorkerRepository {
     await this.db.transaction(async (tx) => {
       const [resource] = await tx
         .select({
+          syncRunId: publisherMediaResources.lastSeenCompleteRunId,
           archiveStatus: publisherMediaResources.logoArchiveStatus,
           sourceKind: publisherMediaResources.logoSourceKind,
           logoSha256: publisherMediaResources.logoSha256,
@@ -2271,14 +2290,13 @@ export class PublisherWorkerRepository {
         .where(
           and(
             eq(publisherMediaResources.id, input.mediaResourceId),
-            eq(publisherMediaResources.lastSeenCompleteRunId, input.syncRunId),
             eq(publisherMediaResources.logoCandidateHash, input.candidateHash),
           ),
         )
         .for("update")
         .limit(1);
       if (
-        resource?.archiveStatus !== "archived" ||
+        !resource?.syncRunId || resource.archiveStatus !== "archived" ||
         (resource.sourceKind !== "site_favicon" &&
           resource.sourceKind !== "generated_fallback") ||
         !resource.logoSha256
@@ -2297,7 +2315,7 @@ export class PublisherWorkerRepository {
         })
         .where(
           and(
-            eq(publisherMediaLogoResolutions.syncRunId, input.syncRunId),
+            eq(publisherMediaLogoResolutions.syncRunId, resource.syncRunId),
             eq(
               publisherMediaLogoResolutions.mediaResourceId,
               input.mediaResourceId,
@@ -2352,6 +2370,15 @@ export class PublisherWorkerRepository {
       throw new RepositoryError("INVALID_STATE", "Invalid media logo failure");
     }
     await this.db.transaction(async (tx) => {
+      const [resource] = await tx.select({
+        syncRunId: publisherMediaResources.lastSeenCompleteRunId,
+        archiveStatus: publisherMediaResources.logoArchiveStatus,
+      }).from(publisherMediaResources).where(and(
+        eq(publisherMediaResources.id, input.mediaResourceId),
+        eq(publisherMediaResources.logoCandidateHash, input.candidateHash),
+      )).for("update").limit(1);
+      // A late failed duplicate must never erase a successfully archived Logo.
+      if (!resource?.syncRunId || resource.archiveStatus === "archived") return;
       await tx
         .update(publisherMediaResources)
         .set({
@@ -2370,7 +2397,6 @@ export class PublisherWorkerRepository {
           and(
             eq(publisherMediaResources.id, input.mediaResourceId),
             eq(publisherMediaResources.logoCandidateHash, input.candidateHash),
-            eq(publisherMediaResources.lastSeenCompleteRunId, input.syncRunId),
           ),
         );
       await tx
@@ -2400,7 +2426,7 @@ export class PublisherWorkerRepository {
         .insert(publisherMediaLogoResolutions)
         .values({
           id: randomUUID(),
-          syncRunId: input.syncRunId,
+          syncRunId: resource.syncRunId,
           mediaResourceId: input.mediaResourceId,
           candidateHash: input.candidateHash,
           status: input.status,
@@ -2902,8 +2928,8 @@ async function submissionBlocker(
       .from(publisherLiveWhitelist)
       .where(eq(publisherLiveWhitelist.mediaResourceId, row.resource.id))
       .limit(1);
-    if (!whitelist) return "Media resource is not LIVE-whitelisted";
-    if (!runtime.imagePublishEnabled) {
+    if (row.version.containsImages && !whitelist) return "Media resource is not LIVE-whitelisted";
+    if (row.version.containsImages && !runtime.imagePublishEnabled) {
       const batchItems = await tx
         .select({ id: publisherItems.id })
         .from(publisherItems)
@@ -2926,7 +2952,7 @@ async function submissionBlocker(
         resourceName: row.resource.name,
         totalTenThousandths: row.batch.quotedTotalTenThousandths,
         containsImages: row.version.containsImages,
-        whitelistImageAllowed: whitelist.imageAllowed,
+        whitelistImageAllowed: whitelist?.imageAllowed === true,
       });
       if (canaryBlocker) return canaryBlocker;
     }
@@ -3036,6 +3062,7 @@ export function publisherLiveCanaryBlocker(input: {
   containsImages: boolean;
   whitelistImageAllowed: boolean;
 }): string | null {
+  if (!input.containsImages) return null;
   if (input.runtimeImagePublishEnabled) return null;
   if (
     input.batchItemCount !== 1 ||
@@ -3238,7 +3265,7 @@ export function publisherStatusForProcessingObservation(
   return currentStatus === "action_required" ? "action_required" : "processing";
 }
 
-function normalizeCatalogResource(resource: KolResourceInput) {
+export function normalizeCatalogResource(resource: KolResourceInput) {
   if (
     !Number.isSafeInteger(resource.id) ||
     resource.id <= 0 ||
@@ -3290,6 +3317,11 @@ function normalizeCatalogResource(resource: KolResourceInput) {
     remark: resource.remark,
     description: resource.description,
     recommended: resource.recommended,
+    recommendationTags: resource.recommendationTags ?? [],
+    platformRecommendationTags: resource.platformRecommendationTags ?? [],
+    recommendationRemark: resource.recommendationRemark,
+    authenticationType: resource.authenticationType,
+    authenticationDescription: resource.authenticationDescription,
     authenticated: resource.authenticated,
     festivalPublishable: resource.festivalPublishable,
     fanCount: resource.fanCount?.toString(),

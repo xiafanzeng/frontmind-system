@@ -63,7 +63,7 @@ export function createPublisherWorkerEngine(input: {
     typeConcurrency: {
       submit_publication_item: 1,
       sync_kol_catalog: 1,
-      archive_publisher_media_logo: Math.max(1, input.config.concurrency),
+      archive_publisher_media_logo: Math.min(input.config.logoConcurrency ?? 2, input.config.concurrency),
       import_docx: input.config.importConcurrency,
       poll_publication_item: input.config.pollConcurrency,
     },

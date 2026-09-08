@@ -114,6 +114,7 @@ async function checkAndUpdateOrdinaryTask(
   observedTerminalMessageIds: Set<string>,
   terminalObservedAt: Map<string, number>,
   knowledgeBaseProbeIds: Set<string>,
+  isCurrent: () => boolean,
 ): Promise<boolean> {
   if (!conversation.taskId || conversation.executionKind === "response_logic") {
     return false;
@@ -129,8 +130,13 @@ async function checkAndUpdateOrdinaryTask(
 
   try {
     const taskData = await retrieveTask(conversation.taskId);
+    if (!isCurrent()) return true;
     const normalizedStatus =
       taskData.status === "failed" ? "error" : taskData.status;
+    if (taskData.execution)
+      updateStatus(conversation.id, conversation.status, {
+        execution: taskData.execution,
+      });
 
     const lastUserIndex = conversation.messages.reduce(
       (latest, message, index) => (message.role === "user" ? index : latest),
@@ -243,6 +249,7 @@ async function checkAndUpdateOrdinaryTask(
     terminalObservedAt.delete(`${conversation.id}\0${taskData.id}`);
     return true;
   } catch (error) {
+    if (!isCurrent()) return true;
     const message = error instanceof Error ? error.message : String(error);
     console.error("[ResumePolling] ordinary task check failed", message);
     if (message.includes("404")) {
@@ -269,6 +276,10 @@ export function useResumePolling() {
   } = context;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runningRef = useRef(false);
+  const pollOnceRef = useRef<(() => Promise<void>) | null>(null);
+  const pollGenerationRef = useRef(0);
+  const historyAttemptedRef = useRef(new Set<string>());
+  const nextDueRef = useRef(new Map<string, number>());
   const terminalProbeKeysRef = useRef(new Set<string>());
   const terminalMessageIdsRef = useRef(new Set<string>());
   const terminalObservedAtRef = useRef(new Map<string, number>());
@@ -296,8 +307,23 @@ export function useResumePolling() {
     wakeKnowledgeBaseConversation,
   };
 
+  const needsHistory = (conversation: Conversation) =>
+    conversation.id === stateRef.current.activeConversationId &&
+    conversation.executionKind === "general_chat_v2" &&
+    !conversation.purpose &&
+    !conversation.knowledgeBase &&
+    Boolean(conversation.taskId) &&
+    ["completed", "error", "failed"].includes(conversation.status) &&
+    !isOrdinaryPollCandidate(conversation) &&
+    conversation.execution?.coverage !== "complete" &&
+    !historyAttemptedRef.current.has(
+      `${conversation.id}:${conversation.taskId}`,
+    );
   const resumableTaskKey = state.conversations
-    .filter((conversation) => isOrdinaryPollCandidate(conversation))
+    .filter(
+      (conversation) =>
+        isOrdinaryPollCandidate(conversation) || needsHistory(conversation),
+    )
     .map(
       (conversation) =>
         `${conversation.id}:${conversation.taskId}:${conversation.status}:${conversation.completedAt ?? ""}`,
@@ -309,21 +335,29 @@ export function useResumePolling() {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
     runningRef.current = false;
+    pollGenerationRef.current += 1;
   }, []);
 
   const startResumePolling = useCallback(() => {
     if (!hydratedRef.current || runningRef.current) return;
-    const candidates = stateRef.current.conversations.filter((conversation) =>
-      isOrdinaryPollCandidate(conversation),
+    const candidates = stateRef.current.conversations.filter(
+      (conversation) =>
+        isOrdinaryPollCandidate(conversation) || needsHistory(conversation),
     );
     if (!candidates.length) return;
     runningRef.current = true;
+    const generation = ++pollGenerationRef.current;
     const stillRunning = new Set(candidates.map(({ id }) => id));
 
     const pollOnce = async () => {
+      if (generation !== pollGenerationRef.current) return;
+      timerRef.current = null;
       const functions = functionsRef.current;
       for (const conversation of stateRef.current.conversations) {
-        if (isOrdinaryPollCandidate(conversation)) {
+        if (
+          isOrdinaryPollCandidate(conversation) ||
+          needsHistory(conversation)
+        ) {
           stillRunning.add(conversation.id);
         }
       }
@@ -336,6 +370,71 @@ export function useResumePolling() {
           stillRunning.delete(conversationId);
           continue;
         }
+        if (
+          !isOrdinaryPollCandidate(conversation) &&
+          !needsHistory(conversation)
+        ) {
+          stillRunning.delete(conversationId);
+          continue;
+        }
+        if (needsHistory(conversation)) {
+          const historyStillCurrent = () => {
+            const current = stateRef.current.conversations.find(
+              (item) => item.id === conversationId,
+            );
+            if (!current) return false;
+            return (
+              current?.taskId === conversation.taskId &&
+              current.status === conversation.status &&
+              current.startedAt === conversation.startedAt &&
+              current.messages.findLast((message) => message.role === "user")
+                ?.id ===
+                conversation.messages.findLast(
+                  (message) => message.role === "user",
+                )?.id
+            );
+          };
+          historyAttemptedRef.current.add(
+            `${conversation.id}:${conversation.taskId}`,
+          );
+          try {
+            const task = await retrieveTask(conversation.taskId);
+            if (generation !== pollGenerationRef.current) return;
+            if (!historyStillCurrent()) {
+              nextDueRef.current.set(conversationId, 0);
+              continue;
+            }
+            functions.updateStatus(conversation.id, conversation.status, {
+              execution:
+                task.execution?.coverage === "complete"
+                  ? task.execution
+                  : {
+                      schemaVersion: 1,
+                      taskId: conversation.taskId,
+                      coverage: "unavailable",
+                      timeline: task.execution?.timeline ?? [],
+                    },
+            });
+          } catch {
+            if (generation !== pollGenerationRef.current) return;
+            if (!historyStillCurrent()) {
+              nextDueRef.current.set(conversationId, 0);
+              continue;
+            }
+            functions.updateStatus(conversation.id, conversation.status, {
+              execution: {
+                schemaVersion: 1,
+                taskId: conversation.taskId,
+                coverage: "unavailable",
+                timeline: conversation.execution?.timeline ?? [],
+              },
+            });
+          }
+          stillRunning.delete(conversationId);
+          continue;
+        }
+        if ((nextDueRef.current.get(conversationId) ?? 0) > Date.now())
+          continue;
         const keepPolling = await checkAndUpdateOrdinaryTask(
           conversation,
           functions.updateStatus,
@@ -346,29 +445,58 @@ export function useResumePolling() {
           terminalMessageIdsRef.current,
           terminalObservedAtRef.current,
           knowledgeBaseProbeIdsRef.current,
+          () => {
+            const current = stateRef.current.conversations.find(
+              (item) => item.id === conversationId,
+            );
+            if (!current) return false;
+            return (
+              generation === pollGenerationRef.current &&
+              current?.taskId === conversation.taskId &&
+              current.startedAt === conversation.startedAt &&
+              current.messages.findLast((message) => message.role === "user")
+                ?.id ===
+                conversation.messages.findLast(
+                  (message) => message.role === "user",
+                )?.id
+            );
+          },
         );
-        if (!keepPolling) stillRunning.delete(conversationId);
+        if (!keepPolling) {
+          stillRunning.delete(conversationId);
+          nextDueRef.current.delete(conversationId);
+        } else {
+          const foreground =
+            document.visibilityState === "visible" &&
+            stateRef.current.activeConversationId === conversationId;
+          const age =
+            Date.now() -
+            (conversation.status === "error" && conversation.completedAt
+              ? conversation.completedAt
+              : conversation.startedAt || conversation.createdAt);
+          nextDueRef.current.set(
+            conversationId,
+            Date.now() + (foreground ? 4_000 : getResumePollDelay(age)),
+          );
+        }
       }
 
+      if (generation !== pollGenerationRef.current) return;
       if (!stillRunning.size) {
         stopResumePolling();
         return;
       }
-      const oldestStartedAt = Math.min(
-        ...[...stillRunning].map((conversationId) => {
-          const conversation = stateRef.current.conversations.find(
-            ({ id }) => id === conversationId,
-          );
-          return conversation?.status === "error" && conversation.completedAt
-            ? conversation.completedAt
-            : conversation?.startedAt || conversation?.createdAt || Date.now();
-        }),
+      const nextAt = Math.min(
+        ...[...stillRunning].map(
+          (id) => nextDueRef.current.get(id) ?? Date.now(),
+        ),
       );
       timerRef.current = setTimeout(
         pollOnce,
-        getResumePollDelay(Date.now() - oldestStartedAt),
+        Math.max(250, nextAt - Date.now()),
       );
     };
+    pollOnceRef.current = pollOnce;
     void pollOnce();
   }, [stopResumePolling]);
 
@@ -393,6 +521,16 @@ export function useResumePolling() {
     const timer = setTimeout(startResumePolling, 1_000);
     return () => clearTimeout(timer);
   }, [hydrated, resumableTaskKey, startResumePolling, stopResumePolling]);
+
+  useEffect(() => {
+    const activeId = state.activeConversationId;
+    if (!activeId) return;
+    nextDueRef.current.set(activeId, 0);
+    if (runningRef.current && timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => void pollOnceRef.current?.(), 0);
+    }
+  }, [state.activeConversationId]);
 
   useEffect(() => stopResumePolling, [stopResumePolling]);
 
@@ -429,7 +567,15 @@ export function useResumePolling() {
       if (hydratedRef.current && !runningRef.current) startResumePolling();
     };
     const visibility = () => {
-      if (document.visibilityState === "visible") resume();
+      if (document.visibilityState === "visible") {
+        const activeId = stateRef.current.activeConversationId;
+        if (activeId) nextDueRef.current.set(activeId, 0);
+        if (runningRef.current && timerRef.current) {
+          clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => void pollOnceRef.current?.(), 0);
+        }
+        resume();
+      }
     };
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("focus", resume);

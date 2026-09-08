@@ -35,6 +35,11 @@ import type {
   ContentProductionMode,
 } from "@shared/content-production";
 import ContentProductionConfirmation from "./ContentProductionConfirmation";
+import {
+  contentProductionArtifactName,
+  contentProductionArtifactUrl,
+  contentProductionTaskTitle,
+} from "@shared/content-production-public";
 import "./content-production.css";
 
 export const CONTENT_MODES: {
@@ -44,22 +49,22 @@ export const CONTENT_MODES: {
 }[] = [
   {
     value: "new_reference_pack",
-    title: "建立新的 Reference Pack",
+    title: "新建品牌资料包",
     description: "整理企业资料，形成可复用的品牌事实、定位与写作资料包。",
   },
   {
     value: "refresh_reference_pack",
-    title: "刷新市场研究与定位",
+    title: "更新品牌资料包",
     description: "在已有资料包基础上，更新市场信息、品牌定位与表达。",
   },
   {
     value: "p0",
-    title: "创建或导入 P0",
-    description: "确认资料包后，选择新建品牌深度文章或接入已有 P0。",
+    title: "制作品牌深度文章",
+    description: "确认资料包后，新建品牌深度文章，或导入已有文章继续编辑。",
   },
   {
     value: "single_article",
-    title: "撰写单问题文章",
+    title: "围绕问题写文章",
     description: "围绕一个问题，结合监控答案与引用信源开展研究和写作。",
   },
 ];
@@ -83,7 +88,7 @@ export function contentProductionLane(
       position: 5,
     },
     {
-      title: "交付 Reference Pack",
+      title: "交付品牌资料包",
       detail: "导出定位已确认的新版本资料包",
       position: 7,
     },
@@ -97,7 +102,7 @@ export function contentProductionLane(
     return packSteps;
   const routeSteps = [
     {
-      title: "选择 Reference Pack",
+      title: "选择品牌资料包",
       detail: "明确使用已有资料包或先创建新资料包",
       position: 1,
     },
@@ -113,24 +118,24 @@ export function contentProductionLane(
     return [
       ...routeSteps,
       {
-        title: "创建或导入 P0",
+        title: "制作品牌深度文章",
         detail: "使用已确认的定位与比较范围",
         position: 8,
       },
       {
         title: "选择例文",
-        detail: "选择例文文风或工作流写作规范",
+        detail: "选择例文文风或默认写作规范",
         position: 9,
       },
       {
-        title: "确认 P0 蓝图",
+        title: "确认品牌文章写作方案",
         detail: "确认结构、材料与已有文章的编辑方案",
         position: 10,
       },
       { title: "正文与编辑", detail: "完成品牌文章和 20 个标题", position: 11 },
       {
-        title: "交付 P0 与资料包",
-        detail: "Markdown、HTML、DOCX 和新版 Reference Pack",
+        title: "交付品牌文章与资料包",
+        detail: "正文文档、网页和新版品牌资料包",
         position: 12,
       },
     ];
@@ -143,19 +148,23 @@ export function contentProductionLane(
     },
     {
       title: "选择文章类型",
-      detail: "阅读分析后，明确选择 P01–P06",
+      detail: "阅读分析后，选择适合本题的文章类型",
       position: 15,
     },
     { title: "选择例文", detail: "确认文章文风与内容参考", position: 16 },
     {
       title: "问题定位",
-      detail: "P01 / P02 确认本题的差异化定位",
+      detail: "推荐类文章需确认本题的差异化定位",
       position: 17,
     },
-    { title: "确认文章蓝图", detail: "结构、品牌角度与材料使用", position: 18 },
+    {
+      title: "确认文章写作方案",
+      detail: "结构、品牌角度与材料使用",
+      position: 18,
+    },
     {
       title: "正文与最终交付",
-      detail: "正文、编辑、20 个标题、DOCX 和 HTML",
+      detail: "正文、编辑、20 个标题、文档和网页",
       position: 19,
     },
   ];
@@ -452,7 +461,7 @@ function ContentProductionInner() {
     )
       return;
     if (mode === "refresh_reference_pack" && materials.length === 0) {
-      setNotice("请选择需要刷新的已有 Reference Pack。");
+      setNotice("请选择需要更新的已有品牌资料包。");
       return;
     }
     startLocked.current = true;
@@ -476,7 +485,7 @@ function ContentProductionInner() {
         ? "使用我的已发布企业知识库。"
         : materials.length
           ? "使用本次上传的企业材料。"
-          : "企业材料或 Reference Pack 将在后续原流程要求时上传，请先展示本任务的原始路由或资料输入步骤。",
+          : "企业材料或品牌资料包将在后续需要时上传，请先展示本任务的资料选择步骤。",
       mode === "single_article" &&
         question.trim() &&
         `正式问题：${question.trim()}`,
@@ -670,7 +679,7 @@ function ContentProductionInner() {
               </option>
               {state.conversations.map((conversation) => (
                 <option key={conversation.id} value={conversation.id}>
-                  {conversation.title}
+                  {contentProductionTaskTitle(conversation.title)}
                   {["running", "pending"].includes(conversation.status)
                     ? " · 执行中"
                     : ["error", "failed"].includes(conversation.status)
@@ -712,7 +721,7 @@ function ContentProductionInner() {
               <Sparkles size={18} />
               <strong>内容协作</strong>
             </div>
-            <span>FrontMind Agent</span>
+            <span>FrontMind 内容智能体</span>
           </div>
           {activeConversation ? (
             <>
@@ -759,9 +768,13 @@ function ContentProductionInner() {
             <div className="cp-empty">
               <FileText size={36} />
               <h2>本次要完成什么？</h2>
-              <p>
-                新建或刷新 Reference Pack，制作 P0
-                品牌文章，或围绕一个问题完成研究与写作。
+              <p className="cp-entry-description">
+                <span className="cp-entry-description-full">
+                  新建或更新品牌资料包，制作品牌文章，或围绕具体问题开展研究与写作。
+                </span>
+                <span className="cp-entry-description-short">
+                  整理资料，制作文章。
+                </span>
               </p>
               <div className="cp-entry-grid">
                 {CONTENT_MODES.map((item) => (
@@ -866,13 +879,13 @@ function ContentProductionInner() {
                 <section className="cp-handoff">
                   <strong>
                     {packFinished
-                      ? "Reference Pack 已完成"
-                      : "P0 与新版资料包已完成"}
+                      ? "品牌资料包已完成"
+                      : "品牌文章与新版资料包已完成"}
                   </strong>
                   <p>
                     {convertedToPack
                       ? "本次选择先创建资料包，文章尚未制作。"
-                      : "资料包可用于后续品牌文章与单问题文章。"}
+                      : "资料包可用于后续品牌文章与问题文章。"}
                     请选择交付的资料包，创建独立的新任务。
                   </p>
                   {packFiles.length > 0 ? (
@@ -886,12 +899,10 @@ function ContentProductionInner() {
                           }
                           disabled={handoffPending}
                         >
-                          <option value="">
-                            请选择交付的 Reference Pack ZIP
-                          </option>
+                          <option value="">请选择已交付的品牌资料包</option>
                           {packFiles.map((file) => (
                             <option key={file.fileUrl} value={file.fileUrl}>
-                              {file.fileName}
+                              {contentProductionArtifactName(file.fileName)}
                             </option>
                           ))}
                         </select>
@@ -918,8 +929,8 @@ function ContentProductionInner() {
                               <Loader2 size={16} className="animate-spin" />
                             )}
                             {next === "p0"
-                              ? "使用此资料包创建 P0"
-                              : "使用此资料包创建单问题文章"}
+                              ? "使用此资料包制作品牌文章"
+                              : "使用此资料包围绕问题写文章"}
                           </button>
                         ))}
                       </div>
@@ -944,8 +955,10 @@ function ContentProductionInner() {
                       file={{
                         id: file.fileUrl,
                         type: "file",
-                        name: file.fileName,
-                        blobUrl: contentArtifactUrl(file.fileUrl)!,
+                        name: contentProductionArtifactName(file.fileName),
+                        blobUrl: contentProductionArtifactUrl(
+                          contentArtifactUrl(file.fileUrl)!,
+                        ),
                       }}
                       className="cp-deliverable-file"
                     />
@@ -1011,7 +1024,7 @@ function ContentProductionInner() {
             </fieldset>
             {handoffName && (
               <p className="cp-form-context">
-                已带入资料包：{handoffName}
+                已带入资料包：{contentProductionArtifactName(handoffName)}
                 。这是独立的新任务，开始后仍需确认使用已有资料包。
               </p>
             )}
@@ -1040,17 +1053,15 @@ function ContentProductionInner() {
                 <option value="files">上传材料（也可在后续步骤补充）</option>
               </select>
               <small>
-                企业知识库提供企业事实材料。P0
-                和单问题文章开始后，需要单独确认使用已有 Reference Pack
-                或先创建资料包。
+                企业知识库提供企业事实材料。品牌资料包进一步汇总市场研究、已确认定位和写作资料。文章任务开始后，需要确认使用已有资料包，或先创建资料包。
               </small>
             </label>
             <label className="cp-field">
               {handoffFile
                 ? "补充企业材料（可选，已保留带入的资料包）"
                 : mode === "refresh_reference_pack"
-                  ? "上传已有 Reference Pack 与补充资料"
-                  : "上传材料或 Reference Pack（可选）"}
+                  ? "上传已有品牌资料包与补充资料"
+                  : "上传材料或品牌资料包（可选）"}
               <input
                 type="file"
                 multiple
@@ -1078,8 +1089,8 @@ function ContentProductionInner() {
             {mode === "single_article" && (
               <>
                 <p className="cp-form-context">
-                  单问题文章需要含已完成 P0 的 Reference Pack，以及来自两个不同
-                  AI 平台的两篇完整答案。可在任务要求资料时补充。
+                  问题文章需要含已完成品牌文章的品牌资料包，以及来自两个不同 AI
+                  平台的两篇完整答案。可在任务要求资料时补充。
                 </p>
                 <label className="cp-field">
                   正式问题

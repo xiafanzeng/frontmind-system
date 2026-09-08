@@ -1,3 +1,4 @@
+import { generalToolLabel } from "../../shared/frontmind-general-execution";
 import { frontmindGeneralIdentity } from "../frontmind-general-identity";
 import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import {
@@ -1593,6 +1594,28 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
   }
 }
 
+/** Normalize native evidence without ever retaining tool payloads or private reasoning. */
+export function nativeGeneralExecutionActivity(event: ZhipuRecord) {
+  const type = String(event.type);
+  if (["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(type)) {
+    const toolKind = type === "agent.mcp_tool_use" ? "mcp" : type === "agent.custom_tool_use" ? "custom" : "builtin";
+    return { kind: "tool_use", toolKind, label: generalToolLabel(event.name, toolKind) };
+  }
+  if (["agent.tool_result", "agent.mcp_tool_result", "user.custom_tool_result"].includes(type)) {
+    const link = type === "user.custom_tool_result" ? event.custom_tool_use_id : event.tool_use_id;
+    return { kind: "tool_result", callId: typeof link === "string" && link.length <= 512 ? link : null, isError: typeof event.is_error === "boolean" ? event.is_error : null };
+  }
+  const lifecycle: Record<string, string> = { "agent.thinking": "thinking", "session.status_running": "running", "session.status_rescheduled": "rescheduling", "session.status_terminated": "cancelled", "session.deleted": "cancelled", "user.interrupt": "cancelled" };
+  if (lifecycle[type]) return { kind: "status", status: lifecycle[type] };
+  if (type === "session.error") return { kind: "status", status: sessionErrorIsRetrying(event) ? "retrying" : "error" };
+  if (type === "session.status_idle") {
+    const reason = object(event.stop_reason);
+    return { kind: "status", status: reason.type === "requires_action" ? "waiting" : reason.type === "end_turn" ? "ended" : ["interrupted", "user_interrupt"].includes(String(reason.type)) ? "cancelled" : "error",
+      ...(reason.type === "requires_action" ? { waitingIds: Array.isArray(reason.event_ids) ? reason.event_ids.filter((id): id is string => typeof id === "string").slice(0, 128) : [] } : {}) };
+  }
+  return null;
+}
+
 export function normalizeDashboardZhipuEvents(
   raw: ZhipuRecord[],
   runtime: DashboardManagedRuntime,
@@ -1603,7 +1626,8 @@ export function normalizeDashboardZhipuEvents(
     const timestamp =
       stamp(event.processed_at) ?? (command ? stamp(command.createdAt) : null);
     if (timestamp === null) return [];
-    const base = { id, timestamp, providerOriginalRank: rank };
+    const activity = nativeGeneralExecutionActivity(event);
+    const base = { id, timestamp, providerOriginalRank: rank, ...(activity ? { executionActivity: activity } : {}) };
     if (event.type === "user.message") {
       if (!command)
         return [
@@ -1638,14 +1662,14 @@ export function normalizeDashboardZhipuEvents(
           assistant_message: { content: text(event.content) },
         },
       ];
-    if (event.type === "agent.tool_use" || event.type === "agent.mcp_tool_use")
+    if (["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(String(event.type)))
       return [{ ...base, type: "tool_use" }];
     if (
       event.type === "agent.tool_result" ||
       event.type === "agent.mcp_tool_result"
     )
       return [
-        { ...base, type: "tool_result", is_error: event.is_error === true },
+        { ...base, type: "tool_result", ...(typeof event.is_error === "boolean" ? { is_error: event.is_error } : {}) },
       ];
     if (event.type === "user.interrupt")
       return [{ ...base, type: "user_stop", user_stop: {} }];
@@ -1672,7 +1696,7 @@ export function normalizeDashboardZhipuEvents(
         },
       ];
     if (event.type === "session.error") {
-      if (sessionErrorIsRetrying(event)) return [];
+      if (sessionErrorIsRetrying(event)) return [{ ...base, type: "execution_activity" }];
       return [
         {
           ...base,
@@ -1733,7 +1757,7 @@ export function normalizeDashboardZhipuEvents(
         },
       ];
     }
-    return [];
+    return activity ? [{ ...base, type: "execution_activity" }] : [];
   });
 }
 

@@ -1,3 +1,6 @@
+import { projectContentProductionMarkdown, contentProductionArtifactName, contentProductionArtifactUrl } from "@shared/content-production-public";
+import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
+import { generalExecutionSlots } from "@/lib/general-execution-display";
 import { projectFrontMindIdentityMessages } from "@shared/frontmind-general-identity";
 import type { ContentProductionInput } from "@shared/content-production";
 /**
@@ -1271,6 +1274,12 @@ export default function ChatArea({
   } | null>(null);
 
   const [retryingKnowledgeBase, setRetryingKnowledgeBase] = useState(false);
+  const [expandedExecutionGroups, setExpandedExecutionGroups] = useState<Set<string>>(() => new Set());
+  const toggleExecutionGroup = useCallback((id: string) => setExpandedExecutionGroups(previous => {
+    const next = new Set(previous);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  }), []);
 
   const startFreshKnowledgeBaseBuild = useCallback(() => {
     const conversationId = createConversation({
@@ -1718,9 +1727,17 @@ export default function ChatArea({
   const messages = useMemo(() => {
     const rows = activeConversation ? messageProjection
       ? activeConversation.messages.map(messageProjection) : activeConversation.messages : [];
+    if (purpose === "content_production") return rows.map(message => message.role === "assistant" ? {
+      ...message,
+      content: projectContentProductionMarkdown(message.content),
+      ...(message.outputFiles ? { outputFiles: message.outputFiles.map(file => ({ ...file, fileName: contentProductionArtifactName(file.fileName), fileUrl: contentProductionArtifactUrl(file.fileUrl) })) } : {}),
+    } : message);
     return activeConversation?.executionKind === "general_chat_v2" && !purpose
       ? projectFrontMindIdentityMessages(rows) : rows;
   }, [activeConversation, messageProjection, purpose]);
+  const executionSlots = useMemo(() => generalExecutionSlots(messages,
+    activeConversation?.executionKind === "general_chat_v2" && !purpose ? activeConversation.execution : undefined,
+    activeConversation?.status === "running" || activeConversation?.status === "pending"), [messages, activeConversation, purpose]);
   const finalAssistantMessageId = useMemo(
     () =>
       [...messages].reverse().find((message) => message.role === "assistant")
@@ -1867,8 +1884,9 @@ export default function ChatArea({
 
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
+              <React.Fragment key={msg.id}>
+              <GeneralExecutionActivity items={executionSlots.before.get(msg.id)} expandedGroups={expandedExecutionGroups} onToggleGroup={toggleExecutionGroup} />
               <MessageBubble
-                key={msg.id}
                 message={msg}
                 isRunning={displayActiveTask}
                 generalChatLinks={
@@ -1893,8 +1911,11 @@ export default function ChatArea({
                       }
                 }
               />
+              <GeneralExecutionActivity items={executionSlots.after.get(msg.id)} expandedGroups={expandedExecutionGroups} onToggleGroup={toggleExecutionGroup} />
+              </React.Fragment>
             ))}
           </AnimatePresence>
+          {!purpose && activeConversation.execution?.coverage === "unavailable" && <p className="text-xs text-muted-foreground">此前的执行过程暂时无法读取，回复内容仍已保留。</p>}
 
           {syncKnowledgeBaseSnapshot &&
             activeConversation.knowledgeBase?.notice &&

@@ -1,3 +1,4 @@
+import type { GeneralExecutionDto } from "@shared/frontmind-general-execution";
 import { captureWorkspaceRestOperation } from "./workspace-rest-scope";
 import type {
   ContentProductionInput,
@@ -190,6 +191,7 @@ export interface Message {
 }
 
 export interface TaskResponse {
+  execution?: GeneralExecutionDto;
   id: string;
   purpose?: "enterprise_qa" | "content_production" | "general";
   contentProduction?: ContentProductionDto | null;

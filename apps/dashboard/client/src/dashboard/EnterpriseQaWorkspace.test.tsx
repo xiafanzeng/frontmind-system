@@ -153,7 +153,7 @@ describe("Enterprise QA source binding", () => {
     render(<EnterpriseQaWorkspace />);
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(
-      await screen.findByRole("link", { name: "构建并发布知识库" }),
+      await screen.findByRole("link", { name: "前往智能知识库" }),
     ).toHaveAttribute(
       "href",
       "/?view=knowledge&enterpriseProjectId=11111111-1111-4111-8111-111111111111&operatorOwnerId=7",
@@ -248,7 +248,9 @@ describe("Enterprise QA source binding", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<EnterpriseQaWorkspace />);
     expect(
-      await screen.findByRole("heading", { name: "先构建并发布企业知识库" }),
+      await screen.findByRole("heading", {
+        name: "发布知识库后，即可开始企业问答",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -311,13 +313,13 @@ describe("Enterprise QA source binding", () => {
       resolveCurrent({ ok: true, json: async () => ({ knowledgeBase: null }) }),
     );
     expect(
-      screen.getByRole("heading", { name: "先构建并发布企业知识库" }),
+      screen.getByRole("heading", { name: "发布知识库后，即可开始企业问答" }),
     ).toBeInTheDocument();
     expect(fetchMock.mock.calls.at(-1)?.[1].headers).toMatchObject({
       "x-enterprise-project-id": "project-b",
     });
     expect(
-      screen.getByRole("link", { name: "构建并发布知识库" }),
+      screen.getByRole("link", { name: "前往智能知识库" }),
     ).toHaveAttribute("href", "/?view=knowledge&enterpriseProjectId=project-b");
   });
 
@@ -344,7 +346,9 @@ describe("Enterprise QA source binding", () => {
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     fireEvent(window, new Event("focus"));
     expect(
-      await screen.findByRole("heading", { name: "先构建并发布企业知识库" }),
+      await screen.findByRole("heading", {
+        name: "发布知识库后，即可开始企业问答",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
   });
@@ -514,7 +518,7 @@ describe("Enterprise QA source binding", () => {
       fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     });
     expect(
-      screen.getByRole("heading", { name: "先构建并发布企业知识库" }),
+      screen.getByRole("heading", { name: "发布知识库后，即可开始企业问答" }),
     ).toBeInTheDocument();
   });
 

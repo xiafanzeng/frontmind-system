@@ -1,0 +1,167 @@
+/** Public execution evidence. Never includes tool arguments, results or reasoning. */
+export type GeneralToolStatus =
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "returned"
+  | "unconfirmed";
+export type GeneralExecutionActivity =
+  | { kind: "tool_use"; label: string; toolKind: "builtin" | "mcp" | "custom" }
+  | { kind: "tool_result"; callId: string | null; isError: boolean | null }
+  | {
+      kind: "status";
+      status:
+        | "thinking"
+        | "running"
+        | "rescheduling"
+        | "waiting"
+        | "retrying"
+        | "error"
+        | "ended"
+        | "cancelled";
+      waitingIds?: string[];
+    };
+
+export type GeneralExecutionEntry = {
+  id: string;
+  turnId: string;
+  /** Durable sequence of the user message that owns this evidence. */
+  userSequence: number;
+  userMessageId?: string;
+  timestamp: number;
+  rank: number;
+} & (
+  | { kind: "message"; providerEventId: string }
+  | {
+      kind: "tool";
+      label: string;
+      status: GeneralToolStatus;
+      finishedAt?: number;
+      resultOnly?: true;
+    }
+  | {
+      kind: "status";
+      status: Extract<GeneralExecutionActivity, { kind: "status" }>["status"];
+    }
+);
+
+export interface GeneralExecutionDto {
+  schemaVersion: 1;
+  taskId: string;
+  coverage: "complete" | "pending" | "unavailable";
+  timeline: GeneralExecutionEntry[];
+}
+
+const builtinLabels: Record<string, string> = {
+  bash: "执行命令",
+  read: "读取文件",
+  write: "写入文件",
+  edit: "编辑文件",
+  grep: "检索文本",
+  find: "查找文件",
+  ls: "查看目录",
+};
+export function generalToolLabel(
+  name: unknown,
+  kind: "builtin" | "mcp" | "custom",
+) {
+  return kind === "builtin" &&
+    typeof name === "string" &&
+    Object.hasOwn(builtinLabels, name)
+    ? builtinLabels[name]!
+    : kind === "mcp"
+      ? "调用扩展工具"
+      : "调用工具";
+}
+
+/** Strict whitelist at both normalization and persisted-data read boundaries. */
+export function generalExecutionActivity(
+  value: unknown,
+): GeneralExecutionActivity | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  if (item.kind === "tool_use") {
+    const labels = [
+      ...Object.values(builtinLabels),
+      "调用扩展工具",
+      "调用工具",
+    ];
+    return {
+      kind: "tool_use",
+      label:
+        typeof item.label === "string" && labels.includes(item.label)
+          ? item.label
+          : "调用工具",
+      toolKind:
+        item.toolKind === "mcp"
+          ? "mcp"
+          : item.toolKind === "custom"
+            ? "custom"
+            : "builtin",
+    };
+  }
+  if (item.kind === "tool_result")
+    return {
+      kind: "tool_result",
+      callId:
+        typeof item.callId === "string" && item.callId.length <= 512
+          ? item.callId
+          : null,
+      isError: typeof item.isError === "boolean" ? item.isError : null,
+    };
+  if (
+    item.kind === "status" &&
+    [
+      "thinking",
+      "running",
+      "rescheduling",
+      "waiting",
+      "retrying",
+      "error",
+      "ended",
+      "cancelled",
+    ].includes(String(item.status))
+  ) {
+    return {
+      kind: "status",
+      status: item.status as Extract<
+        GeneralExecutionActivity,
+        { kind: "status" }
+      >["status"],
+      ...(item.status === "waiting" && Array.isArray(item.waitingIds)
+        ? {
+            waitingIds: item.waitingIds
+              .filter(
+                (id): id is string =>
+                  typeof id === "string" && id.length <= 512,
+              )
+              .slice(0, 128),
+          }
+        : {}),
+    };
+  }
+  return null;
+}
+
+export const generalToolStatusText: Record<GeneralToolStatus, string> = {
+  running: "执行中",
+  waiting: "等待确认",
+  completed: "已完成",
+  failed: "调用失败",
+  returned: "已返回结果",
+  unconfirmed: "结果未确认",
+};
+export const generalExecutionStatusText: Record<
+  Extract<GeneralExecutionEntry, { kind: "status" }>["status"],
+  string
+> = {
+  thinking: "正在处理…",
+  running: "正在执行…",
+  rescheduling: "正在恢复执行…",
+  waiting: "等待确认",
+  retrying: "正在重试…",
+  error: "执行遇到问题",
+  ended: "本轮已结束",
+  cancelled: "本轮已停止",
+};

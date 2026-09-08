@@ -36,7 +36,8 @@ describe("publishing workbench", () => {
   it("switches from work overview into the full publication records list", async () => {
     const { gateway } = open("/publishing");
     expect(await screen.findByRole("heading", { name: "发布工作台" })).toBeInTheDocument();
-    expect(await screen.findByRole("region", { name: "媒体发布概览" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "可恢复投放草稿" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "媒体发布概览" })).not.toBeInTheDocument();
     expect(gateway.listBatches).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("link", { name: "发布记录" }));
     expect(await screen.findByRole("region", { name: "筛选发布记录" })).toBeInTheDocument();

@@ -546,8 +546,8 @@ export default function AdminPage({
         <section className="content-card admin-table-card">
           <div className="card-heading">
             <div>
-              <h2>账号与{mediaWalletSelected ? "媒体发布" : "问题监控"}钱包</h2>
-              <p>两个钱包彼此隔离，余额不可互转；每次资金操作必须填写原因。</p>
+              <h2>账号与统一余额</h2>
+              <p>问题监控、媒体发布与智能体共用账户余额；每次资金操作必须填写原因。</p>
             </div>
           </div>
           <div

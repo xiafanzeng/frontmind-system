@@ -5,6 +5,11 @@ import type {
   ContentProductionAction,
   ContentProductionDto,
 } from "@shared/content-production";
+import {
+  CONTENT_PRODUCTION_PATTERNS,
+  contentProductionPublicText,
+  contentProductionPauseTitle,
+} from "@shared/content-production-public";
 
 type Props = {
   progress: ContentProductionDto;
@@ -19,14 +24,7 @@ type Props = {
 };
 const FILE_TYPES =
   ".zip,.pdf,.docx,.doc,.txt,.md,.json,.csv,.xlsx,.png,.jpg,.jpeg,.webp";
-const PATTERNS = [
-  ["P01", "单主体品类或服务推荐"],
-  ["P02", "开放式多主体推荐"],
-  ["P03", "产品或服务场景解决方案"],
-  ["P04", "事件新闻"],
-  ["P05", "明确对象对比"],
-  ["P06", "单主体口碑与可信度评估"],
-] as const;
+const PATTERNS = CONTENT_PRODUCTION_PATTERNS;
 
 export default function ContentProductionConfirmation({
   progress,
@@ -161,13 +159,25 @@ export default function ContentProductionConfirmation({
 
   return (
     <section className="cp-confirmation" aria-label="当前内容确认">
-      <strong>{progress.pauseTitle || "当前内容确认"}</strong>
+      <strong>
+        {contentProductionPauseTitle(
+          progress.confirmation,
+          progress.pauseTitle,
+        ) || "当前内容确认"}
+      </strong>
       <p>
         请先阅读左侧完整回复、表格和附件，再作出本轮选择。修改内容可在这里提交，也可以继续在对话中说明。
       </p>
       {progress.choices.length > 0 && (
         <p className="cp-native-choices">
-          本轮可选：{progress.choices.join("；")}
+          本轮可选：
+          {progress.choices
+            .map((choice) =>
+              progress.confirmation === "awaiting_core_positioning_direction"
+                ? choice
+                : contentProductionPublicText(choice),
+            )
+            .join("；")}
         </p>
       )}
 
@@ -180,7 +190,7 @@ export default function ContentProductionConfirmation({
             )}
             <div className="cp-confirm-actions">
               {button(
-                "使用已有 Reference Pack",
+                "使用已有品牌资料包",
                 () =>
                   void submit(
                     {
@@ -188,12 +198,12 @@ export default function ContentProductionConfirmation({
                       revision: revisionValue,
                       route: "use",
                     },
-                    `我选择使用已有 Reference Pack，请采用我指定的资料包。${attachmentNames ? `\n本次附件：${attachmentNames}` : ""}`,
+                    `我选择使用已有品牌资料包，请采用我指定的资料包。${attachmentNames ? `\n本次附件：${attachmentNames}` : ""}`,
                     files,
                   ),
               )}
               {button(
-                "创建新的 Reference Pack",
+                "创建新的品牌资料包",
                 () =>
                   void submit(
                     {
@@ -201,7 +211,7 @@ export default function ContentProductionConfirmation({
                       revision: revisionValue,
                       route: "create",
                     },
-                    `我选择先创建新的 Reference Pack，请使用本任务的企业名称和企业材料。${attachmentNames ? `\n本次附件：${attachmentNames}` : ""}`,
+                    `我选择先创建新的品牌资料包，请使用本任务的企业名称和企业材料。${attachmentNames ? `\n本次附件：${attachmentNames}` : ""}`,
                     files,
                   ),
                 true,
@@ -214,11 +224,11 @@ export default function ContentProductionConfirmation({
           <>
             {upload(
               has("provide_question_research_inputs")
-                ? "本题 AI 答案或更新后的 Reference Pack"
-                : "企业材料或 Reference Pack",
+                ? "本题 AI 答案或更新后的品牌资料包"
+                : "企业材料或品牌资料包",
               has("provide_question_research_inputs")
                 ? "可提交来自两个不同 AI 平台的两篇完整答案及来源说明，或上传已含本题研究的新版资料包。"
-                : "上传本轮需要的企业资料或正确版本的 Reference Pack。",
+                : "上传本轮需要的企业资料或正确版本的品牌资料包。",
             )}
             <label className="cp-field">
               资料说明
@@ -336,7 +346,7 @@ export default function ContentProductionConfirmation({
               () =>
                 void submit(
                   { kind: "confirm_core_positioning", revision: revisionValue },
-                  "我确认当前完整核心定位、优势说明和已明确的比较范围，请导出新的 Reference Pack。",
+                  "我确认当前完整核心定位、优势说明和已明确的比较范围，请导出新的品牌资料包。",
                 ),
             )}
           </div>
@@ -345,12 +355,12 @@ export default function ContentProductionConfirmation({
         {has("choose_p0_route") && (
           <>
             {upload(
-              "已有 P0 文章（导入时使用）",
-              "新建 P0 无需上传；导入时可以采用此前已上传的原文。",
+              "已有品牌文章（导入时使用）",
+              "新建品牌文章无需上传；导入时可以采用此前已上传的原文。",
             )}
             <div className="cp-confirm-actions">
               {button(
-                "新建 P0",
+                "新建品牌文章",
                 () =>
                   void submit(
                     {
@@ -358,11 +368,11 @@ export default function ContentProductionConfirmation({
                       revision: revisionValue,
                       route: "create",
                     },
-                    "我选择新建 P0，请依据已确认的核心定位与比较范围继续。",
+                    "我选择新建品牌文章，请依据已确认的核心定位与比较范围继续。",
                   ),
               )}
               {button(
-                "导入已有 P0",
+                "导入已有品牌文章",
                 () =>
                   void submit(
                     {
@@ -370,7 +380,7 @@ export default function ContentProductionConfirmation({
                       revision: revisionValue,
                       route: "import",
                     },
-                    `我选择导入已有 P0，保留原文并在蓝图中展示编辑建议。${attachmentNames ? `\n原文附件：${attachmentNames}` : "请采用本对话此前上传的 P0 原文。"}`,
+                    `我选择导入已有品牌文章，保留原文并在写作方案中展示编辑建议。${attachmentNames ? `\n原文附件：${attachmentNames}` : "请采用本对话此前上传的品牌文章原文。"}`,
                     files,
                   ),
                 true,
@@ -389,11 +399,11 @@ export default function ContentProductionConfirmation({
                     revision: revisionValue,
                     route: "top20",
                   },
-                  "我已阅读例文，选择采用这两篇完整例文作为 P0 的文风参考。",
+                  "我已阅读例文，选择采用这两篇完整例文作为品牌文章的文风参考。",
                 ),
             )}
             {button(
-              "仅用工作流写作规范",
+              "使用默认写作规范",
               () =>
                 void submit(
                   {
@@ -401,7 +411,7 @@ export default function ContentProductionConfirmation({
                     revision: revisionValue,
                     route: "workflow",
                   },
-                  "我选择仅使用工作流写作规范，不采用例文文风。",
+                  "我选择仅使用默认写作规范，不采用例文文风。",
                 ),
               true,
             )}
@@ -482,19 +492,18 @@ export default function ContentProductionConfirmation({
                 <option value="recommended">采用本轮分析推荐的类型</option>
                 {PATTERNS.map(([id, label]) => (
                   <option key={id} value={id}>
-                    {id} · {label}
+                    {label}
                   </option>
                 ))}
               </select>
               <small>
-                P00 用于 P0 品牌文章；本题可选
-                P01–P06，具体回答范围见左侧完整表格。
+                本题可选六种问题文章类型，具体回答范围见左侧完整表格。品牌深度文章需单独创建任务。
               </small>
             </label>
             <div className="cp-confirm-actions">
               {button("确认文章类型", () => {
                 if (!pattern) {
-                  onNotice("请明确选择推荐类型或 P01–P06 中的一种。");
+                  onNotice("请选择本轮推荐类型或六种问题文章类型中的一种。");
                   return;
                 }
                 void submit(
@@ -507,7 +516,7 @@ export default function ContentProductionConfirmation({
                   },
                   pattern === "recommended"
                     ? "我明确选择本轮分析推荐的文章类型，请继续。"
-                    : `我明确选择 ${pattern}，按该类型的回答范围继续。`,
+                    : `我明确选择“${PATTERNS.find(([id]) => id === pattern)?.[1] ?? "所选文章类型"}”，按该类型的回答范围继续。`,
                 );
               })}
             </div>
@@ -516,7 +525,7 @@ export default function ContentProductionConfirmation({
         {has("choose_examples") && (
           <div className="cp-confirm-actions">
             {button(
-              "方案 A：Top20 文风",
+              "参考例文的文风",
               () =>
                 void submit(
                   {
@@ -524,11 +533,11 @@ export default function ContentProductionConfirmation({
                     revision: revisionValue,
                     route: "A",
                   },
-                  "我选择方案 A：两篇 Top20 作为文风参考，两篇 AI 答案固定作为内容参考。",
+                  "我选择参考例文的文风：两篇参考例文作为文风参考，两篇 AI 答案固定作为内容参考。",
                 ),
             )}
             {button(
-              "方案 B：AI 答案文风",
+              "参考 AI 答案的文风",
               () =>
                 void submit(
                   {
@@ -536,7 +545,7 @@ export default function ContentProductionConfirmation({
                     revision: revisionValue,
                     route: "B",
                   },
-                  "我选择方案 B：两篇 AI 答案同时作为内容和文风参考。",
+                  "我选择参考 AI 答案的文风：两篇 AI 答案同时作为内容和文风参考。",
                 ),
               true,
             )}
@@ -552,7 +561,7 @@ export default function ContentProductionConfirmation({
                     kind: "confirm_question_positioning",
                     revision: revisionValue,
                   },
-                  "我确认当前问题上的差异化定位、对象范围与材料处理，请生成文章蓝图。",
+                  "我确认当前问题上的差异化定位、对象范围与材料处理，请生成文章写作方案。",
                 ),
             )}
           </div>
@@ -560,17 +569,17 @@ export default function ContentProductionConfirmation({
         {isBlueprint && (
           <>
             <label className="cp-field">
-              蓝图调整（可选）
+              写作方案调整（可选）
               <textarea
                 value={edits}
                 onChange={(event) => setEdits(event.target.value)}
                 rows={2}
-                placeholder="需要调整时请说明；修改后的蓝图将再次展示供确认"
+                placeholder="需要调整时请说明；修改后的写作方案将再次展示供确认"
               />
             </label>
             <div className="cp-confirm-actions">
               {button(
-                edits.trim() ? "提交蓝图修改" : "确认蓝图，开始正文",
+                edits.trim() ? "提交写作方案修改" : "确认写作方案，开始正文",
                 () =>
                   void submit(
                     {
@@ -581,8 +590,8 @@ export default function ContentProductionConfirmation({
                       ...(edits.trim() ? { blueprintEdits: edits.trim() } : {}),
                     },
                     edits.trim()
-                      ? `请修改蓝图并再次展示供我确认：\n${edits.trim()}`
-                      : "我确认当前蓝图，请开始正文制作并按原流程完成编辑、20 个标题和最终交付。",
+                      ? `请修改写作方案并再次展示供我确认：\n${edits.trim()}`
+                      : "我确认当前写作方案，请开始正文制作并按原流程完成编辑、20 个标题和最终交付。",
                   ),
               )}
             </div>

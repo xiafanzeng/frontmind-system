@@ -414,7 +414,7 @@ function WalletSummaryCard({
           <dt>预占金额</dt>
           <dd>{formatCny(summary?.reservedTenThousandths)}</dd>
         </div>
-        {scope === "media_publishing" && (
+        {frozenTenThousandths !== undefined && (
           <div>
             <dt>待对账冻结</dt>
             <dd>{formatCny(frozenTenThousandths)}</dd>

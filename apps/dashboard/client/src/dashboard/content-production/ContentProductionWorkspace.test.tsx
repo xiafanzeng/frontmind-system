@@ -67,8 +67,14 @@ function progress(
     currentStage: "blueprint",
     productionStep: null,
     confirmation: "awaiting_blueprint_confirmation",
-    pauseTitle: "文章蓝图确认",
-    choices: ["确认蓝图", "修改蓝图", "补充材料", "返回上一步", "更换文风"],
+    pauseTitle: "文章写作方案确认",
+    choices: [
+      "确认写作方案",
+      "修改写作方案",
+      "补充材料",
+      "返回上一步",
+      "更换文风",
+    ],
     progressPosition: 18,
     completedConfirmations: [
       "awaiting_response_brief",
@@ -130,7 +136,7 @@ describe("内容制作 v4.11 原流程界面", () => {
   it("does not expose the frozen model effort in a historical production task", async () => {
     paused("awaiting_blueprint_confirmation");
     render(<ContentProductionWorkspace />);
-    await screen.findByText("FrontMind Agent");
+    await screen.findByText("FrontMind 内容智能体");
     expect(screen.queryByText(/\b(Low|High|Max)\b/)).not.toBeInTheDocument();
   });
 
@@ -140,12 +146,12 @@ describe("内容制作 v4.11 原流程界面", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getAllByRole("radio")).toHaveLength(4);
     expect(
-      within(dialog).getByRole("radio", { name: /创建或导入 P0/ }),
+      within(dialog).getByRole("radio", { name: /制作品牌深度文章/ }),
     ).toBeTruthy();
     expect(
       within(dialog).queryByRole("radio", { name: /^导入 P0/ }),
     ).toBeNull();
-    fireEvent.click(screen.getByRole("radio", { name: /撰写单问题文章/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /围绕问题写文章/ }));
     fireEvent.change(screen.getByLabelText("企业名称"), {
       target: { value: "测试企业" },
     });
@@ -196,7 +202,7 @@ describe("内容制作 v4.11 原流程界面", () => {
   it("starts the native P0 route without prematurely requiring uploaded materials", async () => {
     const view = render(<ContentProductionWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "新建任务" }));
-    fireEvent.click(screen.getByRole("radio", { name: /创建或导入 P0/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /制作品牌深度文章/ }));
     fireEvent.change(screen.getByLabelText("企业名称"), {
       target: { value: "测试企业" },
     });
@@ -207,7 +213,7 @@ describe("内容制作 v4.11 原流程界面", () => {
     expect(mocks.create).toHaveBeenCalledTimes(1);
     mocks.conversation = {
       id: "new-job",
-      title: "测试企业 · 创建或导入 P0",
+      title: "测试企业 · 制作品牌深度文章",
       messages: [],
       status: "idle",
     };
@@ -215,7 +221,7 @@ describe("内容制作 v4.11 原流程界面", () => {
     view.rerender(<ContentProductionWorkspace />);
     await waitFor(() =>
       expect(mocks.send).toHaveBeenCalledWith(
-        expect.stringContaining("请先展示本任务的原始路由或资料输入步骤"),
+        expect.stringContaining("请先展示本任务的资料选择步骤"),
         [],
         expect.objectContaining({
           contentProduction: expect.objectContaining({
@@ -230,7 +236,7 @@ describe("内容制作 v4.11 原流程界面", () => {
   it("accepts an existing question ID without demanding the same question text again", () => {
     render(<ContentProductionWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "新建任务" }));
-    fireEvent.click(screen.getByRole("radio", { name: /撰写单问题文章/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /围绕问题写文章/ }));
     fireEvent.change(screen.getByLabelText("企业名称"), {
       target: { value: "测试企业" },
     });
@@ -253,7 +259,7 @@ describe("内容制作 v4.11 原流程界面", () => {
     await screen.findByRole("button", { name: "确认文章类型" });
     expect(
       container.querySelector('[aria-current="step"]')?.textContent,
-    ).toContain("确认文章蓝图");
+    ).toContain("确认文章写作方案");
     expect(screen.getByText("企业知识库 v2 · 55 份资料")).toBeTruthy();
     expect(screen.getByTestId("original-chat")).toBeTruthy();
     expect(mocks.home).toHaveBeenLastCalledWith(
@@ -271,7 +277,7 @@ describe("内容制作 v4.11 原流程界面", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认文章类型" }));
     await waitFor(() =>
       expect(mocks.send).toHaveBeenCalledWith(
-        expect.stringContaining("P02"),
+        expect.stringContaining("多对象推荐与选择指南"),
         [],
         {
           contentProductionAction: {
@@ -292,18 +298,18 @@ describe("内容制作 v4.11 原流程界面", () => {
   it.each([
     [
       "awaiting_reference_pack_route",
-      "使用已有 Reference Pack",
+      "使用已有品牌资料包",
       "choose_reference_pack_route",
       "use",
     ],
     [
       "awaiting_reference_pack_route",
-      "创建新的 Reference Pack",
+      "创建新的品牌资料包",
       "choose_reference_pack_route",
       "create",
     ],
-    ["awaiting_p0_route", "新建 P0", "choose_p0_route", "create"],
-    ["awaiting_p0_route", "导入已有 P0", "choose_p0_route", "import"],
+    ["awaiting_p0_route", "新建品牌文章", "choose_p0_route", "create"],
+    ["awaiting_p0_route", "导入已有品牌文章", "choose_p0_route", "import"],
     [
       "awaiting_p0_example_confirmation",
       "采用完整例文文风",
@@ -312,19 +318,14 @@ describe("内容制作 v4.11 原流程界面", () => {
     ],
     [
       "awaiting_p0_example_confirmation",
-      "仅用工作流写作规范",
+      "使用默认写作规范",
       "choose_p0_examples",
       "workflow",
     ],
+    ["awaiting_example_confirmation", "参考例文的文风", "choose_examples", "A"],
     [
       "awaiting_example_confirmation",
-      "方案 A：Top20 文风",
-      "choose_examples",
-      "A",
-    ],
-    [
-      "awaiting_example_confirmation",
-      "方案 B：AI 答案文风",
+      "参考 AI 答案的文风",
       "choose_examples",
       "B",
     ],
@@ -429,12 +430,12 @@ describe("内容制作 v4.11 原流程界面", () => {
   it.each([
     [
       "awaiting_reference_pack_input",
-      "企业材料或 Reference Pack",
+      "企业材料或品牌资料包",
       "provide_reference_pack_inputs",
     ],
     [
       "awaiting_question_research_inputs",
-      "本题 AI 答案或更新后的 Reference Pack",
+      "本题 AI 答案或更新后的品牌资料包",
       "provide_question_research_inputs",
     ],
   ] as const)(
@@ -470,10 +471,10 @@ describe("内容制作 v4.11 原流程界面", () => {
     async (pause) => {
       paused(pause);
       render(<ContentProductionWorkspace />);
-      fireEvent.change(await screen.findByLabelText("蓝图调整（可选）"), {
+      fireEvent.change(await screen.findByLabelText("写作方案调整（可选）"), {
         target: { value: "把适用条件放到开头。" },
       });
-      fireEvent.click(screen.getByRole("button", { name: "提交蓝图修改" }));
+      fireEvent.click(screen.getByRole("button", { name: "提交写作方案修改" }));
       await waitFor(() =>
         expect(mocks.send).toHaveBeenCalledWith(
           expect.stringContaining("再次展示供我确认"),
@@ -613,7 +614,7 @@ describe("内容制作 v4.11 原流程界面", () => {
       }),
     );
     expect(
-      screen.queryByRole("button", { name: "确认蓝图，开始正文" }),
+      screen.queryByRole("button", { name: "确认写作方案，开始正文" }),
     ).toBeNull();
     expect(
       view.container.querySelector('[aria-current="step"]')?.textContent,
@@ -633,16 +634,16 @@ describe("内容制作 v4.11 原流程界面", () => {
     const view = render(<ContentProductionWorkspace />);
     await screen.findByText("企业知识库 v2 · 55 份资料");
     expect(view.container.querySelector('[aria-current="step"]')).toBeNull();
-    expect(screen.getByText("Reference Pack 已完成")).toBeInTheDocument();
+    expect(screen.getByText("品牌资料包已完成")).toBeInTheDocument();
     expect(
       screen.getByText(/本次选择先创建资料包，文章尚未制作/),
     ).toBeInTheDocument();
     expect(
       contentProductionLane("p0", "reference_pack").map((step) => step.title),
-    ).not.toContain("确认 P0 蓝图");
+    ).not.toContain("确认品牌文章写作方案");
     expect(screen.queryByText("本次任务已完成")).toBeNull();
     expect(contentProductionLane("p0").map((step) => step.title)).toContain(
-      "确认 P0 蓝图",
+      "确认品牌文章写作方案",
     );
     expect(contentProductionLane("import_foundation")).toEqual(
       contentProductionLane("p0"),
@@ -727,7 +728,7 @@ describe("内容任务隔离与交付复用", () => {
   it("does not briefly expose the previous task confirmation while the next task status is loading", async () => {
     paused("awaiting_blueprint_confirmation");
     const view = render(<ContentProductionWorkspace />);
-    await screen.findByRole("button", { name: "确认蓝图，开始正文" });
+    await screen.findByRole("button", { name: "确认写作方案，开始正文" });
     const firstSignal = mocks.retrieve.mock.calls[0][1].signal as AbortSignal;
     let resolveNext!: (value: unknown) => void;
     mocks.retrieve.mockImplementationOnce(
@@ -745,7 +746,7 @@ describe("内容任务隔离与交付复用", () => {
     };
     view.rerender(<ContentProductionWorkspace />);
     expect(
-      screen.queryByRole("button", { name: "确认蓝图，开始正文" }),
+      screen.queryByRole("button", { name: "确认写作方案，开始正文" }),
     ).toBeNull();
     expect(firstSignal.aborted).toBe(true);
     await act(async () =>
@@ -760,7 +761,7 @@ describe("内容任务隔离与交付复用", () => {
       await screen.findByText("任务状态与当前内容任务不匹配，请重新读取。"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "确认蓝图，开始正文" }),
+      screen.queryByRole("button", { name: "确认写作方案，开始正文" }),
     ).toBeNull();
   });
 
@@ -768,14 +769,14 @@ describe("内容任务隔离与交付复用", () => {
     mocks.send.mockResolvedValue(false);
     const view = render(<ContentProductionWorkspace />);
     fireEvent.click(screen.getByRole("button", { name: "新建任务" }));
-    fireEvent.click(screen.getByRole("radio", { name: /创建或导入 P0/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /制作品牌深度文章/ }));
     fireEvent.change(screen.getByLabelText("企业名称"), {
       target: { value: "保留企业" },
     });
     const file = new File(["企业材料"], "company.md", {
       type: "text/markdown",
     });
-    fireEvent.change(screen.getByLabelText(/上传材料或 Reference Pack/), {
+    fireEvent.change(screen.getByLabelText(/上传材料或品牌资料包/), {
       target: { files: [file] },
     });
     fireEvent.click(screen.getByRole("button", { name: "创建并开始" }));
@@ -848,7 +849,7 @@ describe("内容任务隔离与交付复用", () => {
     try {
       const view = render(<ContentProductionWorkspace />);
       const next = await screen.findByRole("button", {
-        name: "使用此资料包创建 P0",
+        name: "使用此资料包制作品牌文章",
       });
       expect(next).toBeDisabled();
       expect(screen.getAllByTestId("deliverable")).toHaveLength(1);
@@ -862,11 +863,11 @@ describe("内容任务隔离与交付复用", () => {
         "/api/frontmind/v2/artifacts/pack/content",
       );
       expect(
-        within(dialog).getByRole("radio", { name: /创建或导入 P0/ }),
+        within(dialog).getByRole("radio", { name: /制作品牌深度文章/ }),
       ).toBeChecked();
       expect(within(dialog).getByLabelText("企业名称")).toHaveValue("测试企业");
       expect(
-        within(dialog).getByText(/已带入资料包：Reference_Pack_v5.zip/),
+        within(dialog).getByText(/已带入资料包：品牌资料包_v5.zip/),
       ).toBeInTheDocument();
       expect(mocks.create).not.toHaveBeenCalled();
       const supplement = new File(["补充企业事实"], "supplement.pdf", {
@@ -928,10 +929,10 @@ it("locks the opposite composer during a confirmation submission and preserves f
       }),
   );
   render(<ContentProductionWorkspace />);
-  fireEvent.change(await screen.findByLabelText("蓝图调整（可选）"), {
+  fireEvent.change(await screen.findByLabelText("写作方案调整（可选）"), {
     target: { value: "保留这个修改" },
   });
-  const button = screen.getByRole("button", { name: "提交蓝图修改" });
+  const button = screen.getByRole("button", { name: "提交写作方案修改" });
   fireEvent.click(button);
   fireEvent.click(button);
   expect(mocks.send).toHaveBeenCalledTimes(1);
@@ -942,7 +943,9 @@ it("locks the opposite composer during a confirmation submission and preserves f
     }),
   );
   await act(async () => finish(false));
-  expect(screen.getByLabelText("蓝图调整（可选）")).toHaveValue("保留这个修改");
+  expect(screen.getByLabelText("写作方案调整（可选）")).toHaveValue(
+    "保留这个修改",
+  );
   expect(mocks.home).toHaveBeenLastCalledWith(
     expect.objectContaining({ knowledgeEditingBlocked: false }),
   );
@@ -962,7 +965,7 @@ it("shows neutral loading for an unknown historical task instead of inventing Re
   expect(
     screen.getByText("制作阶段将在本任务的信息读取后显示。"),
   ).toBeInTheDocument();
-  expect(screen.queryByText("交付 Reference Pack")).toBeNull();
+  expect(screen.queryByText("交付品牌资料包")).toBeNull();
   expect(view.container.querySelector('[aria-current="step"]')).toBeNull();
   await act(async () =>
     finish({
@@ -973,9 +976,9 @@ it("shows neutral loading for an unknown historical task instead of inventing Re
     }),
   );
   expect(
-    await screen.findByRole("button", { name: "确认蓝图，开始正文" }),
+    await screen.findByRole("button", { name: "确认写作方案，开始正文" }),
   ).toBeInTheDocument();
   expect(
     view.container.querySelector('[aria-current="step"]')?.textContent,
-  ).toContain("确认文章蓝图");
+  ).toContain("确认文章写作方案");
 });

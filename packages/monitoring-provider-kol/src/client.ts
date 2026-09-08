@@ -179,7 +179,9 @@ export class KolClient implements KolProviderPort {
     signal?: AbortSignal,
   ): Promise<KolCreateOrderResult> {
     this.assertPublishingAllowed(input.resourceId);
-    const encoding = this.options.createOrderEncoding ?? "unknown";
+    // Form is the implementation default, not a claim that the provider has
+    // documented an encoding. Never retry a POST with another encoding.
+    const encoding = this.options.createOrderEncoding ?? "form";
     if (encoding === "unknown") {
       throw new KolProviderError(
         "invalid_configuration",

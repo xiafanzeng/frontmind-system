@@ -15,6 +15,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   hydrated: false,
+  activeConversationId: null as string | null,
   conversations: [] as any[],
   retrieveTask: vi.fn(),
   fetchKnowledgeBaseProgress: vi.fn(),
@@ -31,7 +32,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/contexts/ConversationContext", () => ({
   useConversation: () => ({
     hydrated: mocks.hydrated,
-    state: { conversations: mocks.conversations },
+    state: {
+      conversations: mocks.conversations,
+      activeConversationId: mocks.activeConversationId,
+    },
     updateStatus: mocks.updateStatus,
     updateAssistantMessages: mocks.updateAssistantMessages,
     addMessage: mocks.addMessage,
@@ -61,6 +65,7 @@ describe("useResumePolling ordinary-task boundary", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.hydrated = false;
+    mocks.activeConversationId = null;
     mocks.conversations = [
       {
         id: "ordinary",
@@ -88,6 +93,117 @@ describe("useResumePolling ordinary-task boundary", () => {
     expect(getResumePollDelay(0)).toBe(4_000);
     expect(getResumePollDelay(5 * 60 * 1000)).toBe(10_000);
     expect(getResumePollDelay(30 * 60 * 1000)).toBe(30_000);
+  });
+
+  it("polls a selected long-running task every four seconds without accelerating other tasks", async () => {
+    mocks.hydrated = true;
+    mocks.activeConversationId = "ordinary";
+    mocks.conversations.push({
+      ...mocks.conversations[0],
+      id: "background",
+      taskId: "task-2",
+    });
+    const view = renderHook(() => useResumePolling());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(mocks.retrieveTask).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(mocks.retrieveTask).toHaveBeenCalledTimes(3);
+    expect(mocks.retrieveTask.mock.calls[2]?.[0]).toBe("task-1");
+    view.unmount();
+  });
+
+  it("backfills only the selected completed general conversation once through the existing owner", async () => {
+    mocks.hydrated = true;
+    mocks.activeConversationId = "ordinary";
+    mocks.conversations[0] = {
+      ...mocks.conversations[0],
+      executionKind: "general_chat_v2",
+      status: "completed",
+      completedAt: 50,
+    };
+    mocks.conversations.push({
+      ...mocks.conversations[0],
+      id: "other",
+      taskId: "other-task",
+    });
+    const execution = {
+      schemaVersion: 1,
+      taskId: "task-1",
+      coverage: "complete",
+      timeline: [],
+    };
+    mocks.retrieveTask.mockResolvedValue({
+      id: "task-1",
+      status: "completed",
+      execution,
+      output: [],
+    });
+    const view = renderHook(() => useResumePolling());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mocks.retrieveTask).toHaveBeenCalledTimes(1);
+    expect(mocks.updateStatus).toHaveBeenCalledWith("ordinary", "completed", {
+      execution,
+    });
+    expect(mocks.updateAssistantMessages).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("does not let a completed-history GET overwrite a newly submitted turn on the same task", async () => {
+    mocks.hydrated = true;
+    mocks.activeConversationId = "ordinary";
+    mocks.conversations[0] = {
+      ...mocks.conversations[0],
+      executionKind: "general_chat_v2",
+      status: "completed",
+      startedAt: 1,
+      completedAt: 50,
+      messages: [{ id: "old-user", role: "user" }],
+    };
+    let resolveHistory!: (value: unknown) => void;
+    mocks.retrieveTask.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    const view = renderHook(() => useResumePolling());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    mocks.conversations = [
+      {
+        ...mocks.conversations[0],
+        status: "running",
+        startedAt: Date.now(),
+        messages: [{ id: "new-user", role: "user" }],
+      },
+    ];
+    view.rerender();
+    await act(async () => {
+      resolveHistory({
+        id: "task-1",
+        status: "completed",
+        execution: {
+          schemaVersion: 1,
+          taskId: "task-1",
+          coverage: "complete",
+          timeline: [],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(
+      mocks.updateStatus.mock.calls.some((call) => call[1] === "completed"),
+    ).toBe(false);
+    expect(mocks.retrieveTask).toHaveBeenCalledTimes(2);
+    view.unmount();
   });
 
   it("derives the same terminal public ID as server-side SHA-256", () => {

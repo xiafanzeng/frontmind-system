@@ -34,10 +34,7 @@ describe("monitoring module shell ownership", () => {
     );
     expect(screen.getByText("真实稿件页面")).toBeInTheDocument();
     expect(container.querySelector("aside")).toBeNull();
-    expect(screen.getByRole("link", { name: /媒体发布余额/ })).toHaveAttribute(
-      "href",
-      "/monitoring-system/settings?wallet=media_publishing",
-    );
+    expect(screen.queryByRole("link", { name: /媒体发布余额/ })).not.toBeInTheDocument();
   });
   it("uses the existing complete administrator navigation for module pages", () => {
     const { hook } = memoryLocation({ path: "/admin/monitoring/accounts" });

@@ -158,6 +158,11 @@ export type MediaResource = {
   linkType?: string;
   pcWeight?: number;
   authenticated?: boolean;
+  authenticationType?: string;
+  authenticationDescription?: string;
+  recommendationTags?: string[];
+  platformRecommendationTags?: string[];
+  recommendationRemark?: string;
   festivalAvailable?: boolean;
   recommended?: boolean;
   remark?: string;

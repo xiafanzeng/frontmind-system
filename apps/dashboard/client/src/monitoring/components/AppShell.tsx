@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import PortalShell from "@/components/PortalShell";
 import { getAdminNav } from "@/pages/AdminDashboard";
 import type { ProjectSummary, SessionUser } from "../domain";
@@ -21,8 +21,6 @@ type AppShellProps = {
 /** Dashboard owns the shell, account menu, and logout; the module owns its business views. */
 export default function AppShell({
   user,
-  accountBalance,
-  walletBalances,
   publishingEnabled,
   projects,
   activeProjectId,
@@ -44,7 +42,7 @@ export default function AppShell({
     "监控与发布管理";
   const content = (
     <div className="monitoring-module">
-      {!administration && (
+      {!administration && !publishing && projects.length > 0 && (
         <div className="module-toolbar">
           {!publishing && projects.length > 0 && (
             <label className="module-project-picker">
@@ -62,17 +60,6 @@ export default function AppShell({
               </select>
             </label>
           )}
-          <Link
-            href={`/monitoring-system/settings?wallet=${publishing ? "media_publishing" : "monitoring"}`}
-            className="module-wallet-link"
-          >
-            {publishing ? "媒体发布余额" : "问题监控余额"}{" "}
-            <strong>
-              {publishing
-                ? walletBalances?.mediaPublishing || "¥0.00"
-                : walletBalances?.monitoring || accountBalance || "¥0.00"}
-            </strong>
-          </Link>
         </div>
       )}
       {!publishingEnabled && publishing ? (

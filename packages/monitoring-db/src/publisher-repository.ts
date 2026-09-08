@@ -1069,7 +1069,7 @@ export class PublishingRepository {
     }
     if (input.imageSupport) {
       conditions.push(
-        eq(publisherMediaCapabilities.imageSupport, input.imageSupport),
+        sql`COALESCE(${publisherMediaCapabilities.imageSupport}, 'unknown') = ${input.imageSupport}`,
       );
     }
     if (input.authenticated !== undefined)
@@ -4396,7 +4396,7 @@ async function computePreflight(
       }
       const liveEntry = whitelistByMedia.get(resource.id);
       const canaryBlocker =
-        mode === "live" && !runtime?.imagePublishEnabled
+        mode === "live" && version.containsImages && !runtime?.imagePublishEnabled
           ? publisherLiveImageCanaryBlocker({
               batchItemCount: selections.length,
               matchingActiveResourceCount: matchingCanaryResources.length,
@@ -4444,7 +4444,7 @@ async function computePreflight(
           });
         }
       }
-      if (mode === "live" && !liveEntry) {
+      if (mode === "live" && version.containsImages && !liveEntry) {
         blockers.push({
           code: "MEDIA_NOT_WHITELISTED",
           message: "Media is not enabled for LIVE",
@@ -4556,6 +4556,7 @@ export function publisherLiveImageCanaryBlocker(input: {
   containsImages: boolean;
   whitelistImageAllowed: boolean;
 }): string | null {
+  if (!input.containsImages) return null;
   if (
     input.batchItemCount !== 1 ||
     input.matchingActiveResourceCount !== 1 ||
@@ -5198,11 +5199,27 @@ function customerSafeMediaSnapshot(
     remark: resource.remark,
     description: resource.description,
     recommended: resource.recommended,
+    ...publisherMediaEditorialMetadata(resource.rawPayload),
     authenticated: resource.authenticated,
     festivalPublishable: resource.festivalPublishable,
     fanCount: resource.fanCount?.toString() ?? null,
     likeCount: resource.likeCount?.toString() ?? null,
     publishCount: resource.publishCount?.toString() ?? null,
+  };
+}
+
+/** Explicit customer fields only: never serialize the provider raw object. */
+export function publisherMediaEditorialMetadata(raw: Record<string, unknown> | null | undefined) {
+  const tags = (key: string) => [...new Set((Array.isArray(raw?.[key]) ? raw[key] as unknown[] : [])
+    .filter((value): value is string => typeof value === "string")
+    .map(value => value.trim().slice(0, 120)).filter(Boolean))].slice(0, 30);
+  const text = (key: string) => typeof raw?.[key] === "string" ? (raw[key] as string).trim().slice(0, 10_000) || null : null;
+  return {
+    recommendationTags: tags("recommendationTags"),
+    platformRecommendationTags: tags("platformRecommendationTags"),
+    recommendationRemark: text("recommendationRemark"),
+    authenticationType: text("authenticationType"),
+    authenticationDescription: text("authenticationDescription"),
   };
 }
 
@@ -5395,6 +5412,7 @@ function draftMediaSnapshot(
       "recommended",
       current.recommended,
     ),
+    ...publisherMediaEditorialMetadata(snapshot),
     authenticated: snapshotNullableBoolean(
       snapshot,
       "authenticated",

@@ -41,6 +41,11 @@ export interface KolResource {
   remark?: string;
   description?: string;
   recommended?: boolean;
+  recommendationTags?: string[];
+  platformRecommendationTags?: string[];
+  recommendationRemark?: string;
+  authenticationType?: string;
+  authenticationDescription?: string;
   isSelfMedia: boolean;
   authenticated?: boolean;
   festivalPublishable?: boolean;

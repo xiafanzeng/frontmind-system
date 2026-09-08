@@ -355,7 +355,7 @@ describe("tenant-owned Dashboard Managed Agents transport", () => {
     const command = legacy.rows
       .get(record.localTaskId)!
       .runtime.commands.at(-1)!;
-    expect(command.productIdentityContext).toContain("frontmind-general-v1");
+    expect(command.productIdentityContext).toContain("frontmind-general-v2");
     const sends = legacy.calls.filter(
       (c) => c.path.endsWith("/events") && c.method === "POST",
     ).length;

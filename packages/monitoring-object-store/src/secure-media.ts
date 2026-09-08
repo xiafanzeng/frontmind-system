@@ -273,6 +273,10 @@ export function validateRemoteMediaUrl(input: string | URL): URL {
 }
 
 export function sniffMediaContentType(body: Uint8Array): string | undefined {
+  // Detection alone does not allow SVG. Callers must explicitly opt in and
+  // sanitize/rasterize it; the default remote-media allowlist remains raster.
+  const xmlHead = Buffer.from(body.subarray(0, 4096)).toString("utf8").replace(/^\uFEFF/u, "");
+  if (/^\s*(?:<\?xml\b[^?]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg(?:\s|>)/iu.test(xmlHead)) return "image/svg+xml";
   if (
     body.length >= 8 &&
     Buffer.from(body.subarray(0, 8)).equals(

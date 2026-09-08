@@ -1,12 +1,7 @@
 import {
-  AlertCircle,
   ArrowRight,
-  BookOpenText,
-  CheckCircle2,
   Clock3,
-  Database,
   FileText,
-  WalletCards,
 } from "lucide-react";
 import { useCallback } from "react";
 import { Link } from "wouter";
@@ -50,93 +45,6 @@ export default function PublishingOverviewPage() {
       ) : null}
       {query.data ? (
         <>
-          <section className="publishing-metric-grid" aria-label="媒体发布概览">
-            <article className="publishing-metric publishing-metric-primary">
-              <span className="publishing-metric-icon">
-                <WalletCards size={21} />
-              </span>
-              <div>
-                <p>媒体发布余额</p>
-                <strong>
-                  {formatPublishingMoney(
-                    query.data.wallet.availableTenThousandths,
-                  )}
-                </strong>
-                <span>
-                  待对账冻结{" "}
-                  {formatPublishingMoney(
-                    query.data.wallet.frozenTenThousandths,
-                  )}
-                </span>
-              </div>
-              <Link href="/monitoring-system/settings?tab=funds&wallet=media_publishing">
-                余额管理 <ArrowRight size={14} />
-              </Link>
-            </article>
-            <article className="publishing-metric">
-              <span className="publishing-metric-icon">
-                <Database size={21} />
-              </span>
-              <div>
-                <p>可选媒体</p>
-                <strong>
-                  {query.data.catalog.mediaCount.toLocaleString("zh-CN")}
-                </strong>
-                <span>
-                  {query.data.catalog.newsCount !== undefined ||
-                  query.data.catalog.selfMediaCount !== undefined
-                    ? `软文 ${query.data.catalog.newsCount ?? "—"} · 自媒体 ${query.data.catalog.selfMediaCount ?? "—"}`
-                    : query.data.catalog.stale
-                      ? "目录已过期"
-                      : `同步于 ${publishingDateTime(query.data.catalog.lastSyncedAt)}`}
-                </span>
-              </div>
-              <Link href="/publishing/media">
-                进入媒体库 <ArrowRight size={14} />
-              </Link>
-            </article>
-            <article className="publishing-metric">
-              <span className="publishing-metric-icon">
-                <BookOpenText size={21} />
-              </span>
-              <div>
-                <p>我的稿件</p>
-                <strong>{query.data.articleCount}</strong>
-                <span>草稿与已冻结版本</span>
-              </div>
-              <Link href="/publishing/articles">
-                管理稿件 <ArrowRight size={14} />
-              </Link>
-            </article>
-            <article
-              className={
-                query.data.actionableItemCount
-                  ? "publishing-metric publishing-metric-warning"
-                  : "publishing-metric"
-              }
-            >
-              <span className="publishing-metric-icon">
-                {query.data.actionableItemCount ? (
-                  <AlertCircle size={21} />
-                ) : (
-                  <CheckCircle2 size={21} />
-                )}
-              </span>
-              <div>
-                <p>需要处理</p>
-                <strong>{query.data.actionableItemCount}</strong>
-                <span>
-                  {query.data.actionableItemCount
-                    ? "状态未知项目等待管理员对账"
-                    : "当前没有异常项目"}
-                </span>
-              </div>
-              <Link href="/publishing?tab=records">
-                查看记录 <ArrowRight size={14} />
-              </Link>
-            </article>
-          </section>
-
           <div className="publishing-overview-columns">
             <section className="publishing-panel" aria-label="可恢复投放草稿">
               <header className="publishing-panel-heading">

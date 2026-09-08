@@ -15,6 +15,10 @@ import {
   frozenGeneralAgentPurpose,
   type FrozenGeneralAgentPurpose,
 } from "./general-agent-purpose";
+import {
+  contentProductionPauseTitle,
+  contentProductionPublicText,
+} from "../shared/content-production-public";
 
 const decision = z.object({
   revision: z.number().int().min(0).optional(),
@@ -248,8 +252,15 @@ export function contentProductionPublicDto(
     currentStage: state?.stage ?? null,
     jobKind: state?.job_kind ?? null,
     runnerRevision: state?.revision ?? null,
-    pauseTitle: state?.current_pause?.title ?? null,
-    choices: state?.current_pause?.available_choices ?? [],
+    pauseTitle: contentProductionPauseTitle(
+      confirmation,
+      state?.current_pause?.title ?? null,
+    ),
+    choices: (state?.current_pause?.available_choices ?? []).map((choice) =>
+      confirmation === "awaiting_core_positioning_direction"
+        ? choice
+        : contentProductionPublicText(choice),
+    ),
     productionStep:
       state?.flags.p0_production_step ??
       state?.flags.article_production_step ??

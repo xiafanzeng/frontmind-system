@@ -1713,18 +1713,17 @@ export default function MonitorForm({
                   : `保存后每日 ${localTime} 自动执行`}
             </span>
             <small>
-              可用余额 {formatRunMoney(availableBalanceTenThousandths)}
               {attemptCount <= 0
-                ? " · 完善问题和模型后估算费用"
+                ? "完善问题和模型后估算费用"
                 : attemptCount > 500
-                  ? " · 超过单次 500 个任务上限，请减少问题、模型或次数"
+                  ? "超过单次 500 个任务上限，请减少问题、模型或次数"
                   : quoteLoading
-                    ? " · 正在按官方资费估算"
+                    ? "正在按官方资费估算"
                     : quoteError || !currentQuote
-                      ? " · 费用暂无法估算，仍可保存配置"
+                      ? "费用暂无法估算，仍可保存配置"
                       : balanceShortfall
-                        ? ` · 余额不足，还差 ${formatRunMoney(balanceShortfall)}，仍可保存配置`
-                        : ` · 全部成功时预计剩余 ${formatRunMoney(estimatedRemaining || "0")}`}
+                        ? `余额不足，还差 ${formatRunMoney(balanceShortfall)}，仍可保存配置`
+                        : "按实际成功任务结算"}
             </small>
           </div>
         </div>

@@ -53,6 +53,11 @@ export function normalizeResource(
     remark: text(input.remark),
     description: text(input.description),
     recommended: booleanValue(input.is_recommend),
+    recommendationTags: catalogTags(input.recommend),
+    platformRecommendationTags: catalogTags(input.platform_recommend),
+    recommendationRemark: text(input.recommend_remark),
+    authenticationType: text(input.auth_type),
+    authenticationDescription: text(input.auth_description),
     isSelfMedia: kind === "self_media",
     authenticated: booleanValue(input.auth),
     festivalPublishable: booleanValue(input.festival),
@@ -174,6 +179,13 @@ function text(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   const normalized = String(value).trim();
   return normalized ? normalized.slice(0, 10_000) : undefined;
+}
+
+/** Supplier tags are labels, not evidence of account authentication. */
+function catalogTags(value: unknown): string[] {
+  const entries = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  return [...new Set(entries.filter((entry): entry is string => typeof entry === "string")
+    .map(entry => entry.trim().slice(0, 120)).filter(Boolean))].slice(0, 30);
 }
 
 function integer(value: unknown): number | undefined {

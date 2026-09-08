@@ -139,6 +139,7 @@ export interface PublisherRuntimeConfig {
   maxGetAttempts: number;
   getRetryBaseMs: number;
   concurrency: number;
+  logoConcurrency?: number;
   importConcurrency: number;
   pollConcurrency: number;
   submissionIntervalMs: number;
@@ -215,7 +216,7 @@ export function loadWorkerConfig(
     const value =
       env.PUBLISHER_CREATE_ORDER_ENCODING?.trim().toLowerCase() ??
       env.KOL_CREATE_ORDER_ENCODING?.trim().toLowerCase() ??
-      "unknown";
+      "form";
     if (value !== "json" && value !== "form" && value !== "unknown") {
       throw new Error(
         "PUBLISHER_CREATE_ORDER_ENCODING must be json, form or unknown",
@@ -429,6 +430,7 @@ export function loadWorkerConfig(
         1_000,
       ),
       concurrency: publisherPositiveInteger("PUBLISHER_WORKER_CONCURRENCY", 8),
+      logoConcurrency: Math.min(publisherPositiveInteger("PUBLISHER_LOGO_CONCURRENCY", 2), 4),
       importConcurrency: publisherPositiveInteger(
         "PUBLISHER_IMPORT_CONCURRENCY",
         1,

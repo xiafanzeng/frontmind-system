@@ -213,47 +213,72 @@ function EnterpriseQaPublishedWorkspace() {
   const { source, retry } = useKnowledgeSource();
   if (!source.loaded || source.failed || !source.knowledgeBase) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center overflow-y-auto bg-background p-6">
+      <div className="h-full min-h-0 overflow-y-auto bg-[#f7f6f9] px-4 py-8 sm:px-6 lg:px-8">
         <section
           aria-label="企业问答暂未解锁"
-          className="w-full max-w-md rounded-2xl border border-border/70 bg-card p-8 text-center shadow-sm"
+          className="mx-auto mt-4 w-full max-w-3xl overflow-hidden rounded-[24px] border border-[#e8e1ee] bg-white shadow-[0_18px_48px_rgba(33,19,58,.07)] md:mt-8"
         >
-          <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            {!source.loaded ? (
-              <Loader2 className="h-6 w-6 animate-spin" />
-            ) : (
-              <LockKeyhole className="h-6 w-6" />
-            )}
+          <div className="border-b border-[#eee8f2] bg-[linear-gradient(135deg,rgba(91,42,134,.08),rgba(200,144,19,.08))] p-6 md:p-8">
+            <div
+              className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#5b2a86] shadow-sm"
+              aria-hidden="true"
+            >
+              {!source.loaded ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <LockKeyhole className="h-6 w-6" />
+              )}
+            </div>
+            <p className="text-xs font-semibold tracking-wide text-[#8d7b9e]">
+              企业问答智能体
+            </p>
+            <h1 className="mt-2 text-xl font-semibold leading-relaxed text-[#171321] sm:text-2xl">
+              {!source.loaded
+                ? "正在确认知识库状态"
+                : source.failed
+                  ? "暂时无法确认知识库状态"
+                  : "发布知识库后，即可开始企业问答"}
+            </h1>
+            <p
+              role={source.failed ? "alert" : "status"}
+              className="mt-3 max-w-2xl text-sm leading-7 text-[#625a70]"
+            >
+              {!source.loaded
+                ? "确认当前企业项目已发布知识库后，即可进入企业问答。"
+                : source.failed
+                  ? "知识库状态读取失败，请重新检查后再进入企业问答。"
+                  : "当前企业项目尚无可用的已发布知识库。请先完成构建并发布，再开始企业问答。"}
+            </p>
           </div>
-          <p className="text-sm font-medium text-muted-foreground">
-            企业问答智能体
-          </p>
-          <h1 className="mt-2 text-xl font-semibold">
-            {!source.loaded
-              ? "正在确认知识库状态"
-              : source.failed
-                ? "暂时无法确认知识库状态"
-                : "先构建并发布企业知识库"}
-          </h1>
-          <p
-            role={source.failed ? "alert" : "status"}
-            className="mt-3 text-sm leading-6 text-muted-foreground"
-          >
-            {!source.loaded
-              ? "确认当前企业项目已发布知识库后，即可进入企业问答。"
-              : source.failed
-                ? "知识库状态读取失败，请重新检查后再进入企业问答。"
-                : "当前企业项目尚无可用的已发布知识库。请先完成构建并发布，再开始企业问答。"}
-          </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <Button asChild>
-              <Link href={projectWorkspaceUrl("/?view=knowledge")}>
-                构建并发布知识库
-              </Link>
-            </Button>
-            <Button variant="outline" disabled={!source.loaded} onClick={retry}>
-              重新检查
-            </Button>
+          <div className="grid gap-5 p-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:p-8">
+            <div className="flex items-start gap-3 text-[#625a70]">
+              <BookOpen
+                className="mt-0.5 h-5 w-5 shrink-0 text-[#8d7b9e]"
+                aria-hidden="true"
+              />
+              <div>
+                <p className="text-sm font-medium text-[#332a48]">
+                  以企业知识库为依据回答
+                </p>
+                <p className="mt-1 text-xs leading-6">
+                  完成资料构建与发布后，回来重新检查即可开始问答。
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button asChild>
+                <Link href={projectWorkspaceUrl("/?view=knowledge")}>
+                  前往智能知识库
+                </Link>
+              </Button>
+              <Button
+                variant="outline"
+                disabled={!source.loaded}
+                onClick={retry}
+              >
+                重新检查
+              </Button>
+            </div>
           </div>
         </section>
       </div>

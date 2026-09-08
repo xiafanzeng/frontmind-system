@@ -1,3 +1,5 @@
+import { loadGeneralExecutions } from "./frontmind-general-execution";
+import { generalExecutionActivity } from "../shared/frontmind-general-execution";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { aiBillingHttpFailure, sendAiBillingError } from "./ai-billing-http";
 import { AiBillingError, assertAiAccountFunds } from "./ai-billing-service";
@@ -131,6 +133,8 @@ import type {
   ContentProductionInput,
   ContentProductionAction,
 } from "../shared/content-production";
+import { CONTENT_PRODUCTION_LANGUAGE_CONTEXT } from "../shared/content-production-public";
+import { contentProductionPresentationArtifact } from "./content-production-artifact-presentation";
 import {
   contentProductionSystemAttachments,
   contentProductionSystemContext,
@@ -404,11 +408,12 @@ function clientFor(
           systemContext: contentProductionSystemContext(purpose),
           systemAttachments: contentProductionSystemAttachments(purpose),
           recoverableStatusArtifact: isContentWorkflowStateFilename,
-          ...(contentProductionAction
-            ? {
-                turnContext: `The customer submitted this contentProductionAction for the current Runner revision: ${JSON.stringify(contentProductionAction)}. Apply only this original business action with its attached user material; preserve the original user text above.`,
-              }
-            : {}),
+          turnContext: [
+            CONTENT_PRODUCTION_LANGUAGE_CONTEXT,
+            contentProductionAction
+              ? `The customer submitted this contentProductionAction for the current Runner revision: ${JSON.stringify(contentProductionAction)}. Apply only this original business action with its attached user material; preserve the original user text above.`
+              : null,
+          ].filter(Boolean).join("\n\n"),
         }
       : {}),
     ...(operation
@@ -1020,7 +1025,7 @@ function providerEventTurnAssignments(
       current = matchedUserTurns.get(event.id) ?? null;
       continue;
     }
-    if (event.type === "assistant_message" && current) {
+    if (current && (event.type === "assistant_message" || generalExecutionActivity(event.executionActivity))) {
       assignments.set(event.id, current);
     }
   }
@@ -1305,7 +1310,7 @@ async function claimProviderProjectionSnapshot(input: {
   const eventIds = sortedUnique(input.events.map((event) => event.id));
   const snapshot: GeneralChatProjectionSnapshot = {
     eventIds,
-    snapshotHash: requestHash(input.events),
+    snapshotHash: requestHash({ executionVersion: 1, events: input.events }),
     maxProviderTimestampMs: input.events.reduce(
       (maximum, event) => Math.max(maximum, event.timestamp),
       0,
@@ -1785,6 +1790,7 @@ async function applyProviderProjectionSnapshot(input: {
         normalizedPayload: {
           ...payload,
           status: "applied",
+          executionVersion: 1,
           appliedGeneration: input.claim.generation,
           appliedEventIds: input.claim.snapshot.eventIds,
           appliedSnapshotHash: input.claim.snapshot.snapshotHash,
@@ -2097,6 +2103,11 @@ async function persistProviderEvents(input: {
     }
     const normalizedPayload: Record<string, unknown> = {
       kind: "provider_event",
+      providerOriginalRank: event.providerOriginalRank ?? eventIndexes.get(event.id),
+      executionActivity: generalExecutionActivity(event.executionActivity),
+      executionTurn: eventTurnState.assignments.has(event.id)
+        ? { id: eventTurnState.assignments.get(event.id)!.id, userSequence: eventTurnState.assignments.get(event.id)!.messageSequence, userMessageId: eventTurnState.assignments.get(event.id)!.metadata.userMessageId }
+        : null,
       type: event.type,
       text: canonicalMarkdown.text,
       artifacts: localized,
@@ -2317,6 +2328,7 @@ async function taskDto(operation: AgentOperation, task: AgentTask) {
           : purpose?.purpose === "content_production" ? "FrontMind 内容流程" : "FrontMind 通用智能体",
     },
     output: await cachedOutput(task.id),
+    ...(!purpose ? { execution: (await loadGeneralExecutions(await requireDb(), [task.id])).get(task.id) } : {}),
     ...(!task.providerTaskId &&
     ["failed", "cancelled"].includes(operation.status)
       ? { clearTaskPointer: true }
@@ -3266,6 +3278,16 @@ async function syncTask(input: { userId: number; localTaskId: string }) {
   if (["succeeded", "cancelled"].includes(owned.operation.status)) {
     const latestTurn = await latestGeneralChatTurnLifecycle(input);
     if (!latestTurn || ["completed", "cancelled"].includes(latestTurn.status)) {
+      // Old completed conversations need one GET-only projection backfill.
+      const execution = (await loadGeneralExecutions(await requireDb(), [owned.task.id])).get(owned.task.id);
+      if (frozenGeneralAgentPurpose(owned.task, input.userId) || execution?.coverage === "complete") return owned;
+      const frozenCredential = await getDecryptedCredentialForAccountById(input.userId, owned.operation.apiCredentialId);
+      if (frozenCredential && frozenCredential.version === owned.operation.credentialVersion && owned.task.providerTaskId) {
+        try {
+          const events = await clientFor(frozenCredential, input.userId, owned.operation, owned.task).listAllMessages({ taskId: owned.task.providerTaskId, order: "desc" });
+          await persistProviderEvents({ ...owned, events });
+        } catch { console.warn("[FrontMindV2] execution history backfill deferred", { localTaskId: owned.task.id }); }
+      }
       return owned;
     }
   }
@@ -5648,6 +5670,22 @@ router.get("/artifacts/:artifactId/content", async (req, res) => {
     const stored = row ? await readStoredPresalesFile(row.id) : null;
     contentPresent = Boolean(stored);
     if (!row || !stored) throw new ChatV2HttpError("ARTIFACT_NOT_FOUND", 404);
+    const isChinesePresentation = req.query.presentation === "zh" &&
+      frozenGeneralAgentPurpose(owned!.task, enterpriseWorkspaceUserId(req.frontmindUser.id))?.purpose === "content_production";
+    if (isChinesePresentation) {
+      const presentation = contentProductionPresentationArtifact({
+        bytes: await streamToBuffer(stored.createReadStream(), MAX_ARTIFACT_BYTES),
+        filename: row.filename,
+        mimeType: row.mimeType,
+      });
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.setHeader("Content-Type", presentation.mimeType);
+      res.setHeader("Content-Length", String(presentation.bytes.length));
+      res.setHeader("ETag", `\"sha256:${presentation.sha256}\"`);
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(presentation.filename)}`);
+      res.end(presentation.bytes);
+      return;
+    }
     res.setHeader("Cache-Control", "private, no-store, max-age=0");
     res.setHeader("Content-Type", row.mimeType);
     res.setHeader("Content-Length", String(row.sizeBytes));

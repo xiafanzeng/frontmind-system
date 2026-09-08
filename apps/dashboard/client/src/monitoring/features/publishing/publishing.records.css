@@ -10,7 +10,7 @@
   padding: 12px 20px;
   border-bottom: 1px solid var(--publishing-line);
   color: #51495e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-row:last-child {
@@ -25,7 +25,7 @@
   min-height: 56px;
   background: #fdfcfe;
   color: #5f566d;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   font-weight: 650;
 }
 
@@ -36,7 +36,7 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-result b {
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module
@@ -84,7 +84,7 @@
   > span:nth-child(3)
   small {
   color: var(--publishing-muted);
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-title {
@@ -110,7 +110,7 @@
 .monitoring-module :where(.publishing-page) .publishing-batch-title p {
   margin: 8px 0 0;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-title > span {
@@ -118,7 +118,7 @@
   right: 0;
   bottom: 0;
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-result-metrics {
@@ -177,7 +177,7 @@
   flex-direction: column;
   gap: 3px;
   color: #463d52;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module
@@ -208,7 +208,7 @@
   padding: 12px 18px;
   border-bottom: 1px solid var(--publishing-line);
   color: #51485e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-results-row:last-child {
@@ -219,7 +219,7 @@
   min-height: 55px;
   background: #fdfcfe;
   color: #5c5369;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   font-weight: 650;
 }
 
@@ -250,7 +250,7 @@
   > span:nth-child(5)
   small {
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-detail-bottom {
@@ -306,7 +306,7 @@
 
 .monitoring-module :where(.publishing-page) .publishing-batch-money dt {
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-money dd {
@@ -323,7 +323,7 @@
   padding-top: 14px;
   border-top: 1px solid var(--publishing-line);
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-batch-money > p strong {
@@ -444,7 +444,7 @@
     margin-bottom: 4px;
     color: var(--publishing-muted);
     content: attr(data-label);
-    font-size: 9px;
+    font-size: var(--operator-caption-size, 9px);
   }
 
   .monitoring-module
@@ -524,7 +524,7 @@
   border-radius: 7px;
   background: #fff;
   color: #3d3f50;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-publication-filters {
@@ -545,7 +545,7 @@
   display: grid;
   gap: 5px;
   color: #7e8091;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -635,8 +635,8 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: #3636e2;
-  font-size: 11px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 11px);
   cursor: pointer;
 }
 
@@ -645,7 +645,7 @@
   .publishing-result-copy
   .publishing-result-id {
   color: #9294a3;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-result-qr {
@@ -654,9 +654,9 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-result-qr > summary {
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   list-style: none;
 }
 

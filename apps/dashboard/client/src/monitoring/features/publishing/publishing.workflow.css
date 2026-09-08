@@ -127,7 +127,7 @@
   min-height: 55px;
   background: #fcfbfd;
   color: #5c536b;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   font-weight: 650;
 }
 
@@ -200,7 +200,7 @@
   align-items: center;
   gap: 7px;
   color: var(--publishing-green);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-form-error {
@@ -244,7 +244,7 @@
   padding-top: 18px;
   border-top: 1px solid var(--publishing-line);
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 1.7;
 }
 .monitoring-module :where(.publishing-page) .publishing-editor-meta {
@@ -256,7 +256,7 @@
   justify-content: space-between;
   margin-bottom: 13px;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-save-state {
@@ -316,7 +316,7 @@
 
 .monitoring-module :where(.publishing-page) .publishing-title-field > span {
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   font-weight: 650;
 }
 
@@ -395,7 +395,7 @@
 .monitoring-module :where(.publishing-page) .publishing-editor-toolbar-error {
   margin-left: 6px;
   color: var(--publishing-red);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-editor-loading,
@@ -531,7 +531,7 @@
   > span:nth-child(2)
   strong {
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -542,7 +542,7 @@
   > span:nth-child(2)
   small {
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-image-row input,
@@ -554,13 +554,13 @@
   border-radius: 7px;
   background: white;
   color: var(--publishing-ink);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-editor-count {
   padding: 15px 24px;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-editor-inspector {
@@ -589,7 +589,7 @@
   h2
   small {
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 500;
 }
 
@@ -601,7 +601,7 @@
   border: 1px solid #e4dcf3;
   border-radius: 9px;
   background: #fbf9ff;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-version-current strong {
@@ -609,13 +609,13 @@
   border-radius: 12px;
   background: var(--publishing-purple);
   color: white;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-version-current code {
   grid-column: 1 / -1;
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-check-list {
@@ -630,7 +630,7 @@
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid #eee9f2;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-check-list svg,
@@ -661,7 +661,7 @@
   border: 1px solid #ddd5e8;
   border-radius: 5px;
   color: var(--publishing-purple);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 700;
 }
 
@@ -671,12 +671,12 @@
 }
 
 .monitoring-module :where(.publishing-page) .publishing-version-list strong {
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-version-list small {
   color: var(--publishing-muted);
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
 }
 
 .monitoring-module
@@ -729,7 +729,7 @@
   .publishing-draft-summary
   > span:last-child {
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-title-item {
@@ -747,7 +747,7 @@
 
 .monitoring-module :where(.publishing-page) .publishing-title-number {
   color: #a097ab;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   font-weight: 700;
 }
 
@@ -763,7 +763,7 @@
   > label
   > span {
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 650;
 }
 
@@ -782,7 +782,7 @@
   small {
   grid-column: 2;
   color: var(--publishing-muted);
-  font-size: 9px;
+  font-size: var(--operator-caption-size, 9px);
 }
 
 .monitoring-module
@@ -808,7 +808,7 @@
 
 .monitoring-module :where(.publishing-page) .publishing-title-help p {
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 1.65;
 }
 
@@ -822,7 +822,7 @@
   justify-content: space-between;
   padding: 13px 0;
   border-bottom: 1px solid var(--publishing-line);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-title-help dt {
@@ -883,7 +883,7 @@
   span,
 .monitoring-module :where(.publishing-page) .publishing-frozen-article code {
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-frozen-preview {
@@ -919,7 +919,7 @@
   > span {
   margin-top: 5px;
   color: var(--publishing-muted);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-frozen-preview-body,
@@ -964,7 +964,7 @@
   border-radius: 7px;
   background: var(--publishing-purple-soft);
   color: #504761;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-version-pill b {
@@ -990,7 +990,7 @@
   padding: 13px 18px;
   border-bottom: 1px solid var(--publishing-line);
   color: #51485f;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-review-row:last-child {
@@ -1013,7 +1013,7 @@
   gap: 6px;
   margin: 0;
   color: var(--publishing-orange);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-review-confirm {
@@ -1039,7 +1039,7 @@
   justify-content: space-between;
   padding: 11px 0;
   color: #50475e;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-money-summary dd {
@@ -1081,7 +1081,7 @@
   align-items: center;
   gap: 8px;
   margin: 9px 0;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-gate-list p.is-passed {
@@ -1099,7 +1099,7 @@
   gap: 10px;
   padding: 18px 22px;
   color: #413849;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   line-height: 1.6;
   cursor: pointer;
 }
@@ -1142,7 +1142,7 @@
 .monitoring-module :where(.publishing-page) .publishing-notice p {
   margin: 4px 0 0;
   color: #655c73;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
   line-height: 1.55;
 }
 
@@ -1235,7 +1235,7 @@
 .monitoring-module :where(.publishing-page) .publishing-dialog-body > p {
   margin: 10px auto 20px;
   color: var(--publishing-muted);
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
   line-height: 1.7;
 }
 
@@ -1254,7 +1254,7 @@
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid var(--publishing-line);
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 
 .monitoring-module
@@ -1311,7 +1311,7 @@
   max-height: 330px;
   overflow-y: auto;
   padding-right: 5px;
-  font-size: 12px;
+  font-size: var(--operator-caption-size, 12px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-live-images,
@@ -1356,7 +1356,7 @@
 .monitoring-module :where(.publishing-page) .publishing-live-empty {
   overflow-wrap: anywhere;
   color: var(--publishing-muted);
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 
 .monitoring-module :where(.publishing-page) .publishing-live-media-list b {
@@ -1458,7 +1458,7 @@
   .monitoring-module :where(.publishing-page) .publishing-steps li {
     flex-direction: column;
     gap: 5px;
-    font-size: 10px;
+    font-size: var(--operator-caption-size, 10px);
   }
 
   .monitoring-module
@@ -1647,7 +1647,7 @@
     margin-bottom: 4px;
     color: var(--publishing-muted);
     content: attr(data-label);
-    font-size: 9px;
+    font-size: var(--operator-caption-size, 9px);
   }
 
   .monitoring-module
@@ -1701,7 +1701,7 @@
   button
   span {
   color: #8a8c9d;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module
   :where(.publishing-page)
@@ -1710,7 +1710,7 @@
   border-color: #7373ee;
   background: #f2f2ff;
   box-shadow: inset 0 0 0 1px #7373ee;
-  color: #3636e2;
+  color: var(--publishing-purple, #3636e2);
 }
 .monitoring-module :where(.publishing-page) .publishing-title-impact,
 .monitoring-module :where(.publishing-page) .publishing-title-valid {
@@ -1724,7 +1724,7 @@
   border-radius: 8px;
   background: #fff7f8;
   color: #bf3c48;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 .monitoring-module :where(.publishing-page) .publishing-title-valid {
   flex-direction: row;
@@ -1748,11 +1748,11 @@
 }
 .monitoring-module :where(.publishing-page) .publishing-title-tools > div span {
   color: #8b8d9d;
-  font-size: 10px;
+  font-size: var(--operator-caption-size, 10px);
 }
 .monitoring-module :where(.publishing-page) .publishing-title-tools > label {
   color: #696b7c;
-  font-size: 11px;
+  font-size: var(--operator-caption-size, 11px);
 }
 .monitoring-module :where(.publishing-page) .publishing-title-item.is-invalid {
   background: #fff9fa;
@@ -1760,8 +1760,8 @@
 .monitoring-module :where(.publishing-page) .publishing-title-item > button {
   border: 0;
   background: transparent;
-  color: #3636e2;
-  font-size: 10px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 10px);
   cursor: pointer;
 }
 @media (max-width: 800px) {
@@ -1803,6 +1803,6 @@
   padding: 2px 6px;
   border-radius: 4px;
   background: #f0f0ff;
-  color: #3636e2;
-  font-size: 10px;
+  color: var(--publishing-purple, #3636e2);
+  font-size: var(--operator-caption-size, 10px);
 }

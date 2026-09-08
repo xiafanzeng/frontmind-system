@@ -198,15 +198,24 @@ describe("General Agent administrator runtime display", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("Max"),
     );
-    expect(screen.getByRole("combobox", { name: "智能体推理档位" })).toHaveValue("frontmind-base");
-    fireEvent.change(screen.getByRole("combobox", { name: "智能体推理档位" }), { target: { value: "frontmind-pro" } });
+    expect(
+      screen.getByRole("combobox", { name: "智能体推理档位" }),
+    ).toHaveValue("frontmind-base");
+    fireEvent.change(screen.getByRole("combobox", { name: "智能体推理档位" }), {
+      target: { value: "frontmind-pro" },
+    });
     expect(onProfile).toHaveBeenLastCalledWith("frontmind-pro");
   });
 
   it("does not invent an effort when the runtime read fails", async () => {
     const onProfile = vi.fn();
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    render(<GeneralAgentRuntimeBadge localTaskId="591ebbb6-a8a4-439c-8f90-9d5b9b073471" onProfile={onProfile} />);
+    render(
+      <GeneralAgentRuntimeBadge
+        localTaskId="591ebbb6-a8a4-439c-8f90-9d5b9b073471"
+        onProfile={onProfile}
+      />,
+    );
     await act(async () => {});
     expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent(
       "管理员配置",
@@ -394,6 +403,7 @@ describe("knowledge-base ChatInput actions", () => {
       configurable: true,
       value: vi.fn(),
     });
+    mocks.activeConversation.id = "kb-conversation";
     mocks.activeConversation.messages = [
       { id: "user", role: "user", content: "确认", timestamp: 1 },
       {
@@ -426,8 +436,132 @@ describe("knowledge-base ChatInput actions", () => {
     mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
   });
 
+  it("keeps a draft bound to its conversation even when another conversation has equal node coordinates", async () => {
+    const { rerender } = render(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        knowledgeBaseResetRevision={3}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "只属于原会话的修改" },
+    });
+    mocks.activeConversation.id = "another-kb-conversation";
+    rerender(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        knowledgeBaseResetRevision={3}
+      />,
+    );
+    expect(screen.getByText(/当前节点或内容版本已变化/)).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("只属于原会话的修改");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "使用当前节点" }));
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledTimes(1));
+  });
+
+  it("requires explicit draft rebinding after a reset revision changes", () => {
+    const { rerender } = render(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        knowledgeBaseResetRevision={3}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "重置前草稿" },
+    });
+    rerender(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        knowledgeBaseResetRevision={4}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "使用当前节点" })).toBeEnabled();
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("never drops a frozen draft binding while the current presentation is unavailable", () => {
+    const { rerender } = render(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "等待核对的修改" },
+    });
+    mocks.activeConversation.knowledgeBase.presentationKey = null;
+    rerender(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "使用当前节点" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "使用当前节点" }));
+    mocks.activeConversation.knowledgeBase.presentationKey = "presentation-new";
+    mocks.activeConversation.messages[1].knowledgeBase.presentationKey =
+      "presentation-new";
+    rerender(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+      />,
+    );
+    expect(screen.getByText(/当前节点或内容版本已变化/)).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("等待核对的修改");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("blocks task submission while the right pane edits without clearing the composer draft", () => {
+    const onDirty = vi.fn();
+    const { rerender } = render(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        onComposerDirtyChange={onDirty}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "现有任务草稿" },
+    });
+    expect(onDirty).toHaveBeenLastCalledWith(true);
+    rerender(
+      <ChatInput
+        operatorWorkspace
+        syncKnowledgeBaseSnapshot
+        knowledgeBaseProgress={progress}
+        onComposerDirtyChange={onDirty}
+        knowledgeEditingBlocked
+      />,
+    );
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveValue("现有任务草稿");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(onDirty).toHaveBeenLastCalledWith(true);
+  });
+
   it("describes node edits without exposing the frozen effort", () => {
-    render(<ChatInput fixedAgentProfile="frontmind-pro" syncKnowledgeBaseSnapshot />);
+    render(
+      <ChatInput fixedAgentProfile="frontmind-pro" syncKnowledgeBaseSnapshot />,
+    );
     expect(screen.getByRole("textbox")).toHaveAttribute(
       "placeholder",
       "输入文字修改要求；仅上传图片会直接本地保存",

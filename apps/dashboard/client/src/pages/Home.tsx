@@ -35,6 +35,9 @@ export default function Home({
   messageProjection,
   knowledgeBaseProgress,
   knowledgeBaseResetRevision,
+  operatorWorkspace = false,
+  knowledgeEditingBlocked = false,
+  onComposerDirtyChange,
   knowledgeBaseAccountId,
   onKnowledgeBaseBatchCancelled,
 }: {
@@ -54,6 +57,9 @@ export default function Home({
   messageProjection?: (message: LocalMessage) => LocalMessage;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
+  operatorWorkspace?: boolean;
+  knowledgeEditingBlocked?: boolean;
+  onComposerDirtyChange?: (dirty: boolean) => void;
   knowledgeBaseAccountId?: number;
   onKnowledgeBaseBatchCancelled?: (
     conversationId: string,
@@ -128,19 +134,19 @@ export default function Home({
 
   return (
     <div
-      className={`flex overflow-hidden relative bg-background ${
+      className={`flex overflow-hidden relative bg-background ${operatorWorkspace ? "knowledge-workspace-chat" : ""} ${
         embedded ? "h-full w-full" : "h-[100dvh] w-screen"
       }`}
     >
-      {/* Premium calm workspace background */}
-      <div
+      {/* Standalone agent appearance stays outside the operator workspace. */}
+      {!operatorWorkspace && <div
         className="absolute inset-0 pointer-events-none"
         style={{
           background: `radial-gradient(900px circle at 22% 12%, oklch(0.93 0.018 90 / 55%) 0%, transparent 54%),
                        radial-gradient(760px circle at 85% 8%, oklch(0.86 0.035 178 / 28%) 0%, transparent 48%),
                        linear-gradient(180deg, oklch(0.988 0.006 83) 0%, oklch(0.965 0.011 83) 100%)`,
         }}
-      />
+      />}
 
       {syncError && (
         <div className="absolute left-1/2 top-3 z-[70] flex w-[min(92vw,560px)] -translate-x-1/2 items-center gap-2 rounded-xl border border-amber-300/70 bg-amber-50/95 px-3 py-2 text-xs text-amber-950 shadow-lg backdrop-blur">
@@ -192,6 +198,9 @@ export default function Home({
           messageProjection={messageProjection}
           knowledgeBaseProgress={knowledgeBaseProgress}
           knowledgeBaseResetRevision={knowledgeBaseResetRevision}
+          operatorWorkspace={operatorWorkspace}
+          knowledgeEditingBlocked={knowledgeEditingBlocked}
+          onComposerDirtyChange={onComposerDirtyChange}
           knowledgeBaseAccountId={knowledgeBaseAccountId}
           onKnowledgeBaseBatchCancelled={onKnowledgeBaseBatchCancelled}
           showKnowledgeBaseStarter={showKnowledgeBaseStarter}

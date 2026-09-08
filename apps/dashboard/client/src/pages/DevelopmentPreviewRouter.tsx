@@ -1,4 +1,5 @@
 import { Redirect } from "wouter";
+import OperatorWorkspacePreview from "./OperatorWorkspacePreview";
 
 import { ConversationProvider } from "@/contexts/ConversationContext";
 import { PreviewUserBrandDashboard } from "@/dashboard/UserBrandDashboard";
@@ -51,6 +52,8 @@ export default function DevelopmentPreviewRouter({
   const route = location.split("?")[0];
 
   switch (route) {
+    case "/preview/operator-workspace":
+      return <OperatorWorkspacePreview />;
     case "/preview/knowledge-base-live":
       return <KnowledgeBaseProductionAcceptance />;
     case "/preview/knowledge-base-upstream-probe":

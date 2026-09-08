@@ -200,104 +200,155 @@ describe("lightweight knowledge node edit contract", () => {
       }),
     ).rejects.toThrow("IMAGE_OWNERSHIP");
   });
-  it("locally detaches a shared image while preserving the other node and bytes", async () => {
-    const { base: original } = await nodeEditBaseFixture();
-    const bytes = await sharp({
-      create: { width: 8, height: 8, channels: 3, background: "blue" },
-    })
-      .png()
-      .toBuffer();
-    const asset = {
-      assetId: "shared-image",
-      path: "assets/shared.png",
-      sha256: nodeEditSha256(bytes),
-      mimeType: "image/png",
-      bytes: bytes.length,
-      width: 8,
-      height: 8,
-      provenance: {
-        ownership: "first_party",
-        sourceKind: "user_upload",
-        originalUploadSha256: nodeEditSha256(bytes),
-      },
-      documentIds: ["1.1", "1.2"],
-      assetType: "customer_supplied",
-      displayRole: "inline",
-    };
-    const manifest = {
-      ...original.manifest,
-      assets: [asset],
-      counts: { ...original.manifest.counts, assets: 1 },
-      leaves: original.manifest.leaves.map((leaf) =>
-        ["1.1", "1.2"].includes(leaf.leafId)
-          ? { ...leaf, assetIds: [asset.assetId] }
-          : leaf,
-      ),
-    };
-    const zip = new JSZip();
-    for (const [path, content] of original.files)
-      if (path !== "BUNDLE.json")
-        zip.file(path, content, { createFolders: false });
-    zip.file(asset.path, bytes, { createFolders: false });
-    zip.file("BUNDLE.json", JSON.stringify(manifest));
-    const base = await validateKnowledgeBaseWorkingSetArchive(
-      await zip.generateAsync({ type: "nodebuffer" }),
-      {
+  it.each([false, true])(
+    "preserves existing image bytes and the other node through a local patch (detach shared image: %s)",
+    async (detachSharedImage) => {
+      const { base: original } = await nodeEditBaseFixture();
+      const bytes = await sharp({
+        create: { width: 8, height: 8, channels: 3, background: "blue" },
+      })
+        .png()
+        .toBuffer();
+      const asset = {
+        assetId: "shared-image",
+        path: "assets/shared.png",
+        sha256: nodeEditSha256(bytes),
+        mimeType: "image/png",
+        bytes: bytes.length,
+        width: 8,
+        height: 8,
+        provenance: {
+          ownership: "first_party",
+          sourceKind: "user_upload",
+          originalUploadSha256: nodeEditSha256(bytes),
+        },
+        documentIds: ["1.1", "1.2"],
+        assetType: "customer_supplied",
+        displayRole: "inline",
+      };
+      const attachedBytes = await sharp({
+        create: { width: 8, height: 8, channels: 3, background: "green" },
+      })
+        .png()
+        .toBuffer();
+      const attachedAsset = {
+        ...asset,
+        assetId: "target-only-image",
+        path: "assets/target-only.png",
+        sha256: nodeEditSha256(attachedBytes),
+        bytes: attachedBytes.length,
+        provenance: {
+          ...asset.provenance,
+          originalUploadSha256: nodeEditSha256(attachedBytes),
+        },
+        documentIds: ["1.1"],
+      };
+      const manifest = {
+        ...original.manifest,
+        assets: [asset, attachedAsset],
+        counts: { ...original.manifest.counts, assets: 2 },
+        leaves: original.manifest.leaves.map((leaf) =>
+          leaf.leafId === "1.1"
+            ? { ...leaf, assetIds: [asset.assetId, attachedAsset.assetId] }
+            : leaf.leafId === "1.2"
+              ? { ...leaf, assetIds: [asset.assetId] }
+              : leaf,
+        ),
+      };
+      const zip = new JSZip();
+      for (const [path, content] of original.files)
+        if (path !== "BUNDLE.json")
+          zip.file(path, content, { createFolders: false });
+      zip.file(asset.path, bytes, { createFolders: false });
+      zip.file(attachedAsset.path, attachedBytes, { createFolders: false });
+      zip.file("BUNDLE.json", JSON.stringify(manifest));
+      const base = await validateKnowledgeBaseWorkingSetArchive(
+        await zip.generateAsync({ type: "nodebuffer" }),
+        {
+          buildId: manifest.buildId,
+          generation: 1,
+          contentVersion: 1,
+          skillContentHash: manifest.skill.contentHash,
+          companyName: manifest.company.name,
+        },
+      );
+      const archiveBytes = await createKnowledgeNodeEditPatch({
+        base,
+        operationId: "detach-shared",
+        targetLeafId: "1.1",
+        contentMarkdown: detachSharedImage
+          ? base.files.get(base.manifest.leaves[0]!.contentPath)!.toString()
+          : "# 节点 1\n\n直接编辑后的正文，原有图片仍保留。",
+        images: [],
+        removeAssetIds: detachSharedImage ? [asset.assetId] : [],
+      });
+      const authority = {
         buildId: manifest.buildId,
         generation: 1,
-        contentVersion: 1,
-        skillContentHash: manifest.skill.contentHash,
-        companyName: manifest.company.name,
-      },
-    );
-    const archiveBytes = await createKnowledgeNodeEditPatch({
-      base,
-      operationId: "detach-shared",
-      targetLeafId: "1.1",
-      contentMarkdown: base.files
-        .get(base.manifest.leaves[0]!.contentPath)!
-        .toString(),
-      images: [],
-      removeAssetIds: [asset.assetId],
-    });
-    const authority = {
-      buildId: manifest.buildId,
-      generation: 1,
-      baseContentVersion: 1,
-      baseWorkingSetSha256: base.packageSha256,
-      operationId: "detach-shared",
-      targetLeafId: "1.1",
-      attachmentSourceProofs: [],
-    };
-    const result = await normalizeMaterializedKnowledgeBaseResult({
-      mode: "patch",
-      archiveBytes,
-      authority,
-      base,
-      provenance: {
-        exactBoundTask: false,
-        directAssistantOutput: false,
-        applicationAuthoredPatch: true,
-        descriptorFilename: "local.zip",
-      },
-    });
-    expect(result.kind).toBe("accepted");
-    if (result.kind !== "accepted") throw new Error(JSON.stringify(result));
-    expect(result.manifest.leaves[0]!.assetIds).toEqual([]);
-    expect(result.manifest.leaves[1]!.assetIds).toEqual([asset.assetId]);
-    expect(result.manifest.assets[0]!.documentIds).toEqual(["1.2"]);
-    expect(result.workingSet.files.get(asset.path)?.equals(bytes)).toBe(true);
-    const legacy = await normalizeMaterializedKnowledgeBaseResult({
-      mode: "patch",
-      archiveBytes,
-      authority,
-      base,
-      provenance: {
-        exactBoundTask: true,
-        directAssistantOutput: true,
-        descriptorFilename: "provider.zip",
-      },
-    });
-    expect(legacy.kind).toBe("rejected");
-  });
+        baseContentVersion: 1,
+        baseWorkingSetSha256: base.packageSha256,
+        operationId: "detach-shared",
+        targetLeafId: "1.1",
+        attachmentSourceProofs: [],
+      };
+      const result = await normalizeMaterializedKnowledgeBaseResult({
+        mode: "patch",
+        archiveBytes,
+        authority,
+        base,
+        provenance: {
+          exactBoundTask: false,
+          directAssistantOutput: false,
+          applicationAuthoredPatch: true,
+          descriptorFilename: "local.zip",
+        },
+      });
+      expect(result.kind).toBe("accepted");
+      if (result.kind !== "accepted") throw new Error(JSON.stringify(result));
+      expect(result.manifest.leaves[0]!.assetIds).toEqual(
+        detachSharedImage
+          ? [attachedAsset.assetId]
+          : [asset.assetId, attachedAsset.assetId],
+      );
+      expect(result.manifest.leaves[1]!.assetIds).toEqual([asset.assetId]);
+      expect(
+        result.manifest.assets.find((item) => item.assetId === asset.assetId)!
+          .documentIds,
+      ).toEqual(detachSharedImage ? ["1.2"] : ["1.1", "1.2"]);
+      expect(
+        result.manifest.assets.find(
+          (item) => item.assetId === attachedAsset.assetId,
+        ),
+      ).toEqual(attachedAsset);
+      expect(result.workingSet.files.get(asset.path)?.equals(bytes)).toBe(true);
+      expect(
+        result.workingSet.files.get(attachedAsset.path)?.equals(attachedBytes),
+      ).toBe(true);
+      expect(
+        result.workingSet.files
+          .get(base.manifest.leaves[1]!.contentPath)
+          ?.equals(base.files.get(base.manifest.leaves[1]!.contentPath)!),
+      ).toBe(true);
+      expect(base.manifest.leaves[0]!.assetIds).toEqual([
+        asset.assetId,
+        attachedAsset.assetId,
+      ]);
+      if (!detachSharedImage) {
+        expect(result.manifest.assets).toEqual(base.manifest.assets);
+        return;
+      }
+      const legacy = await normalizeMaterializedKnowledgeBaseResult({
+        mode: "patch",
+        archiveBytes,
+        authority,
+        base,
+        provenance: {
+          exactBoundTask: true,
+          directAssistantOutput: true,
+          descriptorFilename: "provider.zip",
+        },
+      });
+      expect(legacy.kind).toBe("rejected");
+    },
+  );
 });

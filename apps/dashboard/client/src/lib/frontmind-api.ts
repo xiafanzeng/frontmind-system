@@ -2315,9 +2315,13 @@ export async function createKnowledgeBaseTurnTask(
  *
  * The argument is a Dashboard-local task id, never a Provider id.
  */
-export async function retrieveTask(responseId: string): Promise<TaskResponse> {
+export async function retrieveTask(
+  responseId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<TaskResponse> {
   const response = await apiRequest(
     `/v2/tasks/${encodeURIComponent(responseId)}`,
+    { signal: options.signal },
   );
   return response.json();
 }

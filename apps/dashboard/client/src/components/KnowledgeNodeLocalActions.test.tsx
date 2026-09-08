@@ -1,5 +1,11 @@
 import { StrictMode } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const context = vi.hoisted(() => ({
   commitKnowledgeBaseObservation: vi.fn(),
@@ -13,8 +19,13 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
 import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
 import { toast } from "sonner";
+import { getUnsavedWorkspaceDrafts } from "@/lib/workspace-navigation-guard";
 let disposeScope: (() => void) | undefined;
-afterEach(() => { disposeScope?.(); disposeScope = undefined; vi.unstubAllGlobals(); });
+afterEach(() => {
+  disposeScope?.();
+  disposeScope = undefined;
+  vi.unstubAllGlobals();
+});
 
 const coordinates = {
   conversationId: "conversation",
@@ -32,19 +43,110 @@ const observation = {
 };
 beforeEach(() => vi.clearAllMocks());
 describe("local knowledge node controls", () => {
+  it("protects changed local image selections and saves them through the existing navigation guard", async () => {
+    const fetcher = vi.fn(
+      async (url: string) =>
+        new Response(
+          JSON.stringify(
+            url.includes("node/images")
+              ? {
+                  coordinates,
+                  images: [
+                    {
+                      assetId: "new-image",
+                      url: "/image.png",
+                      caption: "测试图片",
+                      attached: false,
+                      removable: false,
+                      selectable: true,
+                    },
+                  ],
+                }
+              : { observation },
+          ),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    render(
+      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "本地图片" }));
+    fireEvent.click(await screen.findByRole("checkbox"));
+    const drafts = getUnsavedWorkspaceDrafts();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.label).toBe("知识节点图片");
+    let saved = false;
+    await act(async () => {
+      saved = await drafts[0]!.save!();
+    });
+    expect(saved).toBe(true);
+    expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
+    expect(context.wakeKnowledgeBaseConversation).toHaveBeenCalledWith(
+      "conversation",
+    );
+  });
+
+  it("does not activate a stale AI target after the selected leaf changes", async () => {
+    const selected = vi.fn();
+    let resolveLibrary!: (value: unknown) => void;
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      json: () =>
+        new Promise((resolve) => {
+          resolveLibrary = resolve;
+        }),
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const { rerender } = render(
+      <KnowledgeNodeLocalActions
+        conversationId="conversation"
+        leafId="1.2"
+        onEditTargetSelected={selected}
+        editLabel="AI 修改"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI 修改" }));
+    await waitFor(() => expect(resolveLibrary).toBeTypeOf("function"));
+    rerender(
+      <KnowledgeNodeLocalActions
+        conversationId="conversation"
+        leafId="2.1"
+        onEditTargetSelected={selected}
+        editLabel="AI 修改"
+      />,
+    );
+    await act(async () => resolveLibrary({ coordinates, images: [] }));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(selected).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
   it("does not select the old node when the project changes while its library response is parsing", async () => {
     disposeScope = activateWorkspaceRestScope("1:project-a", "project-a");
     let resolveLibrary!: (value: unknown) => void;
-    const json = vi.fn(() => new Promise(resolve => { resolveLibrary = resolve; }));
+    const json = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveLibrary = resolve;
+        }),
+    );
     const fetcher = vi.fn().mockResolvedValue({ ok: true, json });
     vi.stubGlobal("fetch", fetcher);
-    render(<KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />);
-    fireEvent.click(screen.getByRole("button", { name: "编辑文字 / 上传图片" }));
+    render(
+      <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "编辑文字 / 上传图片" }),
+    );
     await waitFor(() => expect(json).toHaveBeenCalled());
     disposeScope = activateWorkspaceRestScope("1:project-b", "project-b");
     await act(async () => resolveLibrary({ coordinates, images: [] }));
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(new Headers(fetcher.mock.calls[0][1].headers).get("x-enterprise-project-id")).toBe("project-a");
+    expect(
+      new Headers(fetcher.mock.calls[0][1].headers).get(
+        "x-enterprise-project-id",
+      ),
+    ).toBe("project-a");
     expect(context.commitKnowledgeBaseObservation).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
@@ -63,7 +165,9 @@ describe("local knowledge node controls", () => {
     );
     vi.stubGlobal("fetch", fetcher);
     render(
-      <StrictMode><KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" /></StrictMode>,
+      <StrictMode>
+        <KnowledgeNodeLocalActions conversationId="conversation" leafId="1.2" />
+      </StrictMode>,
     );
     fireEvent.click(
       screen.getByRole("button", { name: "编辑文字 / 上传图片" }),

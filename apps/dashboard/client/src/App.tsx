@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
+import { OperatorThemeProvider } from "@/components/ui/operator-theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -7,6 +8,7 @@ import NotFound from "@/pages/NotFound";
 import Login from "@/pages/Login";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Redirect, Route, Router as BrowserRouter, Switch, useLocation, useSearch } from "wouter";
+import WorkspaceNavigationBoundary from "./components/WorkspaceNavigationBoundary";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { ConversationProvider } from "./contexts/ConversationContext";
@@ -24,6 +26,7 @@ import { hasExplicitAdminRole } from "@shared/admin-access";
 import { userFacingErrorMessage } from "@/lib/user-facing-error";
 import { WorkspaceQueryProvider } from "./contexts/WorkspaceQueryProvider";
 import { useWorkspaceLocation } from "./hooks/useWorkspaceLocation";
+import { canonicalKnowledgeWorkspaceUrl } from "./dashboard/operator-navigation";
 import { isEnterpriseWorkspacePath, projectWorkspaceUrl } from "./lib/enterprise-project";
 
 const MonitoringDemo = lazy(() => import("./monitoring/MonitoringDemo"));
@@ -202,6 +205,8 @@ function Router() {
   const customerRoute = isEnterpriseWorkspacePath(pathname) || pathname === "/agent" || pathname === "/account";
   // A single component identity keeps the sidebar and shell in place across module routes.
   if (customerRoute && (user?.role === "user" || (mirrored && pathname !== "/agent") || (isSystemAdminAccount(user) && /^\/(monitoring-system|publishing)(?:\/|$)/.test(pathname)))) {
+    const canonicalKnowledgeUrl = canonicalKnowledgeWorkspaceUrl(pathname, search, window.location.hash);
+    if (canonicalKnowledgeUrl) return <Redirect to={canonicalKnowledgeUrl} replace />;
     return <UserDashboard />;
   }
   return (
@@ -457,6 +462,7 @@ function AppContent() {
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster position="top-center" />
+          <OperatorThemeProvider><WorkspaceNavigationBoundary /></OperatorThemeProvider>
           {previewPage || publicPage || <AuthBoundary />}
         </TooltipProvider>
       </ThemeProvider>

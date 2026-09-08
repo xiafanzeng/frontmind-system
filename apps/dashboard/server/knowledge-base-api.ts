@@ -7,6 +7,8 @@ import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
 import { knowledgeBaseWorkingSetAssetUrl } from "./knowledge-base-materialized-assets";
 import { enterpriseProjectUrl } from "./enterprise-project-scope";
 import { dispatchKnowledgeNodeEdit } from "./knowledge-node-edit-service";
+import { dispatchManualKnowledgeNodeEdit } from "./knowledge-node-manual-edit-service";
+import { getKnowledgeNodeDetails, saveKnowledgeNodeContent } from "./knowledge-node-workspace-service";
 import { KNOWLEDGE_NODE_IMAGE_MIMES } from "./knowledge-node-edit-contract";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import axios from "axios";
@@ -1188,7 +1190,7 @@ export function deriveKnowledgeBaseInteraction(
       interactionState: "published",
       canReply: false,
       canPublish: false,
-      lockReason: "知识库已发布；后续修改请提交维护需求",
+      lockReason: "知识库已更新；可选择节点进行编辑，确认后再次更新知识库",
     };
   }
   if (
@@ -4443,6 +4445,7 @@ async function dispatchKnowledgeBaseRecoveryClaim(
       "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
+  if (claim.recoveryMetadata?.nodeEditMode === "manual_v1") return dispatchManualKnowledgeNodeEdit(claim);
   if (claim.recoveryMetadata?.nodeEditMode === "low_v1") return dispatchKnowledgeNodeEdit(claim, credential);
   return dispatchMaterializedKnowledgeBaseClaim({
     claim,
@@ -4753,6 +4756,14 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
           result.claimedTurnIds.push(ownedClaim.turn.id);
         }
         await assertKnowledgeBaseWritable(ownedClaim.turn.userId);
+        if (ownedClaim.recoveryMetadata.nodeEditMode === "manual_v1") {
+          const recovered = await withKnowledgeBaseRecoveryLeaseHeartbeat({
+            claim: ownedClaim,
+            operation: () => dispatchManualKnowledgeNodeEdit(ownedClaim),
+          });
+          if (recovered.reconciled) result.reconciled += 1;
+          return;
+        }
         let credential: Awaited<
           ReturnType<typeof getDecryptedCredentialForKnowledgeBaseReservation>
         > = null;
@@ -4802,6 +4813,19 @@ export async function recoverExpiredKnowledgeBaseTurns(options?: {
         if (recovered.reconciled) result.reconciled += 1;
       } catch (error) {
         result.failed += 1;
+        if (claim?.recoveryMetadata.nodeEditMode === "manual_v1") {
+          // The local dispatcher settles its own failures. If that write was
+          // unavailable, its lease remains recoverable; never mark a manual
+          // edit as an unknown provider attempt or assume it was settled.
+          logKnowledgeBaseRuntimeFailure({
+            level: "warn",
+            event: "[KnowledgeBaseTurnRecovery] manual_node_edit_failed",
+            turnId: candidate.turnId,
+            buildId: candidate.buildId,
+            error,
+          });
+          return;
+        }
         let manualLogoFailureSettled = false;
         let failureDisposition: "deferred" | "settled" = "deferred";
         let failureToPersist = error;
@@ -5953,6 +5977,60 @@ function normalizeNodeEditAssetIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 99 || value.some((item) => typeof item !== "string" || !/^[a-zA-Z0-9_.-]{1,128}$/u.test(item))) throw new KnowledgeBaseTurnReservationError("INVALID_REQUEST", "本地图片选择无效");
   return [...new Set(value)];
 }
+
+async function sendKnowledgeNodeWorkspaceError(
+  res: import("express").Response,
+  error: unknown,
+  userId: number,
+  conversationId: unknown,
+) {
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ error: { code: "INVALID_REQUEST", message: "节点参数无效；正文不能为空或超过 300000 字符" } });
+    return;
+  }
+  const known = error instanceof KnowledgeBaseMaterializedError || error instanceof KnowledgeBaseTurnReservationError;
+  const status = known && error.code === "BUILD_NOT_FOUND" ? 404
+    : known && error.code !== "DATABASE_UNAVAILABLE" ? 409 : 503;
+  const observation = status === 409 && typeof conversationId === "string"
+    ? await getKnowledgeBaseObservation({ userId, conversationId, upstreamStatus: "local" }).catch(() => null)
+    : null;
+  res.status(status).json({
+    error: {
+      code: known ? error.code : "KNOWLEDGE_NODE_UNAVAILABLE",
+      message: known && ["STALE_COORDINATES", "RESET_REQUIRED", "BUILD_NOT_FOUND", "IDEMPOTENCY_CONFLICT"].includes(error.code)
+        ? error.message : "节点状态暂不可确认，请保留当前修改并重新读取后再试",
+    },
+    ...(observation ? { observation } : {}),
+  });
+}
+
+router.get("/node/content", async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!req.frontmindUser) { res.status(401).json({ error: { code: "UNAUTHORIZED", message: "请先登录" } }); return; }
+  const userId = enterpriseWorkspaceUserId(req.frontmindUser.id);
+  if (!(await requireKnowledgeBuildCapability(userId, res))) return;
+  try {
+    res.json(await getKnowledgeNodeDetails(userId, req.query));
+  } catch (error) {
+    await sendKnowledgeNodeWorkspaceError(res, error, userId, req.query.conversationId);
+  }
+});
+
+router.post("/node/save", async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!req.frontmindUser) { res.status(401).json({ error: { code: "UNAUTHORIZED", message: "请先登录" } }); return; }
+  const userId = enterpriseWorkspaceUserId(req.frontmindUser.id);
+  if (!(await requireKnowledgeBuildCapability(userId, res))) return;
+  try {
+    await assertKnowledgeBaseWritable(userId);
+    const receipt = await saveKnowledgeNodeContent(userId, req.body);
+    const observation = await getKnowledgeBaseObservation({ userId, conversationId: req.body.conversationId, upstreamStatus: "local" });
+    if (!observation) throw new KnowledgeBaseMaterializedError("BUILD_NOT_FOUND", "知识库已重置，请重新读取");
+    res.json({ ...receipt, observation });
+  } catch (error) {
+    await sendKnowledgeNodeWorkspaceError(res, error, userId, req.body?.conversationId);
+  }
+});
 
 router.get("/node/images", async (req, res) => {
   if (!req.frontmindUser || !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))) return;

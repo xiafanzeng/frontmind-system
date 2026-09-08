@@ -19,6 +19,7 @@ import {
   originalContentWorkflowArchive,
   isContentWorkflowInternalFilename,
   isContentWorkflowSnapshotFilename,
+  CONTENT_WORKFLOW_FILENAME,
   CONTENT_WORKFLOW_SHA256,
 } from "./content-production-runtime";
 
@@ -124,6 +125,14 @@ describe("original v4.11 content workflow state", () => {
     const malformedSnapshot = snapshot.replace("52cf72553694a0b9_", "");
     expect(isContentWorkflowSnapshotFilename(malformedSnapshot)).toBe(false);
     expect(isContentWorkflowInternalFilename(malformedSnapshot)).toBe(true);
+    expect(isContentWorkflowInternalFilename(CONTENT_WORKFLOW_FILENAME)).toBe(
+      true,
+    );
+    expect(
+      isContentWorkflowInternalFilename(
+        "frontmind_workflow_job_state_invalid.json",
+      ),
+    ).toBe(true);
     const system = contentProductionSystemContext(context());
     expect(system).toContain("ZIP the entire current Job tree");
     expect(system).toContain("binary inputs and documents");
@@ -270,6 +279,56 @@ describe("original v4.11 content workflow state", () => {
     expect(
       reduceContentProductionProgress(corrected, blueprint, "single_article"),
     ).toBe(corrected);
+  });
+  it("never adopts another Job or a rolled-back revision as this task's newer progress", () => {
+    const initial = reduceContentProductionProgress(
+      null,
+      observation(4, "awaiting_blueprint_confirmation", "blueprint"),
+      "single_article",
+    );
+    const otherJob = observation(5, "completed", "E10");
+    otherJob.state.job_id = "independent-article-job";
+    expect(
+      reduceContentProductionProgress(initial, otherJob, "single_article"),
+    ).toBe(initial);
+    const rewound = observation(6, "awaiting_pattern_confirmation", "E2");
+    rewound.state.revision = 3;
+    rewound.state.current_pause!.revision = 3;
+    expect(
+      reduceContentProductionProgress(initial, rewound, "single_article"),
+    ).toBe(initial);
+  });
+  it("keeps independent tasks separate while allowing the native same-Job create-Pack route", () => {
+    const route = observation(
+      1,
+      "awaiting_reference_pack_route",
+      "reference_pack_route",
+      "p0",
+    );
+    const p0Task = reduceContentProductionProgress(null, route, "p0");
+    const pack = observation(
+      2,
+      "positioning_ready",
+      "reference_pack",
+      "reference_pack",
+    );
+    const createdPack = reduceContentProductionProgress(p0Task, pack, "p0");
+    expect(createdPack.lastObservation.state.job_id).toBe(route.state.job_id);
+    expect(createdPack.lastObservation.state.job_kind).toBe("reference_pack");
+    expect(createdPack.progressPosition).toBeLessThan(20);
+    const separateArticle = observation(
+      1,
+      "awaiting_reference_pack_route",
+      "reference_pack_route",
+    );
+    separateArticle.state.job_id = "separate-article";
+    const articleTask = reduceContentProductionProgress(
+      null,
+      separateArticle,
+      "single_article",
+    );
+    expect(articleTask.lastObservation.state.job_id).toBe("separate-article");
+    expect(p0Task.lastObservation.state.job_kind).toBe("p0");
   });
   it("keeps competitor selection separate from final positioning confirmation", () => {
     const initial = reduceContentProductionProgress(

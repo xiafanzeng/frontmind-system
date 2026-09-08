@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { OperatorSidebar, OperatorTabs, type EnterpriseProjectView } from "./OperatorNavigation";
-import { operatorRouteForView, operatorViewFromRoute, operatorViewPath } from "./operator-navigation";
+import { canonicalKnowledgeWorkspaceUrl, operatorRouteForView, operatorViewFromRoute, operatorViewPath } from "./operator-navigation";
 
 const project: EnterpriseProjectView = { id: "project-a", name: "企业甲", ownerUserId: 1, revision: 1 };
 const sidebarProps = () => ({ projects: [project], activeProject: project, activeEntry: "project" as const, collapsed: false, onCollapse: vi.fn(), onNavigate: vi.fn(), onSelectProject: vi.fn(), onCreateProject: vi.fn().mockResolvedValue(undefined), onRenameProject: vi.fn().mockResolvedValue(undefined), onDeleteProject: vi.fn().mockResolvedValue(undefined) });
@@ -12,17 +12,38 @@ async function chooseProjectAction(name: string) {
 }
 
 describe("operator workspace navigation", () => {
-  it("offers six persistent modules and nested knowledge views", () => {
+  it("reveals a full project name on keyboard focus without selecting it", async () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    const props = sidebarProps();
+    const longProject = { ...project, name: "很长的中文企业项目名称：完整名称在键盘聚焦时同样可见" };
+    const view = render(<OperatorSidebar {...props} projects={[longProject]} activeProject={longProject} />);
+    try {
+      act(() => screen.getByRole("button", { name: longProject.name }).focus());
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(longProject.name);
+      expect(props.onSelectProject).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("offers six linked modules and a single knowledge entry", () => {
     const select = vi.fn();
     render(<OperatorTabs view="knowledge-display" projectName="企业甲" onSelect={select} />);
-    const modules = screen.getByRole("tablist", { name: "项目板块" });
-    expect(within(modules).getAllByRole("tab")).toHaveLength(6);
-    expect(within(modules).getAllByRole("tab").filter(tab => tab.tabIndex === 0)).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "知识库展示" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("tab", { name: /意图优化/ }));
+    const modules = screen.getByRole("navigation", { name: "项目板块" });
+    expect(within(modules).getAllByRole("link")).toHaveLength(6);
+    expect(within(modules).getAllByRole("link").filter(link => link.getAttribute("aria-current") === "page")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "知识库展示" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "智能知识库" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "项目工具" })).toBeInTheDocument();
+    expect(screen.queryByText(/^0[1-6]$/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "意图优化" }));
     expect(select).toHaveBeenCalledWith("questions");
-    fireEvent.keyDown(screen.getByRole("tab", { name: /品牌建设/ }), { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: /意图优化/ })).toHaveFocus();
+    select.mockClear();
+    const nativeLink = screen.getByRole("link", { name: "意图优化" });
+    nativeLink.addEventListener("click", event => event.preventDefault(), { once: true });
+    fireEvent.click(nativeLink, { ctrlKey: true });
+    expect(select).not.toHaveBeenCalled();
     expect(screen.queryByText("服务首页")).not.toBeInTheDocument();
     expect(screen.getByText("AI智能品牌优化")).toBeInTheDocument();
   });
@@ -51,7 +72,7 @@ describe("operator workspace navigation", () => {
     fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: " 甲品牌 " } });
     fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(props.onRenameProject).toHaveBeenCalledWith("甲品牌");
+    expect(props.onRenameProject).toHaveBeenCalledWith("甲品牌", project);
   });
 
   it("requires explicit confirmation before deleting and supports cancellation", async () => {
@@ -121,4 +142,60 @@ describe("operator workspace navigation", () => {
     expect(operatorViewPath("monitoring")).toBe("/monitoring-system");
     expect(operatorViewFromRoute({ section: "publishing-module", sub: "/publishing/articles" })).toBe("articles");
   });
+  it("renames an unselected row using its captured project and returns focus to that row", async () => {
+    const props = sidebarProps();
+    const second = { ...project, id: "project-b", name: "企业乙", revision: 3 };
+    render(<OperatorSidebar {...props} projects={[project, second]} />);
+    const trigger = screen.getByRole("button", { name: "管理项目：企业乙" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "重命名项目" }));
+    expect(screen.getByLabelText("项目名称")).toHaveValue("企业乙");
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "乙品牌" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(props.onRenameProject).toHaveBeenCalledWith("乙品牌", second);
+    expect(props.onSelectProject).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does not submit an old project revision", async () => {
+    const props = sidebarProps();
+    const view = render(<OperatorSidebar {...props} />);
+    await chooseProjectAction("重命名当前项目");
+    view.rerender(<OperatorSidebar {...props} projects={[{ ...project, revision: 2 }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "保存名称" }));
+    expect(props.onRenameProject).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("项目已切换或更新");
+  });
+
+  it("canonicalizes old reading URLs without losing scope or extra parameters", () => {
+    expect(canonicalKnowledgeWorkspaceUrl("/", "view=knowledge-display&enterpriseProjectId=project-a&operatorOwnerId=7&node=1.2", "#detail")).toBe("/?view=knowledge&enterpriseProjectId=project-a&operatorOwnerId=7&node=1.2#detail");
+    expect(canonicalKnowledgeWorkspaceUrl("/knowledge-base", "view=knowledge-display")).toBe("/?view=knowledge");
+    expect(canonicalKnowledgeWorkspaceUrl("/", "view=knowledge")).toBeNull();
+    expect(canonicalKnowledgeWorkspaceUrl("/publishing", "view=knowledge-display")).toBeNull();
+    expect(operatorViewPath("knowledge-display")).toBe("/?view=knowledge");
+    expect(operatorRouteForView("knowledge-display")).toEqual({ section: "knowledge-agent", sub: "build" });
+  });
+
+  it("contains mobile keyboard focus and releases the main work area when closed", () => {
+    const query = vi.spyOn(window, "matchMedia").mockImplementation(() => ({ matches: true, media: "(max-width: 1023px)", onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+    try {
+      const props = sidebarProps();
+      const close = vi.fn();
+      const view = render(<div className="app-shell"><OperatorSidebar {...props} mobileOpen onCloseMobile={close} /><main data-testid="main">工作内容</main></div>);
+      const drawer = screen.getByRole("dialog", { name: "工作区导航" });
+      expect(drawer).toHaveAttribute("aria-modal", "true");
+      expect(screen.getByTestId("main")).toHaveProperty("inert", true);
+      const first = within(drawer).getByRole("button", { name: "AI智能品牌优化" });
+      const last = within(drawer).getByRole("button", { name: "收起侧边栏" });
+      last.focus();
+      fireEvent.keyDown(last, { key: "Tab" });
+      expect(first).toHaveFocus();
+      fireEvent.keyDown(first, { key: "Escape" });
+      expect(close).toHaveBeenCalledTimes(1);
+      view.rerender(<div className="app-shell"><OperatorSidebar {...props} mobileOpen={false} onCloseMobile={close} /><main data-testid="main">工作内容</main></div>);
+      expect(screen.getByTestId("main")).toHaveProperty("inert", false);
+    } finally { query.mockRestore(); }
+  });
+
 });

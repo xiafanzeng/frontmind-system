@@ -18,6 +18,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import {
   currentKnowledgeBaseReplySnapshot,
@@ -147,6 +148,9 @@ export default function ChatInput({
   responseLogicContext,
   knowledgeBaseProgress,
   knowledgeBaseResetRevision,
+  operatorWorkspace = false,
+  knowledgeEditingBlocked = false,
+  onComposerDirtyChange,
 }: {
   fixedAgentProfile?: string;
   syncKnowledgeBaseSnapshot?: boolean;
@@ -156,6 +160,9 @@ export default function ChatInput({
   responseLogicContext?: ResponseLogicTaskContext;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
+  operatorWorkspace?: boolean;
+  knowledgeEditingBlocked?: boolean;
+  onComposerDirtyChange?: (dirty: boolean) => void;
 }) {
   const responseLogicInitialPromptLocked = Boolean(
     responseLogicContext && composerPrefill,
@@ -171,6 +178,24 @@ export default function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Synchronous lock ref to prevent duplicate sends (React state updates are async)
   const sendLockRef = useRef(false);
+  const draftCoordinates = useRef<{
+    conversationId: string;
+    resetRevision: number | undefined;
+    reply: NonNullable<ReturnType<typeof currentKnowledgeBaseReplySnapshot>>;
+  } | null>(null);
+  const [, setDraftBindingRevision] = useState(0);
+  const composerDirty = !isSending && Boolean(text.trim() || files.length);
+  useWorkspaceDraftGuard({
+    dirty: operatorWorkspace && composerDirty,
+    label: "任务输入和附件",
+  });
+  useEffect(() => {
+    onComposerDirtyChange?.(composerDirty);
+  }, [composerDirty, onComposerDirtyChange]);
+  useEffect(
+    () => () => onComposerDirtyChange?.(false),
+    [onComposerDirtyChange],
+  );
   const appliedComposerPrefillRef = useRef<string | null>(
     composerPrefill || null,
   );
@@ -327,7 +352,7 @@ export default function ChatInput({
     syncKnowledgeBaseSnapshot &&
     knowledgeBaseInitialized &&
     activeConversation?.knowledgeBase?.canReply !== true;
-  const inputLocked =
+  const baseInputLocked =
     knowledgeBaseLogoProvenanceRepairRequired ||
     knowledgeBaseAttachmentAttemptActive ||
     knowledgeBaseDeferredUploadRecoveryRequired ||
@@ -338,6 +363,26 @@ export default function ChatInput({
     .find((leaf) => leaf.id === knowledgeBaseProgress.build.currentLeafId);
   const knowledgeBaseReplySnapshot =
     currentKnowledgeBaseReplySnapshot(activeConversation);
+  const currentDraftCoordinates =
+    knowledgeBaseReplySnapshot && activeConversation
+      ? {
+          conversationId: activeConversation.id,
+          resetRevision: knowledgeBaseResetRevision,
+          reply: knowledgeBaseReplySnapshot,
+        }
+      : null;
+  if (!text.trim() && files.length === 0) draftCoordinates.current = null;
+  else if (!draftCoordinates.current && currentDraftCoordinates)
+    draftCoordinates.current = currentDraftCoordinates;
+  const draftTargetChanged = Boolean(
+    operatorWorkspace &&
+      composerDirty &&
+      draftCoordinates.current &&
+      JSON.stringify(draftCoordinates.current) !==
+        JSON.stringify(currentDraftCoordinates),
+  );
+  const inputLocked =
+    baseInputLocked || knowledgeEditingBlocked || draftTargetChanged;
   const currentNodePresentationReady = Boolean(knowledgeBaseReplySnapshot);
   const knowledgeBaseComplete =
     syncKnowledgeBaseSnapshot &&
@@ -382,7 +427,15 @@ export default function ChatInput({
   const addFiles = useCallback(
     async (newFiles: File[]) => {
       if (responseLogicInitialPromptLocked) return;
-      if (syncKnowledgeBaseSnapshot && newFiles.some((file) => !isSupportedOfficialLogoFile(file))) { toast.error("节点附件仅支持 PNG、JPEG、WebP、AVIF 或 GIF 图片；文字修改请填写修改要求"); return; }
+      if (
+        syncKnowledgeBaseSnapshot &&
+        newFiles.some((file) => !isSupportedOfficialLogoFile(file))
+      ) {
+        toast.error(
+          "节点附件仅支持 PNG、JPEG、WebP、AVIF 或 GIF 图片；文字修改请填写修改要求",
+        );
+        return;
+      }
       if (officialLogoRequired && newFiles.length !== 1) {
         toast.error("请只选择一张企业主 Logo");
         return;
@@ -413,7 +466,11 @@ export default function ChatInput({
         );
       }
     },
-    [officialLogoRequired, responseLogicInitialPromptLocked, syncKnowledgeBaseSnapshot],
+    [
+      officialLogoRequired,
+      responseLogicInitialPromptLocked,
+      syncKnowledgeBaseSnapshot,
+    ],
   );
 
   const removeFile = useCallback((id: string) => {
@@ -638,11 +695,41 @@ export default function ChatInput({
 
   return (
     <div
-      className="relative px-3 pb-3 pt-3 bg-gradient-to-t from-background via-background/95 to-transparent sm:px-5 sm:pb-5"
+      className="knowledge-composer relative px-3 pb-3 pt-3 bg-gradient-to-t from-background via-background/95 to-transparent sm:px-5 sm:pb-5"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {draftTargetChanged && (
+        <div
+          role="status"
+          className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"
+        >
+          当前节点或内容版本已变化，你的输入仍保留。请核对后再使用当前节点。
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={
+              !currentDraftCoordinates ||
+              baseInputLocked ||
+              knowledgeEditingBlocked ||
+              isSending
+            }
+            onClick={() => {
+              if (!currentDraftCoordinates) return;
+              draftCoordinates.current = currentDraftCoordinates;
+              setDraftBindingRevision((value) => value + 1);
+            }}
+          >
+            使用当前节点
+          </Button>
+        </div>
+      )}
+      {knowledgeEditingBlocked && (
+        <p className="mb-2 text-sm text-muted-foreground">
+          请先完成右侧节点编辑。
+        </p>
+      )}
       {/* Drag overlay */}
       <AnimatePresence>
         {isDragging && (
@@ -704,7 +791,9 @@ export default function ChatInput({
                             : replacingOfficialLogo
                               ? "更换企业主 Logo"
                               : "需要上传企业主 Logo"
-                          : "当前待确认"}
+                          : currentNodePresentationReady && !baseInputLocked
+                            ? "当前待确认"
+                            : "当前处理节点"}
                       </p>
                       <p
                         className={cn(
@@ -1051,24 +1140,27 @@ export default function ChatInput({
                     ? uploadProgress!.phase === "verifying"
                       ? "附件已上传，正在校验并提交本轮…"
                       : `正在上传文件 ${uploadProgress!.overallPercent}%...`
-                    : inputLocked
-                      ? syncKnowledgeBaseSnapshot
-                        ? "正在根据你的补充资料更新当前节点…"
-                        : purpose === "enterprise_qa"
-                          ? "FrontMind 正在查阅企业知识库并回答…"
-                          : "FrontMind 正在编排内容制作流程..."
-                      : knowledgeBaseNotStarted
-                        ? "请先点击上方“构建企业知识库”完成资料采集设置"
-                        : officialLogoRequired
-                          ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
-                          : syncKnowledgeBaseSnapshot
-                            ? "输入文字修改要求；仅上传图片会直接本地保存"
-                            : purpose === "enterprise_qa"
-                              ? "输入企业相关问题，按 Enter 提问…"
-                              : "输入你的内容需求，按 Enter 开始编排..."
+                    : draftTargetChanged
+                      ? "输入已保留，请核对当前节点后再发送"
+                      : inputLocked
+                        ? syncKnowledgeBaseSnapshot
+                          ? "正在根据你的补充资料更新当前节点…"
+                          : purpose === "enterprise_qa"
+                            ? "FrontMind 正在查阅企业知识库并回答…"
+                            : "FrontMind 正在编排内容制作流程..."
+                        : knowledgeBaseNotStarted
+                          ? "请先点击上方“构建企业知识库”完成资料采集设置"
+                          : officialLogoRequired
+                            ? "请使用左侧按钮上传企业主 Logo，上传后才可继续"
+                            : syncKnowledgeBaseSnapshot
+                              ? "输入文字修改要求；仅上传图片会直接本地保存"
+                              : purpose === "enterprise_qa"
+                                ? "输入企业相关问题，按 Enter 提问…"
+                                : "输入你的内容需求，按 Enter 开始编排..."
                 }
                 disabled={
-                  inputLocked ||
+                  baseInputLocked ||
+                  knowledgeEditingBlocked ||
                   isSending ||
                   isUploading ||
                   knowledgeBaseNotStarted ||

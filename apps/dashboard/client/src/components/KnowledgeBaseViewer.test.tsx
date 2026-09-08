@@ -51,6 +51,18 @@ const snapshot: KnowledgeSnapshotView = {
 
 describe("KnowledgeBaseViewer", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
+  it("shows an empty result without unrelated body or images and restores selection after clearing search", () => {
+    render(<KnowledgeBaseViewer snapshot={snapshot} />);
+    fireEvent.click(screen.getByRole("button", { name: /产品方案/ }));
+    const search = screen.getByPlaceholderText("搜索全部知识内容");
+    fireEvent.change(search, { target: { value: "不存在的节点" } });
+    expect(screen.getByText("没有匹配的知识内容")).toBeTruthy();
+    expect(screen.queryByText("企业基本信息。")).toBeNull();
+    expect(screen.queryByText("产品与解决方案。")).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getByText("产品与解决方案。")).toBeTruthy();
+  });
   it("offers the authenticated snapshot ZIP from the published knowledge view", () => {
     render(
       <KnowledgeBaseViewer

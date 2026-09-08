@@ -1215,6 +1215,9 @@ export default function ChatArea({
   reserveOuterMobileNav = false,
   knowledgeBaseProgress,
   knowledgeBaseResetRevision,
+  operatorWorkspace = false,
+  knowledgeEditingBlocked = false,
+  onComposerDirtyChange,
   knowledgeBaseAccountId,
   onKnowledgeBaseBatchCancelled,
 }: {
@@ -1230,6 +1233,9 @@ export default function ChatArea({
   reserveOuterMobileNav?: boolean;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
+  operatorWorkspace?: boolean;
+  knowledgeEditingBlocked?: boolean;
+  onComposerDirtyChange?: (dirty: boolean) => void;
   knowledgeBaseAccountId?: number;
   onKnowledgeBaseBatchCancelled?: (
     conversationId: string,
@@ -1758,8 +1764,8 @@ export default function ChatArea({
 
   return (
     <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      {/* Header bar */}
-      <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
+      {/* The unified workspace supplies one task header and one status area. */}
+      {!operatorWorkspace && <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
         <div
           className={`min-w-0 sm:pl-0 ${
             reserveOuterMobileNav ? "pl-20" : "pl-10"
@@ -1817,7 +1823,7 @@ export default function ChatArea({
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Messages area */}
       <div
@@ -1929,7 +1935,9 @@ export default function ChatArea({
                         </p>
                       )}
                   </div>
-                  {activeConversation.knowledgeBase.notice.code ===
+                  {operatorWorkspace && !["reconcile", "none"].includes(knowledgeBaseNoticeRecoveryMode(activeConversation.knowledgeBase.notice)) ? (
+                    <Button type="button" size="sm" variant="outline" onClick={requestKnowledgeBaseReset}>重置后重新上传</Button>
+                  ) : activeConversation.knowledgeBase.notice.code ===
                   KNOWLEDGE_BASE_REBUILD_REQUIRED_NOTICE_CODE ? (
                     <Button
                       type="button"
@@ -2054,6 +2062,9 @@ export default function ChatArea({
         responseLogicContext={responseLogicContext}
         knowledgeBaseProgress={knowledgeBaseProgress}
         knowledgeBaseResetRevision={knowledgeBaseResetRevision}
+        operatorWorkspace={operatorWorkspace}
+        knowledgeEditingBlocked={knowledgeEditingBlocked}
+        onComposerDirtyChange={onComposerDirtyChange}
       />
     </div>
   );

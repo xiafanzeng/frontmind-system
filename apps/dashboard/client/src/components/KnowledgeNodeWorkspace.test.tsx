@@ -220,7 +220,7 @@ describe("unified knowledge node workspace", () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(within(tree).getByText("01")).toBeVisible();
     expect(within(tree).getByText("1 / 2 · 50%")).toBeVisible();
-    expect(within(tree).getByText("确认 1")).toBeVisible();
+    expect(within(tree).getByText("已整理 1")).toBeVisible();
     tree.scrollTop = 145;
     fireEvent.scroll(tree);
     const node = screen.getByRole("button", { name: "产品服务 已确认" });
@@ -237,7 +237,7 @@ describe("unified knowledge node workspace", () => {
     ).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("groups prefilled drafts and the current node under pending without changing their stored status", () => {
+  it("keeps prefilled content in handled counts and the current node in pending without changing stored statuses", () => {
     const withDraft = structuredClone(progress);
     const branch = withDraft.branches[0]!;
     branch.confirmed = 0;
@@ -247,12 +247,30 @@ describe("unified knowledge node workspace", () => {
     withDraft.summary.directPrefilled = 1;
     renderWorkspace({ progress: withDraft }, false);
     const tree = screen.getByRole("navigation", { name: "知识节点目录" });
-    expect(within(tree).getByText("确认 0")).toBeVisible();
+    expect(within(tree).getByText("已整理 1")).toBeVisible();
     expect(within(tree).getByText("待再次确认 0")).toBeVisible();
-    expect(within(tree).getByText("待处理 2")).toBeVisible();
+    expect(within(tree).getByText("待处理 1")).toBeVisible();
     expect(within(tree).queryByText(/预填/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "产品服务 待确认" })).toHaveAttribute("data-status", "direct_prefilled");
+    expect(screen.getByRole("button", { name: "产品服务 已有资料" })).toHaveAttribute("data-status", "direct_prefilled");
     expect(branch.leaves[1]!.status).toBe("direct_prefilled");
+  });
+
+  it("does not mark a fully prefilled branch as pending after it reaches 100 percent", () => {
+    const prefilled = structuredClone(progress);
+    const branch = prefilled.branches[0]!;
+    branch.handled = 2;
+    branch.confirmed = 0;
+    branch.directPrefilled = 2;
+    branch.current = 0;
+    branch.leaves.forEach((leaf) => { leaf.status = "direct_prefilled"; });
+    prefilled.build.currentLeafId = null;
+    prefilled.summary = { ...prefilled.summary, handled: 2, confirmed: 0, directPrefilled: 2, current: 0, overallPercent: 100 };
+    renderWorkspace({ progress: prefilled }, false);
+    const tree = screen.getByRole("navigation", { name: "知识节点目录" });
+    expect(within(tree).getByText("2 / 2 · 100%")).toBeVisible();
+    expect(within(tree).getByText("已整理 2")).toBeVisible();
+    expect(within(tree).getByText("待处理 0")).toBeVisible();
+    expect(within(tree).getAllByText("已有资料")).toHaveLength(2);
   });
 
   it("guards Escape and close with an unsaved draft, and saves exactly once before closing", async () => {

@@ -1,5 +1,6 @@
 /** Private, explicitly invoked paid acceptance. Uses the production adapter, durable intents and wallet ledger.
  * FRONTMIND_AI_BILLING_ACCEPTANCE=1 tsx scripts/run-ai-billing-acceptance.ts ACCOUNT_ID RUN_ID [PROJECT_ID]
+ * Set FRONTMIND_AI_BILLING_PREFLIGHT=1 instead for read-only SQL/identity checks; no task is created.
  * Reuse RUN_ID after a crash: acknowledged/unknown commands are never submitted a second time.
  */
 import { createHash } from "node:crypto";
@@ -20,7 +21,8 @@ import {
 } from "../server/presales-v2-contracts";
 import { ZhipuWebsiteAgentProvider } from "../server/providers/website-agent-provider";
 import { writeFile } from "node:fs/promises";
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { enterpriseProjects } from "../drizzle/schema";
 import { getDb } from "../server/db";
 import { getEffectiveDecryptedCredentialForAccount } from "../server/auth-service";
 import { createDashboardAgentClient } from "../server/providers/dashboard-agent-provider";
@@ -45,12 +47,60 @@ const prompts = [
   ["max", "请将英文hello翻译成中文，只输出译文，不要使用工具或生成文件。"],
 ] as const;
 
+async function readAcceptanceCostRows(db: any, taskIds: string[]) {
+  if (!taskIds.length) return [];
+  const [rows] =
+    await db.execute(sql`SELECT local_task_id AS taskId,session_id AS sessionId,provider_event_id AS eventId,
+    CAST(input_tokens AS CHAR) AS inputTokens,CAST(output_tokens AS CHAR) AS outputTokens,CAST(cache_read_input_tokens AS CHAR) AS cacheReadInputTokens,
+    CAST(cost_nanos AS CHAR) AS costNanos,CAST(charged_ten_thousandths AS CHAR) AS chargedUnits,pricing_version AS pricingVersion,occurred_at AS occurredAt,cost_state AS costState
+    FROM ai_cost_events WHERE local_task_id IN (${sql.join(
+      taskIds.map((id) => sql`${id}`),
+      sql`,`,
+    )}) ORDER BY occurred_at,id`);
+  return rows as Array<Record<string, any>>;
+}
+
+function publicOutcome(events: Array<Record<string, unknown>>) {
+  const lastStatus = [...events]
+    .reverse()
+    .find((event) => event.type === "status_update");
+  const lastAgentStatus = String(
+    (lastStatus?.status_update as { agent_status?: string } | undefined)
+      ?.agent_status ?? "unknown",
+  );
+  const publicReplies = events
+    .filter((event) => event.type === "assistant_message")
+    .map((event) => ({
+      eventId: String(event.id),
+      text: (event.assistant_message as { content?: unknown } | undefined)
+        ?.content,
+    }))
+    .filter(
+      (reply): reply is { eventId: string; text: string } =>
+        typeof reply.text === "string" && !!reply.text.trim(),
+    );
+  return {
+    lastAgentStatus,
+    completionStatus:
+      lastAgentStatus === "stopped" && publicReplies.length
+        ? ("succeeded" as const)
+        : lastAgentStatus === "cancelled"
+          ? ("cancelled" as const)
+          : lastAgentStatus === "error"
+            ? ("failed" as const)
+            : ("attention_required" as const),
+    publicReplies,
+    finalPublicText: publicReplies.at(-1)?.text ?? "",
+  };
+}
+
 export async function runAiBillingAcceptance(
   accountId: number,
   runId: string,
   projectId: string | null,
 ) {
-  if (process.env.FRONTMIND_AI_BILLING_ACCEPTANCE !== "1")
+  const preflight = process.env.FRONTMIND_AI_BILLING_PREFLIGHT === "1";
+  if (!preflight && process.env.FRONTMIND_AI_BILLING_ACCEPTANCE !== "1")
     throw new Error("PAID_ACCEPTANCE_NOT_ENABLED");
   if (
     !Number.isSafeInteger(accountId) ||
@@ -75,7 +125,7 @@ export async function runAiBillingAcceptance(
   const [priorIdentities] =
     await db.execute(sql`SELECT o.account_user_id AS accountId,
     o.api_credential_id AS credentialId,o.credential_version AS credentialVersion,
-    o.enterprise_project_id AS projectId FROM agent_tasks t
+    o.enterpriseProjectId AS projectId FROM agent_tasks t
     JOIN agent_operations o ON o.id=t.operation_id
     WHERE o.scope='managed_user' AND JSON_UNQUOTE(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.intentId')) IN (${sql.join(
       prompts.map(
@@ -96,6 +146,32 @@ export async function runAiBillingAcceptance(
   const records: Record<string, unknown>[] = [];
   const websiteCredential = await getActivePresalesCredential();
   if (!websiteCredential) throw new Error("WEBSITE_CREDENTIAL_REQUIRED");
+  if (preflight) {
+    // Exercise the exact remaining raw SQL without creating a Website fixture or reserving funds.
+    await readAcceptanceCostRows(db, ["00000000-0000-0000-0000-000000000000"]);
+    if (projectId) {
+      const [project] = await db
+        .select({ archivedAt: enterpriseProjects.archivedAt })
+        .from(enterpriseProjects)
+        .where(
+          and(
+            eq(enterpriseProjects.id, projectId),
+            eq(enterpriseProjects.ownerUserId, accountId),
+          ),
+        )
+        .limit(1);
+      if (!project || project.archivedAt)
+        throw new Error("ACCEPTANCE_PROJECT_NOT_ACTIVE");
+    }
+    return {
+      preflight: true as const,
+      runId,
+      accountId,
+      projectId,
+      rawSqlStatementsVerified: 2,
+      priorDashboardTasks: (priorIdentities as unknown[]).length,
+    };
+  }
   const sampleHash = createHash("sha256").update("你好").digest("hex");
   const websitePrompt = `将中文“你好”译成英文。仅返回 JSON：schemaVersion 为 1，sourceQuestionSha256 为 ${sampleHash}，questionEnglish 为译文。不要解释，不要调用工具或生成文件。`;
   const acquired = await acquirePresalesV2Task({
@@ -128,18 +204,7 @@ export async function runAiBillingAcceptance(
     businessOwnerName: "费用核对测试",
   });
   const taskIds: string[] = [acquired.record.localTaskId];
-  const costRows = async () => {
-    if (!taskIds.length) return [];
-    const [rows] =
-      await db.execute(sql`SELECT local_task_id AS taskId,session_id AS sessionId,provider_event_id AS eventId,
-      input_tokens AS inputTokens,output_tokens AS outputTokens,cache_read_input_tokens AS cacheReadInputTokens,
-      CAST(cost_nanos AS CHAR) AS costNanos,charged_ten_thousandths AS chargedUnits,pricing_version AS pricingVersion,occurred_at AS occurredAt,cost_state AS costState
-      FROM ai_cost_events WHERE local_task_id IN (${sql.join(
-        taskIds.map((id) => sql`${id}`),
-        sql`,`,
-      )}) ORDER BY occurred_at,id`);
-    return rows as unknown as Array<Record<string, any>>;
-  };
+  const costRows = () => readAcceptanceCostRows(db, taskIds);
   const total = async () =>
     (await costRows()).reduce(
       (sum, row) => sum + BigInt(row.costNanos ?? 0),
@@ -214,7 +279,11 @@ export async function runAiBillingAcceptance(
       }
       if (!settled) await new Promise((resolve) => setTimeout(resolve, 2000));
     } while (!settled);
-    await client.listAllMessages({ taskId: sessionId, order: "asc" });
+    const finalEvents = await client.listAllMessages({
+      taskId: sessionId,
+      order: "asc",
+    });
+    const outcome = publicOutcome(finalEvents);
     const ownRows = (await costRows()).filter(
       (row) => row.taskId === record.localTaskId,
     );
@@ -239,6 +308,16 @@ export async function runAiBillingAcceptance(
       throw new Error(`ACCEPTANCE_NATIVE_EVENT_MISMATCH:${sessionId}`);
     records.push({
       scope: "managed_user",
+      ...outcome,
+      answerMatchesExpected:
+        effort === "low"
+          ? /FrontMind/i.test(outcome.finalPublicText) &&
+            !/GLM|Z\.ai|智谱/i.test(outcome.finalPublicText)
+          : effort === "high"
+            ? /^12[。.!]?$/u.test(outcome.finalPublicText.trim())
+            : /^你好[。！!]?$/u.test(outcome.finalPublicText.trim()),
+      providerSessionStatus: session.status,
+      providerStopReason: session.stop_reason ?? null,
       effort,
       localTaskId: record.localTaskId,
       operationId: record.operationId,
@@ -332,7 +411,34 @@ export async function runAiBillingAcceptance(
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    await client.listAllMessages({ taskId: sessionId, order: "asc" });
+    const finalEvents = await client.listAllMessages({
+      taskId: sessionId,
+      order: "asc",
+    });
+    const outcome = publicOutcome(finalEvents);
+    let structuredResult: Record<string, unknown> | null = null;
+    try {
+      const parsed = JSON.parse(
+        outcome.finalPublicText
+          .trim()
+          .replace(/^```(?:json)?\s*/iu, "")
+          .replace(/\s*```$/u, ""),
+      );
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        structuredResult = parsed;
+    } catch {
+      /* Keep the exact public answer in the receipt; malformed JSON is a failed fixture. */
+    }
+    const structuredResultValid =
+      structuredResult?.schemaVersion === 1 &&
+      structuredResult.sourceQuestionSha256 === sampleHash &&
+      typeof structuredResult.questionEnglish === "string" &&
+      !!structuredResult.questionEnglish.trim();
+    const completionStatus = stopped
+      ? "cancelled"
+      : outcome.completionStatus === "succeeded" && !structuredResultValid
+        ? "failed"
+        : outcome.completionStatus;
     const ownRows = (await costRows()).filter(
       (row) => row.taskId === acquired.record.localTaskId,
     );
@@ -357,12 +463,22 @@ export async function runAiBillingAcceptance(
       throw new Error("WEBSITE_PLATFORM_COST_MISMATCH");
     await update(acquired.record.localTaskId, (record) => ({
       ...record,
-      status:
-        stopped || record.status === "cancelled" ? "cancelled" : "succeeded",
+      status: completionStatus,
+      structuredResult: structuredResultValid ? structuredResult : null,
       terminalAt: record.terminalAt ?? new Date().toISOString(),
     }));
     records.push({
       scope: "website_frontend",
+      ...outcome,
+      completionStatus,
+      structuredResultValid,
+      answerMatchesExpected:
+        structuredResultValid &&
+        /^(hello|hi)[.!]?$/iu.test(
+          String(structuredResult?.questionEnglish).trim(),
+        ),
+      providerSessionStatus: session.status,
+      providerStopReason: session.stop_reason ?? null,
       effort: acquired.record.providerRuntime?.effort ?? "max",
       localTaskId: acquired.record.localTaskId,
       operationId: acquired.record.operationId,
@@ -388,6 +504,13 @@ export async function runAiBillingAcceptance(
   }
   const result = {
     runId,
+    acceptancePassed:
+      records.length === 4 &&
+      records.every(
+        (record) =>
+          record.completionStatus === "succeeded" &&
+          record.answerMatchesExpected === true,
+      ),
     budgetCny: "3.000000",
     totalCostCny: formatCostCny(await total()),
     records,
@@ -397,21 +520,29 @@ export async function runAiBillingAcceptance(
   return { output, ...result };
 }
 
-if (process.env.FRONTMIND_AI_BILLING_ACCEPTANCE === "1") {
+if (
+  process.env.FRONTMIND_AI_BILLING_ACCEPTANCE === "1" ||
+  process.env.FRONTMIND_AI_BILLING_PREFLIGHT === "1"
+) {
   runAiBillingAcceptance(
     Number(process.argv[2]),
     process.argv[3] ?? "",
     process.argv[4] ?? null,
   )
     .then((result) => {
+      if ("preflight" in result) {
+        console.log(JSON.stringify(result));
+        process.exit(0);
+      }
       console.log(
         JSON.stringify({
           output: result.output,
           totalCostCny: result.totalCostCny,
           completed: result.records.length,
+          acceptancePassed: result.acceptancePassed,
         }),
       );
-      process.exit(0);
+      process.exit(result.acceptancePassed ? 0 : 1);
     })
     .catch((error) => {
       console.error(

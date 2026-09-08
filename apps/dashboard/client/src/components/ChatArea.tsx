@@ -403,8 +403,7 @@ export async function recoverKnowledgeBaseNotice(
   });
 }
 
-const EMPTY_STATE_IMG =
-  "https://d2xsxph8kpxj0f.cloudfront.net/310519663465762565/ZiWzJwHCXtKB4GziVKqKt6/fm-logo_cde8eb94.png";
+const EMPTY_STATE_IMG = "/assets/frontmind-mark.svg";
 
 const PdfDocumentViewer = React.lazy(() => import("./PdfDocumentViewer"));
 

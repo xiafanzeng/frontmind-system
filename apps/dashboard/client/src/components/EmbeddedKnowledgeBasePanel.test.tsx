@@ -650,6 +650,23 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     expect(mocks.resetMutation).not.toHaveBeenCalled();
   });
 
+  it("returns focus to the workspace title after reset makes the reset button unavailable", async () => {
+    mocks.progressIsError = true;
+    mocks.resetStatus = { ...mocks.resetStatus, canReset: true, hasKnowledge: true, unavailableReason: null };
+    const onPageChange = vi.fn();
+    const { rerender } = render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={onPageChange} />);
+    mocks.resetRefetch.mockImplementation(async () => {
+      mocks.resetStatus = { ...mocks.resetStatus, canReset: false, hasKnowledge: false, revision: 1 };
+      rerender(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={onPageChange} />);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重置知识库" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "重置知识库" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "智能知识库" })).toHaveFocus());
+    expect(mocks.resetMutation).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the named reset button unavailable when there is no resettable knowledge", () => {
     mocks.progressIsError = true;
     render(<EmbeddedKnowledgeBasePanel page="build" mode="workspace" onPageChange={vi.fn()} />);

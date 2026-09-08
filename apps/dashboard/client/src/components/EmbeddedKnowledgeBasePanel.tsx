@@ -144,6 +144,7 @@ export default function EmbeddedKnowledgeBasePanel({
   const unified = mode === "workspace";
   const [editingBlocked, setEditingBlocked] = useState(false);
   const [knowledgeUpdating, setKnowledgeUpdating] = useState(false);
+  const workspaceTitleRef = useRef<HTMLHeadingElement>(null);
   const { user } = useAuth();
   const trpcUtils = trpc.useUtils();
   const [previewProgress, setPreviewProgress] = useState(
@@ -251,7 +252,7 @@ export default function EmbeddedKnowledgeBasePanel({
     <section className={unified ? "knowledge-workspace" : "page-shell pb-8"} data-layout-mode={mode}>
       <header className={unified ? "knowledge-workspace-toolbar" : "page-header flex flex-wrap items-center justify-between gap-4"}>
         <div>
-          <h2>{unified ? "智能知识库" : page === "build" ? "知识库智能体" : "知识库展示"}</h2>
+          <h2 ref={workspaceTitleRef} tabIndex={-1}>{unified ? "智能知识库" : page === "build" ? "知识库智能体" : "知识库展示"}</h2>
           <p>预览和修改当前节点，确认后更新知识库。</p>
         </div>
         <div className="knowledge-workspace-actions">
@@ -272,6 +273,7 @@ export default function EmbeddedKnowledgeBasePanel({
           {!previewMode && resetQuery.data && <KnowledgeResetButton
             disabled={editingBlocked || knowledgeUpdating}
             status={resetQuery.data}
+            fallbackFocusRef={workspaceTitleRef}
             onReset={async () => {
               await resetQuery.refetch();
               await knowledgeQuery.refetch();
@@ -342,6 +344,7 @@ export default function EmbeddedKnowledgeBasePanel({
 function KnowledgeResetButton({
   status,
   onReset,
+  fallbackFocusRef,
   disabled = false,
 }: {
   status: {
@@ -350,6 +353,7 @@ function KnowledgeResetButton({
     unavailableReason: string | null;
   };
   onReset: () => Promise<unknown>;
+  fallbackFocusRef: React.RefObject<HTMLHeadingElement | null>;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -416,8 +420,14 @@ function KnowledgeResetButton({
       >
         <DialogContent
           onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            resetButtonRef.current?.focus();
+            const resetButton = resetButtonRef.current;
+            const target = resetButton && !resetButton.disabled
+              ? resetButton
+              : fallbackFocusRef.current;
+            if (target) {
+              event.preventDefault();
+              target.focus();
+            }
           }}
           onEscapeKeyDown={(event) => { if (resetMutation.isPending) event.preventDefault(); }}
           onInteractOutside={(event) => { if (resetMutation.isPending) event.preventDefault(); }}

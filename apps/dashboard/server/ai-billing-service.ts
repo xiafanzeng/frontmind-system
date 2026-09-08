@@ -216,7 +216,11 @@ export async function authorizeManagedAiCommand(
   await db
     .transaction(async (tx) => {
       try {
-        await assertEnterpriseProjectActive(tx, input.identity.enterpriseProjectId, input.identity.accountUserId);
+        await assertEnterpriseProjectActive(
+          tx,
+          input.identity.enterpriseProjectId,
+          input.identity.accountUserId,
+        );
       } catch (error) {
         if (error instanceof AuthServiceError && error.code === "NOT_FOUND")
           throw new AiBillingError("AI_BILLING_PROJECT_OWNERSHIP");
@@ -740,6 +744,71 @@ export async function rejectManagedAiCommand(input: {
       .where(eq(aiChargeCommands.id, command.id));
   });
 }
+/** All displayed counters and money use exactly the same event-time window. */
+export function projectAiCostTotals(
+  rows: Array<{
+    accountUserId: number | null;
+    localTaskId?: string;
+    costNanos: bigint | string | null;
+    inputTokens?: bigint | string | null;
+    outputTokens?: bigint | string | null;
+    cacheReadInputTokens?: bigint | string | null;
+  }>,
+) {
+  const totals = new Map<
+    number | null,
+    {
+      nanos: bigint;
+      known: number;
+      unknown: number;
+      input: bigint;
+      output: bigint;
+      cache: bigint;
+      tasks: Set<string>;
+    }
+  >();
+  for (const row of rows) {
+    const value = totals.get(row.accountUserId) ?? {
+      nanos: 0n,
+      known: 0,
+      unknown: 0,
+      input: 0n,
+      output: 0n,
+      cache: 0n,
+      tasks: new Set<string>(),
+    };
+    if (row.costNanos == null) value.unknown++;
+    else {
+      value.nanos += BigInt(row.costNanos);
+      value.known++;
+    }
+    value.input += BigInt(row.inputTokens ?? 0);
+    value.output += BigInt(row.outputTokens ?? 0);
+    value.cache += BigInt(row.cacheReadInputTokens ?? 0);
+    if (row.localTaskId) value.tasks.add(row.localTaskId);
+    totals.set(row.accountUserId, value);
+  }
+  return new Map(
+    [...totals].map(([id, value]) => [
+      id,
+      {
+        provider: "zhipu" as const,
+        unit: "tokens" as const,
+        inputTokens: Number(value.input),
+        outputTokens: Number(value.output),
+        cacheReadInputTokens: Number(value.cache),
+        observedTasks: value.tasks.size,
+        observedEvents: value.known + value.unknown,
+        unknownEvents: value.unknown,
+        costCny: value.known ? formatCostCny(value.nanos) : null,
+        // This is FrontMind's recorded event coverage, never a claim about the complete Key bill.
+        costStatus: value.known ? ("partial" as const) : ("unknown" as const),
+        pricingSourceUrl: ZHIPU_PRICING_SOURCE,
+      },
+    ]),
+  );
+}
+
 export async function readAiCostTotals(input: {
   executor?: any;
   accountIds?: number[];
@@ -748,15 +817,14 @@ export async function readAiCostTotals(input: {
   endAt: number;
 }) {
   const db = input.executor ?? (await database());
-  const rows: Array<{
-    accountUserId: number | null;
-    costNanos: bigint | null;
-    costState: string;
-  }> = await db
+  const rows = await db
     .select({
       accountUserId: aiCostEvents.accountUserId,
+      localTaskId: aiCostEvents.localTaskId,
       costNanos: aiCostEvents.costNanos,
-      costState: aiCostEvents.costState,
+      inputTokens: aiCostEvents.inputTokens,
+      outputTokens: aiCostEvents.outputTokens,
+      cacheReadInputTokens: aiCostEvents.cacheReadInputTokens,
     })
     .from(aiCostEvents)
     .where(
@@ -769,34 +837,7 @@ export async function readAiCostTotals(input: {
           : undefined,
       ),
     );
-  const totals = new Map<
-    number | null,
-    { nanos: bigint; known: number; unknown: number }
-  >();
-  for (const row of rows) {
-    const value = totals.get(row.accountUserId) ?? {
-      nanos: 0n,
-      known: 0,
-      unknown: 0,
-    };
-    if (row.costNanos == null) value.unknown++;
-    else {
-      value.nanos += BigInt(row.costNanos);
-      value.known++;
-    }
-    totals.set(row.accountUserId, value);
-  }
-  return new Map(
-    [...totals].map(([id, v]) => [
-      id,
-      {
-        costCny: v.known ? formatCostCny(v.nanos) : null,
-        // Native event amounts are exact; historical task coverage can still be backfilling.
-        costStatus: v.known ? ("partial" as const) : ("unknown" as const),
-        pricingSourceUrl: ZHIPU_PRICING_SOURCE,
-      },
-    ]),
-  );
+  return projectAiCostTotals(rows);
 }
 
 export async function registerAiUsageTask(localTaskId: string) {

@@ -1,3 +1,5 @@
+import { aiUsageReportInput } from "../shared/ai-usage-report";
+import { readAiUsageReport, exportAiUsageReport } from "./ai-usage-report";
 import { getMonitoringRuntime } from "./monitoring-module";
 import { ensureDashboardAccountLink } from "@frontmind/monitoring-db";
 import { assertWorkspaceAccess } from "./dashboard-service";
@@ -291,6 +293,16 @@ export function managedMonitoringCitationSummaryValue(input: {
 }
 
 export const adminRouter = router({
+  aiUsage: router({
+    report: adminProcedure.input(aiUsageReportInput).query(async ({ ctx, input }) => {
+      requireSystemAdmin(ctx.user);
+      return readAiUsageReport(input);
+    }),
+    export: adminProcedure.input(aiUsageReportInput).query(async ({ ctx, input }) => {
+      requireSystemAdmin(ctx.user);
+      return exportAiUsageReport(input);
+    }),
+  }),
   brandTrackingCredentials: router({
     list: adminProcedure.query(async ({ ctx }) => {
       requireSystemAdmin(ctx.user);

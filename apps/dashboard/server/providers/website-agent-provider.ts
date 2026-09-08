@@ -214,6 +214,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
     private readonly update: UpdateTask,
     apiKey: string,
     api?: ZhipuManagedClient,
+    private readonly options: { tools?: Array<{ type: "agent_toolset_20260601" }> } = {},
   ) {
     this.api = api ?? new ZhipuManagedClient({ apiKey });
   }
@@ -468,7 +469,7 @@ export class ZhipuWebsiteAgentProvider implements WebsiteClient {
           }
         : frozenRuntime.model,
       system: RUNTIME_SYSTEM,
-      tools: [{ type: "agent_toolset_20260601" }],
+      tools: this.options.tools ?? [{ type: "agent_toolset_20260601" }],
     };
     const agent = await this.once(
       "agent",

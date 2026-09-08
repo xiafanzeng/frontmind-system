@@ -5,8 +5,6 @@ import {
   zhipuCostNanos,
   ZHIPU_PRICING_SOURCE,
 } from "./zhipu-cost";
-import { and, eq, gte, inArray, lt } from "drizzle-orm";
-import { agentOperations, agentTasks } from "../drizzle/schema";
 
 export type ManagedNativeUsage = {
   provider: "zhipu";
@@ -81,51 +79,19 @@ export async function readManagedNativeUsageByAccounts(input: {
   startAt: number;
   endAt: number;
 }) {
-  const result = new Map<number, ManagedNativeUsage>();
   const accountIds = [...new Set(input.accountIds)];
+  const result = new Map<number, ManagedNativeUsage>();
   if (!accountIds.length) return result;
-  const rows: Array<{
-    accountUserId: number;
-    runtime: Record<string, unknown> | null;
-    model: string;
-  }> = await input.executor
-    .select({
-      accountUserId: agentOperations.accountUserId,
-      runtime: agentTasks.providerRuntime,
-      model: agentOperations.upstreamModel,
-    })
-    .from(agentTasks)
-    .innerJoin(agentOperations, eq(agentTasks.operationId, agentOperations.id))
-    .where(
-      and(
-        eq(agentOperations.scope, "managed_user"),
-        eq(agentOperations.provider, "zhipu"),
-        inArray(agentOperations.accountUserId, accountIds),
-        gte(agentOperations.createdAt, new Date(input.startAt)),
-        lt(agentOperations.createdAt, new Date(input.endAt)),
-      ),
-    );
-  for (const accountId of accountIds)
-    result.set(
-      accountId,
-      projectManagedNativeUsage(
-        rows
-          .filter((row) => row.accountUserId === accountId)
-          .map((row) =>
-            row.runtime ? { model: row.model, ...row.runtime } : null,
-          ),
-      ),
-    );
   const costs = await readAiCostTotals({
-    executor: input.executor,
+    ...input,
     accountIds,
     scope: "managed_user",
-    startAt: input.startAt,
-    endAt: input.endAt,
   });
   for (const accountId of accountIds) {
-    const cost = costs.get(accountId);
-    if (cost) Object.assign(result.get(accountId)!, cost);
+    result.set(
+      accountId,
+      costs.get(accountId) ?? projectManagedNativeUsage([]),
+    );
   }
   return result;
 }

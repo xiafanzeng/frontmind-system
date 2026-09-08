@@ -50,11 +50,19 @@ describe("managed native usage", () => {
     const rows = [
       {
         accountUserId: 1,
-        runtime: { usage: { input_tokens: 10, output_tokens: 2 } },
+        localTaskId: "task-a",
+        inputTokens: 10n,
+        outputTokens: 2n,
+        cacheReadInputTokens: 0n,
+        costNanos: 136000n,
       },
       {
         accountUserId: 2,
-        runtime: { usage: { input_tokens: 90, output_tokens: 8 } },
+        localTaskId: "task-b",
+        inputTokens: 90n,
+        outputTokens: 8n,
+        cacheReadInputTokens: 0n,
+        costNanos: 944000n,
       },
     ];
     const query: any = {

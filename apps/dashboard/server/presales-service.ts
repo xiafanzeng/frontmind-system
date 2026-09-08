@@ -613,34 +613,13 @@ export async function getPresalesCreditUsageSnapshot(
                     snapshot!.errorCode === "invalid_or_revoked"
                   ? "invalid_or_revoked"
                   : "sync_error";
-  const zhipuRuntimeRows =
-    credential?.provider === "zhipu"
-      ? await db
-          .select({ runtime: agentTasks.providerRuntime, model: agentOperations.upstreamModel })
-          .from(agentTasks)
-          .innerJoin(
-            agentOperations,
-            eq(agentTasks.operationId, agentOperations.id),
-          )
-          .where(
-            and(
-              eq(agentOperations.scope, "website_frontend"),
-              eq(agentOperations.provider, "zhipu"),
-              gte(agentOperations.createdAt, new Date(cutoffMs)),
-            ),
-          )
-      : [];
-  const nativeUsage = projectZhipuNativeUsage(
-    zhipuRuntimeRows.map((row) => row.runtime ? {model:row.model,...row.runtime} : null),
-  );
-  if(credential?.provider==="zhipu") {
-    const eventCosts=await readAiCostTotals({executor:db,scope:"website_frontend",startAt:cutoffMs,endAt:now});
-    const cost=eventCosts.get(null);if(cost)Object.assign(nativeUsage,cost);
-  }
+  // Use the same native events for money and Token counts, including old sessions continued today.
+  const eventCosts = await readAiCostTotals({ executor: db, scope: "website_frontend", startAt: cutoffMs, endAt: now });
+  const nativeUsage = eventCosts.get(null) ?? projectZhipuNativeUsage([]);
   const observedAt = ledgerRows[0]?.observedAt;
   return {
     windowDays: 30,
-    ...(credential?.provider === "zhipu" ? { nativeUsage } : {}),
+    nativeUsage,
     rollingWebsiteUsed: Math.max(0, Number(ledgerRows[0]?.used) || 0),
     usageObservedAt:
       observedAt instanceof Date

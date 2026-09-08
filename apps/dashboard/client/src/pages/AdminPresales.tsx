@@ -1,3 +1,4 @@
+import { AdminAiUsageReport } from "@/components/AdminAiUsageReport";
 import { agentCostDisplay, type AgentCost } from "@/lib/agent-cost";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "wouter";
@@ -277,15 +278,6 @@ export default function AdminPresales() {
     requiresReplacement: aliyunOAuthRequiresReplacement,
     usableForAuthorization: aliyunOAuthUsableForAuthorization,
   } = aliyunOAuthConfigurationDisplayState(aliyunStatus.oauth);
-  const usageWindowDays = 30;
-  const usageQuery = trpc.admin.presales.usage.useQuery(
-    { windowDays: usageWindowDays },
-    {
-      enabled: isAdmin,
-      retry: false,
-      refetchOnWindowFocus: false,
-    },
-  );
   const setMutation = trpc.admin.presales.set.useMutation();
   const replaceMutation = trpc.admin.presales.replace.useMutation();
   const testMutation = trpc.admin.presales.test.useMutation();
@@ -294,7 +286,7 @@ export default function AdminPresales() {
 
   const refreshAll = async () => {
     await utils.admin.presales.status.invalidate();
-    await utils.admin.presales.usage.invalidate();
+    await utils.admin.aiUsage.report.invalidate();
     await utils.admin.presales.twentyFirst.status.invalidate();
     await utils.admin.presales.aliyun.status.invalidate();
   };
@@ -580,9 +572,6 @@ export default function AdminPresales() {
     );
   }
 
-  const keyHealth = usageQuery.data?.keyHealth ?? "unconfigured";
-  const nativeUsage = usageQuery.data?.nativeUsage;
-
   return (
     <PortalShell
       eyebrow="管理中心 · 客户与服务"
@@ -594,13 +583,12 @@ export default function AdminPresales() {
           className="bg-card/80"
           disabled={
             statusQuery.isFetching ||
-            usageQuery.isFetching ||
             twentyFirstStatusQuery.isFetching
           }
           onClick={() => void refreshAll()}
         >
           <RefreshCw
-            className={`h-4 w-4 ${statusQuery.isFetching || usageQuery.isFetching || twentyFirstStatusQuery.isFetching || aliyunStatusQuery.isFetching ? "animate-spin" : ""}`}
+            className={`h-4 w-4 ${statusQuery.isFetching || twentyFirstStatusQuery.isFetching || aliyunStatusQuery.isFetching ? "animate-spin" : ""}`}
           />
           刷新状态
         </Button>
@@ -645,7 +633,7 @@ export default function AdminPresales() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid items-start gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="grid items-start gap-4">
             <Card className="overflow-hidden border-border/70 bg-card/88 shadow-sm backdrop-blur-xl">
               <CardHeader className="border-b border-border/60 pb-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -817,8 +805,7 @@ export default function AdminPresales() {
             <Card className="overflow-hidden border-border/70 bg-card/88 shadow-sm backdrop-blur-xl">
               <CardHeader className="border-b border-border/60 pb-5">
                 <CardTitle className="flex items-center gap-2 text-lg">
-                  <Coins className="h-5 w-5 text-primary" />近 {usageWindowDays}{" "}
-                  天任务用量
+                  <Coins className="h-5 w-5 text-primary" />官网任务用量与对账
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
                   按官网任务上报的原生 Token
@@ -826,45 +813,7 @@ export default function AdminPresales() {
                 </p>
               </CardHeader>
               <CardContent className="p-5 sm:p-6">
-                {usageQuery.isLoading ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-24 rounded-xl" />
-                    {[0, 1, 2].map((item) => (
-                      <Skeleton key={item} className="h-11 rounded-lg" />
-                    ))}
-                  </div>
-                ) : usageQuery.error ? (
-                  <div className="py-12 text-center">
-                    <ShieldAlert className="mx-auto mb-3 h-6 w-6 text-destructive" />
-                    <p className="text-sm font-medium">用量记录读取失败</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {usageQuery.error.message}
-                    </p>
-                    <Button
-                      className="mt-4"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void usageQuery.refetch()}
-                    >
-                      重新读取
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-5">
-                    {keyHealth !== "connected" && (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                        {keyHealth === "invalid_or_revoked"
-                          ? "当前 Key 无法连接或已失效；下方官网近 30 天自用仍按本地记录展示。"
-                          : keyHealth === "unconfigured"
-                            ? "当前未配置 Key；下方官网近 30 天自用仍按本地记录展示。"
-                            : keyHealth === "pending"
-                              ? "当前 Key 正在等待刷新；下方官网近 30 天自用不受影响。"
-                              : "当前 Key 同步失败；下方官网近 30 天自用仍按本地记录展示。"}
-                      </div>
-                    )}
-                    <WebsiteNativeUsage usage={nativeUsage} />
-                  </div>
-                )}
+                <AdminAiUsageReport initialScope="website_frontend" />
               </CardContent>
             </Card>
           </div>

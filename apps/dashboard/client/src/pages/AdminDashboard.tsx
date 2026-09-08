@@ -1,3 +1,4 @@
+import { AdminAiUsageReport } from "@/components/AdminAiUsageReport";
 import { agentCostDisplay, type AgentCost } from "@/lib/agent-cost";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
@@ -2845,6 +2846,7 @@ export default function AdminDashboard({
             )}
           </PortalCard>
         )}
+        {!previewMode && systemAdmin && <AdminAiUsageReport />}
         {!previewMode && (
           <PortalCard className="overflow-hidden">
             <div className="border-b border-[#eee8f2] px-5 py-4 sm:px-6">

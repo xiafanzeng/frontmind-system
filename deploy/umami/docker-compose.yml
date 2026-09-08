@@ -39,6 +39,7 @@ services:
     volumes:
       - ./backup.sh:/opt/umami-backup.sh:ro
       - /srv/frontmind-system/backups/umami:/backups
+      - /srv/frontmind-system/runtime/website-data:/legacy:ro
     depends_on:
       umami-db: {condition: service_healthy}
     restart: unless-stopped

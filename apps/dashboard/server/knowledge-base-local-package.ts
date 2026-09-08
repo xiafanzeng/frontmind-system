@@ -1,7 +1,7 @@
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash } from "node:crypto";
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, notInArray, or } from "drizzle-orm";
 import JSZip from "jszip";
 import { z } from "zod";
 
@@ -591,9 +591,9 @@ export async function readDashboardOwnedKnowledgePackage(input: {
   buffer: Buffer;
   expected: {
     buildId: string;
-    generation: number;
+    generation?: number;
     revision: number;
-    companyName: string;
+    companyName?: string;
   };
   nodes?: readonly KnowledgeBaseBuildNode[];
   storeAsset?: (input: {
@@ -626,10 +626,10 @@ export async function readDashboardOwnedKnowledgePackage(input: {
   );
   if (
     manifest.buildId !== input.expected.buildId ||
-    manifest.generation !== input.expected.generation ||
+    (input.expected.generation !== undefined && manifest.generation !== input.expected.generation) ||
     manifest.revision !== input.expected.revision ||
-    manifest.companyName !==
-      customerSafeKnowledgeText(input.expected.companyName).trim() ||
+    (input.expected.companyName !== undefined && manifest.companyName !==
+      customerSafeKnowledgeText(input.expected.companyName).trim()) ||
     manifest.counts.nodes !== manifest.documents.length ||
     manifest.counts.files !== entries.length
   ) {
@@ -881,178 +881,177 @@ export function knowledgeBasePackageSweepWriteApplied(result: unknown) {
   );
 }
 
-export async function runKnowledgeBasePackageSweep(limit = 8) {
-  const db = await getDb();
-  if (!db) throw new Error("DATABASE_UNAVAILABLE");
-  const now = new Date();
-  const candidates = await db
-    .select()
-    .from(knowledgeBaseBuilds)
-    .where(
-      and(
-        eq(knowledgeBaseBuilds.status, "ready_to_publish"),
-        inArray(knowledgeBaseBuilds.packageStatus, ["preparing", "retrying"]),
-      ),
-    )
-    .orderBy(
-      asc(knowledgeBaseBuilds.packageNextRetryAt),
-      asc(knowledgeBaseBuilds.id),
-    )
-    .limit(Math.max(1, Math.min(50, limit * 3)));
-  let ready = 0;
-  let failed = 0;
-  for (const candidate of candidates) {
-    if (
-      !candidate.contentCompletedAt ||
-      (candidate.packageNextRetryAt && candidate.packageNextRetryAt > now) ||
-      ready + failed >= limit
-    ) {
-      continue;
-    }
-    const nodes = await db
-      .select()
-      .from(knowledgeBaseBuildNodes)
-      .where(eq(knowledgeBaseBuildNodes.buildId, candidate.id))
-      .orderBy(asc(knowledgeBaseBuildNodes.ordinal));
-    try {
-      if (
-        candidate.executionMode === "materialized_bundle_v1" &&
-        !isMaterializedBuildPublishable(candidate, {
-          knownLeafIds: nodes.map((node) => node.leafId),
-        })
-      ) {
-        throw new Error("MATERIALIZED_BUILD_NOT_PUBLISHABLE");
-      }
-      const materializedWorkingSet =
-        candidate.executionMode === "materialized_bundle_v1"
-          ? (
-              await readValidatedActiveKnowledgeBaseWorkingSet({
-                db,
-                build: candidate,
-              })
-            ).validated
-          : undefined;
-      const logo =
-        candidate.logoStorageKey &&
-        candidate.logoSha256 &&
-        candidate.logoBytes &&
-        candidate.logoFilename &&
-        candidate.logoMimeType &&
-        candidate.logoMimeType in LOGO_EXTENSION_BY_MIME
-          ? await readKnowledgeBuildArtifact({
-              userId: candidate.userId,
-              buildId: candidate.id,
-              generation: candidate.generation,
-              kind: "logo",
-              expectedSha256: candidate.logoSha256,
-              expectedBytes: candidate.logoBytes,
-              storageKey: candidate.logoStorageKey,
-            })
-              .then((buffer) => ({
-                buffer,
-                filename: candidate.logoFilename!,
-                mimeType:
-                  candidate.logoMimeType! as keyof typeof LOGO_EXTENSION_BY_MIME,
-                sha256: candidate.logoSha256!,
-                bytes: candidate.logoBytes!,
-              }))
-              // Logo is optional for package readiness. A missing/corrupt
-              // Logo is declared in the manifest instead of rolling content
-              // completion back or consuming the package retry budget.
-              .catch(() => null)
-          : null;
-      const built = await buildDashboardOwnedKnowledgePackage({
-        build: candidate,
-        nodes,
-        logo,
-        materializedWorkingSet,
-      });
-      const stored = await persistKnowledgeBuildArtifact({
-        userId: candidate.userId,
-        buildId: candidate.id,
-        generation: candidate.generation,
-        kind: "package",
-        buffer: built.buffer,
-        expectedSha256: built.sha256,
-        storageKey: knowledgeBuildArtifactLocalPackageStorageKey({
-          userId: candidate.userId,
-          buildId: candidate.id,
-          generation: candidate.generation,
-          revision: candidate.revision,
-        }),
-      });
-      const taskId = knowledgeBasePackageWriterTaskId(candidate);
-      const result = await db
-        .update(knowledgeBaseBuilds)
-        .set({
-          packageStatus: "ready",
-          packageAttemptCount: candidate.packageAttemptCount + 1,
-          packageNextRetryAt: null,
-          packageLastErrorCode: null,
-          packageRevision: candidate.revision,
-          packageTaskId: taskId,
-          packageOutputItemId: `dashboard-local:${candidate.id}:${candidate.revision}`,
-          packageFileId: null,
-          packageFilename: `${candidate.companyName}-knowledge-base.zip`.slice(
-            0,
-            512,
-          ),
-          packageDescriptorHash: sha256(
-            `dashboard-local:${candidate.id}:${candidate.generation}:${candidate.revision}:${built.sha256}`,
-          ),
-          packageStorageKey: stored.storageKey,
-          packageArchiveSha256: stored.sha256,
-          packageSizeBytes: stored.bytes,
-        })
-        .where(
-          and(
-            eq(knowledgeBaseBuilds.id, candidate.id),
-            enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
-            eq(knowledgeBaseBuilds.generation, candidate.generation),
-            eq(knowledgeBaseBuilds.revision, candidate.revision),
-            eq(knowledgeBaseBuilds.status, "ready_to_publish"),
-            eq(
-              knowledgeBaseBuilds.packageAttemptCount,
-              candidate.packageAttemptCount,
-            ),
-            inArray(knowledgeBaseBuilds.packageStatus, [
-              "preparing",
-              "retrying",
-            ]),
-          ),
-        );
-      if (knowledgeBasePackageSweepWriteApplied(result)) ready += 1;
-    } catch (error) {
-      const errorCode =
-        error instanceof Error && /^[A-Z][A-Z0-9_]{2,127}$/u.test(error.message)
-          ? error.message
-          : "LOCAL_PACKAGE_BUILD_FAILED";
-      const failure = nextKnowledgeBasePackageFailure({
-        packageAttemptCount: candidate.packageAttemptCount,
-        now,
-        errorCode,
-      });
-      const result = await db
-        .update(knowledgeBaseBuilds)
-        .set(failure)
-        .where(
-          and(
-            eq(knowledgeBaseBuilds.id, candidate.id),
-            enterpriseOwnerPredicate(knowledgeBaseBuilds, candidate.userId),
-            eq(knowledgeBaseBuilds.generation, candidate.generation),
-            eq(knowledgeBaseBuilds.revision, candidate.revision),
-            eq(
-              knowledgeBaseBuilds.packageAttemptCount,
-              candidate.packageAttemptCount,
-            ),
-            inArray(knowledgeBaseBuilds.packageStatus, [
-              "preparing",
-              "retrying",
-            ]),
-          ),
-        );
-      if (knowledgeBasePackageSweepWriteApplied(result)) failed += 1;
-    }
+const PACKAGE_UPDATE_DEADLINE_MS = 120_000;
+
+export class KnowledgeBasePackageUpdateError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(message);
+    this.name = "KnowledgeBasePackageUpdateError";
   }
-  return { scanned: candidates.length, ready, failed };
+}
+
+/** Called only by an explicit update request, never by node edits or a timer. */
+export async function generateKnowledgeBasePackageForUpdate(requestedBuild: Pick<
+  KnowledgeBaseBuild,
+  "id" | "userId" | "generation" | "revision" | "stateEpoch" | "contentVersion"
+>, onClaimed?: () => void) {
+  const db = await getDb();
+  if (!db) throw new Error("数据库暂不可用，请稍后重新更新知识库");
+  const authority = and(
+    eq(knowledgeBaseBuilds.id, requestedBuild.id),
+    enterpriseOwnerPredicate(knowledgeBaseBuilds, requestedBuild.userId),
+    eq(knowledgeBaseBuilds.generation, requestedBuild.generation),
+    eq(knowledgeBaseBuilds.revision, requestedBuild.revision),
+    eq(knowledgeBaseBuilds.stateEpoch, requestedBuild.stateEpoch),
+    requestedBuild.contentVersion == null
+      ? isNull(knowledgeBaseBuilds.contentVersion)
+      : eq(knowledgeBaseBuilds.contentVersion, requestedBuild.contentVersion),
+    eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+    isNull(knowledgeBaseBuilds.activeTurnId),
+  );
+  const [candidate] = await db.select().from(knowledgeBaseBuilds).where(authority).limit(1);
+  const draftChanged = () => new KnowledgeBasePackageUpdateError(
+    "LOCAL_PACKAGE_WORKING_DRAFT_CHANGED",
+    "工作稿已变化，请重新确认后更新知识库",
+  );
+  if (!candidate) throw draftChanged();
+  const now = new Date();
+  const attempt = candidate.packageAttemptCount + 1;
+  // A durable claim prevents simultaneous browser requests or different web
+  // processes from generating the same revision. An abandoned claim can only
+  // be taken over by another explicit update after its deadline.
+  const claimed = await db.update(knowledgeBaseBuilds).set({
+    packageStatus: "preparing",
+    packageAttemptCount: attempt,
+    packageNextRetryAt: new Date(now.getTime() + PACKAGE_UPDATE_DEADLINE_MS + 30_000),
+    packageLastErrorCode: null,
+    updatedAt: now,
+  }).where(and(
+    authority,
+    eq(knowledgeBaseBuilds.packageAttemptCount, candidate.packageAttemptCount),
+    or(
+      notInArray(knowledgeBaseBuilds.packageStatus, ["preparing", "retrying"]),
+      isNull(knowledgeBaseBuilds.packageNextRetryAt),
+      lte(knowledgeBaseBuilds.packageNextRetryAt, now),
+    ),
+  ));
+  if (!knowledgeBasePackageSweepWriteApplied(claimed)) {
+    throw new KnowledgeBasePackageUpdateError(
+      "KNOWLEDGE_UPDATE_IN_PROGRESS",
+      "知识库正在更新，请稍候查看结果，当前正式版本继续可用",
+    );
+  }
+  onClaimed?.();
+  const claim = and(authority,
+    eq(knowledgeBaseBuilds.packageAttemptCount, attempt),
+    eq(knowledgeBaseBuilds.packageStatus, "preparing"));
+  const startedAt = Date.now();
+  let stage = "validation";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stageLog = (next: string, details: Record<string, unknown> = {}) => {
+    console.info("[KnowledgeBasePackage] update_stage", JSON.stringify({
+      buildId: candidate.id, generation: candidate.generation,
+      revision: candidate.revision, contentVersion: candidate.contentVersion,
+      attempt, stage, elapsedMs: Date.now() - startedAt, ...details,
+    }));
+    stage = next;
+  };
+  try {
+    // Only byte preparation runs under this deadline. Late preparation cannot
+    // bind a ZIP after timeout or overwrite an already-published snapshot.
+    const prepared = await Promise.race([
+      (async () => {
+        const nodes = await db.select().from(knowledgeBaseBuildNodes)
+          .where(eq(knowledgeBaseBuildNodes.buildId, candidate.id))
+          .orderBy(asc(knowledgeBaseBuildNodes.ordinal));
+        if (candidate.executionMode === "materialized_bundle_v1" &&
+          !isMaterializedBuildPublishable(candidate, {
+            knownLeafIds: nodes.map((node) => node.leafId),
+          })) throw new Error("MATERIALIZED_BUILD_NOT_PUBLISHABLE");
+        const materializedWorkingSet = candidate.executionMode === "materialized_bundle_v1"
+          ? (await readValidatedActiveKnowledgeBaseWorkingSet({ db, build: candidate })).validated
+          : undefined;
+        const logo = candidate.logoStorageKey && candidate.logoSha256 &&
+          candidate.logoBytes && candidate.logoFilename && candidate.logoMimeType &&
+          candidate.logoMimeType in LOGO_EXTENSION_BY_MIME
+          ? await readKnowledgeBuildArtifact({
+              userId: candidate.userId, buildId: candidate.id,
+              generation: candidate.generation, kind: "logo",
+              expectedSha256: candidate.logoSha256, expectedBytes: candidate.logoBytes,
+              storageKey: candidate.logoStorageKey,
+            }).then((buffer) => ({ buffer, filename: candidate.logoFilename!,
+              mimeType: candidate.logoMimeType! as keyof typeof LOGO_EXTENSION_BY_MIME,
+              sha256: candidate.logoSha256!, bytes: candidate.logoBytes!,
+            })).catch(() => null)
+          : null;
+        const storageKey = knowledgeBuildArtifactLocalPackageStorageKey({
+          userId: candidate.userId, buildId: candidate.id,
+          generation: candidate.generation, revision: candidate.revision,
+        });
+        const expected = { buildId: candidate.id, generation: candidate.generation,
+          revision: candidate.revision, companyName: candidate.companyName };
+        if (candidate.packageRevision === candidate.revision &&
+          candidate.packageStorageKey === storageKey &&
+          candidate.packageArchiveSha256 && candidate.packageSizeBytes) {
+          try {
+            const buffer = await readKnowledgeBuildArtifact({
+              userId: candidate.userId, buildId: candidate.id,
+              generation: candidate.generation, kind: "package", storageKey,
+              expectedSha256: candidate.packageArchiveSha256,
+              expectedBytes: candidate.packageSizeBytes,
+            });
+            await readDashboardOwnedKnowledgePackage({ buffer, expected, nodes });
+            stageLog("storage", { reused: true, bytes: buffer.length });
+            return { buffer, sha256: candidate.packageArchiveSha256, storageKey, reused: true };
+          } catch { /* Regenerate only this explicitly requested revision. */ }
+        }
+        stageLog("assembly");
+        const built = await buildDashboardOwnedKnowledgePackage({
+          build: candidate, nodes, logo, materializedWorkingSet,
+        });
+        await readDashboardOwnedKnowledgePackage({ buffer: built.buffer, expected, nodes });
+        stageLog("storage", { bytes: built.buffer.length, sha256: built.sha256 });
+        return { buffer: built.buffer, sha256: built.sha256, storageKey, reused: false };
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("LOCAL_PACKAGE_TIMEOUT")), PACKAGE_UPDATE_DEADLINE_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    const stored = prepared.reused
+      ? { storageKey: prepared.storageKey, sha256: prepared.sha256, bytes: prepared.buffer.length }
+      : await persistKnowledgeBuildArtifact({
+          userId: candidate.userId, buildId: candidate.id, generation: candidate.generation,
+          kind: "package", buffer: prepared.buffer, expectedSha256: prepared.sha256,
+          storageKey: prepared.storageKey,
+        });
+    const result = await db.update(knowledgeBaseBuilds).set({
+      packageStatus: "ready", packageNextRetryAt: null, packageLastErrorCode: null,
+      packageRevision: candidate.revision,
+      packageTaskId: knowledgeBasePackageWriterTaskId(candidate),
+      packageOutputItemId: `dashboard-local:${candidate.id}:${candidate.revision}`,
+      packageFileId: null,
+      packageFilename: `${candidate.companyName}-knowledge-base.zip`.slice(0, 512),
+      packageDescriptorHash: sha256(`dashboard-local:${candidate.id}:${candidate.generation}:${candidate.revision}:${prepared.sha256}`),
+      packageStorageKey: stored.storageKey, packageArchiveSha256: stored.sha256,
+      packageSizeBytes: stored.bytes, updatedAt: new Date(),
+    }).where(claim);
+    if (!knowledgeBasePackageSweepWriteApplied(result)) throw draftChanged();
+    stageLog("ready", { bytes: stored.bytes, sha256: stored.sha256, reused: prepared.reused });
+    return { scanned: 1, ready: 1, failed: 0 };
+  } catch (error) {
+    const code = error instanceof KnowledgeBasePackageUpdateError ? error.code
+      : error instanceof Error && /^[A-Z][A-Z0-9_]{2,127}$/u.test(error.message)
+        ? error.message : "LOCAL_PACKAGE_BUILD_FAILED";
+    await db.update(knowledgeBaseBuilds).set({
+      packageStatus: "attention_required", packageNextRetryAt: null,
+      packageLastErrorCode: code, updatedAt: new Date(),
+    }).where(claim);
+    stageLog("failed", { errorCode: code });
+    if (error instanceof KnowledgeBasePackageUpdateError) throw error;
+    throw new KnowledgeBasePackageUpdateError(code,
+      "最终 ZIP 生成失败，修改已保存，当前正式版本未受影响，请重新点击更新知识库");
+  } finally {
+    clearTimeout(timer);
+  }
 }

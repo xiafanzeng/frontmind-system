@@ -324,12 +324,12 @@
 .monitoring-module :where(.publishing-page) .publishing-media-mark {
   --publishing-mark: #4f24c9;
   display: grid;
-  width: 43px;
-  height: 43px;
-  flex: 0 0 43px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
   place-items: center;
   border: 3px solid white;
-  border-radius: 50%;
+  border-radius: 10px;
   background: linear-gradient(
     145deg,
     var(--publishing-mark),
@@ -348,8 +348,6 @@
 .monitoring-module
   :where(.publishing-page)
   .publishing-media-mark.is-placeholder {
-  grid-template-rows: 1fr 11px;
-  padding-top: 5px;
   border-width: 2px;
 }
 
@@ -357,27 +355,14 @@
   :where(.publishing-page)
   .publishing-media-mark.is-placeholder
   b {
-  max-width: 35px;
-  font-size: var(--operator-caption-size, 9px);
+  max-width: 42px;
+  font-size: var(--operator-caption-size, 10px);
   font-weight: 800;
   letter-spacing: -0.4px;
   line-height: 1;
   overflow: hidden;
 }
 
-.monitoring-module
-  :where(.publishing-page)
-  .publishing-media-mark.is-placeholder
-  small {
-  width: 100%;
-  padding: 1px 0 2px;
-  background: rgb(0 0 0 / 28%);
-  color: #fff;
-  font-size: 7px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  line-height: 1;
-}
 
 .monitoring-module :where(.publishing-page) .publishing-media-mark.has-image {
   border-width: 1px;

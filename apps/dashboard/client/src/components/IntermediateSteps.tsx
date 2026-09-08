@@ -87,11 +87,11 @@ function StepItem({
         <StepIcon type={step.type} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs text-muted-foreground/80 leading-relaxed truncate">
+        <p className="text-sm text-muted-foreground/80 leading-relaxed truncate">
           {step.label}
         </p>
         {step.description && (
-          <p className="text-xs text-muted-foreground/50 mt-0.5 line-clamp-2">
+          <p className="text-sm text-muted-foreground/60 mt-0.5 line-clamp-2">
             {step.description}
           </p>
         )}
@@ -124,7 +124,7 @@ function StepGroupItem({
       {/* Group header - clickable to expand/collapse */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2.5 w-full text-left py-1.5 group hover:bg-muted/30 rounded-lg transition-colors relative z-10"
+        className="flex items-center gap-2 w-full text-left py-1 group hover:bg-muted/30 rounded-lg transition-colors relative z-10"
       >
         {/* Status dot */}
         <div
@@ -141,13 +141,13 @@ function StepGroupItem({
         </div>
 
         {/* Title */}
-        <span className="text-xs font-medium text-foreground/70 flex-1 truncate">
+        <span className="text-[11px] font-medium text-foreground/70 flex-1 truncate">
           {group.title}
         </span>
 
         {/* Step count and chevron */}
         <div className="flex items-center gap-1.5 pr-1">
-          <span className="text-xs text-muted-foreground/50">
+          <span className="text-[11px] text-muted-foreground/50">
             {group.steps.length}
           </span>
           <ChevronDown

@@ -1127,6 +1127,7 @@ export async function createKnowledgeSnapshot(input: {
   sourceConversationId?: string;
   sourceBuildId?: string;
   sourceBuildRevision?: number;
+  sourceBuildContentVersion?: number;
   sourceTaskId?: string;
   sourceArtifactHash?: string;
   archiveHash?: string;
@@ -1247,6 +1248,8 @@ export async function createKnowledgeSnapshot(input: {
         input.sourceArtifactHash === undefined ||
         input.archiveHash === undefined ||
         builds[0].revision !== input.sourceBuildRevision ||
+        (input.sourceBuildContentVersion !== undefined &&
+          builds[0].contentVersion !== input.sourceBuildContentVersion) ||
         builds[0].packageRevision !== input.sourceBuildRevision ||
         knowledgeBasePackageWriterTaskId(builds[0]) !== input.sourceTaskId ||
         builds[0].packageTaskId !== input.sourceTaskId ||

@@ -2069,6 +2069,31 @@
 .monitoring-module .billing-ledger-empty svg {
   color: #99a1b0;
 }
+.monitoring-module .billing-ledger-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 4px 0;
+  color: #7b8492;
+  font-size: 11px;
+}
+.monitoring-module .billing-ledger-pagination button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid #dfe3ea;
+  border-radius: 6px;
+  background: #fff;
+  color: #4f5968;
+}
+.monitoring-module .billing-ledger-pagination button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+.monitoring-module .billing-ledger-pagination strong {
+  color: #4b246b;
+  font-weight: 650;
+}
 .monitoring-module .account-password-form {
   width: 100%;
   grid-template-columns: repeat(3, minmax(180px, 1fr)) auto;

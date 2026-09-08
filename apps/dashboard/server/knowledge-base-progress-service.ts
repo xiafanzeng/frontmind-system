@@ -1507,6 +1507,9 @@ type KnowledgeBasePackageProjectionBuild = Pick<
   | "canonicalTaskId"
   | "upstreamTaskId"
   | "packageStatus"
+  | "packageAttemptCount"
+  | "packageLastErrorCode"
+  | "packageNextRetryAt"
   | "packageRevision"
   | "packageTaskId"
   | "packageOutputItemId"
@@ -1561,9 +1564,14 @@ export function knowledgeBasePackageProjectionCompatibility(
   ].includes(String(build.packageStatus || ""))
     ? (build.packageStatus as KnowledgeBaseObservationDto["packageState"])
     : "not_started";
+  const expiredUpdate =
+    (storedPackageState === "preparing" || storedPackageState === "retrying") &&
+    (build.packageNextRetryAt
+      ? build.packageNextRetryAt.getTime() <= Date.now()
+      : build.updatedAt.getTime() + 180_000 <= Date.now());
   const packageState = packageAllowed
     ? ("ready" as const)
-    : storedPackageState === "ready"
+    : storedPackageState === "ready" || expiredUpdate
       ? ("attention_required" as const)
       : storedPackageState;
   const contentCompletedAt =
@@ -1812,8 +1820,15 @@ function buildDto(
           warningCodes: materializedWarningCodes,
         }
       : {}),
+    updateAllowed: !resetRequired && !build.activeTurnId &&
+      build.status === "ready_to_publish" && total > 0 && handled === total &&
+      build.currentLeafId === null &&
+      (build.executionMode !== "materialized_bundle_v1" ||
+        isMaterializedBuildPublishable(build, { knownLeafIds: rows.map((row) => row.leafId) })),
     packageAllowed: packageCompatibility.packageAllowed,
     packageState: packageCompatibility.packageState,
+    packageAttemptCount: build.packageAttemptCount,
+    packageLastErrorCode: build.packageLastErrorCode,
   };
 }
 
@@ -3448,7 +3463,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       code: "KNOWLEDGE_BASE_PACKAGE_ATTENTION_REQUIRED",
       severity: "warning",
       message:
-        "知识库内容已完成，下载包暂时无法生成；已完成正文不受影响，系统不会重复推进内容。",
+        "最终 ZIP 更新未完成，修改已保存，当前正式版本未受影响，请重新点击更新知识库。",
       retryable: false,
       failureClass: "terminal_nonregenerable",
       recoveryAction: "contact_support",
@@ -5248,6 +5263,9 @@ export async function reconcileKnowledgeBaseProgress(input: {
       }
       const summary = getKnowledgeBaseProgressSummary(nextState);
       const contentCompleted = canPackageKnowledgeBase(nextState);
+      // The customer package is always produced by the Dashboard worker from
+      // the accepted node rows. Provider archives are optional inputs for
+      // legacy compatibility only and must never gate a v4 completion.
       const packageDescriptors = contentCompleted
         ? collectKnowledgeArchiveDescriptors(
             Array.isArray(authoritativeOutput) ? authoritativeOutput : [],
@@ -5256,12 +5274,9 @@ export async function reconcileKnowledgeBaseProgress(input: {
       const packageDescriptor =
         packageDescriptors.length === 1 ? packageDescriptors[0] : undefined;
       const stagedPackage = input.stagedArtifacts?.package;
-      // Content completion and package readiness are deliberately separate.
-      // A missing, duplicate or not-yet-staged provider archive is a package
-      // worker concern; it must never roll back the final semantic transition
-      // or make the last accepted node disappear from the customer UI.
-      const packageReady = Boolean(
-        contentCompleted &&
+      const legacyProviderPackageReady = Boolean(
+        build.skillVersion !== "4" &&
+          contentCompleted &&
           stagedPackage &&
           packageDescriptor &&
           stagedPackage.sourceDescriptorHash ===
@@ -5274,17 +5289,20 @@ export async function reconcileKnowledgeBaseProgress(input: {
           Number.isSafeInteger(stagedPackage.bytes) &&
           stagedPackage.bytes > 0,
       );
+      const packageReady = legacyProviderPackageReady;
       const packageLastErrorCode = !contentCompleted
         ? null
-        : packageDescriptors.length > 1
-          ? "MULTIPLE_PROVIDER_PACKAGES"
-          : !packageDescriptor
-            ? "PROVIDER_PACKAGE_MISSING"
-            : !stagedPackage
-              ? "PACKAGE_NOT_STAGED"
-              : packageReady
-                ? null
-                : "PACKAGE_VALIDATION_PENDING";
+        : build.skillVersion === "4"
+          ? null
+          : packageDescriptors.length > 1
+            ? "MULTIPLE_PROVIDER_PACKAGES"
+            : !packageDescriptor
+              ? "PROVIDER_PACKAGE_MISSING"
+              : !stagedPackage
+                ? "PACKAGE_NOT_STAGED"
+                : packageReady
+                  ? null
+                  : "PACKAGE_VALIDATION_PENDING";
       const presentationLeaf = nextState.currentLeafId
         ? nextState.leaves.find(
             (leaf) => leaf.id === nextState.currentLeafId,
@@ -5459,18 +5477,15 @@ export async function reconcileKnowledgeBaseProgress(input: {
           awaitingResponseSince: null,
           completedAt: contentCompleted ? new Date() : null,
           contentCompletedAt: contentCompleted ? new Date() : null,
-          packageStatus: contentCompleted
-            ? packageReady
-              ? "ready"
-              : "preparing"
-            : "not_started",
+          // Confirming content never schedules ZIP generation. Only the
+          // explicit knowledge update endpoint can start that work.
+          packageStatus: packageReady ? "ready" : "not_started",
           packageAttemptCount: contentCompleted
             ? packageReady
               ? Math.max(1, build.packageAttemptCount)
               : 0
             : 0,
-          packageNextRetryAt:
-            contentCompleted && !packageReady ? new Date() : null,
+          packageNextRetryAt: null,
           packageLastErrorCode,
           packageRevision: packageReady ? nextState.revision : null,
           packageTaskId: packageReady
@@ -5660,9 +5675,12 @@ export async function reconcileKnowledgeBaseProgress(input: {
   }
 }
 
-export async function assertKnowledgeBasePublishable(input: {
+export async function assertKnowledgeBaseReadyForUpdate(input: {
   userId: number;
   conversationId: string;
+  expectedBuildId?: string;
+  expectedRevision?: number;
+  expectedContentVersion?: number;
 }) {
   const db = await requireDb();
   const conversationId = normalizeConversationId(input.conversationId);
@@ -5673,11 +5691,18 @@ export async function assertKnowledgeBasePublishable(input: {
       "当前对话没有知识库构建记录",
     );
   }
+  if (
+    (input.expectedBuildId !== undefined && input.expectedBuildId !== build.id) ||
+    (input.expectedRevision !== undefined && input.expectedRevision !== build.revision) ||
+    (input.expectedContentVersion !== undefined && input.expectedContentVersion !== build.contentVersion)
+  ) {
+    throw new KnowledgeBaseBuildError("PUBLISH_BLOCKED", "工作稿已变化，请重新确认后更新知识库");
+  }
   const rows = await loadNodes(db, build.id);
   if (build.status === "published" && build.publishedSnapshotId) {
     return build;
   }
-  if (build.status !== "ready_to_publish") {
+  if (build.status !== "ready_to_publish" || build.activeTurnId) {
     throw new KnowledgeBaseBuildError(
       "PUBLISH_BLOCKED",
       "知识库尚未完成全部节点确认",
@@ -5705,6 +5730,19 @@ export async function assertKnowledgeBasePublishable(input: {
       `知识库尚未逐项走完，当前完成进度为 ${handled}/${rows.length}`,
     );
   }
+  return build;
+}
+
+/** Strict final commit/download gate, checked again after on-demand ZIP generation. */
+export async function assertKnowledgeBasePublishable(input: {
+  userId: number;
+  conversationId: string;
+  expectedBuildId?: string;
+  expectedRevision?: number;
+  expectedContentVersion?: number;
+}) {
+  const build = await assertKnowledgeBaseReadyForUpdate(input);
+  if (build.status === "published" && build.publishedSnapshotId) return build;
   // Keep the publish mutation on the same dual-read contract as progress and
   // artifact download. Migration 0061 gives an already-complete legacy row
   // `packageStatus=not_started`; the immutable package tuple remains the

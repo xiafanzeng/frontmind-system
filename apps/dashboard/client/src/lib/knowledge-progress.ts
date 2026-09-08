@@ -232,6 +232,16 @@ function normalizeObservation(payload: any): KnowledgeBaseObservationDto {
       source.contentCompletedAt >= 0)
       ? source.contentCompletedAt
       : undefined;
+  const packageAttemptCountCandidate =
+    source.packageAttemptCount ?? progress?.packageAttemptCount;
+  const packageAttemptCount =
+    typeof packageAttemptCountCandidate === "number" &&
+    Number.isSafeInteger(packageAttemptCountCandidate) &&
+    packageAttemptCountCandidate >= 0
+      ? packageAttemptCountCandidate
+      : undefined;
+  const packageLastErrorCode =
+    source.packageLastErrorCode ?? progress?.packageLastErrorCode;
   const contentAvailabilityCandidate =
     source.contentAvailability ?? progress?.contentAvailability;
   const contentAvailability = ["none", "partial", "complete"].includes(
@@ -318,6 +328,8 @@ function normalizeObservation(payload: any): KnowledgeBaseObservationDto {
     ...(processingPhase !== undefined ? { processingPhase } : {}),
     ...(contentState ? { contentState } : {}),
     ...(packageState ? { packageState } : {}),
+    ...(packageAttemptCount !== undefined ? { packageAttemptCount } : {}),
+    ...(packageLastErrorCode !== undefined ? { packageLastErrorCode } : {}),
     ...(publicationState ? { publicationState } : {}),
     ...(contentCompletedAt !== undefined ? { contentCompletedAt } : {}),
     ...(contentAvailability ? { contentAvailability } : {}),

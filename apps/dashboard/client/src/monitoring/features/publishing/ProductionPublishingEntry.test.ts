@@ -239,7 +239,7 @@ describe("createProductionPublisherGateway", () => {
   it("maps capability and advanced facet counts into customer labels", async () => {
     const gateway = createProductionPublisherGateway(clientWith());
 
-    const facets = await gateway.getMediaFacets("news");
+    const facets = await gateway.getMediaFacets({ kind: "news", query: "", page: 1, pageSize: 20 });
 
     expect(facets.imageSupports).toEqual([
       { value: "verified", count: 1, label: "支持图文" },

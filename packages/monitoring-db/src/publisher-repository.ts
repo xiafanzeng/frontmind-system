@@ -1157,11 +1157,71 @@ export class PublishingRepository {
 
   private async loadPublisherMediaFacets(input: Partial<PublisherMediaListInput> = {}) {
     const conditions = [
-      eq(publisherMediaResources.isActive, true),
+      input.includeInactive
+        ? isNotNull(publisherMediaResources.mediaKind)
+        : eq(publisherMediaResources.isActive, true),
       isNotNull(publisherMediaResources.mediaKind),
     ];
     if (input.kind)
       conditions.push(eq(publisherMediaResources.mediaKind, input.kind));
+    if (input.query) {
+      conditions.push(
+        or(
+          like(publisherMediaResources.name, `%${escapeLike(input.query)}%`),
+          like(
+            publisherMediaResources.externalResourceId,
+            `%${escapeLike(input.query)}%`,
+          ),
+          like(publisherMediaResources.platform, `%${escapeLike(input.query)}%`),
+        )!,
+      );
+    }
+    if (input.batchQuery?.length) {
+      const terms = [...new Set(input.batchQuery.map((term) => term.trim()))];
+      conditions.push(
+        or(
+          ...terms.flatMap((term) => [
+            eq(publisherMediaResources.externalResourceId, term),
+            like(publisherMediaResources.name, `%${escapeLike(term)}%`),
+          ]),
+        )!,
+      );
+    }
+    if (input.platform)
+      conditions.push(eq(publisherMediaResources.platform, input.platform));
+    if (input.taxonomy)
+      conditions.push(eq(publisherMediaResources.taxonomy, input.taxonomy));
+    if (input.mediaType)
+      conditions.push(eq(publisherMediaResources.mediaType, input.mediaType));
+    if (input.area)
+      conditions.push(eq(publisherMediaResources.area, input.area));
+    if (input.recommended !== undefined)
+      conditions.push(eq(publisherMediaResources.recommended, input.recommended));
+    if (input.includeType)
+      conditions.push(eq(publisherMediaResources.includeType, input.includeType));
+    if (input.publishSpeed)
+      conditions.push(eq(publisherMediaResources.publishSpeed, input.publishSpeed));
+    const entryLevel = input.entryLevel ?? input.entryType;
+    if (entryLevel)
+      conditions.push(eq(publisherMediaResources.entryLevel, entryLevel));
+    if (input.linkType)
+      conditions.push(eq(publisherMediaResources.linkType, input.linkType));
+    if (input.minimumPcWeight !== undefined)
+      conditions.push(gte(publisherMediaResources.pcWeight, input.minimumPcWeight));
+    if (input.minimumIncludeRate !== undefined)
+      conditions.push(gte(publisherMediaResources.includeRateBasisPoints, Math.round(input.minimumIncludeRate * 100)));
+    if (input.minimumSuccessRate !== undefined)
+      conditions.push(gte(publisherMediaResources.successRateBasisPoints, Math.round(input.minimumSuccessRate * 100)));
+    if (input.minimumPriceTenThousandths !== undefined)
+      conditions.push(gte(publisherMediaResources.priceTenThousandths, publisherMoneyFromApiString(input.minimumPriceTenThousandths)));
+    if (input.maximumPriceTenThousandths !== undefined)
+      conditions.push(lte(publisherMediaResources.priceTenThousandths, publisherMoneyFromApiString(input.maximumPriceTenThousandths)));
+    if (input.imageSupport)
+      conditions.push(eq(publisherMediaCapabilities.imageSupport, input.imageSupport));
+    if (input.authenticated !== undefined)
+      conditions.push(eq(publisherMediaResources.authenticated, input.authenticated));
+    if (input.festivalPublishable !== undefined)
+      conditions.push(eq(publisherMediaResources.festivalPublishable, input.festivalPublishable));
     const where = and(...conditions);
     const facet = async (
       column:

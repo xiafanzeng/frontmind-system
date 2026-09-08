@@ -37,7 +37,7 @@ describe("content insights interface preview", () => {
       readContentInsightsRoute(
         "?view=content-insights&contentModule=settings&contentTab=share",
       ),
-    ).toEqual({ section: "widget", module: "settings", tab: "share" });
+    ).toEqual({ section: "widget", module: "settings", tab: "basic" });
     expect(
       readContentInsightsRoute("?contentModule=unknown&contentTab=unknown"),
     ).toEqual({ section: "analytics", module: "overview", tab: "basic" });
@@ -64,7 +64,7 @@ describe("content insights interface preview", () => {
     },
   );
 
-  it("retains local widget edits across module tabs and only copies a valid preview link", () => {
+  it("retains local widget edits across module tabs without exposing install or share internals", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     render(<ContentInsightsWorkspace />);
@@ -78,14 +78,9 @@ describe("content insights interface preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "分析" }));
     fireEvent.click(screen.getByRole("button", { name: "AI 部件" }));
     expect(screen.getByLabelText("机器人名称")).toHaveValue("界面样式助手");
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "分享地址" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    expect(screen.getByLabelText("预览地址")).toHaveValue(
-      `${window.location.origin}/?view=content-insights&contentModule=settings&contentTab=basic`,
-    );
-    expect(window.location.search).toContain("contentTab=share");
+    expect(screen.queryByRole("tab", { name: "安装代码" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "分享地址" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/FrontMindPreview\.switchState/)).not.toBeInTheDocument();
     expect(screen.queryByText("立即续费")).not.toBeInTheDocument();
     expect(screen.queryByText("推荐问题")).not.toBeInTheDocument();
     expect(fetchSpy).not.toHaveBeenCalled();

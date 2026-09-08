@@ -80,6 +80,21 @@ function publication(
 }
 
 describe("authenticated advanced knowledge publication", () => {
+  it("keeps the active publication usable while a later draft is edited or packaged", () => {
+    for (const status of ["confirming", "ready_to_publish"]) {
+      expect(isAuthenticatedAdvancedKnowledgePublication(publication({ build: {
+        revision: 42, status, currentLeafId: "leaf-3", confirmedCount: 39,
+        needsVerificationCount: 1, packageRevision: 42,
+        packageArchiveSha256: "b".repeat(64),
+      }}))).toBe(true);
+    }
+    expect(isAuthenticatedAdvancedKnowledgePublication(publication({
+      snapshot: { sourceArtifactHash: null }, build: { revision: 42 },
+    }))).toBe(false);
+    expect(isAuthenticatedAdvancedKnowledgePublication(publication({
+      snapshot: { status: "archived" }, build: { revision: 42 },
+    }))).toBe(false);
+  });
   it("accepts only a fully traversed build transactionally linked to its snapshot", () => {
     expect(isAuthenticatedAdvancedKnowledgePublication(publication())).toBe(
       true,

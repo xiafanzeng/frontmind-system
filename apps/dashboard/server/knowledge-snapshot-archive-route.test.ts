@@ -266,6 +266,84 @@ describe("knowledge snapshot ZIP endpoint", () => {
     });
   });
 
+  it.each([
+    ["editing", 8, "confirming"],
+    ["update failed", 8, "failed"],
+    ["new version published", 9, "published"],
+  ])(
+    "serves the immutable published ZIP after %s without current build nodes",
+    async (_phase, currentRevision, currentStatus) => {
+      const local = await dashboardOwnedArchive();
+      const immutableValidation: KnowledgeSnapshotDownloadValidation = {
+        kind: "dashboard_owned",
+        immutableSnapshot: true,
+        buildId,
+        archiveSha256: local.sha256,
+        archiveBytes: local.buffer.length,
+        expected: { buildId, revision: 7 },
+      };
+      mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+        id: snapshotId,
+        userId: 42,
+        sourceFileName: "FrontMind-knowledge-base.zip",
+        sourceBuildId: buildId,
+        sourceBuildRevision: 7,
+        sourceConversationId: "conversation-1",
+        sourceArtifactHash: local.sha256,
+        archiveHash: local.sha256,
+        totalBytes: local.buffer.length,
+      });
+      mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(local.buffer);
+      mocks.loadKnowledgeSnapshotDownloadValidation.mockResolvedValueOnce(
+        immutableValidation,
+      );
+
+      const response = await fetch(await startApp(), {
+        headers: { "x-test-auth": "user" },
+      });
+
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(local.buffer);
+      expect(currentRevision).toBeGreaterThan(7);
+      expect(["confirming", "failed", "published"]).toContain(currentStatus);
+    },
+  );
+
+  it("refuses hash-tampered bytes for an immutable published ZIP", async () => {
+    const local = await dashboardOwnedArchive();
+    const tampered = Buffer.from(local.buffer);
+    tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
+    mocks.getKnowledgeSnapshotForWorkspace.mockResolvedValueOnce({
+      id: snapshotId,
+      userId: 42,
+      sourceFileName: "FrontMind-knowledge-base.zip",
+      sourceBuildId: buildId,
+      sourceBuildRevision: 7,
+      sourceConversationId: "conversation-1",
+      sourceArtifactHash: local.sha256,
+      archiveHash: local.sha256,
+      totalBytes: local.buffer.length,
+    });
+    mocks.readKnowledgeSnapshotArchive.mockResolvedValueOnce(tampered);
+    mocks.loadKnowledgeSnapshotDownloadValidation.mockResolvedValueOnce({
+      kind: "dashboard_owned",
+      immutableSnapshot: true,
+      buildId,
+      archiveSha256: local.sha256,
+      archiveBytes: local.buffer.length,
+      expected: { buildId, revision: 7 },
+    });
+
+    const response = await fetch(await startApp(), {
+      headers: { "x-test-auth": "user" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "KNOWLEDGE_ARCHIVE_BINDING_INVALID" },
+    });
+  });
+
   it("refuses a Dashboard-owned snapshot whose DB binding no longer matches", async () => {
     mocks.loadKnowledgeSnapshotDownloadValidation.mockRejectedValueOnce(
       new KnowledgeSnapshotDownloadBindingError(),

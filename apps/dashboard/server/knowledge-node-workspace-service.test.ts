@@ -43,6 +43,7 @@ vi.mock("./knowledge-base-public-resource", async (actual) => ({
 
 import {
   getKnowledgeNodeDetails,
+  searchKnowledgeNodes,
   saveKnowledgeNodeContent,
   knowledgeNodeSaveSchema,
 } from "./knowledge-node-workspace-service";
@@ -307,6 +308,31 @@ beforeEach(() => {
 });
 
 describe("knowledge node workspace", () => {
+  it("searches current node titles and正文 with immutable coordinates", async () => {
+    fixture();
+    const result = await searchKnowledgeNodes(7, {
+      conversationId: "conversation",
+      query: "原始内容",
+      expectedGeneration: 1,
+      expectedContentVersion: 1,
+      expectedResetRevision: 2,
+    });
+    expect(result.matches).toEqual([
+      expect.objectContaining({
+        leafId: ids[0],
+        matchFields: ["content"],
+      }),
+    ]);
+    await expect(
+      searchKnowledgeNodes(7, {
+        conversationId: "conversation",
+        query: "原始内容",
+        expectedGeneration: 2,
+        expectedContentVersion: 1,
+      }),
+    ).rejects.toMatchObject({ code: "STALE_COORDINATES" });
+  });
+
   it("reads one materialized node without changing confirmation, selecting a node or dispatching", async () => {
     const store = fixture();
     const before = structuredClone(store);

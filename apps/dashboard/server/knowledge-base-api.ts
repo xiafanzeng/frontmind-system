@@ -8,7 +8,7 @@ import { knowledgeBaseWorkingSetAssetUrl } from "./knowledge-base-materialized-a
 import { enterpriseProjectUrl } from "./enterprise-project-scope";
 import { dispatchKnowledgeNodeEdit } from "./knowledge-node-edit-service";
 import { dispatchManualKnowledgeNodeEdit } from "./knowledge-node-manual-edit-service";
-import { getKnowledgeNodeDetails, saveKnowledgeNodeContent } from "./knowledge-node-workspace-service";
+import { getKnowledgeNodeDetails, saveKnowledgeNodeContent, searchKnowledgeNodes } from "./knowledge-node-workspace-service";
 import { KNOWLEDGE_NODE_IMAGE_MIMES } from "./knowledge-node-edit-contract";
 import { createCredentialAgentClient } from "./credential-agent-client";
 import axios from "axios";
@@ -1215,7 +1215,9 @@ export function deriveKnowledgeBaseInteraction(
       canPublish: progress.packageAllowed,
       lockReason: progress.packageAllowed
         ? "知识库内容与下载包已完成，请执行唯一一次直接更新"
-        : "知识库内容已完成，下载包正在后台准备；已完成正文不受影响",
+        : progress.packageState === "attention_required"
+          ? "知识库内容已完成，FrontMind 最终 ZIP 生成失败，需要处理；已完成正文不受影响"
+          : "知识库内容已完成，FrontMind 正在生成最终 ZIP；已完成正文不受影响",
     };
   }
   if (
@@ -1769,7 +1771,12 @@ async function reconcileAvailableKnowledgeOutput(input: {
           }
           throw error;
         }
+        // v4 no longer depends on a provider ZIP. The Dashboard worker
+        // creates the sole customer-facing package from accepted nodes, so a
+        // missing upstream archive must not hold the operation in recovery.
+        const providerPackageFlow = boundBuild.skillVersion !== "4";
         const finalPackageMissing =
+          providerPackageFlow &&
           boundBuild.status === "protocol_error" &&
           boundBuild.protocolErrorCode === "FINAL_PACKAGE_MISSING";
         const archiveDescriptorCount =
@@ -1795,6 +1802,7 @@ async function reconcileAvailableKnowledgeOutput(input: {
           });
         }
         const packageRebindRequired =
+          providerPackageFlow &&
           boundBuild.status === "protocol_error" &&
           boundBuild.protocolErrorCode === "PACKAGE_REBIND_REQUIRED";
         if (packageRebindRequired && archiveDescriptorCount === 0) {
@@ -1836,9 +1844,8 @@ async function reconcileAvailableKnowledgeOutput(input: {
             }
           }
           if (
-            (boundBuild.skillVersion === "4" ||
-              !boundBuild.packageStorageKey ||
-              packageRebindRequired) &&
+            providerPackageFlow &&
+            (!boundBuild.packageStorageKey || packageRebindRequired) &&
             collectKnowledgeArchiveDescriptors(unreconciled).length > 0
           ) {
             const bindPackage =
@@ -6011,6 +6018,18 @@ router.get("/node/content", async (req, res) => {
   if (!(await requireKnowledgeBuildCapability(userId, res))) return;
   try {
     res.json(await getKnowledgeNodeDetails(userId, req.query));
+  } catch (error) {
+    await sendKnowledgeNodeWorkspaceError(res, error, userId, req.query.conversationId);
+  }
+});
+
+router.get("/node/search", async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!req.frontmindUser) { res.status(401).json({ error: { code: "UNAUTHORIZED", message: "请先登录" } }); return; }
+  const userId = enterpriseWorkspaceUserId(req.frontmindUser.id);
+  if (!(await requireKnowledgeBuildCapability(userId, res))) return;
+  try {
+    res.json(await searchKnowledgeNodes(userId, req.query));
   } catch (error) {
     await sendKnowledgeNodeWorkspaceError(res, error, userId, req.query.conversationId);
   }

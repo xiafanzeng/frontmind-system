@@ -312,59 +312,6 @@
   height: 40px;
   padding: 12px 19px;
 }
-.helplook-preview .hl-widget-install > p {
-  line-height: 22px;
-  margin: 0 0 14px;
-}
-.helplook-preview .hl-widget-install h4 {
-  font-size: 14px;
-  line-height: 22px;
-  font-weight: 500;
-  margin: 28px 0 12px;
-}
-.helplook-preview .hl-widget-code-wrap {
-  position: relative;
-  margin-bottom: 14px;
-}
-.helplook-preview .hl-widget-code-wrap pre {
-  overflow-x: auto;
-  margin: 0;
-  padding: 18px 20px;
-  background: #f7f8fa;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-  color: #606266;
-  font-size: var(--operator-caption-size, 12px);
-  line-height: 22px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.helplook-preview .hl-widget-code-wrap code {
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: inherit;
-}
-.helplook-preview .hl-widget-code-wrap:first-of-type pre {
-  padding-bottom: 50px;
-}
-.helplook-preview .hl-widget-code-copy {
-  position: absolute;
-  bottom: 10px;
-  right: 10px;
-}
-.helplook-preview .hl-widget-code-actions {
-  display: flex;
-  gap: 8px;
-  margin: 12px 0;
-}
-.helplook-preview .hl-widget-share {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.helplook-preview .hl-widget-share .hl-input {
-  flex: 1;
-  min-width: 0;
-}
 .hl-portal .hl-widget-recommendation-editor textarea.hl-input {
   display: block;
   width: 100%;

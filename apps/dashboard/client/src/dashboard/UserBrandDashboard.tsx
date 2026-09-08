@@ -2299,9 +2299,6 @@ function ProblemOptimizationResults({
         <div>
           <span className="rl-eyebrow">MindPromise 智诺 / 意图优化</span>
           <h2>问题优化</h2>
-          <p>
-            按问题查看应答逻辑智能体确认后的完整回答口径、事实依据、表达边界与图文资料。
-          </p>
         </div>
       </header>
 

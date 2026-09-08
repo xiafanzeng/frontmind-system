@@ -757,7 +757,11 @@ export async function selectMaterializedKnowledgeBaseNode(input: {
       if (node.status !== old.status || node.id === target.id) await tx.update(knowledgeBaseBuildNodes).set({ status: node.status, ...(node.id === target.id ? { presentationKey, confirmedAt: null } : {}), transitionReason: "local_node_selection", updatedAt: now }).where(eq(knowledgeBaseBuildNodes.id, node.id));
     }
     await tx.insert(conversationTurns).values({ id: turnId, userId: input.userId, conversationId: storedConversationId, apiCredentialId: null, clientRequestId: input.clientRequestId, buildId: build.id, buildGeneration: build.generation, operationKey: operation, operationType: "local_select", expectedRevision: build.revision, expectedLeafId: target.leafId, requestHash, attachmentFileIds: [], metadata: { execution: "local", providerRequestCount: 0 }, status: "completed", startedAt: now, completedAt: now, createdAt: now, updatedAt: now });
-    await tx.update(knowledgeBaseBuilds).set({ status: "confirming", currentLeafId: target.leafId, currentPresentationKey: presentationKey, revision, stateEpoch: build.stateEpoch + 1, confirmedCount: nextNodes.filter((node) => node.status === "confirmed").length, directPrefilledCount: nextNodes.filter((node) => node.status === "direct_prefilled").length, needsVerificationCount: nextNodes.filter((node) => node.status === "needs_verification").length, lastAppliedOperationKey: operation, contentCompletedAt: null, packageStatus: "not_started", packageRevision: null, packageStorageKey: null, packageArchiveSha256: null, packageSizeBytes: null, packageNextRetryAt: null, packageAttemptCount: 0, packageLastErrorCode: null, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
+    // Selecting a different node only changes the local review cursor and
+    // node workflow state. Keep the old package tuple intact for the last
+    // published snapshot, but mark it stale for this newer draft revision;
+    // the explicit update request will establish a new binding when needed.
+    await tx.update(knowledgeBaseBuilds).set({ status: "confirming", currentLeafId: target.leafId, currentPresentationKey: presentationKey, revision, stateEpoch: build.stateEpoch + 1, confirmedCount: nextNodes.filter((node) => node.status === "confirmed").length, directPrefilledCount: nextNodes.filter((node) => node.status === "direct_prefilled").length, needsVerificationCount: nextNodes.filter((node) => node.status === "needs_verification").length, lastAppliedOperationKey: operation, contentCompletedAt: null, packageStatus: "not_started", packageNextRetryAt: null, packageLastErrorCode: null, updatedAt: now }).where(eq(knowledgeBaseBuilds.id, build.id));
     await persistKnowledgeBasePresentationInTransaction({ tx, userId: input.userId, conversationId: storedConversationId, turnId, buildId: build.id, generation: build.generation, operationKey: operation, presentationKey, revision, leafId: target.leafId, content: target.contentMarkdown, authoritativeTaskId: null, sentAt: now });
     return { accepted: true, execution: "local", disposition: "selected" };
   };
@@ -1029,8 +1033,9 @@ export async function confirmMaterializedKnowledgeBaseNode(
             : build.needsVerificationCount,
         lastAppliedOperationKey: localOperationKey,
         contentCompletedAt: next ? build.contentCompletedAt : confirmedAt,
-        packageStatus: next ? build.packageStatus : "preparing",
-        packageNextRetryAt: next ? build.packageNextRetryAt : confirmedAt,
+        packageStatus: next ? build.packageStatus : "not_started",
+        packageLastErrorCode: next ? build.packageLastErrorCode : null,
+        packageNextRetryAt: null,
         updatedAt: confirmedAt,
       })
       .where(eq(knowledgeBaseBuilds.id, build.id));

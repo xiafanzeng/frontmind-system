@@ -46,6 +46,31 @@ function stagedLogoMetadata() {
 }
 
 describe("materialized Logo replacement atomicity", () => {
+  it("keeps the published package tuple when selecting a draft node", () => {
+    const serviceSource = readFileSync(
+      path.join(process.cwd(), "server/knowledge-base-materialized-service.ts"),
+      "utf8",
+    );
+    const selectStart = serviceSource.indexOf(
+      "export async function selectMaterializedKnowledgeBaseNode",
+    );
+    const confirmStart = serviceSource.indexOf(
+      "export async function confirmMaterializedKnowledgeBaseNode",
+      selectStart,
+    );
+    const selectionSource = serviceSource.slice(selectStart, confirmStart);
+    expect(selectStart).toBeGreaterThan(0);
+    expect(confirmStart).toBeGreaterThan(selectStart);
+    expect(selectionSource).toContain('packageStatus: "not_started"');
+    expect(selectionSource).toContain("packageNextRetryAt: null");
+    expect(selectionSource).not.toContain("packageRevision: null");
+    expect(selectionSource).not.toContain("packageStorageKey: null");
+    expect(selectionSource).not.toContain("packageArchiveSha256: null");
+    expect(selectionSource).not.toContain("packageSizeBytes: null");
+    expect(selectionSource).not.toContain("packageAttemptCount: 0");
+    expect(selectionSource).not.toContain("generateKnowledgeBasePackageForUpdate");
+  });
+
   it("round-trips only the exact server-authored staging ledger", () => {
     const staged = materializedStagedOfficialLogoFromTurnMetadata({
       metadata: stagedLogoMetadata(),

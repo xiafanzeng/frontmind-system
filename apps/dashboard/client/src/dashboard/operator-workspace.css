@@ -136,7 +136,7 @@
 .operator-module-tabs > a.active { --tab-fill: #fff; --tab-edge: color-mix(in srgb, var(--tab-color) 36%, white); font-weight: 600; }
 .operator-module-tabs > a.active .operator-module-tab-accent { stroke: var(--tab-color); }
 .operator-sub-tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-height: 58px; padding: 10px 12px; background: #fff; border: 1px solid var(--operator-line, #E2E5EB); border-bottom: 0; }
-.operator-sub-tabs > a { display: inline-flex; align-items: center; min-height: 38px; padding: 7px 14px; border-radius: 7px; color: #5D6573; font-size: 15px; line-height: 24px; text-decoration: none; }
+.operator-sub-tabs > a { display: inline-flex; align-items: center; justify-content: center; min-width: 132px; min-height: 40px; padding: 8px 18px; border-radius: 8px; color: #5D6573; font-size: 15px; line-height: 24px; text-decoration: none; }
 .operator-sub-tabs > a:hover { background: #F2EDF6; color: #3d3348; }
 .operator-sub-tabs > a[aria-current="page"] { color: var(--module-accent); background: color-mix(in srgb, var(--module-accent) 8%, white); font-weight: 600; }
 .operator-workspace-header a:focus-visible { outline: 2px solid var(--module-accent); outline-offset: -3px; }

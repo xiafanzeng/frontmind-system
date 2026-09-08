@@ -18,6 +18,8 @@ import type {
 } from "@shared/knowledge-base-progress";
 import type {
   KnowledgeNodeDetailsDto,
+  KnowledgeNodeSearchMatch,
+  KnowledgeNodeSearchResult,
   KnowledgeNodeSaveInput,
   KnowledgeNodeSaveResult,
 } from "@shared/knowledge-node-workspace";
@@ -141,6 +143,10 @@ function KnowledgeNodeWorkspaceSession({
       null,
   );
   const [search, setSearch] = useState("");
+  const [searchMatches, setSearchMatches] = useState<
+    KnowledgeNodeSearchMatch[]
+  >([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(
     () => new Set(),
   );
@@ -351,6 +357,121 @@ function KnowledgeNodeWorkspaceSession({
     reload,
     readonlyPreview,
     previewDetails,
+  ]);
+
+  // Title filtering stays local; content matches come from the current,
+  // coordinate-bound working set. Debouncing and aborting keep stale results
+  // from changing the directory while the user is typing or switching builds.
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      setSearchMatches([]);
+      setSearchError(null);
+      return;
+    }
+    if (readonlyPreview) {
+      const normalized = query.toLocaleLowerCase();
+      const matches = (previewDetails ?? []).flatMap((item) => {
+        const titleMatched = item.node.title
+          .toLocaleLowerCase()
+          .includes(normalized);
+        const contentMatched = item.node.contentMarkdown
+          .toLocaleLowerCase()
+          .includes(normalized);
+        if (!titleMatched && !contentMatched) return [];
+        return [
+          {
+            leafId: item.node.leafId,
+            branchId: "preview",
+            branchTitle: "预览",
+            title: item.node.title,
+            status: item.node.status,
+            snippet: contentMatched
+              ? item.node.contentMarkdown.slice(0, 180)
+              : item.node.title,
+            matchFields: [
+              ...(titleMatched ? ["title" as const] : []),
+              ...(contentMatched ? ["content" as const] : []),
+            ],
+          },
+        ];
+      });
+      setSearchMatches(matches);
+      setSearchError(null);
+      return;
+    }
+    if (
+      !conversationId ||
+      generation === undefined ||
+      expectedContentVersion <= 0
+    ) {
+      setSearchMatches([]);
+      setSearchError(null);
+      return;
+    }
+    const controller = new AbortController();
+    const rest = captureWorkspaceRestOperation(
+      AbortSignal.any([lifetime.current.signal, controller.signal]),
+    );
+    setSearchError(null);
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const params = new URLSearchParams({
+            conversationId,
+            query,
+            expectedGeneration: String(generation),
+            expectedContentVersion: String(expectedContentVersion),
+            ...(resetRevision === undefined
+              ? {}
+              : { expectedResetRevision: String(resetRevision) }),
+          });
+          const response = await rest.fetch(
+            `/api/knowledge-base/node/search?${params}`,
+            { credentials: "include" },
+          );
+          const result =
+            (await response.json()) as KnowledgeNodeSearchResult & {
+              error?: { message?: string };
+            };
+          rest.assertActive();
+          if (!response.ok) {
+            throw new NodeRequestError(
+              result.error?.message ?? "节点搜索暂时不可用，请重试。",
+              response.status,
+            );
+          }
+          if (
+            result.coordinates.conversationId !== conversationId ||
+            result.coordinates.generation !== generation ||
+            result.coordinates.contentVersion !== expectedContentVersion ||
+            (resetRevision !== undefined &&
+              result.coordinates.resetRevision !== resetRevision)
+          ) {
+            throw new NodeRequestError("知识库内容已更新，请重新搜索。", 409);
+          }
+          setSearchMatches(result.matches);
+        } catch (error) {
+          if (rest.signal.aborted) return;
+          setSearchMatches([]);
+          setSearchError(
+            error instanceof Error ? error.message : "节点搜索失败，请重试。",
+          );
+        }
+      })();
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    conversationId,
+    expectedContentVersion,
+    generation,
+    previewDetails,
+    readonlyPreview,
+    resetRevision,
+    search,
   ]);
 
   const finishEditing = () => {
@@ -660,12 +781,18 @@ function KnowledgeNodeWorkspaceSession({
     });
   };
   const searchTerm = search.trim().toLocaleLowerCase();
+  const contentMatchIds = useMemo(
+    () => new Set(searchMatches.map((match) => match.leafId)),
+    [searchMatches],
+  );
   const visibleBranches = branches
     .map((branch) => ({
       ...branch,
       leaves: branch.leaves.filter(
         (leaf) =>
-          !searchTerm || leaf.title.toLocaleLowerCase().includes(searchTerm),
+          !searchTerm ||
+          leaf.title.toLocaleLowerCase().includes(searchTerm) ||
+          contentMatchIds.has(leaf.id),
       ),
     }))
     .filter((branch) => branch.leaves.length > 0);
@@ -734,7 +861,7 @@ function KnowledgeNodeWorkspaceSession({
               <Search aria-hidden="true" />
               <Input
                 aria-label="搜索节点标题"
-                placeholder="搜索节点标题"
+                placeholder="搜索节点标题或内容"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -749,6 +876,11 @@ function KnowledgeNodeWorkspaceSession({
                 directoryScrollTop.current = event.currentTarget.scrollTop;
               }}
             >
+              {searchError && (
+                <p role="alert" className="knowledge-node-workspace__error">
+                  {searchError}
+                </p>
+              )}
               {visibleBranches.length === 0 ? (
                 <p className="knowledge-node-workspace__notice">
                   没有匹配的知识节点。

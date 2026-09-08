@@ -1515,7 +1515,12 @@ export function useSendMessage() {
           updateTitle(convId, title);
         }
 
-        if (!isKnowledgeBaseSubmission && !options?.responseLogicContext) {
+        // Every agent dispatch depends on the conversation snapshot being
+        // acknowledged first. This prevents the knowledge agent from racing
+        // a newly-added message/attachment and surfacing a misleading
+        // "会话尚未同步" error. The queue retries transient failures without
+        // replaying the provider request, so this remains idempotent.
+        if (!options?.responseLogicContext) {
           workspaceOperation.assertActive();
           const snapshotAcknowledged = await flushConversation(convId);
           if (!snapshotAcknowledged) {

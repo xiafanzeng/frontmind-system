@@ -950,6 +950,113 @@ describe("knowledge-base production final-package acceptance", () => {
     if (assetRoot) await rm(assetRoot, { recursive: true, force: true });
   });
 
+  it("generates ZIP only on update, retains the published version on failure, and rejects stale drafts", async () => {
+    const state = initialState();
+    const buildId = "11111111-2026-4000-8000-111111111111";
+    const now = new Date();
+    const build = {
+      id: buildId, userId: USER_ID, conversationId: PUBLIC_CONVERSATION_ID,
+      companyName: "FrontMind超前智能", companyWebsite: "https://frontmind.net/",
+      executionMode: "legacy_conversational", skillVersion: "4", treePolicyVersion: 1,
+      generation: 1, stateEpoch: 8, revision: 8, contentVersion: 1,
+      status: "ready_to_publish", activeTurnId: null, currentLeafId: null,
+      totalNodeCount: 8, confirmedCount: 8, directPrefilledCount: 0, needsVerificationCount: 0,
+      upstreamTaskId: "accepted-local-task", canonicalTaskId: null,
+      packageStatus: "not_started", packageAttemptCount: 0, packageNextRetryAt: null,
+      packageRevision: null, packageStorageKey: null, packageArchiveSha256: null,
+      packageSizeBytes: null, packageOutputItemId: null, publishedSnapshotId: null,
+      logoStorageKey: null, createdAt: now, updatedAt: now,
+    };
+    state.builds.push(build);
+    for (let i = 0; i < 8; i++) {
+      const contentMarkdown = `# 知识节点 ${i + 1}\n\n这是经过确认的 FrontMind 企业知识正文。`;
+      state.nodes.push({
+        id: `manual-update-node-${i}`, buildId, leafId: `1.${i + 1}`,
+        title: `知识节点 ${i + 1}`, branchId: "identity", branchTitle: "企业身份",
+        ordinal: i, status: "confirmed", contentMarkdown,
+        contentSha256: knowledgeBaseMarkdownSha256(contentMarkdown),
+        sourceUrls: [], imageUrls: [], assetRefs: [],
+      });
+    }
+    dependencies.getDb.mockResolvedValue(memoryDatabase(state, { cloneSelectedRows: true, transactional: true }));
+    const { default: dashboardRouter } = await import("./dashboard-api");
+    const dashboard = express();
+    dashboard.use(express.json());
+    dashboard.use("/api/dashboard", dashboardRouter);
+    const listener = await listen(dashboard);
+    const update = (revision: number, contentVersion: number) => fetch(
+      `${listener.baseUrl}/api/dashboard/knowledge/publish`, {
+        method: "POST", headers: { "content-type": "application/json", "x-test-auth": "user" },
+        body: JSON.stringify({ conversationId: PUBLIC_CONVERSATION_ID,
+          expectedBuildId: buildId, expectedRevision: revision, expectedContentVersion: contentVersion }),
+      },
+    );
+    try {
+      // Merely having a completed draft leaves the current publication alone.
+      expect(state.snapshots).toHaveLength(0);
+      expect(build.packageStatus).toBe("not_started");
+      expect(build.packageStorageKey).toBeNull();
+      const stale = await update(7, 1);
+      expect(stale.status).toBe(400);
+      expect(build.packageAttemptCount).toBe(0);
+      const response = await update(8, 1);
+      const first = await response.json() as any;
+      expect(response.status, JSON.stringify(first)).toBe(200);
+      expect(build.status).toBe("published");
+      expect(build.packageOutputItemId).toBe(`dashboard-local:${buildId}:8`);
+      expect(build.packageAttemptCount).toBe(1);
+      const originalSnapshot = structuredClone(state.snapshots[0]);
+      const originalStorageKey = build.packageStorageKey;
+      const repeated = await update(8, 1);
+      expect(repeated.status).toBe(200);
+      expect(state.snapshots).toHaveLength(1);
+      expect(build.packageAttemptCount).toBe(1);
+
+      // Simulate saved-and-confirmed edits, with an intentionally corrupt node
+      // hash to exercise the real package validation failure path.
+      Object.assign(build, { revision: 10, contentVersion: 2, stateEpoch: 10,
+        status: "ready_to_publish", packageStatus: "not_started" });
+      state.nodes[0].contentMarkdown += " 修改后的正文。";
+      expect(build.packageStorageKey).toBe(originalStorageKey);
+      const failure = await update(10, 2);
+      expect(failure.status).toBe(400);
+      expect(build.packageStatus).toBe("attention_required");
+      expect(state.snapshots).toEqual([originalSnapshot]);
+      expect(build.publishedSnapshotId).toBe(originalSnapshot.id);
+      const oldUrl = `${listener.baseUrl}/api/dashboard/knowledge/snapshots/${originalSnapshot.id}/archive`;
+      expect((await fetch(oldUrl, { headers: { "x-test-auth": "user" } })).status).toBe(200);
+
+      state.nodes[0].contentSha256 = knowledgeBaseMarkdownSha256(state.nodes[0].contentMarkdown);
+      const updated = await update(10, 2);
+      const second = await updated.json() as any;
+      expect(updated.status, JSON.stringify(second)).toBe(200);
+      expect(second.snapshot.id).not.toBe(originalSnapshot.id);
+      expect(second.snapshot.archiveHash).not.toBe(originalSnapshot.archiveHash);
+      expect(state.snapshots.filter((item) => item.status === "active")).toHaveLength(1);
+      expect(build.packageStorageKey).not.toBe(originalStorageKey);
+      expect((await fetch(oldUrl, { headers: { "x-test-auth": "user" } })).status).toBe(200);
+
+      const currentSnapshot = build.publishedSnapshotId;
+      Object.assign(build, { revision: 12, contentVersion: 3, stateEpoch: 12,
+        status: "ready_to_publish", packageStatus: "not_started" });
+      dependencies.getDb.mockResolvedValue(memoryDatabase(state, {
+        cloneSelectedRows: true, transactional: true,
+        failUpdate: (table, values) => {
+          if (table === knowledgeBaseBuilds && values.packageStatus === "ready") {
+            Object.assign(build, { revision: 13, contentVersion: 4, stateEpoch: 13,
+              packageStatus: "not_started" });
+          }
+          return undefined;
+        },
+      }));
+      const concurrentEdit = await update(12, 3);
+      expect(concurrentEdit.status).toBe(400);
+      expect((await concurrentEdit.json() as any).error.message).toContain("工作稿已变化");
+      expect(build.publishedSnapshotId).toBe(currentSnapshot);
+      expect(state.snapshots).toHaveLength(2);
+    } finally { await close(listener.server); }
+  });
+
   it("binds optional materialized v5 Logos locally with atomic CAS and no Working Set mutation", async () => {
     const state = initialState();
     const buildId = "31313131-3131-4313-8313-313131313131";

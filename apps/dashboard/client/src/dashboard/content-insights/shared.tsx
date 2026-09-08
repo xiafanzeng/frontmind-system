@@ -22,7 +22,7 @@ export type AnalyticsModule =
   | "articles"
   | "ai-qa"
   | "traffic-sources";
-export type SettingsTab = "basic" | "leads" | "install" | "share";
+export type SettingsTab = "basic" | "leads";
 export type PreviewModule =
   | AnalyticsModule
   | "settings"

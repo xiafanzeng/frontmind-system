@@ -41,6 +41,35 @@ export interface KnowledgeNodeContentQuery {
   expectedContentVersion: number;
 }
 
+export interface KnowledgeNodeSearchInput {
+  conversationId: string;
+  query: string;
+  expectedGeneration: number;
+  expectedContentVersion: number;
+  expectedResetRevision?: number;
+}
+
+export interface KnowledgeNodeSearchMatch {
+  leafId: string;
+  branchId: string;
+  branchTitle: string;
+  title: string;
+  status: KnowledgeBaseLeafStatus;
+  snippet: string;
+  matchFields: Array<"title" | "content">;
+}
+
+export interface KnowledgeNodeSearchResult {
+  coordinates: {
+    buildId: string;
+    conversationId: string;
+    generation: number;
+    contentVersion: number;
+    resetRevision: number;
+  };
+  matches: KnowledgeNodeSearchMatch[];
+}
+
 export interface KnowledgeNodeSaveInput {
   conversationId: string;
   leafId: string;

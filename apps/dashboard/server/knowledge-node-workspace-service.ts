@@ -11,6 +11,7 @@ import {
 } from "../drizzle/schema";
 import type {
   KnowledgeNodeDetailsDto,
+  KnowledgeNodeSearchResult,
   KnowledgeNodeSaveResult,
 } from "../shared/knowledge-node-workspace";
 import { getDb } from "./db";
@@ -58,6 +59,15 @@ export const knowledgeNodeContentQuerySchema = z
     leafId: id,
     expectedGeneration: z.coerce.number().int().positive(),
     expectedContentVersion: z.coerce.number().int().positive(),
+  })
+  .strict();
+export const knowledgeNodeSearchSchema = z
+  .object({
+    conversationId: id,
+    query: z.string().trim().min(1).max(200),
+    expectedGeneration: z.coerce.number().int().positive(),
+    expectedContentVersion: z.coerce.number().int().positive(),
+    expectedResetRevision: z.coerce.number().int().nonnegative().optional(),
   })
   .strict();
 export const knowledgeNodeSaveSchema = z
@@ -294,6 +304,113 @@ export async function getKnowledgeNodeDetails(
         aiEdit: { ...capability },
         manageImages: { ...capability },
       },
+    };
+  });
+}
+
+function knowledgeNodeSearchSnippet(content: string, query: string) {
+  const normalized = content.replace(/\s+/gu, " ").trim();
+  const index = normalized.toLocaleLowerCase().indexOf(query);
+  if (index < 0) return normalized.slice(0, 180);
+  const start = Math.max(0, index - 72);
+  const end = Math.min(normalized.length, index + query.length + 108);
+  return `${start > 0 ? "…" : ""}${normalized.slice(start, end)}${end < normalized.length ? "…" : ""}`;
+}
+
+/** Search the current, owner-scoped working set without exposing stale nodes. */
+export async function searchKnowledgeNodes(
+  userId: number,
+  value: unknown,
+): Promise<KnowledgeNodeSearchResult> {
+  const input = knowledgeNodeSearchSchema.parse(value);
+  const db = await requireDb();
+  return db.transaction(async (tx: any) => {
+    const build = await ownedBuild(tx, userId, input.conversationId);
+    if (
+      build.generation !== input.expectedGeneration ||
+      build.contentVersion !== input.expectedContentVersion
+    )
+      fail("STALE_COORDINATES", "知识库内容已更新，请重新搜索当前内容");
+    const state = (
+      await tx
+        .select({ revision: enterpriseResetStateTable().revision })
+        .from(enterpriseResetStateTable())
+        .where(enterpriseResetStateOwnerPredicate(userId))
+        .limit(1)
+    )[0];
+    const resetRevision = state?.revision ?? 0;
+    if (
+      input.expectedResetRevision !== undefined &&
+      resetRevision !== input.expectedResetRevision
+    )
+      fail("STALE_COORDINATES", "知识库已重置，请重新搜索当前内容");
+    const workingSet = (
+      await tx
+        .select()
+        .from(knowledgeBaseWorkingSets)
+        .where(
+          and(
+            eq(knowledgeBaseWorkingSets.id, build.activeWorkingSetId ?? ""),
+            eq(knowledgeBaseWorkingSets.buildId, build.id),
+            eq(knowledgeBaseWorkingSets.generation, build.generation),
+            eq(knowledgeBaseWorkingSets.contentVersion, build.contentVersion ?? 0),
+            eq(knowledgeBaseWorkingSets.status, "active"),
+          ),
+        )
+        .limit(1)
+    )[0] as { manifest?: KnowledgeBaseWorkingSetManifest } | undefined;
+    const manifest = workingSet?.manifest;
+    if (!manifest || manifest.buildId !== build.id)
+      fail("INVALID_BUILD_STATE", "当前知识库内容暂不可搜索，请重新读取");
+    const leavesById = new Map(manifest.leaves.map((leaf) => [leaf.leafId, leaf]));
+    const nodes = (await tx
+      .select()
+      .from(knowledgeBaseBuildNodes)
+      .where(eq(knowledgeBaseBuildNodes.buildId, build.id))) as KnowledgeBaseBuildNode[];
+    const normalizedQuery = input.query.toLocaleLowerCase();
+    const matches = nodes.flatMap((node) => {
+      const leaf = leavesById.get(node.leafId);
+      const content = node.contentMarkdown
+        ? canonicalKnowledgeBaseMarkdown(node.contentMarkdown)
+        : "";
+      if (
+        !leaf ||
+        node.contentVersion !== build.contentVersion ||
+        !content ||
+        !node.contentSha256 ||
+        knowledgeBaseMarkdownSha256(content) !== node.contentSha256 ||
+        leaf.contentSha256 !== node.contentSha256
+      )
+        return [];
+      const titleMatched = node.title.toLocaleLowerCase().includes(normalizedQuery);
+      const contentMatched = content.toLocaleLowerCase().includes(normalizedQuery);
+      if (!titleMatched && !contentMatched) return [];
+      return [{
+        leafId: node.leafId,
+        branchId: node.branchId,
+        branchTitle: node.branchTitle,
+        title: node.title,
+        status: node.status,
+        snippet: knowledgeNodeSearchSnippet(
+          contentMatched ? content : node.title,
+          normalizedQuery,
+        ),
+        matchFields: [
+          ...(titleMatched ? ["title" as const] : []),
+          ...(contentMatched ? ["content" as const] : []),
+        ],
+      }];
+    });
+    matches.sort((left, right) => left.title.localeCompare(right.title, "zh-Hans"));
+    return {
+      coordinates: {
+        buildId: build.id,
+        conversationId: build.conversationId,
+        generation: build.generation,
+        contentVersion: build.contentVersion!,
+        resetRevision,
+      },
+      matches,
     };
   });
 }

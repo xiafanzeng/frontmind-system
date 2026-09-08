@@ -1645,7 +1645,8 @@ mysqlDescribe(
       expect(fakeProvider.taskSendBodies).toHaveLength(0);
       expect(progress.observation).toMatchObject({
         contentState: "completed",
-        packageState: "preparing",
+        packageState: "not_started",
+        updateAllowed: true,
         interaction: {
           progress: {
             build: {
@@ -1674,7 +1675,7 @@ mysqlDescribe(
         confirmedCount: MATERIALIZED_LEAF_COUNT,
         currentLeafId: null,
         activeTurnId: null,
-        packageStatus: "preparing",
+        packageStatus: "not_started",
         activeWorkingSetId: build.activeWorkingSetId,
         contentVersion: 1,
       });
@@ -1749,24 +1750,23 @@ mysqlDescribe(
       ]);
 
       const {
-        runKnowledgeBasePackageSweep,
+        generateKnowledgeBasePackageForUpdate,
         readDashboardOwnedKnowledgePackage,
       } = await import("../server/knowledge-base-local-package");
-      const packageSettlement = await waitFor({
-        label: "Dashboard local final package",
-        read: async () => {
-          const sweep = await runKnowledgeBasePackageSweep(1);
-          const projection = await getProgress();
-          return { sweep, projection };
-        },
-        accept: ({ sweep, projection }) => {
-          if (sweep.failed !== 0) {
-            throw new Error(`local package failed: ${JSON.stringify(sweep)}`);
-          }
-          return projection.observation?.packageState === "ready";
-        },
+      const packageGeneration = await generateKnowledgeBasePackageForUpdate({
+        id: completedBuild.id,
+        userId: completedBuild.userId,
+        generation: completedBuild.generation,
+        revision: completedBuild.revision,
+        stateEpoch: completedBuild.stateEpoch,
+        contentVersion: completedBuild.contentVersion,
       });
-      progress = packageSettlement.projection;
+      expect(packageGeneration).toMatchObject({
+        scanned: 1,
+        ready: 1,
+        failed: 0,
+      });
+      progress = await getProgress();
       expect(fakeProvider.providerCalls).toHaveLength(
         providerCallsBeforeConfirmation,
       );

@@ -467,13 +467,13 @@ export function createServerBackedPublisherGateway(
       });
     },
 
-    getMediaFacets(kind, signal) {
+    getMediaFacets(filters, signal) {
       monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const mediaApi = client.publisher.media as unknown as {
           facets: {
             query(
-              input: { kind?: "news" | "self_media" },
+              input: Record<string, unknown>,
               options: { signal?: AbortSignal },
             ): Promise<{
               kindCounts: { news: number; selfMedia: number };
@@ -501,7 +501,13 @@ export function createServerBackedPublisherGateway(
             }>;
           };
         };
-        const result = await mediaApi.facets.query(kind ? { kind } : {}, {
+        const resolvedFilters: MediaFilters = filters ?? {
+          query: "",
+          kind: "news",
+          page: 1,
+          pageSize: 50,
+        };
+        const result = await mediaApi.facets.query(mediaInput(resolvedFilters), {
           signal,
         });
         const options = (items: Array<{ value: string; count: number }>) =>
@@ -527,10 +533,9 @@ export function createServerBackedPublisherGateway(
           publishSpeeds: options(result.publishSpeeds),
           entryTypes: options(result.entryTypes),
           linkTypes: options(result.linkTypes),
-          imageSupports: labeledOptions(result.imageSupports, {
+          imageSupports: labeledOptions(result.imageSupports.filter((item) => item.value !== "unknown"), {
             verified: "支持图文",
             unsupported: "仅文字",
-            unknown: "图片待验收",
           }),
           pcWeightThresholds: result.pcWeightThresholds.map((item) => ({
             ...item,

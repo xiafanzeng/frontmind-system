@@ -172,6 +172,10 @@ export class ConversationSyncQueue<T extends { id: string }> {
   private async flushEntry(id: string, entry: QueueEntry<T>): Promise<boolean> {
     // New state can arrive while an older request is in flight. Keep draining
     // successful work until this conversation's lane is truly idle.
+    // A dependent agent send must not race a transient snapshot failure. Retry
+    // a few times in this explicit flush path; the background timer remains as
+    // a longer-lived fallback when the transport is genuinely offline.
+    let transientAttempts = 0;
     for (let pass = 0; pass < 100; pass++) {
       if (this.entries.get(id) !== entry) return true;
       if (entry.timer) {
@@ -184,7 +188,10 @@ export class ConversationSyncQueue<T extends { id: string }> {
       // Explicit flush/retry is allowed to re-attempt a blocked dirty snapshot.
       entry.blocked = false;
       await this.drain(id, entry);
-      if (entry.lastAttemptFailed) return false;
+      if (entry.lastAttemptFailed) {
+        if (entry.blocked || transientAttempts++ >= 2) return false;
+        continue;
+      }
     }
     return false;
   }

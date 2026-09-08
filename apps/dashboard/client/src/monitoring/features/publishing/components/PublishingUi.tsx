@@ -199,26 +199,9 @@ export function MediaMark({
   const resolvedSource = showImage
     ? (logoSource ?? "provider_logo")
     : "generated_fallback";
-  const isSiteFavicon = showImage && resolvedSource === "site_favicon";
-  const isGeneratedFallback =
-    showImage && resolvedSource === "generated_fallback";
-  const secondaryColor = colors[(index + 2) % colors.length];
+  const isGeneratedFallback = showImage && resolvedSource === "generated_fallback";
   const monogram = name.replace(/[·（）()\s]/g, "").slice(0, 3) || "媒体";
-  const sourceLabel = {
-    provider_logo: "媒体标识",
-    provider_icon: "平台图标",
-    site_favicon: "站点图标",
-    web_search_verified: "名称检索验证 Logo",
-    manual_verified: "人工核验 Logo",
-    generated_fallback: "本地占位字标",
-  }[resolvedSource];
-  const statusLabel = {
-    pending: "待归档",
-    archived: "已归档",
-    pending_review: "搜索结果待人工核验",
-    missing: "未找到真实 Logo",
-    failed: "真实 Logo 归档失败",
-  }[logoResolutionStatus ?? (showImage ? "archived" : "missing")];
+  const secondaryColor = colors[(index + 2) % colors.length];
   return (
     <span
       className={`publishing-media-mark ${showImage ? "has-image" : "is-placeholder"} ${isGeneratedFallback ? "is-generated-fallback" : ""}`}
@@ -229,24 +212,8 @@ export function MediaMark({
         } as CSSProperties
       }
       role="img"
-      aria-label={
-        isGeneratedFallback
-          ? `${name}暂无可验证真实 Logo，显示服务端生成的本地占位图片`
-          : isSiteFavicon
-            ? `${name}站点图标（非品牌 Logo），来源：${sourceLabel}`
-            : showImage
-              ? `${name}真实媒体标识，来源：${sourceLabel}`
-              : `${name}暂无可验证真实 Logo，显示本地占位字标，状态：${statusLabel}`
-      }
-      title={
-        isGeneratedFallback
-          ? `${sourceLabel}（仅保证图片展示，不计入真实 Logo 覆盖率）`
-          : isSiteFavicon
-            ? `${sourceLabel}（仅作站点识别，不计入真实 Logo 覆盖率）`
-            : showImage
-              ? sourceLabel
-              : `占位：${statusLabel}`
-      }
+      aria-label={`${name}媒体标识`}
+      title={name}
       data-logo-source={resolvedSource}
       data-logo-status={
         logoResolutionStatus ?? (showImage ? "archived" : "missing")
@@ -263,14 +230,11 @@ export function MediaMark({
             referrerPolicy="no-referrer"
             onError={() => setFailedUrl(safeLogoUrl)}
           />
-          {isGeneratedFallback ? (
-            <small className="publishing-media-mark-label">占位</small>
-          ) : null}
+
         </>
       ) : (
         <>
           <b>{monogram}</b>
-          <small>占位</small>
         </>
       )}
     </span>

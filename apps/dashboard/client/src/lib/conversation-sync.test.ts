@@ -163,6 +163,21 @@ describe("ConversationSyncQueue", () => {
     expect(syncSnapshot).toHaveBeenCalledWith({ id: "one", value: 1 });
   });
 
+  it("retries transient snapshot failures during an explicit dependent flush", async () => {
+    const syncSnapshot = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(undefined);
+    const queue = new ConversationSyncQueue<Snapshot>({
+      syncSnapshot,
+      deleteConversation: vi.fn().mockResolvedValue(undefined),
+    });
+    queue.enqueueSnapshot({ id: "agent", value: 1 }, true);
+    await expect(queue.flushConversation("agent")).resolves.toBe(true);
+    expect(syncSnapshot).toHaveBeenCalledTimes(3);
+  });
+
   it("cancels a reset-owned lane and ignores its late in-flight completion", async () => {
     let finishSnapshot: (() => void) | undefined;
     const syncSnapshot = vi.fn(

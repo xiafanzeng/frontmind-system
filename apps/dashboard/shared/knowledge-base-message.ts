@@ -49,4 +49,4 @@ export function knowledgeBaseCompletionMessagePublicId(input: {
 }
 
 export const KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT =
-  "知识库内容已完成。下载包正在准备中。";
+  "知识库内容已确认，点击更新知识库生成并启用新版本。";

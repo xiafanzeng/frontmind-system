@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const read = (file: string) => fs.readFile(path.resolve(file), "utf8");
 
 describe("knowledge-base materialized-v5 recovery retirement", () => {
-  it("keeps only fresh turn recovery and package sweeps mounted", async () => {
+  it("keeps only fresh turn recovery mounted; packages are generated explicitly", async () => {
     const [api, worker, runtime, backfill] = await Promise.all([
       read("server/knowledge-base-api.ts"),
       read("server/knowledge-base-recovery-worker.ts"),
@@ -16,7 +16,9 @@ describe("knowledge-base materialized-v5 recovery retirement", () => {
     expect(worker).not.toContain("recoverOpenBuilds");
     expect(worker).not.toContain("migrateActiveLegacyBuilds");
     expect(runtime).toContain("recoverExpiredKnowledgeBaseTurns()");
-    expect(runtime).toContain("runKnowledgeBasePackageSweep()");
+    expect(runtime).not.toContain("runKnowledgeBasePackageSweep");
+    expect(runtime).not.toContain("generateKnowledgeBasePackageForUpdate");
+    expect(await read("server/dashboard-api.ts")).toContain("generateKnowledgeBasePackageForUpdate");
     expect(backfill).not.toContain("recoverOpenKnowledgeBaseTasks");
     const main = backfill.slice(backfill.indexOf("async function main()"));
     expect(main.indexOf("assertKnowledgeBaseBackfillApplyRetired(apply)"))

@@ -1,3 +1,4 @@
+import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
 import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import type { DecryptedCredential } from "./auth-service";
@@ -18,6 +19,7 @@ import {
 
 import {
   knowledgeBaseBuildNodes,
+  knowledgeBaseBuilds,
 } from "../drizzle/schema";
 import {
   dashboardContentAssetSchema,
@@ -88,7 +90,10 @@ import {
   type KnowledgeArchiveDescriptor,
 } from "./knowledge-base-artifact";
 import { KnowledgeArchiveDownloadError } from "./knowledge-archive-download-error";
-import { assertKnowledgeBasePublishable } from "./knowledge-base-progress-service";
+import {
+  assertKnowledgeBasePublishable,
+  assertKnowledgeBaseReadyForUpdate,
+} from "./knowledge-base-progress-service";
 import { knowledgeBaseTreePolicy } from "./knowledge-base-progress";
 import { assertKnowledgeBaseWritable } from "./knowledge-base-reset-service";
 import {
@@ -151,6 +156,8 @@ import {
   knowledgeBasePublicationBindingHash,
 } from "./knowledge-base-publication-binding";
 import {
+  generateKnowledgeBasePackageForUpdate,
+  KnowledgeBasePackageUpdateError,
   isDashboardOwnedKnowledgePackageBuild,
   readDashboardOwnedKnowledgePackage,
 } from "./knowledge-base-local-package";
@@ -6934,6 +6941,10 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
   const body = (req.body || {}) as {
     conversationId?: string;
     userId?: number;
+    expectedBuildId?: string;
+    expectedRevision?: number;
+    expectedContentVersion?: number;
+    background?: boolean;
   };
   const targetUserId =
     body.userId === undefined ? enterpriseWorkspaceUserId(actor.id) : Number(body.userId);
@@ -6950,6 +6961,21 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     });
     return;
   }
+  if (
+    (body.expectedBuildId !== undefined &&
+      !z.string().uuid().safeParse(body.expectedBuildId).success) ||
+    [body.expectedRevision, body.expectedContentVersion].some(
+      (value) => value !== undefined && (!Number.isSafeInteger(value) || value < 0),
+    )
+  ) {
+    res.status(400).json({ error: { code: "BAD_REQUEST", message: "知识库版本标识无效" } });
+    return;
+  }
+  const requestedVersion = {
+    expectedBuildId: body.expectedBuildId,
+    expectedRevision: body.expectedRevision,
+    expectedContentVersion: body.expectedContentVersion,
+  };
 
   let storedAssetKeys: string[] = [];
   let snapshotCommitted = false;
@@ -6964,9 +6990,10 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     });
     await assertServiceCapability(targetUserId, "knowledgeBuild");
     await assertKnowledgeBaseWritable(targetUserId);
-    const build = await assertKnowledgeBasePublishable({
+    let build = await assertKnowledgeBaseReadyForUpdate({
       userId: targetUserId,
       conversationId,
+      ...requestedVersion,
     });
     if (build.status === "published" && build.publishedSnapshotId) {
       const snapshot = await getKnowledgeSnapshotById({
@@ -6979,6 +7006,32 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       res.json({ kind: "knowledge", snapshot, idempotent: true });
       return;
     }
+    // Freeze the accepted draft even for older clients that omit coordinates.
+    // A concurrent edit must never become part of an already-confirmed update.
+    Object.assign(requestedVersion, {
+      expectedBuildId: build.id,
+      expectedRevision: build.revision,
+      expectedContentVersion: build.contentVersion ?? undefined,
+    });
+    const acknowledgeUpdate = () => {
+      if (body.background === true && !res.headersSent) {
+        res.status(202).json({ kind: "knowledge_update", ...requestedVersion });
+      }
+    };
+    if (
+      !isDashboardOwnedKnowledgePackageBuild(build) ||
+      build.packageRevision !== build.revision ||
+      build.packageStatus !== "ready"
+    ) {
+      await generateKnowledgeBasePackageForUpdate(build, acknowledgeUpdate);
+    } else {
+      acknowledgeUpdate();
+    }
+    build = await assertKnowledgeBasePublishable({
+      userId: targetUserId,
+      conversationId,
+      ...requestedVersion,
+    });
     const taskId = knowledgeBasePackageWriterTaskId(build);
     const hasDurablePackage = Boolean(
       build.packageStorageKey &&
@@ -6989,9 +7042,8 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     let sourceArtifactHash: string;
 
     if (hasDurablePackage) {
-      // v4 publication consumes the exact bytes that reconciliation already
-      // downloaded, parsed and bound to this build generation. It deliberately
-      // does not read the upstream task or depend on a signed URL/API key.
+      // Publication consumes the ZIP built for this explicit update, without
+      // waiting for a provider task to produce another archive.
       downloaded = {
         buffer: await readKnowledgeBuildArtifact({
           userId: targetUserId,
@@ -7008,9 +7060,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       };
       sourceArtifactHash = knowledgeBasePublicationBindingHash(build)!;
     } else {
-      throw new Error(
-        "旧知识库构建不再续跑或回读 Provider；请重置后使用 v2 全量物化重新构建",
-      );
+      throw new Error("最终 ZIP 尚未生成，请重新点击更新知识库");
     }
     const archiveHash = createHash("sha256")
       .update(downloaded.buffer)
@@ -7176,6 +7226,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       sourceConversationId: conversationId,
       sourceBuildId: build.id,
       sourceBuildRevision: build.revision,
+      sourceBuildContentVersion: build.contentVersion ?? undefined,
       sourceTaskId: taskId,
       sourceArtifactHash,
       archiveHash,
@@ -7184,7 +7235,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       totalBytes: downloaded.buffer.length,
     });
     snapshotCommitted = true;
-    res.json({ kind: "knowledge", snapshot });
+    if (!res.headersSent) res.json({ kind: "knowledge", snapshot });
   } catch (error) {
     await removeUncommittedStoredKnowledgeAssets({
       snapshotCommitted,
@@ -7198,6 +7249,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     const publishedBuild = await assertKnowledgeBasePublishable({
       userId: targetUserId,
       conversationId,
+      ...requestedVersion,
     }).catch(() => null);
     if (
       publishedBuild?.status === "published" &&
@@ -7208,7 +7260,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
         snapshotId: publishedBuild.publishedSnapshotId,
       }).catch(() => null);
       if (snapshot) {
-        res.json({ kind: "knowledge", snapshot, idempotent: true });
+        if (!res.headersSent) res.json({ kind: "knowledge", snapshot, idempotent: true });
         return;
       }
     }
@@ -7216,6 +7268,24 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
       "[Dashboard] Knowledge publish failed",
       dashboardKnowledgePublishErrorForLog(error, publishLogSecrets),
     );
+    // Acknowledged background updates report errors through the durable draft
+    // state. The old active snapshot is untouched by this failure path.
+    if (res.headersSent) {
+      const db = await getDb();
+      if (db && requestedVersion.expectedBuildId && requestedVersion.expectedRevision !== undefined) {
+        await db.update(knowledgeBaseBuilds).set({
+          packageStatus: "attention_required", packageNextRetryAt: null,
+          packageLastErrorCode: "KNOWLEDGE_PUBLICATION_FAILED", updatedAt: new Date(),
+        }).where(and(
+          eq(knowledgeBaseBuilds.id, requestedVersion.expectedBuildId),
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, targetUserId),
+          eq(knowledgeBaseBuilds.revision, requestedVersion.expectedRevision),
+          eq(knowledgeBaseBuilds.status, "ready_to_publish"),
+          eq(knowledgeBaseBuilds.packageStatus, "ready"),
+        ));
+      }
+      return;
+    }
     res
       .status(error instanceof ServiceEntitlementError ? error.statusCode : 400)
       .json({
@@ -7224,7 +7294,9 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
           code:
             error instanceof ServiceEntitlementError
               ? error.code
-              : knowledgeArchiveErrorCode(error) || "KNOWLEDGE_PUBLISH_FAILED",
+              : error instanceof KnowledgeBasePackageUpdateError
+                ? error.code
+                : knowledgeArchiveErrorCode(error) || "KNOWLEDGE_PUBLISH_FAILED",
         },
       });
   }

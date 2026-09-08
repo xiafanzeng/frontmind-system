@@ -14,7 +14,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Copy,
   ImagePlus,
   MessageCircle,
   MessageSquare,
@@ -27,7 +26,6 @@ import {
   HlButton,
   HlField,
   HlSelect,
-  copyText,
   type SettingsTab,
 } from "./shared";
 import "./widget-settings.css";
@@ -84,15 +82,7 @@ const INITIAL_DRAFT: SettingsDraft = {
 const SETTINGS_TABS: Array<{ value: SettingsTab; label: string }> = [
   { value: "basic", label: "基础配置" },
   { value: "leads", label: "留资配置" },
-  { value: "install", label: "安装代码" },
-  { value: "share", label: "分享地址" },
 ];
-
-const LOCAL_INSTALL_CODE = `<!-- 本地预览示例：无需加载外部脚本 -->
-<div id="frontmind-preview-widget"></div>
-<script type="application/json" id="frontmind-preview-config">
-  { "mode": "local-preview", "network": false }
-</script>`;
 
 const DEMO_ARTICLES = [
   {
@@ -738,11 +728,6 @@ export default function WidgetSettingsWorkspace({
     if (invalidField?.matches("input, textarea"))
       invalidField.focus({ preventScroll: true });
   }, [active, errors, tab]);
-  const localShareAddress =
-    typeof window === "undefined"
-      ? "/?view=content-insights&contentModule=settings&contentTab=basic"
-      : `${window.location.origin}/?view=content-insights&contentModule=settings&contentTab=basic`;
-
   const patch = <Key extends keyof SettingsDraft>(
     key: Key,
     value: SettingsDraft[Key],
@@ -1006,76 +991,6 @@ export default function WidgetSettingsWorkspace({
                       }
                     />
                   </HlField>
-                </div>
-              </div>
-            </Tabs.Content>
-            <Tabs.Content value="install" className="hl-widget-tab-content">
-              <div
-                className="hl-widget-form-scroll hl-widget-install"
-                aria-label="安装代码示例"
-                tabIndex={0}
-              >
-                <p>安装代码样式示例，正式接入后提供可用代码</p>
-                <div className="hl-widget-code-wrap">
-                  <pre>
-                    <code>{LOCAL_INSTALL_CODE}</code>
-                  </pre>
-                  <HlButton
-                    className="hl-widget-code-copy"
-                    aria-label="复制安装代码"
-                    onClick={() => void copyText(LOCAL_INSTALL_CODE)}
-                  >
-                    <Copy size={14} />
-                    复制
-                  </HlButton>
-                </div>
-                <h4>使用代码直接控制插件</h4>
-                <div className="hl-widget-code-wrap">
-                  <pre>
-                    <code>
-                      {
-                        "FrontMindPreview.switchState(1) // 打开插件\nFrontMindPreview.switchState(0) // 关闭插件"
-                      }
-                    </code>
-                  </pre>
-                </div>
-                <div className="hl-widget-code-actions">
-                  <HlButton
-                    onClick={() => setPreviewOpen(true)}
-                    disabled={
-                      !draft.enabled || !(draft.chatbot || draft.serviceDesk)
-                    }
-                  >
-                    打开插件
-                  </HlButton>
-                  <HlButton onClick={() => setPreviewOpen(false)}>
-                    关闭插件
-                  </HlButton>
-                </div>
-                <p className="hl-widget-hint">
-                  以上代码仅为本地展示示例。按钮只控制右侧预览。
-                </p>
-              </div>
-            </Tabs.Content>
-            <Tabs.Content value="share" className="hl-widget-tab-content">
-              <div
-                className="hl-widget-form-scroll"
-                aria-label="分享地址"
-                tabIndex={0}
-              >
-                <div className="hl-widget-share">
-                  <input
-                    className="hl-input"
-                    aria-label="预览地址"
-                    disabled
-                    value={localShareAddress}
-                  />
-                  <HlButton
-                    variant="primary"
-                    onClick={() => void copyText(localShareAddress)}
-                  >
-                    复制
-                  </HlButton>
                 </div>
               </div>
             </Tabs.Content>

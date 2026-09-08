@@ -79,7 +79,7 @@ describe("Dashboard-owned snapshot download binding", () => {
   it.each([
     ["snapshot owner", { userId: 43 }],
     ["published snapshot", { publishedSnapshotId: randomUUID() }],
-    ["source revision", { revision: 8 }],
+    ["source revision", { revision: 6 }],
     ["archive bytes", { packageSizeBytes: 1235 }],
     ["package status", { packageStatus: "retrying" }],
     ["storage key", { packageStorageKey: "knowledge-builds/other.zip" }],
@@ -95,6 +95,27 @@ describe("Dashboard-owned snapshot download binding", () => {
         build: { ...build, ...patch },
       }),
     ).toThrow(KnowledgeSnapshotDownloadBindingError);
+  });
+
+  it("keeps an immutable snapshot downloadable while its build is edited", () => {
+    expect(
+      resolveDashboardOwnedSnapshotDownloadBinding({
+        snapshot,
+        build: {
+          ...build,
+          status: "confirming",
+          revision: snapshot.sourceBuildRevision! + 1,
+          packageStatus: "not_started",
+          packageRevision: null,
+          packageStorageKey: null,
+          packageArchiveSha256: null,
+          packageSizeBytes: null,
+        },
+      }),
+    ).toMatchObject({
+      immutableSnapshot: true, archiveSha256, archiveBytes: 1234,
+      expected: { buildId, revision: 7 },
+    });
   });
 
   it("keeps a historical/provider build on the legacy validation path", () => {

@@ -309,9 +309,15 @@ export interface KnowledgeBaseProgressDto {
   generatedSystemAttachmentCount?: number;
   /** Server settlement time, never the browser polling time. */
   settledAt?: number | null;
+  /** Content is confirmed; an explicit update may now generate and activate the ZIP. */
+  updateAllowed?: boolean;
   packageAllowed: boolean;
   /** Additive package phase; older projections may omit it. */
   packageState?: KnowledgeBasePackageState;
+  /** Number of local archive attempts made for the current revision. */
+  packageAttemptCount?: number;
+  /** Stable diagnostic code when local archive generation needs attention. */
+  packageLastErrorCode?: string | null;
 }
 
 /**
@@ -487,6 +493,8 @@ export interface KnowledgeBaseObservationDto {
   processingPhase?: KnowledgeBaseProcessingPhase | null;
   contentState?: KnowledgeBaseContentState;
   packageState?: KnowledgeBasePackageState;
+  packageAttemptCount?: number;
+  packageLastErrorCode?: string | null;
   publicationState?: KnowledgeBasePublicationState;
   contentCompletedAt?: number | null;
   canonicalTaskUrl?: string | null;

@@ -102,7 +102,6 @@ import {
   runLeasedKnowledgeBaseRecovery,
 } from "./knowledge-base-readiness";
 import { createKnowledgeBaseRecoverySweep } from "../knowledge-base-recovery-worker";
-import { runKnowledgeBasePackageSweep } from "../knowledge-base-local-package";
 import { sweepKnowledgeBaseBuildSources } from "../knowledge-base-local-source-lifecycle";
 import {
   bundledMigrationManifestPath,
@@ -575,6 +574,7 @@ async function startServer() {
             }),
         });
       }
+      // ZIP generation belongs to the user's explicit update request.
       if (!runtimeRoleRunsKnowledgeBaseWorker(runtimeRole)) return;
       const recoverKnowledgeBaseState = createKnowledgeBaseRecoverySweep({
         recoverExpiredTurns: () => recoverExpiredKnowledgeBaseTurns(),
@@ -582,29 +582,12 @@ async function startServer() {
           cleanupOrphanedKnowledgeBuildArtifactCandidates(),
       });
       const runKnowledgeRecovery = async () => {
-        const [recoveryResult, packageResult] = await Promise.allSettled([
+        const [recoveryResult] = await Promise.allSettled([
           runLeasedKnowledgeBaseRecovery({
             tracker: knowledgeBaseRecoveryHealth,
             recover: recoverKnowledgeBaseState,
           }),
-          runKnowledgeBasePackageSweep(),
         ]);
-        if (packageResult.status === "fulfilled") {
-          const packages = packageResult.value;
-          if (packages.scanned || packages.ready || packages.failed) {
-            console.info(
-              "[KnowledgeBasePackage] scan_complete",
-              JSON.stringify(packages),
-            );
-          }
-        } else {
-          // Package generation is build-local. Its failure must not hide a
-          // successful provider recovery sweep or degrade global readiness.
-          console.error(
-            "[KnowledgeBasePackage] scan_failed",
-            runtimeErrorForLog(packageResult.reason),
-          );
-        }
         if (recoveryResult.status === "fulfilled") {
           const recovery = recoveryResult.value;
           if (!recovery) return;

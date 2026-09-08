@@ -253,7 +253,7 @@ export default function EmbeddedKnowledgeBasePanel({
       <header className={unified ? "knowledge-workspace-toolbar" : "page-header flex flex-wrap items-center justify-between gap-4"}>
         <div>
           <h2 ref={workspaceTitleRef} tabIndex={-1}>{unified ? "智能知识库" : page === "build" ? "知识库智能体" : "知识库展示"}</h2>
-          <p>预览和修改当前节点，确认后更新知识库。</p>
+          <p>节点修改和确认保存在工作稿中，点击更新知识库后启用新版本。</p>
         </div>
         <div className="knowledge-workspace-actions">
           {(unified || page === "build") && !previewMode && <ManualKnowledgeUpdateButton
@@ -488,6 +488,11 @@ function ManualKnowledgeUpdateButton({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [uncertainConversation, setUncertainConversation] = useState<string | null>(null);
   const confirmedConversation = useRef<string | null>(null);
+  const confirmedDraft = useRef<{
+    expectedBuildId?: string;
+    expectedRevision?: number;
+    expectedContentVersion?: number;
+  }>({});
   const updateLock = useRef(false);
   useEffect(() => { onPendingChange(updating); return () => onPendingChange(false); }, [updating, onPendingChange]);
   const progressQuery = trpc.workspace.knowledgeProgress.useQuery(
@@ -540,7 +545,7 @@ function ManualKnowledgeUpdateButton({
       return;
     }
     const progress = progressQuery.data?.progress;
-    if (!progress?.packageAllowed) {
+    if (!(progress?.updateAllowed ?? progress?.packageAllowed)) {
       toast.warning("知识库尚未逐项走完", {
         description: progress
           ? `当前进度为 ${progress.summary.handled}/${progress.summary.total}；请继续处理“${
@@ -551,6 +556,15 @@ function ManualKnowledgeUpdateButton({
             }”。`
           : "请先完成资料研究并建立通过校验的知识树。",
       });
+      return;
+    }
+    if (
+      confirmedDraft.current.expectedBuildId !== progress?.build.id ||
+      confirmedDraft.current.expectedRevision !== progress?.build.revision ||
+      confirmedDraft.current.expectedContentVersion !== progress?.build.contentVersion
+    ) {
+      setConfirmOpen(false);
+      toast.info("工作稿已变化，请重新确认需要更新的知识库内容");
       return;
     }
     if (
@@ -570,6 +584,9 @@ function ManualKnowledgeUpdateButton({
       const synced = await syncKnowledgeBaseArchiveFromOutput({
         conversationId: updatedConversationId,
         operation,
+        expectedBuildId: progress.build.id,
+        expectedRevision: progress.build.revision,
+        expectedContentVersion: progress.build.contentVersion,
       });
       operation.assertActive();
       if (!synced) {
@@ -607,7 +624,11 @@ function ManualKnowledgeUpdateButton({
   if (progress?.build.status === "published") {
     return null;
   }
-  if (!progress?.packageAllowed) {
+  const generating = progress?.packageState === "preparing" || progress?.packageState === "retrying";
+  if (generating && !updating) {
+    return <Button disabled>生成并更新中…</Button>;
+  }
+  if (!(progress?.updateAllowed ?? progress?.packageAllowed)) {
     return null;
   }
 
@@ -615,16 +636,21 @@ function ManualKnowledgeUpdateButton({
     <Button disabled={disabled || updating} onClick={() => {
       if (getUnsavedWorkspaceDrafts().length) { toast.info("请先保存或清空未提交内容，再更新知识库"); return; }
       confirmedConversation.current = activeConversation?.id ?? null;
+      confirmedDraft.current = {
+        expectedBuildId: progress?.build.id,
+        expectedRevision: progress?.build.revision,
+        expectedContentVersion: progress?.build.contentVersion,
+      };
       setConfirmOpen(true);
     }}><RefreshCw className="h-4 w-4" />更新知识库</Button>
     <Dialog open={confirmOpen} onOpenChange={(open) => { if (!updating) setConfirmOpen(open); }}>
       <DialogContent onEscapeKeyDown={(event) => { if (updating) event.preventDefault(); }} onInteractOutside={(event) => { if (updating) event.preventDefault(); }}>
         <DialogHeader><DialogTitle>更新知识库</DialogTitle><DialogDescription>
-          将已确认的知识内容更新为正式版本，供后续任务使用。正在执行和历史任务仍使用原来绑定的版本；此操作不会发布网站或投放媒体。
+          点击“确认更新”后，系统将根据当前已确认的工作稿生成知识库 ZIP，并启用新的正式版本供后续任务使用。生成期间，当前正式版本继续可用。正在执行和历史任务仍使用原来绑定的版本；此操作不会发布网站或投放媒体。
         </DialogDescription></DialogHeader>
         <DialogFooter>
           <Button variant="outline" disabled={updating} onClick={() => setConfirmOpen(false)}>取消</Button>
-          <Button disabled={disabled || updating} onClick={() => void updateKnowledgeBase()}>{updating ? "正在更新…" : "确认更新"}</Button>
+          <Button disabled={disabled || updating} onClick={() => void updateKnowledgeBase()}>{updating ? "生成并更新中…" : "确认更新"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

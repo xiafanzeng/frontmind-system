@@ -312,6 +312,47 @@
   box-shadow: var(--publishing-shadow);
 }
 
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation {
+  max-width: 1660px;
+  margin: 0 auto 14px;
+  display: grid;
+  grid-template-columns: minmax(210px, 1.3fr) repeat(5, minmax(120px, 1fr)) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e1dff7;
+  border-radius: 10px;
+  background: linear-gradient(110deg, #faf9ff, #fff);
+}
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation-copy strong {
+  color: #302b68;
+  font-size: 13px;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation-copy span {
+  color: #7e7b91;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation input {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid #dedfe8;
+  border-radius: 7px;
+  background: #fff;
+  color: #3d3f50;
+  font-size: 12px;
+}
+.monitoring-module :where(.publishing-page) .publishing-media-recommendation .publishing-button {
+  white-space: nowrap;
+}
+
 .monitoring-module :where(.publishing-page) .publishing-kind-tabs {
   display: flex;
   height: 50px;
@@ -877,12 +918,15 @@
   color: #ad6b0a;
 }
 .monitoring-module :where(.publishing-page) .publishing-media-remark {
-  position: absolute;
-  right: 14px;
-  bottom: 2px;
+  position: static;
+  grid-column: 2 / -1;
+  max-width: 100%;
   margin: 0;
   color: #999baa;
   font-size: var(--operator-caption-size, 9px);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .monitoring-module :where(.publishing-page) .publishing-media-remark.is-danger {
   color: #d64b55;
@@ -1328,6 +1372,18 @@
   .monitoring-module :where(.publishing-page) .publishing-media-search-row {
     grid-template-columns: 1fr;
     padding: 13px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-recommendation {
+    grid-template-columns: 1fr 1fr;
+    margin-right: 13px;
+    margin-left: 13px;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-recommendation-copy,
+  .monitoring-module :where(.publishing-page) .publishing-media-recommendation button {
+    grid-column: 1 / -1;
+  }
+  .monitoring-module :where(.publishing-page) .publishing-media-recommendation-copy span {
+    white-space: normal;
   }
   .monitoring-module :where(.publishing-page) .publishing-sort-field {
     justify-content: space-between;

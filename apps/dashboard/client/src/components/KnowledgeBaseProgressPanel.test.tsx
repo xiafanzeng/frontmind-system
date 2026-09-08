@@ -5,6 +5,7 @@ import KnowledgeBaseProgressPanel, {
   type KnowledgeBaseProgressDto,
 } from "./KnowledgeBaseProgressPanel";
 import { KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE } from "@shared/knowledge-base-progress";
+import KnowledgeWorkspaceStatus from "./KnowledgeWorkspaceStatus";
 
 const progress: KnowledgeBaseProgressDto = {
   build: {
@@ -150,13 +151,14 @@ describe("KnowledgeBaseProgressPanel", () => {
             currentLeafId: null,
           },
           packageAllowed: false,
+          packageState: "preparing",
         }}
       />,
     );
 
     expect(
       screen.getByText(
-        "知识库内容已完成，下载包正在后台准备；已完成正文不会回退。",
+        "正在生成 ZIP 并更新知识库；生成期间，当前正式版本继续可用。",
       ),
     ).toBeTruthy();
   });
@@ -311,7 +313,7 @@ describe("KnowledgeBaseProgressPanel", () => {
     );
 
     expect(
-      screen.getByText("知识库内容与下载包均已完成，可以直接更新。"),
+      screen.getByText("当前知识库已更新，后续新任务将使用此版本。"),
     ).toBeTruthy();
     expect(screen.queryByText(/下载包正在后台准备/)).toBeNull();
   });
@@ -334,10 +336,27 @@ describe("KnowledgeBaseProgressPanel", () => {
 
     expect(
       screen.getByText(
-        "知识库内容已完成，下载包暂时无法生成；已完成正文不受影响。",
+        "知识库更新暂未完成，修改已保存；当前正式版本继续可用，请重试更新。",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/下载包正在后台准备/)).toBeNull();
+  });
+
+  it.each([
+    ["progress panel", KnowledgeBaseProgressPanel],
+    ["workspace status", KnowledgeWorkspaceStatus],
+  ] as const)("keeps a confirmed draft idle until explicit update in %s", (_name, Component) => {
+    render(
+      <Component progress={{
+        ...progress,
+        build: { ...progress.build, status: "ready_to_publish", currentLeafId: null },
+        updateAllowed: true,
+        packageAllowed: false,
+        packageState: "not_started",
+      }} />,
+    );
+    expect(screen.getByText("修改已保存，点击更新知识库生成并启用新版本。")).toBeVisible();
+    expect(screen.queryByText(/正在生成|后台准备|重试生成/)).toBeNull();
   });
 
   it("shows partial safe nodes as view-only and never implies package eligibility", () => {

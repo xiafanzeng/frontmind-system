@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BarChart3, Bot, ContactRound, Globe2, RotateCcw } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
 import AnalyticsWorkspace from "./AnalyticsWorkspace";
@@ -24,7 +24,7 @@ const widgetModules = [
   ["collection", "采集"],
   ["leads", "留资统计"],
 ] as const;
-const settingTabs: SettingsTab[] = ["basic", "leads", "install", "share"];
+const settingTabs: SettingsTab[] = ["basic", "leads"];
 
 export function readContentInsightsRoute(search: string) {
   const params = new URLSearchParams(search);
@@ -110,6 +110,17 @@ export default function ContentInsightsWorkspace() {
   const search = useSearch();
   const [location, setLocation] = useLocation();
   const route = readContentInsightsRoute(search);
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const legacyTab = params.get("contentTab");
+    if (
+      route.module !== "settings" ||
+      !["install", "share"].includes(legacyTab ?? "")
+    )
+      return;
+    params.set("contentTab", "basic");
+    setLocation(`${location}?${params.toString()}`);
+  }, [location, route.module, search, setLocation]);
   const [session, setSession] = useState(0);
   const navigate = (module: PreviewModule, tab: SettingsTab = route.tab) => {
     const params = new URLSearchParams({

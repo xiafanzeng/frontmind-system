@@ -64,7 +64,7 @@ function kindLabel(kind: MediaResource["kind"]) {
 
 function capabilityLabel(capability: MediaResource["capability"]) {
   if (capability === "image") return "支持图文";
-  if (capability === "image_pending") return "图片待验收";
+  if (capability === "image_pending") return "图文能力";
   return "仅文字";
 }
 
@@ -96,6 +96,7 @@ export default function PublishingMediaLibraryPage({
   const [batchQueryDraft, setBatchQueryDraft] = useState(
     filters.batchQuery ?? "",
   );
+  const [recommendationDraft, setRecommendationDraft] = useState({ industry: "", product: "", region: "", audience: "", keywords: "", budget: "", format: "" });
   const selectionScope = useMemo(
     () => ({ gateway, shortlistKey, draftId, articleVersionId }),
     [gateway, shortlistKey, draftId, articleVersionId],
@@ -157,8 +158,8 @@ export default function PublishingMediaLibraryPage({
     [filters, gateway],
   );
   const loadFacets = useCallback(
-    (signal: AbortSignal) => gateway.getMediaFacets(filters.kind, signal),
-    [filters.kind, gateway],
+    (signal: AbortSignal) => gateway.getMediaFacets(filters, signal),
+    [filters, gateway],
   );
   const loadArticles = useCallback(
     (signal: AbortSignal) => gateway.listArticles(signal),
@@ -265,6 +266,11 @@ export default function PublishingMediaLibraryPage({
     nextVersion = articleVersionId,
   ) => {
     navigate(writeMediaRouteState(nextPath, next, nextVersion));
+  };
+  const applySmartRecommendation = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const terms = [recommendationDraft.industry, recommendationDraft.product, recommendationDraft.region, recommendationDraft.audience, recommendationDraft.keywords, recommendationDraft.budget, recommendationDraft.format].map((value) => value.trim()).filter(Boolean);
+    navigateFilters({ ...filters, query: terms.join(" "), recommended: "true", page: 1 });
   };
 
   useEffect(() => setQueryDraft(filters.query), [filters.query]);
@@ -551,6 +557,12 @@ export default function PublishingMediaLibraryPage({
         ) : null}
         <Link href="/publishing/articles">管理稿件</Link>
       </section>
+
+      <form className="publishing-media-recommendation" aria-label="FrontMind 媒体智能推荐" onSubmit={applySmartRecommendation}>
+        <div className="publishing-media-recommendation-copy"><strong>FrontMind 媒体智能推荐</strong><span>输入行业和产品，优先查找目录中的 GEO 推荐媒体</span></div>
+        {[["industry","行业"],["product","产品或服务"],["region","目标地区"],["audience","目标受众"],["keywords","行业词或品牌词"],["budget","预算（可选）"],["format","图文要求（可选）"]].map(([key,label]) => <input key={key} aria-label={label} placeholder={label} value={recommendationDraft[key as keyof typeof recommendationDraft]} onChange={(event) => setRecommendationDraft((current) => ({ ...current, [key]: event.target.value }))} />)}
+        <button className="publishing-button publishing-button-primary" type="submit" disabled={!Object.values(recommendationDraft).some((value) => value.trim())}><Search size={15} />推荐媒体</button>
+      </form>
 
       <section
         className="publishing-media-workbench"

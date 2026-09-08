@@ -58,6 +58,22 @@ export function isAuthenticatedAdvancedKnowledgePublication(input: {
   notBefore: Date;
 }) {
   const { snapshot, build } = input;
+  // A newer working draft cannot revoke an already authenticated publication.
+  // Only the snapshot transaction changes the active version; downstream
+  // tasks continue to bind this immutable snapshot until that commit succeeds.
+  if (
+    snapshot.status === "active" &&
+    snapshot.createdAt.getTime() >= input.notBefore.getTime() &&
+    build.createdAt.getTime() >= input.notBefore.getTime() &&
+    snapshot.userId === build.userId && snapshot.sourceBuildId === build.id &&
+    build.publishedSnapshotId === snapshot.id && Boolean(build.publishedAt) &&
+    snapshot.sourceBuildRevision !== null &&
+    Number.isSafeInteger(snapshot.sourceBuildRevision) &&
+    build.revision > snapshot.sourceBuildRevision &&
+    Boolean(snapshot.sourceTaskId) &&
+    /^[a-f0-9]{64}$/u.test(snapshot.archiveHash || "") &&
+    snapshot.sourceArtifactHash === snapshot.archiveHash
+  ) return true;
   const handled = build.confirmedCount + build.directPrefilledCount;
   const depthPolicy = knowledgeBaseTreePolicy(build.treePolicyVersion);
   let researchCoverageValid = depthPolicy.version === 1;

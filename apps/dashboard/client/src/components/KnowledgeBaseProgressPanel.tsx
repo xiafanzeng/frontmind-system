@@ -21,6 +21,12 @@ import type {
   KnowledgeBaseProgressDto,
 } from "@shared/knowledge-base-progress";
 import { KNOWLEDGE_BASE_MATERIALIZED_RESULT_RESET_MESSAGE } from "@shared/knowledge-base-progress";
+import {
+  KNOWLEDGE_DRAFT_READY_COPY,
+  KNOWLEDGE_UPDATE_ATTENTION_COPY,
+  KNOWLEDGE_UPDATE_COMPLETE_COPY,
+  KNOWLEDGE_UPDATE_PREPARING_COPY,
+} from "@shared/knowledge-base-copy";
 
 export type { KnowledgeBaseProgressDto };
 
@@ -382,15 +388,19 @@ export default function KnowledgeBaseProgressPanel({
       >
         <Archive className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          {progress.packageAllowed
-            ? "知识库内容与下载包均已完成，可以直接更新。"
-            : partialResult
-              ? "当前安全内容已保留并可查看，但不驱动后续操作或发布。"
-              : progress.packageState === "attention_required"
-                ? "知识库内容已完成，下载包暂时无法生成；已完成正文不受影响。"
-                : contentCompleted
-                  ? "知识库内容已完成，下载包正在后台准备；已完成正文不会回退。"
-                  : "知识库必须逐项走完；“企业已确认”和“直接预填”都会计入已处理，但只有企业明确确认的节点显示对号。"}
+          {partialResult
+            ? "当前安全内容已保留并可查看，但不驱动后续操作或发布。"
+            : progress.packageState === "attention_required"
+              ? KNOWLEDGE_UPDATE_ATTENTION_COPY
+              : progress.packageState === "preparing"
+                ? KNOWLEDGE_UPDATE_PREPARING_COPY
+                : progress.packageState === "retrying"
+                  ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）；当前正式版本继续可用。`
+                  : progress.build.status === "published"
+                    ? KNOWLEDGE_UPDATE_COMPLETE_COPY
+                    : contentCompleted || (progress.updateAllowed ?? progress.packageAllowed)
+                      ? KNOWLEDGE_DRAFT_READY_COPY
+                      : "知识库必须逐项走完；“企业已确认”和“直接预填”都会计入已处理，但只有企业明确确认的节点显示对号。"}
         </span>
       </footer>
     </section>

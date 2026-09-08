@@ -577,6 +577,7 @@ describe("knowledge-base 0061 package/content dual-read", () => {
     const projected = knowledgeBasePackageProjectionCompatibility({
       ...legacyPackage,
       packageStatus: "preparing",
+      packageNextRetryAt: new Date(Date.now() + 120_000),
       contentCompletedAt: updatedAt,
     });
 

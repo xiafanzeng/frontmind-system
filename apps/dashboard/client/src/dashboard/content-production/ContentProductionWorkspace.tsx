@@ -647,7 +647,6 @@ function ContentProductionInner() {
         <div>
           <span className="cp-kicker">内容工作台</span>
           <h1>内容制作</h1>
-          <p>每个任务独立保存资料、确认记录与交付成果。</p>
         </div>
         <button
           className="cp-primary"

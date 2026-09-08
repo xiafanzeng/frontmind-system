@@ -11,7 +11,6 @@ import type {
   PublicationBatchSummary,
   PublicationDraft,
   PublicationPreflight,
-  PublisherMediaKind,
   PublisherSubmitInput,
   PublishingDashboard,
   SaveDraftTitlesInput,
@@ -35,7 +34,7 @@ export type PublisherGateway = {
     expectedRevision: number,
   ): Promise<ArticleDetail>;
   getMediaFacets(
-    kind?: PublisherMediaKind,
+    filters?: MediaFilters,
     signal?: AbortSignal,
   ): Promise<MediaFacets>;
   listMedia(filters: MediaFilters, signal?: AbortSignal): Promise<MediaList>;

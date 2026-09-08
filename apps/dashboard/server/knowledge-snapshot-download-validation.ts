@@ -62,13 +62,14 @@ type BuildBindingFields = Pick<
 
 export type DashboardOwnedSnapshotDownloadBinding = {
   buildId: string;
+  immutableSnapshot?: boolean;
   archiveSha256: string;
   archiveBytes: number;
   expected: {
     buildId: string;
-    generation: number;
+    generation?: number;
     revision: number;
-    companyName: string;
+    companyName?: string;
   };
 };
 
@@ -76,7 +77,7 @@ export type KnowledgeSnapshotDownloadValidation =
   | { kind: "historical" }
   | (DashboardOwnedSnapshotDownloadBinding & {
       kind: "dashboard_owned";
-      nodes: readonly KnowledgeBaseBuildNode[];
+      nodes?: readonly KnowledgeBaseBuildNode[];
     });
 
 export class KnowledgeSnapshotDownloadBindingError extends Error {
@@ -194,6 +195,26 @@ export function resolveDashboardOwnedSnapshotDownloadBinding(input: {
   const archiveSha256 = normalizedSha256(build.packageArchiveSha256);
   const snapshotArchiveSha256 = normalizedSha256(snapshot.archiveHash);
   const sourceArtifactHash = normalizedSha256(snapshot.sourceArtifactHash);
+  // The published snapshot keeps its own byte receipt after the source draft
+  // advances. Validate those exact bytes and the sealed manifest, never the
+  // subsequently edited nodes or replacement package tuple.
+  if (
+    snapshot.userId === build.userId && snapshot.sourceBuildId === build.id &&
+    snapshot.sourceConversationId === build.conversationId &&
+    snapshot.sourceBuildRevision !== null &&
+    Number.isSafeInteger(snapshot.sourceBuildRevision) && snapshot.sourceBuildRevision >= 0 &&
+    Number.isSafeInteger(build.revision) && build.revision > snapshot.sourceBuildRevision &&
+    snapshotArchiveSha256 && sourceArtifactHash === snapshotArchiveSha256 &&
+    Number.isSafeInteger(snapshot.totalBytes) && snapshot.totalBytes > 0
+  ) {
+    return {
+      immutableSnapshot: true,
+      buildId: build.id,
+      archiveSha256: snapshotArchiveSha256,
+      archiveBytes: snapshot.totalBytes,
+      expected: { buildId: build.id, revision: snapshot.sourceBuildRevision },
+    };
+  }
   const expectedStorageKey = knowledgeBuildArtifactLocalPackageStorageKey({
     userId: build.userId,
     buildId: build.id,
@@ -323,6 +344,7 @@ export async function loadKnowledgeSnapshotDownloadValidation(
     build: builds[0],
   });
   if (!binding) return { kind: "historical" };
+  if (binding.immutableSnapshot) return { kind: "dashboard_owned", ...binding };
   const nodes = await db
     .select()
     .from(knowledgeBaseBuildNodes)

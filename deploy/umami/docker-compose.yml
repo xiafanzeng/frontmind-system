@@ -36,6 +36,8 @@ services:
     image: ${FRONTMIND_UMAMI_POSTGRES_IMAGE:?pin PostgreSQL 17 image digest}
     env_file: /etc/frontmind-system/umami-postgres.env
     entrypoint: [/bin/sh, /opt/umami-backup.sh]
+    # Match the Website owner so its mode-600 immutable summary stays private.
+    user: "10002:10002"
     volumes:
       - ./backup.sh:/opt/umami-backup.sh:ro
       - /srv/frontmind-system/backups/umami:/backups

@@ -20,6 +20,8 @@ Website summary adapter and does not manufacture dated events or countries.
 Backups run every six hours and retain 14 days of PostgreSQL custom-format dumps.
 The immutable CN historical summary is also copied to the private backup directory;
 it must be restored alongside Umami to reconstruct the public total.
+The backup service runs as Website UID 10002; create its backup directory with
+owner 10002:10002 and mode 0700 before starting it.
 For recovery, stop Umami and its backup service, preserve the damaged volume,
 restore the selected dump with `pg_restore --clean --if-exists --no-owner` into
 an isolated PostgreSQL database, check it, and point Umami to the recovered DB.

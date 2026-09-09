@@ -225,6 +225,8 @@ export interface Conversation {
   id: string;
   title: string;
   purpose?: "enterprise_qa" | "content_production";
+  /** Workbench subagent ownership; absent on legacy general conversations. */
+  workbenchAgentId?: string;
   messages: LocalMessage[];
   /** Server-derived boundary for provider tasks owned outside ordinary chat. */
   executionKind?: "general_chat_v2" | "response_logic";
@@ -1817,6 +1819,7 @@ export function mergeDirtyConversationHydration(
     status: local.status,
     executionKind: local.executionKind ?? remote.executionKind,
     purpose: remote.purpose ?? local.purpose,
+    workbenchAgentId: local.workbenchAgentId ?? remote.workbenchAgentId,
     taskId: local.taskId ?? remote.taskId,
     previousResponseId: local.previousResponseId ?? remote.previousResponseId,
     startedAt: local.startedAt ?? remote.startedAt,
@@ -2259,6 +2262,7 @@ interface ConversationContextType {
     title?: string;
     reuseEmpty?: boolean;
     purpose?: "enterprise_qa" | "content_production";
+    workbenchAgentId?: string;
   }) => string;
   setActive: (id: string) => void;
   addMessage: (conversationId: string, message: LocalMessage) => void;
@@ -2906,6 +2910,7 @@ export function ConversationProvider({
       title?: string;
       reuseEmpty?: boolean;
       purpose?: "enterprise_qa" | "content_production";
+      workbenchAgentId?: string;
     }) => {
       const title = options?.title?.trim() || "新内容流程";
       if (options?.reuseEmpty) {
@@ -2927,6 +2932,7 @@ export function ConversationProvider({
         id,
         title,
         ...(options?.purpose ? { purpose: options.purpose } : {}),
+        ...(options?.workbenchAgentId ? { workbenchAgentId: options.workbenchAgentId } : {}),
         messages: [],
         status: "idle",
         createdAt: Date.now(),
@@ -3274,6 +3280,7 @@ export function ConversationPurposeProvider({
       title?: string;
       reuseEmpty?: boolean;
       purpose?: "enterprise_qa" | "content_production";
+      workbenchAgentId?: string;
     }) =>
       parent.createConversation({
         ...options,
@@ -3285,6 +3292,7 @@ export function ConversationPurposeProvider({
               ? "内容制作"
               : "新会话"),
         purpose: purpose === "general" ? undefined : purpose,
+        workbenchAgentId: options?.workbenchAgentId,
       }),
     [parent.createConversation, purpose],
   );

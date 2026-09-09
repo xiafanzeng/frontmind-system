@@ -141,6 +141,18 @@ export function scrollChatViewportToBottom(
   });
 }
 
+const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 96;
+
+export function isChatViewportNearBottom(
+  viewport: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">,
+  threshold = CHAT_SCROLL_BOTTOM_THRESHOLD_PX,
+) {
+  return (
+    viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <=
+    threshold
+  );
+}
+
 export const KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE =
   "PACKAGE_REBIND_REQUIRED";
 export const KNOWLEDGE_BASE_INTERNAL_ATTACHMENT_NOTICE_CODE =
@@ -1267,6 +1279,7 @@ export default function ChatArea({
     staleTime: 30_000,
   });
   const messagesViewportRef = useRef<HTMLDivElement>(null);
+  const keepMessagesPinnedToBottomRef = useRef(true);
   const explicitRecoveryRequestRef = useRef<{
     recoveryToken: string;
     clientRequestId: string;
@@ -1354,14 +1367,46 @@ export default function ChatArea({
     wakeKnowledgeBaseConversation,
   ]);
 
-  // Auto-scroll to bottom when new messages arrive
+  const messageScrollKey = activeConversation?.messages
+    ?.map(
+      (message) =>
+        `${message.id}:${message.content?.length ?? 0}:${message.stepGroups?.length ?? 0}:${message.outputFiles?.length ?? 0}:${message.inlineImages?.length ?? 0}`,
+    )
+    .join("|");
+
   useEffect(() => {
-    const timer = setTimeout(() => {
+    // A newly selected conversation should start at its most recent message.
+    keepMessagesPinnedToBottomRef.current = true;
+  }, [activeConversation?.id]);
+
+  useEffect(() => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+    const trackReaderPosition = () => {
+      keepMessagesPinnedToBottomRef.current =
+        isChatViewportNearBottom(viewport);
+    };
+    trackReaderPosition();
+    viewport.addEventListener("scroll", trackReaderPosition, { passive: true });
+    return () => viewport.removeEventListener("scroll", trackReaderPosition);
+  }, [activeConversation?.id]);
+
+  // Keep a live response in view only while the reader has stayed near the
+  // bottom. Scrolling upward deliberately releases this anchor.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
       const viewport = messagesViewportRef.current;
-      if (viewport) scrollChatViewportToBottom(viewport);
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [activeConversation?.messages?.length, status]);
+      if (
+        viewport &&
+        (keepMessagesPinnedToBottomRef.current ||
+          isChatViewportNearBottom(viewport))
+      ) {
+        scrollChatViewportToBottom(viewport);
+        keepMessagesPinnedToBottomRef.current = true;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeConversation?.id, messageScrollKey, status]);
 
   const startKnowledgeBase = useCallback(
     async (
@@ -1776,71 +1821,76 @@ export default function ChatArea({
       : activeConversation.knowledgeBase?.notice?.message;
 
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
       {/* The unified workspace supplies one task header and one status area. */}
-      {!operatorWorkspace && <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
-        <div
-          className={`min-w-0 sm:pl-0 ${
-            reserveOuterMobileNav ? "pl-20" : "pl-10"
-          }`}
-        >
-          <div className="flex min-w-0 items-center gap-3">
-            <h2 className="max-w-[400px] truncate text-sm font-semibold text-foreground/80">
-              {sanitizedTitle}
-            </h2>
-            <StatusBadge
-              status={displayStatus || "idle"}
-              knowledgeBase={syncKnowledgeBaseSnapshot}
-            />
-          </div>
-          {(executionModel || startedAt) && (
-            <div
-              className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground/70"
-              aria-label="任务执行信息"
-            >
-              {executionModel && (
-                <span className="inline-flex items-center gap-1">
-                  {syncKnowledgeBaseSnapshot || responseLogicContext || purpose || fixedAgentProfile
-                    ? "FrontMind Agent"
-                    : getModelDisplayName(executionModel)}
-                </span>
-              )}
-              {startedAt && (
-                <span>
-                  开始{" "}
-                  {new Date(startedAt).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
-                </span>
-              )}
-              {completedAt && !activeTask && (
-                <span>
-                  完成{" "}
-                  {new Date(completedAt).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
-                </span>
-              )}
-              {startedAt && (activeTask || completedAt) && (
-                <HeaderExecutionDuration
-                  startedAt={startedAt}
-                  completedAt={completedAt}
-                  active={Boolean(activeTask)}
-                />
-              )}
+      {!operatorWorkspace && (
+        <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
+          <div
+            className={`min-w-0 sm:pl-0 ${
+              reserveOuterMobileNav ? "pl-20" : "pl-10"
+            }`}
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <h2 className="max-w-[400px] truncate text-sm font-semibold text-foreground/80">
+                {sanitizedTitle}
+              </h2>
+              <StatusBadge
+                status={displayStatus || "idle"}
+                knowledgeBase={syncKnowledgeBaseSnapshot}
+              />
             </div>
-          )}
+            {(executionModel || startedAt) && (
+              <div
+                className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground/70"
+                aria-label="任务执行信息"
+              >
+                {executionModel && (
+                  <span className="inline-flex items-center gap-1">
+                    {syncKnowledgeBaseSnapshot ||
+                    responseLogicContext ||
+                    purpose ||
+                    fixedAgentProfile
+                      ? "FrontMind Agent"
+                      : getModelDisplayName(executionModel)}
+                  </span>
+                )}
+                {startedAt && (
+                  <span>
+                    开始{" "}
+                    {new Date(startedAt).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                )}
+                {completedAt && !activeTask && (
+                  <span>
+                    完成{" "}
+                    {new Date(completedAt).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                )}
+                {startedAt && (activeTask || completedAt) && (
+                  <HeaderExecutionDuration
+                    startedAt={startedAt}
+                    completedAt={completedAt}
+                    active={Boolean(activeTask)}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>}
+      )}
 
       {/* Messages area */}
       <div
         ref={messagesViewportRef}
-        className="min-h-0 flex-1 overflow-y-auto custom-scrollbar"
+        className="min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar"
         data-testid="chat-messages-viewport"
       >
         <div className="max-w-4xl mx-auto px-3 py-6 space-y-6 sm:px-5 sm:py-8 sm:space-y-7">
@@ -1883,37 +1933,50 @@ export default function ChatArea({
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
               <React.Fragment key={msg.id}>
-              <GeneralExecutionActivity items={executionSlots.before.get(msg.id)} expandedGroups={expandedExecutionGroups} onToggleGroup={toggleExecutionGroup} />
-              <MessageBubble
-                message={msg}
-                isRunning={displayActiveTask}
-                generalChatLinks={
-                  activeConversation.executionKind === "general_chat_v2"
-                }
-                fixedElapsedTime={
-                  status === "completed" &&
-                  msg.id === finalAssistantMessageId &&
-                  startedAt !== undefined &&
-                  completedAt !== undefined
-                    ? Math.max(0, (completedAt - startedAt) / 1_000)
-                    : undefined
-                }
-                suppressKnowledgeArtifacts={syncKnowledgeBaseSnapshot}
-                onDelete={
-                  syncKnowledgeBaseSnapshot
-                    ? undefined
-                    : () => {
-                        if (activeConversation) {
-                          deleteMessage(activeConversation.id, msg.id);
+                <GeneralExecutionActivity
+                  items={executionSlots.before.get(msg.id)}
+                  expandedGroups={expandedExecutionGroups}
+                  onToggleGroup={toggleExecutionGroup}
+                />
+                <MessageBubble
+                  message={msg}
+                  isRunning={displayActiveTask}
+                  generalChatLinks={
+                    activeConversation.executionKind === "general_chat_v2"
+                  }
+                  fixedElapsedTime={
+                    status === "completed" &&
+                    msg.id === finalAssistantMessageId &&
+                    startedAt !== undefined &&
+                    completedAt !== undefined
+                      ? Math.max(0, (completedAt - startedAt) / 1_000)
+                      : undefined
+                  }
+                  suppressKnowledgeArtifacts={syncKnowledgeBaseSnapshot}
+                  onDelete={
+                    syncKnowledgeBaseSnapshot
+                      ? undefined
+                      : () => {
+                          if (activeConversation) {
+                            deleteMessage(activeConversation.id, msg.id);
+                          }
                         }
-                      }
-                }
-              />
-              <GeneralExecutionActivity items={executionSlots.after.get(msg.id)} expandedGroups={expandedExecutionGroups} onToggleGroup={toggleExecutionGroup} />
+                  }
+                />
+                <GeneralExecutionActivity
+                  items={executionSlots.after.get(msg.id)}
+                  expandedGroups={expandedExecutionGroups}
+                  onToggleGroup={toggleExecutionGroup}
+                />
               </React.Fragment>
             ))}
           </AnimatePresence>
-          {!purpose && activeConversation.execution?.coverage === "unavailable" && <p className="text-xs text-muted-foreground">此前的执行过程暂时无法读取，回复内容仍已保留。</p>}
+          {!purpose &&
+            activeConversation.execution?.coverage === "unavailable" && (
+              <p className="text-xs text-muted-foreground">
+                此前的执行过程暂时无法读取，回复内容仍已保留。
+              </p>
+            )}
 
           {syncKnowledgeBaseSnapshot &&
             activeConversation.knowledgeBase?.notice &&
@@ -1951,10 +2014,22 @@ export default function ChatArea({
                         </p>
                       )}
                   </div>
-                  {operatorWorkspace && !["reconcile", "none"].includes(knowledgeBaseNoticeRecoveryMode(activeConversation.knowledgeBase.notice)) ? (
-                    <Button type="button" size="sm" variant="outline" onClick={requestKnowledgeBaseReset}>重置后重新上传</Button>
+                  {operatorWorkspace &&
+                  !["reconcile", "none"].includes(
+                    knowledgeBaseNoticeRecoveryMode(
+                      activeConversation.knowledgeBase.notice,
+                    ),
+                  ) ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={requestKnowledgeBaseReset}
+                    >
+                      重置后重新上传
+                    </Button>
                   ) : activeConversation.knowledgeBase.notice.code ===
-                  KNOWLEDGE_BASE_REBUILD_REQUIRED_NOTICE_CODE ? (
+                    KNOWLEDGE_BASE_REBUILD_REQUIRED_NOTICE_CODE ? (
                     <Button
                       type="button"
                       size="sm"
@@ -4209,7 +4284,7 @@ export function MessageBubble({
                 className={cn(
                   "text-[14px] leading-relaxed",
                   isUser
-                    ? "rounded-2xl rounded-tr-md border border-border/55 bg-muted/45 px-4 py-3 text-foreground"
+                    ? "rounded-2xl rounded-tr-md border border-[#e4e4e7] bg-[#f4f4f5] px-4 py-3 text-foreground"
                     : "px-0 py-1 text-foreground",
                 )}
               >
@@ -4376,7 +4451,7 @@ export function MessageBubble({
                     type="button"
                     onClick={handleCopyMessage}
                     className={cn(
-                      "ml-1 inline-flex items-center gap-1 rounded-md bg-transparent px-2 py-0.5 text-xs font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
+                      "ml-1 inline-flex items-center gap-1 rounded-md bg-transparent px-2 py-0.5 text-[12px] font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
                       copied
                         ? "text-emerald-600 dark:text-emerald-400"
                         : "text-muted-foreground hover:text-primary",

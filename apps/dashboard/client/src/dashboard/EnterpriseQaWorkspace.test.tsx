@@ -101,8 +101,8 @@ describe("Enterprise QA source binding", () => {
       within(result).queryByRole("group", { name: "子智能体" }),
     ).not.toBeInTheDocument();
     expect(
-      within(conversation).queryByRole("button", { name: "企业问答" }),
-    ).not.toBeInTheDocument();
+      within(conversation).getByRole("button", { name: "企业问答" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     await act(async () =>
       resolve({ ok: true, json: async () => ({ knowledgeBase: null }) }),

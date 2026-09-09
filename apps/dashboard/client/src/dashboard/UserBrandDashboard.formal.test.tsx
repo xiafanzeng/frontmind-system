@@ -654,7 +654,7 @@ describe("UserBrandDashboard formal workspace", () => {
   it("shows actual monitoring report counts instead of invented results", () => {
     render(<UserBrandDashboard />);
     fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
-    fireEvent.click(within(screen.getByRole("region", { name: "监控与报告" })).getByRole("button", { name: "进度报告" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "智能体协作" })).getByRole("button", { name: "进度报告" }));
     expect(screen.getByText(/尚无监控运行记录/)).toBeInTheDocument();
     expect(screen.getByText("运行次数")).toBeInTheDocument();
   });

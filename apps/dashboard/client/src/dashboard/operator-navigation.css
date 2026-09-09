@@ -1,6 +1,6 @@
 /* Navigation-specific layout. Kept separate so workspace styling can evolve independently. */
 .operator-module-nav { display: grid; gap: 4px; min-height: 0; overflow-y: auto; padding: 2px 0; }
-.operator-module-group-label { margin: 0; padding: 0 10px 10px; color: #aeb5c2; font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; }
+.operator-module-group-label { margin: 0; padding: 0 10px 10px; color: #aeb5c2; font-size: 16px; font-weight: 600; line-height: 24px; white-space: nowrap; }
 .operator-module-entry { min-height: 42px !important; font-size: 14px !important; }
 .operator-module-entry[aria-current="page"] { box-shadow: inset 2px 0 0 #d5b6ef; }
 .operator-project-capsule { position: relative; max-height: none; }

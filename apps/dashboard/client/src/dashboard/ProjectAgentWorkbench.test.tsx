@@ -54,8 +54,8 @@ beforeEach(() => {
   };
 });
 afterEach(cleanup);
-describe("project conversation and results", () => {
-  it("switches module results without replacing the current conversation or its input", async () => {
+describe("project conversation and workbench context", () => {
+  it("keeps business content in the primary pane and exposes subagent context on the side", async () => {
     const open = vi.fn();
     const modules = createWorkbenchModules((id) => <p>{id} 成果</p>, open);
     const layout = (index: number) => (
@@ -66,8 +66,6 @@ describe("project conversation and results", () => {
       </WorkbenchModuleContext.Provider>
     );
     const { rerender } = render(layout(1));
-    const input = await screen.findByRole("textbox", { name: "对话输入" });
-    fireEvent.change(input, { target: { value: "继续分析" } });
     fireEvent.click(
       within(screen.getByRole("group", { name: "子智能体" })).getByRole(
         "button",
@@ -76,21 +74,13 @@ describe("project conversation and results", () => {
         },
       ),
     );
-    expect(
-      within(screen.getByRole("region", { name: "任务对话" })).queryByRole(
-        "button",
-        { name: "应答逻辑" },
-      ),
-    ).not.toBeInTheDocument();
     expect(open).toHaveBeenCalledWith("response-logic");
     rerender(layout(2));
-    expect(screen.getByRole("textbox")).toBe(input);
-    expect(input).toHaveValue("继续分析");
     expect(screen.getByText("progress 成果")).toBeInTheDocument();
     expect(screen.queryByText("intent 成果")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("chat-a");
+    expect(screen.getByText(/主工作区中的业务内容会随操作逐步展开/u)).toBeInTheDocument();
   });
-  it("renders only current conversation artifacts and rejects executable output URLs", () => {
+  it("does not render a separate results pane for the general agent", () => {
     context.current.activeConversation.messages = [
       {
         id: "out-a",
@@ -110,13 +100,8 @@ describe("project conversation and results", () => {
       },
     ];
     const { rerender } = render(<ProjectAgentWorkbench projectId="a" />);
-    expect(screen.getByRole("link", { name: "项目A报告.pdf" })).toHaveAttribute(
-      "href",
-      "/api/files/a",
-    );
-    expect(
-      screen.queryByRole("link", { name: "无效地址" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "任务成果" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "无效地址" })).not.toBeInTheDocument();
     context.current = {
       ...context.current,
       activeConversation: null,

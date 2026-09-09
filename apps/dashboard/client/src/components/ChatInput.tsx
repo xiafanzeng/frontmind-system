@@ -695,7 +695,7 @@ export default function ChatInput({
 
   return (
     <div
-      className="knowledge-composer relative px-3 pb-3 pt-3 bg-gradient-to-t from-background via-background/95 to-transparent sm:px-5 sm:pb-5"
+      className="knowledge-composer relative shrink-0 border-t border-border/60 bg-gradient-to-t from-white via-white/95 to-transparent px-3 pb-3 pt-3 sm:px-5 sm:pb-5"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

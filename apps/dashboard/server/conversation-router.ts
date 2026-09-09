@@ -162,6 +162,7 @@ export const conversationSnapshotSchema = z.object({
   id: z.string().min(1).max(128),
   title: z.string().min(1).max(255),
   purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
+  workbenchAgentId: z.string().max(128).optional(),
   messages: z.array(messageSchema).max(5_000),
   taskId: z.string().max(255).optional(),
   previousResponseId: z.string().max(255).optional(),

@@ -1,5 +1,5 @@
-import { Suspense, lazy, type ReactNode } from "react";
-import { Plus } from "lucide-react";
+import { Suspense, lazy, useState, type ReactNode } from "react";
+import { Check, ChevronDown, MessageSquare, Plus, Trash2 } from "lucide-react";
 import {
   ConversationContextProvider,
   ConversationPurposeProvider,
@@ -7,6 +7,11 @@ import {
 } from "@/contexts/ConversationContext";
 import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
 import { projectResourceUrl } from "@/lib/enterprise-project";
 import { useWorkbenchModule, workbenchStatus } from "./agent-workbench";
@@ -37,34 +42,137 @@ function ProjectConversation({
   purpose: "general" | "enterprise_qa";
 }) {
   const module = useWorkbenchModule();
-  const { state, activeConversation, createConversation, setActive, hydrated } =
-    useConversation();
+  const {
+    state,
+    activeConversation,
+    createConversation,
+    setActive,
+    deleteConversation,
+    hydrated,
+  } = useConversation();
+  const taggedConversations = module
+    ? state.conversations.filter(
+        (conversation) => conversation.workbenchAgentId === module.id,
+      )
+    : [];
+  // Legacy general conversations remain visible until this subagent has its
+  // first tagged task; new tasks are always isolated by workbenchAgentId.
+  const conversations =
+    taggedConversations.length > 0
+      ? taggedConversations
+      : state.conversations.filter((conversation) => !conversation.workbenchAgentId);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const formatTime = (ts: number) => {
+    const date = new Date(ts);
+    const now = new Date();
+    return date.toDateString() === now.toDateString()
+      ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+      : date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+  };
+  const statusLabel: Record<string, string> = {
+    running: "执行中",
+    pending: "准备中",
+    awaiting_input: "等待确认",
+    completed: "已完成",
+    failed: "失败",
+    error: "失败",
+    idle: "就绪",
+  };
+  const visibleConversations = conversations.filter((conversation) =>
+    conversation.title.toLocaleLowerCase().includes(historyQuery.trim().toLocaleLowerCase()),
+  );
   return (
     <div className="workbench-conversation">
       <div className="workbench-conversation__toolbar">
-        <select
-          aria-label="当前对话"
-          value={activeConversation?.id ?? ""}
-          onChange={(event) =>
-            requestWorkspaceNavigation(() => setActive(event.target.value))
-          }
-        >
-          <option value="" disabled>
-            开始一个新任务
-          </option>
-          {state.conversations.map((conversation) => (
-            <option key={conversation.id} value={conversation.id}>
-              {conversation.title}
-            </option>
-          ))}
-        </select>
+        <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
+          <PopoverTrigger asChild>
+            <input
+              readOnly
+              role="combobox"
+              aria-label="当前对话"
+              aria-haspopup="listbox"
+              aria-expanded={historyOpen}
+              value={activeConversation?.title ?? "开始一个新任务"}
+              className="workbench-conversation__history-trigger"
+            />
+          </PopoverTrigger>
+          <PopoverContent
+            align="start"
+            className="workbench-conversation__history-popover"
+          >
+            <div className="workbench-conversation__history-heading">
+              <span>任务历史</span>
+              <span>{conversations.length} 个任务</span>
+            </div>
+            <input
+              aria-label="搜索任务"
+              className="workbench-conversation__history-search"
+              placeholder="搜索任务"
+              value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.target.value)}
+            />
+            <div role="listbox" aria-label="任务历史">
+              {visibleConversations.map((conversation) => (
+                <div
+                  key={conversation.id}
+                  role="option"
+                  aria-selected={conversation.id === activeConversation?.id}
+                  className="workbench-conversation__history-item"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      requestWorkspaceNavigation(() => setActive(conversation.id));
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    <MessageSquare className="size-4" />
+                    <span className="workbench-conversation__history-copy">
+                      <strong>{conversation.title}</strong>
+                      <small>
+                        {statusLabel[conversation.status] ?? "就绪"} · {formatTime(conversation.updatedAt)}
+                        {(conversation.messages?.length ?? 0) > 0 &&
+                          ` · ${conversation.messages?.length ?? 0} 条`}
+                      </small>
+                    </span>
+                    {conversation.id === activeConversation?.id && (
+                      <Check className="size-4" aria-label="当前任务" />
+                    )}
+                  </button>
+                  {deleteConversation && (
+                    <button
+                      type="button"
+                      className="workbench-conversation__history-delete"
+                      aria-label={`删除任务 ${conversation.title}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteConversation(conversation.id);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!visibleConversations.length && (
+                <p className="workbench-conversation__history-empty">暂无任务历史</p>
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+        <ChevronDown className="workbench-conversation__history-chevron size-4" aria-hidden="true" />
         <Button
           variant="ghost"
           size="sm"
           disabled={!hydrated}
           onClick={() =>
             requestWorkspaceNavigation(() =>
-              createConversation({ reuseEmpty: false }),
+              createConversation({
+                reuseEmpty: false,
+                title: module ? `${module.label}任务` : "新任务",
+                workbenchAgentId: module?.id,
+              }),
             )
           }
         >
@@ -78,27 +186,34 @@ function ProjectConversation({
         </p>
       )}
       <div className="workbench-conversation__chat">
-        <Suspense
-          fallback={
-            <div role="status" className="p-5">
-              正在恢复对话…
-            </div>
-          }
-        >
-          <Home
-            embedded
-            hideSidebar
-            operatorWorkspace
-            hidePortalNavigation
-            showKnowledgeBaseStarter={false}
-            showAccountMenu={false}
-            showSettings={false}
-            purpose={purpose === "enterprise_qa" ? "enterprise_qa" : undefined}
-            standardWelcomeVariant={
-              purpose === "enterprise_qa" ? "enterprise_qa" : "simple"
+        {module && purpose === "general" ? (
+          <div className="workbench-conversation__context-note">
+            <strong>当前步骤</strong>
+            <p>主工作区中的业务内容会随操作逐步展开。这里保留本子 Agent 的任务上下文。</p>
+          </div>
+        ) : (
+          <Suspense
+            fallback={
+              <div role="status" className="p-5">
+                正在恢复对话…
+              </div>
             }
-          />
-        </Suspense>
+          >
+            <Home
+              embedded
+              hideSidebar
+              operatorWorkspace
+              hidePortalNavigation
+              showKnowledgeBaseStarter={false}
+              showAccountMenu={false}
+              showSettings={false}
+              purpose={purpose === "enterprise_qa" ? "enterprise_qa" : undefined}
+              standardWelcomeVariant={
+                purpose === "enterprise_qa" ? "enterprise_qa" : "simple"
+              }
+            />
+          </Suspense>
+        )}
       </div>
     </div>
   );
@@ -135,6 +250,7 @@ function ScopedWorkbench({
       title={module?.label ?? "通用智能体"}
       resultTitle={module?.resultTitle ?? "任务成果"}
       status={workbenchStatus(activeConversation?.status)}
+      showResult={purpose === "enterprise_qa" || Boolean(module)}
       resultKey={`${activeConversation?.id ?? "new"}:${uniqueFiles.map((file) => `${file.messageId}:${file.fileUrl}`).join("|")}`}
       conversation={<ProjectConversation purpose={purpose} />}
       result={

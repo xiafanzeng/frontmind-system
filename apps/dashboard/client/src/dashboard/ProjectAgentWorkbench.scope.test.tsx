@@ -53,7 +53,7 @@ function EditorProbe() {
   );
 }
 describe("workbench conversation boundaries", () => {
-  it("lets specialist editors restore their task while the central conversation stays filtered", () => {
+  it("lets specialist editors restore their task while the central conversation stays filtered", async () => {
     const module = createWorkbenchModules(() => null, () => undefined)[0]!;
     render(
       <WorkbenchModuleContext.Provider value={module}>
@@ -62,7 +62,7 @@ describe("workbench conversation boundaries", () => {
         </ProjectAgentWorkbench>
       </WorkbenchModuleContext.Provider>,
     );
-    expect(screen.getByLabelText("编辑器任务")).toHaveTextContent(
+    expect(await screen.findByLabelText("编辑器任务")).toHaveTextContent(
       "general,logic,qa",
     );
     expect(screen.getByRole("combobox")).toHaveValue("开始一个新任务");

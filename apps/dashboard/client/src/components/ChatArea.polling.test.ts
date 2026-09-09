@@ -13,6 +13,7 @@ import {
   knowledgeBaseReconcileResultRequiresConfirmation,
   knowledgeBaseSameTurnRecoveryAccepted,
   isKnowledgeBaseTaskVisiblyRunning,
+  isChatViewportNearBottom,
   readKnowledgeBaseStartRequestError,
   recoverKnowledgeBaseNotice,
   runningAssistantStatusText,
@@ -36,6 +37,23 @@ describe("chat message viewport", () => {
       top: 4_800,
       behavior: "auto",
     });
+  });
+
+  it("keeps live updates anchored only while the reader is near the bottom", () => {
+    expect(
+      isChatViewportNearBottom({
+        scrollHeight: 4_800,
+        clientHeight: 600,
+        scrollTop: 4_120,
+      }),
+    ).toBe(true);
+    expect(
+      isChatViewportNearBottom({
+        scrollHeight: 4_800,
+        clientHeight: 600,
+        scrollTop: 3_900,
+      }),
+    ).toBe(false);
   });
 });
 

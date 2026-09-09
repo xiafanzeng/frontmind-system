@@ -37,20 +37,22 @@ export type AgentWorkbenchShellProps = {
   resultKey?: string;
   status?: string;
   embedded?: boolean;
+  /** General agent conversations can use the full work area without a result panel. */
+  showResult?: boolean;
   /** A new request reveals the conversation and focuses its composer. */
   conversationFocusRequest?: object | null;
 };
-const MIN_RESULT = 320;
-const MIN_CONVERSATION = 360;
+const MIN_CONTEXT = 320;
+const MIN_PRIMARY = 360;
 const QUERY = "(max-width: 1099px)";
 const widthKey = (projectId: string, moduleId: string) =>
   `frontmind.workbench.width:${projectId}:${moduleId}`;
 function readWidth(key: string) {
   try {
     const value = Number(localStorage.getItem(key));
-    return value >= MIN_RESULT ? value : 480;
+    return value >= MIN_CONTEXT ? value : 400;
   } catch {
-    return 480;
+    return 400;
   }
 }
 
@@ -67,6 +69,7 @@ export function AgentWorkbenchShell({
   resultKey,
   status,
   embedded = false,
+  showResult = true,
   conversationFocusRequest,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
@@ -80,15 +83,19 @@ export function AgentWorkbenchShell({
   const root = useRef<HTMLElement>(null);
   const handledFocusRequest = useRef<object | null>(null);
   const pendingConversationFocus = useRef(false);
+  const [conversationHost] = useState(() => {
+    const element = document.createElement("div");
+    element.className = "agent-workbench-shell__conversation-body";
+    return element;
+  });
   const focusConversation = useCallback(() => {
-    root.current
-      ?.querySelector<HTMLTextAreaElement>(
-        ".agent-workbench-shell__conversation-body textarea:not([disabled])",
-      )
+    conversationHost
+      .querySelector<HTMLTextAreaElement>("textarea:not([disabled])")
       ?.focus();
-  }, []);
-  // One portal host follows the responsive surface. Moving between a desktop
-  // panel and a drawer must not remount editors or discard their local drafts.
+  }, [conversationHost]);
+  // Portal hosts follow the responsive surface. Moving between the desktop
+  // context panel and its drawer must not remount a draft conversation; the
+  // primary business view receives the same protection when its shell changes.
   const [resultHost] = useState(() => {
     const element = document.createElement("div");
     element.className = "agent-workbench-shell__result-body";
@@ -101,9 +108,16 @@ export function AgentWorkbenchShell({
     },
     [resultHost],
   );
+  const attachConversation = useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot) slot.appendChild(conversationHost);
+      else conversationHost.remove();
+    },
+    [conversationHost],
+  );
   const stopDrag = useRef<() => void>(() => undefined);
   const previousKey = useRef(key);
-  const maxWidth = Math.max(MIN_RESULT, available - MIN_CONVERSATION);
+  const maxWidth = Math.max(MIN_CONTEXT, available - MIN_PRIMARY);
   const renderedWidth = Math.min(width, maxWidth);
   useEffect(() => {
     setWidth(readWidth(key));
@@ -118,10 +132,8 @@ export function AgentWorkbenchShell({
       return;
     handledFocusRequest.current = conversationFocusRequest;
     pendingConversationFocus.current = true;
-    setExpanded(false);
-    if (narrow && mobileOpen) {
-      // Let the drawer release its focus trap before handing focus to the composer.
-      setMobileOpen(false);
+    if (narrow && !mobileOpen) {
+      setMobileOpen(true);
       return;
     }
     const frame = window.requestAnimationFrame(() => {
@@ -180,9 +192,9 @@ export function AgentWorkbenchShell({
     const move = (moveEvent: globalThis.PointerEvent) =>
       setWidth(
         Math.max(
-          MIN_RESULT,
+          MIN_CONTEXT,
           Math.min(
-            Math.max(MIN_RESULT, bounds.width - MIN_CONVERSATION),
+            Math.max(MIN_CONTEXT, bounds.width - MIN_PRIMARY),
             bounds.right - moveEvent.clientX,
           ),
         ),
@@ -245,12 +257,54 @@ export function AgentWorkbenchShell({
           {status && <span role="status">{status}</span>}
         </header>
       )}
-      <div className="agent-workbench-shell__layout">
+      <div
+        className={`agent-workbench-shell__layout ${showResult ? "" : "is-single-pane"}`}
+      >
         <section
-          className="agent-workbench-shell__conversation"
-          aria-label="任务对话"
+          className={
+            showResult
+              ? "agent-workbench-shell__result"
+              : "agent-workbench-shell__conversation"
+          }
+          aria-label={showResult ? resultTitle : "智能体协作"}
         >
-          {narrow && (
+          <header
+            className={
+              showResult
+                ? "agent-workbench-shell__result-head"
+                : "agent-workbench-shell__conversation-head"
+            }
+          >
+            <h2>{showResult ? resultTitle : "智能体协作"}</h2>
+            {showResult && !narrow && (
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => setExpanded((value) => !value)}
+                aria-label={expanded ? "还原主工作区" : "展开主工作区"}
+              >
+                {expanded ? (
+                  <Minimize2 className="size-4" />
+                ) : (
+                  <Maximize2 className="size-4" />
+                )}
+              </Button>
+            )}
+            {!showResult && status && <span role="status">{status}</span>}
+          </header>
+          {showResult ? (
+            <div
+              ref={attachResult}
+              className="agent-workbench-shell__result-slot"
+              data-result-key={resultKey}
+            />
+          ) : (
+            <div
+              ref={attachConversation}
+              className="agent-workbench-shell__conversation-slot"
+            />
+          )}
+          {showResult && narrow && (
             <Sheet
               open={mobileOpen}
               onOpenChange={(open) =>
@@ -266,7 +320,7 @@ export function AgentWorkbenchShell({
                   variant="ghost"
                 >
                   <PanelRightOpen className="size-4" />
-                  查看成果
+                  打开智能体协作
                 </Button>
               </SheetTrigger>
               <SheetContent
@@ -281,28 +335,25 @@ export function AgentWorkbenchShell({
                 }}
               >
                 <SheetHeader>
-                  <SheetTitle>{resultTitle}</SheetTitle>
+                  <SheetTitle>智能体协作</SheetTitle>
                 </SheetHeader>
                 {actionsBar}
                 <div
-                  className="agent-workbench-shell__result-slot"
-                  ref={attachResult}
+                  className="agent-workbench-shell__conversation-slot"
+                  ref={attachConversation}
                 />
               </SheetContent>
             </Sheet>
           )}
-          <div className="agent-workbench-shell__conversation-body">
-            {conversation}
-          </div>
         </section>
-        {!narrow && (
+        {showResult && !narrow && (
           <>
             <div
               className="agent-workbench-shell__resize"
               role="separator"
-              aria-label="调整成果面板宽度"
+              aria-label="调整智能体协作面板宽度"
               aria-orientation="vertical"
-              aria-valuemin={MIN_RESULT}
+              aria-valuemin={MIN_CONTEXT}
               aria-valuemax={maxWidth}
               aria-valuenow={renderedWidth}
               tabIndex={0}
@@ -318,11 +369,11 @@ export function AgentWorkbenchShell({
                 setExpanded(false);
                 setWidth(
                   event.key === "Home"
-                    ? MIN_RESULT
+                    ? MIN_CONTEXT
                     : event.key === "End"
                       ? maxWidth
                       : Math.max(
-                          MIN_RESULT,
+                          MIN_CONTEXT,
                           Math.min(
                             maxWidth,
                             renderedWidth +
@@ -333,35 +384,24 @@ export function AgentWorkbenchShell({
               }}
             />
             <section
-              className="agent-workbench-shell__result"
-              aria-label={resultTitle}
+              className="agent-workbench-shell__conversation"
+              aria-label="智能体协作"
             >
-              <header className="agent-workbench-shell__result-head">
-                <h2>{resultTitle}</h2>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => setExpanded((value) => !value)}
-                  aria-label={expanded ? "还原成果面板" : "展开成果面板"}
-                >
-                  {expanded ? (
-                    <Minimize2 className="size-4" />
-                  ) : (
-                    <Maximize2 className="size-4" />
-                  )}
-                </Button>
+              <header className="agent-workbench-shell__conversation-head">
+                <h2>智能体协作</h2>
+                {status && <span role="status">{status}</span>}
               </header>
               {actionsBar}
               <div
-                ref={attachResult}
-                className="agent-workbench-shell__result-slot"
-                data-result-key={resultKey}
+                ref={attachConversation}
+                className="agent-workbench-shell__conversation-slot"
               />
             </section>
           </>
         )}
       </div>
-      {createPortal(resultContent, resultHost)}
+      {showResult && createPortal(resultContent, resultHost)}
+      {createPortal(conversation, conversationHost)}
     </section>
   );
 }

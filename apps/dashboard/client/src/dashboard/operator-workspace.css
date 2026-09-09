@@ -6,7 +6,7 @@
   --fm-text-body-sm: .875rem;
   --fm-text-body: 1rem;
   --fm-leading-body: 1.75;
-  --background: #F6F7F9;
+  --background: #ffffff;
   --foreground: #20232B;
   --card: #ffffff;
   --card-foreground: #20232B;
@@ -16,7 +16,7 @@
   --primary-foreground: #ffffff;
   --secondary: #F2EDF6;
   --secondary-foreground: #5D6573;
-  --muted: #F6F7F9;
+  --muted: #f7f7f8;
   --muted-foreground: #5D6573;
   --accent: #F2EDF6;
   --accent-foreground: #4B246B;
@@ -32,7 +32,7 @@
   --operator-sidebar-hover: #1c202a;
   --operator-sidebar-active: #302744;
   --operator-surface: #ffffff;
-  --operator-canvas: #F6F7F9;
+  --operator-canvas: #ffffff;
   --operator-line: #E2E5EB;
   --operator-text: #20232B;
   --operator-muted: #5D6573;
@@ -183,6 +183,10 @@
 /* Floats retain body portals and keyboard behavior; unrelated consumers keep their default theme. */
 .operator-portal[data-slot$="content"] { font-size: 15px; line-height: 1.75; }
 .operator-portal[data-slot="tooltip-content"] { font-size: 13px; line-height: 1.5; color: var(--background); }
+.user-brand-dashboard.operator-mode [data-testid="chat-messages-viewport"] button[title="复制内容"] {
+  font-size: 12px !important;
+  line-height: 18px;
+}
 .operator-portal[data-slot="dropdown-menu-content"], .operator-portal[data-slot="dropdown-menu-sub-content"], .operator-portal[data-slot="select-content"], .operator-portal[data-slot="popover-content"] { z-index: 110; }
 .operator-portal[data-slot="dialog-overlay"], .operator-portal[data-slot="alert-dialog-overlay"], .operator-portal[data-slot="sheet-overlay"] { z-index: 100; }
 .operator-portal[data-slot="dialog-content"], .operator-portal[data-slot="alert-dialog-content"], .operator-portal[data-slot="sheet-content"] { z-index: 101; }

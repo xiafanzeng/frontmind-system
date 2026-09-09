@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ProjectAgentWorkbench from "./ProjectAgentWorkbench";
+import { createWorkbenchModules, WorkbenchModuleContext } from "./agent-workbench";
 import { useConversation } from "@/contexts/ConversationContext";
 const fixture = vi.hoisted(() => ({
   workspace: {
@@ -53,16 +54,19 @@ function EditorProbe() {
 }
 describe("workbench conversation boundaries", () => {
   it("lets specialist editors restore their task while the central conversation stays filtered", () => {
+    const module = createWorkbenchModules(() => null, () => undefined)[0]!;
     render(
-      <ProjectAgentWorkbench projectId="project-a">
-        <EditorProbe />
-      </ProjectAgentWorkbench>,
+      <WorkbenchModuleContext.Provider value={module}>
+        <ProjectAgentWorkbench projectId="project-a">
+          <EditorProbe />
+        </ProjectAgentWorkbench>
+      </WorkbenchModuleContext.Provider>,
     );
     expect(screen.getByLabelText("编辑器任务")).toHaveTextContent(
       "general,logic,qa",
     );
-    expect(screen.getByRole("combobox")).toHaveTextContent("品牌讨论");
-    expect(screen.getByRole("combobox")).not.toHaveTextContent("应答逻辑");
+    expect(screen.getByRole("combobox")).toHaveValue("开始一个新任务");
+    expect(screen.getByRole("combobox")).not.toHaveValue("应答逻辑");
   });
   it("keeps enterprise QA source information bound to the QA conversation", () => {
     render(

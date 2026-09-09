@@ -96,18 +96,20 @@ function selectProject(id: string) {
 }
 
 describe("OperatorWorkspacePreview subagent results", () => {
-  it("keeps one selector in the result pane and changes the actual result for every subagent", () => {
+  it("keeps the subagent selector in collaboration and changes the result for every subagent", () => {
     render(<OperatorWorkspacePreview />);
-    const conversation = screen.getByRole("region", { name: "任务对话" });
+    const conversation = screen.getByRole("region", { name: "智能体协作" });
     expect(
-      within(conversation).queryByRole("group", { name: "子智能体" }),
-    ).not.toBeInTheDocument();
+      within(conversation).getByRole("group", { name: "子智能体" }),
+    ).toBeInTheDocument();
 
     for (const module of OPERATOR_MODULES) {
       selectModule(module.label);
       for (const view of module.views) {
         selectSubagent(view.label);
-        const group = screen.getByRole("group", { name: "子智能体" });
+        const group = within(conversation).getByRole("group", {
+          name: "子智能体",
+        });
         expect(
           within(group).getByRole("button", { name: view.label }),
         ).toHaveAttribute("aria-pressed", "true");
@@ -117,9 +119,6 @@ describe("OperatorWorkspacePreview subagent results", () => {
             name: resultTitles[view.id],
           }),
         ).toBeInTheDocument();
-        expect(
-          within(conversation).queryByRole("button", { name: view.label }),
-        ).not.toBeInTheDocument();
       }
     }
   });

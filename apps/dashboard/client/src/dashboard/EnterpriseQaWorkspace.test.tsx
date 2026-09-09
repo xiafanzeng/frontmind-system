@@ -73,7 +73,7 @@ describe("Enterprise QA source binding", () => {
     window.history.replaceState(null, "", "/");
   });
 
-  it("keeps the workbench chat gated while loading and unpublished, with subagents only in the result pane", async () => {
+  it("keeps the workbench chat gated while loading and unpublished, with subagents in collaboration", async () => {
     state.activeConversation = { taskId: "historical-task" };
     let resolve!: (response: unknown) => void;
     const fetchMock = vi.fn().mockImplementation(
@@ -92,17 +92,17 @@ describe("Enterprise QA source binding", () => {
     expect(
       screen.queryByRole("button", { name: "新任务" }),
     ).not.toBeInTheDocument();
-    const conversation = screen.getByRole("region", { name: "任务对话" });
+    const conversation = screen.getByRole("region", { name: "智能体协作" });
     expect(
-      within(conversation).queryByRole("group", { name: "子智能体" }),
-    ).not.toBeInTheDocument();
+      within(conversation).getByRole("group", { name: "子智能体" }),
+    ).toBeInTheDocument();
     const result = screen.getByRole("region", { name: "项目工具" });
     expect(
-      within(result).getByRole("group", { name: "子智能体" }),
-    ).toBeInTheDocument();
+      within(result).queryByRole("group", { name: "子智能体" }),
+    ).not.toBeInTheDocument();
     expect(
-      within(result).getByRole("button", { name: "企业问答" }),
-    ).toHaveAttribute("aria-pressed", "true");
+      within(conversation).queryByRole("button", { name: "企业问答" }),
+    ).not.toBeInTheDocument();
 
     await act(async () =>
       resolve({ ok: true, json: async () => ({ knowledgeBase: null }) }),

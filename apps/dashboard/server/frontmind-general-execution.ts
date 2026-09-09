@@ -75,6 +75,7 @@ export function projectGeneralExecution(
         ...base,
         kind: "tool",
         label: activity.label,
+        toolKind: activity.toolKind,
         status: "running",
       });
     return [{ row, p, turnId: turn.id, base, activity }];
@@ -105,7 +106,9 @@ export function projectGeneralExecution(
             : "returned";
       if (call) {
         call.status = status;
-        call.finishedAt = base.timestamp;
+        // A reordered snapshot may report a result timestamp before its call.
+        // Preserve the result status without inventing a negative duration.
+        if (base.timestamp >= call.timestamp) call.finishedAt = base.timestamp;
       } else
         entries.push({
           ...base,

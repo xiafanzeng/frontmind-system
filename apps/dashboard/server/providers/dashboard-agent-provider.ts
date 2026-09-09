@@ -1,4 +1,4 @@
-import { generalToolLabel } from "../../shared/frontmind-general-execution";
+import { generalToolLabel, type GeneralExecutionActivity } from "../../shared/frontmind-general-execution";
 import { frontmindGeneralIdentity } from "../frontmind-general-identity";
 import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import {
@@ -1595,7 +1595,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
 }
 
 /** Normalize native evidence without ever retaining tool payloads or private reasoning. */
-export function nativeGeneralExecutionActivity(event: ZhipuRecord) {
+export function nativeGeneralExecutionActivity(event: ZhipuRecord): GeneralExecutionActivity | null {
   const type = String(event.type);
   if (["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(type)) {
     const toolKind = type === "agent.mcp_tool_use" ? "mcp" : type === "agent.custom_tool_use" ? "custom" : "builtin";
@@ -1605,7 +1605,7 @@ export function nativeGeneralExecutionActivity(event: ZhipuRecord) {
     const link = type === "user.custom_tool_result" ? event.custom_tool_use_id : event.tool_use_id;
     return { kind: "tool_result", callId: typeof link === "string" && link.length <= 512 ? link : null, isError: typeof event.is_error === "boolean" ? event.is_error : null };
   }
-  const lifecycle: Record<string, string> = { "agent.thinking": "thinking", "session.status_running": "running", "session.status_rescheduled": "rescheduling", "session.status_terminated": "cancelled", "session.deleted": "cancelled", "user.interrupt": "cancelled" };
+  const lifecycle: Record<string, Extract<GeneralExecutionActivity, { kind: "status" }>["status"]> = { "agent.thinking": "thinking", "session.status_running": "running", "session.status_rescheduled": "rescheduling", "session.status_terminated": "cancelled", "session.deleted": "cancelled", "user.interrupt": "cancelled" };
   if (lifecycle[type]) return { kind: "status", status: lifecycle[type] };
   if (type === "session.error") return { kind: "status", status: sessionErrorIsRetrying(event) ? "retrying" : "error" };
   if (type === "session.status_idle") {
@@ -1623,10 +1623,19 @@ export function normalizeDashboardZhipuEvents(
   return raw.flatMap((event, rank): ManusV2MessageEvent[] => {
     const id = zhipuResourceId(event);
     const command = runtime.commands.find((c) => c.eventId === id);
-    const timestamp =
-      stamp(event.processed_at) ?? (command ? stamp(command.createdAt) : null);
-    if (timestamp === null) return [];
     const activity = nativeGeneralExecutionActivity(event);
+    const pendingActivity =
+      activity?.kind === "tool_use" ||
+      (activity?.kind === "status" && activity.status === "thinking");
+    const timestamp =
+      stamp(event.processed_at) ??
+      (command ? stamp(command.createdAt) : null) ??
+      // Native activity can be visible before processing finishes (especially
+      // a tool waiting for approval). Use its own creation time, never the
+      // polling/browser clock. Messages, results and lifecycle settlement
+      // events retain their existing processed-at gate.
+      (pendingActivity ? stamp(event.created_at) : null);
+    if (timestamp === null) return [];
     const base = { id, timestamp, providerOriginalRank: rank, ...(activity ? { executionActivity: activity } : {}) };
     if (event.type === "user.message") {
       if (!command)

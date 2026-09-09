@@ -37,6 +37,7 @@ export type GeneralExecutionEntry = {
       kind: "tool";
       label: string;
       status: GeneralToolStatus;
+      toolKind?: "builtin" | "mcp" | "custom";
       finishedAt?: number;
       resultOnly?: true;
     }
@@ -61,6 +62,11 @@ const builtinLabels: Record<string, string> = {
   grep: "检索文本",
   find: "查找文件",
   ls: "查看目录",
+  web_search: "搜索网页",
+  web_fetch: "读取网页",
+  browser: "浏览网页",
+  python: "运行代码",
+  code_interpreter: "运行代码",
 };
 export function generalToolLabel(
   name: unknown,
@@ -156,7 +162,7 @@ export const generalExecutionStatusText: Record<
   Extract<GeneralExecutionEntry, { kind: "status" }>["status"],
   string
 > = {
-  thinking: "正在处理…",
+  thinking: "正在分析任务…",
   running: "正在执行…",
   rescheduling: "正在恢复执行…",
   waiting: "等待确认",

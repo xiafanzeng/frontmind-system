@@ -12,7 +12,15 @@ type MessageAnchor = {
 export type ExecutionDisplayEntry = Exclude<
   GeneralExecutionEntry,
   { kind: "message" }
->;
+> & {
+  /** Presentation only: historical evidence remains visible without a live spinner. */
+  animate?: boolean;
+  /** Latest active phase/tool, including a non-animated confirmation wait. */
+  isCurrent?: boolean;
+};
+
+const eventKey = (turnId: string, providerEventId: string) =>
+  JSON.stringify([turnId, providerEventId]);
 
 /** Keep actual conversation ordering; native rank places activity around public replies. */
 export function generalExecutionSlots(
@@ -26,7 +34,15 @@ export function generalExecutionSlots(
   const messageByEvent = new Map(
     messages.flatMap((message) =>
       message.generalChat
-        ? [[message.generalChat.providerEventId, message] as const]
+        ? [
+            [
+              eventKey(
+                message.generalChat.turnId,
+                message.generalChat.providerEventId,
+              ),
+              message,
+            ] as const,
+          ]
         : [],
     ),
   );
@@ -49,34 +65,64 @@ export function generalExecutionSlots(
       .filter((message) => message.role === "user")
       .map((message) => [message.id, message]),
   );
+  const activeUser = messages.findLast((message) => message.role === "user");
   for (const turn of byTurn.values()) {
+    const lastLifecycle = turn.findLast((entry) => entry.kind === "status");
+    const activeTurn = Boolean(
+      running &&
+        activeUser &&
+        turn.some(
+          (entry) =>
+            entry.userMessageId === activeUser.id ||
+            (activeUser.serverSequence !== undefined &&
+              entry.userSequence === activeUser.serverSequence),
+        ) &&
+        !(
+          lastLifecycle?.kind === "status" &&
+          ["ended", "cancelled", "error"].includes(lastLifecycle.status)
+        ),
+    );
     const nextAnchors = new Map<string, MessageAnchor>();
     let next: MessageAnchor | undefined;
     for (let index = turn.length - 1; index >= 0; index--) {
       const entry = turn[index]!;
       if (entry.kind === "message")
-        next = messageByEvent.get(entry.providerEventId) ?? next;
+        next =
+          messageByEvent.get(eventKey(entry.turnId, entry.providerEventId)) ??
+          next;
       else if (next) nextAnchors.set(entry.id, next);
     }
     let previous: MessageAnchor | undefined;
-    const lastRank = turn.at(-1)?.rank ?? -1;
+    const lastEntryId = turn.at(-1)?.id;
     for (const rawEntry of turn) {
       if (rawEntry.kind === "message") {
-        previous = messageByEvent.get(rawEntry.providerEventId) ?? previous;
+        previous =
+          messageByEvent.get(
+            eventKey(rawEntry.turnId, rawEntry.providerEventId),
+          ) ?? previous;
         continue;
       }
       const entry: ExecutionDisplayEntry =
-        !running && rawEntry.kind === "tool" && rawEntry.status === "running"
-          ? { ...rawEntry, status: "unconfirmed" }
-          : rawEntry;
-      if (
-        entry.kind === "status" &&
-        (entry.rank < lastRank ||
-          ["ended", "cancelled"].includes(entry.status) ||
-          (!running &&
-            ["thinking", "running", "rescheduling", "retrying"].includes(entry.status)))
-      )
-        continue;
+        rawEntry.kind === "tool"
+          ? {
+              ...rawEntry,
+              ...(!activeTurn && rawEntry.status === "running"
+                ? { status: "unconfirmed" as const }
+                : {}),
+              animate: activeTurn && rawEntry.status === "running",
+              isCurrent:
+                activeTurn && ["running", "waiting"].includes(rawEntry.status),
+            }
+          : {
+              ...rawEntry,
+              isCurrent: activeTurn && rawEntry.id === lastEntryId,
+              animate:
+                activeTurn &&
+                rawEntry.id === lastEntryId &&
+                ["thinking", "running", "rescheduling", "retrying"].includes(
+                  rawEntry.status,
+                ),
+            };
       const next = nextAnchors.get(entry.id);
       const anchor =
         next ??

@@ -34,6 +34,93 @@ const use = (name = "read") =>
   });
 
 describe("Managed public execution evidence", () => {
+  it("shows pending native activity from its creation time without exposing unprocessed messages", () => {
+    const events = normalizeDashboardZhipuEvents(
+      [
+        {
+          id: "thinking",
+          type: "agent.thinking",
+          processed_at: null,
+          created_at: "2026-09-09T01:00:00Z",
+          content: "private-reasoning",
+        },
+        {
+          id: "call",
+          type: "agent.tool_use",
+          name: "web_search",
+          processed_at: null,
+          created_at: "2026-09-09T01:00:01Z",
+          input: { query: "private-query" },
+        },
+        {
+          id: "draft",
+          type: "agent.message",
+          processed_at: null,
+          created_at: "2026-09-09T01:00:02Z",
+          content: "unprocessed-answer",
+        },
+        { id: "untimed", type: "agent.thinking", processed_at: null },
+        {
+          id: "unprocessed-result",
+          type: "agent.tool_result",
+          tool_use_id: "call",
+          is_error: false,
+          processed_at: null,
+          created_at: "2026-09-09T01:00:02Z",
+        },
+        {
+          id: "unprocessed-end",
+          type: "session.status_idle",
+          stop_reason: { type: "end_turn" },
+          processed_at: null,
+          created_at: "2026-09-09T01:00:03Z",
+        },
+      ],
+      { commands: [] } as any,
+    );
+    expect(events.map((event) => event.id)).toEqual(["thinking", "call"]);
+    expect(events[1]).toMatchObject({
+      executionActivity: { kind: "tool_use", label: "搜索网页" },
+    });
+    expect(events[0]!.timestamp).toBeGreaterThan(0);
+    expect(JSON.stringify(events)).not.toMatch(/private-|unprocessed-answer/);
+  });
+  it("retains lifecycle history and tool kind for presentation while omitting impossible durations", () => {
+    const dto = projectGeneralExecution("task", [
+      row("think", 0, { kind: "status", status: "thinking" }),
+      row(
+        "call",
+        1,
+        nativeGeneralExecutionActivity({
+          type: "agent.mcp_tool_use",
+          name: "private-name",
+        }),
+      ),
+      {
+        ...row("result", 2, {
+          kind: "tool_result",
+          callId: "call",
+          isError: false,
+        }),
+        providerTimestampMs: 1699999999000,
+      },
+      row("retry", 3, { kind: "status", status: "retrying" }),
+      row("end", 4, { kind: "status", status: "ended" }),
+    ]);
+    expect(dto.timeline.map((entry) => entry.kind)).toEqual([
+      "status",
+      "tool",
+      "status",
+      "status",
+    ]);
+    expect(dto.timeline[1]).toMatchObject({
+      label: "调用扩展工具",
+      toolKind: "mcp",
+      status: "completed",
+    });
+    expect(dto.timeline[1]).not.toHaveProperty("finishedAt");
+    expect(JSON.stringify(dto)).not.toContain("private-name");
+  });
   it("retains native linkage and strict result tri-state without arguments, results or reasoning", () => {
     for (const flag of [true, false, undefined]) {
       const events = normalizeDashboardZhipuEvents(

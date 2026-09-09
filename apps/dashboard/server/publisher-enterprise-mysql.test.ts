@@ -199,6 +199,39 @@ const hash = (value: string) =>
         ),
       ).rejects.toThrow("MONITORING_PROJECT_OWNER_MISMATCH");
     });
+    it("replays concurrent draft creation and rejects a reused key with changed content", async () => {
+      const idempotencyKey = `draft-replay-${marker}`;
+      const input = {
+        articleVersionId: versionA,
+        expectedRevision: 0,
+        idempotencyKey,
+        items: [],
+      };
+      const [first, replay] = await Promise.all([
+        inProject(projectA, () => repo.savePublisherDraft(owner, input)),
+        inProject(projectA, () => repo.savePublisherDraft(owner, input)),
+      ]);
+      expect(replay.id).toBe(first.id);
+      expect(
+        (await inProject(projectA, () => repo.savePublisherDraft(owner, input)))
+          .id,
+      ).toBe(first.id);
+      await expect(
+        inProject(projectA, () =>
+          repo.savePublisherDraft(owner, {
+            ...input,
+            sharedTitle: "different request",
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      const another = await inProject(projectB, () =>
+        repo.savePublisherDraft(owner, {
+          ...input,
+          articleVersionId: versionB,
+        }),
+      );
+      expect(another.id).not.toBe(first.id);
+    });
     it("returns complete overview counts and only the latest scoped previews with joined article versions", async () => {
       const overviewProject = randomUUID(),
         foreignProject = randomUUID();
@@ -522,64 +555,56 @@ const hash = (value: string) =>
       const mediaId = randomUUID(),
         batchId = randomUUID(),
         itemId = randomUUID();
-      await domain.db
-        .insert(publisherMediaResources)
-        .values({
-          id: mediaId,
-          externalResourceId: mediaId,
-          catalogRevision: hash(marker),
-          name: "Local acceptance resource",
-          mediaKind: "news",
-          priceTenThousandths: 10000n,
-          rawPayload: {},
-          payloadHash: hash(marker),
-          logoCandidateHash: hash(marker),
-          lastSeenAt: new Date(),
-        });
+      await domain.db.insert(publisherMediaResources).values({
+        id: mediaId,
+        externalResourceId: mediaId,
+        catalogRevision: hash(marker),
+        name: "Local acceptance resource",
+        mediaKind: "news",
+        priceTenThousandths: 10000n,
+        rawPayload: {},
+        payloadHash: hash(marker),
+        logoCandidateHash: hash(marker),
+        lastSeenAt: new Date(),
+      });
       await inProject(projectA, async () => {
-        await domain.db
-          .insert(publisherBatches)
-          .values({
-            id: batchId,
-            ownerId: owner,
-            draftId: draftA,
-            articleVersionId: versionA,
-            mode: "mock",
-            quotedTotalTenThousandths: 10000n,
-            quoteFingerprint: hash(marker),
-            preflightRevision: randomUUID(),
-            preflightSnapshot: {},
-            idempotencyKey: randomUUID(),
-          });
-        await domain.db
-          .insert(publisherItems)
-          .values({
-            id: itemId,
-            ownerId: owner,
-            batchId,
-            mediaResourceId: mediaId,
-            externalResourceId: mediaId,
-            mediaNameSnapshot: "Local acceptance",
-            mediaKindSnapshot: "news",
-            mediaMetadataSnapshot: {},
-            submissionTitle: "Local acceptance",
-            articleContentHash: hash(marker),
-            catalogRevision: hash(marker),
-            preflightBlockers: [],
-            preflightWarnings: [],
-            submissionKey: randomUUID(),
-          });
-        await domain.db
-          .insert(mediaPublishingItemPriceSnapshots)
-          .values({
-            itemId,
-            ownerId: owner,
-            mediaResourceId: mediaId,
-            catalogRevision: hash(marker),
-            externalResourceId: mediaId,
-            amountTenThousandths: 10000n,
-            providerPayloadHash: hash(marker),
-          });
+        await domain.db.insert(publisherBatches).values({
+          id: batchId,
+          ownerId: owner,
+          draftId: draftA,
+          articleVersionId: versionA,
+          mode: "mock",
+          quotedTotalTenThousandths: 10000n,
+          quoteFingerprint: hash(marker),
+          preflightRevision: randomUUID(),
+          preflightSnapshot: {},
+          idempotencyKey: randomUUID(),
+        });
+        await domain.db.insert(publisherItems).values({
+          id: itemId,
+          ownerId: owner,
+          batchId,
+          mediaResourceId: mediaId,
+          externalResourceId: mediaId,
+          mediaNameSnapshot: "Local acceptance",
+          mediaKindSnapshot: "news",
+          mediaMetadataSnapshot: {},
+          submissionTitle: "Local acceptance",
+          articleContentHash: hash(marker),
+          catalogRevision: hash(marker),
+          preflightBlockers: [],
+          preflightWarnings: [],
+          submissionKey: randomUUID(),
+        });
+        await domain.db.insert(mediaPublishingItemPriceSnapshots).values({
+          itemId,
+          ownerId: owner,
+          mediaResourceId: mediaId,
+          catalogRevision: hash(marker),
+          externalResourceId: mediaId,
+          amountTenThousandths: 10000n,
+          providerPayloadHash: hash(marker),
+        });
         expect(await repo.listBatchCsvRows(owner, batchId)).toHaveLength(1);
       });
       await inProject(projectB, async () => {

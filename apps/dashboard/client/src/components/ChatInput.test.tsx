@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   wakeKnowledgeBaseConversation: vi.fn(),
   rollbackPendingKnowledgeBaseTurn: vi.fn(),
   knowledgeBaseAttachmentAttempt: null as any,
+  workbenchScopeKey: "",
   activeConversation: {
     id: "kb-conversation",
     taskId: "kb-task",
@@ -71,6 +72,7 @@ vi.mock("@/hooks/useSendMessage", () => ({
 vi.mock("@/contexts/ConversationContext", () => ({
   useConversation: () => ({
     activeConversation: mocks.activeConversation,
+    workbenchScopeKey: mocks.workbenchScopeKey,
     commitKnowledgeBaseObservation: mocks.commitKnowledgeBaseObservation,
     wakeKnowledgeBaseConversation: mocks.wakeKnowledgeBaseConversation,
     rollbackPendingKnowledgeBaseTurn: mocks.rollbackPendingKnowledgeBaseTurn,
@@ -390,6 +392,7 @@ function showLogoRequiredPresentation() {
 
 describe("knowledge-base ChatInput actions", () => {
   beforeEach(() => {
+    mocks.workbenchScopeKey = `test-scope:${crypto.randomUUID()}`;
     mocks.sendMessage.mockClear();
     mocks.sendMessage.mockResolvedValue(true);
     mocks.continueKnowledgeBaseAttachmentAttempt.mockClear();
@@ -436,34 +439,90 @@ describe("knowledge-base ChatInput actions", () => {
     mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
   });
 
-  it("keeps a draft bound to its conversation even when another conversation has equal node coordinates", async () => {
-    const { rerender } = render(
-      <ChatInput
-        operatorWorkspace
-        syncKnowledgeBaseSnapshot
-        knowledgeBaseProgress={progress}
-        knowledgeBaseResetRevision={3}
-      />,
-    );
+  it("restores each task's own draft and attachments without rebinding them to another task", async () => {
+    const props = {
+      operatorWorkspace: true,
+      syncKnowledgeBaseSnapshot: true,
+      knowledgeBaseProgress: progress,
+      knowledgeBaseResetRevision: 3,
+    };
+    const { rerender, unmount } = render(<ChatInput {...props} />);
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "只属于原会话的修改" },
     });
+    const file = new File(["image"], "原任务资料.png", { type: "image/png" });
+    fireEvent.change(document.querySelector('input[type="file"]')!, {
+      target: { files: [file] },
+    });
+    await screen.findByText("原任务资料.png");
     mocks.activeConversation.id = "another-kb-conversation";
-    rerender(
-      <ChatInput
-        operatorWorkspace
-        syncKnowledgeBaseSnapshot
-        knowledgeBaseProgress={progress}
-        knowledgeBaseResetRevision={3}
-      />,
-    );
-    expect(screen.getByText(/当前节点或内容版本已变化/)).toBeVisible();
+    rerender(<ChatInput {...props} />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.queryByText("原任务资料.png")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "另一项任务" },
+    });
+    mocks.activeConversation.id = "kb-conversation";
+    rerender(<ChatInput {...props} />);
     expect(screen.getByRole("textbox")).toHaveValue("只属于原会话的修改");
+    await waitFor(() =>
+      expect(screen.getByText("原任务资料.png")).toBeVisible(),
+    );
+    expect(
+      screen.queryByText(/当前节点或内容版本已变化/),
+    ).not.toBeInTheDocument();
+    unmount();
+    render(<ChatInput {...props} />);
+    expect(screen.getByRole("textbox")).toHaveValue("只属于原会话的修改");
+    await waitFor(() =>
+      expect(screen.getByText("原任务资料.png")).toBeVisible(),
+    );
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
-    expect(mocks.sendMessage).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "使用当前节点" }));
+    await waitFor(() =>
+      expect(mocks.sendMessage).toHaveBeenCalledWith(
+        "只属于原会话的修改",
+        [file],
+        expect.any(Object),
+      ),
+    );
+  });
+
+  it("does not clear another task's composer when an earlier send completes", async () => {
+    let complete!: (value: boolean) => void;
+    mocks.sendMessage.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        complete = resolve;
+      }),
+    );
+    const { rerender } = render(<ChatInput operatorWorkspace />);
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "任务 A" },
+    });
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
-    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledTimes(1));
+    mocks.activeConversation.id = "task-b";
+    rerender(<ChatInput operatorWorkspace />);
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "任务 B 的新输入" },
+    });
+    await act(async () => complete(true));
+    expect(screen.getByRole("textbox")).toHaveValue("任务 B 的新输入");
+    mocks.activeConversation.id = "kb-conversation";
+    rerender(<ChatInput operatorWorkspace />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("isolates drafts across project and account scopes", () => {
+    const { rerender } = render(<ChatInput operatorWorkspace />);
+    const originalScope = mocks.workbenchScopeKey;
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "项目一资料" },
+    });
+    mocks.workbenchScopeKey = `${originalScope}:another-project`;
+    rerender(<ChatInput operatorWorkspace />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    mocks.workbenchScopeKey = originalScope;
+    rerender(<ChatInput operatorWorkspace />);
+    expect(screen.getByRole("textbox")).toHaveValue("项目一资料");
   });
 
   it("requires explicit draft rebinding after a reset revision changes", () => {

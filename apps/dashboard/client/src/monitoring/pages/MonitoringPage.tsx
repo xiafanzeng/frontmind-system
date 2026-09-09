@@ -1,3 +1,4 @@
+import { useBusinessWorkspace } from "@/dashboard/BusinessWorkspaceContext";
 import { activeEnterpriseProjectId } from "@/lib/enterprise-project";
 import { ArchiveRestore, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -133,6 +134,7 @@ export default function MonitoringPage({
   onSelectedRunChange,
   onSelectedMonitorChange,
 }: MonitoringPageProps) {
+  const { isWorkbench, task } = useBusinessWorkspace();
   const [, navigate] = useLocation();
   const [monitorEditor, setMonitorEditor] = useState<MonitorEditorState>();
   const [projectModal, setProjectModal] = useState(false);
@@ -202,6 +204,37 @@ export default function MonitoringPage({
     }
   };
 
+  const rememberMonitorResult = (monitorId: string, runId?: string) => {
+    if (!isWorkbench || !task) return;
+    void task
+      .saveState({
+        step: runId ? "monitoring-running" : "monitoring-saved",
+        values: {
+          selectedMonitorId: monitorId,
+          ...(runId ? { selectedRunId: runId } : {}),
+        },
+        ...(runId
+          ? {
+              resources: [
+                ...(task.state?.resources ?? []).filter(
+                  (item) => item.kind !== "monitoring_run",
+                ),
+                { kind: "monitoring_run" as const, id: runId },
+              ],
+            }
+          : {}),
+        record: {
+          id: `monitor-${runId ?? monitorId}`,
+          label: runId ? "监控已提交执行" : "监控配置已保存",
+          status: "completed",
+        },
+      })
+      .catch(() =>
+        setActionError(
+          "监控操作已提交，任务记录同步失败；可在任务辅助区重试同步。",
+        ),
+      );
+  };
   const persistMonitor = async (
     value: MonitorInput,
     runNow: boolean,
@@ -211,12 +244,23 @@ export default function MonitoringPage({
     setSubmitting(true);
     setSubmitError("");
     try {
+      if (isWorkbench && task)
+        await task.saveState({
+          step: runNow ? "monitoring-confirmed" : "monitoring-saving",
+          values: { monitorForm: value },
+          record: {
+            id: "monitor-submit",
+            label: runNow ? "已确认监控费用并提交" : "保存监控配置",
+            status: "pending",
+          },
+        });
       const result = monitorId
         ? await onUpdateMonitor?.(monitorId, value, runNow, idempotencyKey)
         : await onSaveMonitor(value, runNow, idempotencyKey);
       setMonitorEditor(undefined);
       const resolvedResult = result || (monitorId ? { monitorId } : undefined);
       if (resolvedResult) {
+        rememberMonitorResult(resolvedResult.monitorId, resolvedResult.runId);
         setSuccess({
           message: runNow
             ? monitorId
@@ -354,7 +398,18 @@ export default function MonitoringPage({
     if (pendingRun.kind === "existing") {
       setActionError("");
       try {
+        if (isWorkbench && task)
+          await task.saveState({
+            step: "monitoring-confirmed",
+            values: { selectedMonitorId: pendingRun.monitor.id },
+            record: {
+              id: "monitor-submit",
+              label: "已确认监控费用并提交",
+              status: "pending",
+            },
+          });
         const result = await onRunMonitor(pendingRun.monitor.id);
+        rememberMonitorResult(pendingRun.monitor.id, result?.runId);
         setSuccess({
           message: "监控已开始执行",
           monitorId: pendingRun.monitor.id,
@@ -483,6 +538,7 @@ export default function MonitoringPage({
       )}
 
       <Modal
+        inline={isWorkbench}
         open={projectModal}
         onClose={() => !submitting && setProjectModal(false)}
         title={project ? "编辑项目" : "创建第一个项目"}
@@ -503,6 +559,7 @@ export default function MonitoringPage({
       </Modal>
       {project && monitorEditor && (
         <Modal
+          inline={isWorkbench}
           open
           onClose={closeMonitorEditor}
           title={
@@ -559,6 +616,7 @@ export default function MonitoringPage({
       )}
       {pendingRun && (
         <RunConfirmationDialog
+          inline={isWorkbench}
           open
           monitorName={
             pendingRun.kind === "existing"
@@ -602,6 +660,7 @@ export default function MonitoringPage({
         />
       )}
       <Modal
+        inline={isWorkbench}
         open={Boolean(pendingDelete)}
         onClose={() => {
           if (!deleting) setPendingDelete(undefined);
@@ -635,6 +694,7 @@ export default function MonitoringPage({
         </footer>
       </Modal>
       <Modal
+        inline={isWorkbench}
         open={recycleModal}
         onClose={() => setRecycleModal(false)}
         title="问题监控回收站"

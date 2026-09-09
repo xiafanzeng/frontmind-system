@@ -644,3 +644,28 @@
 .hl-filter-row .hl-pending-search {
   max-width: 300px;
 }
+
+.content-insights-workspace.content-insights-flow {
+  background: #fff;
+  padding: 0;
+}
+.content-insights-flow .hl-workspace-nav {
+  border: 0;
+  border-bottom: 1px solid #e8e8eb;
+  background: #fff;
+  border-radius: 0;
+  padding-inline: 0;
+}
+.hl-flow-preview-note {
+  margin: 0 0 22px;
+  font-size: 13px;
+  color: #767680;
+  line-height: 1.8;
+}
+.content-insights-flow .hl-page {
+  background: #fff;
+  padding-inline: 0;
+}
+.content-insights-flow .hl-page-heading h2 {
+  font-size: 18px;
+}

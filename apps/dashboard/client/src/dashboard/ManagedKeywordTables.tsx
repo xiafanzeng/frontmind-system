@@ -1,5 +1,11 @@
+import { useBusinessFlowState, readFlowString } from "./useBusinessFlowState";
 import { Database, Search, X } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useBusinessWorkspace,
+  useBusinessWorkspaceSummary,
+} from "./BusinessWorkspaceContext";
+import "./business-module-flows.css";
 import {
   KEYWORD_CATEGORY_OPTIONS,
   isKeywordCategoryColumn,
@@ -38,9 +44,11 @@ type ManagedKeywordTablesProps = {
     category: KeywordCategoryKey;
     tableId: string;
     rowIndex: number;
+    workbenchTaskId?: string;
   }) => void;
   quotaAvailability?: ManagedKeywordQuotaAvailability;
   generationEnabled?: boolean;
+  dashboardRevision?: number | null;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
@@ -185,6 +193,9 @@ function brandQuestionUniverseStatus(
 }
 
 function BrandQuestionUniverseGenerationControl() {
+  const { isWorkbench, task } = useBusinessWorkspace();
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [binding, setBinding] = useState(false);
   const utils = trpc.useUtils();
   const observation = trpc.workspace.brandQuestionUniverse.observe.useQuery(
     undefined,
@@ -198,9 +209,14 @@ function BrandQuestionUniverseGenerationControl() {
       ]);
     },
   });
+  const generationIntent = useRef<{
+    fingerprint: string;
+    clientRequestId: string;
+  } | null>(null);
   const data = observation.data;
-  const disabled = !data?.canStart || start.isPending;
+  const disabled = !data?.canStart || start.isPending || binding;
   const status =
+    bindingError ||
     start.error?.message ||
     observation.error?.message ||
     brandQuestionUniverseStatus(data);
@@ -208,14 +224,64 @@ function BrandQuestionUniverseGenerationControl() {
     <BrandQuestionUniverseGenerationAction
       disabled={disabled}
       status={status}
-      onStart={() => {
-        if (!data?.knowledgeSnapshotId) return;
-        start.mutate({
-          knowledgeSnapshotId: data.knowledgeSnapshotId,
-          clientRequestId: crypto.randomUUID(),
-          expectedDashboardRevision: data.dashboardRevision,
-        });
-      }}
+      onStart={() =>
+        void (async () => {
+          if (!data?.knowledgeSnapshotId || binding || start.isPending) return;
+          const fingerprint = JSON.stringify([
+            data.knowledgeSnapshotId,
+            data.dashboardRevision,
+          ]);
+          if (generationIntent.current?.fingerprint !== fingerprint)
+            generationIntent.current = {
+              fingerprint,
+              clientRequestId: crypto.randomUUID(),
+            };
+          const requestId = generationIntent.current.clientRequestId;
+          setBinding(true);
+          setBindingError(null);
+          try {
+            if (isWorkbench && task)
+              await task.saveState({
+                step: "keyword-generating",
+                resources: [
+                  { kind: "knowledge_snapshot", id: data.knowledgeSnapshotId },
+                ],
+                record: {
+                  id: requestId,
+                  label: "生成品牌全域词库",
+                  status: "pending",
+                },
+              });
+            await start.mutateAsync({
+              knowledgeSnapshotId: data.knowledgeSnapshotId,
+              clientRequestId: requestId,
+              expectedDashboardRevision: data.dashboardRevision,
+            });
+            if (isWorkbench && task)
+              void task
+                .saveState({
+                  step: "keyword-observing",
+                  record: {
+                    id: requestId,
+                    label: "已提交词库生成",
+                    status: "completed",
+                    detail: "生成进度与正式词库以当前服务返回为准。",
+                  },
+                })
+                .catch(() =>
+                  setBindingError(
+                    "生成请求已提交，任务记录同步失败；可从辅助区重试同步。",
+                  ),
+                );
+          } catch (cause) {
+            setBindingError(
+              cause instanceof Error ? cause.message : "生成未能开始，请重试。",
+            );
+          } finally {
+            setBinding(false);
+          }
+        })()
+      }
     />
   );
 }
@@ -273,12 +339,104 @@ export default function ManagedKeywordTables({
   onUseQuestion,
   quotaAvailability,
   generationEnabled = false,
+  dashboardRevision,
 }: ManagedKeywordTablesProps) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [tableFilter, setTableFilter] = useState("all");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [subdivisionFilter, setSubdivisionFilter] = useState("all");
+  const { isWorkbench, task } = useBusinessWorkspace();
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [handingOff, setHandingOff] = useState(false);
+  const handoffInFlight = useRef(false);
+  const [selectedKeyword, setSelectedKeyword] = useBusinessFlowState<{
+    question: string;
+    category: KeywordCategoryKey;
+    tableId: string;
+    rowIndex: number;
+  } | null>("selectedKeyword", null, (value) => {
+    if (!value || typeof value !== "object") return undefined;
+    const item = value as Record<string, unknown>;
+    const category = keywordCategoryKey(item.category);
+    return typeof item.question === "string" &&
+      typeof item.tableId === "string" &&
+      typeof item.rowIndex === "number" &&
+      Number.isInteger(item.rowIndex) &&
+      category
+      ? {
+          question: item.question,
+          category,
+          tableId: item.tableId,
+          rowIndex: item.rowIndex,
+        }
+      : undefined;
+  });
+  const handoffQuestion = async () => {
+    if (!selectedKeyword || handoffInFlight.current) return;
+    if (!isWorkbench || !task) {
+      onUseQuestion?.(selectedKeyword);
+      return;
+    }
+    if (dashboardRevision == null) {
+      setHandoffError("词库版本尚未载入，请刷新后重试。");
+      return;
+    }
+    handoffInFlight.current = true;
+    setHandingOff(true);
+    setHandoffError(null);
+    try {
+      const result = await task.handoff({
+        targetAgentId: "questions",
+        title: selectedKeyword.question,
+        resources: [],
+        values: {
+          questionDraft: selectedKeyword.question,
+          questionCategory: selectedKeyword.category,
+          questionLibraryRef: {
+            dashboardRevision,
+            tableId: selectedKeyword.tableId,
+            rowIndex: selectedKeyword.rowIndex,
+          },
+          questionOrigin: "brand_keyword_library",
+          questionIntakeOpen: true,
+        },
+        idempotencyKey: `keyword:${dashboardRevision}:${selectedKeyword.tableId}:${selectedKeyword.rowIndex}`,
+      });
+      onUseQuestion?.({
+        ...selectedKeyword,
+        workbenchTaskId: result.conversationId,
+      });
+    } catch (cause) {
+      setHandoffError(
+        cause instanceof Error ? cause.message : "交接没有完成，请重试。",
+      );
+    } finally {
+      handoffInFlight.current = false;
+      setHandingOff(false);
+    }
+  };
+  const [pages, setPages] = useState<Record<string, number>>({});
+  const [searchTerm, setSearchTerm] = useBusinessFlowState(
+    "keywordSearch",
+    "",
+    readFlowString,
+  );
+  const [tableFilter, setTableFilter] = useBusinessFlowState(
+    "keywordTable",
+    "all",
+    readFlowString,
+  );
+  const [categoryFilter, setCategoryFilter] = useBusinessFlowState(
+    "keywordCategory",
+    "all",
+    readFlowString,
+  );
+  const [subdivisionFilter, setSubdivisionFilter] = useBusinessFlowState(
+    "keywordSubdivision",
+    "all",
+    readFlowString,
+  );
   const keyword = searchTerm.trim().toLowerCase();
+  useEffect(
+    () => setPages({}),
+    [searchTerm, tableFilter, categoryFilter, subdivisionFilter],
+  );
   const hasKeywordCategories = useMemo(
     () =>
       tables.some((table) => {
@@ -372,13 +530,31 @@ export default function ManagedKeywordTables({
     [visibleTables],
   );
 
+  useBusinessWorkspaceSummary({
+    items: [
+      { label: "词库记录", value: `${totalRows} 条` },
+      { label: "当前筛选", value: `${visibleRows} 条` },
+      { label: "当前词条", value: selectedKeyword?.question || "尚未选择" },
+      {
+        label: "已选来源",
+        value: selectedKeyword
+          ? tables.find((table) => table.id === selectedKeyword.tableId)
+              ?.title || "品牌全域词库"
+          : "—",
+      },
+    ],
+  });
   return (
-    <section className="page-shell brand-deep-page">
-      <KeywordPageHeader
-        eyebrow="MindPromise智诺 / 品牌建设"
-        title="品牌全域词库"
-        desc={KEYWORD_SOURCE_DESCRIPTION}
-      />
+    <section
+      className={`page-shell brand-deep-page ${isWorkbench ? "keyword-conversation-flow" : ""}`}
+    >
+      {!isWorkbench && (
+        <KeywordPageHeader
+          eyebrow="MindPromise智诺 / 品牌建设"
+          title="品牌全域词库"
+          desc={KEYWORD_SOURCE_DESCRIPTION}
+        />
+      )}
       {loading ? (
         <KeywordEmptyPanel
           title="正在载入品牌全域词库"
@@ -493,6 +669,35 @@ export default function ManagedKeywordTables({
               当前显示 <strong>{formatNumber(visibleRows)}</strong> 条
             </span>
           </div>
+          {isWorkbench && selectedKeyword && (
+            <section
+              className="business-inline-step"
+              aria-label="已选词条与下一步"
+            >
+              <div className="business-inline-step-heading">
+                <h3>用这个问题开展优化</h3>
+                <button
+                  type="button"
+                  aria-label="清除词条选择"
+                  onClick={() => setSelectedKeyword(null)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <p>{selectedKeyword.question}</p>
+              <button
+                type="button"
+                className="keyword-optimize-button"
+                disabled={handingOff || task?.pending}
+                onClick={() => void handoffQuestion()}
+              >
+                {handingOff ? "正在建立优化任务…" : "确认选择并交给问题优化"}
+              </button>
+              {handoffError && (
+                <p role="alert">{handoffError} 选择已保留，可再次点击重试。</p>
+              )}
+            </section>
+          )}
           <div className="saas-content-area">
             {visibleTables.map((table) => {
               const tableQuestionColumnIndex = questionColumnIndex(
@@ -501,6 +706,11 @@ export default function ManagedKeywordTables({
               const tableCategoryColumnIndex = keywordCategoryColumnIndex(
                 table.columns,
               );
+              const pageCount = Math.max(1, Math.ceil(table.rows.length / 20));
+              const page = Math.min(pages[table.id] ?? 0, pageCount - 1);
+              const rows = isWorkbench
+                ? table.rows.slice(page * 20, (page + 1) * 20)
+                : table.rows;
               return (
                 <KeywordPanel
                   title={tables.length === 1 ? "全域词库" : table.title}
@@ -528,7 +738,7 @@ export default function ManagedKeywordTables({
                         </tr>
                       </thead>
                       <tbody>
-                        {table.rows.map(({ row, rowIndex }) => {
+                        {rows.map(({ row, rowIndex }) => {
                           const question = safeText(
                             row[tableQuestionColumnIndex],
                           );
@@ -539,7 +749,15 @@ export default function ManagedKeywordTables({
                             ? quotaAvailability?.[category]
                             : undefined;
                           return (
-                            <tr key={`${table.id}-${rowIndex}`}>
+                            <tr
+                              key={`${table.id}-${rowIndex}`}
+                              aria-selected={
+                                isWorkbench
+                                  ? selectedKeyword?.tableId === table.id &&
+                                    selectedKeyword.rowIndex === rowIndex
+                                  : undefined
+                              }
+                            >
                               {table.displayColumns.map(
                                 ({ column, columnIndex }) => {
                                   const normalizedColumn =
@@ -601,7 +819,9 @@ export default function ManagedKeywordTables({
                                     }
                                     onClick={() =>
                                       category &&
-                                      onUseQuestion({
+                                      (isWorkbench
+                                        ? setSelectedKeyword
+                                        : onUseQuestion)({
                                         question,
                                         category,
                                         tableId: table.id,
@@ -612,7 +832,9 @@ export default function ManagedKeywordTables({
                                     {quotaAccess?.available === false
                                       ? quotaAccess.unavailableLabel ||
                                         "该类额度已满"
-                                      : "选择并进入问题优化"}
+                                      : isWorkbench
+                                        ? "选择词条"
+                                        : "选择并进入问题优化"}
                                   </button>
                                 </td>
                               )}
@@ -622,6 +844,40 @@ export default function ManagedKeywordTables({
                       </tbody>
                     </table>
                   </div>
+                  {isWorkbench && pageCount > 1 && (
+                    <nav
+                      className="business-flow-pagination"
+                      aria-label={`${table.title}分页`}
+                    >
+                      <span>
+                        {page + 1} / {pageCount} 页
+                      </span>
+                      <button
+                        type="button"
+                        disabled={page === 0}
+                        onClick={() =>
+                          setPages((value) => ({
+                            ...value,
+                            [table.id]: page - 1,
+                          }))
+                        }
+                      >
+                        上一页
+                      </button>
+                      <button
+                        type="button"
+                        disabled={page + 1 >= pageCount}
+                        onClick={() =>
+                          setPages((value) => ({
+                            ...value,
+                            [table.id]: page + 1,
+                          }))
+                        }
+                      >
+                        下一页
+                      </button>
+                    </nav>
+                  )}
                 </KeywordPanel>
               );
             })}

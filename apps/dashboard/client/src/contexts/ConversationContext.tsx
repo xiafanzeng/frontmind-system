@@ -227,6 +227,7 @@ export interface Conversation {
   purpose?: "enterprise_qa" | "content_production";
   /** Workbench subagent ownership; absent on legacy general conversations. */
   workbenchAgentId?: string;
+  workbench?: import("@shared/workbench-task").WorkbenchTaskState;
   messages: LocalMessage[];
   /** Server-derived boundary for provider tasks owned outside ordinary chat. */
   executionKind?: "general_chat_v2" | "response_logic";
@@ -457,7 +458,7 @@ type Action =
         taskUrl?: string;
         previousResponseId?: string;
         executionKind?: "general_chat_v2" | "response_logic";
-  execution?: GeneralExecutionDto;
+        execution?: GeneralExecutionDto;
         clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;
@@ -601,13 +602,22 @@ function conversationReducer(
             ? undefined
             : (action.payload.previousResponseId ?? c.previousResponseId),
           executionKind: action.payload.executionKind ?? c.executionKind,
-          execution: action.payload.execution ? {
-            ...action.payload.execution,
-            timeline: [
-              ...(c.execution?.timeline.filter(entry => !entry.id.startsWith(`execution:${action.payload.execution!.taskId}:`)) ?? []),
-              ...action.payload.execution.timeline,
-            ].sort((a, b) => a.userSequence - b.userSequence || a.rank - b.rank),
-          } : c.execution,
+          execution: action.payload.execution
+            ? {
+                ...action.payload.execution,
+                timeline: [
+                  ...(c.execution?.timeline.filter(
+                    (entry) =>
+                      !entry.id.startsWith(
+                        `execution:${action.payload.execution!.taskId}:`,
+                      ),
+                  ) ?? []),
+                  ...action.payload.execution.timeline,
+                ].sort(
+                  (a, b) => a.userSequence - b.userSequence || a.rank - b.rank,
+                ),
+              }
+            : c.execution,
           startedAt: action.payload.startedAt ?? c.startedAt,
           completedAt:
             action.payload.completedAt !== undefined
@@ -1749,7 +1759,8 @@ export function prepareConversationForCloud(
 // empty specialized drafts local until that evidence can be saved with them.
 function hasDurableConversationIdentity(conversation: Conversation) {
   return (
-    !conversation.purpose ||
+    (!conversation.purpose && !conversation.workbenchAgentId) ||
+    Boolean(conversation.workbench) ||
     conversation.messages.length > 0 ||
     Boolean(
       conversation.taskId ||
@@ -1819,7 +1830,11 @@ export function mergeDirtyConversationHydration(
     status: local.status,
     executionKind: local.executionKind ?? remote.executionKind,
     purpose: remote.purpose ?? local.purpose,
-    workbenchAgentId: local.workbenchAgentId ?? remote.workbenchAgentId,
+    workbenchAgentId:
+      remote.workbench?.agentId ??
+      remote.workbenchAgentId ??
+      local.workbenchAgentId,
+    workbench: remote.workbench ?? local.workbench,
     taskId: local.taskId ?? remote.taskId,
     previousResponseId: local.previousResponseId ?? remote.previousResponseId,
     startedAt: local.startedAt ?? remote.startedAt,
@@ -1839,7 +1854,9 @@ export function remoteMissingLocalConversations(
   return local.filter(
     (conversation) =>
       !remoteIds.has(conversation.id) &&
-      (initial || isDirty(conversation.id) || !hasDurableConversationIdentity(conversation)),
+      (initial ||
+        isDirty(conversation.id) ||
+        !hasDurableConversationIdentity(conversation)),
   );
 }
 
@@ -2253,6 +2270,7 @@ interface ConversationTrpcHooks {
 }
 
 interface ConversationContextType {
+  workbenchScopeKey?: string;
   state: ConversationState;
   activeConversation: Conversation | null;
   loading: boolean;
@@ -2278,7 +2296,7 @@ interface ConversationContextType {
       taskUrl?: string;
       previousResponseId?: string;
       executionKind?: "general_chat_v2" | "response_logic";
-  execution?: GeneralExecutionDto;
+      execution?: GeneralExecutionDto;
       clearTaskPointer?: boolean;
       startedAt?: number;
       completedAt?: number;
@@ -2335,8 +2353,12 @@ export function ConversationProvider({
   const authenticatedUser = auth.user as { id: number } | null;
   const userId = authenticatedUser?.id ?? null;
   const [workspaceScope] = useState(() =>
-    typeof window === "undefined" ? undefined :
-      enterpriseWorkspaceScope(window.location.pathname, window.location.search),
+    typeof window === "undefined"
+      ? undefined
+      : enterpriseWorkspaceScope(
+          window.location.pathname,
+          window.location.search,
+        ),
   );
   const conversationApi = (
     trpc as unknown as { conversation: ConversationTrpcHooks }
@@ -2435,10 +2457,12 @@ export function ConversationProvider({
         );
         if (conversation && hasDurableConversationIdentity(conversation)) {
           const snapshot = prepareConversationForCloud(conversation);
-          if (canSyncRef.current) syncQueueRef.current!.enqueueSnapshot(snapshot);
-          else syncQueueRef.current!.restorePending([
-            { kind: "snapshot", conversation: snapshot },
-          ]);
+          if (canSyncRef.current)
+            syncQueueRef.current!.enqueueSnapshot(snapshot);
+          else
+            syncQueueRef.current!.restorePending([
+              { kind: "snapshot", conversation: snapshot },
+            ]);
         }
       }
     },
@@ -2740,7 +2764,8 @@ export function ConversationProvider({
             if (
               restoredPendingIdsRef.current.has(conversation.id) ||
               !hasDurableConversationIdentity(conversation)
-            ) continue;
+            )
+              continue;
             syncQueueRef.current!.enqueueSnapshot(
               prepareConversationForCloud(conversation),
               true,
@@ -2789,15 +2814,20 @@ export function ConversationProvider({
     locallyDiscardedConversationIdsRef.current.clear();
     restoredPendingIdsRef.current.clear();
     const key = JSON.stringify([
-      userId, workspaceScope ?? null, projectAssignmentId ?? null,
+      userId,
+      workspaceScope ?? null,
+      projectAssignmentId ?? null,
     ]);
-    const retained = userId === null ? undefined : retainedWorkspaceDrafts.get(key);
+    const retained =
+      userId === null ? undefined : retainedWorkspaceDrafts.get(key);
     retainedWorkspaceDrafts.delete(key);
     if (retained) {
       syncQueueRef.current!.restorePending(retained.operations);
       for (const operation of retained.operations) {
-        const id = operation.kind === "snapshot"
-          ? operation.conversation.id : operation.id;
+        const id =
+          operation.kind === "snapshot"
+            ? operation.conversation.id
+            : operation.id;
         restoredPendingIdsRef.current.add(id);
         if (operation.kind === "delete") {
           locallyDiscardedConversationIdsRef.current.add(id);
@@ -2826,31 +2856,53 @@ export function ConversationProvider({
       accountIdRef.current = null;
       canSyncRef.current = false;
       const operations = syncQueueRef.current!.detachPending();
-      const dirtyIds = new Set(operations
-        .filter(operation => operation.kind === "snapshot")
-        .map(operation => operation.conversation.id));
-      const conversations = stateRef.current.conversations.filter(conversation =>
-        dirtyIds.has(conversation.id) || !hasDurableConversationIdentity(conversation),
+      const dirtyIds = new Set(
+        operations
+          .filter((operation) => operation.kind === "snapshot")
+          .map((operation) => operation.conversation.id),
+      );
+      const conversations = stateRef.current.conversations.filter(
+        (conversation) =>
+          dirtyIds.has(conversation.id) ||
+          !hasDurableConversationIdentity(conversation),
       );
       const retainedState = {
         conversations,
-        activeConversationId: conversations.some(conversation =>
-          conversation.id === stateRef.current.activeConversationId,
-        ) ? stateRef.current.activeConversationId : null,
+        activeConversationId: conversations.some(
+          (conversation) =>
+            conversation.id === stateRef.current.activeConversationId,
+        )
+          ? stateRef.current.activeConversationId
+          : null,
       };
-      if (conversations.length || operations.length || locallyDiscardedConversationIdsRef.current.size) {
+      if (
+        conversations.length ||
+        operations.length ||
+        locallyDiscardedConversationIdsRef.current.size
+      ) {
         retainedWorkspaceDrafts.set(key, {
           state: retainedState,
           operations,
           discardedIds: [...locallyDiscardedConversationIdsRef.current],
         });
       }
-      revokeReleasedAttachmentBlobUrls(stateRef.current, retainedState, retainedState);
+      revokeReleasedAttachmentBlobUrls(
+        stateRef.current,
+        retainedState,
+        retainedState,
+      );
       // The next effect may be an account/assignment change within this mount.
       // Retained blob URLs now belong exclusively to the scoped draft store.
       stateRef.current = EMPTY_STATE;
     };
-  }, [auth.loading, hydrateForUser, projectAssignmentId, replaceState, userId, workspaceScope]);
+  }, [
+    auth.loading,
+    hydrateForUser,
+    projectAssignmentId,
+    replaceState,
+    userId,
+    workspaceScope,
+  ]);
 
   useEffect(() => {
     // A previous rejection must not turn off the outbox. Newer local snapshots
@@ -2918,6 +2970,7 @@ export function ConversationProvider({
           (conversation) =>
             conversation.title === title &&
             conversation.purpose === options.purpose &&
+            conversation.workbenchAgentId === options.workbenchAgentId &&
             conversation.status === "idle" &&
             conversation.messages.length === 0 &&
             !conversation.taskId &&
@@ -2932,7 +2985,9 @@ export function ConversationProvider({
         id,
         title,
         ...(options?.purpose ? { purpose: options.purpose } : {}),
-        ...(options?.workbenchAgentId ? { workbenchAgentId: options.workbenchAgentId } : {}),
+        ...(options?.workbenchAgentId
+          ? { workbenchAgentId: options.workbenchAgentId }
+          : {}),
         messages: [],
         status: "idle",
         createdAt: Date.now(),
@@ -2945,10 +3000,12 @@ export function ConversationProvider({
       replaceState(nextState);
       if (hasDurableConversationIdentity(conversation)) {
         const snapshot = prepareConversationForCloud(conversation);
-        if (canSyncRef.current) syncQueueRef.current!.enqueueSnapshot(snapshot, true);
-        else syncQueueRef.current!.restorePending([
-          { kind: "snapshot", conversation: snapshot },
-        ]);
+        if (canSyncRef.current)
+          syncQueueRef.current!.enqueueSnapshot(snapshot, true);
+        else
+          syncQueueRef.current!.restorePending([
+            { kind: "snapshot", conversation: snapshot },
+          ]);
       }
       return id;
     },
@@ -2993,7 +3050,7 @@ export function ConversationProvider({
         taskUrl?: string;
         previousResponseId?: string;
         executionKind?: "general_chat_v2" | "response_logic";
-  execution?: GeneralExecutionDto;
+        execution?: GeneralExecutionDto;
         clearTaskPointer?: boolean;
         startedAt?: number;
         completedAt?: number;
@@ -3174,6 +3231,7 @@ export function ConversationProvider({
   return (
     <ConversationContext.Provider
       value={{
+        workbenchScopeKey: `${userId ?? "anonymous"}:${workspaceScope ?? "account"}:${projectAssignmentId ?? ""}`,
         state,
         activeConversation,
         loading: auth.loading || hydrationLoading,
@@ -3218,11 +3276,123 @@ export function conversationBelongsToPurpose(
   conversation: Conversation,
   purpose: "general" | "enterprise_qa" | "content_production",
 ) {
-  if (purpose !== "general") return conversation.purpose === purpose;
+  // A bound handoff can exist before its first native dispatch. Let that
+  // explicitly tagged draft enter its composer without inventing a persisted
+  // provider purpose; completed executions retain their original purpose.
+  const nativePurpose =
+    conversation.purpose ??
+    (conversation.workbenchAgentId === "enterprise-qa"
+      ? "enterprise_qa"
+      : conversation.workbenchAgentId === "content"
+        ? "content_production"
+        : undefined);
+  if (purpose !== "general") return nativePurpose === purpose;
   return (
-    !conversation.purpose &&
+    !nativePurpose &&
     !conversation.knowledgeBase?.initialized &&
     conversation.executionKind !== "response_logic"
+  );
+}
+
+export function conversationBelongsToAgent(
+  conversation: Conversation,
+  agentId: import("@shared/workbench-task").WorkbenchAgentId,
+) {
+  if (conversation.workbenchAgentId)
+    return conversation.workbenchAgentId === agentId;
+  if (agentId === "enterprise-qa")
+    return conversation.purpose === "enterprise_qa";
+  if (agentId === "content")
+    return conversation.purpose === "content_production";
+  if (agentId === "knowledge")
+    return Boolean(conversation.knowledgeBase?.initialized);
+  if (agentId === "response-logic")
+    return conversation.executionKind === "response_logic";
+  return (
+    agentId === "general" &&
+    conversationBelongsToPurpose(conversation, "general")
+  );
+}
+const agentSelections = new Map<string, string>();
+export function setWorkbenchTaskQuery(id: string) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("workbenchTask", id);
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}
+/** Preserves the persistence owner while isolating history, selection and composer. */
+export function ConversationAgentProvider({
+  agentId,
+  children,
+}: {
+  agentId: import("@shared/workbench-task").WorkbenchAgentId;
+  children: React.ReactNode;
+}) {
+  const parent = useConversation();
+  const key = `${parent.workbenchScopeKey ?? "workspace"}:${agentId}`;
+  const conversations = parent.state.conversations
+    .filter((item) => conversationBelongsToAgent(item, agentId))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const queryId =
+    typeof window === "undefined"
+      ? null
+      : new URLSearchParams(window.location.search).get("workbenchTask");
+  const activeConversation =
+    conversations.find((item) => item.id === queryId) ??
+    conversations.find((item) => item.id === parent.activeConversation?.id) ??
+    conversations.find((item) => item.id === agentSelections.get(key)) ??
+    conversations[0] ??
+    null;
+  if (activeConversation) agentSelections.set(key, activeConversation.id);
+  const setActive = useCallback(
+    (id: string) => {
+      if (
+        !parent.state.conversations.some(
+          (item) => item.id === id && conversationBelongsToAgent(item, agentId),
+        )
+      )
+        return;
+      agentSelections.set(key, id);
+      setWorkbenchTaskQuery(id);
+      parent.setActive(id);
+    },
+    [parent.setActive, parent.state.conversations, agentId, key],
+  );
+  const createConversation = useCallback(
+    (
+      options?: Parameters<ConversationContextType["createConversation"]>[0],
+    ) => {
+      const id = parent.createConversation({
+        ...options,
+        reuseEmpty: false,
+        workbenchAgentId: agentId,
+      });
+      agentSelections.set(key, id);
+      setWorkbenchTaskQuery(id);
+      return id;
+    },
+    [parent.createConversation, agentId, key],
+  );
+  return (
+    <ConversationContext.Provider
+      value={{
+        ...parent,
+        state: {
+          ...parent.state,
+          conversations,
+          activeConversationId: activeConversation?.id ?? null,
+        },
+        activeConversation,
+        createConversation,
+        setActive,
+      }}
+    >
+      {children}
+    </ConversationContext.Provider>
   );
 }
 

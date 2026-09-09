@@ -100,8 +100,13 @@ const PUBLISHER_IMAGE_CANARY_MAX_TEN_THOUSANDTHS = 100_000n;
 
 export class PublishingRepository {
   constructor(public readonly db: Database) {}
-  private mediaFacetsCache = new Map<string, { expiresAt: number; value: ReturnType<PublishingRepository["loadPublisherMediaFacets"]> }>();
-
+  private mediaFacetsCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      value: ReturnType<PublishingRepository["loadPublisherMediaFacets"]>;
+    }
+  >();
 
   async ensureMediaPublishingWallet(ownerId: string) {
     await this.db
@@ -747,13 +752,19 @@ export class PublishingRepository {
     if (input.cursor) conditions.push(gt(publisherArticles.id, input.cursor));
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
     return this.db
-      .select({ ...getTableColumns(publisherArticles), currentVersion: publisherArticleVersions.version })
+      .select({
+        ...getTableColumns(publisherArticles),
+        currentVersion: publisherArticleVersions.version,
+      })
       .from(publisherArticles)
-      .leftJoin(publisherArticleVersions, and(
-        eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
-        eq(publisherArticleVersions.articleId, publisherArticles.id),
-        monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
-      ))
+      .leftJoin(
+        publisherArticleVersions,
+        and(
+          eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
+          eq(publisherArticleVersions.articleId, publisherArticles.id),
+          monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
+        ),
+      )
       .where(and(...conditions))
       .orderBy(asc(publisherArticles.id))
       .limit(limit + 1);
@@ -1142,20 +1153,29 @@ export class PublishingRepository {
 
   async getPublisherMediaFacets(input: Partial<PublisherMediaListInput> = {}) {
     const runtime = await this.getPublisherRuntimeState();
-    const key = JSON.stringify([runtime?.activeCatalogRevision, runtime?.catalogSyncedAt, input.kind ?? "all"]);
+    const key = JSON.stringify([
+      runtime?.activeCatalogRevision,
+      runtime?.catalogSyncedAt,
+      input.kind ?? "all",
+    ]);
     const cached = this.mediaFacetsCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     if (this.mediaFacetsCache.size >= 3) this.mediaFacetsCache.clear();
     const value = this.loadPublisherMediaFacets(input);
     const entry = { expiresAt: Date.now() + 60_000, value };
     this.mediaFacetsCache.set(key, entry);
-    try { return await value; } catch (error) {
-      if (this.mediaFacetsCache.get(key) === entry) this.mediaFacetsCache.delete(key);
+    try {
+      return await value;
+    } catch (error) {
+      if (this.mediaFacetsCache.get(key) === entry)
+        this.mediaFacetsCache.delete(key);
       throw error;
     }
   }
 
-  private async loadPublisherMediaFacets(input: Partial<PublisherMediaListInput> = {}) {
+  private async loadPublisherMediaFacets(
+    input: Partial<PublisherMediaListInput> = {},
+  ) {
     const conditions = [
       input.includeInactive
         ? isNotNull(publisherMediaResources.mediaKind)
@@ -1172,7 +1192,10 @@ export class PublishingRepository {
             publisherMediaResources.externalResourceId,
             `%${escapeLike(input.query)}%`,
           ),
-          like(publisherMediaResources.platform, `%${escapeLike(input.query)}%`),
+          like(
+            publisherMediaResources.platform,
+            `%${escapeLike(input.query)}%`,
+          ),
         )!,
       );
     }
@@ -1196,32 +1219,69 @@ export class PublishingRepository {
     if (input.area)
       conditions.push(eq(publisherMediaResources.area, input.area));
     if (input.recommended !== undefined)
-      conditions.push(eq(publisherMediaResources.recommended, input.recommended));
+      conditions.push(
+        eq(publisherMediaResources.recommended, input.recommended),
+      );
     if (input.includeType)
-      conditions.push(eq(publisherMediaResources.includeType, input.includeType));
+      conditions.push(
+        eq(publisherMediaResources.includeType, input.includeType),
+      );
     if (input.publishSpeed)
-      conditions.push(eq(publisherMediaResources.publishSpeed, input.publishSpeed));
+      conditions.push(
+        eq(publisherMediaResources.publishSpeed, input.publishSpeed),
+      );
     const entryLevel = input.entryLevel ?? input.entryType;
     if (entryLevel)
       conditions.push(eq(publisherMediaResources.entryLevel, entryLevel));
     if (input.linkType)
       conditions.push(eq(publisherMediaResources.linkType, input.linkType));
     if (input.minimumPcWeight !== undefined)
-      conditions.push(gte(publisherMediaResources.pcWeight, input.minimumPcWeight));
+      conditions.push(
+        gte(publisherMediaResources.pcWeight, input.minimumPcWeight),
+      );
     if (input.minimumIncludeRate !== undefined)
-      conditions.push(gte(publisherMediaResources.includeRateBasisPoints, Math.round(input.minimumIncludeRate * 100)));
+      conditions.push(
+        gte(
+          publisherMediaResources.includeRateBasisPoints,
+          Math.round(input.minimumIncludeRate * 100),
+        ),
+      );
     if (input.minimumSuccessRate !== undefined)
-      conditions.push(gte(publisherMediaResources.successRateBasisPoints, Math.round(input.minimumSuccessRate * 100)));
+      conditions.push(
+        gte(
+          publisherMediaResources.successRateBasisPoints,
+          Math.round(input.minimumSuccessRate * 100),
+        ),
+      );
     if (input.minimumPriceTenThousandths !== undefined)
-      conditions.push(gte(publisherMediaResources.priceTenThousandths, publisherMoneyFromApiString(input.minimumPriceTenThousandths)));
+      conditions.push(
+        gte(
+          publisherMediaResources.priceTenThousandths,
+          publisherMoneyFromApiString(input.minimumPriceTenThousandths),
+        ),
+      );
     if (input.maximumPriceTenThousandths !== undefined)
-      conditions.push(lte(publisherMediaResources.priceTenThousandths, publisherMoneyFromApiString(input.maximumPriceTenThousandths)));
+      conditions.push(
+        lte(
+          publisherMediaResources.priceTenThousandths,
+          publisherMoneyFromApiString(input.maximumPriceTenThousandths),
+        ),
+      );
     if (input.imageSupport)
-      conditions.push(eq(publisherMediaCapabilities.imageSupport, input.imageSupport));
+      conditions.push(
+        eq(publisherMediaCapabilities.imageSupport, input.imageSupport),
+      );
     if (input.authenticated !== undefined)
-      conditions.push(eq(publisherMediaResources.authenticated, input.authenticated));
+      conditions.push(
+        eq(publisherMediaResources.authenticated, input.authenticated),
+      );
     if (input.festivalPublishable !== undefined)
-      conditions.push(eq(publisherMediaResources.festivalPublishable, input.festivalPublishable));
+      conditions.push(
+        eq(
+          publisherMediaResources.festivalPublishable,
+          input.festivalPublishable,
+        ),
+      );
     const where = and(...conditions);
     const facet = async (
       column:
@@ -1590,7 +1650,10 @@ export class PublishingRepository {
     const page = Math.max(input.page ?? 1, 1);
     const legacyCursorMode =
       input.page === undefined && input.pageSize === undefined;
-    if (input.activeOnly) conditions.push(inArray(publisherBatches.status, ["queued", "processing"]));
+    if (input.activeOnly)
+      conditions.push(
+        inArray(publisherBatches.status, ["queued", "processing"]),
+      );
     const [{ total = 0 } = { total: 0 }] = await this.db
       .select({ total: count() })
       .from(publisherBatches)
@@ -1863,33 +1926,64 @@ export class PublishingRepository {
       );
     // Lightweight covering-index counts; the overview never loads catalog facets.
     const [kindRows, [articleTotal], articles, processing] = await Promise.all([
-      this.db.select({ kind: publisherMediaResources.mediaKind, total: count() })
-        .from(publisherMediaResources).where(and(
-          eq(publisherMediaResources.isActive, true),
-          isNotNull(publisherMediaResources.mediaKind),
-        ))
+      this.db
+        .select({ kind: publisherMediaResources.mediaKind, total: count() })
+        .from(publisherMediaResources)
+        .where(
+          and(
+            eq(publisherMediaResources.isActive, true),
+            isNotNull(publisherMediaResources.mediaKind),
+          ),
+        )
         .groupBy(publisherMediaResources.mediaKind),
-      this.db.select({ total: count() }).from(publisherArticles)
+      this.db
+        .select({ total: count() })
+        .from(publisherArticles)
         .where(monitoringProjectOwnerPredicate(publisherArticles, ownerId)),
-      this.db.select({
-        id: publisherArticles.id, workingName: publisherArticles.workingName,
-        suggestedTitle: publisherArticles.suggestedTitle, status: publisherArticles.status,
-        currentVersionId: publisherArticles.currentVersionId, currentVersion: publisherArticleVersions.version,
-        containsImages: publisherArticles.containsImages, revision: publisherArticles.revision,
-        updatedAt: publisherArticles.updatedAt, createdAt: publisherArticles.createdAt,
-      }).from(publisherArticles).leftJoin(publisherArticleVersions, and(
-        eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
-        eq(publisherArticleVersions.articleId, publisherArticles.id),
-        monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
-      )).where(and(monitoringProjectOwnerPredicate(publisherArticles, ownerId),
-        inArray(publisherArticles.status, ["draft", "ready"])))
-        .orderBy(desc(publisherArticles.updatedAt), desc(publisherArticles.id)).limit(3),
-      this.listPublisherBatches(ownerId, { page: 1, pageSize: 3, activeOnly: true }),
+      this.db
+        .select({
+          id: publisherArticles.id,
+          workingName: publisherArticles.workingName,
+          suggestedTitle: publisherArticles.suggestedTitle,
+          status: publisherArticles.status,
+          currentVersionId: publisherArticles.currentVersionId,
+          currentVersion: publisherArticleVersions.version,
+          containsImages: publisherArticles.containsImages,
+          revision: publisherArticles.revision,
+          updatedAt: publisherArticles.updatedAt,
+          createdAt: publisherArticles.createdAt,
+        })
+        .from(publisherArticles)
+        .leftJoin(
+          publisherArticleVersions,
+          and(
+            eq(publisherArticleVersions.id, publisherArticles.currentVersionId),
+            eq(publisherArticleVersions.articleId, publisherArticles.id),
+            monitoringProjectOwnerPredicate(publisherArticleVersions, ownerId),
+          ),
+        )
+        .where(
+          and(
+            monitoringProjectOwnerPredicate(publisherArticles, ownerId),
+            inArray(publisherArticles.status, ["draft", "ready"]),
+          ),
+        )
+        .orderBy(desc(publisherArticles.updatedAt), desc(publisherArticles.id))
+        .limit(3),
+      this.listPublisherBatches(ownerId, {
+        page: 1,
+        pageSize: 3,
+        activeOnly: true,
+      }),
     ]);
     const now = new Date();
     return {
-      catalogCounts: { news: Number(kindRows.find(row => row.kind === "news")?.total ?? 0),
-        selfMedia: Number(kindRows.find(row => row.kind === "self_media")?.total ?? 0) },
+      catalogCounts: {
+        news: Number(kindRows.find((row) => row.kind === "news")?.total ?? 0),
+        selfMedia: Number(
+          kindRows.find((row) => row.kind === "self_media")?.total ?? 0,
+        ),
+      },
       articleCount: Number(articleTotal?.total ?? 0),
       resumableArticles: articles,
       processingBatchCount: processing.total,
@@ -2005,7 +2099,10 @@ export class PublishingRepository {
         runId: publisherMediaLogoResolutions.syncRunId,
         status: publisherMediaLogoResolutions.status,
         sourceKind: publisherMediaLogoResolutions.sourceKind,
-        unverifiedTotal: sql<number>`sum(case when JSON_UNQUOTE(JSON_EXTRACT(${publisherMediaLogoResolutions.reviewAudit}, '$.verification')) = 'unverified' then 1 else 0 end)`.mapWith(Number),
+        unverifiedTotal:
+          sql<number>`sum(case when JSON_UNQUOTE(JSON_EXTRACT(${publisherMediaLogoResolutions.reviewAudit}, '$.verification')) = 'unverified' then 1 else 0 end)`.mapWith(
+            Number,
+          ),
         total: count(),
       })
       .from(publisherMediaLogoResolutions)
@@ -2462,7 +2559,10 @@ export class PublishingRepository {
               and(
                 eq(publisherSubmissionAttempts.itemId, item.id),
                 eq(publisherSubmissionAttempts.ownerId, item.ownerId),
-                eq(publisherSubmissionAttempts.attemptNumber, item.attemptCount),
+                eq(
+                  publisherSubmissionAttempts.attemptNumber,
+                  item.attemptCount,
+                ),
               ),
             )
             .limit(1);
@@ -2598,6 +2698,69 @@ export class PublishingRepository {
     },
   ) {
     return this.db.transaction(async (tx) => {
+      // The existing audit receipt and draft commit together. Serialize creates
+      // for this owner so a lost response or a double click can only make one
+      // draft, without changing the draft schema or bypassing project scope.
+      let createReceipt: { id: string; requestHash: string } | undefined;
+      if (!input.draftId && input.idempotencyKey) {
+        const projectId = monitoringEnterpriseProjectIdForOwner(ownerId);
+        const hash = sha256(
+          JSON.stringify([
+            "publisher.draft.create",
+            ownerId,
+            projectId,
+            input.idempotencyKey,
+          ]),
+        );
+        const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+        const requestHash = sha256(
+          JSON.stringify({
+            articleVersionId: input.articleVersionId,
+            expectedRevision: input.expectedRevision,
+            titleMode: input.titleMode ?? null,
+            sharedTitle: input.sharedTitle?.trim() || null,
+            items: [...input.items].sort((a, b) =>
+              a.mediaResourceId.localeCompare(b.mediaResourceId),
+            ),
+          }),
+        );
+        await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, ownerId))
+          .for("update")
+          .limit(1);
+        const [receipt] = await tx
+          .select()
+          .from(auditLogs)
+          .where(and(eq(auditLogs.id, id), eq(auditLogs.ownerId, ownerId)))
+          .limit(1);
+        if (receipt) {
+          if (
+            receipt.action !== "publisher.draft_created" ||
+            receipt.metadata?.requestHash !== requestHash ||
+            typeof receipt.metadata?.draftId !== "string"
+          )
+            throw new RepositoryError(
+              "CONFLICT",
+              "Draft idempotency key is already bound to another request",
+            );
+          const [replay] = await tx
+            .select()
+            .from(publisherDrafts)
+            .where(
+              and(
+                eq(publisherDrafts.id, receipt.metadata.draftId),
+                monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
+              ),
+            )
+            .limit(1);
+          if (!replay)
+            throw new RepositoryError("NOT_FOUND", "Draft not found");
+          return { id: replay.id, revision: replay.revision };
+        }
+        createReceipt = { id, requestHash };
+      }
       const uniqueMediaIds = new Set(
         input.items.map((item) => item.mediaResourceId),
       );
@@ -2817,6 +2980,16 @@ export class PublishingRepository {
             monitoringProjectOwnerPredicate(publisherDrafts, ownerId),
           ),
         );
+      if (createReceipt)
+        await tx.insert(auditLogs).values({
+          id: createReceipt.id,
+          actorId: ownerId,
+          ownerId,
+          action: "publisher.draft_created",
+          targetType: "publication_draft",
+          targetIdHash: sha256(draftId),
+          metadata: { requestHash: createReceipt.requestHash, draftId },
+        });
       return { id: draftId, revision: nextRevision };
     });
   }
@@ -4480,7 +4653,9 @@ async function computePreflight(
       }
       const liveEntry = whitelistByMedia.get(resource.id);
       const canaryBlocker =
-        mode === "live" && version.containsImages && !runtime?.imagePublishEnabled
+        mode === "live" &&
+        version.containsImages &&
+        !runtime?.imagePublishEnabled
           ? publisherLiveImageCanaryBlocker({
               batchItemCount: selections.length,
               matchingActiveResourceCount: matchingCanaryResources.length,
@@ -5293,11 +5468,22 @@ function customerSafeMediaSnapshot(
 }
 
 /** Explicit customer fields only: never serialize the provider raw object. */
-export function publisherMediaEditorialMetadata(raw: Record<string, unknown> | null | undefined) {
-  const tags = (key: string) => [...new Set((Array.isArray(raw?.[key]) ? raw[key] as unknown[] : [])
-    .filter((value): value is string => typeof value === "string")
-    .map(value => value.trim().slice(0, 120)).filter(Boolean))].slice(0, 30);
-  const text = (key: string) => typeof raw?.[key] === "string" ? (raw[key] as string).trim().slice(0, 10_000) || null : null;
+export function publisherMediaEditorialMetadata(
+  raw: Record<string, unknown> | null | undefined,
+) {
+  const tags = (key: string) =>
+    [
+      ...new Set(
+        (Array.isArray(raw?.[key]) ? (raw[key] as unknown[]) : [])
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim().slice(0, 120))
+          .filter(Boolean),
+      ),
+    ].slice(0, 30);
+  const text = (key: string) =>
+    typeof raw?.[key] === "string"
+      ? (raw[key] as string).trim().slice(0, 10_000) || null
+      : null;
   return {
     recommendationTags: tags("recommendationTags"),
     platformRecommendationTags: tags("platformRecommendationTags"),

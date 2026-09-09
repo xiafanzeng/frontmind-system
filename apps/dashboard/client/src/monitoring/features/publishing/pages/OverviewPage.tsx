@@ -1,8 +1,4 @@
-import {
-  ArrowRight,
-  Clock3,
-  FileText,
-} from "lucide-react";
+import { ArrowRight, Clock3, FileText } from "lucide-react";
 import { useCallback } from "react";
 import { Link } from "wouter";
 
@@ -15,6 +11,7 @@ import {
   PublishingPage,
 } from "../components/PublishingUi";
 import { formatPublishingMoney, publishingDateTime } from "../types";
+import { usePublishingSummary } from "../PublishingFlowContext";
 
 export default function PublishingOverviewPage() {
   const gateway = usePublisherGateway();
@@ -23,6 +20,24 @@ export default function PublishingOverviewPage() {
     [gateway],
   );
   const query = usePublisherQuery(load, "overview");
+  usePublishingSummary({
+    title: "发布概览",
+    items: [
+      {
+        label: "可继续草稿",
+        value: `${query.data?.resumableDraftCount ?? 0} 个`,
+      },
+      {
+        label: "处理中批次",
+        value: `${query.data?.processingBatchCount ?? 0} 个`,
+      },
+      {
+        label: "需要处理",
+        value: `${query.data?.actionableItemCount ?? 0} 项`,
+      },
+    ],
+    note: "从主区选择当前投放，继续标题、预检与确认步骤。",
+  });
 
   return (
     <PublishingPage

@@ -1674,3 +1674,111 @@ fieldset.rl-editor-scroll:disabled select {
     width: calc(100% - 24px);
   }
 }
+
+/* In the conversational workbench, selection, collaboration and the draft are
+   consecutive main-column steps. The inspector never owns another editor. */
+.rl-flow-question-picker {
+  min-width: 0;
+}
+.rl-flow-question-picker > summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.response-logic-workspace.rl-conversation-flow {
+  padding: 0 0 32px;
+  background: #fff;
+}
+.rl-conversation-flow > .rl-page-header {
+  margin: 0 0 8px;
+  justify-content: flex-end;
+}
+.rl-conversation-flow .rl-layout,
+.rl-conversation-flow .rl-work-columns {
+  display: flex;
+  flex-direction: column;
+  height: auto;
+  gap: 24px;
+}
+.rl-conversation-flow .rl-flow-question-picker {
+  border-bottom: 1px solid #e8e8ea;
+}
+.rl-conversation-flow .rl-question-nav {
+  position: static;
+  max-height: 380px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+.rl-conversation-flow .rl-agent-area {
+  width: 100%;
+}
+.rl-conversation-flow .rl-question-context {
+  border: 0;
+  background: #fff;
+  padding-inline: 0;
+}
+.rl-conversation-flow .rl-dialogue-card {
+  height: min(680px, 70dvh);
+  min-height: 420px;
+}
+.rl-conversation-flow .rl-dialogue-card,
+.rl-conversation-flow .rl-editor-card {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.rl-conversation-flow .rl-editor-card {
+  height: auto;
+  overflow: visible;
+  border-top: 1px solid #e8e8ea;
+}
+.rl-conversation-flow .rl-card-title {
+  padding-inline: 0;
+  background: #fff;
+}
+.rl-conversation-flow .rl-editor-scroll {
+  max-height: none;
+  overflow: visible;
+  padding-inline: 0;
+}
+.rl-conversation-flow .rl-editor-footer {
+  padding-inline: 0;
+  background: #fff;
+}
+.rl-conversation-flow .rl-dialogue-expand {
+  display: none;
+}
+.rl-flow-confirm {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding-block: 24px;
+  border-top: 1px solid #e8e8ea;
+}
+.rl-flow-confirm h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.rl-flow-confirm p {
+  color: #63636b;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.rl-task-summary dl {
+  display: grid;
+  gap: 22px;
+  margin: 0;
+}
+.rl-task-summary dt {
+  font-size: 12px;
+  color: #767680;
+  margin-bottom: 5px;
+}
+.rl-task-summary dd {
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 0;
+  color: #303038;
+}

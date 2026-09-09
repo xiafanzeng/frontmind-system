@@ -1,4 +1,14 @@
-import { projectContentProductionMarkdown, contentProductionArtifactName, contentProductionArtifactUrl } from "@shared/content-production-public";
+import { GeneralAgentWelcome } from "./GeneralAgentWelcome";
+import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
+export {
+  scrollChatViewportToBottom,
+  isChatViewportNearBottom,
+} from "@/hooks/useChatReadingPosition";
+import {
+  projectContentProductionMarkdown,
+  contentProductionArtifactName,
+  contentProductionArtifactUrl,
+} from "@shared/content-production-public";
 import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
 import { generalExecutionSlots } from "@/lib/general-execution-display";
 import { projectFrontMindIdentityMessages } from "@shared/frontmind-general-identity";
@@ -129,27 +139,6 @@ export function isKnowledgeBaseTaskVisiblyRunning(input: {
   if (!input.syncKnowledgeBaseSnapshot) return true;
   return (
     input.interactionState !== "failed" && input.noticeSeverity !== "error"
-  );
-}
-
-export function scrollChatViewportToBottom(
-  viewport: Pick<HTMLElement, "scrollHeight" | "scrollTo">,
-) {
-  viewport.scrollTo({
-    top: viewport.scrollHeight,
-    behavior: "auto",
-  });
-}
-
-const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 96;
-
-export function isChatViewportNearBottom(
-  viewport: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">,
-  threshold = CHAT_SCROLL_BOTTOM_THRESHOLD_PX,
-) {
-  return (
-    viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <=
-    threshold
   );
 }
 
@@ -1038,7 +1027,9 @@ export async function fetchKnowledgeBaseStartRequest(
         options.endpoint ?? "/api/knowledge-base/start/reserve",
         {
           ...init,
-          headers: operation.headers(Object.fromEntries(new Headers(init.headers).entries())),
+          headers: operation.headers(
+            Object.fromEntries(new Headers(init.headers).entries()),
+          ),
           signal: controller.signal,
         },
       ),
@@ -1258,6 +1249,7 @@ export default function ChatArea({
 }) {
   const {
     activeConversation,
+    workbenchScopeKey,
     createConversation,
     setActive,
     deleteConversation,
@@ -1279,19 +1271,25 @@ export default function ChatArea({
     staleTime: 30_000,
   });
   const messagesViewportRef = useRef<HTMLDivElement>(null);
-  const keepMessagesPinnedToBottomRef = useRef(true);
   const explicitRecoveryRequestRef = useRef<{
     recoveryToken: string;
     clientRequestId: string;
   } | null>(null);
 
   const [retryingKnowledgeBase, setRetryingKnowledgeBase] = useState(false);
-  const [expandedExecutionGroups, setExpandedExecutionGroups] = useState<Set<string>>(() => new Set());
-  const toggleExecutionGroup = useCallback((id: string) => setExpandedExecutionGroups(previous => {
-    const next = new Set(previous);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  }), []);
+  const [expandedExecutionGroups, setExpandedExecutionGroups] = useState<
+    Set<string>
+  >(() => new Set());
+  const toggleExecutionGroup = useCallback(
+    (id: string) =>
+      setExpandedExecutionGroups((previous) => {
+        const next = new Set(previous);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [],
+  );
 
   const startFreshKnowledgeBaseBuild = useCallback(() => {
     const conversationId = createConversation({
@@ -1374,39 +1372,11 @@ export default function ChatArea({
     )
     .join("|");
 
-  useEffect(() => {
-    // A newly selected conversation should start at its most recent message.
-    keepMessagesPinnedToBottomRef.current = true;
-  }, [activeConversation?.id]);
-
-  useEffect(() => {
-    const viewport = messagesViewportRef.current;
-    if (!viewport) return;
-    const trackReaderPosition = () => {
-      keepMessagesPinnedToBottomRef.current =
-        isChatViewportNearBottom(viewport);
-    };
-    trackReaderPosition();
-    viewport.addEventListener("scroll", trackReaderPosition, { passive: true });
-    return () => viewport.removeEventListener("scroll", trackReaderPosition);
-  }, [activeConversation?.id]);
-
-  // Keep a live response in view only while the reader has stayed near the
-  // bottom. Scrolling upward deliberately releases this anchor.
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      const viewport = messagesViewportRef.current;
-      if (
-        viewport &&
-        (keepMessagesPinnedToBottomRef.current ||
-          isChatViewportNearBottom(viewport))
-      ) {
-        scrollChatViewportToBottom(viewport);
-        keepMessagesPinnedToBottomRef.current = true;
-      }
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeConversation?.id, messageScrollKey, status]);
+  const { showLatest, returnToLatest } = useChatReadingPosition(
+    messagesViewportRef,
+    `${workbenchScopeKey ?? "workspace"}:${activeConversation?.id ?? "new"}`,
+    `${messageScrollKey}:${status}`,
+  );
 
   const startKnowledgeBase = useCallback(
     async (
@@ -1769,19 +1739,45 @@ export default function ChatArea({
   ]);
 
   const messages = useMemo(() => {
-    const rows = activeConversation ? messageProjection
-      ? activeConversation.messages.map(messageProjection) : activeConversation.messages : [];
-    if (purpose === "content_production") return rows.map(message => message.role === "assistant" ? {
-      ...message,
-      content: projectContentProductionMarkdown(message.content),
-      ...(message.outputFiles ? { outputFiles: message.outputFiles.map(file => ({ ...file, fileName: contentProductionArtifactName(file.fileName), fileUrl: contentProductionArtifactUrl(file.fileUrl) })) } : {}),
-    } : message);
+    const rows = activeConversation
+      ? messageProjection
+        ? activeConversation.messages.map(messageProjection)
+        : activeConversation.messages
+      : [];
+    if (purpose === "content_production")
+      return rows.map((message) =>
+        message.role === "assistant"
+          ? {
+              ...message,
+              content: projectContentProductionMarkdown(message.content),
+              ...(message.outputFiles
+                ? {
+                    outputFiles: message.outputFiles.map((file) => ({
+                      ...file,
+                      fileName: contentProductionArtifactName(file.fileName),
+                      fileUrl: contentProductionArtifactUrl(file.fileUrl),
+                    })),
+                  }
+                : {}),
+            }
+          : message,
+      );
     return activeConversation?.executionKind === "general_chat_v2" && !purpose
-      ? projectFrontMindIdentityMessages(rows) : rows;
+      ? projectFrontMindIdentityMessages(rows)
+      : rows;
   }, [activeConversation, messageProjection, purpose]);
-  const executionSlots = useMemo(() => generalExecutionSlots(messages,
-    activeConversation?.executionKind === "general_chat_v2" && !purpose ? activeConversation.execution : undefined,
-    activeConversation?.status === "running" || activeConversation?.status === "pending"), [messages, activeConversation, purpose]);
+  const executionSlots = useMemo(
+    () =>
+      generalExecutionSlots(
+        messages,
+        activeConversation?.executionKind === "general_chat_v2" && !purpose
+          ? activeConversation.execution
+          : undefined,
+        activeConversation?.status === "running" ||
+          activeConversation?.status === "pending",
+      ),
+    [messages, activeConversation, purpose],
+  );
   const finalAssistantMessageId = useMemo(
     () =>
       [...messages].reverse().find((message) => message.role === "assistant")
@@ -1820,8 +1816,18 @@ export default function ChatArea({
         : "本轮需要重置，请重置后重新上传资料。"
       : activeConversation.knowledgeBase?.notice?.message;
 
+  const welcome =
+    operatorWorkspace &&
+    standardWelcomeVariant === "simple" &&
+    !syncKnowledgeBaseSnapshot &&
+    !responseLogicContext &&
+    !purpose &&
+    messages.length === 0 &&
+    status === "idle";
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
+    <div
+      className={`relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white ${welcome ? "general-agent-welcome" : ""}`}
+    >
       {/* The unified workspace supplies one task header and one status area. */}
       {!operatorWorkspace && (
         <div className="flex items-center justify-between gap-4 border-b border-border/60 bg-background/85 px-4 py-3 sm:px-6 backdrop-blur-xl">
@@ -1892,6 +1898,7 @@ export default function ChatArea({
         ref={messagesViewportRef}
         className="min-h-0 flex-1 overflow-y-auto bg-white custom-scrollbar"
         data-testid="chat-messages-viewport"
+        style={{ overflowAnchor: "none" }}
       >
         <div className="max-w-4xl mx-auto px-3 py-6 space-y-6 sm:px-5 sm:py-8 sm:space-y-7">
           {messages.length === 0 &&
@@ -1932,7 +1939,7 @@ export default function ChatArea({
 
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
-              <React.Fragment key={msg.id}>
+              <div key={msg.id} data-reading-anchor={msg.id}>
                 <GeneralExecutionActivity
                   items={executionSlots.before.get(msg.id)}
                   expandedGroups={expandedExecutionGroups}
@@ -1968,7 +1975,7 @@ export default function ChatArea({
                   expandedGroups={expandedExecutionGroups}
                   onToggleGroup={toggleExecutionGroup}
                 />
-              </React.Fragment>
+              </div>
             ))}
           </AnimatePresence>
           {!purpose &&
@@ -2143,8 +2150,18 @@ export default function ChatArea({
         </div>
       </div>
 
-      {/* Input area */}
+      {showLatest && (
+        <button
+          type="button"
+          className="chat-back-to-latest"
+          onClick={returnToLatest}
+        >
+          ↓ 回到最新
+        </button>
+      )}
+      {/* The same composer stays mounted when the first message is sent. */}
       <ChatInput
+        welcomeSuggestions={welcome}
         fixedAgentProfile={fixedAgentProfile}
         syncKnowledgeBaseSnapshot={syncKnowledgeBaseSnapshot}
         purpose={purpose}
@@ -2272,23 +2289,7 @@ function StandardConversationHint({
     );
   }
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="mx-auto max-w-xl py-14 text-center"
-    >
-      <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary/10 text-primary">
-        <Sparkles className="h-5 w-5" />
-      </span>
-      <h3 className="mt-4 text-lg font-semibold text-foreground/80">
-        有什么需要我协助？
-      </h3>
-      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        直接输入任务或上传文件即可开始。
-      </p>
-    </motion.div>
-  );
+  return <GeneralAgentWelcome />;
 }
 
 type KnowledgeBaseStarterFileState = {
@@ -4282,7 +4283,7 @@ export function MessageBubble({
             {displayContent && displayContent.trim() !== "" && (
               <div
                 className={cn(
-                  "text-[14px] leading-relaxed",
+                  "text-[16px] leading-relaxed",
                   isUser
                     ? "rounded-2xl rounded-tr-md border border-[#e4e4e7] bg-[#f4f4f5] px-4 py-3 text-foreground"
                     : "px-0 py-1 text-foreground",

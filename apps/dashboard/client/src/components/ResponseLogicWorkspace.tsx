@@ -1,3 +1,4 @@
+import { WorkbenchTaskToolbar } from "@/dashboard/WorkbenchTaskToolbar";
 import {
   AlertTriangle,
   BarChart3,
@@ -22,6 +23,7 @@ import {
   Upload,
 } from "lucide-react";
 import {
+  type ReactNode,
   type ComponentType,
   type ChangeEvent,
   type Dispatch,
@@ -33,6 +35,12 @@ import {
 } from "react";
 
 import Home from "@/pages/Home";
+import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
+import {
+  activeEnterpriseProjectId,
+  projectWorkspaceUrl,
+} from "@/lib/enterprise-project";
+import { navigate } from "wouter/use-browser-location";
 import FilePreview from "@/components/FilePreview";
 import ImagePreview from "@/components/ImagePreview";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
@@ -131,6 +139,7 @@ export type ResponseLogicWorkspaceState = {
 
 export type ResponseLogicWorkspaceProps = {
   preview: boolean;
+  workbench?: boolean;
   workspaceState?: ResponseLogicWorkspaceState;
   initialQuestionId?: string | null;
   onSelectedQuestionChange?: (questionId: string) => void;
@@ -782,14 +791,8 @@ export function canRequestResponseLogicReset(input: {
 export default function ResponseLogicWorkspace(
   props: ResponseLogicWorkspaceProps,
 ) {
-  if (!props.questionGroups?.length) {
-    return (
-      <ResponseLogicConfirmationState
-        title="当前项目尚无优化问题"
-        description="在优化问题中添加问题后，可在这里逐题对话、核验并确认应答逻辑。"
-      />
-    );
-  }
+  if (!props.questionGroups?.length)
+    return <ResponseLogicEmptyWorkspace workbench={props.workbench} />;
   if (props.preview) {
     return import.meta.env.DEV ? (
       <DevelopmentResponseLogicWorkspace {...props} />
@@ -801,6 +804,48 @@ export default function ResponseLogicWorkspace(
     );
   }
   return <PersistentResponseLogicWorkspace {...props} />;
+}
+
+function ResponseLogicEmptyWorkspace({
+  workbench = false,
+}: {
+  workbench?: boolean;
+}) {
+  const openQuestions = () =>
+    navigate(
+      projectWorkspaceUrl("/?view=questions", activeEnterpriseProjectId()),
+    );
+  const main = (
+    <ResponseLogicConfirmationState
+      title="当前项目尚无优化问题"
+      description="先选择或添加一个优化问题，再逐题协作、核验并确认应答逻辑。"
+      actionLabel="前往优化问题"
+      onAction={openQuestions}
+    />
+  );
+  return workbench ? (
+    <AgentWorkbenchShell
+      projectId={activeEnterpriseProjectId() ?? "account"}
+      moduleId="response-logic"
+      title="应答逻辑"
+      taskTitle="选择优化问题"
+      main={main}
+      auxiliary={
+        <p className="p-5 text-sm text-muted-foreground">
+          每个优化问题分别保存应答逻辑会话、草稿与正式版本。
+        </p>
+      }
+      toolbar={
+        <WorkbenchTaskToolbar
+          tasks={[]}
+          onNew={openQuestions}
+          onSelect={() => undefined}
+        />
+      }
+    />
+  ) : (
+    main
+  );
 }
 
 function DevelopmentResponseLogicWorkspace(props: ResponseLogicWorkspaceProps) {
@@ -1182,7 +1227,34 @@ function PersistentResponseLogicWorkspace(props: ResponseLogicWorkspaceProps) {
   );
 }
 
+function QuestionFlowSelection({
+  workbench,
+  question,
+  children,
+  open,
+  onToggle,
+}: {
+  workbench: boolean;
+  question: string;
+  children: ReactNode;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+}) {
+  if (!workbench) return <>{children}</>;
+  return (
+    <details
+      className="rl-flow-question-picker"
+      open={open}
+      onToggle={(event) => onToggle(event.currentTarget.open)}
+    >
+      <summary>选择要优化的问题 · {question}</summary>
+      {children}
+    </details>
+  );
+}
+
 function ResponseLogicWorkspaceContent({
+  workbench = false,
   preview,
   workspaceState,
   initialQuestionId,
@@ -1226,6 +1298,7 @@ function ResponseLogicWorkspaceContent({
   const syncedRecordIdsRef = useRef<Set<string> | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [questionPickerOpen, setQuestionPickerOpen] = useState(false);
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
 
   useEffect(() => {
@@ -1356,14 +1429,8 @@ function ResponseLogicWorkspaceContent({
     setSelectedQuestionId,
   ]);
 
-  if (!selectedEntry) {
-    return (
-      <ResponseLogicConfirmationState
-        title="当前项目尚无优化问题"
-        description="在优化问题中添加问题后，这里会按问题载入应答逻辑草稿与正式确认内容。"
-      />
-    );
-  }
+  if (!selectedEntry)
+    return <ResponseLogicEmptyWorkspace workbench={workbench} />;
 
   const draft =
     drafts[activeQuestionId] ??
@@ -1704,18 +1771,22 @@ function ResponseLogicWorkspaceContent({
     }
   };
 
-  return (
+  const workspace = (
     <section
-      className={`response-logic-workspace page-shell ${workspaceExpanded ? "rl-workspace-expanded" : ""}`}
+      className={`response-logic-workspace page-shell ${workbench ? "rl-conversation-flow" : ""} ${workspaceExpanded ? "rl-workspace-expanded" : ""}`}
     >
       <header className="rl-page-header rl-page-header-with-action">
-        <div>
-          <span className="rl-eyebrow">MindPromise 智诺 · 应答逻辑智能体</span>
-          <h2>应答逻辑智能体</h2>
-          <p>
-            围绕每个核心问题沉淀可核验的回答口径、证据来源、表达边界与配图材料；完成更新后返回问题优化查看正式版本。
-          </p>
-        </div>
+        {!workbench && (
+          <div>
+            <span className="rl-eyebrow">
+              MindPromise 智诺 · 应答逻辑智能体
+            </span>
+            <h2>应答逻辑智能体</h2>
+            <p>
+              围绕每个核心问题沉淀可核验的回答口径、证据来源、表达边界与配图材料；完成更新后返回问题优化查看正式版本。
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-end gap-2">
           <QuestionActionDialog
             mode="response_logic"
@@ -1748,14 +1819,21 @@ function ResponseLogicWorkspaceContent({
       )}
 
       <div className="rl-layout">
-        <QuestionNavigator
-          groups={groups}
-          confirmedQuestionIds={new Set(Object.keys(confirmations))}
-          selectedGroupId={selectedGroupId}
-          selectedQuestionId={activeQuestionId}
-          onSelectGroup={selectGroup}
-          onSelectQuestion={selectQuestion}
-        />
+        <QuestionFlowSelection
+          workbench={workbench}
+          question={selectedEntry.question.question}
+          open={questionPickerOpen}
+          onToggle={setQuestionPickerOpen}
+        >
+          <QuestionNavigator
+            groups={groups}
+            confirmedQuestionIds={new Set(Object.keys(confirmations))}
+            selectedGroupId={selectedGroupId}
+            selectedQuestionId={activeQuestionId}
+            onSelectGroup={selectGroup}
+            onSelectQuestion={selectQuestion}
+          />
+        </QuestionFlowSelection>
 
         <div className="rl-agent-area">
           <QuestionContext
@@ -1798,8 +1876,35 @@ function ResponseLogicWorkspaceContent({
           </div>
         </div>
       </div>
+      {workbench && confirmDialogOpen && (
+        <section className="rl-flow-confirm" aria-label="确认当前应答逻辑">
+          <h3>确认并启用这份应答逻辑</h3>
+          <p>
+            确认后将作为“{selectedEntry.question.question}
+            ”的正式版本；后续调整沿用重置流程。
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="rl-secondary-button"
+              disabled={isPublishing}
+              onClick={() => setConfirmDialogOpen(false)}
+            >
+              继续检查
+            </button>
+            <button
+              type="button"
+              className="rl-update-button"
+              disabled={isPublishing}
+              onClick={() => void updateConfirmation()}
+            >
+              {isPublishing ? "正在确认…" : "确认并锁定"}
+            </button>
+          </div>
+        </section>
+      )}
       <AlertDialog
-        open={confirmDialogOpen}
+        open={!workbench && confirmDialogOpen}
         onOpenChange={(open) => {
           if (!isPublishing) setConfirmDialogOpen(open);
         }}
@@ -1830,6 +1935,78 @@ function ResponseLogicWorkspaceContent({
         </AlertDialogContent>
       </AlertDialog>
     </section>
+  );
+  return workbench ? (
+    <AgentWorkbenchShell
+      projectId={activeEnterpriseProjectId() ?? "account"}
+      moduleId="response-logic"
+      title="应答逻辑"
+      taskTitle={selectedEntry.question.question}
+      taskKey={conversationId ?? activeQuestionId}
+      main={workspace}
+      auxiliary={
+        <section className="rl-task-summary" aria-label="应答逻辑任务摘要">
+          <dl>
+            <div>
+              <dt>当前问题</dt>
+              <dd>{selectedEntry.question.question}</dd>
+            </div>
+            <div>
+              <dt>保存状态</dt>
+              <dd>
+                {confirmed
+                  ? "已确认并锁定"
+                  : persistedRecord
+                    ? "草稿已保存"
+                    : "等待首次生成"}
+              </dd>
+            </div>
+            <div>
+              <dt>正式版本</dt>
+              <dd>
+                {persistedRecord?.version
+                  ? `v${persistedRecord.version}`
+                  : "尚未发布"}
+              </dd>
+            </div>
+            <div>
+              <dt>关联会话</dt>
+              <dd>{conversationId ? "本问题的专属会话" : "首次操作时建立"}</dd>
+            </div>
+          </dl>
+        </section>
+      }
+      toolbar={
+        <WorkbenchTaskToolbar
+          tasks={questionEntries
+            .filter(
+              (entry) =>
+                conversationIds[entry.question.id] ||
+                persistence?.records?.some(
+                  (record) => record.questionId === entry.question.id,
+                ),
+            )
+            .map((entry) => ({
+              id: entry.question.id,
+              title: entry.question.question,
+              updatedAt:
+                new Date(
+                  persistence?.records?.find(
+                    (record) => record.questionId === entry.question.id,
+                  )?.updatedAt ?? 0,
+                ).getTime() || 0,
+            }))}
+          currentId={activeQuestionId}
+          onNew={() => setQuestionPickerOpen(true)}
+          onSelect={(id) => {
+            selectQuestion(id);
+            setQuestionPickerOpen(false);
+          }}
+        />
+      }
+    />
+  ) : (
+    workspace
   );
 }
 
@@ -2227,7 +2404,9 @@ function RealResponseLogicDialogue({
     const nextConversationId = createConversation();
     // This draft already belongs to the response editor, even before its first
     // task starts. Keep it out of the workbench's general conversation pane.
-    updateStatus(nextConversationId, "idle", { executionKind: "response_logic" });
+    updateStatus(nextConversationId, "idle", {
+      executionKind: "response_logic",
+    });
     updateTitle(nextConversationId, `应答-${question.question}`);
     void callbackRef.current(nextConversationId).finally(() => {
       initializationRef.current = null;

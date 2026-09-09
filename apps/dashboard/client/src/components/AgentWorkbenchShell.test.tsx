@@ -16,43 +16,41 @@ import {
 } from "@/dashboard/agent-workbench";
 import type { OperatorView } from "@/dashboard/operator-navigation";
 
-let narrow = false;
-let change: (() => void) | undefined;
+let workspaceWidth = 1184;
 const props = {
   projectId: "a",
   moduleId: "brand",
   title: "品牌建设",
-  resultTitle: "品牌成果",
-  conversation: <textarea aria-label="任务草稿" defaultValue="保留我的对话" />,
-  result: <div>成果正文</div>,
+  taskTitle: "品牌资料整理",
+  main: <textarea aria-label="任务草稿" defaultValue="保留我的对话" />,
+  auxiliary: <div>辅助摘要</div>,
 };
+function viewport(width: number, container = width - 256) {
+  workspaceWidth = container;
+  vi.stubGlobal("innerWidth", width);
+  fireEvent(window, new Event("resize"));
+}
 beforeEach(() => {
-  narrow = false;
+  workspaceWidth = 1184;
+  vi.stubGlobal("innerWidth", 1440);
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+    () => workspaceWidth,
+  );
   vi.stubGlobal("localStorage", {
     getItem: vi.fn().mockReturnValue(null),
     setItem: vi.fn(),
     removeItem: vi.fn(),
   });
   vi.stubGlobal("PointerEvent", MouseEvent);
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn(() => ({
-      get matches() {
-        return narrow;
-      },
-      addEventListener: (_: string, callback: () => void) => {
-        change = callback;
-      },
-      removeEventListener: vi.fn(),
-    })),
-  );
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
 describe("AgentWorkbenchShell", () => {
-  it("keeps business content in the main pane and subagent controls in the contextual pane", () => {
+  it("keeps the dialogue left and contextual subagent controls right without remounting the main composer", () => {
     function Workbench() {
       const [view, setView] = useState<OperatorView>("publishing");
       const module = createWorkbenchModules(() => null, setView, view).find(
@@ -60,29 +58,20 @@ describe("AgentWorkbenchShell", () => {
       )!;
       return (
         <WorkbenchModuleContext.Provider value={module}>
-          <AgentWorkbenchShell {...props} result={<p>{view} 当前成果</p>} />
+          <AgentWorkbenchShell {...props} auxiliary={<p>{view} 摘要</p>} />
         </WorkbenchModuleContext.Provider>
       );
     }
     render(<Workbench />);
     const draft = screen.getByRole("textbox", { name: "任务草稿" });
     fireEvent.change(draft, { target: { value: "保留未发送内容" } });
-    const selector = screen.getByRole("group", { name: "子智能体" });
-    expect(
-      within(screen.getByRole("region", { name: "品牌成果" })).queryByRole(
-        "group",
-        { name: "子智能体" },
-      ),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "品牌成果" })).toHaveTextContent(
-      "publishing 当前成果",
-    );
-    expect(
-      within(screen.getByRole("region", { name: "智能体协作" })).getByRole(
-        "group",
-        { name: "子智能体" },
-      ),
-    ).toBe(selector);
+    const main = screen.getByRole("region", { name: "主工作区" });
+    const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+    expect(main).toContainElement(draft);
+    expect(within(main).queryByRole("navigation")).not.toBeInTheDocument();
+    const selector = within(aside).getByRole("navigation", {
+      name: "切换子 Agent",
+    });
     expect(
       within(selector).getByRole("button", { name: "发布工作台" }),
     ).toHaveAttribute("aria-pressed", "true");
@@ -90,199 +79,169 @@ describe("AgentWorkbenchShell", () => {
     expect(
       within(selector).getByRole("button", { name: "媒体库" }),
     ).toHaveAttribute("aria-pressed", "true");
-    expect(
-      within(selector).getByRole("button", { name: "发布工作台" }),
-    ).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByText("media 当前成果")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "任务草稿" })).toBe(draft);
+    expect(aside).toHaveTextContent("media 摘要");
+    expect(screen.getByRole("textbox")).toBe(draft);
     expect(draft).toHaveValue("保留未发送内容");
   });
-  it("keeps dialogue mounted when module results change and resizes with keyboard", () => {
-    const { rerender } = render(<AgentWorkbenchShell {...props} />);
-    const draft = screen.getByRole("textbox");
-    fireEvent.change(draft, { target: { value: "未发送的想法" } });
-    const separator = screen.getByRole("separator");
-    const before = Number(separator.getAttribute("aria-valuenow"));
-    fireEvent.keyDown(separator, { key: "ArrowLeft" });
-    expect(Number(separator.getAttribute("aria-valuenow"))).toBe(before + 32);
-    fireEvent.keyDown(separator, { key: "Home" });
-    expect(separator).toHaveAttribute("aria-valuenow", "320");
-    rerender(
-      <AgentWorkbenchShell
-        {...props}
-        moduleId="intent"
-        resultTitle="优化问题"
-        result={<p>另一个成果</p>}
-      />,
-    );
-    expect(screen.getByRole("textbox")).toBe(draft);
-    expect(draft).toHaveValue("未发送的想法");
-    expect(screen.getByRole("region", { name: "优化问题" })).toHaveTextContent(
-      "另一个成果",
-    );
-    expect(screen.queryByText("成果正文")).not.toBeInTheDocument();
-  });
-  it("uses the complete main pane for a conversation with no business module", () => {
-    render(<AgentWorkbenchShell {...props} showResult={false} />);
+  it("uses one complete main pane for general conversations", () => {
+    render(<AgentWorkbenchShell {...props} layout="single" />);
     expect(screen.queryByRole("separator")).not.toBeInTheDocument();
-    expect(screen.queryByText("成果正文")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "智能体协作" })).toContainElement(
-      screen.getByRole("textbox", { name: "任务草稿" }),
+    expect(screen.queryByText("辅助摘要")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "打开任务信息" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "主工作区" })).toContainElement(
+      screen.getByRole("textbox"),
     );
   });
-  it("bounds pointer resizing against the actual workspace, not the browser width", () => {
-    const { container } = render(<AgentWorkbenchShell {...props} />);
-    const root = container.querySelector(".agent-workbench-shell")!;
-    vi.spyOn(root, "getBoundingClientRect").mockReturnValue({
-      left: 280,
-      right: 1280,
-      width: 1000,
-    } as DOMRect);
-    fireEvent.pointerDown(screen.getByRole("separator"), { button: 0 });
-    fireEvent.pointerMove(window, { clientX: 300 });
-    fireEvent.pointerUp(window);
-    expect(
-      Number(screen.getByRole("separator").getAttribute("aria-valuenow")),
-    ).toBe(640);
-  });
-  it("keeps business content visible on narrow screens and opens contextual collaboration in a drawer", async () => {
-    narrow = true;
+  it("keeps backward-compatible conversation props in main, never in the auxiliary pane", () => {
     render(
       <AgentWorkbenchShell
-        {...props}
-        actions={[
-          {
-            id: "edit",
-            label: "打开编辑器",
-            kind: "open-editor",
-            run: vi.fn(),
-          },
-        ]}
+        projectId="a"
+        moduleId="knowledge"
+        title="智能知识库"
+        layout="knowledge"
+        conversation={<p>真实协作对话</p>}
+        result={<p>固定知识节点</p>}
       />,
     );
-    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
-    expect(screen.getByText("成果正文")).toBeInTheDocument();
-    const trigger = screen.getByRole("button", { name: "打开智能体协作" });
-    fireEvent.click(trigger);
-    expect(screen.getByRole("dialog", { name: "智能体协作" })).toHaveTextContent(
-      "打开编辑器",
+    expect(screen.getByRole("region", { name: "主工作区" })).toHaveTextContent(
+      "真实协作对话",
     );
     expect(
-      screen.getByRole("button", { name: "打开编辑器" }),
-    ).toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      screen.getByRole("complementary", { name: "知识节点与资料" }),
+    ).toHaveTextContent("固定知识节点");
+    expect(screen.getByRole("separator")).toHaveAttribute(
+      "aria-valuemin",
+      "420",
     );
-    expect(trigger).toHaveFocus();
-    fireEvent.click(trigger);
-    expect(screen.getByRole("textbox")).toHaveValue("保留我的对话");
   });
-  it("preserves editor state when expanding the desktop result", () => {
+  it("bounds mouse and keyboard resizing to preserve 600px for main", () => {
+    const { container } = render(<AgentWorkbenchShell {...props} />);
+    const separator = screen.getByRole("separator");
+    expect(separator).toHaveAttribute("aria-valuenow", "320");
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator).toHaveAttribute("aria-valuenow", "344");
+    fireEvent.keyDown(separator, { key: "Home" });
+    expect(separator).toHaveAttribute("aria-valuenow", "280");
+    act(() => viewport(1440, 1000));
+    vi.spyOn(
+      container.querySelector(".agent-workbench-shell")!,
+      "getBoundingClientRect",
+    ).mockReturnValue({ left: 256, right: 1256, width: 1000 } as DOMRect);
+    fireEvent.pointerDown(separator, { button: 0 });
+    fireEvent.pointerMove(window, { clientX: 300 });
+    fireEvent.pointerUp(window);
+    expect(separator).toHaveAttribute("aria-valuenow", "399");
+    expect(localStorage.setItem).toHaveBeenCalled();
+  });
+  it.each([
+    [1024, 768],
+    [1440, 850],
+  ])(
+    "prioritizes main when viewport %i or container %i cannot fit both panes",
+    async (width, available) => {
+      viewport(width, available);
+      render(<AgentWorkbenchShell {...props} />);
+      expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "任务草稿" })).toBeVisible();
+      expect(screen.queryByText("辅助摘要")).not.toBeInTheDocument();
+      const toggle = screen.getByRole("button", { name: "打开任务信息" });
+      fireEvent.click(toggle);
+      expect(
+        screen.getByRole("dialog", { name: "任务信息" }),
+      ).toHaveTextContent("辅助摘要");
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      expect(toggle).toHaveFocus();
+    },
+  );
+  it("keeps the same editor and its draft across collapse, responsive drawer, and reopening", async () => {
     function Editor() {
       const [value, setValue] = useState("");
       return (
         <input
-          aria-label="编辑成果"
+          aria-label="知识节点正文"
           value={value}
           onChange={(event) => setValue(event.target.value)}
         />
       );
     }
-    render(<AgentWorkbenchShell {...props} result={<Editor />} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "编辑成果" }), {
-      target: { value: "本地修改" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "展开主工作区" }));
-    expect(screen.getByRole("textbox", { name: "编辑成果" })).toHaveValue(
-      "本地修改",
+    render(
+      <AgentWorkbenchShell
+        {...props}
+        layout="knowledge"
+        auxiliary={<Editor />}
+      />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "还原主工作区" }));
-    expect(screen.getByRole("textbox", { name: "编辑成果" })).toHaveValue(
-      "本地修改",
+    const editor = screen.getByRole("textbox", { name: "知识节点正文" });
+    fireEvent.change(editor, { target: { value: "不能丢失的节点修改" } });
+    fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    expect(screen.getByRole("textbox", { name: "知识节点正文" })).toBe(editor);
+    act(() => viewport(768));
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    expect(screen.getByRole("textbox", { name: "知识节点正文" })).toBe(editor);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
+    act(() => viewport(1440));
+    expect(screen.getByRole("textbox", { name: "知识节点正文" })).toBe(editor);
+    expect(editor).toHaveValue("不能丢失的节点修改");
   });
-  it("focuses the contextual composer for a desktop AI edit request", async () => {
+  it("hands an AI node-edit request back to the main composer", async () => {
     const view = render(<AgentWorkbenchShell {...props} />);
-    fireEvent.click(screen.getByRole("button", { name: "展开主工作区" }));
     view.rerender(
       <AgentWorkbenchShell
         {...props}
         conversationFocusRequest={{ node: "1.1" }}
       />,
     );
-    expect(
-      screen.getByRole("button", { name: "还原主工作区" }),
-    ).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "任务草稿" })).toHaveFocus(),
     );
   });
-  it("hands focus from the result drawer to the composer without losing result edits", async () => {
-    narrow = true;
-    function Workbench() {
-      const [request, setRequest] = useState<object | null>(null);
-      return (
-        <AgentWorkbenchShell
-          {...props}
-          conversationFocusRequest={request}
-          result={
-            <>
-              <input aria-label="成果草稿" defaultValue="" />
-              <button onClick={() => setRequest({ node: "1.1" })}>
-                用 AI 修改
-              </button>
-            </>
-          }
-        />
-      );
-    }
-    render(<Workbench />);
-    const resultDraft = screen.getByRole("textbox", { name: "成果草稿" });
-    fireEvent.change(resultDraft, { target: { value: "保留成果修改" } });
-    fireEvent.click(screen.getByRole("button", { name: "用 AI 修改" }));
-    await waitFor(() =>
-      expect(screen.getByRole("dialog", { name: "智能体协作" })).toBeInTheDocument(),
+  it("restores each task's reading position without scrolling after ordinary updates", async () => {
+    const view = render(
+      <AgentWorkbenchShell
+        {...props}
+        taskKey="first"
+        main={<p>长任务内容</p>}
+      />,
     );
-    await waitFor(() =>
-      expect(screen.getByRole("textbox", { name: "任务草稿" })).toHaveFocus(),
-    );
-    expect(resultDraft).toHaveValue("保留成果修改");
-  });
-  it("keeps a draft editor alive across breakpoints and drawer reopen", async () => {
-    function Editor() {
-      const [value, setValue] = useState("");
-      return (
-        <input
-          aria-label="成果草稿"
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-        />
-      );
-    }
-    render(<AgentWorkbenchShell {...props} result={<Editor />} />);
-    const editor = screen.getByRole("textbox", { name: "成果草稿" });
-    fireEvent.change(editor, { target: { value: "不能丢失的修改" } });
-    act(() => {
-      narrow = true;
-      change?.();
+    const scroll = screen.getByRole("region", {
+      name: "主工作区",
+    }).firstElementChild!;
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    expect(screen.getByRole("textbox", { name: "成果草稿" })).toBe(editor);
-    fireEvent.click(screen.getByRole("button", { name: "打开智能体协作" }));
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole("textbox", { name: "成果草稿" })).toHaveValue(
-      "不能丢失的修改",
-    );
-    act(() => {
-      narrow = false;
-      change?.();
+    Object.defineProperties(scroll, {
+      scrollHeight: { value: 2000 },
+      clientHeight: { value: 600 },
     });
-    expect(screen.getByRole("textbox", { name: "成果草稿" })).toBe(editor);
+    scroll.scrollTop = 280;
+    fireEvent.scroll(scroll);
+    view.rerender(
+      <AgentWorkbenchShell
+        {...props}
+        taskKey="second"
+        main={<p>第二任务内容</p>}
+      />,
+    );
+    await waitFor(() => expect(scroll.scrollTop).toBe(0));
+    view.rerender(
+      <AgentWorkbenchShell
+        {...props}
+        taskKey="first"
+        main={<p>更新后的长任务内容</p>}
+      />,
+    );
+    await waitFor(() => expect(scroll.scrollTop).toBe(280));
   });
-  it("remains usable when preferences are blocked", () => {
+  it("remains usable when local preferences are blocked", () => {
     vi.mocked(localStorage.getItem).mockImplementation(() => {
       throw new Error("blocked");
     });
@@ -290,8 +249,9 @@ describe("AgentWorkbenchShell", () => {
       throw new Error("blocked");
     });
     render(<AgentWorkbenchShell {...props} />);
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "End" });
     expect(
-      screen.getByRole("region", { name: "品牌成果" }),
-    ).toBeInTheDocument();
+      screen.getByRole("complementary", { name: "任务辅助区" }),
+    ).toHaveTextContent("辅助摘要");
   });
 });

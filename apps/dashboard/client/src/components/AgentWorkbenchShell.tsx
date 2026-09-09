@@ -7,15 +7,15 @@ import {
   type ReactNode,
   type PointerEvent,
 } from "react";
+import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
 import { createPortal } from "react-dom";
-import { Maximize2, Minimize2, PanelRightOpen } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
 } from "@/components/ui/sheet";
 import {
   useWorkbenchModule,
@@ -23,146 +23,103 @@ import {
 } from "@/dashboard/agent-workbench";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
 import "./AgentWorkbenchShell.css";
-
 export type { WorkbenchAction } from "@/dashboard/agent-workbench";
 export type AgentWorkbenchShellProps = {
   projectId: string;
   moduleId: string;
   title: string;
-  conversation: ReactNode;
+  main?: ReactNode;
+  auxiliary?: ReactNode;
+  composer?: ReactNode;
+  layout?: "single" | "workflow" | "knowledge";
+  toolbar?: ReactNode;
+  taskTitle?: string;
+  taskKey?: string;
+  scrollMain?: boolean;
+  conversation?: ReactNode;
   children?: ReactNode;
   result?: ReactNode;
-  resultTitle: string;
+  resultTitle?: string;
   actions?: WorkbenchAction[];
   resultKey?: string;
   status?: string;
   embedded?: boolean;
-  /** General agent conversations can use the full work area without a result panel. */
   showResult?: boolean;
-  /** A new request reveals the conversation and focuses its composer. */
   conversationFocusRequest?: object | null;
 };
-const MIN_CONTEXT = 320;
-const MIN_PRIMARY = 360;
-const QUERY = "(max-width: 1099px)";
-const widthKey = (projectId: string, moduleId: string) =>
-  `frontmind.workbench.width:${projectId}:${moduleId}`;
-function readWidth(key: string) {
+function savedWidth(key: string) {
   try {
-    const value = Number(localStorage.getItem(key));
-    return value >= MIN_CONTEXT ? value : 400;
+    return Number(localStorage.getItem(key)) || null;
   } catch {
-    return 400;
+    return null;
   }
 }
-
-/** Shared reading surface. Business components continue owning their state and requests. */
 export function AgentWorkbenchShell({
   projectId,
   moduleId,
   title,
+  main,
+  auxiliary,
+  composer,
+  layout: requestedLayout,
+  toolbar,
+  taskTitle,
+  taskKey,
+  scrollMain,
   conversation,
   children,
   result,
-  resultTitle,
+  resultTitle = "任务信息",
   actions,
-  resultKey,
   status,
-  embedded = false,
   showResult = true,
   conversationFocusRequest,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
-  const panelActions = actions ?? module?.actions ?? [];
-  const key = widthKey(projectId, moduleId);
-  const [width, setWidth] = useState(() => readWidth(key));
-  const [expanded, setExpanded] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [narrow, setNarrow] = useState(() => window.matchMedia(QUERY).matches);
-  const [available, setAvailable] = useState(1100);
+  const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
+  const isKnowledge = layout === "knowledge";
+  const hasAux = layout !== "single";
+  const ownsScroll = scrollMain ?? main !== undefined;
+  const preferenceKey = `frontmind.workbench.v2.width:${projectId}:${moduleId}:${layout}`;
+  const [width, setWidth] = useState<number | null>(() =>
+    savedWidth(preferenceKey),
+  );
+  const [available, setAvailable] = useState(0);
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const [collapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const root = useRef<HTMLElement>(null);
-  const handledFocusRequest = useRef<object | null>(null);
-  const pendingConversationFocus = useRef(false);
-  const [conversationHost] = useState(() => {
-    const element = document.createElement("div");
-    element.className = "agent-workbench-shell__conversation-body";
-    return element;
-  });
-  const focusConversation = useCallback(() => {
-    conversationHost
-      .querySelector<HTMLTextAreaElement>("textarea:not([disabled])")
-      ?.focus();
-  }, [conversationHost]);
-  // Portal hosts follow the responsive surface. Moving between the desktop
-  // context panel and its drawer must not remount a draft conversation; the
-  // primary business view receives the same protection when its shell changes.
-  const [resultHost] = useState(() => {
-    const element = document.createElement("div");
-    element.className = "agent-workbench-shell__result-body";
-    return element;
-  });
-  const attachResult = useCallback(
-    (slot: HTMLDivElement | null) => {
-      if (slot) slot.appendChild(resultHost);
-      else resultHost.remove();
-    },
-    [resultHost],
-  );
-  const attachConversation = useCallback(
-    (slot: HTMLDivElement | null) => {
-      if (slot) slot.appendChild(conversationHost);
-      else conversationHost.remove();
-    },
-    [conversationHost],
-  );
+  const mainViewport = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
   const stopDrag = useRef<() => void>(() => undefined);
-  const previousKey = useRef(key);
-  const maxWidth = Math.max(MIN_CONTEXT, available - MIN_PRIMARY);
-  const renderedWidth = Math.min(width, maxWidth);
+  const focusMainAfterClose = useRef(false);
+  const minAux = isKnowledge ? 420 : 280;
+  const maxAux = Math.max(
+    minAux,
+    Math.min(isKnowledge ? 720 : 480, available - 601),
+  );
+  const renderedWidth = Math.max(
+    minAux,
+    Math.min(maxAux, width ?? (isKnowledge ? available * 0.45 : 320)),
+  );
+  const narrow = viewport < 1280 || (available > 0 && available < 601 + minAux);
+  const inlineAux = hasAux && !narrow && !collapsed;
+  const [auxHost] = useState(() => {
+    const node = document.createElement("div");
+    node.className = "agent-workbench-shell__auxiliary-content";
+    return node;
+  });
+  const attachAux = useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot) slot.appendChild(auxHost);
+    },
+    [auxHost],
+  );
   useEffect(() => {
-    setWidth(readWidth(key));
-    setExpanded(false);
-    setMobileOpen(false);
-  }, [key]);
-  useEffect(() => {
-    if (
-      !conversationFocusRequest ||
-      handledFocusRequest.current === conversationFocusRequest
-    )
-      return;
-    handledFocusRequest.current = conversationFocusRequest;
-    pendingConversationFocus.current = true;
-    if (narrow && !mobileOpen) {
-      setMobileOpen(true);
-      return;
-    }
-    const frame = window.requestAnimationFrame(() => {
-      pendingConversationFocus.current = false;
-      focusConversation();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [conversationFocusRequest, narrow, mobileOpen, focusConversation]);
-  useEffect(() => {
-    // Never write the previous project's width to the next project's preference.
-    if (previousKey.current !== key) {
-      previousKey.current = key;
-      return;
-    }
-    try {
-      localStorage.setItem(key, String(width));
-    } catch {
-      /* Optional preference. */
-    }
-  }, [key, width]);
-  useEffect(() => {
-    const query = window.matchMedia(QUERY);
-    const update = () => {
-      setNarrow(query.matches);
-      if (!query.matches) setMobileOpen(false);
+    const measure = () => {
+      setAvailable(root.current?.clientWidth ?? 0);
+      setViewport(window.innerWidth);
     };
-    query.addEventListener("change", update);
-    const measure = () =>
-      setAvailable(root.current?.getBoundingClientRect().width || 1100);
     measure();
     const observer =
       typeof ResizeObserver === "undefined"
@@ -171,34 +128,50 @@ export function AgentWorkbenchShell({
     if (root.current) observer?.observe(root.current);
     window.addEventListener("resize", measure);
     return () => {
-      query.removeEventListener("change", update);
       observer?.disconnect();
       window.removeEventListener("resize", measure);
       stopDrag.current();
     };
   }, []);
   useEffect(() => {
-    const body = resultHost;
-    if (body && !body.contains(document.activeElement))
-      body.scrollTo?.({ top: 0, behavior: "smooth" });
-  }, [resultKey, mobileOpen, resultHost]);
+    setWidth(savedWidth(preferenceKey));
+    setCollapsed(false);
+    setDrawerOpen(false);
+  }, [preferenceKey]);
+  useEffect(() => {
+    if (!narrow) setDrawerOpen(false);
+  }, [narrow]);
+  useEffect(() => {
+    if (!conversationFocusRequest) return;
+    if (drawerOpen) {
+      focusMainAfterClose.current = true;
+      setDrawerOpen(false);
+    } else
+      mainViewport.current
+        ?.querySelector<HTMLTextAreaElement>("textarea:not([disabled])")
+        ?.focus();
+  }, [conversationFocusRequest]);
+  const readingKey = `${projectId}:${moduleId}:${taskKey ?? "current"}`;
+  const { showLatest, returnToLatest } = useChatReadingPosition(
+    mainViewport,
+    readingKey,
+    readingKey,
+    { initialPinned: false, enabled: ownsScroll },
+  );
+  const changeWidth = (value: number) => {
+    const next = Math.max(minAux, Math.min(maxAux, value));
+    setWidth(next);
+    try {
+      localStorage.setItem(preferenceKey, String(next));
+    } catch {}
+  };
   const resize = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    setExpanded(false);
     stopDrag.current();
-    const bounds = root.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const move = (moveEvent: globalThis.PointerEvent) =>
-      setWidth(
-        Math.max(
-          MIN_CONTEXT,
-          Math.min(
-            Math.max(MIN_CONTEXT, bounds.width - MIN_PRIMARY),
-            bounds.right - moveEvent.clientX,
-          ),
-        ),
-      );
+    const right = root.current?.getBoundingClientRect().right;
+    if (right === undefined) return;
+    const move = (e: globalThis.PointerEvent) => changeWidth(right - e.clientX);
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
@@ -209,199 +182,167 @@ export function AgentWorkbenchShell({
     window.addEventListener("pointerup", stop);
     window.addEventListener("pointercancel", stop);
   };
-  const actionsBar = panelActions.length > 0 && (
-    <div className="agent-workbench-subagents">
-      <div className="agent-workbench-subagents__heading">子智能体</div>
-      <div
-        className="agent-workbench-actions"
-        role="group"
-        aria-label="子智能体"
-      >
-        {panelActions.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            aria-label={action.label}
-            aria-pressed={action.active}
-            className={action.active ? "is-active" : undefined}
-            style={
-              { "--subagent-color": action.color ?? "#5e6174" } as CSSProperties
-            }
-            disabled={action.disabled}
-            onClick={() => requestWorkspaceNavigation(action.run)}
-          >
-            <span className="agent-workbench-actions__label">
-              {action.label}
-            </span>
-            {action.description && (
-              <span className="agent-workbench-actions__description">
-                {action.description}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
+  const subagents = actions ?? module?.actions ?? [];
+  const agentSwitch = subagents.length > 0 && (
+    <nav className="agent-workbench-subagents" aria-label="切换子 Agent">
+      {subagents.map((action) => (
+        <button
+          type="button"
+          key={action.id}
+          aria-current={action.active ? "page" : undefined}
+          aria-pressed={action.active}
+          disabled={action.disabled}
+          title={action.description}
+          className={action.active ? "is-active" : undefined}
+          style={
+            { "--subagent-color": action.color ?? "#491060" } as CSSProperties
+          }
+          onClick={() => requestWorkspaceNavigation(action.run)}
+        >
+          <Sparkles size={14} aria-hidden="true" />
+          <span>{action.label}</span>
+        </button>
+      ))}
+    </nav>
   );
-  const resultContent = result ?? children;
   return (
     <section
       ref={root}
-      className={`agent-workbench-shell ${expanded ? "is-expanded" : ""}`}
-      style={{ "--agent-result-width": `${renderedWidth}px` } as CSSProperties}
+      className={`agent-workbench-shell layout-${layout}`}
       aria-label={`${title}工作区`}
+      data-layout={layout}
+      style={{ "--agent-aux-width": `${renderedWidth}px` } as CSSProperties}
     >
-      {!embedded && (
-        <header className="agent-workbench-shell__heading">
-          <h1>{title}</h1>
-          {status && <span role="status">{status}</span>}
-        </header>
-      )}
-      <div
-        className={`agent-workbench-shell__layout ${showResult ? "" : "is-single-pane"}`}
-      >
-        <section
-          className={
-            showResult
-              ? "agent-workbench-shell__result"
-              : "agent-workbench-shell__conversation"
-          }
-          aria-label={showResult ? resultTitle : "智能体协作"}
-        >
-          <header
-            className={
-              showResult
-                ? "agent-workbench-shell__result-head"
-                : "agent-workbench-shell__conversation-head"
-            }
-          >
-            <h2>{showResult ? resultTitle : "智能体协作"}</h2>
-            {showResult && !narrow && (
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => setExpanded((value) => !value)}
-                aria-label={expanded ? "还原主工作区" : "展开主工作区"}
-              >
-                {expanded ? (
-                  <Minimize2 className="size-4" />
-                ) : (
-                  <Maximize2 className="size-4" />
-                )}
-              </Button>
-            )}
-            {!showResult && status && <span role="status">{status}</span>}
-          </header>
-          {showResult ? (
-            <div
-              ref={attachResult}
-              className="agent-workbench-shell__result-slot"
-              data-result-key={resultKey}
-            />
-          ) : (
-            <div
-              ref={attachConversation}
-              className="agent-workbench-shell__conversation-slot"
-            />
+      <header className="agent-workbench-shell__taskbar">
+        <div className="agent-workbench-task-name">
+          <strong>{title}</strong>
+          {taskTitle && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span title={taskTitle}>{taskTitle}</span>
+            </>
           )}
-          {showResult && narrow && (
-            <Sheet
-              open={mobileOpen}
-              onOpenChange={(open) =>
-                open
-                  ? setMobileOpen(true)
-                  : requestWorkspaceNavigation(() => setMobileOpen(false))
+        </div>
+        {status && (
+          <span className="agent-workbench-task-status" role="status">
+            {status}
+          </span>
+        )}
+        <div className="agent-workbench-task-actions">
+          {toolbar}
+          {hasAux && (
+            <Button
+              ref={toggle}
+              variant="ghost"
+              size="icon"
+              aria-label={inlineAux ? "收起任务信息" : "打开任务信息"}
+              aria-expanded={inlineAux || drawerOpen}
+              onClick={() =>
+                narrow ? setDrawerOpen(true) : setCollapsed((value) => !value)
               }
             >
-              <SheetTrigger asChild>
-                <Button
-                  className="agent-workbench-shell__mobile-trigger"
-                  size="sm"
-                  variant="ghost"
-                >
-                  <PanelRightOpen className="size-4" />
-                  打开智能体协作
-                </Button>
-              </SheetTrigger>
-              <SheetContent
-                side="bottom"
-                className="agent-workbench-drawer"
-                aria-describedby={undefined}
-                onCloseAutoFocus={(event) => {
-                  if (!pendingConversationFocus.current) return;
-                  event.preventDefault();
-                  pendingConversationFocus.current = false;
-                  focusConversation();
-                }}
-              >
-                <SheetHeader>
-                  <SheetTitle>智能体协作</SheetTitle>
-                </SheetHeader>
-                {actionsBar}
-                <div
-                  className="agent-workbench-shell__conversation-slot"
-                  ref={attachConversation}
-                />
-              </SheetContent>
-            </Sheet>
+              {inlineAux ? (
+                <PanelRightClose size={18} />
+              ) : (
+                <PanelRightOpen size={18} />
+              )}
+            </Button>
+          )}
+        </div>
+      </header>
+      <div
+        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"}`}
+      >
+        <section className="agent-workbench-shell__main" aria-label="主工作区">
+          <div
+            ref={mainViewport}
+            className={`agent-workbench-shell__main-content ${ownsScroll ? "is-scrollable" : "has-native-scroll"}`}
+          >
+            {main ?? conversation}
+          </div>
+          {ownsScroll && showLatest && (
+            <button
+              type="button"
+              className="workbench-back-to-latest"
+              onClick={returnToLatest}
+            >
+              ↓ 回到最新
+            </button>
+          )}
+          {composer && (
+            <div className="agent-workbench-shell__composer">{composer}</div>
           )}
         </section>
-        {showResult && !narrow && (
+        {inlineAux && (
           <>
             <div
               className="agent-workbench-shell__resize"
               role="separator"
-              aria-label="调整智能体协作面板宽度"
+              aria-label="调整任务信息面板宽度"
               aria-orientation="vertical"
-              aria-valuemin={MIN_CONTEXT}
-              aria-valuemax={maxWidth}
-              aria-valuenow={renderedWidth}
+              aria-valuemin={minAux}
+              aria-valuemax={maxAux}
+              aria-valuenow={Math.round(renderedWidth)}
               tabIndex={0}
               onPointerDown={resize}
-              onKeyDown={(event) => {
-                if (
-                  !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                    event.key,
-                  )
-                )
+              onKeyDown={(e) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
                   return;
-                event.preventDefault();
-                setExpanded(false);
-                setWidth(
-                  event.key === "Home"
-                    ? MIN_CONTEXT
-                    : event.key === "End"
-                      ? maxWidth
-                      : Math.max(
-                          MIN_CONTEXT,
-                          Math.min(
-                            maxWidth,
-                            renderedWidth +
-                              (event.key === "ArrowLeft" ? 32 : -32),
-                          ),
-                        ),
+                e.preventDefault();
+                changeWidth(
+                  e.key === "Home"
+                    ? minAux
+                    : e.key === "End"
+                      ? maxAux
+                      : renderedWidth + (e.key === "ArrowLeft" ? 24 : -24),
                 );
               }}
             />
-            <section
-              className="agent-workbench-shell__conversation"
-              aria-label="智能体协作"
+            <aside
+              className="agent-workbench-shell__auxiliary"
+              aria-label={isKnowledge ? "知识节点与资料" : "任务辅助区"}
             >
-              <header className="agent-workbench-shell__conversation-head">
-                <h2>智能体协作</h2>
-                {status && <span role="status">{status}</span>}
-              </header>
-              {actionsBar}
+              {agentSwitch}
               <div
-                ref={attachConversation}
-                className="agent-workbench-shell__conversation-slot"
+                className="agent-workbench-shell__auxiliary-slot"
+                ref={attachAux}
               />
-            </section>
+            </aside>
           </>
         )}
       </div>
-      {showResult && createPortal(resultContent, resultHost)}
-      {createPortal(conversation, conversationHost)}
+      {hasAux && (
+        <Sheet open={drawerOpen && narrow} onOpenChange={setDrawerOpen}>
+          <SheetContent
+            side="right"
+            className="agent-workbench-drawer"
+            aria-describedby={undefined}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              if (focusMainAfterClose.current) {
+                focusMainAfterClose.current = false;
+                mainViewport.current
+                  ?.querySelector<HTMLTextAreaElement>(
+                    "textarea:not([disabled])",
+                  )
+                  ?.focus();
+              } else toggle.current?.focus();
+            }}
+          >
+            <SheetHeader>
+              <SheetTitle>
+                {isKnowledge ? "知识节点与资料" : resultTitle}
+              </SheetTitle>
+            </SheetHeader>
+            {agentSwitch}
+            <div
+              className="agent-workbench-shell__auxiliary-slot"
+              ref={attachAux}
+            />
+          </SheetContent>
+        </Sheet>
+      )}
+      {hasAux && createPortal(auxiliary ?? result ?? children, auxHost)}
     </section>
   );
 }

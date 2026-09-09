@@ -12,7 +12,7 @@ import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import type { TaskResponse } from "@/lib/frontmind-api";
 import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import ProjectAgentWorkbench from "./ProjectAgentWorkbench";
-import { useWorkbenchModule } from "./agent-workbench";
+import { trpc } from "@/lib/trpc";
 
 type EnterpriseQaWorkspaceProps = {
   workbench?: boolean;
@@ -161,58 +161,119 @@ export function EnterpriseQaSourceNote({
     !localTaskId && currentPublication ? currentPublication : taskSource;
 
   return (
-    <header className="border-b border-border/60 bg-background px-5 py-3 pl-16 lg:pl-5">
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <BookOpen className="h-4 w-4 text-primary" />
-        企业问答智能体
-      </div>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground" role="status">
-        {!source.loaded ? (
-          "正在读取知识库来源…"
-        ) : source.failed ? (
-          "知识库来源暂时无法读取，请稍后重试。"
-        ) : source.knowledgeBase ? (
+    <section className="enterprise-qa-source" aria-label="企业问答知识来源">
+      <h2>知识来源</h2>
+      <dl>
+        <div>
+          <dt>{localTaskId ? "本任务绑定版本" : "新任务使用版本"}</dt>
+          <dd role="status">
+            {!source.loaded
+              ? "正在读取…"
+              : source.failed
+                ? "读取失败"
+                : source.knowledgeBase
+                  ? `v${source.knowledgeBase.version}`
+                  : "尚未发布"}
+          </dd>
+        </div>
+        {currentPublication?.knowledgeBase && (
+          <div>
+            <dt>项目当前发布版本</dt>
+            <dd>v{currentPublication.knowledgeBase.version}</dd>
+          </div>
+        )}
+        {source.knowledgeBase && (
           <>
-            {localTaskId ? "本会话绑定" : "新会话使用"}已发布知识库 v
-            {source.knowledgeBase.version} ·{" "}
-            {source.knowledgeBase.sourceFileName} ·{" "}
-            {source.knowledgeBase.documentCount} 篇资料
-            {localTaskId
-              ? "。后续发布不会改变本会话的知识来源。"
-              : "。开始问答时绑定当前发布版本。"}
-          </>
-        ) : (
-          <>
-            尚无可用的已发布企业知识库。请先
-            <Link
-              href={projectWorkspaceUrl("/?view=knowledge")}
-              className="ml-1 font-medium text-primary underline underline-offset-2"
-            >
-              构建并发布知识库
-            </Link>
-            ，再开始问答。
+            <div>
+              <dt>来源资料</dt>
+              <dd>{source.knowledgeBase.sourceFileName}</dd>
+            </div>
+            <div>
+              <dt>资料数量</dt>
+              <dd>{source.knowledgeBase.documentCount} 篇</dd>
+            </div>
           </>
         )}
-      </p>
-      {(source.refreshFailed || currentPublication?.refreshFailed) && (
-        <div
-          role="alert"
-          className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-700"
-        >
-          <span>知识库状态暂时无法刷新，已保留当前会话和草稿。</span>
+      </dl>
+      {localTaskId && <p>后续发布保留本任务原有知识版本。</p>}
+      {(source.failed ||
+        source.refreshFailed ||
+        currentPublication?.refreshFailed) && (
+        <div role="alert">
+          <p>暂时无法刷新知识来源，当前任务和输入已保留。</p>
           <Button
-            size="sm"
             variant="ghost"
+            size="sm"
             onClick={() => {
-              if (currentPublication?.refreshFailed) onRetryPublication?.();
-              if (taskSource.refreshFailed) retryTaskSource();
+              onRetryPublication?.();
+              retryTaskSource();
             }}
           >
             重新检查知识库
           </Button>
         </div>
       )}
-    </header>
+    </section>
+  );
+}
+
+function KnowledgeUnlockSteps() {
+  const progress = trpc.workspace.knowledgeProgress.useQuery(undefined, {
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+  const data = progress.data?.progress;
+  const files = data?.retainedCustomerAttachmentCount;
+  const materials = progress.isError
+    ? "暂时无法读取"
+    : progress.isLoading
+      ? "正在读取资料状态…"
+      : !data
+        ? "待提交企业资料"
+        : typeof files === "number" && files > 0
+          ? `已保留 ${files} 份资料`
+          : "已建立知识构建任务";
+  const confirmation = progress.isError
+    ? "暂时无法读取"
+    : progress.isLoading
+      ? "正在读取构建状态…"
+      : data?.updateAllowed || data?.packageAllowed
+        ? "已确认，可更新知识库"
+        : data
+          ? "构建与节点确认尚未完成"
+          : "等待开始构建";
+  return (
+    <>
+      <ol className="enterprise-qa-unlock-steps">
+        <li>
+          <span>1</span>
+          <div>
+            提交企业资料<small>{materials}</small>
+          </div>
+        </li>
+        <li>
+          <span>2</span>
+          <div>
+            完成构建与确认<small>{confirmation}</small>
+          </div>
+        </li>
+        <li>
+          <span>3</span>
+          <div>
+            发布知识库<small>尚未发布</small>
+          </div>
+        </li>
+      </ol>
+      {progress.isError && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void progress.refetch()}
+        >
+          重新读取构建状态
+        </Button>
+      )}
+    </>
   );
 }
 
@@ -222,7 +283,7 @@ function EnterpriseQaPublishedWorkspace({
 }: EnterpriseQaWorkspaceProps) {
   // A historical conversation's frozen snapshot cannot unlock a project with no current publication.
   const { source, retry } = useKnowledgeSource();
-  const module = useWorkbenchModule();
+
   if (!source.loaded || source.failed || !source.knowledgeBase) {
     const lockedView = (
       <div className="h-full min-h-0 overflow-y-auto bg-[#f7f6f9] px-4 py-8 sm:px-6 lg:px-8">
@@ -298,24 +359,69 @@ function EnterpriseQaPublishedWorkspace({
     if (!workbench) return lockedView;
     return (
       <AgentWorkbenchShell
-        embedded
         projectId={projectId}
-        moduleId={module?.id ?? "extensions"}
+        moduleId="enterprise-qa"
         title="企业问答"
-        resultTitle={module?.resultTitle ?? "知识来源"}
-        conversation={lockedView}
-        result={
+        taskTitle="新任务"
+        layout="workflow"
+        main={
           <section
-            className="space-y-3 text-sm leading-7"
+            className="enterprise-qa-unlock"
+            aria-label="企业问答暂未解锁"
+          >
+            {!source.loaded ? (
+              <p role="status">
+                <Loader2 className="inline-block mr-2 h-4 w-4 animate-spin" />
+                正在确认知识库状态…
+              </p>
+            ) : source.failed ? (
+              <>
+                <p role="alert">暂时无法确认知识库状态</p>
+                <Button variant="outline" onClick={retry}>
+                  重新检查
+                </Button>
+              </>
+            ) : (
+              <>
+                <BookOpen size={26} className="text-primary" />
+                <h2>先发布企业知识库，即可开始问答</h2>
+                <KnowledgeUnlockSteps />
+                <div className="flex flex-wrap gap-3">
+                  <Button asChild>
+                    <Link href={projectWorkspaceUrl("/?view=knowledge")}>
+                      前往智能知识库
+                    </Link>
+                  </Button>
+                  <Button variant="ghost" onClick={retry}>
+                    重新检查
+                  </Button>
+                </div>
+              </>
+            )}
+          </section>
+        }
+        auxiliary={
+          <section
+            className="enterprise-qa-source"
             aria-label="企业问答知识来源"
           >
-            <h2 className="font-semibold">以已发布知识库为依据</h2>
-            <p className="text-muted-foreground">
-              企业问答使用当前项目已发布的知识版本。完成知识库构建与发布后，重新检查即可开始问答。
-            </p>
-            <p className="text-muted-foreground">
-              企业事实、产品与服务范围将作为回答依据。每次新会话会使用当时已发布的知识版本。
-            </p>
+            <h2>知识来源</h2>
+            <dl>
+              <div>
+                <dt>项目发布状态</dt>
+                <dd>
+                  {!source.loaded
+                    ? "正在读取"
+                    : source.failed
+                      ? "暂时无法读取"
+                      : "尚未发布"}
+                </dd>
+              </div>
+              <div>
+                <dt>任务绑定版本</dt>
+                <dd>首次提问时绑定</dd>
+              </div>
+            </dl>
           </section>
         }
       />

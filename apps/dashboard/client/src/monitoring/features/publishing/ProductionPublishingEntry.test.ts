@@ -179,13 +179,27 @@ describe("createProductionPublisherGateway", () => {
   it("loads exact dashboard totals in one request without catalog or article fanout", async () => {
     const client = clientWith();
     vi.mocked(client.publisher.dashboard.query).mockResolvedValue({
-      catalogRevision: "catalog-2", catalogSyncedAt: date, kindComplete: true, catalogStale: false,
-      catalogCounts: { news: 91822, selfMedia: 20 }, articleCount: 2500,
-      resumableArticles: [article], processingBatchCount: 0, processingBatches: [],
-      wallet: { availableTenThousandths: "10000", reservedTenThousandths: "0", frozenTenThousandths: "0" },
-      actionRequiredCount: 0, resumableDraftCount: 0, resumableDrafts: [], recentBatches: [],
+      catalogRevision: "catalog-2",
+      catalogSyncedAt: date,
+      kindComplete: true,
+      catalogStale: false,
+      catalogCounts: { news: 91822, selfMedia: 20 },
+      articleCount: 2500,
+      resumableArticles: [article],
+      processingBatchCount: 0,
+      processingBatches: [],
+      wallet: {
+        availableTenThousandths: "10000",
+        reservedTenThousandths: "0",
+        frozenTenThousandths: "0",
+      },
+      actionRequiredCount: 0,
+      resumableDraftCount: 0,
+      resumableDrafts: [],
+      recentBatches: [],
     });
-    const result = await createProductionPublisherGateway(client).getDashboard();
+    const result =
+      await createProductionPublisherGateway(client).getDashboard();
     expect(result.articleCount).toBe(2500);
     expect(result.catalog.mediaCount).toBe(91842);
     expect(result.resumableArticles).toHaveLength(1);
@@ -239,7 +253,12 @@ describe("createProductionPublisherGateway", () => {
   it("maps capability and advanced facet counts into customer labels", async () => {
     const gateway = createProductionPublisherGateway(clientWith());
 
-    const facets = await gateway.getMediaFacets({ kind: "news", query: "", page: 1, pageSize: 20 });
+    const facets = await gateway.getMediaFacets({
+      kind: "news",
+      query: "",
+      page: 1,
+      pageSize: 20,
+    });
 
     expect(facets.imageSupports).toEqual([
       { value: "verified", count: 1, label: "支持图文" },
@@ -258,7 +277,11 @@ describe("createProductionPublisherGateway", () => {
   it("maps resumable drafts and counts all queued or processing batches for the overview", async () => {
     const client = clientWith();
     vi.mocked(client.publisher.dashboard.query).mockResolvedValue({
-      catalogCounts: { news: 1, selfMedia: 1 }, articleCount: 1, resumableArticles: [article], processingBatchCount: 3, processingBatches: [],
+      catalogCounts: { news: 1, selfMedia: 1 },
+      articleCount: 1,
+      resumableArticles: [article],
+      processingBatchCount: 3,
+      processingBatches: [],
       catalogRevision: "catalog-2",
       catalogSyncedAt: date.toISOString(),
       catalogStale: false,
@@ -436,6 +459,22 @@ describe("createProductionPublisherGateway", () => {
     });
     expect(saved.articleVersionHash).toBe("a".repeat(64));
     expect(saved.articleContainsImages).toBe(false);
+  });
+
+  it("passes the same task draft identity through creation retries", async () => {
+    const client = clientWith();
+    const gateway = createProductionPublisherGateway(client);
+    const key = "publisher:draft:stable-task-selection";
+    await gateway.createDraft(versionId, [mediaId], key);
+    await gateway.createDraft(versionId, [mediaId], key);
+    const requests = vi.mocked(client.publisher.drafts.save.mutate).mock.calls;
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.[0]).toEqual(requests[1]?.[0]);
+    expect(requests[0]?.[0]).toMatchObject({
+      articleVersionId: versionId,
+      expectedRevision: 0,
+      idempotencyKey: key,
+    });
   });
 
   it("polls the asynchronous DOCX import before opening the article", async () => {

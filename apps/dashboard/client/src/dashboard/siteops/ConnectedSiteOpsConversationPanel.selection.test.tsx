@@ -274,7 +274,7 @@ describe("ConnectedSiteOpsConversationPanel select_visual", () => {
     render(<ConnectedSiteOpsConversationPanel />);
 
     const pageOneF = screen.getByRole("button", { name: "选择 F" });
-    act(() => {
+    await act(async () => {
       for (let index = 0; index < 10; index += 1) {
         pageOneF.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       }

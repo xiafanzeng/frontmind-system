@@ -16,7 +16,10 @@ import {
   WorkbenchModuleContext,
 } from "./agent-workbench";
 
-const state = vi.hoisted(() => ({ activeConversation: null as any }));
+const state = vi.hoisted(() => ({
+  activeConversation: null as any,
+  knowledgeProgress: null as any,
+}));
 vi.mock("@/contexts/ConversationContext", () => ({
   useConversation: () => ({
     activeConversation: state.activeConversation,
@@ -27,6 +30,7 @@ vi.mock("@/contexts/ConversationContext", () => ({
     createConversation: vi.fn(),
     setActive: vi.fn(),
   }),
+  ConversationAgentProvider: ({ children }: any) => children,
   ConversationContextProvider: ({ children }: any) => children,
   ConversationPurposeProvider: ({ children, purpose }: any) => (
     <div data-purpose={purpose} data-testid="purpose">
@@ -35,6 +39,33 @@ vi.mock("@/contexts/ConversationContext", () => ({
   ),
 }));
 
+vi.mock("@/hooks/useWorkbenchTask", () => ({
+  useWorkbenchTask: () => ({
+    taskId: null,
+    task: null,
+    tasks: [],
+    state: null,
+    hydrated: true,
+    pending: false,
+    error: null,
+    newTask: vi.fn(),
+    selectTask: vi.fn(),
+  }),
+}));
+vi.mock("@/lib/trpc", () => ({
+  trpc: {
+    workspace: {
+      knowledgeProgress: {
+        useQuery: () => ({
+          data: { progress: state.knowledgeProgress },
+          isLoading: false,
+          isError: false,
+          refetch: vi.fn(),
+        }),
+      },
+    },
+  },
+}));
 function WorkbenchQa() {
   const module = createWorkbenchModules(
     () => null,
@@ -64,6 +95,8 @@ vi.mock("@/pages/Home", () => ({
 describe("Enterprise QA source binding", () => {
   beforeEach(() => {
     state.activeConversation = null;
+    state.knowledgeProgress = null;
+    vi.stubGlobal("innerWidth", 1440);
     window.history.replaceState(null, "", "/");
   });
   afterEach(() => {
@@ -85,35 +118,55 @@ describe("Enterprise QA source binding", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<WorkbenchQa />);
 
-    expect(
-      screen.getByRole("heading", { name: "正在确认知识库状态" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/正在确认知识库状态/)).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "新任务" }),
     ).not.toBeInTheDocument();
-    const conversation = screen.getByRole("region", { name: "智能体协作" });
+    const main = screen.getByRole("region", { name: "主工作区" });
+    const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+    expect(within(main).queryByRole("navigation")).not.toBeInTheDocument();
+    const selector = within(aside).getByRole("navigation", {
+      name: "切换子 Agent",
+    });
     expect(
-      within(conversation).getByRole("group", { name: "子智能体" }),
-    ).toBeInTheDocument();
-    const result = screen.getByRole("region", { name: "项目工具" });
-    expect(
-      within(result).queryByRole("group", { name: "子智能体" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(conversation).getByRole("button", { name: "企业问答" }),
+      within(selector).getByRole("button", { name: "企业问答" }),
     ).toHaveAttribute("aria-pressed", "true");
 
     await act(async () =>
       resolve({ ok: true, json: async () => ({ knowledgeBase: null }) }),
     );
     expect(
-      screen.getByRole("heading", { name: "发布知识库后，即可开始企业问答" }),
+      screen.getByRole("heading", { name: "先发布企业知识库，即可开始问答" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
     ]);
+  });
+
+  it("shows actual retained files and confirmation readiness in the main unlock steps", async () => {
+    state.knowledgeProgress = {
+      retainedCustomerAttachmentCount: 4,
+      updateAllowed: true,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue({
+          ok: true,
+          json: async () => ({ knowledgeBase: null }),
+        }),
+    );
+    render(<WorkbenchQa />);
+    const main = screen.getByRole("region", { name: "主工作区" });
+    expect(
+      await within(main).findByText("已保留 4 份资料"),
+    ).toBeInTheDocument();
+    expect(within(main).getByText("已确认，可更新知识库")).toBeInTheDocument();
+    expect(within(main).getByText("尚未发布")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
   });
 
   it("opens scoped workbench chat after publication and keeps its source note and retry behavior", async () => {
@@ -137,10 +190,11 @@ describe("Enterprise QA source binding", () => {
     render(<WorkbenchQa />);
     const chat = await screen.findByTestId("chat");
     expect(chat).toHaveAttribute("data-purpose", "enterprise_qa");
-    const result = screen.getByRole("region", { name: "项目工具" });
-    expect(within(result).getByRole("status")).toHaveTextContent(
-      "新会话使用已发布知识库 v8",
+    const result = screen.getByRole("complementary", { name: "任务辅助区" });
+    expect(screen.getByRole("region", { name: "主工作区" })).toContainElement(
+      chat,
     );
+    expect(within(result).getByRole("status")).toHaveTextContent("v8");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     fireEvent.change(screen.getByLabelText("问答草稿"), {
       target: { value: "尚未发送的问题" },
@@ -148,7 +202,7 @@ describe("Enterprise QA source binding", () => {
 
     fireEvent(window, new Event("focus"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "已保留当前会话和草稿",
+      "当前任务和输入已保留",
     );
     expect(screen.getByTestId("chat")).toBe(chat);
     expect(screen.getByLabelText("问答草稿")).toHaveValue("尚未发送的问题");
@@ -176,13 +230,14 @@ describe("Enterprise QA source binding", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<EnterpriseQaWorkspace />);
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "新会话使用已发布知识库 v8",
-      ),
+      expect(screen.getByRole("status")).toHaveTextContent("v8"),
     );
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "企业知识库.md · 12 篇资料",
-    );
+    expect(
+      screen.getByRole("region", { name: "企业问答知识来源" }),
+    ).toHaveTextContent("企业知识库.md");
+    expect(
+      screen.getByRole("region", { name: "企业问答知识来源" }),
+    ).toHaveTextContent("12 篇");
     expect(screen.getByRole("status")).not.toHaveTextContent(
       "server-only-hash",
     );
@@ -227,9 +282,7 @@ describe("Enterprise QA source binding", () => {
     state.activeConversation = { taskId: "task-current" };
     rerender(<EnterpriseQaSourceNote />);
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "本会话绑定已发布知识库 v3",
-      ),
+      expect(screen.getByRole("status")).toHaveTextContent("v3"),
     );
     await act(async () => {
       resolveOld({
@@ -244,8 +297,12 @@ describe("Enterprise QA source binding", () => {
         }),
       });
     });
-    expect(screen.getByRole("status")).toHaveTextContent("历史资料.md");
-    expect(screen.getByRole("status")).not.toHaveTextContent("过期资料.md");
+    expect(
+      screen.getByRole("region", { name: "企业问答知识来源" }),
+    ).toHaveTextContent("历史资料.md");
+    expect(
+      screen.getByRole("region", { name: "企业问答知识来源" }),
+    ).not.toHaveTextContent("过期资料.md");
     expect(fetchMock.mock.calls[1][0]).toBe(
       "/api/frontmind/v2/runtime-config?localTaskId=task-current",
     );
@@ -495,9 +552,7 @@ describe("Enterprise QA source binding", () => {
     const chat = await screen.findByTestId("chat");
     fireEvent(window, new Event("focus"));
     expect(screen.getByTestId("chat")).toBe(chat);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "新会话使用已发布知识库 v8",
-    );
+    expect(screen.getByRole("status")).toHaveTextContent("v8");
     await act(async () => resolveRefresh(published));
     expect(screen.getByTestId("chat")).toBe(chat);
   });
@@ -531,11 +586,11 @@ describe("Enterprise QA source binding", () => {
     render(<EnterpriseQaWorkspace />);
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "本会话绑定已发布知识库 v3",
-      ),
+      expect(screen.getByRole("status")).toHaveTextContent("v3"),
     );
-    expect(screen.getByRole("status")).toHaveTextContent("历史资料.md");
+    expect(
+      screen.getByRole("region", { name: "企业问答知识来源" }),
+    ).toHaveTextContent("历史资料.md");
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
       "/api/frontmind/v2/runtime-config?localTaskId=frozen-task",
@@ -568,7 +623,7 @@ describe("Enterprise QA source binding", () => {
       });
       fireEvent(window, new Event("focus"));
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        "已保留当前会话和草稿",
+        "当前任务和输入已保留",
       );
       expect(screen.getByTestId("chat")).toBe(chat);
       expect(screen.getByLabelText("问答草稿")).toHaveValue("尚未发送的问题");
@@ -666,7 +721,7 @@ describe("Enterprise QA source binding", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15000);
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("已保留当前会话和草稿");
+    expect(screen.getByRole("alert")).toHaveTextContent("当前任务和输入已保留");
     expect(screen.getByTestId("chat")).toBe(chat);
     expect(screen.getByLabelText("问答草稿")).toHaveValue("保留草稿");
     await act(async () => {

@@ -92,3 +92,34 @@ describe("customer question selection", () => {
     );
   });
 });
+
+it("confirms an operator question inline and preserves the original business request", async () => {
+  render(
+    <QuestionIntakePanel
+      workbench
+      preview={false}
+      portal={{ ...portal, mode: "operator" }}
+      onOpenBrandQuestions={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByPlaceholderText("请输入一个完整、明确的问题"), {
+    target: { value: "如何为企业选择方案？" },
+  });
+  fireEvent.change(screen.getByRole("combobox", { name: "问题类别" }), {
+    target: { value: "product_scenario" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "确认优化问题" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(
+    screen.getByRole("region", { name: "确认优化问题" }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
+  await waitFor(() =>
+    expect(mocks.select).toHaveBeenCalledWith({
+      mode: "direct",
+      question: "如何为企业选择方案？",
+      category: "product_scenario",
+    }),
+  );
+  await screen.findByText(/已保存“如何为企业选择方案？”/);
+});

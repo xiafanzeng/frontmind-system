@@ -1,4 +1,11 @@
-import { useEffect, useState } from "react";
+import {
+  useBusinessFlowState,
+  readFlowString,
+  readFlowBoolean,
+} from "./useBusinessFlowState";
+import "./business-module-flows.css";
+import { useBusinessWorkspace } from "./BusinessWorkspaceContext";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -184,6 +191,7 @@ function questionQuotaUnavailableActionLabel(portal: ServicePortalView) {
 
 type Props = {
   preview: boolean;
+  workbench?: boolean;
   portal: ServicePortalView;
   draft?: QuestionIntakeDraft | null;
   onDraftChange?: (draft: QuestionIntakeDraft | null) => void;
@@ -194,30 +202,75 @@ type Props = {
 
 function QuestionIntakeView({
   portal,
+  workbench: workbenchProp,
   draft,
   onDraftChange,
   onOpenBrandQuestions,
   onPortalRefresh,
   preview,
   onSubmit,
-  submitting,
+  submitting: businessSubmitting,
 }: Props & {
   onSubmit: (input: QuestionIntakeSubmitInput) => Promise<boolean>;
   submitting: boolean;
 }) {
-  const [question, setQuestion] = useState(draft?.question || "");
-  const [category, setCategory] = useState<WorkspaceQuestionCategory | null>(
-    draft?.category || null,
+  const workbench = workbenchProp ?? portal.mode === "operator";
+  const { task } = useBusinessWorkspace();
+  const confirmationPending = useRef(false);
+  const [bindingConfirmation, setBindingConfirmation] = useState(false);
+  const submitting = businessSubmitting || bindingConfirmation;
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [showIntake, setShowIntake] = useBusinessFlowState(
+    "questionIntakeOpen",
+    Boolean(draft) || portal.purchasedQuestions.length === 0,
+    readFlowBoolean,
   );
-  const [libraryRef, setLibraryRef] = useState<BrandKeywordLibraryRef | null>(
-    draft?.libraryRef || null,
+  const [savedQuestion, setSavedQuestion] = useState("");
+  const [question, setQuestion] = useBusinessFlowState(
+    "questionDraft",
+    draft?.question || "",
+    readFlowString,
   );
-  const [origin, setOrigin] = useState<QuestionIntakeOrigin>(
+  const [category, setCategory] =
+    useBusinessFlowState<WorkspaceQuestionCategory | null>(
+      "questionCategory",
+      draft?.category || null,
+      (value) =>
+        value === null
+          ? null
+          : questionCategoryOptions.find((item) => item.value === value)?.value,
+    );
+  const [libraryRef, setLibraryRef] =
+    useBusinessFlowState<BrandKeywordLibraryRef | null>(
+      "questionLibraryRef",
+      draft?.libraryRef || null,
+      (value) => {
+        if (value === null) return null;
+        if (!value || typeof value !== "object") return undefined;
+        const item = value as Record<string, unknown>;
+        return typeof item.dashboardRevision === "number" &&
+          typeof item.tableId === "string" &&
+          typeof item.rowIndex === "number"
+          ? {
+              dashboardRevision: item.dashboardRevision,
+              tableId: item.tableId,
+              rowIndex: item.rowIndex,
+            }
+          : undefined;
+      },
+    );
+  const [origin, setOrigin] = useBusinessFlowState<QuestionIntakeOrigin>(
+    "questionOrigin",
     draft?.origin || "self_entered",
+    (value) =>
+      value === "brand_keyword_library" || value === "self_entered"
+        ? value
+        : undefined,
   );
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   useEffect(() => {
     if (!draft) return;
+    setShowIntake(true);
     setQuestion(draft.question);
     setCategory(draft.category);
     setLibraryRef(draft.libraryRef);
@@ -246,30 +299,98 @@ function QuestionIntakeView({
     category && hasCapacity(category) && (!fromLibrary || libraryRef),
   );
   const submit = async () => {
-    if (
-      await onSubmit({
-        question: question.trim(),
-        category,
-        libraryRef,
-        origin,
-      })
-    ) {
-      setQuestion("");
-      setCategory(null);
-      setLibraryRef(null);
-      setOrigin("self_entered");
-      onDraftChange?.(null);
-      setConfirmationOpen(false);
+    if (confirmationPending.current || businessSubmitting) return;
+    confirmationPending.current = true;
+    setBindingConfirmation(true);
+    setTaskError(null);
+    try {
+      if (workbench && task)
+        await task.saveState({
+          step: "question-confirming",
+          values: {
+            questionDraft: question,
+            questionCategory: category,
+            questionLibraryRef: libraryRef,
+            questionOrigin: origin,
+          },
+          record: {
+            id: "question-confirm",
+            label: "确认优化问题",
+            status: "pending",
+          },
+        });
+      if (
+        await onSubmit({
+          question: question.trim(),
+          category,
+          libraryRef,
+          origin,
+        })
+      ) {
+        if (workbench && task)
+          void task
+            .saveState({
+              step: "question-saved",
+              record: {
+                id: "question-confirm",
+                label: "已保存优化问题",
+                status: "completed",
+                detail: question.trim(),
+              },
+            })
+            .catch(() =>
+              setTaskError(
+                "问题已保存，任务记录同步失败；可从辅助区重试同步。",
+              ),
+            );
+        setSavedQuestion(question.trim());
+        if (workbench) setShowIntake(false);
+        setQuestion("");
+        setCategory(null);
+        setLibraryRef(null);
+        setOrigin("self_entered");
+        onDraftChange?.(null);
+        setConfirmationOpen(false);
+      }
+    } catch (cause) {
+      setTaskError(
+        cause instanceof Error
+          ? cause.message
+          : "任务暂未同步，输入已保留，请重试。",
+      );
+    } finally {
+      confirmationPending.current = false;
+      setBindingConfirmation(false);
     }
   };
   return (
-    <section className="question-intake-panel" aria-label="目标问题管理">
+    <section
+      className={`question-intake-panel ${workbench ? "question-intake-flow" : ""}`}
+      aria-label="目标问题管理"
+    >
+      {taskError && <p role="alert">{taskError}</p>}
       <div className="question-intake-heading">
-        <div>
-          <span>目标问题</span>
-          <h3>从品牌全域词库选择或自主填写需要优化的问题</h3>
-          <p>{portal.mode === "operator" ? "添加问题后即可开展应答优化与进度监控，支持随时修改或删除。" : "选择类别并确认后立即进入服务。您可以直接修改或删除自己的问题。"}</p>
-        </div>
+        {!workbench && (
+          <div>
+            <span>目标问题</span>
+            <h3>从品牌全域词库选择或自主填写需要优化的问题</h3>
+            <p>
+              {portal.mode === "operator"
+                ? "添加问题后即可开展应答优化与进度监控，支持随时修改或删除。"
+                : "选择类别并确认后立即进入服务。您可以直接修改或删除自己的问题。"}
+            </p>
+          </div>
+        )}
+        {workbench && (
+          <button
+            type="button"
+            className="question-intake-library-link"
+            onClick={() => setShowIntake((value) => !value)}
+            aria-expanded={showIntake}
+          >
+            {showIntake ? "收起新增" : "新增优化问题"}
+          </button>
+        )}
         <button
           type="button"
           className="question-intake-library-link"
@@ -279,93 +400,16 @@ function QuestionIntakeView({
           <ArrowUpRight size={15} />
         </button>
       </div>
-      {access.allowed ? (
-        <div className="question-intake-form">
-          <label>
-            <span>问题来源</span>
-            <input
-              readOnly
-              value={fromLibrary ? "品牌全域词库" : "自主填写"}
-              aria-label="问题来源"
-            />
-          </label>
-          <label className="question-intake-question">
-            <span>目标问题</span>
-            <input
-              value={question}
-              readOnly={fromLibrary}
-              maxLength={4000}
-              placeholder="请输入一个完整、明确的问题"
-              onChange={(event) => {
-                setQuestion(event.target.value);
-                onDraftChange?.({
-                  origin,
-                  question: event.target.value,
-                  category,
-                  libraryRef,
-                });
-              }}
-            />
-          </label>
-          {!fromLibrary && (
-            <label>
-              <span>问题类别</span>
-              <select
-                aria-label="问题类别"
-                value={category || ""}
-                onChange={(event) => {
-                  const value = event.target.value as WorkspaceQuestionCategory;
-                  setCategory(value);
-                  onDraftChange?.({
-                    origin,
-                    question,
-                    category: value,
-                    libraryRef,
-                  });
-                }}
-              >
-                <option value="">请选择问题类别</option>
-                {options.map((option) => (
-                  <option
-                    key={option.value}
-                    value={option.value}
-                    disabled={!hasCapacity(option.value)}
-                  >
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <div className="question-intake-form-actions">
-            <button
-              type="button"
-              className="question-intake-submit"
-              disabled={submitting || question.trim().length < 2 || !available}
-              onClick={() => setConfirmationOpen(true)}
-            >
-              {submitting
-                ? "正在确认…"
-                : !hasAnyCapacity || (!available && category)
-                  ? questionQuotaUnavailableActionLabel(portal) ||
-                    "该分类额度不足"
-                  : "确认优化问题"}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <p role="status" className="question-intake-quota-note">
-          {access.reason || "当前不能新增问题。"}
-        </p>
-      )}
-      {access.allowed && (!hasAnyCapacity || (category && !available)) && (
-        <p role="status" className="question-intake-quota-note">
-          {questionQuotaUnavailableMessage(portal, fromLibrary)}
-        </p>
-      )}
       {portal.purchasedQuestions.length > 0 && (
-        <section className="mt-5 grid gap-3" aria-label={portal.mode === "operator" ? "优化问题管理" : "服务问题管理"}>
-          <strong className="text-sm">{portal.mode === "operator" ? "优化问题" : "已进入服务的问题"}</strong>
+        <section
+          className="mt-5 grid gap-3"
+          aria-label={
+            portal.mode === "operator" ? "优化问题管理" : "服务问题管理"
+          }
+        >
+          <strong className="text-sm">
+            {portal.mode === "operator" ? "优化问题" : "已进入服务的问题"}
+          </strong>
           {portal.purchasedQuestions.map((item) => (
             <article
               key={item.id}
@@ -398,8 +442,130 @@ function QuestionIntakeView({
           ))}
         </section>
       )}
+      {workbench && savedQuestion && (
+        <p className="question-intake-saved" role="status">
+          已保存“{savedQuestion}”，可在当前问题清单中继续应答优化或监控。
+        </p>
+      )}
+      {(!workbench || showIntake) &&
+        (access.allowed ? (
+          <div className="question-intake-form">
+            <label>
+              <span>问题来源</span>
+              <input
+                readOnly
+                value={fromLibrary ? "品牌全域词库" : "自主填写"}
+                aria-label="问题来源"
+              />
+            </label>
+            <label className="question-intake-question">
+              <span>目标问题</span>
+              <input
+                value={question}
+                readOnly={fromLibrary}
+                maxLength={4000}
+                placeholder="请输入一个完整、明确的问题"
+                onChange={(event) => {
+                  setQuestion(event.target.value);
+                  onDraftChange?.({
+                    origin,
+                    question: event.target.value,
+                    category,
+                    libraryRef,
+                  });
+                }}
+              />
+            </label>
+            {!fromLibrary && (
+              <label>
+                <span>问题类别</span>
+                <select
+                  aria-label="问题类别"
+                  value={category || ""}
+                  onChange={(event) => {
+                    const value = event.target
+                      .value as WorkspaceQuestionCategory;
+                    setCategory(value);
+                    onDraftChange?.({
+                      origin,
+                      question,
+                      category: value,
+                      libraryRef,
+                    });
+                  }}
+                >
+                  <option value="">请选择问题类别</option>
+                  {options.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      disabled={!hasCapacity(option.value)}
+                    >
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="question-intake-form-actions">
+              <button
+                type="button"
+                className="question-intake-submit"
+                disabled={
+                  submitting || question.trim().length < 2 || !available
+                }
+                onClick={() => setConfirmationOpen(true)}
+              >
+                {submitting
+                  ? "正在确认…"
+                  : !hasAnyCapacity || (!available && category)
+                    ? questionQuotaUnavailableActionLabel(portal) ||
+                      "该分类额度不足"
+                    : "确认优化问题"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p role="status" className="question-intake-quota-note">
+            {access.reason || "当前不能新增问题。"}
+          </p>
+        ))}
+      {access.allowed && (!hasAnyCapacity || (category && !available)) && (
+        <p role="status" className="question-intake-quota-note">
+          {questionQuotaUnavailableMessage(portal, fromLibrary)}
+        </p>
+      )}
+      {workbench && confirmationOpen && (
+        <section className="question-intake-confirm" aria-label="确认优化问题">
+          <h3>确认这个优化问题</h3>
+          <p>{question}</p>
+          <p className="text-sm text-muted-foreground">
+            {portal.mode === "operator"
+              ? "保存到当前企业项目后即可开展应答优化与监控。"
+              : "确认后立即进入服务并占用对应问题额度。"}
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="question-intake-library-link"
+              disabled={submitting}
+              onClick={() => setConfirmationOpen(false)}
+            >
+              返回检查
+            </button>
+            <button
+              type="button"
+              className="question-intake-submit"
+              disabled={submitting}
+              onClick={() => void submit()}
+            >
+              {submitting ? "正在确认…" : "确认并开启进度"}
+            </button>
+          </div>
+        </section>
+      )}
       <AlertDialog
-        open={confirmationOpen}
+        open={!workbench && confirmationOpen}
         onOpenChange={(open) => {
           if (!submitting) setConfirmationOpen(open);
         }}
@@ -408,7 +574,9 @@ function QuestionIntakeView({
           <AlertDialogHeader>
             <AlertDialogTitle>确认优化问题？</AlertDialogTitle>
             <AlertDialogDescription>
-              {portal.mode === "operator" ? "保存到当前企业项目后即可开展应答优化与监控；后续仍可修改或删除。" : "确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。"}
+              {portal.mode === "operator"
+                ? "保存到当前企业项目后即可开展应答优化与监控；后续仍可修改或删除。"
+                : "确认后立即进入服务并占用对应问题额度；后续仍可修改或删除。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <p className="rounded-xl border bg-muted/40 px-4 py-3 text-sm">

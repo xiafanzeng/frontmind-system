@@ -5,7 +5,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import OperatorWorkspacePreview from "./OperatorWorkspacePreview";
 import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
 
@@ -16,6 +16,14 @@ vi.mock("@/components/ChatArea", () => ({
     message: { id: string; content: string };
   }) => <div data-message-id={message.id}>{message.content}</div>,
 }));
+vi.mock("@/contexts/ConversationContext", async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  ConversationProvider: ({ children }: any) => children,
+  useConversation: () => ({
+    state: { conversations: [] },
+    commitKnowledgeBaseObservation: vi.fn(),
+  }),
+}));
 vi.mock("@/dashboard/OperatorNavigation", async () => {
   const { OPERATOR_MODULES } = await import("@/dashboard/operator-navigation");
   return {
@@ -24,19 +32,16 @@ vi.mock("@/dashboard/OperatorNavigation", async () => {
       activeProject,
       onSelectProject,
       onSelectView,
-    }: {
-      projects: { id: string; name: string }[];
-      activeProject?: { id: string };
-      onSelectProject: (id: string) => void;
-      onSelectView: (view: string) => void;
-    }) => (
+      onNavigate,
+    }: any) => (
       <nav aria-label="项目导航预览">
+        <button onClick={() => onNavigate("/agent")}>通用智能体</button>
         <select
           aria-label="切换预览项目"
           value={activeProject?.id ?? ""}
           onChange={(event) => onSelectProject(event.target.value)}
         >
-          {projects.map((project) => (
+          {projects.map((project: any) => (
             <option key={project.id} value={project.id}>
               {project.name}
             </option>
@@ -54,132 +59,142 @@ vi.mock("@/dashboard/OperatorNavigation", async () => {
     ),
   };
 });
-
-afterEach(cleanup);
-
-const resultTitles = {
-  knowledge: "品牌知识底稿",
-  keywords: "品牌全域词库",
-  questions: "待优化的客户问题",
-  "response-logic": "产品选型应答逻辑",
-  monitoring: "目标问题监控记录",
-  reports: "品牌优化进度报告",
-  content: "品牌文章草稿",
-  publishing: "发布准备清单",
-  articles: "稿件管理",
-  media: "媒体渠道库",
-  "enterprise-qa": "企业问答示例",
-  website: "企业网站内容配置",
-  "content-insights": "内容表现与 AI 部件",
-};
-
-function selectModule(label: string) {
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1440,
+  });
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+const selectModule = (name: string) =>
   fireEvent.click(
     within(screen.getByRole("navigation", { name: "项目导航预览" })).getByRole(
       "button",
-      { name: label },
+      { name },
     ),
   );
-}
-function selectSubagent(label: string) {
+const selectAgent = (name: string) =>
   fireEvent.click(
-    within(screen.getByRole("group", { name: "子智能体" })).getByRole(
+    within(screen.getByRole("navigation", { name: "切换子 Agent" })).getByRole(
       "button",
-      { name: label },
+      { name },
     ),
   );
-}
-function selectProject(id: string) {
-  fireEvent.change(screen.getByRole("combobox", { name: "切换预览项目" }), {
-    target: { value: id },
-  });
-}
 
-describe("OperatorWorkspacePreview subagent results", () => {
-  it("keeps the subagent selector in collaboration and changes the result for every subagent", () => {
-    render(<OperatorWorkspacePreview />);
-    const conversation = screen.getByRole("region", { name: "智能体协作" });
+describe("operator workspace layout acceptance", () => {
+  it("uses real knowledge nodes at right, main business content and inspector summaries for every agent", () => {
+    const { container } = render(<OperatorWorkspacePreview />);
     expect(
-      within(conversation).getByRole("group", { name: "子智能体" }),
+      container.querySelector('[data-layout="knowledge"]'),
     ).toBeInTheDocument();
-
+    expect(screen.getByRole("region", { name: "主工作区" })).toContainElement(
+      screen.getByRole("textbox", { name: "样例任务输入" }),
+    );
+    expect(
+      screen.getByRole("complementary", { name: "知识节点与资料" }),
+    ).not.toContainElement(
+      screen.getByRole("textbox", { name: "样例任务输入" }),
+    );
+    expect(container.querySelector(".operator-project-context")).toBeNull();
     for (const module of OPERATOR_MODULES) {
       selectModule(module.label);
-      for (const view of module.views) {
-        selectSubagent(view.label);
-        const group = within(conversation).getByRole("group", {
-          name: "子智能体",
-        });
+      for (const agent of module.views) {
+        selectAgent(agent.label);
         expect(
-          within(group).getByRole("button", { name: view.label }),
+          within(
+            screen.getByRole("navigation", { name: "切换子 Agent" }),
+          ).getByRole("button", { name: agent.label }),
         ).toHaveAttribute("aria-pressed", "true");
-        expect(
-          screen.getByRole("heading", {
-            level: 2,
-            name: resultTitles[view.id],
-          }),
-        ).toBeInTheDocument();
+        if (agent.id !== "knowledge") {
+          expect(
+            container.querySelector('[data-layout="workflow"]'),
+          ).toBeInTheDocument();
+          const auxiliary = screen.getByRole("complementary", {
+            name: "任务辅助区",
+          });
+          expect(auxiliary.querySelector("table")).toBeNull();
+          expect(auxiliary.querySelector("textarea")).toBeNull();
+        }
       }
     }
   });
-
-  it("keeps the shared project conversation while isolating another project's draft and running state", () => {
-    render(<OperatorWorkspacePreview />);
-    const input = screen.getByRole("textbox", { name: "继续对话" });
-    fireEvent.change(input, { target: { value: "星辰项目待发问题" } });
-    selectModule("媒体发布");
-    selectSubagent("媒体库");
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toBe(input);
-    expect(input).toHaveValue("星辰项目待发问题");
-    fireEvent.click(screen.getByRole("button", { name: "发送预览消息" }));
-    fireEvent.click(screen.getByRole("button", { name: "演示长任务" }));
-
-    selectProject("design-project-2");
-    expect(screen.queryByText("星辰项目待发问题")).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue("");
+  it("shows the general welcome and attachment composer in a single workspace", () => {
+    const { container } = render(<OperatorWorkspacePreview />);
+    selectModule("通用智能体");
     expect(
-      screen.getByRole("button", { name: "演示长任务" }),
+      container.querySelector('[data-layout="single"]'),
     ).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "继续对话" }), {
-      target: { value: "教育项目草稿" },
-    });
-
-    selectProject("design-project");
-    expect(screen.getByText("星辰项目待发问题")).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue("");
     expect(
-      screen.getByRole("button", { name: "完成演示任务" }),
+      screen.getByRole("heading", { name: "有什么想一起完成的？" }),
     ).toBeInTheDocument();
-    selectProject("design-project-2");
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue(
-      "教育项目草稿",
-    );
+    expect(
+      screen.getByRole("textbox", { name: "继续对话" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("添加预览附件")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "任务辅助区" }),
+    ).toBeNull();
   });
-
-  it("stores edits by project and subagent rather than overwriting another result in the same module", () => {
+  it("keeps drafts and conversation history independent between agents and projects", () => {
+    render(<OperatorWorkspacePreview />);
+    selectModule("通用智能体");
+    fireEvent.change(screen.getByRole("textbox", { name: "继续对话" }), {
+      target: { value: "通用任务草稿" },
+    });
+    selectModule("内容制作");
+    selectModule("通用智能体");
+    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue(
+      "通用任务草稿",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "发送预览消息" }));
+    fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+    expect(screen.queryByText("通用任务草稿")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "预览任务历史" })).getByRole(
+        "button",
+        { name: "任务 1" },
+      ),
+    );
+    expect(screen.getByText("通用任务草稿")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "切换预览项目" }), {
+      target: { value: "design-project-2" },
+    });
+    selectModule("通用智能体");
+    expect(screen.queryByText("通用任务草稿")).toBeNull();
+  });
+  it("starts the media workflow with a directory and keeps the handoff steps in main", () => {
     render(<OperatorWorkspacePreview />);
     selectModule("媒体发布");
-    selectSubagent("稿件");
-    fireEvent.click(screen.getByRole("button", { name: "编辑成果" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "成果正文" }), {
-      target: { value: "星辰项目专用稿件" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存并返回" }));
-    expect(screen.getByText("星辰项目专用稿件")).toBeInTheDocument();
-
-    selectSubagent("媒体库");
-    expect(screen.queryByText("星辰项目专用稿件")).not.toBeInTheDocument();
+    selectAgent("媒体库");
+    const main = screen.getByRole("region", { name: "主工作区" });
+    expect(within(main).getByRole("table")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "媒体渠道库" }),
-    ).toBeInTheDocument();
-    selectSubagent("稿件");
-    expect(screen.getByText("星辰项目专用稿件")).toBeInTheDocument();
-    selectProject("design-project-2");
-    expect(screen.queryByText("星辰项目专用稿件")).not.toBeInTheDocument();
+      within(main).queryByRole("textbox", { name: "继续对话" }),
+    ).toBeNull();
+    fireEvent.click(
+      within(main).getByRole("checkbox", { name: "选择科技观察" }),
+    );
+    fireEvent.click(
+      within(main).getByRole("button", { name: "选择稿件并继续" }),
+    );
     expect(
-      screen.getByRole("heading", { name: "稿件管理" }),
+      within(main).getByRole("heading", { name: "选择冻结稿件" }),
     ).toBeInTheDocument();
-    selectProject("design-project");
-    expect(screen.getByText("星辰项目专用稿件")).toBeInTheDocument();
+    fireEvent.click(within(main).getByRole("button", { name: "交给发布助手" }));
+    expect(
+      within(main).getByRole("heading", { name: "标题与发布预检" }),
+    ).toBeInTheDocument();
   });
 });

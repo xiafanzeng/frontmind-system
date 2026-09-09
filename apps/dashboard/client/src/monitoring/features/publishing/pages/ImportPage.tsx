@@ -7,6 +7,16 @@ import {
 } from "lucide-react";
 import { useRef, useState, type DragEvent } from "react";
 import { useLocation } from "wouter";
+import {
+  usePublishingFlow,
+  usePublishingSummary,
+  usePublishingOperationScope,
+  publishingTaskUrl,
+} from "../PublishingFlowContext";
+import {
+  performApprovedWorkspaceNavigation,
+  useWorkspaceDraftGuard,
+} from "@/lib/workspace-navigation-guard";
 
 import { usePublisherGateway } from "../PublishingContext";
 import {
@@ -17,12 +27,23 @@ import {
 
 export default function PublishingImportPage() {
   const gateway = usePublisherGateway();
+  const flow = usePublishingFlow();
+  const operationScope = usePublishingOperationScope("import");
   const [, navigate] = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File>();
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const uploadLock = useRef(false);
+  useWorkspaceDraftGuard({ dirty: Boolean(file), label: "待导入稿件" });
+  usePublishingSummary({
+    title: "稿件导入",
+    items: [
+      { label: "文件", value: file?.name ?? "待选择 DOCX" },
+      { label: "状态", value: busy ? "正在检查并导入" : error || "等待上传" },
+    ],
+  });
 
   const choose = (next?: File) => {
     setError("");
@@ -45,15 +66,37 @@ export default function PublishingImportPage() {
   };
 
   const submit = async () => {
-    if (!file || busy) return;
+    if (!file || busy || uploadLock.current) return;
+    const isCurrent = operationScope();
+    uploadLock.current = true;
     setBusy(true);
     setError("");
     try {
       const result = await gateway.importDocx(file);
-      navigate(`/publishing/articles/${result.articleId}/edit`);
+      if (!isCurrent()) return;
+      await flow
+        ?.record({
+          id: `import:${result.articleId}`,
+          label: "稿件已导入并完成检查",
+          detail: file.name,
+          resources: [{ kind: "article", id: result.articleId }],
+        })
+        .catch(() => undefined);
+      if (isCurrent())
+        performApprovedWorkspaceNavigation(() =>
+          navigate(
+            publishingTaskUrl(
+              `/publishing/articles/${result.articleId}/edit`,
+              flow?.taskId,
+            ),
+          ),
+        );
     } catch (reason) {
+      if (!isCurrent()) return;
       setError(reason instanceof Error ? reason.message : "导入失败，请重试");
       setBusy(false);
+    } finally {
+      uploadLock.current = false;
     }
   };
 

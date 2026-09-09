@@ -21,6 +21,12 @@ import {
 } from "../components/PublishingUi";
 import { publisherSubmitIdempotencyKey } from "../queryState";
 import { formatPublishingMoney } from "../types";
+import {
+  usePublishingFlow,
+  usePublishingSummary,
+  usePublishingOperationScope,
+  publishingTaskUrl,
+} from "../PublishingFlowContext";
 
 const REFRESHABLE_CATALOG_BLOCKERS = new Set([
   "CATALOG_CHANGED",
@@ -33,6 +39,8 @@ const REFRESHABLE_CATALOG_BLOCKERS = new Set([
 
 export default function PublishingReviewPage({ draftId }: { draftId: string }) {
   const gateway = usePublisherGateway();
+  const flow = usePublishingFlow();
+  const operationScope = usePublishingOperationScope(draftId);
   const [, navigate] = useLocation();
   const load = useCallback(
     (signal: AbortSignal) => gateway.preflightDraft(draftId, signal),
@@ -48,9 +56,20 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
   const submitIntent = useRef<{ quoteFingerprint: string; key: string } | null>(
     null,
   );
+  const submitLock = useRef(false);
 
   const submit = async () => {
-    if (!query.data || submitting) return;
+    if (
+      !query.data ||
+      submitting ||
+      submitLock.current ||
+      !acknowledged ||
+      query.data.blockers.length ||
+      query.data.items.some((item) => item.blockers.length)
+    )
+      return;
+    const isCurrent = operationScope();
+    submitLock.current = true;
     setSubmitting(true);
     setSubmitError("");
     try {
@@ -76,6 +95,7 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
       try {
         batch = await gateway.submitDraft(request);
       } catch (reason) {
+        if (!isCurrent()) return;
         if (
           !(reason instanceof PublisherGatewayError) ||
           reason.code !== "unavailable"
@@ -86,8 +106,24 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
         // One replay with the same key recovers that batch without a second reservation.
         batch = await gateway.submitDraft(request);
       }
-      navigate(`/publishing/publications/${batch.id}?submitted=1`);
+      if (!isCurrent()) return;
+      await flow
+        ?.record({
+          id: `submitted:${batch.id}`,
+          label: "发布请求已受理",
+          detail: `${batch.itemCount} 家媒体 · 批次结果由发布服务更新`,
+          resources: [{ kind: "publication_batch", id: batch.id }],
+        })
+        .catch(() => undefined);
+      if (isCurrent())
+        navigate(
+          publishingTaskUrl(
+            `/publishing/publications/${batch.id}?submitted=1`,
+            flow?.taskId,
+          ),
+        );
     } catch (reason) {
+      if (!isCurrent()) return;
       setSubmitError(
         reason instanceof Error ? reason.message : "发布请求未能提交",
       );
@@ -100,6 +136,8 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
         setAcknowledged(false);
         query.reload();
       }
+    } finally {
+      submitLock.current = false;
     }
   };
 
@@ -131,6 +169,28 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
       ]
     : [];
   const blocked = blockingMessages.length > 0;
+  usePublishingSummary({
+    title: "费用与发布状态",
+    items: [
+      { label: "稿件", value: query.data?.article.title ?? "正在预检" },
+      { label: "媒体", value: `${query.data?.items.length ?? 0} 家` },
+      {
+        label: "待预占费用",
+        value: query.data
+          ? formatPublishingMoney(query.data.totalTenThousandths)
+          : "—",
+      },
+      {
+        label: "预检结果",
+        value: blocked
+          ? `${blockingMessages.length} 项待处理`
+          : query.data
+            ? "等待确认发布"
+            : "读取中",
+      },
+    ],
+    note: submitError || undefined,
+  });
   const live = query.data?.mode === "live";
   const canRefreshCatalog = Boolean(
     [
@@ -452,6 +512,7 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
 
       {query.data ? (
         <PublishingConfirmDialog
+          inline={Boolean(flow)}
           open={dialogOpen}
           title={live ? "这是一次真实投稿" : "确认 Preview 模拟发布"}
           description={
@@ -555,12 +616,14 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
               </p>
             )}
           </div>
-          <p className="publishing-dialog-security">
-            <ShieldCheck size={16} />
-            {live
-              ? "浏览器不会接触供应商凭据，提交由服务端统一执行。"
-              : "Preview 不会发起任何供应商网络请求。"}
-          </p>
+          {!flow && (
+            <p className="publishing-dialog-security">
+              <ShieldCheck size={16} />
+              {live
+                ? "浏览器不会接触供应商凭据，提交由服务端统一执行。"
+                : "Preview 不会发起任何供应商网络请求。"}
+            </p>
+          )}
         </PublishingConfirmDialog>
       ) : null}
     </PublishingPage>

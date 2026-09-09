@@ -1,49 +1,76 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { useState, type ReactNode } from "react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProjectAgentWorkbench from "./ProjectAgentWorkbench";
-import { createWorkbenchModules, WorkbenchModuleContext } from "./agent-workbench";
-import { useConversation } from "@/contexts/ConversationContext";
-const fixture = vi.hoisted(() => ({
-  workspace: {
-    activeConversation: null,
-    state: {
-      conversations: [
-        { id: "general", title: "品牌讨论" },
-        { id: "logic", title: "应答逻辑", executionKind: "response_logic" },
-        { id: "qa", title: "企业问答", purpose: "enterprise_qa" },
-      ],
+import {
+  createWorkbenchModules,
+  WorkbenchModuleContext,
+} from "./agent-workbench";
+import {
+  ConversationContextProvider,
+  useConversation,
+  type Conversation,
+} from "@/contexts/ConversationContext";
+const api = vi.hoisted(() => ({ mutate: vi.fn() }));
+vi.mock("@/lib/trpc", () => ({
+  trpc: {
+    conversation: {
+      workbenchBind: { useMutation: () => ({ mutateAsync: api.mutate }) },
+      workbenchSaveState: { useMutation: () => ({ mutateAsync: api.mutate }) },
+      workbenchHandoff: { useMutation: () => ({ mutateAsync: api.mutate }) },
     },
-    hydrated: true,
-    createConversation: vi.fn(),
-    setActive: vi.fn(),
   },
 }));
-vi.mock("@/contexts/ConversationContext", async () => {
-  const React = await import("react");
-  const Context = React.createContext<any>(null);
-  return {
-    useConversation: () => React.useContext(Context) ?? fixture.workspace,
-    ConversationContextProvider: Context.Provider,
-    ConversationPurposeProvider: ({ purpose, children }: any) => (
-      <Context.Provider
-        value={{
-          ...fixture.workspace,
-          state: {
-            conversations: fixture.workspace.state.conversations.filter(
-              (item) =>
-                purpose === "general"
-                  ? !item.purpose && item.executionKind !== "response_logic"
-                  : item.purpose === purpose,
-            ),
-          },
-        }}
-      >
-        {children}
-      </Context.Provider>
-    ),
-  };
+vi.mock("@/pages/Home", () => ({
+  default: function Chat() {
+    const { activeConversation } = useConversation();
+    return <output aria-label="问答会话">{activeConversation?.id}</output>;
+  },
+}));
+const row = (id: string, extra: Partial<Conversation> = {}): Conversation => ({
+  id,
+  title: id,
+  messages: [],
+  status: "idle",
+  createdAt: 1,
+  updatedAt: 1,
+  ...extra,
 });
-vi.mock("@/pages/Home", () => ({ default: () => <div>对话已就绪</div> }));
+const tasks = [
+  row("general"),
+  row("logic", { executionKind: "response_logic" }),
+  row("qa", { purpose: "enterprise_qa" }),
+  row("media-a", { workbenchAgentId: "media" }),
+  row("articles-a", { workbenchAgentId: "articles" }),
+];
+function Workspace({ children }: { children: ReactNode }) {
+  const [active, setActive] = useState("general");
+  return (
+    <ConversationContextProvider
+      value={
+        {
+          hydrated: true,
+          workbenchScopeKey: "scope-integration",
+          state: { conversations: tasks, activeConversationId: active },
+          activeConversation: tasks.find((item) => item.id === active),
+          setActive,
+          isKnowledgeBaseConversation: () => false,
+          createConversation: vi.fn(),
+          flushConversation: async () => true,
+          refreshConversations: async () => undefined,
+        } as any
+      }
+    >
+      {children}
+    </ConversationContextProvider>
+  );
+}
 function EditorProbe() {
   const { state } = useConversation();
   return (
@@ -52,28 +79,75 @@ function EditorProbe() {
     </output>
   );
 }
-describe("workbench conversation boundaries", () => {
-  it("lets specialist editors restore their task while the central conversation stays filtered", async () => {
-    const module = createWorkbenchModules(() => null, () => undefined)[0]!;
+beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", {
+    value: 1440,
+    configurable: true,
+  });
+  window.history.replaceState({}, "", "/");
+});
+afterEach(() => {
+  cleanup();
+  window.history.replaceState({}, "", "/");
+});
+describe("workbench task scopes", () => {
+  it("isolates subagent history while specialist adapters retain project access", () => {
+    const module = createWorkbenchModules(
+      () => null,
+      () => undefined,
+      "media",
+    ).find((item) => item.id === "publishing")!;
     render(
-      <WorkbenchModuleContext.Provider value={module}>
-        <ProjectAgentWorkbench projectId="project-a">
+      <Workspace>
+        <WorkbenchModuleContext.Provider value={module}>
+          <ProjectAgentWorkbench projectId="project-a">
+            <EditorProbe />
+          </ProjectAgentWorkbench>
+        </WorkbenchModuleContext.Provider>
+      </Workspace>,
+    );
+    expect(screen.getByLabelText("编辑器任务")).toHaveTextContent(
+      "general,logic,qa,media-a,articles-a",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    const history = screen.getByRole("listbox", { name: "任务历史" });
+    expect(within(history).getAllByRole("option")).toHaveLength(1);
+    expect(history).toHaveTextContent("media-a");
+    expect(history).not.toHaveTextContent("articles-a");
+    expect(history).not.toHaveTextContent("general");
+  });
+  it("keeps QA source and main dialogue on the same native task", async () => {
+    render(
+      <Workspace>
+        <ProjectAgentWorkbench projectId="project-a" purpose="enterprise_qa">
           <EditorProbe />
         </ProjectAgentWorkbench>
-      </WorkbenchModuleContext.Provider>,
+      </Workspace>,
     );
-    expect(await screen.findByLabelText("编辑器任务")).toHaveTextContent(
-      "general,logic,qa",
-    );
-    expect(screen.getByRole("combobox")).toHaveValue("开始一个新任务");
-    expect(screen.getByRole("combobox")).not.toHaveValue("应答逻辑");
-  });
-  it("keeps enterprise QA source information bound to the QA conversation", () => {
-    render(
-      <ProjectAgentWorkbench projectId="project-a" purpose="enterprise_qa">
-        <EditorProbe />
-      </ProjectAgentWorkbench>,
-    );
+    expect(await screen.findByLabelText("问答会话")).toHaveTextContent(/^qa$/);
     expect(screen.getByLabelText("编辑器任务")).toHaveTextContent(/^qa$/);
+    expect(
+      within(screen.getByRole("region", { name: "主工作区" })).getByLabelText(
+        "问答会话",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "任务辅助区" }),
+      ).getByLabelText("编辑器任务"),
+    ).toBeInTheDocument();
+  });
+  it("keeps unclassified conversations in the general legacy history entry", () => {
+    render(
+      <Workspace>
+        <ProjectAgentWorkbench projectId="account" />
+      </Workspace>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "旧任务" }));
+    const history = screen.getByRole("listbox", { name: "任务历史" });
+    expect(within(history).getAllByRole("option")).toHaveLength(1);
+    expect(history).toHaveTextContent("general");
+    expect(history).not.toHaveTextContent("media-a");
   });
 });

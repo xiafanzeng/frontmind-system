@@ -22,3 +22,13 @@ FRONTMIND_PUBLISHER_PROJECT_TEST_MYSQL_URL=mysql://root@127.0.0.1:33077/fm_proje
 ```
 
 验收覆盖跨项目读取与写入、版本和草稿引用、私有图片与 CSV 下载、上传前拒绝、同客户端键的项目隔离、切换项目后的后台导入、供应商图片能力凭证、共享钱包，以及异步发布来源不一致时在提交前拒绝。既有无供应商的 DOCX HTTP 上传与转换回归一并通过。
+
+### 对话任务与发布幂等回归
+
+本机已有 `mysqld`（MySQL 8.4）时，可运行以下命令。脚本只创建新的临时数据目录和随机回环端口，使用仓库迁移建立全新 acceptance 数据库，并生成合成账号；结束后关闭实例并删除自己创建的数据目录。它不连接生产数据库，不调用媒体供应商。
+
+```sh
+pnpm --filter frontmind-client exec tsx scripts/run-workbench-mysql-acceptance.ts
+```
+
+覆盖真实 InnoDB 行锁等待、并发旧版本拒绝、交接事务回滚、重复交接和丢响应重试、旧会话快照保留工作台元数据，以及稿件/投放草稿的版本和项目边界。`FRONTMIND_LOCAL_MYSQLD` 可指定已有的 `mysqld` 可执行文件。

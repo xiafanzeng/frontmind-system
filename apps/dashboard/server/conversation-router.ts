@@ -1,4 +1,21 @@
 import { loadGeneralExecutions } from "./frontmind-general-execution";
+import {
+  bindWorkbenchTask,
+  saveWorkbenchTask,
+  handoffWorkbenchTask,
+  isWorkbenchStorageMessage,
+  parsedWorkbenchStorage,
+  workbenchStorageMessageId,
+  readWorkbenchStorage,
+  assertWorkbenchAgent,
+} from "./workbench-task-service";
+import {
+  workbenchAgentIdSchema,
+  workbenchStatePatchSchema,
+  workbenchTaskStateSchema,
+  workbenchResourceSchema,
+  workbenchValuesSchema,
+} from "../shared/workbench-task";
 import type { GeneralExecutionDto } from "../shared/frontmind-general-execution";
 import { enterpriseProjectPredicate } from "./enterprise-project-scope";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
@@ -14,6 +31,7 @@ import {
   inArray,
   isNull,
   notInArray,
+  ne,
   or,
 } from "drizzle-orm";
 import { createHash, randomUUID } from "node:crypto";
@@ -163,6 +181,7 @@ export const conversationSnapshotSchema = z.object({
   title: z.string().min(1).max(255),
   purpose: z.enum(["enterprise_qa", "content_production"]).optional(),
   workbenchAgentId: z.string().max(128).optional(),
+  workbench: workbenchTaskStateSchema.optional(),
   messages: z.array(messageSchema).max(5_000),
   taskId: z.string().max(255).optional(),
   previousResponseId: z.string().max(255).optional(),
@@ -185,7 +204,9 @@ export const conversationSnapshotSchema = z.object({
   deletedMessageIds: z.array(z.string().max(128)).max(5_000).optional(),
 });
 
-export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema> & { execution?: GeneralExecutionDto };
+export type ConversationSnapshot = z.infer<
+  typeof conversationSnapshotSchema
+> & { execution?: GeneralExecutionDto };
 
 type KnowledgeBaseUserMessageAttachment = NonNullable<
   ConversationSnapshot["messages"][number]["attachments"]
@@ -804,7 +825,7 @@ async function loadLegacySnapshotResourceBindings(
       .where(
         and(
           enterpriseProjectPredicate(upstreamResources.enterpriseProjectId),
-        eq(upstreamResources.kind, kind),
+          eq(upstreamResources.kind, kind),
           inArray(upstreamResources.upstreamId, ids),
         ),
       );
@@ -2023,73 +2044,78 @@ export async function loadPersistedMessages(
     projectAssignmentId,
   );
 
-  return messageRows.map((message: typeof messages.$inferSelect) => {
-    const metadata = (message.metadata ?? {}) as MessageMetadata;
-    const knowledgeBase = persistedKnowledgeBaseMetadata(
-      message,
-      authoritativeKnowledgeBase.verified,
-    );
-    const claimedServerOwnedKnowledgeBase =
-      parsedKnowledgeBaseMessageMetadata(metadata)?.serverOwned === true;
-    const inlineImages = claimedServerOwnedKnowledgeBase
-      ? authoritativeKnowledgeBase.inlineImages.get(message.id)
-      : metadata.inlineImages;
-    const reconstructedAttachments = claimedServerOwnedKnowledgeBase
-      ? authoritativeKnowledgeBase.userAttachments.get(message.id)
-      : undefined;
-    const generalChat = authoritativeGeneralChat.get(message.id);
-    const generalChatDispatch =
-      message.role === "user"
-        ? parsedGeneralChatDispatchMetadata(metadata)
+  return messageRows
+    .filter(
+      (message: typeof messages.$inferSelect) =>
+        !isWorkbenchStorageMessage(message),
+    )
+    .map((message: typeof messages.$inferSelect) => {
+      const metadata = (message.metadata ?? {}) as MessageMetadata;
+      const knowledgeBase = persistedKnowledgeBaseMetadata(
+        message,
+        authoritativeKnowledgeBase.verified,
+      );
+      const claimedServerOwnedKnowledgeBase =
+        parsedKnowledgeBaseMessageMetadata(metadata)?.serverOwned === true;
+      const inlineImages = claimedServerOwnedKnowledgeBase
+        ? authoritativeKnowledgeBase.inlineImages.get(message.id)
+        : metadata.inlineImages;
+      const reconstructedAttachments = claimedServerOwnedKnowledgeBase
+        ? authoritativeKnowledgeBase.userAttachments.get(message.id)
         : undefined;
-    return {
-      id: publicId(userId, message.id, projectAssignmentId),
-      serverSequence: message.sequence,
-      ...(metadata.upstreamOutputId
-        ? { upstreamOutputId: metadata.upstreamOutputId }
-        : {}),
-      role:
-        message.role === "assistant"
-          ? ("assistant" as const)
-          : ("user" as const),
-      content: normalizeKnowledgeCollectionCopy(message.content),
-      timestamp: message.sentAt.getTime(),
-      attachments: (
-        reconstructedAttachments ??
-        (attachmentsByMessage.get(message.id) ?? []).map(
-          (attachment: typeof attachments.$inferSelect) => ({
-            id: publicId(userId, attachment.id, projectAssignmentId),
-            type: attachment.kind,
-            name: attachment.fileName,
-            ...(attachment.upstreamFileId
-              ? { fileId: attachment.upstreamFileId }
-              : {}),
-          }),
-        )
-      ).map((attachment: KnowledgeBaseUserMessageAttachment) =>
-        applyAttachmentRetention(attachment, retentionByFileId),
-      ),
-      ...(metadata.outputFiles ? { outputFiles: metadata.outputFiles } : {}),
-      ...(inlineImages ? { inlineImages } : {}),
-      ...(metadata.elapsedTime !== undefined
-        ? { elapsedTime: metadata.elapsedTime }
-        : {}),
-      ...(metadata.responseStartedAt !== undefined
-        ? { responseStartedAt: metadata.responseStartedAt }
-        : {}),
-      ...(metadata.intermediateSteps
-        ? { intermediateSteps: metadata.intermediateSteps }
-        : {}),
-      ...(metadata.stepGroups ? { stepGroups: metadata.stepGroups } : {}),
-      ...(metadata.isStepsPlaceholder !== undefined
-        ? { isStepsPlaceholder: metadata.isStepsPlaceholder }
-        : {}),
-      ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
-      ...(knowledgeBase ? { knowledgeBase } : {}),
-      ...(generalChat ? { generalChat } : {}),
-      ...(generalChatDispatch ? { generalChatDispatch } : {}),
-    };
-  });
+      const generalChat = authoritativeGeneralChat.get(message.id);
+      const generalChatDispatch =
+        message.role === "user"
+          ? parsedGeneralChatDispatchMetadata(metadata)
+          : undefined;
+      return {
+        id: publicId(userId, message.id, projectAssignmentId),
+        serverSequence: message.sequence,
+        ...(metadata.upstreamOutputId
+          ? { upstreamOutputId: metadata.upstreamOutputId }
+          : {}),
+        role:
+          message.role === "assistant"
+            ? ("assistant" as const)
+            : ("user" as const),
+        content: normalizeKnowledgeCollectionCopy(message.content),
+        timestamp: message.sentAt.getTime(),
+        attachments: (
+          reconstructedAttachments ??
+          (attachmentsByMessage.get(message.id) ?? []).map(
+            (attachment: typeof attachments.$inferSelect) => ({
+              id: publicId(userId, attachment.id, projectAssignmentId),
+              type: attachment.kind,
+              name: attachment.fileName,
+              ...(attachment.upstreamFileId
+                ? { fileId: attachment.upstreamFileId }
+                : {}),
+            }),
+          )
+        ).map((attachment: KnowledgeBaseUserMessageAttachment) =>
+          applyAttachmentRetention(attachment, retentionByFileId),
+        ),
+        ...(metadata.outputFiles ? { outputFiles: metadata.outputFiles } : {}),
+        ...(inlineImages ? { inlineImages } : {}),
+        ...(metadata.elapsedTime !== undefined
+          ? { elapsedTime: metadata.elapsedTime }
+          : {}),
+        ...(metadata.responseStartedAt !== undefined
+          ? { responseStartedAt: metadata.responseStartedAt }
+          : {}),
+        ...(metadata.intermediateSteps
+          ? { intermediateSteps: metadata.intermediateSteps }
+          : {}),
+        ...(metadata.stepGroups ? { stepGroups: metadata.stepGroups } : {}),
+        ...(metadata.isStepsPlaceholder !== undefined
+          ? { isStepsPlaceholder: metadata.isStepsPlaceholder }
+          : {}),
+        ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
+        ...(knowledgeBase ? { knowledgeBase } : {}),
+        ...(generalChat ? { generalChat } : {}),
+        ...(generalChatDispatch ? { generalChatDispatch } : {}),
+      };
+    });
 }
 
 type SnapshotMessage = ConversationSnapshot["messages"][number];
@@ -2252,7 +2278,9 @@ async function loadGeneralChatSnapshotTurnAuthority(
     .from(conversationTurns)
     .where(
       and(
-        projectAssignmentId ? undefined : enterpriseOwnerPredicate(conversationTurns, userId),
+        projectAssignmentId
+          ? undefined
+          : enterpriseOwnerPredicate(conversationTurns, userId),
         eq(conversationTurns.conversationId, persistedConversationId),
         eq(conversationTurns.operationType, "general_chat_v2"),
       ),
@@ -2761,7 +2789,10 @@ export async function persistSnapshot(
       .from(knowledgeBaseConversationRetentionTombstones)
       .where(
         and(
-          enterpriseOwnerPredicate(knowledgeBaseConversationRetentionTombstones, userId),
+          enterpriseOwnerPredicate(
+            knowledgeBaseConversationRetentionTombstones,
+            userId,
+          ),
           eq(
             knowledgeBaseConversationRetentionTombstones.publicConversationId,
             snapshot.id,
@@ -2807,6 +2838,31 @@ export async function persistSnapshot(
     throw new TRPCError({ code: "NOT_FOUND", message: "会话已删除" });
   }
   if (existing && options.skipExisting) return "skipped";
+
+  // Workbench identity is server-owned. A route change or an older browser
+  // snapshot can neither rebind a task nor replace its workflow projection.
+  const boundWorkbench = existing
+    ? await readWorkbenchStorage(executor, persistedConversationId)
+    : null;
+  const incomingAgent = workbenchAgentIdSchema.safeParse(
+    snapshot.workbenchAgentId,
+  );
+  if (boundWorkbench && incomingAgent.success)
+    assertWorkbenchAgent(boundWorkbench.state, incomingAgent.data);
+  if (
+    incomingAgent.success &&
+    ((snapshot.purpose === "enterprise_qa" &&
+      incomingAgent.data !== "enterprise-qa") ||
+      (snapshot.purpose === "content_production" &&
+        incomingAgent.data !== "content") ||
+      (snapshot.executionKind === "response_logic" &&
+        incomingAgent.data !== "response-logic"))
+  ) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "专用任务的智能体归属不能通过快照修改",
+    });
+  }
 
   let preservedServerOwnedMessageIds: string[] = [];
   const persistedSequenceByPublicMessageId = new Map<string, number>();
@@ -2943,7 +2999,16 @@ export async function persistSnapshot(
       ? (knowledgeBuild.completedAt ?? existing?.completedAt ?? null)
       : asDate(snapshot.completedAt),
     createdAt: asDate(snapshot.createdAt) ?? new Date(),
-    updatedAt: asDate(snapshot.updatedAt) ?? new Date(),
+    updatedAt:
+      asDate(
+        boundWorkbench
+          ? Math.max(
+              snapshot.updatedAt,
+              boundWorkbench.state.updatedAt,
+              existing?.updatedAt?.getTime() ?? 0,
+            )
+          : snapshot.updatedAt,
+      ) ?? new Date(),
   };
 
   if (existing) {
@@ -3024,11 +3089,23 @@ export async function persistSnapshot(
   // turns and presentations are written by the server state machine and may
   // carry a turn FK; deleting/reinserting them here used to invert the
   // build -> turn lock order and could deadlock an accepted dispatch.
+  if (
+    !boundWorkbench &&
+    incomingAgent.success &&
+    snapshot.messages.length > 0
+  ) {
+    await bindWorkbenchTask(
+      executor,
+      { userId, projectAssignmentId },
+      { conversationId: snapshot.id, agentId: incomingAgent.data },
+    );
+  }
   await executor
     .delete(messages)
     .where(
       and(
         eq(messages.conversationId, persistedConversationId),
+        ne(messages.id, workbenchStorageMessageId(persistedConversationId)),
         ...(preservedServerOwnedMessageIds.length > 0
           ? [notInArray(messages.id, preservedServerOwnedMessageIds)]
           : []),
@@ -3337,18 +3414,52 @@ export async function listSnapshots(
     ),
   );
 
-  const executionTaskIds = candidateGeneralChatTaskIds.filter(taskId => {
-    const binding = ownedGeneralChatTaskBindings.get(upstreamResourceKey("task", taskId));
+  const executionTaskIds = candidateGeneralChatTaskIds.filter((taskId) => {
+    const binding = ownedGeneralChatTaskBindings.get(
+      upstreamResourceKey("task", taskId),
+    );
     return binding && !binding.purpose;
   });
   const executions = await loadGeneralExecutions(db, executionTaskIds);
   return conversationRows.map((row) => ({
     id: publicId(userId, row.id, projectAssignmentId),
     ...(() => {
-      const taskIds = [...new Set([row.upstreamTaskId, row.previousResponseId, ...(durableTaskIdsByConversation.get(row.id) ?? [])].filter((id): id is string => Boolean(id)))];
-      const parts = taskIds.flatMap(id => executions.get(id) ? [executions.get(id)!] : []);
-      return parts.length ? { execution: { schemaVersion: 1 as const, taskId: parts[0]!.taskId, coverage: parts.every(part => part.coverage === "complete") ? "complete" as const : "pending" as const,
-        timeline: parts.flatMap(part => part.timeline).sort((a, b) => a.userSequence - b.userSequence || a.rank - b.rank) } } : {};
+      const stored = (messagesByConversation.get(row.id) ?? [])
+        .map(parsedWorkbenchStorage)
+        .find(Boolean);
+      return stored
+        ? { workbenchAgentId: stored.state.agentId, workbench: stored.state }
+        : {};
+    })(),
+    ...(() => {
+      const taskIds = [
+        ...new Set(
+          [
+            row.upstreamTaskId,
+            row.previousResponseId,
+            ...(durableTaskIdsByConversation.get(row.id) ?? []),
+          ].filter((id): id is string => Boolean(id)),
+        ),
+      ];
+      const parts = taskIds.flatMap((id) =>
+        executions.get(id) ? [executions.get(id)!] : [],
+      );
+      return parts.length
+        ? {
+            execution: {
+              schemaVersion: 1 as const,
+              taskId: parts[0]!.taskId,
+              coverage: parts.every((part) => part.coverage === "complete")
+                ? ("complete" as const)
+                : ("pending" as const),
+              timeline: parts
+                .flatMap((part) => part.timeline)
+                .sort(
+                  (a, b) => a.userSequence - b.userSequence || a.rank - b.rank,
+                ),
+            },
+          }
+        : {};
     })(),
     ...(() => {
       const bound = [
@@ -3390,71 +3501,75 @@ export async function listSnapshots(
         ? { executionKind: "general_chat_v2" as const }
         : {}),
     title: row.title,
-    messages: (messagesByConversation.get(row.id) ?? []).map((message) => {
-      const metadata = (message.metadata ?? {}) as MessageMetadata;
-      const knowledgeBase = persistedKnowledgeBaseMetadata(
-        message,
-        authoritativeKnowledgeBase.verified,
-      );
-      const claimedServerOwnedKnowledgeBase =
-        parsedKnowledgeBaseMessageMetadata(metadata)?.serverOwned === true;
-      const inlineImages = claimedServerOwnedKnowledgeBase
-        ? authoritativeKnowledgeBase.inlineImages.get(message.id)
-        : metadata.inlineImages;
-      const reconstructedAttachments = claimedServerOwnedKnowledgeBase
-        ? authoritativeKnowledgeBase.userAttachments.get(message.id)
-        : undefined;
-      const generalChat = authoritativeGeneralChat.get(message.id);
-      const generalChatDispatch =
-        message.role === "user"
-          ? parsedGeneralChatDispatchMetadata(metadata)
+    messages: (messagesByConversation.get(row.id) ?? [])
+      .filter((message) => !isWorkbenchStorageMessage(message))
+      .map((message) => {
+        const metadata = (message.metadata ?? {}) as MessageMetadata;
+        const knowledgeBase = persistedKnowledgeBaseMetadata(
+          message,
+          authoritativeKnowledgeBase.verified,
+        );
+        const claimedServerOwnedKnowledgeBase =
+          parsedKnowledgeBaseMessageMetadata(metadata)?.serverOwned === true;
+        const inlineImages = claimedServerOwnedKnowledgeBase
+          ? authoritativeKnowledgeBase.inlineImages.get(message.id)
+          : metadata.inlineImages;
+        const reconstructedAttachments = claimedServerOwnedKnowledgeBase
+          ? authoritativeKnowledgeBase.userAttachments.get(message.id)
           : undefined;
-      return {
-        id: publicId(userId, message.id, projectAssignmentId),
-        serverSequence: message.sequence,
-        ...(metadata.upstreamOutputId
-          ? { upstreamOutputId: metadata.upstreamOutputId }
-          : {}),
-        role:
-          message.role === "assistant"
-            ? ("assistant" as const)
-            : ("user" as const),
-        content: normalizeKnowledgeCollectionCopy(message.content),
-        timestamp: message.sentAt.getTime(),
-        attachments: (
-          reconstructedAttachments ??
-          (attachmentsByMessage.get(message.id) ?? []).map((attachment) => ({
-            id: publicId(userId, attachment.id, projectAssignmentId),
-            type: attachment.kind,
-            name: attachment.fileName,
-            ...(attachment.upstreamFileId
-              ? { fileId: attachment.upstreamFileId }
-              : {}),
-          }))
-        ).map((attachment: KnowledgeBaseUserMessageAttachment) =>
-          applyAttachmentRetention(attachment, retentionByFileId),
-        ),
-        ...(metadata.outputFiles ? { outputFiles: metadata.outputFiles } : {}),
-        ...(inlineImages ? { inlineImages } : {}),
-        ...(metadata.elapsedTime !== undefined
-          ? { elapsedTime: metadata.elapsedTime }
-          : {}),
-        ...(metadata.responseStartedAt !== undefined
-          ? { responseStartedAt: metadata.responseStartedAt }
-          : {}),
-        ...(metadata.intermediateSteps
-          ? { intermediateSteps: metadata.intermediateSteps }
-          : {}),
-        ...(metadata.stepGroups ? { stepGroups: metadata.stepGroups } : {}),
-        ...(metadata.isStepsPlaceholder !== undefined
-          ? { isStepsPlaceholder: metadata.isStepsPlaceholder }
-          : {}),
-        ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
-        ...(knowledgeBase ? { knowledgeBase } : {}),
-        ...(generalChat ? { generalChat } : {}),
-        ...(generalChatDispatch ? { generalChatDispatch } : {}),
-      };
-    }),
+        const generalChat = authoritativeGeneralChat.get(message.id);
+        const generalChatDispatch =
+          message.role === "user"
+            ? parsedGeneralChatDispatchMetadata(metadata)
+            : undefined;
+        return {
+          id: publicId(userId, message.id, projectAssignmentId),
+          serverSequence: message.sequence,
+          ...(metadata.upstreamOutputId
+            ? { upstreamOutputId: metadata.upstreamOutputId }
+            : {}),
+          role:
+            message.role === "assistant"
+              ? ("assistant" as const)
+              : ("user" as const),
+          content: normalizeKnowledgeCollectionCopy(message.content),
+          timestamp: message.sentAt.getTime(),
+          attachments: (
+            reconstructedAttachments ??
+            (attachmentsByMessage.get(message.id) ?? []).map((attachment) => ({
+              id: publicId(userId, attachment.id, projectAssignmentId),
+              type: attachment.kind,
+              name: attachment.fileName,
+              ...(attachment.upstreamFileId
+                ? { fileId: attachment.upstreamFileId }
+                : {}),
+            }))
+          ).map((attachment: KnowledgeBaseUserMessageAttachment) =>
+            applyAttachmentRetention(attachment, retentionByFileId),
+          ),
+          ...(metadata.outputFiles
+            ? { outputFiles: metadata.outputFiles }
+            : {}),
+          ...(inlineImages ? { inlineImages } : {}),
+          ...(metadata.elapsedTime !== undefined
+            ? { elapsedTime: metadata.elapsedTime }
+            : {}),
+          ...(metadata.responseStartedAt !== undefined
+            ? { responseStartedAt: metadata.responseStartedAt }
+            : {}),
+          ...(metadata.intermediateSteps
+            ? { intermediateSteps: metadata.intermediateSteps }
+            : {}),
+          ...(metadata.stepGroups ? { stepGroups: metadata.stepGroups } : {}),
+          ...(metadata.isStepsPlaceholder !== undefined
+            ? { isStepsPlaceholder: metadata.isStepsPlaceholder }
+            : {}),
+          ...(metadata.modelName ? { modelName: metadata.modelName } : {}),
+          ...(knowledgeBase ? { knowledgeBase } : {}),
+          ...(generalChat ? { generalChat } : {}),
+          ...(generalChatDispatch ? { generalChatDispatch } : {}),
+        };
+      }),
     ...(row.upstreamTaskId ? { taskId: row.upstreamTaskId } : {}),
     ...(row.previousResponseId
       ? { previousResponseId: row.previousResponseId }
@@ -3471,6 +3586,86 @@ export async function listSnapshots(
 }
 
 export const conversationRouter = router({
+  workbenchBind: protectedProcedure
+    .input(
+      z.object({
+        conversationId: z.string().min(1).max(128),
+        agentId: workbenchAgentIdSchema,
+        title: z.string().min(1).max(255).optional(),
+        projectAssignmentId: z.string().uuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const projectAssignmentId = await resolveConversationProjectAssignment(
+        ctx.user,
+        input.projectAssignmentId,
+      );
+      return runConversationWriteTransaction(requireDb(await getDb()), (tx) =>
+        bindWorkbenchTask(
+          tx,
+          {
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
+            projectAssignmentId,
+          },
+          input,
+        ),
+      );
+    }),
+  workbenchSaveState: protectedProcedure
+    .input(
+      z.object({
+        conversationId: z.string().min(1).max(128),
+        agentId: workbenchAgentIdSchema,
+        expectedRevision: z.number().int().positive(),
+        patch: workbenchStatePatchSchema,
+        projectAssignmentId: z.string().uuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const projectAssignmentId = await resolveConversationProjectAssignment(
+        ctx.user,
+        input.projectAssignmentId,
+      );
+      return runConversationWriteTransaction(requireDb(await getDb()), (tx) =>
+        saveWorkbenchTask(
+          tx,
+          {
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
+            projectAssignmentId,
+          },
+          input,
+        ),
+      );
+    }),
+  workbenchHandoff: protectedProcedure
+    .input(
+      z.object({
+        conversationId: z.string().min(1).max(128),
+        agentId: workbenchAgentIdSchema,
+        targetAgentId: workbenchAgentIdSchema,
+        title: z.string().min(1).max(255).optional(),
+        resources: z.array(workbenchResourceSchema).max(100),
+        values: workbenchValuesSchema.optional(),
+        idempotencyKey: z.string().min(1).max(128),
+        projectAssignmentId: z.string().uuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const projectAssignmentId = await resolveConversationProjectAssignment(
+        ctx.user,
+        input.projectAssignmentId,
+      );
+      return runConversationWriteTransaction(requireDb(await getDb()), (tx) =>
+        handoffWorkbenchTask(
+          tx,
+          {
+            userId: enterpriseWorkspaceUserId(ctx.user.id),
+            projectAssignmentId,
+          },
+          input,
+        ),
+      );
+    }),
   list: protectedProcedure
     .input(
       z
@@ -3482,7 +3677,10 @@ export const conversationRouter = router({
         ctx.user,
         input?.projectAssignmentId,
       );
-      return listSnapshots(enterpriseWorkspaceUserId(ctx.user.id), projectAssignmentId);
+      return listSnapshots(
+        enterpriseWorkspaceUserId(ctx.user.id),
+        projectAssignmentId,
+      );
     }),
 
   syncSnapshot: protectedProcedure
@@ -3500,9 +3698,14 @@ export const conversationRouter = router({
       const db = requireDb(await getDb());
       try {
         await runConversationWriteTransaction(db, async (tx) => {
-          await persistSnapshot(tx, enterpriseWorkspaceUserId(ctx.user.id), input.conversation, {
-            projectAssignmentId,
-          });
+          await persistSnapshot(
+            tx,
+            enterpriseWorkspaceUserId(ctx.user.id),
+            input.conversation,
+            {
+              projectAssignmentId,
+            },
+          );
         });
       } catch (error) {
         const code = conversationSyncMysqlErrorCode(error);
@@ -3515,7 +3718,10 @@ export const conversationRouter = router({
         }
         throw error;
       }
-      const snapshots = await listSnapshots(enterpriseWorkspaceUserId(ctx.user.id), projectAssignmentId);
+      const snapshots = await listSnapshots(
+        enterpriseWorkspaceUserId(ctx.user.id),
+        projectAssignmentId,
+      );
       const persisted = snapshots.find(
         (item) => item.id === input.conversation.id,
       );
@@ -3557,7 +3763,10 @@ export const conversationRouter = router({
               .from(siteProjects)
               .where(
                 and(
-                  enterpriseOwnerPredicate(siteProjects, enterpriseWorkspaceUserId(ctx.user.id)),
+                  enterpriseOwnerPredicate(
+                    siteProjects,
+                    enterpriseWorkspaceUserId(ctx.user.id),
+                  ),
                   or(
                     eq(siteProjects.conversationId, input.id),
                     eq(siteProjects.conversationId, persistedConversationId),
@@ -3579,7 +3788,10 @@ export const conversationRouter = router({
           .from(knowledgeBaseBuilds)
           .where(
             and(
-              enterpriseOwnerPredicate(knowledgeBaseBuilds, enterpriseWorkspaceUserId(ctx.user.id)),
+              enterpriseOwnerPredicate(
+                knowledgeBaseBuilds,
+                enterpriseWorkspaceUserId(ctx.user.id),
+              ),
               eq(knowledgeBaseBuilds.conversationId, input.id),
             ),
           )
@@ -3641,12 +3853,17 @@ export const conversationRouter = router({
       let skipped = 0;
       for (const conversation of input.conversations) {
         const result = await runConversationWriteTransaction(db, (tx) =>
-          persistSnapshot(tx, enterpriseWorkspaceUserId(ctx.user.id), conversation, {
-            skipExisting: true,
-            importCredentialId: prepared.credentialId,
-            validatedResourceKeys: prepared.validatedResourceKeys,
-            projectAssignmentId,
-          }),
+          persistSnapshot(
+            tx,
+            enterpriseWorkspaceUserId(ctx.user.id),
+            conversation,
+            {
+              skipExisting: true,
+              importCredentialId: prepared.credentialId,
+              validatedResourceKeys: prepared.validatedResourceKeys,
+              projectAssignmentId,
+            },
+          ),
         );
         if (result === "imported") imported += 1;
         else skipped += 1;

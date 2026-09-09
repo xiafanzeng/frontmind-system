@@ -237,9 +237,12 @@ export function createServerBackedPublisherGateway(
     getDashboard(signal) {
       monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
-        const dashboard = await client.publisher.dashboard.query(undefined, { signal });
+        const dashboard = await client.publisher.dashboard.query(undefined, {
+          signal,
+        });
         const recentBatches = dashboard.recentBatches.map(mapApiBatchSummary);
-        const activeBatches = dashboard.processingBatches.map(mapApiBatchSummary);
+        const activeBatches =
+          dashboard.processingBatches.map(mapApiBatchSummary);
         const articleViews = dashboard.resumableArticles.map(mapArticleSummary);
         return {
           wallet: {
@@ -249,7 +252,8 @@ export function createServerBackedPublisherGateway(
           },
           catalog: {
             activeRevision: dashboard.catalogRevision ?? "等待首次完整同步",
-            mediaCount: dashboard.catalogCounts.news + dashboard.catalogCounts.selfMedia,
+            mediaCount:
+              dashboard.catalogCounts.news + dashboard.catalogCounts.selfMedia,
             newsCount: dashboard.catalogCounts.news,
             selfMediaCount: dashboard.catalogCounts.selfMedia,
             kindComplete: dashboard.kindComplete,
@@ -507,9 +511,12 @@ export function createServerBackedPublisherGateway(
           page: 1,
           pageSize: 50,
         };
-        const result = await mediaApi.facets.query(mediaInput(resolvedFilters), {
-          signal,
-        });
+        const result = await mediaApi.facets.query(
+          mediaInput(resolvedFilters),
+          {
+            signal,
+          },
+        );
         const options = (items: Array<{ value: string; count: number }>) =>
           items.map((item) => ({ ...item, label: item.value }));
         const labeledOptions = (
@@ -533,10 +540,13 @@ export function createServerBackedPublisherGateway(
           publishSpeeds: options(result.publishSpeeds),
           entryTypes: options(result.entryTypes),
           linkTypes: options(result.linkTypes),
-          imageSupports: labeledOptions(result.imageSupports.filter((item) => item.value !== "unknown"), {
-            verified: "支持图文",
-            unsupported: "仅文字",
-          }),
+          imageSupports: labeledOptions(
+            result.imageSupports.filter((item) => item.value !== "unknown"),
+            {
+              verified: "支持图文",
+              unsupported: "仅文字",
+            },
+          ),
           pcWeightThresholds: result.pcWeightThresholds.map((item) => ({
             ...item,
             label: `${item.value} 以上`,
@@ -592,13 +602,14 @@ export function createServerBackedPublisherGateway(
       });
     },
 
-    createDraft(articleVersionId, mediaIds) {
+    createDraft(articleVersionId, mediaIds, idempotencyKey) {
       monitoringClientRestOperation(client);
       return translateGatewayErrors(async () => {
         const context = await resolveVersion(articleVersionId);
         const defaultTitle = articleTitle(context.article);
         const saved = await client.publisher.drafts.save.mutate({
           articleVersionId,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
           expectedRevision: 0,
           titleMode: "single",
           sharedTitle: defaultTitle,
@@ -828,7 +839,9 @@ export function createServerBackedPublisherGateway(
     },
 
     batchCsvUrl(batchId) {
-      return projectResourceUrl(`/api/monitoring/publisher/batches/${encodeURIComponent(batchId)}.csv`);
+      return projectResourceUrl(
+        `/api/monitoring/publisher/batches/${encodeURIComponent(batchId)}.csv`,
+      );
     },
   };
 }
@@ -972,9 +985,15 @@ function mapMedia(
     ...(media.recommended === null ? {} : { recommended: media.recommended }),
     recommendationTags: media.recommendationTags ?? [],
     platformRecommendationTags: media.platformRecommendationTags ?? [],
-    ...(media.recommendationRemark ? { recommendationRemark: media.recommendationRemark } : {}),
-    ...(media.authenticationType ? { authenticationType: media.authenticationType } : {}),
-    ...(media.authenticationDescription ? { authenticationDescription: media.authenticationDescription } : {}),
+    ...(media.recommendationRemark
+      ? { recommendationRemark: media.recommendationRemark }
+      : {}),
+    ...(media.authenticationType
+      ? { authenticationType: media.authenticationType }
+      : {}),
+    ...(media.authenticationDescription
+      ? { authenticationDescription: media.authenticationDescription }
+      : {}),
     ...(media.remark ? { remark: media.remark } : {}),
     ...(media.fanCount === null ? {} : { followers: Number(media.fanCount) }),
     ...(media.likeCount === null ? {} : { likes: Number(media.likeCount) }),

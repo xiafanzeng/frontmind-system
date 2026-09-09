@@ -1,0 +1,61 @@
+import { useReducer, useRef, type Dispatch, type SetStateAction } from "react";
+import { useBusinessWorkspace } from "./BusinessWorkspaceContext";
+
+/** UI drafts stay separate from model messages and domain facts. Optimistic
+ * drafts survive task switches and the first empty task receiving its server ID. */
+export function useBusinessFlowState<T>(
+  key: string,
+  initial: T,
+  parse: (value: unknown) => T | undefined,
+  serialize: (value: T) => unknown = (value) => value,
+): [T, Dispatch<SetStateAction<T>>] {
+  const workspace = useBusinessWorkspace();
+  const scope = `${workspace.agentId}:${workspace.taskId ?? "new"}`;
+  const drafts = useRef(new Map<string, T>());
+  const previousScope = useRef(scope);
+  const [, updateRender] = useReducer((value) => value + 1, 0);
+  if (
+    previousScope.current !== scope &&
+    previousScope.current === `${workspace.agentId}:new` &&
+    workspace.task?.pending &&
+    drafts.current.has(previousScope.current)
+  ) {
+    drafts.current.set(scope, drafts.current.get(previousScope.current)!);
+    drafts.current.delete(previousScope.current);
+  }
+  previousScope.current = scope;
+  const saved = parse(workspace.task?.state?.values[key]);
+  const value = drafts.current.has(scope)
+    ? drafts.current.get(scope)!
+    : saved === undefined
+      ? initial
+      : saved;
+  const latest = useRef({ workspace, scope, value, serialize });
+  latest.current = { workspace, scope, value, serialize };
+  const update: Dispatch<SetStateAction<T>> = (next) => {
+    const current = latest.current;
+    const resolved =
+      typeof next === "function"
+        ? (next as (value: T) => T)(current.value)
+        : next;
+    latest.current.value = resolved;
+    drafts.current.set(current.scope, resolved);
+    updateRender();
+    if (current.workspace.isWorkbench && current.workspace.task) {
+      // Invoke while this task is selected. The adapter freezes ownership and
+      // serializes writes; its error UI offers recovery without clearing input.
+      void current.workspace.task
+        .saveState({ values: { [key]: current.serialize(resolved) } })
+        .catch(() => undefined);
+    }
+  };
+  return [value, update];
+}
+export const readFlowString = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+export const readFlowBoolean = (value: unknown) =>
+  typeof value === "boolean" ? value : undefined;
+export const readFlowStringArray = (value: unknown) =>
+  Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? (value as string[])
+    : undefined;

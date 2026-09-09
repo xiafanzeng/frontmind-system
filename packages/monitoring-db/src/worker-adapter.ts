@@ -78,7 +78,9 @@ type BillingCursor = {
 export function createWorkerRepository({ env }: { env: NodeJS.ProcessEnv }) {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl)
-    throw new Error("DATABASE_URL is required by @frontmind/monitoring-db/worker-adapter");
+    throw new Error(
+      "DATABASE_URL is required by @frontmind/monitoring-db/worker-adapter",
+    );
   const { db } = createDatabase(databaseUrl, {
     connectionLimit: Number(env.WORKER_DB_POOL_SIZE ?? 8),
   });
@@ -1727,7 +1729,16 @@ export class DrizzleWorkerRepository {
             ),
           ),
         );
-      await tx.delete(auditLogs).where(lte(auditLogs.createdAt, auditCutoff));
+      // Draft-create receipts also carry durable request identity; dropping
+      // them while the draft remains would let a task retry create duplicates.
+      await tx
+        .delete(auditLogs)
+        .where(
+          and(
+            lte(auditLogs.createdAt, auditCutoff),
+            sql`${auditLogs.action} <> 'publisher.draft_created'`,
+          ),
+        );
     });
     const candidates: Array<{
       entityType: "project" | "monitor" | "run";
@@ -2931,9 +2942,9 @@ function materializeResultValues(input: {
     input.mentionPositionProvided ||
     Boolean(
       input.mainBrand &&
-      input.answerContent
-        .toLocaleLowerCase()
-        .includes(input.mainBrand.toLocaleLowerCase()),
+        input.answerContent
+          .toLocaleLowerCase()
+          .includes(input.mainBrand.toLocaleLowerCase()),
     );
   return {
     currentRevisionId: input.revisionId,

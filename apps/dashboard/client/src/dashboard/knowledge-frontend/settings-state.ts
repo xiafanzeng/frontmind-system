@@ -123,7 +123,14 @@ export const portalDraftKey = (ownerId: string | number, projectId: string) =>
 export function readPortalDraft(key: string): PortalDraft {
   const defaults = createPortalDraft();
   try {
-    const input: unknown = JSON.parse(localStorage.getItem(key) || "null");
+    return parsePortalDraft(JSON.parse(localStorage.getItem(key) || "null"));
+  } catch {
+    return defaults;
+  }
+}
+export function parsePortalDraft(input: unknown): PortalDraft {
+  const defaults = createPortalDraft();
+  try {
     if (
       !input ||
       typeof input !== "object" ||

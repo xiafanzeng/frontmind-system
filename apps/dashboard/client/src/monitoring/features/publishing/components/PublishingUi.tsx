@@ -22,6 +22,7 @@ import {
   type ReactNode,
 } from "react";
 import { Link } from "wouter";
+import { usePublishingFlow } from "../PublishingFlowContext";
 
 import type {
   MediaResource,
@@ -43,6 +44,21 @@ export function PublishingPage({
   children: ReactNode;
   busy?: boolean;
 }) {
+  const flow = usePublishingFlow();
+  if (flow)
+    return (
+      <section
+        className="publishing-page publishing-flow-step"
+        aria-label={title}
+        aria-busy={busy || undefined}
+      >
+        <div className="publishing-flow-intro">
+          {description && <p>{description}</p>}
+          {actions && <div className="publishing-page-actions">{actions}</div>}
+        </div>
+        {children}
+      </section>
+    );
   return (
     <main className="publishing-page" aria-busy={busy || undefined}>
       <header className="publishing-page-heading">
@@ -143,6 +159,8 @@ export function PublishingBreadcrumbs({
 }
 
 export function PublishingSteps({ current }: { current: 1 | 2 | 3 | 4 }) {
+  const flow = usePublishingFlow();
+  if (flow) return null;
   const labels = ["稿件", "媒体", "标题", "预检"];
   return (
     <ol className="publishing-steps" aria-label="发布步骤">
@@ -193,13 +211,14 @@ export function MediaMark({
   const safeLogoUrl = safePublisherLogoUrl(logoUrl);
   const showImage = Boolean(
     safeLogoUrl &&
-    failedUrl !== safeLogoUrl &&
-    (!logoResolutionStatus || logoResolutionStatus === "archived"),
+      failedUrl !== safeLogoUrl &&
+      (!logoResolutionStatus || logoResolutionStatus === "archived"),
   );
   const resolvedSource = showImage
     ? (logoSource ?? "provider_logo")
     : "generated_fallback";
-  const isGeneratedFallback = showImage && resolvedSource === "generated_fallback";
+  const isGeneratedFallback =
+    showImage && resolvedSource === "generated_fallback";
   const monogram = name.replace(/[·（）()\s]/g, "").slice(0, 3) || "媒体";
   const secondaryColor = colors[(index + 2) % colors.length];
   return (
@@ -230,7 +249,6 @@ export function MediaMark({
             referrerPolicy="no-referrer"
             onError={() => setFailedUrl(safeLogoUrl)}
           />
-
         </>
       ) : (
         <>
@@ -442,6 +460,7 @@ export function PublishingConfirmDialog({
   wide,
   onCancel,
   onConfirm,
+  inline = false,
   children,
 }: {
   open: boolean;
@@ -453,6 +472,7 @@ export function PublishingConfirmDialog({
   wide?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  inline?: boolean;
   children?: ReactNode;
 }) {
   const titleId = useId();
@@ -466,7 +486,7 @@ export function PublishingConfirmDialog({
   onCancelRef.current = onCancel;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     previousFocusRef.current = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     const getFocusable = () =>
@@ -504,9 +524,40 @@ export function PublishingConfirmDialog({
       previousFocusRef.current?.focus();
       previousFocusRef.current = null;
     };
-  }, [open]);
+  }, [open, inline]);
 
   if (!open) return null;
+  if (inline)
+    return (
+      <section
+        className="publishing-inline-step"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+      >
+        <h2 id={titleId}>{title}</h2>
+        <p id={descriptionId}>{description}</p>
+        {children}
+        <footer className="publishing-inline-actions">
+          <button
+            className="publishing-button publishing-button-secondary"
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+          >
+            返回检查
+          </button>
+          <button
+            className="publishing-button publishing-button-primary"
+            type="button"
+            disabled={busy || confirmDisabled}
+            onClick={onConfirm}
+          >
+            {busy && <LoaderCircle className="publishing-spin" size={16} />}
+            {confirmLabel}
+          </button>
+        </footer>
+      </section>
+    );
   return (
     <div
       className="publishing-dialog-backdrop"

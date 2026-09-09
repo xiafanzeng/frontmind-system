@@ -43,7 +43,7 @@
 }
 .user-brand-dashboard button,
 .user-brand-dashboard a {
-  font: inherit;
+  font-family: inherit;
 }
 .user-brand-dashboard button {
   cursor: pointer;
@@ -177,7 +177,9 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 20px;
-  transition: color 160ms ease, background 160ms ease;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
 }
 .user-brand-dashboard .sub-nav button > span {
   white-space: nowrap;
@@ -1970,7 +1972,7 @@
   border-radius: 13px;
   background: #fbf9fd;
   color: #30263e;
-  font: inherit;
+  font-family: inherit;
   outline: none;
 }
 
@@ -2204,7 +2206,7 @@
   background: #fbf9fd;
   padding: 11px 12px;
   color: #30263e;
-  font: inherit;
+  font-family: inherit;
   font-weight: 500;
   line-height: 1.6;
   outline: none;
@@ -4431,7 +4433,7 @@
   border-radius: 14px;
   background: #fff;
   color: inherit;
-  font: inherit;
+  font-family: inherit;
   text-align: left;
   cursor: pointer;
   transition: all 160ms ease;

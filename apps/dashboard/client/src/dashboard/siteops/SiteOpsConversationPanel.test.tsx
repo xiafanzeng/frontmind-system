@@ -1,3 +1,4 @@
+import { BusinessWorkspaceProvider } from "../BusinessWorkspaceContext";
 import {
   act,
   fireEvent,
@@ -2901,4 +2902,46 @@ it("restarts website preparation directly while retaining the live website", asy
     }),
   );
   expect(screen.queryByText(/工单|审批|人工受理/)).not.toBeInTheDocument();
+});
+
+it("binds the real site and knowledge version before executing a workbench action", async () => {
+  const saveState = vi.fn(async (_patch: unknown) => undefined);
+  const onAction = vi.fn(async () => undefined);
+  const current = observation();
+  render(
+    <BusinessWorkspaceProvider
+      value={{
+        isWorkbench: true,
+        agentId: "website",
+        taskId: "website-task",
+        task: { saveState, state: null } as any,
+        setSummary: () => undefined,
+      }}
+    >
+      <SiteOpsConversationPanel observation={current} onAction={onAction} />
+    </BusinessWorkspaceProvider>,
+  );
+  expect(saveState).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /选择 A/ }));
+  await waitFor(() => expect(onAction).toHaveBeenCalled());
+  expect(saveState.mock.calls[0][0]).toEqual(
+    expect.objectContaining({
+      resources: expect.arrayContaining([
+        { kind: "site", id: current.project.id, label: "当前项目官网" },
+        {
+          kind: "knowledge_snapshot",
+          id: current.project.currentKnowledgeSnapshotId,
+          label: "建站知识版本",
+        },
+      ]),
+      record: expect.objectContaining({ status: "pending" }),
+    }),
+  );
+  await waitFor(() =>
+    expect(saveState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        record: expect.objectContaining({ status: "completed" }),
+      }),
+    ),
+  );
 });

@@ -7,7 +7,12 @@ import type {
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 
 function scopedPublishingUrl(path: string) {
-  return typeof window === "undefined" ? path : projectWorkspaceUrl(path);
+  if (typeof window === "undefined") return path;
+  const url = new URL(projectWorkspaceUrl(path), window.location.origin);
+  const task = new URLSearchParams(window.location.search).get("workbenchTask");
+  if (task && !url.searchParams.has("workbenchTask"))
+    url.searchParams.set("workbenchTask", task);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 export const DEFAULT_MEDIA_FILTERS: MediaFilters = {
@@ -211,7 +216,9 @@ export function writePublicationRouteState(
   return scopedPublishingUrl(query ? `${pathname}?${query}` : pathname);
 }
 
-export function writePublicationWorkbenchRouteState(filters: PublicationListFilters) {
+export function writePublicationWorkbenchRouteState(
+  filters: PublicationListFilters,
+) {
   const route = writePublicationRouteState("/publishing", filters);
   const [pathname, query] = route.split("?");
   const params = new URLSearchParams({ tab: "records" });

@@ -283,7 +283,8 @@ function ServerBackedWorkspace({
     { fingerprint: string; idempotencyKey: string } | undefined
   >(undefined);
   const customerEnabled = user.role === "user";
-  const monitoringEnabled = customerEnabled && location.startsWith("/monitoring-system");
+  const monitoringEnabled =
+    customerEnabled && location.startsWith("/monitoring-system");
   const projectsQuery = trpc.projects.list.useQuery(undefined, {
     enabled: monitoringEnabled,
   });
@@ -300,7 +301,8 @@ function ServerBackedWorkspace({
     enabled: monitoringEnabled,
   });
   const settingsEnabled =
-    customerEnabled && ["/account", "/monitoring-system/settings"].includes(location);
+    customerEnabled &&
+    ["/account", "/monitoring-system/settings"].includes(location);
   const billingSummaryQuery = trpc.billing.summary.useQuery(undefined, {
     enabled: monitoringEnabled || settingsEnabled,
     refetchInterval: monitoringEnabled || settingsEnabled ? 10_000 : false,
@@ -311,8 +313,17 @@ function ServerBackedWorkspace({
       enabled: settingsEnabled && publishingEnabled,
       refetchInterval: settingsEnabled && publishingEnabled ? 10_000 : false,
     });
-  const [activityRequest, setActivityRequest] = useState<{ page: number; source?: "monitoring" | "media_publishing" | "ai" }>({ page: 1 });
-  const billingActivityQuery = trpc.billing.activityPage.useQuery(activityRequest, { enabled: settingsEnabled, refetchInterval: settingsEnabled ? 10_000 : false });
+  const [activityRequest, setActivityRequest] = useState<{
+    page: number;
+    source?: "monitoring" | "media_publishing" | "ai";
+  }>({ page: 1 });
+  const billingActivityQuery = trpc.billing.activityPage.useQuery(
+    activityRequest,
+    {
+      enabled: settingsEnabled,
+      refetchInterval: settingsEnabled ? 10_000 : false,
+    },
+  );
   const billingPricingQuery = trpc.billing.pricing.useQuery(undefined, {
     enabled: settingsEnabled,
   });
@@ -423,7 +434,9 @@ function ServerBackedWorkspace({
     {
       enabled: Boolean(selectedLatestRunId && monitoringEnabled),
       refetchInterval: (state) =>
-        monitoringEnabled && state.state.data && shouldPollRun(state.state.data.run.status)
+        monitoringEnabled &&
+        state.state.data &&
+        shouldPollRun(state.state.data.run.status)
           ? 3_000
           : false,
     },
@@ -690,7 +703,27 @@ function ServerBackedWorkspace({
         localServerBacked ? "本地真实联调 · Server-backed" : undefined
       }
     >
-      {location === "/account" && <div className="operator-account-info"><div><strong>{dashboardUser?.displayName || dashboardUser?.username}</strong><small>@{dashboardUser?.username} · 客户账号</small></div><button onClick={() => void logout().catch(error => setOperationError(error instanceof Error ? error.message : "退出失败，请重试。"))}>退出登录</button></div>}
+      {location === "/account" && (
+        <div className="operator-account-info">
+          <div>
+            <strong>
+              {dashboardUser?.displayName || dashboardUser?.username}
+            </strong>
+            <small>@{dashboardUser?.username} · 客户账号</small>
+          </div>
+          <button
+            onClick={() =>
+              void logout().catch((error) =>
+                setOperationError(
+                  error instanceof Error ? error.message : "退出失败，请重试。",
+                ),
+              )
+            }
+          >
+            退出登录
+          </button>
+        </div>
+      )}
       {(operationError || queryError) && (
         <div className="operation-banner" role="alert">
           {operationError || `数据加载失败：${queryError}`}
@@ -754,13 +787,24 @@ function ServerBackedWorkspace({
               pricing={mapBillingPricingViews(
                 billingPricingQuery.data?.items || [],
               )}
-              activity={mapBillingActivityViews(billingActivityQuery.data?.items ?? [])}
+              activity={mapBillingActivityViews(
+                billingActivityQuery.data?.items ?? [],
+              )}
               activityTotal={billingActivityQuery.data?.total ?? 0}
-              activityPage={billingActivityQuery.data?.page ?? activityRequest.page}
+              activityPage={
+                billingActivityQuery.data?.page ?? activityRequest.page
+              }
               activityLoading={billingActivityQuery.isFetching}
               activityFilter={activityRequest.source ?? "all"}
-              onActivityPageChange={(page) => setActivityRequest(current => ({ ...current, page }))}
-              onActivityFilterChange={(source) => setActivityRequest({ page: 1, ...(source === "all" ? {} : { source }) })}
+              onActivityPageChange={(page) =>
+                setActivityRequest((current) => ({ ...current, page }))
+              }
+              onActivityFilterChange={(source) =>
+                setActivityRequest({
+                  page: 1,
+                  ...(source === "all" ? {} : { source }),
+                })
+              }
               paymentMethods={paymentMethodViews}
               activeTopup={settingsTopup}
               mediaPublishingActiveTopup={settingsMediaPublishingTopup}
@@ -965,7 +1009,11 @@ function ServerBackedWorkspace({
           <Route path="/monitoring-system">
             {user.role === "user" ? (
               <MonitoringPage
-                seedQuestions={activeProject ? questionSources?.[activeProject.id] : undefined}
+                seedQuestions={
+                  activeProject
+                    ? questionSources?.[activeProject.id]
+                    : undefined
+                }
                 serverData
                 project={activeProject}
                 monitors={monitors}
@@ -1431,7 +1479,13 @@ function UserMonitorRoute({
   );
 }
 
-function UserRunRoute({ runId }: { runId: string }) {
+function UserRunRoute({
+  runId,
+  embedded = false,
+}: {
+  runId: string;
+  embedded?: boolean;
+}) {
   const utils = trpc.useUtils();
   const query = trpc.runs.get.useQuery(
     { runId },
@@ -1471,6 +1525,7 @@ function UserRunRoute({ runId }: { runId: string }) {
   );
   return (
     <RunDetailPage
+      embedded={embedded}
       run={run}
       comparisonRuns={comparisonRuns}
       onCancel={async () => {
@@ -1940,7 +1995,11 @@ function numericProperty(value: object | null | undefined, key: string) {
 }
 
 /** Resolve the linked tenant using the existing Dashboard cookie. Authentication belongs to Dashboard. */
-function LinkedMonitoringWorkspace({ questionSources }: { questionSources?: Record<string, string[]> }) {
+function LinkedMonitoringWorkspace({
+  questionSources,
+}: {
+  questionSources?: Record<string, string[]>;
+}) {
   const [location] = useLocation();
   const me = trpc.auth.me.useQuery(undefined, {
     retry: false,
@@ -1980,7 +2039,9 @@ function LinkedMonitoringWorkspace({ questionSources }: { questionSources?: Reco
   );
 }
 
-export default function MonitoringModule({ questionSources }: { questionSources?: Record<string, string[]> } = {}) {
+export default function MonitoringModule({
+  questionSources,
+}: { questionSources?: Record<string, string[]> } = {}) {
   const { user } = useAuth();
   const [client] = useState(createTrpcClient);
   const queryClient = useMemo(createModuleQueryClient, [user?.id]);
@@ -1994,6 +2055,30 @@ export default function MonitoringModule({ questionSources }: { questionSources?
     <QueryClientProvider client={queryClient}>
       <trpc.Provider client={client} queryClient={queryClient}>
         <LinkedMonitoringWorkspace questionSources={questionSources} />
+      </trpc.Provider>
+    </QueryClientProvider>
+  );
+}
+
+/** The report agent expands the existing, owner-checked run analysis in place. */
+export function MonitoringRunPanel({ runId }: { runId: string }) {
+  const { user } = useAuth();
+  const [client] = useState(createTrpcClient);
+  const queryClient = useMemo(createModuleQueryClient, [user?.id]);
+  useEffect(
+    () => () => {
+      queryClient.clear();
+    },
+    [queryClient],
+  );
+  return (
+    <QueryClientProvider client={queryClient}>
+      <trpc.Provider client={client} queryClient={queryClient}>
+        <div className="monitoring-module monitoring-inline-report">
+          <Suspense fallback={<p role="status">正在读取运行分析…</p>}>
+            <UserRunRoute key={runId} runId={runId} embedded />
+          </Suspense>
+        </div>
       </trpc.Provider>
     </QueryClientProvider>
   );

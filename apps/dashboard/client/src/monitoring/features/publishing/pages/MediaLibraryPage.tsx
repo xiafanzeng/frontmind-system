@@ -22,6 +22,11 @@ import {
 import { Link, useLocation, useSearch } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
+  publishingDraftRequestKey,
+  usePublishingFlow,
+  usePublishingSummary,
+} from "../PublishingFlowContext";
+import {
   mediaSelectionBlocker,
   mediaShortlistKey,
   readMediaShortlist,
@@ -80,23 +85,44 @@ function compactNumber(value?: number) {
 }
 
 export default function PublishingMediaLibraryPage({
-  draftId,
+  draftId: routeDraftId,
 }: {
   draftId?: string;
 }) {
   const gateway = usePublisherGateway();
+  const flow = usePublishingFlow();
+  const draftId =
+    routeDraftId ??
+    flow?.resources?.find((resource) => resource.kind === "publication_draft")
+      ?.id;
   const [location, navigate] = useLocation();
   const search = useSearch();
   const { user } = useAuth();
-  const shortlistKey = mediaShortlistKey(user?.id, search);
+  const accountShortlistKey = mediaShortlistKey(user?.id, search);
+  const shortlistKey =
+    flow && accountShortlistKey
+      ? `${accountShortlistKey}:task:${flow.taskId ?? "new"}`
+      : accountShortlistKey;
   const pathname = location || "/publishing/media";
   const routeState = useMemo(() => readMediaRouteState(search), [search]);
-  const { filters, articleVersionId } = routeState;
+  const { filters } = routeState;
+  const articleVersionId =
+    routeState.articleVersionId ??
+    flow?.resources?.find((resource) => resource.kind === "article_version")
+      ?.id;
   const [queryDraft, setQueryDraft] = useState(filters.query);
   const [batchQueryDraft, setBatchQueryDraft] = useState(
     filters.batchQuery ?? "",
   );
-  const [recommendationDraft, setRecommendationDraft] = useState({ industry: "", product: "", region: "", audience: "", keywords: "", budget: "", format: "" });
+  const [recommendationDraft, setRecommendationDraft] = useState({
+    industry: "",
+    product: "",
+    region: "",
+    audience: "",
+    keywords: "",
+    budget: "",
+    format: "",
+  });
   const selectionScope = useMemo(
     () => ({ gateway, shortlistKey, draftId, articleVersionId }),
     [gateway, shortlistKey, draftId, articleVersionId],
@@ -133,6 +159,7 @@ export default function PublishingMediaLibraryPage({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [articleChooserOpen, setArticleChooserOpen] = useState(false);
   const [chosenVersion, setChosenVersion] = useState("");
+  const [boundDraft, setBoundDraft] = useState<PublicationDraft>();
   const selectionInFlight = useRef(false);
   const selectionGeneration = useRef(0);
   useEffect(() => {
@@ -141,12 +168,14 @@ export default function PublishingMediaLibraryPage({
     setSelectionBusy(false);
     setSelectionError("");
     setArticleChooserOpen(false);
+    setBoundDraft(undefined);
     return () => {
       selectionGeneration.current += 1;
     };
   }, [selectionScope]);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(Boolean(filters.batchQuery));
+  const [businessFiltersOpen, setBusinessFiltersOpen] = useState(false);
   const observedCatalogRevision = useRef<string | undefined>(undefined);
   const [catalogRevisionChange, setCatalogRevisionChange] = useState<{
     previous: string;
@@ -218,10 +247,25 @@ export default function PublishingMediaLibraryPage({
       return;
     }
     setDraft(draftQuery.data);
+    if (flow) setBoundDraft(draftQuery.data);
     setSelected(
       new Map(draftQuery.data.items.map((item) => [item.media.id, item.media])),
     );
   }, [draftId, draftQuery.data, shortlistKey, setDraft, setSelected]);
+
+  const persistedSelection = flow?.selections?.mediaSelection;
+  useEffect(() => {
+    if (!flow || draftId || !Array.isArray(persistedSelection)) return;
+    const rows = persistedSelection.filter((row): row is MediaResource =>
+      Boolean(
+        row &&
+          typeof row === "object" &&
+          typeof row.id === "string" &&
+          typeof row.priceTenThousandths === "string",
+      ),
+    );
+    setSelected(new Map(rows.slice(0, 20).map((row) => [row.id, row])));
+  }, [draftId, persistedSelection, setSelected]);
 
   useEffect(() => {
     if (selection.scope === selectionScope && !draftId && !draft)
@@ -266,11 +310,29 @@ export default function PublishingMediaLibraryPage({
     nextVersion = articleVersionId,
   ) => {
     navigate(writeMediaRouteState(nextPath, next, nextVersion));
+    void flow?.saveSelections({ mediaFilters: next }).catch(() => undefined);
   };
-  const applySmartRecommendation = (event: React.FormEvent<HTMLFormElement>) => {
+  const applySmartRecommendation = (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => {
     event.preventDefault();
-    const terms = [recommendationDraft.industry, recommendationDraft.product, recommendationDraft.region, recommendationDraft.audience, recommendationDraft.keywords, recommendationDraft.budget, recommendationDraft.format].map((value) => value.trim()).filter(Boolean);
-    navigateFilters({ ...filters, query: terms.join(" "), recommended: "true", page: 1 });
+    const terms = [
+      recommendationDraft.industry,
+      recommendationDraft.product,
+      recommendationDraft.region,
+      recommendationDraft.audience,
+      recommendationDraft.keywords,
+      recommendationDraft.budget,
+      recommendationDraft.format,
+    ]
+      .map((value) => value.trim())
+      .filter(Boolean);
+    navigateFilters({
+      ...filters,
+      query: terms.join(" "),
+      recommended: "true",
+      page: 1,
+    });
   };
 
   useEffect(() => setQueryDraft(filters.query), [filters.query]);
@@ -315,10 +377,39 @@ export default function PublishingMediaLibraryPage({
     optimistic: Map<string, MediaResource>,
   ) => {
     if (draftId && !draft) return;
-    if (!articleVersionId && !draft) {
-      setSelected(optimistic);
-      setSelectionError("");
-      saveMediaShortlist(shortlistKey, optimistic);
+    if ((!articleVersionId || flow) && !draft) {
+      if (flow) {
+        if (selectionInFlight.current) return;
+        selectionInFlight.current = true;
+        const generation = selectionGeneration.current;
+        setSelectionBusy(true);
+        try {
+          await flow.saveSelections({
+            mediaSelection: [...optimistic.values()],
+            mediaFilters: filters,
+          });
+          if (generation === selectionGeneration.current) {
+            setSelected(optimistic);
+            setSelectionError("");
+          }
+        } catch (reason) {
+          if (generation === selectionGeneration.current)
+            setSelectionError(
+              reason instanceof Error
+                ? reason.message
+                : "媒体选择未能保存，请重试",
+            );
+        } finally {
+          if (generation === selectionGeneration.current) {
+            selectionInFlight.current = false;
+            setSelectionBusy(false);
+          }
+        }
+      } else {
+        setSelected(optimistic);
+        setSelectionError("");
+        saveMediaShortlist(shortlistKey, optimistic);
+      }
       return;
     }
     if (selectionInFlight.current) return;
@@ -340,7 +431,13 @@ export default function PublishingMediaLibraryPage({
           new Map(saved.items.map((item) => [item.media.id, item.media])),
         );
       } else {
-        const saved = await gateway.createDraft(articleVersionId!, mediaIds);
+        const taskId = flow ? await flow.ensureTask() : undefined;
+        const requestKey = taskId
+          ? await publishingDraftRequestKey(taskId, articleVersionId!, mediaIds)
+          : undefined;
+        const saved = requestKey
+          ? await gateway.createDraft(articleVersionId!, mediaIds, requestKey)
+          : await gateway.createDraft(articleVersionId!, mediaIds);
         if (generation !== selectionGeneration.current) return;
         saveMediaShortlist(shortlistKey, new Map());
         setDraft(saved);
@@ -373,6 +470,7 @@ export default function PublishingMediaLibraryPage({
 
   const toggle = (media: MediaResource) => {
     if (selectionInFlight.current || selectionBusy) return;
+    setBoundDraft(undefined);
     const next = new Map(selected);
     if (next.has(media.id)) {
       next.delete(media.id);
@@ -427,6 +525,36 @@ export default function PublishingMediaLibraryPage({
   const articleHasImages = draft
     ? draft.articleContainsImages
     : Boolean(selectedArticle?.imageCount);
+  usePublishingSummary({
+    title: "当前投放选择",
+    items: [
+      {
+        label: "已选媒体",
+        value: `${selected.size} 家 · 软文 ${selectedCounts.news} / 自媒体 ${selectedCounts.self_media}`,
+      },
+      { label: "预估合计", value: formatPublishingMoney(selectedTotal) },
+      {
+        label: "当前稿件",
+        value:
+          (boundDraft ?? draft)?.articleTitle ??
+          selectedArticle?.title ??
+          "待选择冻结稿件",
+      },
+      {
+        label: "状态",
+        value: selectionBusy
+          ? "正在保存"
+          : boundDraft
+            ? "稿件已绑定，等待交接"
+            : "选择中",
+      },
+      ...selectedValues.map((media) => ({
+        label: media.name,
+        value: formatPublishingMoney(media.priceTenThousandths),
+      })),
+    ],
+    note: selectionError || "最终报价与发布能力在预检时重新核对。",
+  });
 
   const chooseArticle = () => {
     setDrawerOpen(false);
@@ -457,14 +585,31 @@ export default function PublishingMediaLibraryPage({
     setSelectionError("");
     try {
       // A new draft also clears titles from the previously selected article.
-      const saved = await gateway.createDraft(chosenVersion, [
-        ...selected.keys(),
-      ]);
+      const mediaIds = [...selected.keys()];
+      const taskId = flow ? await flow.ensureTask() : undefined;
+      const requestKey = taskId
+        ? await publishingDraftRequestKey(taskId, chosenVersion, mediaIds)
+        : undefined;
+      if (generation !== selectionGeneration.current) return;
+      const saved = requestKey
+        ? await gateway.createDraft(chosenVersion, mediaIds, requestKey)
+        : await gateway.createDraft(chosenVersion, mediaIds);
       if (generation !== selectionGeneration.current) return;
       saveMediaShortlist(shortlistKey, new Map());
       setDraft(saved);
       setArticleChooserOpen(false);
-      navigate(`/publishing/drafts/${saved.id}/titles`);
+      if (flow) {
+        setBoundDraft(saved);
+        await flow.record({
+          id: `media-bound:${saved.id}`,
+          label: `已选择 ${saved.items.length} 家媒体并绑定稿件`,
+          detail: `${saved.articleTitle} · v${saved.articleVersion}`,
+          resources: [
+            { kind: "article_version", id: saved.articleVersionId },
+            { kind: "publication_draft", id: saved.id },
+          ],
+        });
+      } else navigate(`/publishing/drafts/${saved.id}/titles`);
     } catch (error) {
       if (generation !== selectionGeneration.current) return;
       setSelectionError(
@@ -478,8 +623,34 @@ export default function PublishingMediaLibraryPage({
     }
   };
   const continueSelection = () => {
-    if (draft) navigate(`/publishing/drafts/${draft.id}/titles`);
+    if (flow && draft) setBoundDraft(draft);
+    else if (draft) navigate(`/publishing/drafts/${draft.id}/titles`);
     else chooseArticle();
+  };
+  const handoff = async () => {
+    if (!flow || !boundDraft || selectionInFlight.current) return;
+    selectionInFlight.current = true;
+    setSelectionBusy(true);
+    setSelectionError("");
+    try {
+      await flow.handoff({
+        targetAgentId: "publishing",
+        title: `发布 · ${boundDraft.articleTitle}`,
+        resources: [
+          { kind: "article_version", id: boundDraft.articleVersionId },
+          { kind: "publication_draft", id: boundDraft.id },
+        ],
+        idempotencyKey: `media-publishing-${boundDraft.id}`,
+        route: `/publishing/drafts/${boundDraft.id}/titles`,
+      });
+    } catch (reason) {
+      setSelectionError(
+        reason instanceof Error ? reason.message : "交接未完成，请重试",
+      );
+    } finally {
+      selectionInFlight.current = false;
+      setSelectionBusy(false);
+    }
   };
   const activeFilterCount = [
     filters.platform,
@@ -558,11 +729,63 @@ export default function PublishingMediaLibraryPage({
         <Link href="/publishing/articles">管理稿件</Link>
       </section>
 
-      <form className="publishing-media-recommendation" aria-label="FrontMind 媒体智能推荐" onSubmit={applySmartRecommendation}>
-        <div className="publishing-media-recommendation-copy"><strong>FrontMind 媒体智能推荐</strong><span>输入行业和产品，优先查找目录中的 GEO 推荐媒体</span></div>
-        {[["industry","行业"],["product","产品或服务"],["region","目标地区"],["audience","目标受众"],["keywords","行业词或品牌词"],["budget","预算（可选）"],["format","图文要求（可选）"]].map(([key,label]) => <input key={key} aria-label={label} placeholder={label} value={recommendationDraft[key as keyof typeof recommendationDraft]} onChange={(event) => setRecommendationDraft((current) => ({ ...current, [key]: event.target.value }))} />)}
-        <button className="publishing-button publishing-button-primary" type="submit" disabled={!Object.values(recommendationDraft).some((value) => value.trim())}><Search size={15} />推荐媒体</button>
-      </form>
+      {flow && (
+        <button
+          type="button"
+          className="publishing-button publishing-button-secondary publishing-business-filter-trigger"
+          aria-expanded={businessFiltersOpen}
+          onClick={() => setBusinessFiltersOpen((value) => !value)}
+        >
+          <Filter size={15} />
+          按业务需求筛选
+        </button>
+      )}
+      {(!flow || businessFiltersOpen) && (
+        <form
+          className="publishing-media-recommendation"
+          aria-label="按业务需求筛选媒体"
+          onSubmit={applySmartRecommendation}
+        >
+          <div className="publishing-media-recommendation-copy">
+            <strong>按业务需求筛选媒体</strong>
+            <span>组合行业与产品关键词，查找目录中的推荐媒体。</span>
+          </div>
+          {[
+            ["industry", "行业"],
+            ["product", "产品或服务"],
+            ["region", "目标地区"],
+            ["audience", "目标受众"],
+            ["keywords", "行业词或品牌词"],
+            ["budget", "预算（可选）"],
+            ["format", "图文要求（可选）"],
+          ].map(([key, label]) => (
+            <input
+              key={key}
+              aria-label={label}
+              placeholder={label}
+              value={
+                recommendationDraft[key as keyof typeof recommendationDraft]
+              }
+              onChange={(event) =>
+                setRecommendationDraft((current) => ({
+                  ...current,
+                  [key]: event.target.value,
+                }))
+              }
+            />
+          ))}
+          <button
+            className="publishing-button publishing-button-primary"
+            type="submit"
+            disabled={
+              !Object.values(recommendationDraft).some((value) => value.trim())
+            }
+          >
+            <Search size={15} />
+            应用筛选
+          </button>
+        </form>
+      )}
 
       <section
         className="publishing-media-workbench"
@@ -1254,7 +1477,28 @@ export default function PublishingMediaLibraryPage({
         </>
       ) : null}
 
-      {selected.size ? (
+      {flow && boundDraft ? (
+        <section className="publishing-flow-result" aria-label="投放选择已保存">
+          <Check size={20} />
+          <div>
+            <strong>稿件与媒体已准备好</strong>
+            <p>
+              {boundDraft.articleTitle} · v{boundDraft.articleVersion}，
+              {boundDraft.items.length} 家媒体。继续配置标题并确认发布。
+            </p>
+            <button
+              type="button"
+              className="publishing-button publishing-button-primary"
+              disabled={selectionBusy}
+              onClick={() => void handoff()}
+            >
+              交给发布助手
+            </button>
+            {selectionError && <p role="alert">{selectionError}</p>}
+          </div>
+        </section>
+      ) : null}
+      {selected.size && !boundDraft ? (
         <aside className="publishing-selection-bar" aria-label="已选媒体">
           <button
             className="publishing-selection-summary"
@@ -1386,6 +1630,7 @@ export default function PublishingMediaLibraryPage({
         </div>
       ) : null}
       <PublishingConfirmDialog
+        inline={Boolean(flow)}
         open={articleChooserOpen}
         title={draft ? "更换发布稿件" : "选择发布稿件"}
         description={
@@ -1393,7 +1638,13 @@ export default function PublishingMediaLibraryPage({
             ? "已选媒体将复制到新的投放草稿，标题重新配置，原草稿保留。"
             : "选择已确认的稿件版本，系统将重新核对媒体报价与内容要求。"
         }
-        confirmLabel={selected.size ? "绑定稿件并配置标题" : "使用这篇稿件"}
+        confirmLabel={
+          selected.size
+            ? flow
+              ? "确认稿件与媒体"
+              : "绑定稿件并配置标题"
+            : "使用这篇稿件"
+        }
         busy={selectionBusy}
         confirmDisabled={!chosenVersion}
         onCancel={() => setArticleChooserOpen(false)}

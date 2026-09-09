@@ -1474,3 +1474,58 @@
     flex-direction: column;
   }
 }
+
+.siteops-panel.siteops-conversation-flow {
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.siteops-conversation-flow .siteops-panel-header {
+  justify-content: flex-end;
+  background: #fff;
+  padding-inline: 0;
+  border: 0;
+}
+.siteops-conversation-flow .siteops-message-list {
+  width: 100%;
+  gap: 28px;
+  padding: 24px 0;
+}
+.siteops-conversation-flow .siteops-message {
+  max-width: 100%;
+  width: 100%;
+}
+.siteops-conversation-flow .siteops-message-avatar,
+.siteops-conversation-flow .siteops-message-meta > strong {
+  display: none;
+}
+.siteops-conversation-flow .siteops-message-bubble {
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+  font-size: 16px;
+}
+.siteops-conversation-flow .siteops-message[data-role="user"] {
+  max-width: min(85%, 720px);
+  width: auto;
+}
+.siteops-conversation-flow
+  .siteops-message[data-role="user"]
+  .siteops-message-bubble {
+  background: #f4f4f5;
+  border: 0;
+  border-radius: 14px;
+  padding: 12px 16px;
+  box-shadow: none;
+}
+.siteops-conversation-flow .siteops-message-footer button {
+  font-size: 12px;
+}
+.siteops-conversation-flow .siteops-message-footer button svg {
+  width: 14px;
+  height: 14px;
+}

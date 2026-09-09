@@ -1,3 +1,8 @@
+import {
+  useBusinessWorkspace,
+  useBusinessWorkspaceSummary,
+} from "../BusinessWorkspaceContext";
+import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import { useEffect, useState } from "react";
 import { BarChart3, Bot, ContactRound, Globe2, RotateCcw } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
@@ -107,6 +112,7 @@ function PendingWorkspace({ module }: { module: "collection" | "leads" }) {
 }
 
 export default function ContentInsightsWorkspace() {
+  const { isWorkbench } = useBusinessWorkspace();
   const search = useSearch();
   const [location, setLocation] = useLocation();
   const route = readContentInsightsRoute(search);
@@ -123,27 +129,49 @@ export default function ContentInsightsWorkspace() {
   }, [location, route.module, search, setLocation]);
   const [session, setSession] = useState(0);
   const navigate = (module: PreviewModule, tab: SettingsTab = route.tab) => {
-    const params = new URLSearchParams({
-      view: "content-insights",
-      contentModule: module,
-    });
+    const params = new URLSearchParams(search);
+    params.set("view", "content-insights");
+    params.set("contentModule", module);
+    params.delete("contentTab");
     if (module === "settings") params.set("contentTab", tab);
     setLocation(
-      `${import.meta.env.DEV && location.startsWith("/preview/user") ? location : "/"}?${params}`,
+      projectWorkspaceUrl(
+        `${import.meta.env.DEV && location.startsWith("/preview/user") ? location : "/"}?${params}`,
+      ),
     );
   };
+  useBusinessWorkspaceSummary({
+    items: [
+      {
+        label: "当前范围",
+        value:
+          [...analyticsModules, ...widgetModules].find(
+            ([id]) => id === route.module,
+          )?.[1] || "概览",
+      },
+      { label: "数据来源", value: "示例数据" },
+      { label: "配置状态", value: "仅本次预览，未正式发布" },
+    ],
+  });
   return (
     <section
-      className="helplook-preview content-insights-workspace"
+      className={`helplook-preview content-insights-workspace ${isWorkbench ? "content-insights-flow" : ""}`}
       aria-label="内容分析与 AI 部件"
     >
-      <header className="hl-insights-heading">
-        <div>
-          <h2>内容分析与 AI 部件</h2>
-          <p>查看分析界面和部件样式；示例数据与设置仅用于本次预览。</p>
-        </div>
-        <span className="hl-preview-badge">界面预览</span>
-      </header>
+      {!isWorkbench && (
+        <header className="hl-insights-heading">
+          <div>
+            <h2>内容分析与 AI 部件</h2>
+            <p>查看分析界面和部件样式；示例数据与设置仅用于本次预览。</p>
+          </div>
+          <span className="hl-preview-badge">界面预览</span>
+        </header>
+      )}
+      {isWorkbench && (
+        <p className="hl-flow-preview-note" role="note">
+          当前为界面预览：分析使用示例数据，部件设置仅在本次预览中生效。
+        </p>
+      )}
       <div className="hl-workspace-nav">
         <div className="hl-group-toggle" aria-label="模块分组">
           <button

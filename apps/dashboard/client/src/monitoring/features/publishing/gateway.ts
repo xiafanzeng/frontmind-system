@@ -41,6 +41,7 @@ export type PublisherGateway = {
   createDraft(
     articleVersionId: string,
     mediaIds: string[],
+    idempotencyKey?: string,
   ): Promise<PublicationDraft>;
   getDraft(draftId: string, signal?: AbortSignal): Promise<PublicationDraft>;
   updateDraftMedia(

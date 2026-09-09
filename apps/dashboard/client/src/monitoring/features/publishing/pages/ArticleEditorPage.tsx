@@ -17,6 +17,16 @@ import {
   useState,
 } from "react";
 import { Link, useLocation } from "wouter";
+import {
+  usePublishingFlow,
+  usePublishingSummary,
+  usePublishingOperationScope,
+  publishingTaskUrl,
+} from "../PublishingFlowContext";
+import {
+  performApprovedWorkspaceNavigation,
+  useWorkspaceDraftGuard,
+} from "@/lib/workspace-navigation-guard";
 
 import { usePublisherGateway, usePublisherQuery } from "../PublishingContext";
 import {
@@ -79,6 +89,8 @@ export default function PublishingArticleEditorPage({
   articleId: string;
 }) {
   const gateway = usePublisherGateway();
+  const flow = usePublishingFlow();
+  const operationScope = usePublishingOperationScope(articleId);
   const [, navigate] = useLocation();
   const load = useCallback(
     (signal: AbortSignal) => gateway.getArticle(articleId, signal),
@@ -97,6 +109,9 @@ export default function PublishingArticleEditorPage({
   const [saveError, setSaveError] = useState("");
   const [savedSignature, setSavedSignature] = useState("");
   const saveRequest = useRef(0);
+  const freezeLock = useRef(false);
+  const [freezing, setFreezing] = useState(false);
+  const [frozenResult, setFrozenResult] = useState<ArticleDetail>();
   const previewObjectUrls = useRef(new Set<string>());
 
   useEffect(
@@ -135,6 +150,25 @@ export default function PublishingArticleEditorPage({
 
   const signature = JSON.stringify([title, content.html, images]);
   const dirty = Boolean(article) && signature !== savedSignature;
+  usePublishingSummary({
+    title: "当前稿件",
+    items: [
+      { label: "稿件", value: title || "正在读取" },
+      {
+        label: "保存状态",
+        value:
+          saveError || (saving ? "保存中" : dirty ? "有未保存修改" : "已保存"),
+      },
+      {
+        label: "版本",
+        value: article?.currentVersion
+          ? `v${article.currentVersion}`
+          : "尚未冻结",
+      },
+      { label: "图片", value: `${images.length} 张` },
+    ],
+    note: frozenResult ? "版本已冻结，可交给媒体助手选择投放资源。" : undefined,
+  });
 
   const saveNow = useCallback(async () => {
     if (!article || !dirty) return article;
@@ -167,6 +201,18 @@ export default function PublishingArticleEditorPage({
       if (request === saveRequest.current) setSaving(false);
     }
   }, [article, content, dirty, gateway, images, signature, title]);
+  useWorkspaceDraftGuard({
+    dirty,
+    label: "稿件正文与图片",
+    save: async () => {
+      try {
+        await saveNow();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
 
   useEffect(() => {
     if (!dirty || saving) return;
@@ -178,11 +224,16 @@ export default function PublishingArticleEditorPage({
   }, [dirty, saveNow, saving, signature]);
 
   const freezeAndContinue = async () => {
-    if (!article) return;
+    if (!article || saving || freezeLock.current) return;
+    const isCurrent = operationScope();
+    freezeLock.current = true;
+    setFreezing(true);
     setSaveError("");
     try {
       const saved = (await saveNow()) ?? article;
+      if (!isCurrent()) return;
       const frozen = await gateway.freezeArticle(saved.id, saved.revision);
+      if (!isCurrent()) return;
       setArticle(frozen);
       setSavedSignature(
         JSON.stringify([
@@ -194,11 +245,57 @@ export default function PublishingArticleEditorPage({
           frozen.images,
         ]),
       );
-      navigate(
-        `/publishing/media?articleVersion=${encodeURIComponent(frozen.currentVersionId!)}`,
-      );
+      if (flow) {
+        setFrozenResult(frozen);
+        await flow
+          .record({
+            id: `article-frozen:${frozen.currentVersionId}`,
+            label: "稿件版本已冻结",
+            detail: `${frozen.title} · v${frozen.currentVersion}`,
+            resources: [
+              { kind: "article", id: frozen.id },
+              { kind: "article_version", id: frozen.currentVersionId! },
+            ],
+          })
+          .catch(() => undefined);
+      } else
+        performApprovedWorkspaceNavigation(() =>
+          navigate(
+            publishingTaskUrl(
+              `/publishing/media?articleVersion=${encodeURIComponent(frozen.currentVersionId!)}`,
+            ),
+          ),
+        );
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : "无法冻结版本");
+    } finally {
+      freezeLock.current = false;
+      setFreezing(false);
+    }
+  };
+  const handoffToMedia = async () => {
+    if (!flow || !frozenResult?.currentVersionId || dirty || freezeLock.current)
+      return;
+    freezeLock.current = true;
+    setFreezing(true);
+    try {
+      await flow.handoff({
+        targetAgentId: "media",
+        title: `媒体选择 · ${frozenResult.title}`,
+        resources: [
+          { kind: "article", id: frozenResult.id },
+          { kind: "article_version", id: frozenResult.currentVersionId },
+        ],
+        idempotencyKey: `article-media-${frozenResult.currentVersionId}`,
+        route: `/publishing/media?articleVersion=${encodeURIComponent(frozenResult.currentVersionId)}`,
+      });
+    } catch (reason) {
+      setSaveError(
+        reason instanceof Error ? reason.message : "交接未完成，请重试",
+      );
+    } finally {
+      freezeLock.current = false;
+      setFreezing(false);
     }
   };
 
@@ -254,15 +351,36 @@ export default function PublishingArticleEditorPage({
               className="publishing-button publishing-button-primary"
               type="button"
               onClick={freezeAndContinue}
-              disabled={saving || !title.trim() || !content.text.trim()}
+              disabled={
+                saving || freezing || !title.trim() || !content.text.trim()
+              }
             >
               <FileCheck2 size={17} />
-              保存新版本
+              {freezing ? "正在冻结…" : "冻结当前版本"}
             </button>
           </>
         ) : undefined
       }
     >
+      {flow && frozenResult && !dirty && (
+        <section className="publishing-flow-result" aria-label="稿件冻结完成">
+          <CheckCircle2 size={20} />
+          <div>
+            <strong>稿件 v{frozenResult.currentVersion} 已冻结</strong>
+            <p>
+              {frozenResult.title}。后续编辑会保留本次冻结版本及其历史引用。
+            </p>
+            <button
+              type="button"
+              className="publishing-button publishing-button-primary"
+              disabled={freezing}
+              onClick={() => void handoffToMedia()}
+            >
+              交给媒体助手
+            </button>
+          </div>
+        </section>
+      )}
       <PublishingBreadcrumbs
         items={[
           { label: "稿件", href: "/publishing/articles" },
@@ -404,14 +522,18 @@ export default function PublishingArticleEditorPage({
                   ))}
                 </ol>
               </section>
-              <button
-                className="publishing-button publishing-button-accent publishing-button-block"
-                type="button"
-                onClick={freezeAndContinue}
-                disabled={saving || !title.trim() || !content.text.trim()}
-              >
-                选择媒体
-              </button>
+              {!flow && (
+                <button
+                  className="publishing-button publishing-button-accent publishing-button-block"
+                  type="button"
+                  onClick={freezeAndContinue}
+                  disabled={
+                    saving || freezing || !title.trim() || !content.text.trim()
+                  }
+                >
+                  选择媒体
+                </button>
+              )}
               <Link
                 className="publishing-button publishing-button-secondary publishing-button-block"
                 href="/publishing/articles"

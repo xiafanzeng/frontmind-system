@@ -313,7 +313,9 @@ export const publisherMediaListInputSchema = z
 
 const publisherMediaLogoPathSchema = z
   .string()
-  .regex(/^\/api\/monitoring\/publisher\/media-logos\/[0-9a-f-]{36}\/[a-f0-9]{64}$/u);
+  .regex(
+    /^\/api\/monitoring\/publisher\/media-logos\/[0-9a-f-]{36}\/[a-f0-9]{64}$/u,
+  );
 
 export const publisherMediaOutputSchema = z.object({
   id: idSchema,
@@ -415,6 +417,7 @@ export const publisherDraftItemInputSchema = z.object({
 export const publisherSaveDraftInputSchema = z
   .object({
     draftId: idSchema.optional(),
+    idempotencyKey: idempotencyKeySchema.optional(),
     articleVersionId: idSchema,
     expectedRevision: z.number().int().nonnegative(),
     titleMode: publisherTitleModeSchema.optional(),
@@ -641,11 +644,16 @@ export const publisherBatchInputSchema = z.object({ batchId: idSchema });
 export const publisherDraftInputSchema = z.object({ draftId: idSchema });
 
 export const publisherDashboardOutputSchema = z.object({
-  catalogCounts: z.object({ news: z.number().int().nonnegative(), selfMedia: z.number().int().nonnegative() }),
+  catalogCounts: z.object({
+    news: z.number().int().nonnegative(),
+    selfMedia: z.number().int().nonnegative(),
+  }),
   articleCount: z.number().int().nonnegative(),
   resumableArticles: z.array(publisherArticleSummaryOutputSchema).max(3),
   processingBatchCount: z.number().int().nonnegative(),
-  processingBatches: z.array(publisherBatchOutputSchema.omit({ items: true })).max(3),
+  processingBatches: z
+    .array(publisherBatchOutputSchema.omit({ items: true }))
+    .max(3),
   catalogRevision: z.string().nullable(),
   catalogSyncedAt: z.coerce.date().nullable(),
   catalogStale: z.boolean(),

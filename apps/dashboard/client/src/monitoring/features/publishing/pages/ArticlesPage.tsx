@@ -10,6 +10,7 @@ import {
   PublishingPage,
 } from "../components/PublishingUi";
 import { publishingDateTime } from "../types";
+import { usePublishingSummary } from "../PublishingFlowContext";
 
 export default function PublishingArticlesPage() {
   const gateway = usePublisherGateway();
@@ -18,6 +19,17 @@ export default function PublishingArticlesPage() {
     [gateway],
   );
   const query = usePublisherQuery(load);
+  usePublishingSummary({
+    title: "项目稿件",
+    items: [
+      { label: "稿件数量", value: `${query.data?.length ?? 0} 篇` },
+      {
+        label: "已冻结版本",
+        value: `${query.data?.filter((article) => article.currentVersionId).length ?? 0} 篇`,
+      },
+    ],
+    note: "选择稿件后可继续编辑正文、管理图片并冻结发布版本。",
+  });
 
   return (
     <PublishingPage

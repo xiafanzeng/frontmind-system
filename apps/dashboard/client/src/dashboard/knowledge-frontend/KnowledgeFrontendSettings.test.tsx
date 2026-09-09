@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { BusinessWorkspaceProvider } from "../BusinessWorkspaceContext";
 import KnowledgeFrontendSettings from "./KnowledgeFrontendSettings";
 import {
   createPortalDraft,
@@ -121,4 +122,53 @@ describe("project knowledge frontend drafts", () => {
     fireEvent.click(screen.getByRole("button", { name: "现有工作流" }));
     expect(screen.getByText("原有任务")).toBeInTheDocument();
   });
+});
+
+it("restores each website task's entry, form and tab while keeping deployment separate", () => {
+  const saved: Record<string, Record<string, unknown>> = {};
+  const value = (id: string) => ({
+    isWorkbench: true,
+    agentId: "website",
+    taskId: id,
+    setSummary: () => undefined,
+    task: {
+      state: { values: saved[id] ?? {} },
+      saveState: vi.fn(async (patch: any) => {
+        saved[id] = { ...saved[id], ...patch.values };
+      }),
+    } as any,
+  });
+  const workspace = (id: string) => (
+    <BusinessWorkspaceProvider value={value(id)}>
+      <KnowledgeFrontendSettings
+        ownerId={1}
+        projectId="project"
+        legacyWorkflow={<p>真实建站步骤</p>}
+      />
+    </BusinessWorkspaceProvider>
+  );
+  const { rerender, unmount } = render(workspace("website-a"));
+  expect(screen.getByText("真实建站步骤")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "配置内容展示" }));
+  fireEvent.change(screen.getByLabelText("站点名称"), {
+    target: { value: "任务甲的配置" },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "SEO配置" }));
+  expect(saved["website-a"].websiteEntry).toBe("settings");
+  expect(saved["website-a"].websiteDraft).toEqual(
+    expect.objectContaining({ name: "任务甲的配置" }),
+  );
+  rerender(workspace("website-b"));
+  expect(screen.getByText("真实建站步骤")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "配置内容展示" }));
+  expect(screen.getByLabelText("站点名称")).toHaveValue("品牌知识中心");
+  unmount();
+  render(workspace("website-a"));
+  expect(screen.getByRole("tab", { name: "SEO配置" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "站点信息" }));
+  expect(screen.getByLabelText("站点名称")).toHaveValue("任务甲的配置");
+  expect(localStorage.getItem(portalDraftKey(1, "project"))).toBeNull();
 });

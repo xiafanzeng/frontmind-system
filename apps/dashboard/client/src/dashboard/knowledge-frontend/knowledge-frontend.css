@@ -1016,3 +1016,97 @@
   transform: translateY(1px);
   filter: brightness(0.96);
 }
+
+.knowledge-frontend.kf-conversation-flow {
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 0;
+}
+.kf-workbench-entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e9e9ec;
+}
+.kf-workbench-entries button {
+  background: #fff;
+  color: #666670;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.kf-workbench-entries button[aria-pressed="true"] {
+  background: #f4f4f6;
+  color: #24242b;
+  font-weight: 500;
+}
+.kf-conversation-flow .kf-topbar {
+  justify-content: flex-end;
+  padding-inline: 0;
+  background: #fff;
+  border: 0;
+}
+.kf-conversation-flow .kf-draft-notice {
+  background: #fff;
+  border: 0;
+  padding-inline: 0;
+  color: #74747d;
+}
+.kf-conversation-flow .kf-shell {
+  display: block;
+  min-height: 0;
+}
+.kf-conversation-flow .kf-sidebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  width: auto;
+  padding: 0 0 16px;
+  border: 0;
+  gap: 6px;
+  background: #fff;
+}
+.kf-conversation-flow .kf-sidebar-heading,
+.kf-conversation-flow .kf-sidebar small,
+.kf-conversation-flow .kf-sidebar-note,
+.kf-conversation-flow .kf-sidebar-divider {
+  display: none;
+}
+.kf-conversation-flow .kf-sidebar > button {
+  width: auto;
+}
+.kf-conversation-flow .kf-main,
+.kf-conversation-flow .kf-scroll {
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  background: #fff;
+}
+.kf-conversation-flow .kf-scroll {
+  padding-inline: 0;
+}
+.kf-conversation-flow .kf-savebar {
+  position: static;
+  padding-inline: 0;
+  background: #fff;
+}
+.kf-inline-preview {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #e8e8eb;
+}
+.kf-inline-preview > h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+.kf-inline-preview > p {
+  font-size: 13px;
+  color: #777780;
+  line-height: 1.8;
+}

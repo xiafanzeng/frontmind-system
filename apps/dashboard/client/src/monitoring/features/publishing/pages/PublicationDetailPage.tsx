@@ -26,6 +26,7 @@ import {
   PublishingPage,
 } from "../components/PublishingUi";
 import { formatPublishingMoney, publishingDateTime } from "../types";
+import { usePublishingSummary } from "../PublishingFlowContext";
 
 export default function PublishingPublicationDetailPage({
   batchId,
@@ -45,6 +46,25 @@ export default function PublishingPublicationDetailPage({
     [batchId, gateway],
   );
   const query = usePublisherQuery(load);
+  usePublishingSummary({
+    title: "发布结果",
+    items: [
+      { label: "稿件", value: query.data?.articleTitle ?? "读取中" },
+      { label: "批次", value: batchId },
+      {
+        label: "已发布",
+        value: `${query.data?.successCount ?? 0} / ${query.data?.itemCount ?? 0} 家`,
+      },
+      {
+        label: "已消费",
+        value: query.data
+          ? formatPublishingMoney(query.data.consumedTenThousandths)
+          : "—",
+      },
+      { label: "待核实", value: `${query.data?.unknownCount ?? 0} 项` },
+    ],
+    note: "回链、费用与执行状态来自当前批次。",
+  });
 
   useEffect(() => {
     const params = new URLSearchParams(search.replace(/^\?/u, ""));

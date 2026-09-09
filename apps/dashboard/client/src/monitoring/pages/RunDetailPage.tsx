@@ -30,6 +30,7 @@ import {
 
 type RunDetailPageProps = {
   run?: MonitorRun;
+  embedded?: boolean;
   comparisonRuns?: MonitorRun[];
   onCancel: () => void | Promise<void>;
   backHref?: string;
@@ -578,7 +579,7 @@ function pageIsScrolledToEnd() {
 }
 
 function scrollContainerAtEnd(element: HTMLElement) {
-  for (let ancestor = element.parentElement; ancestor;) {
+  for (let ancestor = element.parentElement; ancestor; ) {
     const overflowY = window.getComputedStyle(ancestor).overflowY;
     if (
       /^(?:auto|overlay|scroll)$/u.test(overflowY) &&
@@ -659,6 +660,7 @@ function archiveSummary(assets: RunAttempt["assets"]) {
 
 export default function RunDetailPage({
   run,
+  embedded = false,
   comparisonRuns = [],
   onCancel,
   backHref,
@@ -820,13 +822,15 @@ export default function RunDetailPage({
   return (
     <div className="run-page" ref={runPageRef}>
       <div className="run-page-head">
-        <Link
-          className="back-link"
-          href={backHref || `/monitoring-system/${run.monitorId}`}
-        >
-          <ArrowLeft size={15} />
-          {backLabel || "返回监控详情"}
-        </Link>
+        {!embedded && (
+          <Link
+            className="back-link"
+            href={backHref || `/monitoring-system/${run.monitorId}`}
+          >
+            <ArrowLeft size={15} />
+            {backLabel || "返回监控详情"}
+          </Link>
+        )}
         <div className="run-title-row">
           <div>
             <span className={`status-chip ${run.status}`}>
@@ -846,7 +850,9 @@ export default function RunDetailPage({
           <div className="detail-actions">
             <a
               className="secondary-button"
-              href={projectResourceUrl(`/api/monitoring/downloads/runs/${run.id}.xlsx`)}
+              href={projectResourceUrl(
+                `/api/monitoring/downloads/runs/${run.id}.xlsx`,
+              )}
             >
               <Download size={15} />
               导出 XLSX

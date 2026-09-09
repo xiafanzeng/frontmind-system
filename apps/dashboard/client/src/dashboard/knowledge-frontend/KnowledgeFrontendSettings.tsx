@@ -1,4 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
+import {
+  useBusinessWorkspace,
+  useBusinessWorkspaceSummary,
+} from "../BusinessWorkspaceContext";
+import { useRef, useState, type ReactNode } from "react";
+import {
+  useBusinessFlowState,
+  readFlowString,
+  readFlowBoolean,
+} from "../useBusinessFlowState";
 import {
   ArrowDown,
   ArrowUp,
@@ -29,6 +39,7 @@ import {
   portalDraftErrors,
   portalDraftKey,
   readPortalDraft,
+  parsePortalDraft,
   SITE_TABS,
   type PortalDraft,
   type PortalSection,
@@ -255,17 +266,116 @@ export default function KnowledgeFrontendSettings(
   );
   return <SettingsWorkspace key={scope} {...props} scope={scope} />;
 }
+function portalDraftFingerprint(draft: PortalDraft) {
+  const copy = { ...draft };
+  for (const field of ["icon", "logo", "darkLogo", "heroBackground"] as const) {
+    let hash = 2166136261;
+    for (let i = 0; i < draft[field].length; i++)
+      hash = Math.imul(hash ^ draft[field].charCodeAt(i), 16777619);
+    copy[field] = `${draft[field].length}:${hash >>> 0}`;
+  }
+  return JSON.stringify(copy);
+}
 function SettingsWorkspace({
   scope,
   legacyWorkflow,
   publishedContent,
   demo = false,
 }: KnowledgeFrontendSettingsProps & { scope: string }) {
-  const [draft, setDraft] = useState(() => readPortalDraft(scope));
-  const [section, setSection] = useState<PortalSection>("站点设置");
-  const [tab, setTab] = useState<SiteTab>("站点信息");
-  const [websiteTab, setWebsiteTab] = useState("模板配置");
-  const [preview, setPreview] = useState(false);
+  const { isWorkbench, taskId } = useBusinessWorkspace();
+  const [initialDraft] = useState(() => readPortalDraft(scope));
+  const imageNamespace = useRef(crypto.randomUUID());
+  const serializeDraft = (value: PortalDraft) => {
+    const compact = { ...value };
+    for (const field of [
+      "icon",
+      "logo",
+      "darkLogo",
+      "heroBackground",
+    ] as const) {
+      if (!value[field]) continue;
+      const key = `${scope}:task-image:${taskId ?? imageNamespace.current}:${field}`;
+      try {
+        localStorage.setItem(key, value[field]);
+        compact[field] = `local-image:${key}`;
+      } catch {
+        compact[field] = "";
+        setMessage(
+          "图片仍保留在当前页面，本地空间不足，刷新后需要重新添加图片。",
+        );
+      }
+    }
+    return compact;
+  };
+  const restoreDraft = (value: unknown) => {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      (value as PortalDraft).version !== 1
+    )
+      return undefined;
+    const restored = { ...value } as PortalDraft;
+    for (const field of [
+      "icon",
+      "logo",
+      "darkLogo",
+      "heroBackground",
+    ] as const) {
+      const source = restored[field];
+      if (typeof source === "string" && source.startsWith("local-image:")) {
+        try {
+          restored[field] = localStorage.getItem(source.slice(12)) || "";
+        } catch {
+          restored[field] = "";
+        }
+      }
+    }
+    return parsePortalDraft(restored);
+  };
+  const [entry, setEntry] = useBusinessFlowState<
+    "build" | "settings" | "published"
+  >("websiteEntry", "build", (value) =>
+    value === "build" || value === "settings" || value === "published"
+      ? value
+      : undefined,
+  );
+  const [draft, setDraft] = useBusinessFlowState(
+    "websiteDraft",
+    initialDraft,
+    restoreDraft,
+    serializeDraft,
+  );
+  const [savedSnapshot, setSavedSnapshot] = useBusinessFlowState(
+    "websiteSavedSnapshot",
+    portalDraftFingerprint(initialDraft),
+    readFlowString,
+  );
+  const [section, setSection] = useBusinessFlowState<PortalSection>(
+    "websiteSection",
+    "站点设置",
+    (value) =>
+      ["站点设置", "导航栏", "主页", "页脚", "AI友好官网"].includes(
+        String(value),
+      )
+        ? (value as PortalSection)
+        : undefined,
+  );
+  const [tab, setTab] = useBusinessFlowState<SiteTab>(
+    "websiteTab",
+    "站点信息",
+    (value) =>
+      SITE_TABS.includes(value as SiteTab) ? (value as SiteTab) : undefined,
+  );
+  const [websiteTab, setWebsiteTab] = useBusinessFlowState(
+    "websiteBuildTab",
+    "模板配置",
+    readFlowString,
+  );
+  const [preview, setPreview] = useBusinessFlowState(
+    "websitePreview",
+    false,
+    readFlowBoolean,
+  );
   const [saved, setSaved] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
@@ -390,16 +500,30 @@ function SettingsWorkspace({
     setErrors(next);
     if (next.length) {
       setMessage("请修正表单后保存");
-      return;
+      return false;
     }
     try {
       localStorage.setItem(scope, JSON.stringify(draft));
       setSaved(true);
+      setSavedSnapshot(portalDraftFingerprint(draft));
       setMessage("当前项目的本地草稿已保存");
+      return true;
     } catch {
       setMessage("本地空间不足或不可用，草稿尚未保存");
+      return false;
     }
   };
+  useWorkspaceDraftGuard({
+    dirty: isWorkbench && portalDraftFingerprint(draft) !== savedSnapshot,
+    label: "网站内容展示配置",
+    save: async () => save(),
+    discard: async () => {
+      const restored = readPortalDraft(scope);
+      setDraft(restored);
+      setSavedSnapshot(portalDraftFingerprint(restored));
+      return true;
+    },
+  });
   const templateGrid = (
     <div className="kf-template-grid">
       {templates.map((name, i) => (
@@ -426,14 +550,77 @@ function SettingsWorkspace({
     setSection(value);
     setErrors([]);
   };
+  const entryNav = (
+    <nav className="kf-workbench-entries" aria-label="网站管理任务入口">
+      {(
+        [
+          ["build", "建站与部署"],
+          ["settings", "配置内容展示"],
+          ["published", "查看已发布内容"],
+        ] as const
+      ).map(([value, label]) => (
+        <button
+          key={value}
+          type="button"
+          aria-pressed={entry === value}
+          onClick={() => setEntry(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+  if (isWorkbench && entry !== "settings")
+    return (
+      <section
+        className="knowledge-frontend kf-conversation-flow"
+        aria-label="网站管理"
+      >
+        {entryNav}
+        {entry === "build" ? (
+          legacyWorkflow || (
+            <p className="kf-draft-notice">
+              {demo
+                ? "本地演示不连接真实建站服务。"
+                : "当前项目暂无可用的官网工作流。"}
+            </p>
+          )
+        ) : (
+          <>
+            <WebsiteConfigurationSummary
+              title="已发布内容"
+              status="真实内容记录"
+            />
+            <p className="kf-draft-notice">
+              这里展示当前项目已有的发布内容；建站与部署使用独立的真实发布流程。
+            </p>
+            {publishedContent || <p>当前项目暂无已发布内容。</p>}
+          </>
+        )}
+      </section>
+    );
   return (
-    <section className="knowledge-frontend" aria-label="知识库前台设置">
+    <section
+      className={`knowledge-frontend ${isWorkbench ? "kf-conversation-flow" : ""}`}
+      aria-label="知识库前台设置"
+    >
+      {isWorkbench && (
+        <>
+          {entryNav}
+          <WebsiteConfigurationSummary
+            title={draft.name || "内容展示"}
+            status={saved ? "本地草稿已保存" : "本地配置草稿"}
+          />
+        </>
+      )}
       <header className="kf-topbar">
-        <div>
-          <Settings2 size={21} />
-          <strong>知识库前台</strong>
-          <span>站点与内容展示</span>
-        </div>
+        {!isWorkbench && (
+          <div>
+            <Settings2 size={21} />
+            <strong>知识库前台</strong>
+            <span>站点与内容展示</span>
+          </div>
+        )}
         <button
           type="button"
           className="kf-button"
@@ -1179,7 +1366,21 @@ function SettingsWorkspace({
           </footer>
         </div>
       </div>
-      <Dialog open={preview} onOpenChange={setPreview}>
+      {isWorkbench && preview && (
+        <section className="kf-inline-preview" aria-label="站点配置预览">
+          <h3>站点预览 · {draft.template}</h3>
+          <p>使用本地示例栏目预览布局，设置尚未发布到域名。</p>
+          <button
+            type="button"
+            className="kf-button"
+            onClick={() => setPreview(false)}
+          >
+            收起预览
+          </button>
+          <PortalPreview draft={draft} />
+        </section>
+      )}
+      <Dialog open={!isWorkbench && preview} onOpenChange={setPreview}>
         <DialogContent className="kf-preview-dialog">
           <DialogTitle>站点预览 · {draft.template}</DialogTitle>
           <DialogDescription>
@@ -1190,4 +1391,21 @@ function SettingsWorkspace({
       </Dialog>
     </section>
   );
+}
+
+function WebsiteConfigurationSummary({
+  title,
+  status,
+}: {
+  title: string;
+  status: string;
+}) {
+  useBusinessWorkspaceSummary({
+    items: [
+      { label: "当前站点", value: title },
+      { label: "保存状态", value: status },
+      { label: "部署状态", value: "本地展示配置与建站部署分别管理" },
+    ],
+  });
+  return null;
 }

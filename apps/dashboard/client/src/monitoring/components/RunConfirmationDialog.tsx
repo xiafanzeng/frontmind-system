@@ -11,6 +11,7 @@ import { useMonitoringDemo } from "../MonitoringDemoContext";
 
 export type RunConfirmationDialogProps = {
   open: boolean;
+  inline?: boolean;
   monitorName: string;
   questionCount: number;
   platformCount: number;
@@ -45,6 +46,7 @@ function screenshotPolicyLabel(policy?: ScreenshotPolicySummary) {
 
 export default function RunConfirmationDialog({
   open,
+  inline = false,
   monitorName,
   questionCount,
   platformCount,
@@ -92,6 +94,7 @@ export default function RunConfirmationDialog({
 
   return (
     <Modal
+      inline={inline}
       open={open}
       title="确认立即执行"
       description={

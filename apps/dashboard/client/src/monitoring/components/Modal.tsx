@@ -4,6 +4,7 @@ import { useRef, type ReactNode } from "react";
 
 type ModalProps = {
   open: boolean;
+  inline?: boolean;
   title: string;
   description?: string;
   size?: "medium" | "large" | "wide";
@@ -13,6 +14,7 @@ type ModalProps = {
 
 export default function Modal({
   open,
+  inline = false,
   title,
   description,
   size = "medium",
@@ -21,6 +23,29 @@ export default function Modal({
 }: ModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
+  if (inline)
+    return open ? (
+      <section
+        className={`monitoring-inline-step modal-${size}`}
+        aria-label={title}
+      >
+        <header className="modal-header">
+          <div>
+            <h3>{title}</h3>
+            {description && <p>{description}</p>}
+          </div>
+          <button
+            type="button"
+            className="top-icon"
+            aria-label="收起当前步骤"
+            onClick={onClose}
+          >
+            <X size={20} />
+          </button>
+        </header>
+        {children}
+      </section>
+    ) : null;
   return (
     <Dialog.Root
       open={open}

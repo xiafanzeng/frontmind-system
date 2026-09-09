@@ -1,3 +1,9 @@
+import { useBusinessFlowState, readFlowString } from "../useBusinessFlowState";
+import type { WorkbenchResourceRef } from "@shared/workbench-task";
+import {
+  useBusinessWorkspace,
+  useBusinessWorkspaceSummary,
+} from "../BusinessWorkspaceContext";
 import type {
   SiteOpsExecutionStep,
   SiteOpsMessageProjection,
@@ -668,6 +674,41 @@ export default function SiteOpsConversationPanel({
   onRefreshAliyunDomains,
   onDisconnectAliyun,
 }: SiteOpsConversationPanelProps) {
+  const { isWorkbench, task } = useBusinessWorkspace();
+  const summaryBuild = observation?.builds[0];
+  const summaryDeployment = observation?.deployments.find(
+    (item) => item.status === "active",
+  );
+  useBusinessWorkspaceSummary(
+    isWorkbench
+      ? {
+          items: [
+            {
+              label: "站点状态",
+              value: observation
+                ? summaryBuild
+                  ? BUILD_STATUS_LABELS[summaryBuild.status] || "准备建站"
+                  : "等待选择知识库"
+                : "正在读取",
+            },
+            {
+              label: "制作版本",
+              value: summaryBuild ? `v${summaryBuild.ordinal}` : "尚未构建",
+            },
+            {
+              label: "部署状态",
+              value: summaryDeployment ? "已部署" : "尚未部署",
+            },
+            {
+              label: "知识来源",
+              value: observation?.project.currentKnowledgeSnapshotId
+                ? "本次建站绑定的知识版本"
+                : "开始建站时绑定",
+            },
+          ],
+        }
+      : null,
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -680,12 +721,20 @@ export default function SiteOpsConversationPanel({
   const [aliyunFlowPhase, setAliyunFlowPhase] =
     useState<AliyunFlowPhase>("idle");
   const [previewOpenError, setPreviewOpenError] = useState<string | null>(null);
-  const [selectedAliyunDomain, setSelectedAliyunDomain] = useState("");
+  const [selectedAliyunDomain, setSelectedAliyunDomain] = useBusinessFlowState(
+    "siteSelectedDomain",
+    "",
+    readFlowString,
+  );
   const [failedAutomaticDomainKey, setFailedAutomaticDomainKey] = useState<
     string | null
   >(null);
   const [activeVisualPage, setActiveVisualPage] = useState(1);
-  const [revisionText, setRevisionText] = useState("");
+  const [revisionText, setRevisionText] = useBusinessFlowState(
+    "siteRevisionDraft",
+    "",
+    readFlowString,
+  );
   const [revisionFiles, setRevisionFiles] = useState<File[]>([]);
   const [revisionProgress, setRevisionProgress] = useState<number[]>([]);
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
@@ -880,6 +929,54 @@ export default function SiteOpsConversationPanel({
     chooseRevisionFiles(merged);
   }
 
+  async function rememberSiteStep(
+    key: string,
+    label: string,
+    status: "pending" | "completed" | "failed",
+  ) {
+    if (!isWorkbench || !task || !observation) return;
+    const resources: WorkbenchResourceRef[] = [
+      ...(task.state?.resources ?? []).filter(
+        (item) => item.kind !== "site" && item.kind !== "knowledge_snapshot",
+      ),
+      { kind: "site", id: observation.project.id, label: "当前项目官网" },
+      ...(observation.project.currentKnowledgeSnapshotId
+        ? [
+            {
+              kind: "knowledge_snapshot" as const,
+              id: observation.project.currentKnowledgeSnapshotId,
+              label: "建站知识版本",
+            },
+          ]
+        : []),
+    ];
+    await task.saveState({
+      step: status === "pending" ? "website-submitting" : "website-observing",
+      resources,
+      values: {
+        siteProjectId: observation.project.id,
+        siteConversationId: observation.project.conversationId,
+        siteProjectRevision: observation.project.revision,
+        siteAction: key,
+      },
+      record: {
+        id: `site-${key}-${observation.project.revision}`.slice(0, 128),
+        label,
+        status,
+        detail:
+          status === "completed"
+            ? "操作已提交，最新构建与部署状态以站点服务返回为准。"
+            : undefined,
+      },
+    });
+  }
+  function rememberCompletedStep(key: string, label: string) {
+    void rememberSiteStep(key, label, "completed").catch(() =>
+      setLocalError(
+        "操作已提交，任务记录同步失败。请从任务辅助区重试同步，最新结果仍可在当前页面查看。",
+      ),
+    );
+  }
   async function submitRevision(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = revisionText.trim();
@@ -895,6 +992,7 @@ export default function SiteOpsConversationPanel({
     setRevisionError(null);
     setRevisionProgress(revisionFiles.map(() => 0));
     try {
+      await rememberSiteStep("revision", "提交官网修改需求", "pending");
       await onSubmitRevision({
         text,
         files: revisionFiles,
@@ -906,6 +1004,7 @@ export default function SiteOpsConversationPanel({
           });
         },
       });
+      rememberCompletedStep("revision", "已提交官网修改需求");
       setRevisionText("");
       setRevisionFiles([]);
       setRevisionProgress([]);
@@ -925,7 +1024,9 @@ export default function SiteOpsConversationPanel({
     setBusyAction(key);
     setLocalError(null);
     try {
+      await rememberSiteStep(key, "提交建站操作", "pending");
       await onAction(input);
+      rememberCompletedStep(key, "已提交建站操作");
     } catch (actionError) {
       if (input.action !== "select_visual" || !onRetrySelectVisual) {
         setLocalError(
@@ -1382,17 +1483,23 @@ export default function SiteOpsConversationPanel({
   const mainlandReady =
     dnsReady && observation.domainState?.icpStatus === "approved";
   return (
-    <section className="siteops-panel" aria-labelledby="siteops-panel-title">
+    <section
+      className={`siteops-panel ${isWorkbench ? "siteops-conversation-flow" : ""}`}
+      aria-label={isWorkbench ? "建站协作" : undefined}
+      aria-labelledby={isWorkbench ? undefined : "siteops-panel-title"}
+    >
       <header className="siteops-panel-header">
-        <div>
-          <h2 id="siteops-panel-title" className="siteops-panel-title">
-            <Sparkles size={15} aria-hidden="true" />
-            {SITEOPS_CUSTOMER_DISPLAY_NAME}
-          </h2>
-          <span>
-            从企业知识库开始，选择视觉方案后由 FrontMind 完成官网制作与检查。
-          </span>
-        </div>
+        {!isWorkbench && (
+          <div>
+            <h2 id="siteops-panel-title" className="siteops-panel-title">
+              <Sparkles size={15} aria-hidden="true" />
+              {SITEOPS_CUSTOMER_DISPLAY_NAME}
+            </h2>
+            <span>
+              从企业知识库开始，选择视觉方案后由 FrontMind 完成官网制作与检查。
+            </span>
+          </div>
+        )}
         <div className="siteops-header-controls">
           <div className="siteops-header-actions">
             {onRefresh && (

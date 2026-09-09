@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { BusinessWorkspaceProvider } from "./BusinessWorkspaceContext";
+import {
+  fireEvent,
+  render,
+  screen,
+  within,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import ManagedKeywordTables, {
@@ -302,4 +309,78 @@ describe("ManagedKeywordTables", () => {
       screen.getByRole("button", { name: "抓取品牌全域词库" }),
     ).toBeInTheDocument();
   });
+});
+
+it("shows a paged catalog and requires the selected row to be reviewed before handoff in workbench", async () => {
+  const handoff = vi.fn();
+  const saveState = vi.fn(async () => ({}));
+  const createHandoff = vi.fn(async () => ({
+    conversationId: "target-question-task",
+  }));
+  render(
+    <BusinessWorkspaceProvider
+      value={{
+        isWorkbench: true,
+        agentId: "keywords",
+        taskId: "task-1",
+        task: { saveState, handoff: createHandoff, state: null } as any,
+        setSummary: () => undefined,
+      }}
+    >
+      <ManagedKeywordTables
+        dashboardRevision={7}
+        tables={[
+          {
+            id: "words",
+            title: "全域问题",
+            columns: ["问题", "主分类"],
+            rows: Array.from({ length: 25 }, (_, index) => [
+              `问题 ${index + 1}`,
+              "产品场景词",
+            ]),
+          },
+        ]}
+        onUseQuestion={handoff}
+      />
+    </BusinessWorkspaceProvider>,
+  );
+  expect(screen.getAllByRole("row")).toHaveLength(21);
+  expect(screen.queryByText("MindPromise智诺 / 品牌建设")).toBeNull();
+  fireEvent.click(screen.getAllByRole("button", { name: "选择词条" })[0]);
+  expect(handoff).not.toHaveBeenCalled();
+  expect(saveState).toHaveBeenCalledWith(
+    expect.objectContaining({
+      values: { selectedKeyword: expect.objectContaining({ rowIndex: 0 }) },
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "确认选择并交给问题优化" }),
+  );
+  await waitFor(() =>
+    expect(handoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "问题 1",
+        tableId: "words",
+        rowIndex: 0,
+        workbenchTaskId: "target-question-task",
+      }),
+    ),
+  );
+  expect(createHandoff).toHaveBeenCalledWith(
+    expect.objectContaining({
+      targetAgentId: "questions",
+      idempotencyKey: "keyword:7:words:0",
+      values: expect.objectContaining({
+        questionDraft: "问题 1",
+        questionOrigin: "brand_keyword_library",
+        questionLibraryRef: {
+          dashboardRevision: 7,
+          tableId: "words",
+          rowIndex: 0,
+        },
+      }),
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  expect(screen.getAllByRole("row")).toHaveLength(6);
 });

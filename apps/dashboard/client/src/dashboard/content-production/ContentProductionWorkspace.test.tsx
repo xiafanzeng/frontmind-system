@@ -982,3 +982,30 @@ it("shows neutral loading for an unknown historical task instead of inventing Re
     view.container.querySelector('[aria-current="step"]')?.textContent,
   ).toContain("确认文章写作方案");
 });
+
+it("places native chat and actionable stage confirmation in main, keeping only a summary at right", async () => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1440,
+  });
+  paused("awaiting_blueprint_confirmation");
+  render(<ContentProductionWorkspace workbench projectId="project-1" />);
+  const main = screen.getByRole("region", { name: "主工作区" });
+  expect(within(main).getByTestId("original-chat")).toBeInTheDocument();
+  expect(
+    await within(main).findByRole("button", { name: "确认写作方案，开始正文" }),
+  ).toBeInTheDocument();
+  const auxiliary = screen.getByRole("complementary", { name: "任务辅助区" });
+  expect(
+    within(auxiliary).queryByRole("button", { name: "确认写作方案，开始正文" }),
+  ).toBeNull();
+  expect(within(auxiliary).queryByRole("textbox")).toBeNull();
+  expect(
+    screen.queryByRole("combobox", { name: "选择内容制作任务" }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    within(main).getByRole("region", { name: "新建内容任务" }),
+  ).toBeInTheDocument();
+});

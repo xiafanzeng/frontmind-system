@@ -6,7 +6,7 @@ import {
   LoaderCircle,
   WandSparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 
 import { usePublisherGateway, usePublisherQuery } from "../PublishingContext";
@@ -20,9 +20,21 @@ import {
 } from "../components/PublishingUi";
 import { unicodeLength } from "../queryState";
 import { formatPublishingMoney, type PublisherTitleMode } from "../types";
+import {
+  usePublishingFlow,
+  usePublishingSummary,
+  usePublishingOperationScope,
+  publishingTaskUrl,
+} from "../PublishingFlowContext";
+import {
+  performApprovedWorkspaceNavigation,
+  useWorkspaceDraftGuard,
+} from "@/lib/workspace-navigation-guard";
 
 export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
   const gateway = usePublisherGateway();
+  const flow = usePublishingFlow();
+  const operationScope = usePublishingOperationScope(draftId);
   const [, navigate] = useLocation();
   const load = useCallback(
     (signal: AbortSignal) => gateway.getDraft(draftId, signal),
@@ -36,6 +48,8 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
   const [error, setError] = useState("");
   const [onlyErrors, setOnlyErrors] = useState(false);
   const [confirmSingle, setConfirmSingle] = useState(false);
+  const submitting = useRef(false);
+  const [savedSignature, setSavedSignature] = useState("");
 
   useEffect(() => {
     if (!query.data) return;
@@ -45,6 +59,15 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
       Object.fromEntries(
         query.data.items.map((item) => [item.media.id, item.title]),
       ),
+    );
+    setSavedSignature(
+      JSON.stringify([
+        query.data.titleMode,
+        query.data.sharedTitle ?? query.data.articleTitle,
+        Object.fromEntries(
+          query.data.items.map((item) => [item.media.id, item.title]),
+        ),
+      ]),
     );
   }, [query.data]);
 
@@ -68,6 +91,30 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
   const invalidCount = [...validation.values()].filter(
     (item) => item.message,
   ).length;
+  const signature = JSON.stringify([mode, sharedTitle, titles]);
+  useWorkspaceDraftGuard({
+    dirty: Boolean(query.data) && signature !== savedSignature,
+    label: "发布标题",
+  });
+  usePublishingSummary({
+    title: "发布准备",
+    items: [
+      { label: "稿件", value: query.data?.articleTitle ?? "读取中" },
+      {
+        label: "冻结版本",
+        value: query.data ? `v${query.data.articleVersion}` : "—",
+      },
+      { label: "投放媒体", value: `${query.data?.items.length ?? 0} 家` },
+      {
+        label: "标题状态",
+        value: busy
+          ? "保存中"
+          : invalidCount
+            ? `${invalidCount} 项需要修改`
+            : "可继续预检",
+      },
+    ],
+  });
 
   const requestMode = (next: PublisherTitleMode) => {
     if (next === mode) return;
@@ -106,7 +153,9 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
     );
 
   const submit = async () => {
-    if (!query.data || invalidCount || busy) return;
+    if (!query.data || invalidCount || busy || submitting.current) return;
+    const isCurrent = operationScope();
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -116,10 +165,31 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
         titles,
         expectedRevision: query.data.revision,
       });
-      navigate(`/publishing/drafts/${draftId}/review`);
+      if (!isCurrent()) return;
+      setSavedSignature(signature);
+      await flow
+        ?.record({
+          id: `titles:${draftId}:${query.data.revision + 1}`,
+          label: "发布标题已保存",
+          detail: `${query.data.items.length} 家媒体 · ${mode === "single" ? "统一标题" : "逐家标题"}`,
+          resources: [{ kind: "publication_draft", id: draftId }],
+        })
+        .catch(() => undefined);
+      if (isCurrent())
+        performApprovedWorkspaceNavigation(() =>
+          navigate(
+            publishingTaskUrl(
+              `/publishing/drafts/${draftId}/review`,
+              flow?.taskId,
+            ),
+          ),
+        );
     } catch (reason) {
+      if (!isCurrent()) return;
       setError(reason instanceof Error ? reason.message : "标题保存失败");
       setBusy(false);
+    } finally {
+      submitting.current = false;
     }
   };
 
@@ -148,10 +218,7 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
               </span>
               <div>
                 <strong>{query.data.articleTitle}</strong>
-                <span>
-                  冻结版本 v{query.data.articleVersion} ·{" "}
-                  {query.data.articleVersionHash.slice(0, 12)}
-                </span>
+                <span>冻结版本 v{query.data.articleVersion}</span>
               </div>
               <span>{query.data.items.length} 家媒体</span>
             </header>

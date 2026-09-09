@@ -1,3 +1,4 @@
+import { GENERAL_TASK_SUGGESTIONS } from "./GeneralAgentWelcome";
 import type { ContentProductionInput } from "@shared/content-production";
 /**
  * ChatInput Component - Message input with file upload and runtime status
@@ -50,6 +51,19 @@ interface FilePreview {
   file: File;
   id: string;
 }
+type ComposerCoordinates = {
+  conversationId: string;
+  resetRevision: number | undefined;
+  reply: NonNullable<ReturnType<typeof currentKnowledgeBaseReplySnapshot>>;
+};
+type ComposerDraft = {
+  text: string;
+  files: FilePreview[];
+  coordinates: ComposerCoordinates | null;
+};
+// File bytes remain in page memory across Agent routes. Account/project scope is
+// part of every key; an attachment is never copied to another task.
+const workspaceComposerDrafts = new Map<string, ComposerDraft>();
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -145,6 +159,7 @@ export default function ChatInput({
   purpose,
   contentProduction,
   composerPrefill,
+  welcomeSuggestions = false,
   responseLogicContext,
   knowledgeBaseProgress,
   knowledgeBaseResetRevision,
@@ -157,6 +172,7 @@ export default function ChatInput({
   purpose?: "enterprise_qa" | "content_production";
   contentProduction?: ContentProductionInput;
   composerPrefill?: string;
+  welcomeSuggestions?: boolean;
   responseLogicContext?: ResponseLogicTaskContext;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
@@ -164,25 +180,45 @@ export default function ChatInput({
   knowledgeEditingBlocked?: boolean;
   onComposerDirtyChange?: (dirty: boolean) => void;
 }) {
+  const {
+    activeConversation,
+    workbenchScopeKey,
+    commitKnowledgeBaseObservation,
+    wakeKnowledgeBaseConversation,
+    rollbackPendingKnowledgeBaseTurn,
+  } = useConversation();
+  const draftKey = `${workbenchScopeKey ?? "workspace"}:${activeConversation?.id ?? "new"}`;
+  const localDrafts = useRef(new Map<string, ComposerDraft>());
+  const composerDrafts = workbenchScopeKey
+    ? workspaceComposerDrafts
+    : localDrafts.current;
+  const initialDraft = useRef(composerDrafts.get(draftKey));
+  const currentDraftKey = useRef(draftKey);
+  currentDraftKey.current = draftKey;
   const responseLogicInitialPromptLocked = Boolean(
     responseLogicContext && composerPrefill,
   );
   const [text, setText] = useState(
-    () => composerPrefill || consumePendingFrontMindBuildDraft(),
+    () =>
+      initialDraft.current?.text ??
+      (composerPrefill || consumePendingFrontMindBuildDraft()),
   );
-  const [files, setFiles] = useState<FilePreview[]>([]);
+  const [files, setFiles] = useState<FilePreview[]>(
+    () => initialDraft.current?.files ?? [],
+  );
   const [isDragging, setIsDragging] = useState(false);
-  const [isSending, setIsSending] = useState(false);
+  const [sendingTasks, setSendingTasks] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const isSending = sendingTasks.has(draftKey);
   const [replacingOfficialLogo, setReplacingOfficialLogo] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Synchronous lock ref to prevent duplicate sends (React state updates are async)
-  const sendLockRef = useRef(false);
-  const draftCoordinates = useRef<{
-    conversationId: string;
-    resetRevision: number | undefined;
-    reply: NonNullable<ReturnType<typeof currentKnowledgeBaseReplySnapshot>>;
-  } | null>(null);
+  const sendLockRef = useRef(new Set<string>());
+  const draftCoordinates = useRef<ComposerCoordinates | null>(
+    initialDraft.current?.coordinates ?? null,
+  );
   const [, setDraftBindingRevision] = useState(0);
   const composerDirty = !isSending && Boolean(text.trim() || files.length);
   useWorkspaceDraftGuard({
@@ -263,12 +299,37 @@ export default function ChatInput({
     continueKnowledgeBaseAttachmentAttempt,
     discardKnowledgeBaseAttachmentAttempt,
   } = useSendMessage();
-  const {
-    activeConversation,
-    commitKnowledgeBaseObservation,
-    wakeKnowledgeBaseConversation,
-    rollbackPendingKnowledgeBaseTurn,
-  } = useConversation();
+  const previousDraftKey = useRef(draftKey);
+  const latestDraft = useRef<ComposerDraft>({
+    text,
+    files,
+    coordinates: draftCoordinates.current,
+  });
+  useLayoutEffect(() => {
+    if (previousDraftKey.current !== draftKey) {
+      composerDrafts.set(previousDraftKey.current, latestDraft.current);
+      const restored = composerDrafts.get(draftKey);
+      const next = restored ?? {
+        text: composerPrefill ?? "",
+        files: [],
+        coordinates: null,
+      };
+      draftCoordinates.current = next.coordinates;
+      latestDraft.current = next;
+      previousDraftKey.current = draftKey;
+      setText(next.text);
+      setFiles(next.files);
+      setReplacingOfficialLogo(false);
+      setDraftBindingRevision((value) => value + 1);
+    } else {
+      latestDraft.current = {
+        text,
+        files,
+        coordinates: draftCoordinates.current,
+      };
+      composerDrafts.set(draftKey, latestDraft.current);
+    }
+  });
 
   // Only show upload progress if it belongs to the current active conversation
   const uploadProgress =
@@ -532,10 +593,10 @@ export default function ChatInput({
       }
 
       // Synchronous lock: immediately block subsequent calls before async state updates.
-      if (sendLockRef.current) return;
-      sendLockRef.current = true;
-
-      setIsSending(true);
+      const submittedDraftKey = draftKey;
+      if (sendLockRef.current.has(submittedDraftKey)) return;
+      sendLockRef.current.add(submittedDraftKey);
+      setSendingTasks((previous) => new Set(previous).add(submittedDraftKey));
       try {
         const sent = await sendMessage(
           message,
@@ -571,17 +632,31 @@ export default function ChatInput({
           },
         );
         if (sent) {
-          setText("");
-          clearSelectedFiles();
-          setReplacingOfficialLogo(false);
-          textareaRef.current?.focus();
+          composerDrafts.set(submittedDraftKey, {
+            text: "",
+            files: [],
+            coordinates: null,
+          });
+          if (currentDraftKey.current === submittedDraftKey) {
+            setText("");
+            clearSelectedFiles();
+            draftCoordinates.current = null;
+            setReplacingOfficialLogo(false);
+            textareaRef.current?.focus();
+          }
         }
       } finally {
-        setIsSending(false);
-        sendLockRef.current = false;
+        sendLockRef.current.delete(submittedDraftKey);
+        setSendingTasks((previous) => {
+          const next = new Set(previous);
+          next.delete(submittedDraftKey);
+          return next;
+        });
       }
     },
     [
+      draftKey,
+      composerDrafts,
       clearSelectedFiles,
       fixedAgentProfile,
       inputLocked,
@@ -695,7 +770,7 @@ export default function ChatInput({
 
   return (
     <div
-      className="knowledge-composer relative shrink-0 border-t border-border/60 bg-gradient-to-t from-white via-white/95 to-transparent px-3 pb-3 pt-3 sm:px-5 sm:pb-5"
+      className={`knowledge-composer relative shrink-0 bg-white px-3 pb-3 pt-3 sm:px-5 sm:pb-5 ${welcomeSuggestions ? "is-welcome-composer" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1043,9 +1118,9 @@ export default function ChatInput({
           )}
         </AnimatePresence>
 
-        {/* File previews */}
-        <AnimatePresence>
-          {files.length > 0 && (
+        {/* A different task must not retain an exiting attachment animation. */}
+        <AnimatePresence key={draftKey}>
+          {previousDraftKey.current === draftKey && files.length > 0 && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -1107,6 +1182,7 @@ export default function ChatInput({
                       variant="ghost"
                       size="icon"
                       className="w-9 h-9 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary"
+                      aria-label="添加附件"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={
                         responseLogicInitialPromptLocked ||
@@ -1193,6 +1269,7 @@ export default function ChatInput({
 
                 {/* Send button */}
                 <Button
+                  aria-label="发送消息"
                   onClick={handleSubmit}
                   disabled={
                     (!text.trim() && files.length === 0) ||
@@ -1228,6 +1305,24 @@ export default function ChatInput({
                     : "Enter 发送 · Shift+Enter 换行 · 支持资料、图片与交付文件上传"}
               </p>
             </div>
+          </div>
+        )}
+        {welcomeSuggestions && (
+          <div className="general-task-suggestions" aria-label="快捷任务建议">
+            {GENERAL_TASK_SUGGESTIONS.map((item) => (
+              <button
+                type="button"
+                key={item.label}
+                onClick={() => {
+                  setText((current) =>
+                    current.trim() ? `${current}\n${item.prompt}` : item.prompt,
+                  );
+                  requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
         )}
       </div>

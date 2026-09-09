@@ -42,7 +42,7 @@ describe("Managed public execution evidence", () => {
           type: "agent.thinking",
           processed_at: null,
           created_at: "2026-09-09T01:00:00Z",
-          content: "private-reasoning",
+          content: " 先检查题目。\n再执行验证。 ",
         },
         {
           id: "call",
@@ -76,14 +76,20 @@ describe("Managed public execution evidence", () => {
           created_at: "2026-09-09T01:00:03Z",
         },
       ],
-      { commands: [] } as any,
+      { commands: [], generalIdentitySystem: "frontmind-general-v2" } as any,
     );
     expect(events.map((event) => event.id)).toEqual(["thinking", "call"]);
     expect(events[1]).toMatchObject({
       executionActivity: { kind: "tool_use", label: "搜索网页" },
     });
     expect(events[0]!.timestamp).toBeGreaterThan(0);
-    expect(JSON.stringify(events)).not.toMatch(/private-|unprocessed-answer/);
+    expect(events[0]!.executionActivity).toMatchObject({
+      thinkingText: " 先检查题目。\n再执行验证。 ",
+      thinkingSource: "event",
+    });
+    expect(JSON.stringify(events)).not.toMatch(
+      /private-query|unprocessed-answer/,
+    );
   });
   it("retains lifecycle history and tool kind for presentation while omitting impossible durations", () => {
     const dto = projectGeneralExecution("task", [
@@ -121,7 +127,7 @@ describe("Managed public execution evidence", () => {
     expect(dto.timeline[1]).not.toHaveProperty("finishedAt");
     expect(JSON.stringify(dto)).not.toContain("private-name");
   });
-  it("retains native linkage and strict result tri-state without arguments, results or reasoning", () => {
+  it("retains native linkage and thinking text while excluding tool arguments and result payloads", () => {
     for (const flag of [true, false, undefined]) {
       const events = normalizeDashboardZhipuEvents(
         [
@@ -144,17 +150,21 @@ describe("Managed public execution evidence", () => {
             id: "t",
             type: "agent.thinking",
             processed_at: "2026-09-08T01:00:00Z",
-            content: [{ text: "secret-reasoning" }],
+            content: [{ type: "text", text: "先核对材料，再计算。" }],
           },
         ],
-        { commands: [] } as any,
+        { commands: [], generalIdentitySystem: "frontmind-general-v2" } as any,
       );
       expect(events[1]!.executionActivity).toEqual({
         kind: "tool_result",
         callId: "u",
         isError: flag ?? null,
       });
-      expect(JSON.stringify(events)).not.toMatch(/secret-|input|content/);
+      expect(JSON.stringify(events)).not.toMatch(/secret-input|secret-output/);
+      expect(events[2]!.executionActivity).toMatchObject({
+        thinkingText: "先核对材料，再计算。",
+        thinkingComplete: true,
+      });
       expect(events.map((event) => event.providerOriginalRank)).toEqual([
         0, 1, 2,
       ]);
@@ -272,5 +282,171 @@ describe("Managed public execution evidence", () => {
     expect(system).toContain("没有实际执行的操作不能声称完成");
     expect(system).toContain("开始和关键进展处用一到两句话");
     expect(system).toContain("正文不要重复工具调用日志");
+  });
+});
+
+describe("Provider thinking transcript projection", () => {
+  const began = "2026-09-09T02:00:00Z";
+  const captures = [
+    {
+      eventId: "think",
+      commandKey: "initial",
+      afterEventId: "user",
+      text: " 先计算\n再验证 <script>原文</script> ",
+      startedAt: began,
+      complete: true,
+    },
+  ];
+  const runtime = {
+    commands: [{ key: "initial", eventId: "user", createdAt: began }],
+    thinkingCaptures: captures,
+    generalIdentitySystem: "frontmind-general-v2",
+  } as any;
+  // No command projection fields are needed here: use an unowned user message
+  // as the chronological boundary and a separately acknowledged runtime key.
+  const raw = [
+    { id: "user", type: "user.message", processed_at: began, content: [] },
+  ];
+  const normalize = (events: any[], state = runtime) =>
+    normalizeDashboardZhipuEvents(events, {
+      ...state,
+      commands: state.commands.map((command: any) => ({
+        ...command,
+        prompt: "",
+        providerPromptHash:
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        attachments: [],
+      })),
+    });
+  it("keeps streamed text when the complete history event contains no text", () => {
+    const normalized = normalize([
+      ...raw,
+      { id: "think", type: "agent.thinking", processed_at: began },
+    ]);
+    expect(normalized[1]!.executionActivity).toMatchObject({
+      thinkingText: captures[0]!.text,
+      thinkingSource: "stream",
+      thinkingComplete: true,
+    });
+    const dto = projectGeneralExecution(
+      "task",
+      normalized.map((event, index) =>
+        row(event.id, index, event.executionActivity),
+      ),
+    );
+    expect(dto.timeline.find((item) => item.kind === "status")).toMatchObject({
+      thinkingText: captures[0]!.text,
+    });
+  });
+  it("shows only a positively command-bound stream preview with its real event id", () => {
+    const normalized = normalize(raw);
+    expect(normalized.map((item) => item.id)).toEqual(["user", "think"]);
+    expect(normalized[1]).toMatchObject({
+      providerProjection: "zhipu_thinking_stream_preview",
+      executionActivity: { thinkingSource: "stream" },
+    });
+    expect(
+      normalize(raw, {
+        ...runtime,
+        thinkingCaptures: [{ ...captures[0], commandKey: "foreign" }],
+      }),
+    ).toHaveLength(1);
+  });
+  it("does not attach a capture to another turn or overwrite an authoritative full text", () => {
+    const withNextTurn = [
+      ...raw,
+      { id: "next", type: "user.message", processed_at: began },
+      { id: "think", type: "agent.thinking", processed_at: began },
+    ];
+    expect(
+      normalize(withNextTurn).at(-1)!.executionActivity,
+    ).not.toHaveProperty("thinkingText");
+    expect(normalize(withNextTurn).map((item) => item.id)).toEqual([
+      "user",
+      "next",
+      "think",
+    ]);
+    expect(
+      normalize([
+        ...raw,
+        {
+          id: "think",
+          type: "agent.thinking",
+          processed_at: began,
+          content: "完整正文",
+        },
+      ])[1]!.executionActivity,
+    ).toMatchObject({ thinkingText: "完整正文", thinkingSource: "event" });
+  });
+  it("binds repeated provider event IDs to their own command boundaries", () => {
+    const secondRuntime = {
+      ...runtime,
+      commands: [
+        ...runtime.commands,
+        {
+          key: "turn:2",
+          eventId: "next",
+          createdAt: began,
+          prompt: "",
+          providerPromptHash:
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          attachments: [],
+        },
+      ],
+      thinkingCaptures: [
+        ...captures,
+        {
+          ...captures[0],
+          commandKey: "turn:2",
+          afterEventId: "next",
+          text: "第二轮正文",
+        },
+      ],
+    } as any;
+    const normalized = normalize(
+      [
+        ...raw,
+        { id: "next", type: "user.message", processed_at: began, content: [] },
+      ],
+      secondRuntime,
+    );
+    expect(normalized.map((item) => item.id)).toEqual([
+      "user",
+      "think",
+      "next",
+      "think",
+    ]);
+    expect(normalized[1]!.executionActivity).toMatchObject({
+      thinkingText: captures[0]!.text,
+    });
+    expect(normalized[3]!.executionActivity).toMatchObject({
+      thinkingText: "第二轮正文",
+    });
+  });
+  it("does not project stream captures outside the general agent", () => {
+    const normalized = normalize(raw, {
+      ...runtime,
+      generalIdentitySystem: undefined,
+    });
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]!.executionActivity).toBeUndefined();
+  });
+  it("keeps thinking text restricted to thinking statuses at the read boundary", () => {
+    const dto = projectGeneralExecution("task", [
+      row("run", 0, {
+        kind: "status",
+        status: "running",
+        thinkingText: "not a thinking event",
+      }),
+      row("text", 1, {
+        kind: "status",
+        status: "thinking",
+        thinkingText: captures[0]!.text,
+        input: "ignored",
+      }),
+    ]);
+    expect(dto.timeline[0]).not.toHaveProperty("thinkingText");
+    expect(dto.timeline[1]).toMatchObject({ thinkingText: captures[0]!.text });
+    expect(JSON.stringify(dto)).not.toContain("ignored");
   });
 });

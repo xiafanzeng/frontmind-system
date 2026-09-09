@@ -1,4 +1,10 @@
-/** Public execution evidence. Never includes tool arguments, results or reasoning. */
+/** Tenant-owned execution evidence, including thinking text returned by the provider.
+ * Tool arguments and tool result payloads are not part of this contract. */
+export type GeneralThinkingText = {
+  thinkingText?: string;
+  thinkingSource?: "event" | "stream";
+  thinkingComplete?: boolean;
+};
 export type GeneralToolStatus =
   | "running"
   | "waiting"
@@ -9,7 +15,7 @@ export type GeneralToolStatus =
 export type GeneralExecutionActivity =
   | { kind: "tool_use"; label: string; toolKind: "builtin" | "mcp" | "custom" }
   | { kind: "tool_result"; callId: string | null; isError: boolean | null }
-  | {
+  | ({
       kind: "status";
       status:
         | "thinking"
@@ -21,7 +27,7 @@ export type GeneralExecutionActivity =
         | "ended"
         | "cancelled";
       waitingIds?: string[];
-    };
+    } & GeneralThinkingText);
 
 export type GeneralExecutionEntry = {
   id: string;
@@ -41,10 +47,10 @@ export type GeneralExecutionEntry = {
       finishedAt?: number;
       resultOnly?: true;
     }
-  | {
+  | ({
       kind: "status";
       status: Extract<GeneralExecutionActivity, { kind: "status" }>["status"];
-    }
+    } & GeneralThinkingText)
 );
 
 export interface GeneralExecutionDto {
@@ -79,6 +85,19 @@ export function generalToolLabel(
     : kind === "mcp"
       ? "调用扩展工具"
       : "调用工具";
+}
+
+/** Only explicit thinking text is accepted; arbitrary provider objects are never serialized. */
+export function generalThinkingText(
+  value: GeneralThinkingText,
+): GeneralThinkingText {
+  if (typeof value.thinkingText !== "string" || !value.thinkingText.trim())
+    return {};
+  return {
+    thinkingText: value.thinkingText,
+    thinkingSource: value.thinkingSource === "stream" ? "stream" : "event",
+    thinkingComplete: value.thinkingComplete !== false,
+  };
 }
 
 /** Strict whitelist at both normalization and persisted-data read boundaries. */
@@ -131,6 +150,9 @@ export function generalExecutionActivity(
   ) {
     return {
       kind: "status",
+      ...(item.status === "thinking"
+        ? generalThinkingText(item as GeneralThinkingText)
+        : {}),
       status: item.status as Extract<
         GeneralExecutionActivity,
         { kind: "status" }

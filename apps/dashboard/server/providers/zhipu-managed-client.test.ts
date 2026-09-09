@@ -337,6 +337,69 @@ it("decodes CRLF split across chunks and an EOF frame without losing durable eve
   }
 });
 
+it("opts into thinking/message preview deltas and keeps them out of durable events", async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      const frames = [
+        'event: event_start\ndata: {"event":{"type":"agent.thinking"}}\n\n',
+        'event: event_delta\ndata: {"content_delta":"思"}\n\n',
+        'event: event_delta\ndata: {"content_delta":"考中"}\n\n',
+        'data: {"id":"event_1","type":"agent.message","content":"done"}\n\n',
+      ];
+      for (const frame of frames)
+        controller.enqueue(new TextEncoder().encode(frame));
+      controller.close();
+    },
+  });
+  const transport = vi.fn(async (url: string) =>
+    new Response(body, { headers: { "content-type": "text/event-stream" } }),
+  );
+  const client = new ZhipuManagedClient({ apiKey: "test", fetchImpl: transport });
+  const previews: unknown[] = [];
+  const stream = await client.subscribeEvents("sess_preview", {
+    eventDeltas: ["agent.thinking", "agent.message", "agent.thinking"],
+    onPreview: (frame) => void previews.push(frame),
+  });
+  const durable: string[] = [];
+  for await (const event of stream.events) durable.push(event.id as string);
+  expect(transport.mock.calls[0]![0]).toContain(
+    "event_deltas%5B%5D=agent.thinking",
+  );
+  expect(transport.mock.calls[0]![0]).toContain(
+    "event_deltas%5B%5D=agent.message",
+  );
+  expect(durable).toEqual(["event_1"]);
+  expect(previews).toEqual([
+    { type: "event_start", event: { type: "agent.thinking" } },
+    { type: "event_delta", content_delta: "思" },
+    { type: "event_delta", content_delta: "考中" },
+  ]);
+});
+
+it("discards preview frames by default and preserves split UTF-8 content", async () => {
+  const bytes = new TextEncoder().encode(
+    'event: event_delta\ndata: {"content_delta":"思考"}\n\ndata: {"id":"event_2","type":"agent.message"}\n\n',
+  );
+  const body = new ReadableStream({
+    start(controller) {
+      // Deliberately split in the middle of a multibyte UTF-8 character.
+      controller.enqueue(bytes.slice(0, 44));
+      controller.enqueue(bytes.slice(44));
+      controller.close();
+    },
+  });
+  const client = new ZhipuManagedClient({
+    apiKey: "test",
+    fetchImpl: vi.fn(async () =>
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
+    ),
+  });
+  const stream = await client.subscribeEvents("sess_preview_default");
+  const durable: string[] = [];
+  for await (const event of stream.events) durable.push(event.id as string);
+  expect(durable).toEqual(["event_2"]);
+});
+
 describe("Managed Agents acknowledged file deletion", () => {
   it("validates the file identity before dispatch and requires a matching deletion acknowledgement", async () => {
     const transport = vi.fn(async () => json({ id: "file_1", deleted: true }));

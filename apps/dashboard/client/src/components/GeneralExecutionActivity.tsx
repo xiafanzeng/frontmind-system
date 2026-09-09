@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Check,
   CheckCircle2,
+  Brain,
   ChevronRight,
   Circle,
   FileText,
@@ -93,6 +94,81 @@ function isResultOnly(item: ActivityItem) {
   return item.kind === "tool" && item.resultOnly === true;
 }
 
+type ThinkingDetails = {
+  thinkingText?: string;
+  thinkingSource?: "event" | "stream";
+  thinkingComplete?: boolean;
+};
+
+function thinkingDetails(item: ActivityItem): ThinkingDetails | null {
+  if (item.kind !== "status" || item.status !== "thinking") return null;
+  const candidate = item as ActivityItem & ThinkingDetails;
+  return typeof candidate.thinkingText === "string" &&
+    candidate.thinkingText.length > 0
+    ? {
+        thinkingText: candidate.thinkingText,
+        thinkingSource: candidate.thinkingSource,
+        thinkingComplete: candidate.thinkingComplete,
+      }
+    : null;
+}
+
+function isThinkingText(item: ActivityItem) {
+  return Boolean(thinkingDetails(item));
+}
+
+function ThinkingBlock({ item }: { item: ActivityItem }) {
+  const details = thinkingDetails(item);
+  const [expanded, setExpanded] = useState(true);
+  if (!details) return <ActivityLine item={item} />;
+  const live = isLive(item);
+  const clock = formatClock(item.timestamp);
+  return (
+    <section
+      className="my-1.5 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5"
+      aria-label="思考过程"
+    >
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 text-left text-[13px] font-medium text-foreground/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-label="思考过程"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <Brain
+          className={`h-3.5 w-3.5 shrink-0 text-primary ${live ? "animate-pulse motion-reduce:animate-none" : ""}`}
+          aria-hidden
+        />
+        <span>思考过程</span>
+        <span className="font-normal text-muted-foreground">
+          {details.thinkingComplete === true
+            ? "已完成"
+            : live
+              ? "思考中"
+              : "过程记录"}
+        </span>
+        {clock && (
+          <time
+            className="ml-auto shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/70"
+            dateTime={new Date(item.timestamp).toISOString()}
+          >
+            {clock}
+          </time>
+        )}
+        <ChevronRight
+          className={`h-3 w-3 shrink-0 text-muted-foreground/70 transition-transform ${expanded ? "rotate-90" : ""}`}
+          aria-hidden
+        />
+      </button>
+      {expanded && (
+        <p className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-words border-l-2 border-primary/25 pl-3 text-[13px] leading-6 text-muted-foreground">
+          {details.thinkingText}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function ActivityLine({ item }: { item: ActivityItem }) {
   const spinning = isLive(item);
   const failed =
@@ -166,7 +242,12 @@ function ActivityGroup({
 }) {
   const [localExpanded, setExpanded] = useState(false);
   const expanded = expandedOverride ?? localExpanded;
-  if (items.length === 1) return <ActivityLine item={items[0]!} />;
+  if (items.length === 1)
+    return isThinkingText(items[0]!) ? (
+      <ThinkingBlock item={items[0]!} />
+    ) : (
+      <ActivityLine item={items[0]!} />
+    );
   const active = [...items].reverse().find((item) => isCurrentVisible(item));
   const lastItem = items.at(-1);
   const currentTerminal =
@@ -212,7 +293,13 @@ function ActivityGroup({
       {expanded && (
         <div className="ml-1.5 border-l border-border/60 pl-3">
           {items.map((item) => (
-            <ActivityLine key={item.id} item={item} />
+            <div key={item.id}>
+              {isThinkingText(item) ? (
+                <ThinkingBlock item={item} />
+              ) : (
+                <ActivityLine item={item} />
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -240,8 +327,10 @@ export function GeneralExecutionActivity({
     const last = groups[groups.length - 1];
     if (
       !isResultOnly(item) &&
+      !isThinkingText(item) &&
       last &&
       !isResultOnly(last[last.length - 1]!) &&
+      !isThinkingText(last[last.length - 1]!) &&
       last[0]?.turnId === item.turnId
     )
       last.push(item);

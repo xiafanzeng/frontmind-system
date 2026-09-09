@@ -2,6 +2,7 @@ import { inArray } from "drizzle-orm";
 import { agentEvents } from "../drizzle/schema";
 import {
   generalExecutionActivity,
+  generalThinkingText,
   type GeneralExecutionDto,
   type GeneralExecutionEntry,
 } from "../shared/frontmind-general-execution";
@@ -119,7 +120,14 @@ export function projectGeneralExecution(
           resultOnly: true,
         });
     } else if (activity?.kind === "status") {
-      entries.push({ ...base, kind: "status", status: activity.status });
+      entries.push({
+        ...base,
+        kind: "status",
+        status: activity.status,
+        ...(activity.status === "thinking"
+          ? generalThinkingText(activity)
+          : {}),
+      });
       for (const call of calls.values()) {
         if (call.turnId !== turnId || call.rank > base.rank) continue;
         if (

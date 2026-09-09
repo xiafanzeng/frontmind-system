@@ -1,3 +1,4 @@
+import type { ZhipuThinkingCapture } from "./zhipu-thinking-stream";
 import { assertEnterpriseProjectActive } from "../enterprise-project-lifecycle";
 import { createHash } from "node:crypto";
 import { and, eq, isNull, or, sql } from "drizzle-orm";
@@ -67,6 +68,8 @@ export type DashboardManagedRuntime = {
   commands: DashboardManagedCommand[];
   files: DashboardManagedFile[];
   usage?: Record<string, unknown>;
+  /** Actual provider thinking transcripts, isolated to the owning command/session. */
+  thinkingCaptures?: ZhipuThinkingCapture[];
   observedEventIds?: string[];
   eventCursor?: string;
 };
@@ -75,6 +78,36 @@ export type DashboardRuntimeRecord = {
   operationId: string;
   runtime: DashboardManagedRuntime;
 };
+
+/** Retain API-delivered text within its owning turn; replay cannot erase it. */
+export function retainDashboardThinkingCapture(
+  runtime: DashboardManagedRuntime,
+  capture: ZhipuThinkingCapture,
+): DashboardManagedRuntime {
+  if (
+    !runtime.generalIdentitySystem ||
+    !capture.text.trim() ||
+    !runtime.commands.some((command) => command.key === capture.commandKey)
+  )
+    return runtime;
+  const sameCapture = (item: ZhipuThinkingCapture) =>
+    item.commandKey === capture.commandKey && item.eventId === capture.eventId;
+  const prior = runtime.thinkingCaptures?.find(sameCapture);
+  if (
+    prior &&
+    !capture.authoritativeText &&
+    ((!capture.complete && prior.complete) ||
+      !capture.text.startsWith(prior.text))
+  )
+    return runtime;
+  return {
+    ...runtime,
+    thinkingCaptures: [
+      ...(runtime.thinkingCaptures ?? []).filter((item) => !sameCapture(item)),
+      { ...capture, startedAt: prior?.startedAt ?? capture.startedAt },
+    ],
+  };
+}
 export type DashboardRuntimeReservation = {
   generalIdentitySystem?: string;
   identity: DashboardProviderIdentity;

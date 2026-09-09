@@ -1,4 +1,13 @@
-import { generalToolLabel, type GeneralExecutionActivity } from "../../shared/frontmind-general-execution";
+import {
+  generalToolLabel,
+  generalThinkingText,
+  type GeneralExecutionActivity,
+} from "../../shared/frontmind-general-execution";
+import {
+  ZhipuThinkingStreamCollector,
+  nativeThinkingText,
+  type ZhipuThinkingCapture,
+} from "./zhipu-thinking-stream";
 import { frontmindGeneralIdentity } from "../frontmind-general-identity";
 import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import {
@@ -25,6 +34,7 @@ import {
 } from "./zhipu-managed-client";
 import {
   dashboardAgentRuntimeStore,
+  retainDashboardThinkingCapture,
   type DashboardAgentRuntimeStore,
   type DashboardManagedCommand,
   type DashboardManagedFile,
@@ -800,7 +810,10 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       );
     }
   }
-  private async connect(record: DashboardRuntimeRecord) {
+  private async connect(
+    record: DashboardRuntimeRecord,
+    historyAnchorId?: string,
+  ) {
     const sessionId = record.runtime.sessionId!;
     const streamKey = `${this.identity.accountUserId}:${record.localTaskId}:${sessionId}`;
     const existing = activeStreams.get(streamKey);
@@ -815,16 +828,74 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
     void (async () => {
       let close: (() => void) | undefined;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const collectThinking = Boolean(record.runtime.generalIdentitySystem);
+      const collector = new ZhipuThinkingStreamCollector();
+      let context = {
+        commandKey: record.runtime.commands.at(-1)?.key ?? "",
+        afterEventId:
+          historyAnchorId ?? record.runtime.observedEventIds?.at(-1),
+      };
+      let lastSavedAt = 0;
+      let lastSavedId = "";
+      let lastSavedCommand = "";
+      const persistThinking = async (
+        capture: ZhipuThinkingCapture | undefined,
+        force = false,
+      ) => {
+        if (!capture?.text.trim()) return;
+        if (
+          !force &&
+          capture.eventId === lastSavedId &&
+          capture.commandKey === lastSavedCommand &&
+          Date.now() - lastSavedAt < 750
+        )
+          return;
+        await this.change(record, (runtime) =>
+          retainDashboardThinkingCapture(runtime, capture),
+        );
+        lastSavedAt = Date.now();
+        lastSavedId = capture.eventId;
+        lastSavedCommand = capture.commandKey;
+      };
       try {
-        const stream = await this.api.subscribeEvents(sessionId);
+        const stream = await this.api.subscribeEvents(
+          sessionId,
+          collectThinking
+            ? {
+                eventDeltas: ["agent.thinking"],
+                onPreview: async (frame) => {
+                  if (!context.commandKey) return;
+                  await persistThinking(
+                    collector.consumePreview(frame, context),
+                    frame.type === "event_start",
+                  );
+                },
+              }
+            : undefined,
+        );
         close = stream.close;
         timer = setTimeout(close, 60 * 60_000);
         timer.unref?.();
         ready();
-        // Stream events are wake-up evidence only. Complete history is fetched
-        // for business results; no new Dashboard execution-log UI is created.
+        // Business results still come from complete history. Thinking previews
+        // are separately retained because the provider does not persist them.
         for await (const event of stream.events) {
           const id = zhipuResourceId(event);
+          if (collectThinking) {
+            await persistThinking(collector.consumeEvent(event), true);
+            if (event.type === "user.message") {
+              await persistThinking(collector.interrupt(), true);
+              const current = await this.session(sessionId);
+              const command =
+                current.runtime.commands.find((item) => item.eventId === id) ??
+                current.runtime.commands.find(
+                  (item) =>
+                    !item.eventId &&
+                    item.providerPromptHash === sha(text(event.content)),
+                );
+              context = { commandKey: command?.key ?? "", afterEventId: id };
+            } else context.afterEventId = id;
+          }
           await this.change(record, (runtime) => ({
             ...runtime,
             observedEventIds: [
@@ -845,6 +916,10 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       } finally {
         if (timer) clearTimeout(timer);
         close?.();
+        if (collectThinking)
+          await persistThinking(collector.interrupt(), true).catch(
+            () => undefined,
+          );
         if (activeStreams.get(streamKey) === pending)
           activeStreams.delete(streamKey);
       }
@@ -1146,6 +1221,20 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       if (zhipuResourceId(session) !== input.taskId)
         fail("task.listMessages", "TASK_ID_CONFLICT");
       await this.observeBilling(record, session, raw);
+      // Refresh the separately persisted stream transcript before projecting
+      // this poll. An old history-only snapshot must not erase received text.
+      record = await this.session(input.taskId);
+      if (
+        record.runtime.generalIdentitySystem &&
+        currentSessionStatus(session, raw, record.runtime) === "running"
+      ) {
+        void this.connect(
+          record,
+          typeof raw.at(-1)?.id === "string"
+            ? String(raw.at(-1)!.id)
+            : undefined,
+        ).catch(() => undefined);
+      }
       const events = normalizeDashboardZhipuEvents(raw, record.runtime);
       const files = await this.api.listAll(
         "/v1/files",
@@ -1187,8 +1276,8 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
       }
       const ordered = projected.sort(
         (a, b) =>
-          a.timestamp - b.timestamp ||
-          Number(a.providerOriginalRank) - Number(b.providerOriginalRank),
+          Number(a.providerOriginalRank) - Number(b.providerOriginalRank) ||
+          a.timestamp - b.timestamp,
       );
       // Native listAllMessages always returns chronological events; order is
       // a pagination option, not the public return order.
@@ -1594,24 +1683,99 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
   }
 }
 
-/** Normalize native evidence without ever retaining tool payloads or private reasoning. */
-export function nativeGeneralExecutionActivity(event: ZhipuRecord): GeneralExecutionActivity | null {
+/** Normalize actual provider evidence. Thinking text is retained verbatim; tool payloads stay separate. */
+export function nativeGeneralExecutionActivity(
+  event: ZhipuRecord,
+  includeThinkingText = true,
+): GeneralExecutionActivity | null {
   const type = String(event.type);
-  if (["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(type)) {
-    const toolKind = type === "agent.mcp_tool_use" ? "mcp" : type === "agent.custom_tool_use" ? "custom" : "builtin";
-    return { kind: "tool_use", toolKind, label: generalToolLabel(event.name, toolKind) };
+  if (
+    ["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(
+      type,
+    )
+  ) {
+    const toolKind =
+      type === "agent.mcp_tool_use"
+        ? "mcp"
+        : type === "agent.custom_tool_use"
+          ? "custom"
+          : "builtin";
+    return {
+      kind: "tool_use",
+      toolKind,
+      label: generalToolLabel(event.name, toolKind),
+    };
   }
-  if (["agent.tool_result", "agent.mcp_tool_result", "user.custom_tool_result"].includes(type)) {
-    const link = type === "user.custom_tool_result" ? event.custom_tool_use_id : event.tool_use_id;
-    return { kind: "tool_result", callId: typeof link === "string" && link.length <= 512 ? link : null, isError: typeof event.is_error === "boolean" ? event.is_error : null };
+  if (
+    [
+      "agent.tool_result",
+      "agent.mcp_tool_result",
+      "user.custom_tool_result",
+    ].includes(type)
+  ) {
+    const link =
+      type === "user.custom_tool_result"
+        ? event.custom_tool_use_id
+        : event.tool_use_id;
+    return {
+      kind: "tool_result",
+      callId: typeof link === "string" && link.length <= 512 ? link : null,
+      isError: typeof event.is_error === "boolean" ? event.is_error : null,
+    };
   }
-  const lifecycle: Record<string, Extract<GeneralExecutionActivity, { kind: "status" }>["status"]> = { "agent.thinking": "thinking", "session.status_running": "running", "session.status_rescheduled": "rescheduling", "session.status_terminated": "cancelled", "session.deleted": "cancelled", "user.interrupt": "cancelled" };
+  if (type === "agent.thinking") {
+    const thinkingText = includeThinkingText
+      ? nativeThinkingText(event.content)
+      : "";
+    return {
+      kind: "status",
+      status: "thinking",
+      ...generalThinkingText({
+        thinkingText,
+        thinkingSource: "event",
+        thinkingComplete: Boolean(event.processed_at),
+      }),
+    };
+  }
+  const lifecycle: Record<
+    string,
+    Extract<GeneralExecutionActivity, { kind: "status" }>["status"]
+  > = {
+    "agent.thinking": "thinking",
+    "session.status_running": "running",
+    "session.status_rescheduled": "rescheduling",
+    "session.status_terminated": "cancelled",
+    "session.deleted": "cancelled",
+    "user.interrupt": "cancelled",
+  };
   if (lifecycle[type]) return { kind: "status", status: lifecycle[type] };
-  if (type === "session.error") return { kind: "status", status: sessionErrorIsRetrying(event) ? "retrying" : "error" };
+  if (type === "session.error")
+    return {
+      kind: "status",
+      status: sessionErrorIsRetrying(event) ? "retrying" : "error",
+    };
   if (type === "session.status_idle") {
     const reason = object(event.stop_reason);
-    return { kind: "status", status: reason.type === "requires_action" ? "waiting" : reason.type === "end_turn" ? "ended" : ["interrupted", "user_interrupt"].includes(String(reason.type)) ? "cancelled" : "error",
-      ...(reason.type === "requires_action" ? { waitingIds: Array.isArray(reason.event_ids) ? reason.event_ids.filter((id): id is string => typeof id === "string").slice(0, 128) : [] } : {}) };
+    return {
+      kind: "status",
+      status:
+        reason.type === "requires_action"
+          ? "waiting"
+          : reason.type === "end_turn"
+            ? "ended"
+            : ["interrupted", "user_interrupt"].includes(String(reason.type))
+              ? "cancelled"
+              : "error",
+      ...(reason.type === "requires_action"
+        ? {
+            waitingIds: Array.isArray(reason.event_ids)
+              ? reason.event_ids
+                  .filter((id): id is string => typeof id === "string")
+                  .slice(0, 128)
+              : [],
+          }
+        : {}),
+    };
   }
   return null;
 }
@@ -1620,10 +1784,13 @@ export function normalizeDashboardZhipuEvents(
   raw: ZhipuRecord[],
   runtime: DashboardManagedRuntime,
 ): ManusV2MessageEvent[] {
-  return raw.flatMap((event, rank): ManusV2MessageEvent[] => {
+  const native = raw.flatMap((event, rank): ManusV2MessageEvent[] => {
     const id = zhipuResourceId(event);
     const command = runtime.commands.find((c) => c.eventId === id);
-    const activity = nativeGeneralExecutionActivity(event);
+    const activity = nativeGeneralExecutionActivity(
+      event,
+      Boolean(runtime.generalIdentitySystem),
+    );
     const pendingActivity =
       activity?.kind === "tool_use" ||
       (activity?.kind === "status" && activity.status === "thinking");
@@ -1636,7 +1803,12 @@ export function normalizeDashboardZhipuEvents(
       // events retain their existing processed-at gate.
       (pendingActivity ? stamp(event.created_at) : null);
     if (timestamp === null) return [];
-    const base = { id, timestamp, providerOriginalRank: rank, ...(activity ? { executionActivity: activity } : {}) };
+    const base = {
+      id,
+      timestamp,
+      providerOriginalRank: rank,
+      ...(activity ? { executionActivity: activity } : {}),
+    };
     if (event.type === "user.message") {
       if (!command)
         return [
@@ -1671,14 +1843,26 @@ export function normalizeDashboardZhipuEvents(
           assistant_message: { content: text(event.content) },
         },
       ];
-    if (["agent.tool_use", "agent.mcp_tool_use", "agent.custom_tool_use"].includes(String(event.type)))
+    if (
+      [
+        "agent.tool_use",
+        "agent.mcp_tool_use",
+        "agent.custom_tool_use",
+      ].includes(String(event.type))
+    )
       return [{ ...base, type: "tool_use" }];
     if (
       event.type === "agent.tool_result" ||
       event.type === "agent.mcp_tool_result"
     )
       return [
-        { ...base, type: "tool_result", ...(typeof event.is_error === "boolean" ? { is_error: event.is_error } : {}) },
+        {
+          ...base,
+          type: "tool_result",
+          ...(typeof event.is_error === "boolean"
+            ? { is_error: event.is_error }
+            : {}),
+        },
       ];
     if (event.type === "user.interrupt")
       return [{ ...base, type: "user_stop", user_stop: {} }];
@@ -1705,7 +1889,8 @@ export function normalizeDashboardZhipuEvents(
         },
       ];
     if (event.type === "session.error") {
-      if (sessionErrorIsRetrying(event)) return [{ ...base, type: "execution_activity" }];
+      if (sessionErrorIsRetrying(event))
+        return [{ ...base, type: "execution_activity" }];
       return [
         {
           ...base,
@@ -1768,6 +1953,98 @@ export function normalizeDashboardZhipuEvents(
     }
     return activity ? [{ ...base, type: "execution_activity" }] : [];
   });
+  // Thinking captures are only a general-agent capability. Never project a
+  // stream transcript into ordinary provider conversations.
+  const captures = runtime.generalIdentitySystem
+    ? (runtime.thinkingCaptures ?? [])
+    : [];
+  for (const capture of captures) {
+    if (!capture.text.trim()) continue;
+    const command = runtime.commands.find(
+      (item) => item.key === capture.commandKey,
+    );
+    const startRank = command?.eventId
+      ? raw.findIndex(
+          (event) =>
+            event.id === command.eventId && event.type === "user.message",
+        )
+      : -1;
+    if (startRank < 0) continue;
+    const nextRank = raw.findIndex(
+      (event, rank) => rank > startRank && event.type === "user.message",
+    );
+    const endRank = nextRank < 0 ? raw.length : nextRank;
+    // Provider event IDs are expected to be stable, but a reconnect or a
+    // later turn can repeat one. Resolve the ID only inside this command's
+    // chronological boundary so one turn cannot steal another's text.
+    const actualRank = raw.findIndex(
+      (event, rank) =>
+        rank > startRank &&
+        rank < endRank &&
+        event.id === capture.eventId &&
+        event.type === "agent.thinking",
+    );
+    const thinking = generalThinkingText({
+      thinkingText: capture.text,
+      thinkingSource: "stream",
+      thinkingComplete: capture.complete,
+    });
+    if (actualRank >= 0) {
+      if (
+        actualRank <= startRank ||
+        actualRank >= endRank ||
+        raw[actualRank]?.type !== "agent.thinking"
+      )
+        continue;
+      const target = native.find(
+        (event) =>
+          event.id === capture.eventId &&
+          Number(event.providerOriginalRank) === actualRank,
+      );
+      const activity = target?.executionActivity as
+        | GeneralExecutionActivity
+        | undefined;
+      if (
+        target &&
+        activity?.kind === "status" &&
+        activity.status === "thinking" &&
+        !activity.thinkingText
+      ) {
+        target.executionActivity = { ...activity, ...thinking };
+      }
+    } else {
+      // A matching complete event exists outside this command's boundary. It
+      // belongs to another turn, so do not manufacture a preview in this one.
+      if (
+        raw.some(
+          (event) =>
+            event.id === capture.eventId && event.type === "agent.thinking",
+        )
+      )
+        continue;
+      // event_start supplied this real provider ID. Its local receipt time is
+      // used only until the complete event supplies an authoritative timestamp.
+      const anchorRank = capture.afterEventId
+        ? raw.findIndex((event) => event.id === capture.afterEventId)
+        : startRank;
+      if (anchorRank < startRank || anchorRank >= endRank) continue;
+      const timestamp = stamp(capture.startedAt);
+      if (timestamp === null) continue;
+      native.push({
+        // Preserve the provider event ID so the preview is reconciled with a
+        // later complete event by the existing event UPSERT path.
+        id: capture.eventId,
+        type: "execution_activity",
+        timestamp,
+        providerOriginalRank: anchorRank + 0.01,
+        executionActivity: { kind: "status", status: "thinking", ...thinking },
+        providerProjection: "zhipu_thinking_stream_preview",
+      });
+    }
+  }
+  return native.sort(
+    (a, b) => Number(a.providerOriginalRank) - Number(b.providerOriginalRank),
+  );
 }
 
 export function createDashboardAgentClient(

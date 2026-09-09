@@ -212,3 +212,104 @@ describe("compact execution activity", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 });
+
+describe("thinking text activity", () => {
+  const thinking = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "thinking-1",
+      turnId: "turn",
+      userSequence: 1,
+      timestamp: 1_800_000_000_000,
+      rank: 1,
+      kind: "status",
+      status: "thinking",
+      thinkingText: "先检查任务目标。\n再决定调用哪个工具。",
+      thinkingComplete: true,
+      animate: false,
+      ...overrides,
+    }) as unknown as ExecutionDisplayEntry;
+
+  it("shows thinking text by default and keeps it outside the tool group", () => {
+    render(
+      <GeneralExecutionActivity
+        items={[
+          thinking(),
+          {
+            id: "tool",
+            turnId: "turn",
+            userSequence: 1,
+            timestamp: 1_800_000_000_100,
+            rank: 2,
+            kind: "tool",
+            label: "搜索网页",
+            status: "completed",
+            animate: false,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("思考过程")).toBeTruthy();
+    expect(screen.getByText(/先检查任务目标。/)).toBeTruthy();
+    expect(screen.getByText("搜索网页 · 已完成")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "思考过程" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(screen.queryByText(/执行过程 · 2 条记录/)).toBeNull();
+  });
+
+  it("can fold and unfold the complete thinking text", () => {
+    render(<GeneralExecutionActivity items={[thinking()]} />);
+    const toggle = screen.getByRole("button", { name: "思考过程" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/先检查任务目标。/)).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText(/再决定调用哪个工具。/)).toBeTruthy();
+  });
+
+  it("renders hostile markup as plain text without interpreting links", () => {
+    const hostile =
+      '<img src=x onerror="alert(1)"> [不要点我](https://evil.example)';
+    render(
+      <GeneralExecutionActivity
+        items={[thinking({ thinkingText: hostile })]}
+      />,
+    );
+    expect(screen.getByText(hostile)).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('a[href="https://evil.example"]')).toBeNull();
+  });
+
+  it("does not truncate long thinking text", () => {
+    const longText = Array.from(
+      { length: 240 },
+      (_, index) => `步骤 ${index + 1}`,
+    ).join("\n");
+    render(
+      <GeneralExecutionActivity
+        items={[thinking({ thinkingText: longText })]}
+      />,
+    );
+    const content = screen.getByText(
+      (_text, element) => element?.textContent === longText,
+    );
+    expect(content).toBeTruthy();
+    expect(content.textContent).toContain("步骤 1");
+    expect(content.textContent).toContain("步骤 240");
+  });
+
+  it("keeps older thinking entries as the compact status line", () => {
+    render(
+      <GeneralExecutionActivity
+        items={[
+          thinking({ thinkingText: undefined, thinkingComplete: undefined }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("分析任务")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "思考过程" })).toBeNull();
+  });
+});

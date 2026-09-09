@@ -6,6 +6,7 @@ vi.mock("../db", () => ({ getDb: mocked.getDb }));
 import {
   dashboardAgentRuntimeStore,
   assertDashboardManagedRuntimeImmutable,
+  retainDashboardThinkingCapture,
   type DashboardManagedRuntime,
 } from "./dashboard-agent-runtime-store";
 
@@ -73,6 +74,49 @@ function database(responses: unknown[][]) {
   return { predicates, updates, insert };
 }
 beforeEach(() => vi.clearAllMocks());
+
+describe("API thinking transcript retention", () => {
+  const readyRuntime = (): DashboardManagedRuntime => ({
+    ...runtime(),
+    generalIdentitySystem: "FrontMind",
+    commands: ["first", "second"].map((key) => ({
+      key, intentId: key, prompt: key, providerPromptHash: key,
+      attachments: [], beforeEventIds: [], beforeFileIds: [],
+      createdAt: "2026-09-09T00:00:00Z",
+    })),
+  });
+  const capture = {
+    eventId: "reused-id", commandKey: "first", text: "收到的过程文本",
+    startedAt: "2026-09-09T00:00:01Z", complete: false,
+  };
+  it("persists the same provider ID independently for each owning command", () => {
+    const first = retainDashboardThinkingCapture(readyRuntime(), capture);
+    const second = retainDashboardThinkingCapture(first, {
+      ...capture, commandKey: "second", text: "另一个轮次的文本",
+    });
+    expect(second.thinkingCaptures?.map((item) => [item.commandKey, item.text]))
+      .toEqual([["first", "收到的过程文本"], ["second", "另一个轮次的文本"]]);
+  });
+  it("preserves longer saved text on replay but accepts authoritative event content", () => {
+    const first = retainDashboardThinkingCapture(readyRuntime(), capture);
+    expect(retainDashboardThinkingCapture(first, { ...capture, text: "收到" })).toBe(first);
+    expect(retainDashboardThinkingCapture(first, { ...capture, text: "收到", complete: true })).toBe(first);
+    const finished = retainDashboardThinkingCapture(first, {
+      ...capture, text: "完整事件修订的正文", complete: true, authoritativeText: true,
+    });
+    expect(finished.thinkingCaptures?.[0]).toMatchObject({ text: "完整事件修订的正文", complete: true });
+    expect(retainDashboardThinkingCapture(finished, {
+      ...capture, text: "完整事件修订的正文以及迟到增量",
+    })).toBe(finished);
+  });
+  it("rejects unowned commands, empty captures and non-general workflows", () => {
+    const current = readyRuntime();
+    expect(retainDashboardThinkingCapture(current, { ...capture, commandKey: "unknown" })).toBe(current);
+    expect(retainDashboardThinkingCapture(current, { ...capture, text: "  " })).toBe(current);
+    const workflow = { ...current, generalIdentitySystem: undefined };
+    expect(retainDashboardThinkingCapture(workflow, capture)).toBe(workflow);
+  });
+});
 describe("Dashboard runtime ownership and immutable bindings", () => {
   it("reuses a supplied operation's one owned task instead of creating a transport duplicate", async () => {
     const f = database([

@@ -1,5 +1,10 @@
 const BASE = "https://agent-api.bigmodel.cn/api/agent/managed";
 export type ZhipuRecord = Record<string, unknown>;
+export type ZhipuEventDeltaType = "agent.thinking" | "agent.message";
+export type ZhipuPreviewFrame = ZhipuRecord & {
+  /** SSE frame name (`event:`), when the upstream supplied one. */
+  type: "event_start" | "event_delta";
+};
 export class ZhipuManagedError extends Error {
   constructor(
     readonly operation: string,
@@ -272,7 +277,13 @@ export class ZhipuManagedClient {
         response.headers.get("content-type") ?? "application/octet-stream",
     };
   }
-  async subscribeEvents(sessionId: string) {
+  async subscribeEvents(
+    sessionId: string,
+    options: {
+      eventDeltas?: readonly ZhipuEventDeltaType[];
+      onPreview?: (frame: ZhipuPreviewFrame) => void | Promise<void>;
+    } = {},
+  ) {
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(),
@@ -282,7 +293,13 @@ export class ZhipuManagedClient {
     try {
       response = await this.open(
         "GET",
-        `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`,
+        `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream${(() => {
+          const deltas = [...new Set(options.eventDeltas ?? [])];
+          if (!deltas.length) return "";
+          const query = new URLSearchParams();
+          for (const delta of deltas) query.append("event_deltas[]", delta);
+          return `?${query.toString()}`;
+        })()}`,
         undefined,
         controller.signal,
       );
@@ -313,14 +330,35 @@ export class ZhipuManagedClient {
           while ((end = buffer.indexOf("\n\n")) >= 0) {
             const frame = buffer.slice(0, end);
             buffer = buffer.slice(end + 2);
-            const data = frame
-              .split("\n")
+            const lines = frame.split("\n");
+            const eventName = lines
+              .find((line) => line.startsWith("event:"))
+              ?.slice(6)
+              .trim();
+            const data = lines
               .filter((line) => line.startsWith("data:"))
               .map((line) => line.slice(5).trimStart())
               .join("\n");
             if (!data || data === "[DONE]") continue;
             const value = record(JSON.parse(data));
-            // Complete events alone are durable. No reasoning/delta subscription.
+            const previewType =
+              eventName === "event_start" || eventName === "event_delta"
+                ? eventName
+                : value.type === "event_start" || value.type === "event_delta"
+                  ? value.type
+                  : null;
+            if (previewType) {
+              // Preview frames have no durable id and are intentionally kept
+              // out of the history generator. Forward their exact payload to
+              // the opt-in consumer; the SSE event name wins over payload.type.
+              if (options.onPreview)
+                await options.onPreview({
+                  ...value,
+                  type: previewType,
+                } as ZhipuPreviewFrame);
+              continue;
+            }
+            // Complete events alone are durable. Preview frames are handled above.
             if (typeof value.id === "string") yield value;
           }
           if (chunk.done) break;

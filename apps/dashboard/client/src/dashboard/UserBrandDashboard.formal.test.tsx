@@ -741,7 +741,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
   });
 
-  it("opens the selected enterprise project with six modules and no plan chrome", async () => {
+  it("opens the selected enterprise project with all seven modules in one group and no plan chrome", async () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
     const modules = screen.getByRole("navigation", { name: "项目模块" });
@@ -759,6 +759,8 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(
       Array.from(modules.querySelectorAll(".operator-module-entry")),
     ).toEqual([...moduleEntries, general]);
+    const moduleGroup = modules.querySelector("#operator-brand-modules")!;
+    expect(Array.from(moduleGroup.children)).toEqual([...moduleEntries, general]);
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();
@@ -808,6 +810,40 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(
       screen.getByRole("button", { name: "项目总览" }).closest("aside"),
     ).toBe(sidebar);
+  });
+  it("opens project overview after general agent without navigating to brand or losing the remembered project", async () => {
+    render(<UserBrandDashboard />);
+    fireEvent.click(screen.getByRole("button", { name: "通用智能体" }));
+    expect(
+      await screen.findByTestId("customer-general-agent"),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/agent");
+    expect(window.location.search).toBe("");
+    const rememberedProject = sessionStorage.getItem(
+      "frontmind.enterpriseProject",
+    );
+    expect(JSON.parse(rememberedProject!)).toEqual({
+      ownerUserId: 7,
+      id: projectMocks.id,
+    });
+    const overview = screen.getByRole("button", { name: "项目总览" });
+    fireEvent.click(overview);
+    expect(overview).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "企业项目A" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByTestId("customer-general-agent")).toBeInTheDocument();
+    expect(screen.queryByTestId("knowledge-agent")).toBeNull();
+    expect(window.location.pathname).toBe("/agent");
+    expect(window.location.search).toBe("");
+    expect(sessionStorage.getItem("frontmind.enterpriseProject")).toBe(
+      rememberedProject,
+    );
+    expect(projectMocks.select).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "企业项目A" }));
+    expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
+    expect(overview).toHaveAttribute("aria-expanded", "false");
   });
   it("opens enterprise QA under project tools while preserving project navigation", async () => {
     render(<UserBrandDashboard />);

@@ -112,6 +112,10 @@ describe("operator workspace layout acceptance", () => {
       screen.getByRole("textbox", { name: "样例任务输入" }),
     );
     expect(container.querySelector(".operator-project-context")).toBeNull();
+    expect(screen.getByLabelText("知识库版本与下载")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "任务历史" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
     for (const module of OPERATOR_MODULES) {
       selectModule(module.label);
       for (const agent of module.views) {
@@ -130,23 +134,37 @@ describe("operator workspace layout acceptance", () => {
           });
           expect(auxiliary.querySelector("table")).toBeNull();
           expect(auxiliary.querySelector("textarea")).toBeNull();
+          if (agent.id === "keywords") {
+            expect(
+              within(auxiliary).getByRole("heading", { name: "项目词库" }),
+            ).toBeInTheDocument();
+            expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
+            expect(
+              screen.queryByRole("listbox", { name: "任务历史" }),
+            ).toBeNull();
+            expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
+            expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
+          }
         }
       }
     }
   });
-  it("keeps the polished general welcome and tasks/results in the shared workspace", () => {
+  it("keeps the polished general welcome and task/file tabs in the shared workspace", () => {
     const { container } = render(<OperatorWorkspacePreview />);
     selectModule("通用智能体");
     expect(
       container.querySelector('[data-layout="workflow"]'),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "有什么想一起完成的？" }),
+      screen.getByRole("heading", { name: "定义 AI 原生时代的企业增长" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "继续对话" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("添加预览附件")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "任务" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
     expect(
       screen.getByRole("complementary", { name: "任务辅助区" }),
     ).toContainElement(screen.getByRole("button", { name: "新任务" }));
@@ -212,14 +230,101 @@ describe("operator workspace layout acceptance", () => {
     ).toBeInTheDocument();
     selectAgent("媒体库");
     fireEvent.click(within(main).getByRole("button", { name: "交给发布助手" }));
-    fireEvent.click(screen.getByRole("tab", { name: "任务" }));
+    fireEvent.click(screen.getByText("投放工作记录", { selector: "summary" }));
     expect(
-      within(screen.getByRole("listbox", { name: "任务历史" })).getAllByRole(
-        "option",
-      ),
+      within(
+        screen.getByRole("listbox", { name: "投放工作记录" }),
+      ).getAllByRole("option"),
     ).toHaveLength(2);
     expect(screen.queryByText("任务 3")).toBeNull();
   });
+
+  it.each([
+    ["意图优化", "优化问题", "优化问题", "选题工作记录", null],
+    ["媒体发布", "稿件", "稿件与版本", "编辑工作记录", null],
+    ["媒体发布", "媒体库", "投放选择", "选媒工作记录", "开始新的选媒"],
+    ["媒体发布", "发布工作台", "发布进度", "投放工作记录", null],
+    ["进度监控", "问题监控", "监控项目与运行", "监控工作记录", null],
+    ["进度监控", "进度报告", "分析范围与报告", "分析记录", null],
+    ["AI专用官网", "网站管理", "站点与版本", "建站与配置记录", null],
+    [
+      "AI专用官网",
+      "内容分析与 AI 部件",
+      "分析与部件配置",
+      "预览配置记录",
+      null,
+    ],
+  ])(
+    "shows %s / %s business resources before secondary work records",
+    (moduleName, agentName, title, history, newAction) => {
+      render(<OperatorWorkspacePreview />);
+      selectModule(moduleName!);
+      selectAgent(agentName!);
+      const auxiliary = screen.getByRole("complementary", {
+        name: "任务辅助区",
+      });
+      expect(
+        within(auxiliary).getByRole("heading", { name: title! }),
+      ).toBeInTheDocument();
+      expect(within(auxiliary).queryByRole("tablist")).toBeNull();
+      const disclosure = within(auxiliary).getByText(history!, {
+        selector: "summary",
+      });
+      expect(disclosure.parentElement).not.toHaveAttribute("open");
+      expect(
+        within(auxiliary).getByRole("listbox", { name: history! }),
+      ).not.toBeVisible();
+      fireEvent.click(disclosure);
+      expect(
+        within(auxiliary).getByRole("listbox", { name: history! }),
+      ).toBeInTheDocument();
+      expect(
+        within(auxiliary).queryByRole("button", {
+          name: "新任务",
+        }),
+      ).toBeNull();
+      if (newAction) {
+        fireEvent.click(
+          within(auxiliary).getByRole("button", {
+            name: newAction,
+          }),
+        );
+        expect(within(auxiliary).getAllByRole("option")).toHaveLength(2);
+      } else {
+        expect(
+          auxiliary.querySelector(".workbench-task-navigation__new"),
+        ).toBeNull();
+      }
+    },
+  );
+
+  it.each([
+    ["AI专用官网", "企业问答", "会话", "知识来源", "新会话", "会话历史"],
+    ["意图优化", "应答逻辑", "问题", "应答版本", "选择问题", "已有应答问题"],
+    ["内容制作", "内容工作台", "制作任务", "交付文件", "新建制作", "制作记录"],
+  ])(
+    "uses dedicated %s / %s panel labels while preserving preview task switching",
+    (moduleName, agentName, historyTab, outputTab, newAction, history) => {
+      render(<OperatorWorkspacePreview />);
+      selectModule(moduleName);
+      selectAgent(agentName);
+      const auxiliary = screen.getByRole("complementary", {
+        name: "任务辅助区",
+      });
+      expect(
+        within(auxiliary).getByRole("tab", { name: outputTab }),
+      ).toBeInTheDocument();
+      fireEvent.click(within(auxiliary).getByRole("tab", { name: historyTab }));
+      fireEvent.click(
+        within(auxiliary).getByRole("button", { name: newAction }),
+      );
+      expect(
+        within(auxiliary).getByRole("listbox", { name: history }),
+      ).toBeInTheDocument();
+      expect(within(auxiliary).getAllByRole("option")).toHaveLength(2);
+      expect(within(auxiliary).queryByRole("tab", { name: "成果" })).toBeNull();
+    },
+  );
 
   it("selects a word-bank resource inside the question task and retains only confirmed outcomes", () => {
     render(<OperatorWorkspacePreview />);

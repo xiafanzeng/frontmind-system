@@ -1226,6 +1226,7 @@ function ContentProductionInner({
           projectId={projectId}
           moduleId="content-production"
           title="内容工作台"
+          resultTitle="制作与交付"
           taskTitle={
             activeConversation
               ? contentProductionTaskTitle(activeConversation.title)
@@ -1254,7 +1255,7 @@ function ContentProductionInner({
               <div
                 className="workbench-panel-tabs"
                 role="tablist"
-                aria-label="任务与成果"
+                aria-label="制作任务与交付文件"
               >
                 <button
                   type="button"
@@ -1262,7 +1263,7 @@ function ContentProductionInner({
                   aria-selected={taskPanel === "tasks"}
                   onClick={() => setTaskPanel("tasks")}
                 >
-                  任务
+                  制作任务
                 </button>
                 <button
                   type="button"
@@ -1270,12 +1271,17 @@ function ContentProductionInner({
                   aria-selected={taskPanel === "outputs"}
                   onClick={() => setTaskPanel("outputs")}
                 >
-                  成果
+                  交付文件
                 </button>
               </div>
               {taskPanel === "tasks" ? (
                 <WorkbenchTaskToolbar
                   presentation="panel"
+                  labels={{
+                    newAction: "新建制作",
+                    history: "制作记录",
+                    noun: "制作任务",
+                  }}
                   tasks={state.conversations.map((item) => ({
                     ...item,
                     title: contentProductionTaskTitle(item.title),
@@ -1346,7 +1352,6 @@ function ContentProductionInner({
               )}
             </div>
           }
-          resultTitle="任务摘要"
           resultKey={activeConversation?.id ?? "empty"}
           status={statusLabel}
         />

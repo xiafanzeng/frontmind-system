@@ -8,6 +8,11 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  installWorkspaceNavigationGuard,
+  performApprovedWorkspaceNavigation,
+  registerWorkspaceDraft,
+} from "@/lib/workspace-navigation-guard";
+import {
   OperatorSidebar,
   OperatorTabs,
   type EnterpriseProjectView,
@@ -171,15 +176,24 @@ describe("operator workspace navigation", () => {
     view.unmount();
   });
 
-  it("keeps all seven modules visible and task navigation in the workbench panel", () => {
+  it("keeps all seven modules in the same collapsible group and task navigation in the workbench panel", () => {
+    const props = sidebarProps();
     render(
       <OperatorSidebar
-        {...sidebarProps()}
+        {...props}
         activeEntry="agent"
         taskNavigation={<p>旧的左侧任务列表</p>}
       />,
     );
     const toggle = screen.getByRole("button", { name: "AI 智能品牌优化" });
+    const group = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    const entries = within(group).getAllByRole("button");
+    expect(entries).toHaveLength(7);
+    expect(entries.at(-1)).toHaveAccessibleName("通用智能体");
+    for (const entry of entries) {
+      expect(entry.parentElement).toBe(group);
+      expect(entry).toHaveClass("operator-nav-entry", "operator-module-entry");
+    }
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "品牌建设" })).toBeVisible();
     expect(
@@ -190,10 +204,15 @@ describe("operator workspace navigation", () => {
       "--module-accent": "#16794f",
     });
     fireEvent.click(toggle);
-    expect(screen.queryByRole("button", { name: "品牌建设" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "通用智能体" }),
-    ).toBeVisible();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(group).queryAllByRole("button")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: "通用智能体" })).toBeNull();
+    fireEvent.click(toggle);
+    expect(within(group).getAllByRole("button")).toHaveLength(7);
+    fireEvent.click(within(group).getByRole("button", { name: "通用智能体" }));
+    expect(props.onNavigate).toHaveBeenCalledTimes(1);
+    expect(props.onNavigate).toHaveBeenCalledWith("/agent");
+    expect(props.onSelectProject).not.toHaveBeenCalled();
   });
 
   it("keeps the project capsule at the bottom with its list closed by default", () => {
@@ -239,6 +258,51 @@ describe("operator workspace navigation", () => {
     expect(screen.getByRole("textbox", { name: "搜索项目" })).toHaveValue("");
     expect(screen.getByRole("button", { name: "企业甲" })).toBeInTheDocument();
   });
+
+  it.each(["agent", "account"] as const)(
+    "opens the project overview from %s without leaving the current task and guards explicit project selection",
+    (activeEntry) => {
+      const props = sidebarProps();
+      const second = { ...project, id: "project-b", name: "企业乙" };
+      const prompt = vi.fn();
+      const removeGuard = installWorkspaceNavigationGuard(prompt);
+      const removeDraft = registerWorkspaceDraft({
+        isDirty: () => true,
+        label: "当前未保存任务",
+      });
+      try {
+        render(
+          <OperatorSidebar
+            {...props}
+            activeEntry={activeEntry}
+            projects={[project, second]}
+          />,
+        );
+        const overview = screen.getByRole("button", { name: "项目总览" });
+        fireEvent.click(overview);
+        expect(overview).toHaveAttribute("aria-expanded", "true");
+        expect(screen.getByRole("button", { name: "企业甲" })).toHaveAttribute(
+          "aria-current",
+          "page",
+        );
+        expect(props.onNavigate).not.toHaveBeenCalled();
+        expect(props.onSelectProject).not.toHaveBeenCalled();
+        expect(prompt).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "企业乙" }));
+        expect(prompt).toHaveBeenCalledTimes(1);
+        expect(props.onSelectProject).not.toHaveBeenCalled();
+        expect(overview).toHaveAttribute("aria-expanded", "true");
+        act(() => performApprovedWorkspaceNavigation(prompt.mock.calls[0]![0]));
+        expect(props.onSelectProject).toHaveBeenCalledTimes(1);
+        expect(props.onSelectProject).toHaveBeenCalledWith("project-b");
+        expect(overview).toHaveAttribute("aria-expanded", "false");
+        expect(props.onNavigate).not.toHaveBeenCalled();
+      } finally {
+        removeDraft();
+        removeGuard();
+      }
+    },
+  );
 
   it("opens creation directly from the plus button and reuses the FrontMind logo", async () => {
     const props = sidebarProps();

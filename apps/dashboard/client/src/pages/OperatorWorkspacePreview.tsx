@@ -20,6 +20,7 @@ import {
 import { OperatorThemeProvider } from "@/components/ui/operator-theme";
 import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import { WorkbenchTaskToolbar } from "@/dashboard/WorkbenchTaskToolbar";
+import { businessPanelPolicy } from "@/dashboard/workbench-panel-policy";
 import {
   WorkflowCompleted,
   WorkflowFeedback,
@@ -169,6 +170,39 @@ function OperatorWorkspacePreviewContent() {
     ? "通用智能体"
     : (module.actions.find((action) => action.id === view)?.label ??
       "智能知识库");
+  const businessPanel = businessPanelPolicy[agent];
+  const dedicatedPanel =
+    agent === "enterprise-qa"
+      ? {
+          history: "会话",
+          output: "知识来源",
+          newAction: "新会话",
+          records: "会话历史",
+          noun: "会话",
+        }
+      : agent === "response-logic"
+        ? {
+            history: "问题",
+            output: "应答版本",
+            newAction: "选择问题",
+            records: "已有应答问题",
+            noun: "问题",
+          }
+        : agent === "content"
+          ? {
+              history: "制作任务",
+              output: "交付文件",
+              newAction: "新建制作",
+              records: "制作记录",
+              noun: "制作任务",
+            }
+          : {
+              history: "任务",
+              output: "文件",
+              newAction: "新任务",
+              records: "任务历史",
+              noun: "任务",
+            };
   const selectTask = (id: string) => {
     setData((current) => ({
       ...current,
@@ -443,6 +477,33 @@ function OperatorWorkspacePreviewContent() {
       onRevise: () => updateFlow({ step: 1 }),
     })),
   };
+  const taskNavigation = (
+    <WorkbenchTaskToolbar
+      presentation="panel"
+      tasks={Array.from({ length: data.counts[scope] ?? 1 }, (_, index) => ({
+        id: String(index + 1),
+        title: `任务 ${index + 1}`,
+        updatedAt: 1788912000000 + index * 60000,
+      })).reverse()}
+      currentId={String(taskNumber)}
+      onNew={newTask}
+      onSelect={selectTask}
+      showNew={!businessPanel || Boolean(businessPanel.newAction)}
+      labels={
+        businessPanel
+          ? {
+              newAction: businessPanel.newAction,
+              history: businessPanel.history,
+              noun: "记录",
+            }
+          : {
+              newAction: dedicatedPanel.newAction,
+              history: dedicatedPanel.records,
+              noun: dedicatedPanel.noun,
+            }
+      }
+    />
+  );
   return (
     <OperatorThemeProvider enabled>
       <div
@@ -537,6 +598,12 @@ function OperatorWorkspacePreviewContent() {
                   taskTitle={`任务 ${taskNumber}`}
                   taskKey={taskKey}
                   layout="workflow"
+                  resultTitle={
+                    agent === "keywords"
+                      ? "项目词库"
+                      : (businessPanel?.title ??
+                        `${dedicatedPanel.history}与${dedicatedPanel.output}`)
+                  }
                   main={
                     <BusinessWorkspaceProvider
                       value={{
@@ -567,64 +634,81 @@ function OperatorWorkspacePreviewContent() {
                     </BusinessWorkspaceProvider>
                   }
                   auxiliary={
-                    <div className="workbench-task-panel">
-                      <div
-                        className="workbench-panel-tabs"
-                        role="tablist"
-                        aria-label="任务与成果"
-                      >
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={panel === "tasks"}
-                          onClick={() => setPanel("tasks")}
-                        >
-                          任务
-                        </button>
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={panel === "outputs"}
-                          onClick={() => setPanel("outputs")}
-                        >
-                          成果
-                        </button>
-                      </div>
-                      {panel === "tasks" ? (
-                        <>
-                          <WorkbenchTaskToolbar
-                            presentation="panel"
-                            tasks={Array.from(
-                              { length: data.counts[scope] ?? 1 },
-                              (_, index) => ({
-                                id: String(index + 1),
-                                title: `任务 ${index + 1}`,
-                                updatedAt: 1788912000000 + index * 60000,
-                              }),
-                            ).reverse()}
-                            currentId={String(taskNumber)}
-                            onNew={newTask}
-                            onSelect={selectTask}
-                          />
-                          {nativeChat && (
-                            <button
-                              type="button"
-                              className="workflow-text-action"
-                              onClick={() => setRunning((value) => !value)}
-                            >
-                              {running ? "结束长任务演示" : "演示长任务"}
-                            </button>
-                          )}
-                        </>
-                      ) : (
+                    agent === "keywords" ? (
+                      <BusinessWorkspaceInspector
+                        summary={{
+                          ...(summary ?? fallbackSummary),
+                          title: "项目词库",
+                          scope: "project",
+                          canViewProject: false,
+                        }}
+                      />
+                    ) : businessPanel ? (
+                      <div className="workbench-business-panel">
                         <BusinessWorkspaceInspector
-                          summary={summary ?? fallbackSummary}
+                          summary={{
+                            ...(summary ?? fallbackSummary),
+                            title: businessPanel.title,
+                          }}
                         />
-                      )}
-                      <p className="preview-local-note">
-                        设计预览 · 数据与操作仅保存在当前浏览器。
-                      </p>
-                    </div>
+                        <details
+                          className="workbench-business-records"
+                          key={scope}
+                        >
+                          <summary>{businessPanel.history}</summary>
+                          {taskNavigation}
+                        </details>
+                        <p className="preview-local-note">
+                          设计预览 · 数据与操作仅保存在当前浏览器。
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="workbench-task-panel">
+                        <div
+                          className="workbench-panel-tabs"
+                          role="tablist"
+                          aria-label={`${dedicatedPanel.history}与${dedicatedPanel.output}`}
+                        >
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={panel === "tasks"}
+                            onClick={() => setPanel("tasks")}
+                          >
+                            {dedicatedPanel.history}
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={panel === "outputs"}
+                            onClick={() => setPanel("outputs")}
+                          >
+                            {dedicatedPanel.output}
+                          </button>
+                        </div>
+                        {panel === "tasks" ? (
+                          <>
+                            {taskNavigation}
+                            {nativeChat && (
+                              <button
+                                type="button"
+                                className="workflow-text-action"
+                                onClick={() => setRunning((value) => !value)}
+                              >
+                                {running ? "结束长任务演示" : "演示长任务"}
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <BusinessWorkspaceInspector
+                            summary={summary ?? fallbackSummary}
+                          />
+                        )}
+                        <p className="preview-local-note">
+                          设计预览 · 数据与操作仅保存在当前浏览器。
+                        </p>
+                      </div>
+                    )
                   }
                   composer={
                     nativeChat && !(general && !task.messages.length)

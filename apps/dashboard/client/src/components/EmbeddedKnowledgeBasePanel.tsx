@@ -45,7 +45,6 @@ import {
 } from "@/lib/knowledge-progress";
 import { trpc } from "@/lib/trpc";
 import Home from "@/pages/Home";
-import { WorkbenchTaskToolbar } from "@/dashboard/WorkbenchTaskToolbar";
 import { setWorkbenchTaskQuery } from "@/contexts/ConversationContext";
 import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import type {
@@ -53,7 +52,10 @@ import type {
   KnowledgeBaseProgressDto,
 } from "@shared/knowledge-base-progress";
 
-const KnowledgeActionsContext = createContext<React.ReactNode>(null);
+const KnowledgeActionsContext = createContext<{
+  workflow: React.ReactNode;
+  download: React.ReactNode;
+}>({ workflow: null, download: null });
 const KNOWLEDGE_BASE_NEW_BUILD_EVENT = "frontmind:new-knowledge-base-build";
 export const KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS = 15_000;
 
@@ -262,6 +264,19 @@ export default function EmbeddedKnowledgeBasePanel({
       /^[a-f0-9]{64}$/i.test(displayedSnapshot.archiveHash || ""),
   );
 
+  const knowledgeDownload = displayedSnapshot && archiveDownloadAvailable && (
+    <a
+      href={projectResourceUrl(
+        `/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`,
+      )}
+      download={displayedSnapshot.sourceFileName}
+      className="knowledge-workspace-download"
+      title="下载最近一次更新的正式版本，不包含未更新的修改"
+    >
+      <Download className="h-4 w-4" />
+      下载已更新版本
+    </a>
+  );
   const knowledgeActions = (
     <div className="knowledge-workspace-actions">
       {(unified || page === "build") && !previewMode && (
@@ -274,19 +289,7 @@ export default function EmbeddedKnowledgeBasePanel({
           }}
         />
       )}
-      {displayedSnapshot && archiveDownloadAvailable && (
-        <a
-          href={projectResourceUrl(
-            `/api/dashboard/knowledge/snapshots/${encodeURIComponent(displayedSnapshot.id)}/archive`,
-          )}
-          download={displayedSnapshot.sourceFileName}
-          className="knowledge-workspace-download"
-          title="下载最近一次更新的正式版本，不包含未更新的修改"
-        >
-          <Download className="h-4 w-4" />
-          下载已更新版本
-        </a>
-      )}
+      {!workbench && knowledgeDownload}
       {!previewMode && resetQuery.data && (
         <KnowledgeResetButton
           disabled={editingBlocked || knowledgeUpdating}
@@ -303,7 +306,11 @@ export default function EmbeddedKnowledgeBasePanel({
   );
   return (
     <section
-      className={unified ? `knowledge-workspace${workbench ? " knowledge-workspace--workbench" : ""}` : "page-shell pb-8"}
+      className={
+        unified
+          ? `knowledge-workspace${workbench ? " knowledge-workspace--workbench" : ""}`
+          : "page-shell pb-8"
+      }
       data-layout-mode={mode}
     >
       {!workbench && (
@@ -319,7 +326,9 @@ export default function EmbeddedKnowledgeBasePanel({
           {knowledgeActions}
         </header>
       )}
-      <KnowledgeActionsContext.Provider value={knowledgeActions}>
+      <KnowledgeActionsContext.Provider
+        value={{ workflow: knowledgeActions, download: knowledgeDownload }}
+      >
         {!unified && page === "display" ? (
           <div className="min-h-0 flex-1 overflow-auto">
             <KnowledgeBaseViewer
@@ -822,30 +831,10 @@ function RealBuildFlow({
     (item) =>
       item.knowledgeBase?.initialized || item.workbenchAgentId === "knowledge",
   );
-  const chooseHistory = (id: string) => {
-    if (!historyTasks.some((item) => item.id === id)) return;
-    setHistoricalId(id);
-    setConversationId(id);
-    setActive(id);
-    setWorkbenchTaskQuery(id);
-  };
   const historyQueryId = new URLSearchParams(window.location.search).get(
     "workbenchTask",
   );
   const requestedFreshConversationRef = useRef<string | null>(null);
-  const newKnowledgeTask = () => {
-    if (nodeDirty || nodePending || composerDirty || updating) return;
-    const id = createConversation({
-      title: "企业知识库构建",
-      workbenchAgentId: "knowledge",
-      reuseEmpty: false,
-    });
-    requestedFreshConversationRef.current = id;
-    setHistoricalId(id);
-    setConversationId(id);
-    setActive(id);
-    setWorkbenchTaskQuery(id);
-  };
   const [nodeDirty, setNodeDirty] = useState(false);
   const [nodePending, setNodePending] = useState(false);
   const [composerDirty, setComposerDirty] = useState(false);
@@ -950,9 +939,13 @@ function RealBuildFlow({
     }
     // Resolve the URL and the active conversation in this same effect. A
     // separate URL effect races the latest-build fallback on first hydration.
-    const selectedHistoryId = [historyQueryId, historicalId].find(
-      (id) => id && historyTasks.some((item) => item.id === id),
-    );
+    // The workbench represents the project's current knowledge resource.
+    // Legacy conversation links remain stored, but cannot replace that build.
+    const selectedHistoryId =
+      !workbench &&
+      [historyQueryId, historicalId].find(
+        (id) => id && historyTasks.some((item) => item.id === id),
+      );
     if (selectedHistoryId) {
       if (historicalId !== selectedHistoryId)
         setHistoricalId(selectedHistoryId);
@@ -1004,6 +997,24 @@ function RealBuildFlow({
       return;
     }
     if (!conversationId && !latestConversationId && !fallbackSnapshot) {
+      const initialConversation = historyTasks
+        .filter(
+          (item) =>
+            item.workbenchAgentId === "knowledge" &&
+            item.status === "idle" &&
+            !item.messages.length &&
+            !item.taskId &&
+            !item.previousResponseId &&
+            !item.knowledgeBase?.initialized,
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      if (initialConversation) {
+        requestedFreshConversationRef.current = initialConversation.id;
+        setConversationId(initialConversation.id);
+        if (activeConversation?.id !== initialConversation.id)
+          setActive(initialConversation.id);
+        return;
+      }
       const nextConversationId = createConversation({
         title: "企业知识库构建",
         workbenchAgentId: "knowledge",
@@ -1014,6 +1025,7 @@ function RealBuildFlow({
     }
   }, [
     activeConversation?.id,
+    workbench,
     historicalId,
     historyQueryId,
     conversationId,
@@ -1304,7 +1316,13 @@ function RealBuildFlow({
       )}
       <KnowledgeWorkspaceStatus progress={displayedProgress} />
       {workbench && (
+        <div className="knowledge-flow-actions">
+          {knowledgeActions.workflow}
+        </div>
+      )}
+      {workbench && (
         <KnowledgeWorkbenchActions
+          presentation="accept"
           progress={displayedProgress}
           conversationId={conversationId ?? ""}
           resetRevision={resetRevision}
@@ -1320,9 +1338,6 @@ function RealBuildFlow({
           className="knowledge-workbench-main-node"
           data-open={nodeDetailsOpen}
         />
-      )}
-      {workbench && (
-        <div className="knowledge-flow-actions">{knowledgeActions}</div>
       )}
       {editTarget && (
         <div className="knowledge-workspace-edit-target">
@@ -1460,17 +1475,25 @@ function RealBuildFlow({
     <KnowledgeWorkspaceSurfaces
       taskTitle={displayedConversation?.title}
       taskKey={conversationId ?? undefined}
-      toolbar={
-        <WorkbenchTaskToolbar
-          tasks={historyTasks}
-          currentId={conversationId}
-          onSelect={chooseHistory}
-          onNew={newKnowledgeTask}
-          disabled={updating || nodeDirty || nodePending || composerDirty}
-        />
-      }
       collaboration={collaboration}
       knowledge={knowledge}
+      resourceActions={
+        workbench ? (
+          <>
+            <KnowledgeWorkbenchActions
+              presentation="resource"
+              progress={displayedProgress}
+              conversationId={conversationId ?? ""}
+              resetRevision={resetRevision}
+              disabled={updating || nodeDirty || nodePending || composerDirty}
+              exportDisabled={updating || nodePending}
+              hasUnsavedChanges={nodeDirty || composerDirty}
+              onProgress={setLiveProgress}
+            />
+            {knowledgeActions.download}
+          </>
+        ) : undefined
+      }
       nodeFocusRequest={nodeFocusRequest}
       collaborationRequest={editTarget?.mode === "ai" ? editTarget : null}
       workbench={workbench}
@@ -1481,22 +1504,22 @@ function RealBuildFlow({
 }
 
 function KnowledgeWorkspaceSurfaces({
-  toolbar,
   taskTitle,
   taskKey,
   collaboration,
   knowledge,
+  resourceActions,
   collaborationRequest,
   nodeFocusRequest,
   workbench = false,
   projectId = "knowledge",
   resultKey,
 }: {
-  toolbar?: React.ReactNode;
   taskTitle?: string;
   taskKey?: string;
   collaboration: React.ReactNode;
   knowledge: React.ReactNode;
+  resourceActions?: React.ReactNode;
   collaborationRequest?: object | null;
   nodeFocusRequest?: object | null;
   workbench?: boolean;
@@ -1545,14 +1568,7 @@ function KnowledgeWorkspaceSurfaces({
         conversationFocusRequest={mainFocusRequest}
         auxiliary={
           <div className="knowledge-workbench-auxiliary">
-            {toolbar && (
-              <div
-                className="knowledge-workbench-task-entry"
-                aria-label="知识库任务入口"
-              >
-                {toolbar}
-              </div>
-            )}
+            {resourceActions}
             <div className="knowledge-workbench-tree">{knowledge}</div>
           </div>
         }
@@ -1734,17 +1750,6 @@ export function PreviewBuildFlow({
   const focusNode = useCallback(() => setNodeFocusRequest({}), []);
   const [initialAccepted, setInitialAccepted] = useState(false);
   const [draft, setDraft] = useState("");
-  const [previewTaskNumber, setPreviewTaskNumber] = useState(1);
-  const [previewTaskCount, setPreviewTaskCount] = useState(1);
-  const [taskSnapshots, setTaskSnapshots] = useState<
-    Record<
-      number,
-      {
-        draft: string;
-        messages: Array<{ role: "assistant" | "user"; content: string }>;
-      }
-    >
-  >({});
   const currentLeaf = progress.branches
     .flatMap((branch) => branch.leaves)
     .find((leaf) => leaf.id === progress.build.currentLeafId);
@@ -1758,23 +1763,6 @@ export function PreviewBuildFlow({
     },
   ]);
 
-  const selectPreviewTask = (number: number) => {
-    setTaskSnapshots((current) => ({
-      ...current,
-      [previewTaskNumber]: { draft, messages },
-    }));
-    setPreviewTaskNumber(number);
-    setDraft(taskSnapshots[number]?.draft ?? "");
-    setMessages(
-      taskSnapshots[number]?.messages ?? [
-        {
-          role: "assistant",
-          content:
-            "这是独立的知识协作任务预览。可在左侧补充资料与确认意见，在右侧查看节点；预览不会执行真实构建。",
-        },
-      ],
-    );
-  };
   const sendPreviewMessage = () => {
     const content = draft.trim();
     if (!content || !currentLeaf) return;
@@ -1845,27 +1833,29 @@ export function PreviewBuildFlow({
     }));
   return (
     <KnowledgeWorkspaceSurfaces
-      taskTitle={`品牌资料协作 ${previewTaskNumber}`}
-      taskKey={`preview-knowledge-${previewTaskNumber}`}
-      toolbar={
-        <WorkbenchTaskToolbar
-          tasks={Array.from({ length: previewTaskCount }, (_, index) => ({
-            id: String(index + 1),
-            title: `品牌资料协作 ${index + 1}`,
-            updatedAt: 1788900000000 + index,
-          }))}
-          currentId={String(previewTaskNumber)}
-          onNew={() => {
-            const next = previewTaskCount + 1;
-            setPreviewTaskCount(next);
-            selectPreviewTask(next);
-          }}
-          onSelect={(id) => selectPreviewTask(Number(id))}
-        />
-      }
+      taskTitle="项目知识库"
+      taskKey={`preview-knowledge-${projectId}`}
       workbench={workbench}
       projectId={projectId}
       resultKey={`${projectId}:${progress.build.id}:${progress.build.revision}:${progress.build.currentLeafId ?? ""}:${progress.build.contentVersion ?? ""}`}
+      resourceActions={
+        workbench ? (
+          <section
+            className="knowledge-workbench-stage"
+            aria-label="知识库版本与下载"
+          >
+            <div>
+              <span className="knowledge-workbench-stage__eyebrow">
+                工作稿版本 {progress.build.contentVersion ?? 1}
+              </span>
+              <p>
+                {initialAccepted ? "已进入节点编辑" : "初稿待确认"} ·
+                本地设计预览
+              </p>
+            </div>
+          </section>
+        ) : undefined
+      }
       nodeFocusRequest={nodeFocusRequest}
       collaboration={
         <div className="flex h-full min-h-0 flex-1 flex-col">

@@ -9,49 +9,36 @@
   color: #000;
   background: #fff;
 }
-.agent-workbench-shell__taskbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  height: 56px;
-  min-height: 56px;
-  padding: 0 24px;
-  border-bottom: 1px solid #eaecf0;
-  background: #fff;
-}
-.agent-workbench-task-name {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  flex: 1;
-  font-size: 16px;
-  white-space: nowrap;
-}
-.agent-workbench-task-name strong {
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.agent-workbench-task-name > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #000;
-}
+/* Panel controls share the outcome surface; the main canvas has no title bar. */
 .agent-workbench-task-status {
   font-size: 12px;
   color: #595959;
-  white-space: nowrap;
+  margin-bottom: 8px;
 }
-.agent-workbench-task-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
+.agent-workbench-shell__panel-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 3;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #fff;
+  color: #595959;
 }
-.agent-workbench-task-actions button {
-  font-size: 13px;
+.agent-workbench-shell__panel-toggle.is-in-panel {
+  top: 32px;
+  right: 28px;
+}
+.agent-workbench-shell__auxiliary.has-panel-controls .workbench-panel-tabs {
+  padding-right: 40px;
+}
+.agent-workbench-shell__layout.has-floating-toggle
+  .agent-workbench-shell__main {
+  padding-top: 44px;
 }
 .agent-workbench-shell__layout {
+  position: relative;
   display: grid;
   width: 100%;
   max-width: 1584px;
@@ -152,16 +139,25 @@
   width: 1px;
   background: transparent;
 }
-.agent-workbench-shell__resize:hover,
-.agent-workbench-shell__resize:focus-visible {
-  outline: 2px solid #491060;
-  outline-offset: 0;
+.agent-workbench-shell__resize:focus {
+  outline: none;
+}
+.agent-workbench-shell__resize:hover:after,
+.agent-workbench-shell__resize:focus-visible:after {
+  top: 50%;
+  bottom: auto;
+  left: 6px;
+  width: 3px;
+  height: 40px;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  background: #b8b0bd;
 }
 .agent-workbench-subagents {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 16px;
+  padding: 16px 56px 16px 16px;
   border-bottom: 1px solid #eaecf0;
   flex-shrink: 0;
 }
@@ -311,41 +307,16 @@
   overflow: hidden;
 }
 @media (max-width: 1023px) {
-  .agent-workbench-shell__taskbar {
-    padding-left: 72px;
-    padding-right: 12px;
-    gap: 8px;
-  }
-  .agent-workbench-task-status {
-    display: none;
-  }
   .agent-workbench-shell__main-content.is-scrollable {
     padding: 16px;
   }
-  .agent-workbench-task-actions button {
-    gap: 3px;
-    padding-left: 8px;
-    padding-right: 8px;
+  .agent-workbench-shell__layout.has-floating-toggle
+    .agent-workbench-shell__main {
+    padding-top: 52px;
   }
-}
-@media (max-width: 479px) {
-  .agent-workbench-task-name {
-    font-size: 13px;
-    gap: 5px;
-  }
-  .agent-workbench-task-name strong {
-    max-width: 105px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .agent-workbench-task-actions {
-    gap: 0;
-  }
-  .agent-workbench-task-actions button {
-    font-size: 12px;
-  }
-  .agent-workbench-shell__main-content.is-scrollable {
-    padding: 16px;
+  .agent-workbench-shell__panel-toggle {
+    width: 44px;
+    height: 44px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -723,6 +694,26 @@
   flex-direction: column;
   flex: 1;
 }
+.workbench-business-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+.workbench-business-records {
+  border-top: 1px solid #eaecf0;
+  padding-top: 16px;
+}
+.workbench-business-records > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #595959;
+  font-size: 13px;
+  line-height: 24px;
+}
+.workbench-business-records[open] > summary {
+  margin-bottom: 16px;
+}
 .workbench-output-list {
   list-style: none;
   padding: 0;
@@ -867,7 +858,11 @@
   box-shadow: none;
   color: #000;
 }
-.agent-workbench-shell .knowledge-composer .general-runtime-trigger:hover:not(:disabled) { background: #f5f5f5; }
+.agent-workbench-shell
+  .knowledge-composer
+  .general-runtime-trigger:hover:not(:disabled) {
+  background: #f5f5f5;
+}
 
 @media (max-width: 639px) {
   .agent-workbench-shell .agent-composer-controls {
@@ -881,14 +876,24 @@
     width: 100%;
     padding-inline: 4px;
   }
-  .agent-workbench-shell .agent-composer-attachments { grid-column: 1; grid-row: 2; }
-  .agent-workbench-shell .agent-composer-actions { grid-column: 2; grid-row: 2; }
+  .agent-workbench-shell .agent-composer-attachments {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .agent-workbench-shell .agent-composer-actions {
+    grid-column: 2;
+    grid-row: 2;
+  }
 }
 
-.agent-workbench-shell [data-testid="chat-messages-viewport"] > .workbench-reading-column {
+.agent-workbench-shell
+  [data-testid="chat-messages-viewport"]
+  > .workbench-reading-column {
   padding: 0;
 }
-.agent-workbench-shell .knowledge-composer textarea { padding-block: 8px; }
+.agent-workbench-shell .knowledge-composer textarea {
+  padding-block: 8px;
+}
 
 .agent-workbench-shell__main-content.is-scrollable,
 .agent-workbench-shell [data-testid="chat-messages-viewport"] {

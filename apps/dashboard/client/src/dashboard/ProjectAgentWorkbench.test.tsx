@@ -118,6 +118,89 @@ afterEach(() => {
   window.history.replaceState({}, "", "/");
 });
 describe("conversational project workbench", () => {
+  it.each([true, false])(
+    "keeps the project keyword catalog independent of stale task links (saved resource: %s)",
+    (saved) => {
+      const module = createWorkbenchModules(
+        () => null,
+        () => undefined,
+        "keywords",
+      ).find((item) => item.id === "brand")!;
+      const row = (
+        id: string,
+        updatedAt: number,
+        agentId: "keywords" | "media",
+      ): Conversation => ({
+        id,
+        title: id,
+        messages: [],
+        status: "idle",
+        createdAt: 1,
+        updatedAt,
+        workbenchAgentId: agentId,
+        workbench: initialWorkbenchTaskState(agentId),
+      });
+      const retained = saved
+        ? [
+            row("historical-keywords", 1, "keywords"),
+            row("current-keywords", 2, "keywords"),
+            row("foreign-media", 3, "media"),
+          ]
+        : [row("foreign-media", 3, "media")];
+      function Catalog() {
+        const { task } = useBusinessWorkspace();
+        const { state } = useConversation();
+        useBusinessWorkspaceSummary({
+          title: "项目词库",
+          scope: "project",
+          items: [{ label: "当前生效词库", value: "版本 7 · 160 条问题" }],
+        });
+        return (
+          <>
+            <output aria-label="词库绑定">{task?.taskId}</output>
+            <output aria-label="保留记录">
+              {state.conversations.map((item) => item.id).join(",")}
+            </output>
+          </>
+        );
+      }
+      const page = () => (
+        <Workspace initialConversations={retained}>
+          <WorkbenchModuleContext.Provider value={module}>
+            <ProjectAgentWorkbench projectId="a">
+              <Catalog />
+            </ProjectAgentWorkbench>
+          </WorkbenchModuleContext.Provider>
+        </Workspace>
+      );
+      window.history.replaceState(
+        {},
+        "",
+        `/?view=keywords&workbenchTask=${saved ? "historical-keywords" : "foreign-media"}`,
+      );
+      const view = render(page());
+      const expected = saved ? "current-keywords" : "local-1";
+      expect(screen.getByLabelText("词库绑定")).toHaveTextContent(expected);
+      const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+      expect(
+        within(aside).getByRole("heading", { name: "项目词库" }),
+      ).toBeInTheDocument();
+      expect(aside).toHaveTextContent("版本 7 · 160 条问题");
+      expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
+      expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
+      expect(screen.queryByRole("listbox", { name: "任务历史" })).toBeNull();
+      retained.forEach((item) =>
+        expect(screen.getByLabelText("保留记录")).toHaveTextContent(item.id),
+      );
+      view.unmount();
+      render(page());
+      expect(screen.getByLabelText("词库绑定")).toHaveTextContent(expected);
+      expect(api.bind).not.toHaveBeenCalled();
+      expect(api.save).not.toHaveBeenCalled();
+      expect(api.handoff).not.toHaveBeenCalled();
+    },
+  );
   it("keeps an already restored business outcome visible on first mount", () => {
     function RestoredBusiness() {
       useBusinessWorkspaceSummary({

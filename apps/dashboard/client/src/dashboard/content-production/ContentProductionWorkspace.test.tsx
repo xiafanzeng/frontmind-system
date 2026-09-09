@@ -1009,12 +1009,16 @@ it("places native chat and actionable stage confirmation in main, keeping only a
   ).toBeNull();
   expect(within(main).queryByRole("button", { name: "新任务" })).toBeNull();
   expect(within(main).queryByRole("button", { name: "历史" })).toBeNull();
-  fireEvent.click(within(auxiliary).getByRole("tab", { name: "任务" }));
+  expect(
+    within(auxiliary).getByRole("tab", { name: "交付文件" }),
+  ).toBeInTheDocument();
+  fireEvent.click(within(auxiliary).getByRole("tab", { name: "制作任务" }));
   expect(within(main).getByTestId("original-chat")).toBeInTheDocument();
   expect(
-    within(auxiliary).getByRole("listbox", { name: "任务历史" }),
+    within(auxiliary).getByRole("listbox", { name: "制作记录" }),
   ).toBeInTheDocument();
-  fireEvent.click(within(auxiliary).getByRole("button", { name: "新任务" }));
+  fireEvent.click(within(auxiliary).getByRole("button", { name: "新建制作" }));
+  expect(mocks.create).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(
     within(main).getByRole("region", { name: "新建内容任务" }),

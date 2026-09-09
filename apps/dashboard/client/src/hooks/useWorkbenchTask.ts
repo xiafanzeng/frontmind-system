@@ -24,7 +24,11 @@ export type WorkbenchHandoffInput = {
 /** Workflow state is a separate server projection; no synthetic chat messages. */
 export function useWorkbenchTask(
   agentId: WorkbenchAgentId,
-  options: { conversationId?: string; title?: string } = {},
+  options: {
+    conversationId?: string;
+    title?: string;
+    ignoreTaskQuery?: boolean;
+  } = {},
 ) {
   const workspace = useConversation();
   const bindMutation = trpc.conversation.workbenchBind.useMutation();
@@ -44,11 +48,12 @@ export function useWorkbenchTask(
       : new URLSearchParams(window.location.search).get("workbenchTask");
   const task =
     tasks.find((item) => item.id === options.conversationId) ??
-    tasks.find(
-      (item) =>
-        item.id === (selection?.key === scopeKey ? selection.id : queryId),
-    ) ??
-    tasks.find((item) => item.id === workspace.activeConversation?.id) ??
+    (!options.ignoreTaskQuery
+      ? (tasks.find(
+          (item) =>
+            item.id === (selection?.key === scopeKey ? selection.id : queryId),
+        ) ?? tasks.find((item) => item.id === workspace.activeConversation?.id))
+      : undefined) ??
     tasks[0] ??
     null;
   const taskId = options.conversationId ?? task?.id ?? null;

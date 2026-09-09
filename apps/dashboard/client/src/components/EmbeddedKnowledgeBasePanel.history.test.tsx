@@ -16,6 +16,7 @@ import {
 const api = vi.hoisted(() => ({
   progress: vi.fn(),
   refresh: vi.fn(),
+  create: vi.fn(),
   setData: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -124,7 +125,7 @@ function Workspace() {
     syncError: null,
     workbenchScopeKey: "owner-7:project-1",
     setActive,
-    createConversation: () => "fresh",
+    createConversation: api.create,
     refreshConversations: api.refresh,
     refreshConversationsAfterDiscard: api.refresh,
     discardKnowledgeBaseConversationsLocally: () => [],
@@ -146,6 +147,7 @@ function Workspace() {
 beforeEach(() => {
   vi.clearAllMocks();
   api.refresh.mockResolvedValue(undefined);
+  api.create.mockReturnValue("fresh");
   const historical = progress("historical");
   const latest = progress("latest");
   api.progress.mockImplementation((id?: string) =>
@@ -155,52 +157,68 @@ beforeEach(() => {
 });
 afterEach(() => window.history.replaceState({}, "", "/"));
 
-describe("knowledge history restoration", () => {
-  it("creates an independent knowledge task without emitting reset or removing history", async () => {
+describe("project knowledge restoration", () => {
+  it("opens the authoritative project build without task controls or replacing retained history", async () => {
     const reset = vi.fn();
     window.addEventListener("frontmind:request-knowledge-reset", reset);
     try {
+      const view = render(<Workspace />);
+      await waitFor(() =>
+        expect(screen.getByLabelText("conversation")).toHaveTextContent(
+          /^latest:latest$/,
+        ),
+      );
+      expect(screen.getByLabelText("nodes")).toHaveTextContent(
+        /^latest:latest$/,
+      );
+      expect(screen.getByTestId("shell")).toHaveAttribute(
+        "data-task",
+        "latest",
+      );
+      expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "历史" })).toBeNull();
+      expect(screen.queryByRole("listbox", { name: "任务历史" })).toBeNull();
+      expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
+      view.unmount();
       render(<Workspace />);
       await waitFor(() =>
         expect(screen.getByLabelText("conversation")).toHaveTextContent(
-          /^historical:historical$/,
-        ),
-      );
-      fireEvent.click(screen.getByRole("button", { name: "新任务" }));
-      await waitFor(() =>
-        expect(screen.getByLabelText("conversation")).toHaveTextContent(
-          /^fresh:empty$/,
+          /^latest:latest$/,
         ),
       );
       expect(reset).not.toHaveBeenCalled();
-      expect(rows.map((row) => row.id)).toContain("historical");
-      expect(
-        new URLSearchParams(window.location.search).get("workbenchTask"),
-      ).toBe("fresh");
+      expect(api.create).not.toHaveBeenCalled();
+      expect(rows.map((row) => row.id)).toEqual([
+        "historical",
+        "latest",
+        "fresh",
+      ]);
     } finally {
       window.removeEventListener("frontmind:request-knowledge-reset", reset);
     }
   });
-  it("restores the historical conversation and its nodes together when a newer build exists", async () => {
-    render(<Workspace />);
+  it("reuses an existing empty project knowledge binding before a build has started", async () => {
+    api.progress.mockReturnValue(null);
+    const view = render(<Workspace />);
     await waitFor(() =>
       expect(screen.getByLabelText("conversation")).toHaveTextContent(
-        /^historical:historical$/,
+        /^historical:empty$/,
       ),
     );
-    expect(screen.getByLabelText("nodes")).toHaveTextContent(
-      /^historical:historical$/,
-    );
-    expect(screen.getByTestId("shell")).toHaveAttribute(
-      "data-task",
-      "historical",
-    );
-  });
-  it("leaves historical selection behind when a failed build creates a fresh task", async () => {
+    view.unmount();
     render(<Workspace />);
     await waitFor(() =>
       expect(screen.getByLabelText("conversation")).toHaveTextContent(
-        /^historical:historical$/,
+        /^historical:empty$/,
+      ),
+    );
+    expect(api.create).not.toHaveBeenCalled();
+  });
+  it("keeps explicit failed-build recovery on the new authoritative conversation", async () => {
+    render(<Workspace />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("conversation")).toHaveTextContent(
+        /^latest:latest$/,
       ),
     );
     act(() => {

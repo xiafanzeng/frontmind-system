@@ -163,11 +163,22 @@ describe("ResponseLogicWorkspace", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "应答参考草稿" })).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: "任务" }));
-    expect(screen.getByRole("button", { name: "新任务" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "应答版本" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "问题" }));
+    expect(
+      screen.getByRole("listbox", { name: "已有应答问题" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "选择问题" }));
+    expect(
+      screen.getByRole("heading", { name: "想为哪个优化问题整理应答？" }),
+    ).toBeInTheDocument();
+    expect(
+      new URLSearchParams(window.location.search).get("workbenchTask"),
+    ).toBeNull();
     expect(
       document.querySelector(".agent-workbench-shell__taskbar"),
-    ).not.toHaveTextContent("新任务历史");
+    ).not.toBeInTheDocument();
   });
 
   it("honors an explicit question deep link over an older parent selection", async () => {
@@ -187,11 +198,11 @@ describe("ResponseLogicWorkspace", () => {
       );
       await waitFor(() =>
         expect(
-          document.querySelector(".agent-workbench-task-name"),
+          screen.getByRole("region", { name: "主工作区" }),
         ).toHaveTextContent("企业如何系统搭建可被 AI 理解的知识库？"),
       );
       expect(
-        document.querySelector(".agent-workbench-task-name"),
+        screen.getByRole("region", { name: "主工作区" }),
       ).not.toHaveTextContent("示例企业是一家什么样的公司？");
     } finally {
       window.history.replaceState(null, "", "/");

@@ -226,12 +226,6 @@
 .operator-brand-modules[hidden] {
   display: none;
 }
-.user-brand-dashboard .operator-sidebar .operator-general-entry {
-  font-size: 16px !important;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  color: #491060;
-}
 .operator-task-navigation-slot {
   display: flex;
   flex: 1;

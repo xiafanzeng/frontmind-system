@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ManagedKeywordTables, {
   BrandQuestionUniverseGenerationAction,
 } from "./ManagedKeywordTables";
+import { initialWorkbenchTaskState } from "@shared/workbench-task";
 
 const mocks = vi.hoisted(() => ({
   observe: vi.fn(),
@@ -534,4 +535,130 @@ it("confirms a versioned selection before an explicit idempotent handoff", async
   );
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
   expect(screen.getAllByRole("listitem")).toHaveLength(10);
+});
+
+it("summarizes the project catalog and retained keyword references with the current selection taking precedence", () => {
+  const setSummary = vi.fn();
+  const handoff = vi.fn();
+  const saveState = vi.fn();
+  const selection = {
+    dashboardRevision: 7,
+    tableId: "question-list-1",
+    rowIndex: 0,
+    question: "品牌问题",
+    category: "reputation",
+  };
+  const stateFor = (
+    confirmed: typeof selection,
+    agentId: "keywords" | "media" = "keywords",
+  ) => ({
+    ...initialWorkbenchTaskState(agentId),
+    values: {
+      keywordsWorkflow: {
+        entry: "start",
+        pending: confirmed,
+        confirmed,
+        filters: { query: "", category: "", page: 0 },
+      },
+    },
+  });
+  const current = {
+    ...stateFor(selection),
+    records: [
+      {
+        id: "handoff",
+        label: "已交给问题优化",
+        detail: "当前交接结果",
+        status: "completed",
+        timestamp: 2,
+        targetTask: { conversationId: "question-target", agentId: "questions" },
+      },
+    ],
+  };
+  const old = {
+    ...stateFor({ ...selection, question: "已过期的同一引用" }),
+    records: [{ ...current.records[0], detail: "旧交接结果" }],
+  };
+  const retained = stateFor({
+    ...selection,
+    rowIndex: 1,
+    question: "场景问题",
+    category: "product_scenario",
+  });
+  const foreign = stateFor(
+    { ...selection, rowIndex: 2, question: "其他智能体的私有选题" },
+    "media",
+  );
+  window.history.replaceState(
+    {},
+    "",
+    "/?enterpriseProjectId=project-7&view=keywords",
+  );
+  const view = render(
+    <BusinessWorkspaceProvider
+      value={{
+        isWorkbench: true,
+        agentId: "keywords",
+        taskId: "current",
+        setSummary,
+        task: {
+          scopeKey: "owner-7:project-7:keywords",
+          taskId: "current",
+          state: current,
+          tasks: [
+            { workbench: old },
+            { workbench: retained },
+            { workbench: foreign },
+          ],
+          handoff,
+          saveState,
+        } as any,
+      }}
+    >
+      <ManagedKeywordTables tables={tables} dashboardRevision={7} />
+    </BusinessWorkspaceProvider>,
+  );
+  const summary = setSummary.mock.calls.at(-1)?.[0];
+  expect(summary).toMatchObject({
+    title: "项目词库",
+    scope: "project",
+    items: [{ label: "当前生效词库", value: "版本 7 · 4 条问题" }],
+  });
+  expect(summary.outputs.map((item: any) => item.title)).toEqual([
+    "品牌问题",
+    "场景问题",
+    "当前交接结果",
+  ]);
+  act(() => summary.outputs.at(-1).onOpen());
+  expect(mocks.navigate).toHaveBeenCalledWith(
+    expect.stringContaining("workbenchTask=question-target"),
+  );
+  expect(mocks.navigate).toHaveBeenCalledWith(
+    expect.stringContaining("enterpriseProjectId=project-7"),
+  );
+  expect(handoff).not.toHaveBeenCalled();
+  expect(saveState).not.toHaveBeenCalled();
+  view.rerender(
+    <BusinessWorkspaceProvider
+      value={{
+        isWorkbench: true,
+        agentId: "keywords",
+        taskId: null,
+        setSummary,
+        task: {
+          scopeKey: "owner-8:project-8:keywords",
+          taskId: null,
+          state: null,
+          tasks: [],
+          handoff,
+          saveState,
+        } as any,
+      }}
+    >
+      <ManagedKeywordTables tables={[]} />
+    </BusinessWorkspaceProvider>,
+  );
+  expect(setSummary.mock.calls.at(-1)?.[0].outputs).toEqual([]);
+  expect(setSummary.mock.calls.at(-1)?.[0].items).toEqual([]);
+  window.history.replaceState({}, "", "/");
 });

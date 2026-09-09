@@ -88,6 +88,9 @@ export function EnterpriseMonitoringWorkspace({
     setError("");
     intent.current = undefined;
   }, [enterpriseProjectId]);
+  const selectedProject = progress.data?.projects.find(
+    (project) => project.id === selectedProjectId,
+  );
   useBusinessWorkspaceSummary({
     items: [
       {
@@ -98,7 +101,18 @@ export function EnterpriseMonitoringWorkspace({
             ? "执行配置与运行"
             : "选择监控任务",
       },
-      { label: "已选问题", value: `${selected.length} 个` },
+      {
+        label: "已保存来源问题",
+        value: selectedProject
+          ? `${selectedProject.sourceQuestions?.length ?? 0} 个`
+          : selectedProjectId
+            ? progress.error
+              ? "读取失败"
+              : progress.isLoading
+                ? "正在读取已保存项目"
+                : "等待同步已保存项目"
+            : "尚未选择已保存项目",
+      },
       {
         label: "监控项目",
         value: `${progress.data?.summary.projectCount ?? 0} 个`,
@@ -541,37 +555,63 @@ export function EnterpriseProgressReport({
             ? "所选监控最近 100 次运行；趋势按筛选时间范围查询"
             : reportMode === "imports"
               ? "历史导入报告"
-              : "当前项目最近 200 次运行",
+              : reportMode === "runs"
+                ? "当前项目最近 200 次运行"
+                : "尚未选择分析方式",
       },
-      {
-        label: "选中运行",
-        value: selectedRun
-          ? `${projectName(selectedRun.projectId)} · ${runStatus[selectedRun.status] || selectedRun.status}`
-          : "尚未选择",
-      },
-      {
-        label: "更新时间",
-        value: progress.dataUpdatedAt
-          ? new Date(progress.dataUpdatedAt).toLocaleTimeString("zh-CN")
-          : "等待读取",
-      },
+      ...(reportMode === "runs"
+        ? [
+            {
+              label: "选中运行",
+              value: selectedRun
+                ? `${projectName(selectedRun.projectId)} · ${runStatus[selectedRun.status] || selectedRun.status}`
+                : "尚未选择",
+            },
+          ]
+        : reportMode === "trends"
+          ? [
+              {
+                label: "趋势监控项目",
+                value:
+                  progress.data?.projects.find(
+                    (project) => project.id === trendProjectId,
+                  )?.name ?? "尚未选择",
+              },
+            ]
+          : []),
+      ...(["runs", "trends"].includes(reportMode)
+        ? [
+            {
+              label: "监控数据更新时间",
+              value: progress.dataUpdatedAt
+                ? new Date(progress.dataUpdatedAt).toLocaleTimeString("zh-CN")
+                : "等待读取",
+            },
+          ]
+        : []),
     ],
-    status: progress.error ? "读取失败" : undefined,
-    outputs: selectedRun
-      ? [
-          {
-            id: selectedRun.id,
-            title: `${projectName(selectedRun.projectId)} · 运行报告`,
-            type: "监控报告",
-            status: runStatus[selectedRun.status] || selectedRun.status,
-            source: "真实监控运行",
-            onOpen: () => setReportMode("runs"),
-          },
-        ]
-      : [],
+    status:
+      ["runs", "trends"].includes(reportMode) && progress.error
+        ? "读取失败"
+        : undefined,
+    outputs:
+      reportMode === "runs" && selectedRun
+        ? [
+            {
+              id: selectedRun.id,
+              title: `${projectName(selectedRun.projectId)} · 运行报告`,
+              type: "监控报告",
+              status: runStatus[selectedRun.status] || selectedRun.status,
+              source: "真实监控运行",
+              onOpen: () => setReportMode("runs"),
+            },
+          ]
+        : undefined,
   });
   return (
-    <section className={`${isWorkbench ? "" : "page-shell "}operator-progress-report business-report-flow`}>
+    <section
+      className={`${isWorkbench ? "" : "page-shell "}operator-progress-report business-report-flow`}
+    >
       {!reportMode ? (
         <WorkflowQuestion
           question="这次想了解哪一类监控结果？"

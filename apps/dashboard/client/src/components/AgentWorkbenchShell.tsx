@@ -80,7 +80,6 @@ export function AgentWorkbenchShell({
   composer,
   layout: requestedLayout,
   toolbar,
-  taskTitle,
   taskKey,
   scrollMain,
   auxiliaryScroll = true,
@@ -240,47 +239,30 @@ export function AgentWorkbenchShell({
       data-layout={layout}
       style={{ "--agent-aux-width": `${renderedWidth}px` } as CSSProperties}
     >
-      <header className="agent-workbench-shell__taskbar">
-        <div className="agent-workbench-task-name">
-          <strong>{title}</strong>
-          {taskTitle && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span title={taskTitle}>{taskTitle}</span>
-            </>
-          )}
-        </div>
-        {status && (
-          <span className="agent-workbench-task-status" role="status">
-            {status}
-          </span>
-        )}
-        <div className="agent-workbench-task-actions">
-          {toolbar}
-          {hasAux && (
-            <Button
-              ref={toggle}
-              variant="ghost"
-              size="icon"
-              aria-label={inlineAux ? "收起任务信息" : "打开任务信息"}
-              aria-expanded={inlineAux || drawerOpen}
-              onClick={() =>
-                narrow ? setDrawerOpen(true) : setCollapsed((value) => !value)
-              }
-            >
-              {inlineAux ? (
-                <PanelRightClose size={18} />
-              ) : (
-                <PanelRightOpen size={18} />
-              )}
-            </Button>
-          )}
-        </div>
-      </header>
       <div
         ref={layoutRoot}
-        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"}`}
+        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"} ${hasAux && !inlineAux ? "has-floating-toggle" : ""}`}
       >
+        {hasAux && (
+          <Button
+            ref={toggle}
+            className={`agent-workbench-shell__panel-toggle ${inlineAux ? "is-in-panel" : ""}`}
+            variant="ghost"
+            size="icon"
+            aria-label={inlineAux ? "收起任务信息" : "打开任务信息"}
+            aria-expanded={inlineAux || drawerOpen}
+            title={inlineAux ? "收起浮窗" : "打开浮窗"}
+            onClick={() =>
+              narrow ? setDrawerOpen(true) : setCollapsed((value) => !value)
+            }
+          >
+            {inlineAux ? (
+              <PanelRightClose size={18} />
+            ) : (
+              <PanelRightOpen size={18} />
+            )}
+          </Button>
+        )}
         <section className="agent-workbench-shell__main" aria-label="主工作区">
           <div
             ref={mainViewport}
@@ -339,7 +321,7 @@ export function AgentWorkbenchShell({
               }}
             />
             <aside
-              className="agent-workbench-shell__auxiliary"
+              className={`agent-workbench-shell__auxiliary ${agentSwitch ? "" : "has-panel-controls"}`}
               aria-label={isKnowledge ? "知识节点与资料" : "任务辅助区"}
             >
               {agentSwitch}
@@ -381,7 +363,19 @@ export function AgentWorkbenchShell({
       {hasAux && !inlineAux && !drawerOpen && (
         <div hidden aria-hidden="true" ref={attachAux} />
       )}
-      {hasAux && createPortal(auxiliary ?? result ?? children, auxHost)}
+      {hasAux &&
+        createPortal(
+          <>
+            {toolbar}
+            {status && (
+              <span className="agent-workbench-task-status" role="status">
+                {status}
+              </span>
+            )}
+            {auxiliary ?? result ?? children}
+          </>,
+          auxHost,
+        )}
     </section>
   );
 }

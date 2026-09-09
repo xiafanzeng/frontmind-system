@@ -856,12 +856,18 @@ function ResponseLogicEmptyWorkspace({
       projectId={activeEnterpriseProjectId() ?? "account"}
       moduleId="response-logic"
       title="应答逻辑"
+      resultTitle="问题与应答"
       taskTitle="选择优化问题"
       main={main}
       auxiliary={
         <div className="workbench-task-panel">
           <WorkbenchTaskToolbar
             presentation="panel"
+            labels={{
+              newAction: "选择问题",
+              history: "已有应答问题",
+              noun: "问题",
+            }}
             tasks={[]}
             onNew={openQuestions}
             onSelect={() => undefined}
@@ -2265,6 +2271,7 @@ function ResponseLogicWorkspaceContent({
       moduleId="response-logic"
       title="应答逻辑"
       taskTitle={hasFlowQuestion ? selectedEntry.question.question : "新任务"}
+      resultTitle="问题与应答"
       taskKey={conversationId ?? activeQuestionId}
       main={unifiedDialogue}
       scrollMain={!hasFlowQuestion || questionPickerOpen || preview}
@@ -2273,7 +2280,7 @@ function ResponseLogicWorkspaceContent({
           <div
             className="workbench-panel-tabs"
             role="tablist"
-            aria-label="任务与成果"
+            aria-label="问题与应答版本"
           >
             <button
               type="button"
@@ -2281,7 +2288,7 @@ function ResponseLogicWorkspaceContent({
               aria-selected={taskPanel === "tasks"}
               onClick={() => setTaskPanel("tasks")}
             >
-              任务
+              问题
             </button>
             <button
               type="button"
@@ -2289,12 +2296,17 @@ function ResponseLogicWorkspaceContent({
               aria-selected={taskPanel === "outputs"}
               onClick={() => setTaskPanel("outputs")}
             >
-              成果
+              应答版本
             </button>
           </div>
           {taskPanel === "tasks" ? (
             <WorkbenchTaskToolbar
               presentation="panel"
+              labels={{
+                newAction: "选择问题",
+                history: "已有应答问题",
+                noun: "问题",
+              }}
               tasks={questionEntries
                 .filter(
                   (entry) =>

@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { BusinessWorkspaceProvider } from "./BusinessWorkspaceContext";
+import { useState, type ReactNode } from "react";
+import {
+  BusinessWorkspaceProvider,
+  BusinessWorkspaceInspector,
+  type BusinessWorkspaceSummary,
+} from "./BusinessWorkspaceContext";
 import {
   EnterpriseMonitoringWorkspace,
   EnterpriseProgressReport,
@@ -21,12 +26,26 @@ vi.mock("@/lib/trpc", () => ({
           refetch: api.refresh,
           data: {
             summary: {
-              projectCount: 1,
+              projectCount: 2,
               runCount: 25,
               completedAttempts: 25,
               failedAttempts: 0,
             },
-            projects: [{ id: "project-1", name: "企业监控" }],
+            projects: [
+              {
+                id: "project-1",
+                name: "企业监控",
+                sourceQuestions: [
+                  { question: "已保存问题甲" },
+                  { question: "已保存问题乙" },
+                ],
+              },
+              {
+                id: "project-2",
+                name: "另一监控",
+                sourceQuestions: [{ question: "另一已保存问题" }],
+              },
+            ],
             runs: Array.from({ length: 25 }, (_, index) => ({
               id: `run-${index}`,
               projectId: "project-1",
@@ -42,6 +61,115 @@ vi.mock("@/lib/trpc", () => ({
     },
   },
 }));
+function WithSummary({
+  agentId,
+  children,
+}: {
+  agentId: "monitoring" | "reports";
+  children: ReactNode;
+}) {
+  const [summary, setSummary] = useState<BusinessWorkspaceSummary | null>(null);
+  const [task] = useState(() => ({
+    saveState: vi.fn(async () => undefined),
+    state: null,
+  }));
+  return (
+    <BusinessWorkspaceProvider
+      value={{
+        isWorkbench: true,
+        agentId,
+        taskId: `${agentId}-summary`,
+        task: task as any,
+        setSummary,
+      }}
+    >
+      {children}
+      <aside aria-label="业务摘要">
+        <BusinessWorkspaceInspector summary={summary} />
+      </aside>
+    </BusinessWorkspaceProvider>
+  );
+}
+
+it("shows only saved project source questions and replaces them when selecting another monitor", async () => {
+  render(
+    <WithSummary agentId="monitoring">
+      <EnterpriseMonitoringWorkspace
+        enterpriseProjectId="enterprise-project"
+        questions={[
+          { id: "draft-question", question: "尚未提交的问题" } as any,
+        ]}
+      />
+    </WithSummary>,
+  );
+  const summary = within(
+    screen.getByRole("complementary", { name: "业务摘要" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(summary.getByText("尚未选择已保存项目")).toBeInTheDocument();
+  expect(
+    summary.getByText("已保存来源问题").nextElementSibling,
+  ).not.toHaveTextContent("1 个");
+  fireEvent.click(screen.getByRole("button", { name: "收起新建监控" }));
+  fireEvent.click(screen.getByRole("button", { name: "继续已有监控" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: /企业监控.*2 个来源问题/ }),
+  );
+  expect(await screen.findByLabelText("内联监控模块")).toHaveTextContent(
+    "project-1",
+  );
+  expect(
+    summary.getByText("已保存来源问题").nextElementSibling,
+  ).toHaveTextContent("2 个");
+  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: /另一监控.*1 个来源问题/ }),
+  );
+  expect(
+    summary.getByText("已保存来源问题").nextElementSibling,
+  ).toHaveTextContent("1 个");
+  expect(screen.getByLabelText("内联监控模块")).toHaveTextContent("project-2");
+});
+
+it("projects only the active report mode while preserving the chosen run for a return to single-run analysis", async () => {
+  render(
+    <WithSummary agentId="reports">
+      <EnterpriseProgressReport
+        enterpriseProjectId="enterprise-project"
+        historical={<p>项目历史导入正文</p>}
+      />
+    </WithSummary>,
+  );
+  const summary = within(
+    screen.getByRole("complementary", { name: "业务摘要" }),
+  );
+  expect(summary.getByText("尚未选择分析方式")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
+  fireEvent.click(screen.getAllByRole("button", { name: "展开分析" })[0]);
+  expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: /分析监控趋势/ }));
+  fireEvent.click(
+    screen.getByRole("button", { name: /另一监控.*展开趋势分析/ }),
+  );
+  expect(
+    summary.getByText("趋势监控项目").nextElementSibling,
+  ).toHaveTextContent("另一监控");
+  expect(summary.queryByText("选中运行")).toBeNull();
+  expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: /查看导入报告/ }));
+  expect(summary.getByText("历史导入报告")).toBeInTheDocument();
+  expect(summary.queryByText("趋势监控项目")).toBeNull();
+  expect(summary.queryByText("选中运行")).toBeNull();
+  expect(summary.queryByText("监控数据更新时间")).toBeNull();
+  expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
+  expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
+  expect(await screen.findByText("读取真实运行 run-0")).toBeInTheDocument();
+});
 vi.mock("@/monitoring/Workspace", () => ({
   default: ({ selectedProjectId, createMonitorRequest, analysisOnly }: any) => (
     <output aria-label="内联监控模块">
@@ -72,7 +200,9 @@ it("pages live runs and expands the selected owned run in the main flow", async 
       <EnterpriseProgressReport enterpriseProjectId="enterprise-project" />
     </BusinessWorkspaceProvider>,
   );
-  expect(document.querySelector(".business-report-flow")).not.toHaveClass("page-shell");
+  expect(document.querySelector(".business-report-flow")).not.toHaveClass(
+    "page-shell",
+  );
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
   expect(screen.getAllByRole("row")).toHaveLength(21);

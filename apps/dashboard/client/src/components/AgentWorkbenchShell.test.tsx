@@ -54,6 +54,21 @@ afterEach(() => {
 });
 
 describe("AgentWorkbenchShell", () => {
+  it("removes the title bar and keeps the panel control and live save status with outcomes", () => {
+    const { container } = render(
+      <AgentWorkbenchShell {...props} status="正在保存" />,
+    );
+    expect(
+      container.querySelector(".agent-workbench-shell__taskbar"),
+    ).toBeNull();
+    expect(screen.queryByText("品牌资料整理")).not.toBeInTheDocument();
+    const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+    expect(within(aside).getByRole("status")).toHaveTextContent("正在保存");
+    fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    expect(screen.getByRole("complementary")).toHaveTextContent("辅助摘要");
+  });
   it("uses the same 2:1 geometry at the 948px boundary for every layout", () => {
     expect(workbenchPaneGeometry(948)).toEqual({
       minAux: 300,

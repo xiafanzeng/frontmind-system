@@ -109,8 +109,9 @@ describe("workbench task scopes", () => {
     expect(screen.getByLabelText("编辑器任务")).toHaveTextContent(
       "general,logic,qa,media-a,articles-a",
     );
-    fireEvent.click(screen.getByRole("tab", { name: "任务" }));
-    const history = screen.getByRole("listbox", { name: "任务历史" });
+    expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
+    fireEvent.click(screen.getByText("选媒工作记录", { selector: "summary" }));
+    const history = screen.getByRole("listbox", { name: "选媒工作记录" });
     expect(within(history).getAllByRole("option")).toHaveLength(1);
     expect(history).toHaveTextContent("media-a");
     expect(history).not.toHaveTextContent("articles-a");

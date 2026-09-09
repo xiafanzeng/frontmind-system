@@ -13,6 +13,7 @@ import { operatorViewPath } from "./operator-navigation";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import {
   ConversationAgentProvider,
+  conversationBelongsToAgent,
   ConversationContextProvider,
   ConversationPurposeProvider,
   useConversation,
@@ -27,6 +28,7 @@ import {
   type BusinessWorkspaceSummary,
 } from "./BusinessWorkspaceContext";
 import { WorkbenchTaskToolbar } from "./WorkbenchTaskToolbar";
+import { businessPanelPolicy } from "./workbench-panel-policy";
 const Home = lazy(() => import("@/pages/Home"));
 function taskUrl(projectId: string, agentId: string, conversationId: string) {
   const path = operatorViewPath(agentId);
@@ -54,7 +56,46 @@ function ScopedWorkbench({
 }) {
   const module = useWorkbenchModule();
   const workspace = useConversation();
-  const task = useWorkbenchTask(agentId);
+  const projectResource = agentId === "keywords";
+  const businessPanel = businessPanelPolicy[agentId];
+  const isQa = purpose === "enterprise_qa";
+  const historyLabel = isQa ? "会话" : "任务";
+  const outputLabel = isQa ? "知识来源" : "文件";
+  // Catalogs belong to the project. Reuse its latest persisted workbench
+  // projection instead of allowing a stale task URL to replace that context.
+  const resourceCandidates = projectResource
+    ? originalWorkspace.state.conversations
+        .filter((item) => conversationBelongsToAgent(item, agentId))
+        .sort(
+          (a, b) =>
+            Number(Boolean(b.workbench)) - Number(Boolean(a.workbench)) ||
+            b.updatedAt - a.updatedAt,
+        )
+    : [];
+  const resourceBinding = useRef<{ scope: string; id: string } | null>(null);
+  const resourceScope = `${originalWorkspace.workbenchScopeKey ?? projectId}:${agentId}`;
+  if (
+    projectResource &&
+    (!resourceBinding.current ||
+      resourceBinding.current.scope !== resourceScope ||
+      !resourceCandidates.some(
+        (item) => item.id === resourceBinding.current?.id,
+      ))
+  ) {
+    resourceBinding.current = resourceCandidates[0]
+      ? { scope: resourceScope, id: resourceCandidates[0].id }
+      : null;
+  }
+  const task = useWorkbenchTask(
+    agentId,
+    projectResource
+      ? {
+          conversationId: resourceBinding.current?.id,
+          title: "品牌全域词库",
+          ignoreTaskQuery: true,
+        }
+      : {},
+  );
   const [summary, setSummary] = useState<BusinessWorkspaceSummary | null>(null);
   const creating = useRef(false);
   const [panel, setPanel] = useState<"tasks" | "outputs">(
@@ -83,7 +124,11 @@ function ScopedWorkbench({
     ) {
       creating.current = true;
       workspace.createConversation({
-        title: purpose === "enterprise_qa" ? "企业问答" : "新任务",
+        title: projectResource
+          ? "品牌全域词库"
+          : purpose === "enterprise_qa"
+            ? "企业问答"
+            : (businessPanel?.title ?? "新任务"),
         reuseEmpty: false,
         workbenchAgentId: agentId,
       });
@@ -91,6 +136,7 @@ function ScopedWorkbench({
     if (workspace.activeConversation) creating.current = false;
   }, [
     native,
+    projectResource,
     workspace.hydrated,
     workspace.activeConversation,
     workspace.createConversation,
@@ -203,21 +249,50 @@ function ScopedWorkbench({
       error={workspace.syncError}
       onRetry={() => void task.retry().catch(() => undefined)}
       presentation="panel"
-      showNew
+      showNew={!businessPanel || Boolean(businessPanel.newAction)}
+      labels={
+        isQa
+          ? { newAction: "新会话", history: "会话历史", noun: "会话" }
+          : businessPanel
+            ? {
+                newAction: businessPanel.newAction,
+                history: businessPanel.history,
+                noun: "记录",
+              }
+            : undefined
+      }
       onNew={() => {
-        task.newTask("新任务");
+        task.newTask(isQa ? "企业问答" : (businessPanel?.title ?? "新任务"));
       }}
       onSelect={task.selectTask}
       onDelete={workspace.deleteConversation}
       onNavigate={agentId === "general" ? onTaskNavigate : undefined}
     />
   );
-  const panelContents = (
+  const panelContents = projectResource ? (
+    <BusinessWorkspaceInspector
+      summary={summary ?? { title: "项目词库", items: [], scope: "project" }}
+    />
+  ) : businessPanel ? (
+    <div className="workbench-business-panel">
+      <BusinessWorkspaceInspector
+        summary={{
+          ...summary,
+          title: businessPanel.title,
+          items: summary?.items ?? [],
+        }}
+      />
+      <details className="workbench-business-records">
+        <summary>{businessPanel.history}</summary>
+        {taskNavigation}
+      </details>
+    </div>
+  ) : (
     <div className="workbench-task-panel">
       <div
         className="workbench-panel-tabs"
         role="tablist"
-        aria-label="任务与成果"
+        aria-label={`${historyLabel}与${outputLabel}`}
       >
         <button
           type="button"
@@ -227,7 +302,7 @@ function ScopedWorkbench({
           aria-selected={panel === "tasks"}
           onClick={() => setPanel("tasks")}
         >
-          任务
+          {historyLabel}
         </button>
         <button
           type="button"
@@ -237,7 +312,7 @@ function ScopedWorkbench({
           aria-selected={panel === "outputs"}
           onClick={() => setPanel("outputs")}
         >
-          成果
+          {outputLabel}
         </button>
       </div>
       <div
@@ -308,13 +383,20 @@ function ScopedWorkbench({
         taskTitle={task.task?.title ?? "新任务"}
         taskKey={task.taskId ?? "new"}
         layout="workflow"
+        resultTitle={
+          projectResource
+            ? "项目词库"
+            : (businessPanel?.title ?? `${historyLabel}与${outputLabel}`)
+        }
         main={body}
         scrollMain={!native}
         status={
           task.pending
             ? "正在保存"
-            : native
-              ? workbenchStatus(workspace.activeConversation?.status)
+            : native &&
+                workspace.activeConversation?.status &&
+                workspace.activeConversation.status !== "idle"
+              ? workbenchStatus(workspace.activeConversation.status)
               : undefined
         }
         auxiliary={panelContents}

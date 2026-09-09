@@ -14,6 +14,7 @@ export default function KnowledgeWorkbenchActions({
   exportDisabled = disabled,
   hasUnsavedChanges = false,
   onProgress,
+  presentation = "full",
 }: {
   progress: KnowledgeBaseProgressDto | null;
   conversationId: string;
@@ -22,6 +23,7 @@ export default function KnowledgeWorkbenchActions({
   exportDisabled?: boolean;
   hasUnsavedChanges?: boolean;
   onProgress: (progress: KnowledgeBaseProgressDto) => void;
+  presentation?: "full" | "accept" | "resource";
 }) {
   const { commitKnowledgeBaseObservation } = useConversation();
   const [pending, setPending] = useState(false);
@@ -85,51 +87,68 @@ export default function KnowledgeWorkbenchActions({
   const params = new URLSearchParams(
     Object.entries(coordinates).map(([key, value]) => [key, String(value)]),
   );
+  if (presentation === "accept" && !initial) return null;
   return (
     <section
       className="knowledge-workbench-stage"
-      aria-label={initial ? "知识库初稿确认" : "知识库编辑阶段"}
+      aria-label={
+        presentation === "resource"
+          ? "知识库版本与下载"
+          : initial
+            ? "知识库初稿确认"
+            : "知识库编辑阶段"
+      }
     >
       <div>
         <span className="knowledge-workbench-stage__eyebrow">
-          {initial ? "初稿审阅" : "工作稿"}
+          {presentation === "resource"
+            ? `工作稿版本 ${progress.build.contentVersion}`
+            : initial
+              ? "初稿审阅"
+              : "工作稿"}
         </span>
         <p>
-          {initial
-            ? "初稿已按知识节点组织。浏览后整体确认，即可继续修改正文和图片。"
-            : "从右侧选择节点，在这里查看与编辑。完成修改后，更新知识库以启用新版本。"}
+          {presentation === "resource"
+            ? initial
+              ? "初稿待确认"
+              : "已进入节点编辑"
+            : initial
+              ? "初稿已按知识节点组织。浏览后整体确认，即可继续修改正文和图片。"
+              : "从右侧选择节点，在这里查看与编辑。完成修改后，更新知识库以启用新版本。"}
         </p>
       </div>
       <div className="knowledge-workbench-stage__actions">
-        {initial && (
+        {initial && presentation !== "resource" && (
           <Button onClick={accept} disabled={!available || disabled || pending}>
             {pending ? <Loader2 className="animate-spin" /> : <Check />}
             {pending ? "正在确认…" : "确认初稿，进入编辑"}
           </Button>
         )}
-        <Button
-          variant="outline"
-          asChild
-          disabled={!available || exportDisabled || pending}
-        >
-          <a
-            href={projectResourceUrl(
-              `/api/knowledge-base/workspace-export?${params}`,
-            )}
-            target="_blank"
-            rel="noreferrer"
-            aria-disabled={!available || exportDisabled || pending}
-            onClick={(event) => {
-              if (!available || exportDisabled || pending)
-                event.preventDefault();
-            }}
+        {presentation !== "accept" && (
+          <Button
+            variant="outline"
+            asChild
+            disabled={!available || exportDisabled || pending}
           >
-            <Download />
-            {hasUnsavedChanges ? "下载已保存工作稿 ZIP" : "导出工作稿 ZIP"}
-          </a>
-        </Button>
+            <a
+              href={projectResourceUrl(
+                `/api/knowledge-base/workspace-export?${params}`,
+              )}
+              target="_blank"
+              rel="noreferrer"
+              aria-disabled={!available || exportDisabled || pending}
+              onClick={(event) => {
+                if (!available || exportDisabled || pending)
+                  event.preventDefault();
+              }}
+            >
+              <Download />
+              {hasUnsavedChanges ? "下载已保存工作稿 ZIP" : "导出工作稿 ZIP"}
+            </a>
+          </Button>
+        )}
       </div>
-      {hasUnsavedChanges && (
+      {hasUnsavedChanges && presentation !== "accept" && (
         <p className="knowledge-workbench-stage__saved-note">
           下载包含已保存的节点和资料；要包含当前修改，请先在节点中保存。
         </p>

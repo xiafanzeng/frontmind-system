@@ -80,6 +80,34 @@ beforeEach(() => {
 afterEach(() => window.history.replaceState({}, "", "/"));
 
 describe("useWorkbenchTask persistence", () => {
+  it("ignores historical URL and active-task preferences for a project resource without writing on browse", () => {
+    window.history.replaceState({}, "", "/?workbenchTask=old");
+    const old = {
+      ...task("old"),
+      workbenchAgentId: "keywords" as const,
+      workbench: initialWorkbenchTaskState("keywords"),
+    };
+    const current = { ...old, id: "current", updatedAt: 2 };
+    const view = renderHook(
+      () => useWorkbenchTask("keywords", { ignoreTaskQuery: true }),
+      {
+        wrapper: wrapper([old, current]),
+      },
+    );
+    expect(view.result.current.taskId).toBe("current");
+    expect(view.result.current.tasks).toHaveLength(2);
+    view.unmount();
+    const empty = renderHook(
+      () => useWorkbenchTask("keywords", { ignoreTaskQuery: true }),
+      {
+        wrapper: wrapper([task("old")]),
+      },
+    );
+    expect(empty.result.current.taskId).toBeNull();
+    expect(api.bind).not.toHaveBeenCalled();
+    expect(api.save).not.toHaveBeenCalled();
+    expect(api.flush).not.toHaveBeenCalled();
+  });
   it.each(["project", "task", "agent"] as const)(
     "clears the previous task error when the %s changes through route restoration",
     async (change) => {

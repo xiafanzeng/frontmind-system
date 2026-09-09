@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const context = vi.hoisted(() => ({ commitKnowledgeBaseObservation: vi.fn() }));
 vi.mock("@/contexts/ConversationContext", () => ({
@@ -20,6 +26,54 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 describe("knowledge initial draft actions", () => {
+  it("keeps acceptance in the main area and exposes version and download directly in the resource area", () => {
+    render(
+      <>
+        <main>
+          <KnowledgeWorkbenchActions
+            presentation="accept"
+            progress={progress}
+            conversationId="conversation"
+            resetRevision={3}
+            onProgress={vi.fn()}
+          />
+        </main>
+        <aside>
+          <KnowledgeWorkbenchActions
+            presentation="resource"
+            progress={progress}
+            conversationId="conversation"
+            resetRevision={3}
+            onProgress={vi.fn()}
+          />
+        </aside>
+      </>,
+    );
+    expect(
+      within(screen.getByRole("main")).getByRole("button", {
+        name: "确认初稿，进入编辑",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main")).queryByRole("link", { name: /ZIP/ }),
+    ).toBeNull();
+    expect(
+      within(screen.getByRole("complementary")).getByText("工作稿版本 1"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("complementary")).getByRole("link", {
+        name: "导出工作稿 ZIP",
+      }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("expectedContentVersion=1"),
+    );
+    expect(
+      within(screen.getByRole("complementary")).queryByRole("button", {
+        name: "确认初稿，进入编辑",
+      }),
+    ).toBeNull();
+  });
   it("retries a failed initial acceptance with the same id and commits the authoritative editing phase", async () => {
     const updated = {
       ...progress,

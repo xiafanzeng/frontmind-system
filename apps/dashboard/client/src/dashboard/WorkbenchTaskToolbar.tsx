@@ -28,6 +28,7 @@ export function WorkbenchTaskToolbar({
   onRetry,
   onNavigate,
   showNew = true,
+  labels,
 }: {
   tasks: WorkbenchHistoryItem[];
   currentId?: string | null;
@@ -38,11 +39,14 @@ export function WorkbenchTaskToolbar({
   legacyTasks?: WorkbenchHistoryItem[];
   presentation?: "toolbar" | "sidebar" | "panel";
   showNew?: boolean;
+  labels?: { newAction?: string; history?: string; noun?: string };
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
   onNavigate?: () => void;
 }) {
+  const noun = labels?.noun ?? "任务";
+  const historyLabel = labels?.history ?? "任务历史";
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [legacy, setLegacy] = useState(false);
@@ -65,13 +69,13 @@ export function WorkbenchTaskToolbar({
       }
     >
       <Plus size={15} />
-      新任务
+      {labels?.newAction ?? "新任务"}
     </Button>
   );
   const historyContent = (
     <>
       <div className="workbench-conversation__history-heading">
-        <span>任务历史</span>
+        <span>{historyLabel}</span>
         {legacyTasks.length > 0 && (
           <button type="button" onClick={() => setLegacy((value) => !value)}>
             {legacy ? "当前智能体" : "旧任务"}
@@ -81,15 +85,15 @@ export function WorkbenchTaskToolbar({
       <label className="workbench-history-search">
         <Search size={15} />
         <input
-          aria-label="搜索任务"
-          placeholder="搜索任务"
+          aria-label={`搜索${noun}`}
+          placeholder={`搜索${noun}`}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </label>
       {loading && (
         <p role="status" className="workbench-conversation__history-empty">
-          正在读取任务…
+          正在读取{noun}…
         </p>
       )}
       {error && (
@@ -105,7 +109,7 @@ export function WorkbenchTaskToolbar({
       <div
         ref={list}
         role="listbox"
-        aria-label="任务历史"
+        aria-label={historyLabel}
         className="workbench-history-list"
         onKeyDown={(event) => {
           if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
@@ -170,7 +174,7 @@ export function WorkbenchTaskToolbar({
               <button
                 type="button"
                 className="workbench-conversation__history-delete"
-                aria-label={`删除任务 ${task.title}`}
+                aria-label={`删除${noun} ${task.title}`}
                 onClick={() =>
                   requestWorkspaceNavigation(() => onDelete(task.id))
                 }
@@ -182,7 +186,7 @@ export function WorkbenchTaskToolbar({
         ))}
         {!shown.length && !loading && !error && (
           <p className="workbench-conversation__history-empty">
-            {query ? "没有匹配的任务" : "暂无任务历史"}
+            {query ? `没有匹配的${noun}` : `暂无${historyLabel}`}
           </p>
         )}
       </div>
@@ -190,7 +194,10 @@ export function WorkbenchTaskToolbar({
   );
   if (presentation !== "toolbar") {
     return (
-      <section className="workbench-task-navigation" aria-label="智能体任务">
+      <section
+        className="workbench-task-navigation"
+        aria-label={labels ? historyLabel : "智能体任务"}
+      >
         {showNew && (
           <div className="workbench-task-navigation__new">{newTaskButton}</div>
         )}

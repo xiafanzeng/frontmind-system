@@ -21,8 +21,8 @@ export function GeneralAgentWelcome() {
   return (
     <div className="general-welcome-heading">
       <img src="/assets/frontmind-wordmark.svg" alt="FrontMind" />
-      <h3>有什么想一起完成的？</h3>
-      <p>从一个想法、一份资料，或一个具体任务开始。</p>
+      <h3>定义 AI 原生时代的企业增长</h3>
+      <p>以智能研究、分析与创作，探索企业增长的新可能。</p>
     </div>
   );
 }

@@ -103,6 +103,14 @@
   padding: 0;
   background: #fff;
 }
+.workbench-flow .operator-progress-report.business-report-flow {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+}
 .business-report-flow .operator-progress-stats {
   margin-top: 20px;
 }
@@ -146,24 +154,210 @@
   inset: auto;
   transform: none;
   width: 100%;
-  max-width: none;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 0;
   max-height: none;
   overflow: visible;
   background: #fff;
   border: 0;
-  border-top: 1px solid #e8e8eb;
   border-radius: 0;
   box-shadow: none;
-  margin: 24px 0;
-  padding-block: 20px;
+  margin: 0;
+  padding: 20px 0;
 }
-.monitoring-inline-step .modal-header {
+.monitoring-module .monitoring-inline-step
+  :is(.modal-header, .modal-body, .modal-footer, .monitor-form, .monitor-form-body,
+      .monitor-form-footer, .monitor-form-left, .monitor-form-right,
+      .question-workbench, .question-editor-panel, .models-section, .monitor-frequency-section) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0;
   background: #fff;
-  padding-inline: 0;
 }
-.monitoring-inline-step .modal-header h3 {
+.monitoring-module .monitoring-inline-step
+  :is(.monitor-form-body, .question-workbench, .monitor-bottom-grid) {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+}
+.monitoring-module .monitoring-inline-step .model-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+}
+.monitoring-module .monitoring-inline-step .monitor-form-footer {
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 24px;
+}
+.monitoring-module .monitoring-inline-step .modal-header {
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+.monitoring-module .monitoring-inline-step .modal-header h3 {
   font-size: 16px;
   font-weight: 600;
+}
+/* Inline editors retain their real controls without inheriting dialog-sized
+   columns, fixed heights or nested scroll viewports. */
+.monitoring-module .monitoring-inline-step :is(.monitor-form-left, .monitor-form-right) {
+  gap: 24px;
+}
+.monitoring-module .monitoring-inline-step :is(.monitor-basic-grid, .form-section) {
+  padding: 16px 0;
+  border: 0;
+  border-bottom: 1px solid #eaecf0;
+  border-radius: 0;
+}
+.monitoring-module .monitoring-inline-step .monitor-competitor-section {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #eaecf0;
+}
+.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading, .question-editor-panel > .section-heading, .frequency-heading) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading, .section-heading) > div:first-child {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 6px;
+}
+.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading small, .monitor-competitor-empty span) {
+  color: #595959;
+  font-size: 13px;
+  line-height: 20px;
+}
+.monitoring-module .monitoring-inline-step :is(.monitor-competitor-empty, .monitor-competitor-editor) {
+  display: grid;
+  gap: 8px;
+}
+.monitoring-module .monitoring-inline-step .monitor-competitor-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+.monitoring-module .monitoring-inline-step .monitor-competitor-row :is(label, input) {
+  width: 100%;
+  min-width: 0;
+}
+.monitoring-module .monitoring-inline-step :is(.question-editor-actions, .question-item-actions, .question-import-footer, .footer-actions) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.monitoring-module .monitoring-inline-step :is(.competitor-add-button, .competitor-remove-button, .question-add-button, .question-editor-actions button, .question-item-actions button, .question-import-footer button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #000;
+  font-size: 14px;
+  line-height: 20px;
+}
+.monitoring-module .monitoring-inline-step :is(.competitor-remove-button, .question-item-actions button) {
+  width: 44px;
+  padding: 0;
+}
+.monitoring-module .monitoring-inline-step :is(.question-editor-actions button.active, .question-import-confirm) {
+  border-color: #2867a5;
+  color: #2867a5;
+  background: #f4f8fc;
+}
+.monitoring-module .monitoring-inline-step :is(.question-list-mode, .question-item-list) {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+}
+.monitoring-module .monitoring-inline-step .question-item {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eaecf0;
+}
+.monitoring-module .monitoring-inline-step :is(.question-item-text, .question-item-editor) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 22px;
+}
+.monitoring-module .monitoring-inline-step .question-add-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.monitoring-module .monitoring-inline-step .question-add-row textarea {
+  flex: 1 1 180px;
+  min-width: 0;
+  min-height: 44px;
+  resize: vertical;
+}
+.monitoring-module .monitoring-inline-step .question-import-control {
+  position: relative;
+}
+.monitoring-module .monitoring-inline-step .question-import-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 12px;
+  width: min(360px, calc(100vw - 64px));
+  padding: 16px;
+  border: 1px solid #d0d5dd;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(24 24 27 / 10%);
+}
+.monitoring-module .monitoring-inline-step .question-import-popover textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+.monitoring-module .monitoring-inline-step :is(.frequency-grid, .schedule-row) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.monitoring-module .monitoring-inline-step .footer-actions button {
+  min-height: 44px;
+  font-size: 14px;
+}
+@media (max-width: 767px) {
+  .monitoring-module .monitoring-inline-step :is(.frequency-grid, .schedule-row, .monitor-basic-grid) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .monitoring-module .monitoring-inline-step .monitor-competitor-row {
+    grid-template-columns: 26px minmax(0, 1fr) 44px;
+  }
+  .monitoring-module .monitoring-inline-step .monitor-competitor-row > label:nth-of-type(2) {
+    grid-column: 2;
+  }
+  .monitoring-module .monitoring-inline-step .competitor-remove-button {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }
 .monitoring-module.monitoring-inline-report .run-page {
   padding: 0;

@@ -26,7 +26,8 @@ export default function Modal({
   if (inline)
     return open ? (
       <section
-        className={`monitoring-inline-step modal-${size}`}
+        className="monitoring-inline-step"
+        data-size={size}
         aria-label={title}
       >
         <header className="modal-header">

@@ -5,6 +5,7 @@ import { knowledgeBaseUserMessagePublicId } from "@shared/knowledge-base-message
 import { generalChatTerminalMessagePublicId } from "@shared/frontmind-general-chat-terminal";
 import {
   ConversationProvider,
+  ConversationAgentProvider,
   ConversationPurposeProvider,
   conversationBelongsToPurpose,
   appendOrUpsertConversationMessage,
@@ -555,6 +556,386 @@ describe("ConversationProvider cloud hydration", () => {
   afterEach(() => {
     vi.useRealTimers();
     window.history.replaceState(null, "", "/");
+  });
+
+  it("restores a verified empty response binding under its original ID and assignment exactly once", async () => {
+    const assignedWrapper = ({ children }: { children: React.ReactNode }) => (
+      <ConversationProvider projectAssignmentId="response-assignment">
+        {children}
+      </ConversationProvider>
+    );
+    mocks.syncSnapshot.mockImplementation(
+      async ({ conversation: snapshot }) => snapshot,
+    );
+    const { result } = renderHook(() => useConversation(), {
+      wrapper: assignedWrapper,
+    });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const verify = vi.fn().mockResolvedValue(true);
+    await act(async () => {
+      const first = result.current.restoreResponseLogicConversation(
+        "bound-response",
+        "原应答任务",
+        verify,
+      );
+      const second = result.current.restoreResponseLogicConversation(
+        "bound-response",
+        "原应答任务",
+        verify,
+      );
+      expect(second).toBe(first);
+      expect(await first).toBe("bound-response");
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.syncSnapshot).toHaveBeenCalledWith({
+      projectAssignmentId: "response-assignment",
+      conversation: expect.objectContaining({
+        id: "bound-response",
+        title: "原应答任务",
+        messages: [],
+        status: "idle",
+        workbenchAgentId: "response-logic",
+        executionKind: "response_logic",
+      }),
+    });
+    expect(result.current.state.conversations.map(({ id }) => id)).toEqual([
+      "bound-response",
+      "account-1",
+    ]);
+    expect(result.current.activeConversation?.id).toBe("account-1");
+    await act(async () => {
+      await result.current.restoreResponseLogicConversation(
+        "bound-response",
+        "不能改名",
+        verify,
+      );
+    });
+    expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1);
+    expect(result.current.state.conversations[0].title).toBe("原应答任务");
+  });
+
+  it("never replaces an existing local response conversation or its unsaved body", async () => {
+    const existing: Conversation = {
+      ...conversation("saved-response"),
+      executionKind: "response_logic",
+      messages: [
+        { id: "saved-body", role: "user", content: "完整原正文", timestamp: 1 },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [existing] });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const verify = vi.fn().mockResolvedValue(true);
+    await act(async () => {
+      await result.current.restoreResponseLogicConversation(
+        existing.id,
+        "空壳标题",
+        verify,
+      );
+    });
+    expect(result.current.state.conversations[0]).toMatchObject(existing);
+    expect(mocks.listRefetch).toHaveBeenCalledTimes(1);
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("loads a missing local response from the complete cloud snapshot without sending an empty snapshot", async () => {
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const existing: Conversation = {
+      ...conversation("remote-response"),
+      executionKind: "response_logic",
+      taskId: "real-task",
+      messages: [
+        {
+          id: "remote-body",
+          role: "assistant",
+          content: "远端完整应答正文",
+          timestamp: 1,
+        },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [existing] });
+    const verify = vi.fn().mockResolvedValue(false);
+    await act(async () => {
+      await result.current.restoreResponseLogicConversation(
+        existing.id,
+        "空壳标题",
+        verify,
+      );
+    });
+    expect(
+      result.current.state.conversations.find(({ id }) => id === existing.id),
+    ).toMatchObject(existing);
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("restores a legacy unclassified owner snapshot into the response view without losing its body", async () => {
+    const legacy: Conversation = {
+      ...conversation("legacy-response"),
+      messages: [
+        {
+          id: "local-body",
+          role: "user",
+          content: "保留本地完整正文",
+          timestamp: 1,
+        },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [legacy] });
+    const responseWrapper = ({ children }: { children: React.ReactNode }) => (
+      <ConversationProvider>
+        <ConversationAgentProvider agentId="response-logic">
+          {children}
+        </ConversationAgentProvider>
+      </ConversationProvider>
+    );
+    const { result } = renderHook(() => useConversation(), {
+      wrapper: responseWrapper,
+    });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    expect(result.current.state.conversations).toEqual([]);
+    mocks.listRefetch.mockResolvedValueOnce({
+      data: [
+        {
+          ...legacy,
+          executionKind: "response_logic",
+          messages: [
+            {
+              id: "remote-body",
+              role: "assistant",
+              content: "服务端原正文",
+              timestamp: 2,
+            },
+          ],
+        },
+      ],
+    });
+    const verify = vi.fn().mockResolvedValue(false);
+    await act(async () => {
+      await result.current.restoreResponseLogicConversation(
+        legacy.id,
+        "不能替换原文",
+        verify,
+      );
+    });
+    expect(result.current.state.conversations).toHaveLength(1);
+    expect(result.current.state.conversations[0]).toMatchObject({
+      id: legacy.id,
+      workbenchAgentId: "response-logic",
+      executionKind: "response_logic",
+      messages: [
+        expect.objectContaining({ content: "保留本地完整正文" }),
+        expect.objectContaining({ content: "服务端原正文" }),
+      ],
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an unclassified local history that the cloud has not confirmed", async () => {
+    const legacy: Conversation = {
+      ...conversation("unclassified-response"),
+      messages: [
+        {
+          id: "unclassified-body",
+          role: "user",
+          content: "未确认归属的原正文",
+          timestamp: 1,
+        },
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [legacy] });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    await act(async () => {
+      await expect(
+        result.current.restoreResponseLogicConversation(
+          legacy.id,
+          "不能替换原文",
+          async () => true,
+        ),
+      ).rejects.toThrow("本地会话的归属尚未确认");
+    });
+    expect(result.current.state.conversations[0]).toMatchObject(legacy);
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each(["local", "remote"])(
+    "refuses a %s snapshot already owned by another agent",
+    async (source) => {
+      const other: Conversation = {
+        ...conversation("other-agent"),
+        workbenchAgentId: "content",
+      };
+      if (source === "local")
+        mocks.listRefetch.mockResolvedValueOnce({ data: [other] });
+      const { result } = renderHook(() => useConversation(), { wrapper });
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+      if (source === "remote")
+        mocks.listRefetch.mockResolvedValueOnce({ data: [other] });
+      const verify = vi.fn().mockResolvedValue(true);
+      await act(async () => {
+        await expect(
+          result.current.restoreResponseLogicConversation(
+            other.id,
+            "不能换智能体",
+            verify,
+          ),
+        ).rejects.toThrow("该会话已属于其他智能体");
+      });
+      expect(verify).not.toHaveBeenCalled();
+      expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+      expect(
+        result.current.state.conversations.some(
+          (item) =>
+            item.id === other.id && item.workbenchAgentId === "response-logic",
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("uses the server's merged snapshot when history arrives during an empty binding repair", async () => {
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const merged: Conversation = {
+      ...conversation("merged-response"),
+      executionKind: "response_logic",
+      taskId: "concurrent-task",
+      messages: [
+        {
+          id: "concurrent-body",
+          role: "assistant",
+          content: "并发写入的完整正文",
+          timestamp: 1,
+        },
+      ],
+    };
+    mocks.syncSnapshot.mockResolvedValueOnce(merged);
+    await act(async () => {
+      await result.current.restoreResponseLogicConversation(
+        merged.id,
+        "空壳标题",
+        async () => true,
+      );
+    });
+    expect(
+      result.current.state.conversations.find(({ id }) => id === merged.id),
+    ).toMatchObject(merged);
+  });
+
+  it("refuses an empty repair after the authoritative binding starts, changes, or is confirmed", async () => {
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    await act(async () => {
+      await expect(
+        result.current.restoreResponseLogicConversation(
+          "changed-response",
+          "旧任务",
+          async () => false,
+        ),
+      ).rejects.toThrow("应答任务绑定已变化");
+    });
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    expect(
+      result.current.state.conversations.some(
+        ({ id }) => id === "changed-response",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not turn an unsuccessful cloud read into an empty conversation", async () => {
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    mocks.listRefetch.mockResolvedValueOnce({ error: new Error("读取失败") });
+    const verify = vi.fn().mockResolvedValue(true);
+    await act(async () => {
+      await expect(
+        result.current.restoreResponseLogicConversation(
+          "unread-response",
+          "旧任务",
+          verify,
+        ),
+      ).rejects.toThrow("读取失败");
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    expect(
+      result.current.state.conversations.some(
+        ({ id }) => id === "unread-response",
+      ),
+    ).toBe(false);
+  });
+
+  it("fences an empty response repair when the project changes during its cloud read", async () => {
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    let finishRead!: (value: { data: Conversation[] }) => void;
+    mocks.listRefetch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    const verify = vi.fn().mockResolvedValue(true);
+    const restoration = result.current.restoreResponseLogicConversation(
+      "old-project-response",
+      "旧项目任务",
+      verify,
+    );
+    const rejected = expect(restoration).rejects.toThrow("会话所属项目已变化");
+    window.history.replaceState(
+      null,
+      "",
+      "/?enterpriseProjectId=different-response-project",
+    );
+    await act(async () => {
+      finishRead({ data: [] });
+      await rejected;
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.syncSnapshot).not.toHaveBeenCalled();
+    expect(
+      result.current.state.conversations.some(
+        ({ id }) => id === "old-project-response",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not apply a late restored response snapshot to the next account", async () => {
+    const { result, rerender } = renderHook(() => useConversation(), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    let finishWrite!: (value: Conversation) => void;
+    mocks.syncSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishWrite = resolve;
+        }),
+    );
+    const restoration = result.current.restoreResponseLogicConversation(
+      "old-account-response",
+      "旧账号任务",
+      async () => true,
+    );
+    const rejected = expect(restoration).rejects.toThrow("会话所属项目已变化");
+    await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1));
+    mocks.auth.user = { id: 2 };
+    mocks.listRefetch.mockResolvedValue({ data: [conversation("account-2")] });
+    rerender();
+    await waitFor(() =>
+      expect(result.current.activeConversation?.id).toBe("account-2"),
+    );
+    await act(async () => {
+      finishWrite(conversation("old-account-response"));
+      await rejected;
+    });
+    expect(result.current.state.conversations.map(({ id }) => id)).toEqual([
+      "account-2",
+    ]);
   });
 
   it("retains an unacknowledged message and browser attachment only in its original workspace", async () => {

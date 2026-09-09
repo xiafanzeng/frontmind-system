@@ -478,7 +478,7 @@ export function EnterpriseProgressReport({
   enterpriseProjectId: string;
   historical?: React.ReactNode;
 }) {
-  const { task } = useBusinessWorkspace();
+  const { task, isWorkbench } = useBusinessWorkspace();
   const [reportMode, setReportMode] = useBusinessFlowState(
     "reportMode",
     task?.state?.values.reportRunId ||
@@ -571,7 +571,7 @@ export function EnterpriseProgressReport({
       : [],
   });
   return (
-    <section className="page-shell operator-progress-report business-report-flow">
+    <section className={`${isWorkbench ? "" : "page-shell "}operator-progress-report business-report-flow`}>
       {!reportMode ? (
         <WorkflowQuestion
           question="这次想了解哪一类监控结果？"

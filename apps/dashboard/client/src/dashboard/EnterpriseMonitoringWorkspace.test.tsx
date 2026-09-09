@@ -72,6 +72,7 @@ it("pages live runs and expands the selected owned run in the main flow", async 
       <EnterpriseProgressReport enterpriseProjectId="enterprise-project" />
     </BusinessWorkspaceProvider>,
   );
+  expect(document.querySelector(".business-report-flow")).not.toHaveClass("page-shell");
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
   expect(screen.getAllByRole("row")).toHaveLength(21);

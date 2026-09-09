@@ -1520,16 +1520,34 @@ function ResponseLogicWorkspaceContent({
   if (!selectedEntry)
     return <ResponseLogicEmptyWorkspace workbench={workbench} />;
 
-  const draft =
-    drafts[activeQuestionId] ??
-    (preview && previewAdapter
-      ? previewAdapter.createDraft(selectedEntry.question, selectedEntry.group)
-      : createEmptyDraft(selectedEntry.question));
-  const confirmed = confirmations[activeQuestionId];
-  const conversationId = conversationIds[activeQuestionId];
   const persistedRecord = persistence?.records?.find(
     (record) => record.questionId === activeQuestionId,
   );
+  const draft =
+    drafts[activeQuestionId] ??
+    persistedRecord?.draft ??
+    (preview && previewAdapter
+      ? previewAdapter.createDraft(selectedEntry.question, selectedEntry.group)
+      : createEmptyDraft(selectedEntry.question));
+  const confirmed =
+    confirmations[activeQuestionId] ?? persistedRecord?.confirmed;
+  // Child effects run before the parent hydration effect. Consume the saved
+  // binding during render so opening a task cannot create a replacement first.
+  const conversationId =
+    persistedRecord?.conversationId ?? conversationIds[activeQuestionId];
+  const verifyEmptyConversationBinding = async () => {
+    if (!persistence || !persistedRecord?.conversationId) return false;
+    const latestRecords = await persistence.refresh();
+    const latest = latestRecords.find(
+      (record) => record.questionId === activeQuestionId,
+    );
+    return Boolean(
+      latest &&
+        latest.conversationId === persistedRecord.conversationId &&
+        !latest.lastTaskId &&
+        !latest.confirmed,
+    );
+  };
   const resetAvailable = canRequestResponseLogicReset({
     preview,
     record: persistedRecord,
@@ -1616,11 +1634,20 @@ function ResponseLogicWorkspaceContent({
 
   const bindConversation = async (nextConversationId: string) => {
     if (confirmed) return;
-    setConversationIds((current) => ({
-      ...current,
-      [activeQuestionId]: nextConversationId,
-    }));
-    if (preview) return;
+    if (
+      persistedRecord?.conversationId &&
+      persistedRecord.conversationId !== nextConversationId
+    )
+      throw new Error("当前问题已绑定其他应答会话，请重新载入原会话");
+    setConversationIds((current) =>
+      current[activeQuestionId] === nextConversationId
+        ? current
+        : { ...current, [activeQuestionId]: nextConversationId },
+    );
+    // Reopening a server-bound task only restores its local identity. Saving
+    // here would advance the draft revision without any business change.
+    if (preview || persistedRecord?.conversationId === nextConversationId)
+      return;
     try {
       await persistDraft(draft, { conversationId: nextConversationId });
     } catch (error) {
@@ -2049,6 +2076,8 @@ function ResponseLogicWorkspaceContent({
             question={selectedEntry.question}
             draft={draft}
             conversationId={conversationId}
+            persistedConversationId={persistedRecord?.conversationId}
+            verifyEmptyConversationBinding={verifyEmptyConversationBinding}
             recordsLoading={Boolean(persistence?.loading)}
             recordsReady={Boolean(persistence?.ready)}
             recordsError={persistence?.error}
@@ -2140,6 +2169,8 @@ function ResponseLogicWorkspaceContent({
               question={selectedEntry.question}
               draft={draft}
               conversationId={conversationId}
+              persistedConversationId={persistedRecord?.conversationId}
+              verifyEmptyConversationBinding={verifyEmptyConversationBinding}
               recordsLoading={!preview && Boolean(persistence?.loading)}
               recordsReady={preview || Boolean(persistence?.ready)}
               recordsError={persistence?.error}
@@ -2508,6 +2539,8 @@ function DialoguePanel({
   question,
   draft,
   conversationId,
+  persistedConversationId,
+  verifyEmptyConversationBinding,
   recordsLoading,
   recordsReady,
   recordsError,
@@ -2527,6 +2560,8 @@ function DialoguePanel({
   question: IntentQuestion;
   draft: LogicDraft;
   conversationId?: string;
+  persistedConversationId?: string;
+  verifyEmptyConversationBinding?: () => Promise<boolean>;
   recordsLoading: boolean;
   recordsReady: boolean;
   recordsError?: string;
@@ -2581,6 +2616,8 @@ function DialoguePanel({
           question={question}
           draft={draft}
           conversationId={conversationId}
+          persistedConversationId={persistedConversationId}
+          verifyEmptyConversationBinding={verifyEmptyConversationBinding}
           recordsLoading={recordsLoading}
           recordsReady={recordsReady}
           recordsError={recordsError}
@@ -2597,6 +2634,33 @@ function DialoguePanel({
   );
 }
 
+function ResponseLogicDialogueGate({
+  workbench,
+  role,
+  children,
+}: {
+  workbench: boolean;
+  role: "alert" | "status";
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={
+        workbench ? "rl-workbench-gate" : "rl-home-frame rl-home-loading"
+      }
+      role={role}
+    >
+      {workbench ? (
+        <div className="workbench-reading-column rl-workbench-gate__content">
+          {children}
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
 export function RealResponseLogicDialogue({
   workbench = false,
   workbenchContent,
@@ -2604,6 +2668,8 @@ export function RealResponseLogicDialogue({
   question,
   draft,
   conversationId,
+  persistedConversationId,
+  verifyEmptyConversationBinding,
   recordsLoading,
   recordsReady,
   recordsError,
@@ -2621,6 +2687,8 @@ export function RealResponseLogicDialogue({
   question: IntentQuestion;
   draft: LogicDraft;
   conversationId?: string;
+  persistedConversationId?: string;
+  verifyEmptyConversationBinding?: () => Promise<boolean>;
   recordsLoading: boolean;
   recordsReady: boolean;
   recordsError?: string;
@@ -2641,6 +2709,8 @@ export function RealResponseLogicDialogue({
     updateAssistantMessages,
     updateStatus,
     updateTitle,
+    refreshConversations,
+    restoreResponseLogicConversation,
   } = useConversation();
   const initializationRef = useRef<string | null>(null);
   const [bindingFailure, setBindingFailure] = useState<{
@@ -2649,6 +2719,23 @@ export function RealResponseLogicDialogue({
     message: string;
   } | null>(null);
   const [retryingBinding, setRetryingBinding] = useState(false);
+  const restorationKey = `${question.id}:${conversationId ?? ""}`;
+  const restorationAttemptRef = useRef<string | null>(null);
+  const [restorationRetry, setRestorationRetry] = useState(0);
+  const [restoration, setRestoration] = useState<{
+    key: string;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
+  const canRestoreInitialConversation = Boolean(
+    conversationId &&
+      persistedConversationId === conversationId &&
+      verifyEmptyConversationBinding &&
+      !lastTaskId &&
+      !readOnly,
+  );
+  const scopedRestoration =
+    restoration?.key === restorationKey ? restoration : null;
   const callbackRef = useRef(onConversationIdChange);
   callbackRef.current = onConversationIdChange;
   const unavailableTaskIdsRef = useRef(new Set<string>());
@@ -2784,7 +2871,9 @@ export function RealResponseLogicDialogue({
       return;
     }
 
-    if (readOnly) return;
+    // A durable binding may arrive before its local conversation snapshot.
+    // Restore that exact snapshot below instead of changing the question binding.
+    if (readOnly || conversationId) return;
 
     const key = `${question.id}:${conversationId || "new"}`;
     if (bindingFailure?.questionId === question.id) return;
@@ -2836,6 +2925,51 @@ export function RealResponseLogicDialogue({
     setActive,
     updateStatus,
     updateTitle,
+  ]);
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      recordsLoading ||
+      !recordsReady ||
+      recordsError ||
+      scopedConversation ||
+      !canRestoreInitialConversation ||
+      !conversationId ||
+      !verifyEmptyConversationBinding ||
+      !restoreResponseLogicConversation
+    )
+      return;
+    const attemptKey = `${restorationKey}:${restorationRetry}`;
+    if (restorationAttemptRef.current === attemptKey) return;
+    restorationAttemptRef.current = attemptKey;
+    setRestoration({ key: restorationKey, loading: true });
+    void restoreResponseLogicConversation(
+      conversationId,
+      `应答-${question.question}`,
+      verifyEmptyConversationBinding,
+    )
+      .then(() => setRestoration({ key: restorationKey, loading: false }))
+      .catch((error) =>
+        setRestoration({
+          key: restorationKey,
+          loading: false,
+          error: error instanceof Error ? error.message : "请稍后重试",
+        }),
+      );
+  }, [
+    canRestoreInitialConversation,
+    conversationId,
+    hydrated,
+    question.question,
+    recordsError,
+    recordsLoading,
+    recordsReady,
+    restorationKey,
+    restorationRetry,
+    restoreResponseLogicConversation,
+    scopedConversation,
+    verifyEmptyConversationBinding,
   ]);
 
   const applyCompletedObservationRef = useRef<
@@ -3082,13 +3216,13 @@ export function RealResponseLogicDialogue({
 
   if (recordsError) {
     return (
-      <div className="rl-home-frame rl-home-loading" role="alert">
+      <ResponseLogicDialogueGate workbench={workbench} role="alert">
         <AlertTriangle size={22} />
         <span>{recordsError}</span>
         <button type="button" onClick={onRetryRecords}>
           重新载入
         </button>
-      </div>
+      </ResponseLogicDialogueGate>
     );
   }
 
@@ -3097,7 +3231,7 @@ export function RealResponseLogicDialogue({
       /知识库/.test(bindingFailure.message) &&
       /发布|完成/.test(bindingFailure.message);
     return (
-      <div className="rl-home-frame rl-home-loading" role="alert">
+      <ResponseLogicDialogueGate workbench={workbench} role="alert">
         <AlertTriangle size={22} />
         <span>
           {needsKnowledge
@@ -3141,7 +3275,50 @@ export function RealResponseLogicDialogue({
               ? "发布后重新检查"
               : "重新保存会话"}
         </button>
-      </div>
+      </ResponseLogicDialogueGate>
+    );
+  }
+
+  if (
+    recordsReady &&
+    !recordsLoading &&
+    hydrated &&
+    conversationId &&
+    !scopedConversation &&
+    !readOnly
+  ) {
+    return (
+      <ResponseLogicDialogueGate
+        workbench={workbench}
+        role={scopedRestoration?.loading ? "status" : "alert"}
+      >
+        {scopedRestoration?.loading ? (
+          <Loader2 size={22} className="animate-spin" />
+        ) : (
+          <AlertTriangle size={22} />
+        )}
+        <span>
+          {scopedRestoration?.loading
+            ? "正在恢复当前问题的专属会话…"
+            : scopedRestoration?.error
+              ? `应答会话暂未恢复：${scopedRestoration.error}。已有草稿保持不变。`
+              : "当前问题已绑定的应答会话尚未载入，已有草稿保持不变。"}
+        </span>
+        <button
+          type="button"
+          disabled={scopedRestoration?.loading}
+          onClick={() => {
+            onRetryRecords();
+            if (canRestoreInitialConversation) {
+              setRestorationRetry((value) => value + 1);
+            } else {
+              void refreshConversations?.();
+            }
+          }}
+        >
+          {scopedRestoration?.loading ? "正在载入…" : "重新载入会话"}
+        </button>
+      </ResponseLogicDialogueGate>
     );
   }
 
@@ -3154,10 +3331,10 @@ export function RealResponseLogicDialogue({
       : activeConversation?.id !== scopedConversation.id)
   ) {
     return (
-      <div className="rl-home-frame rl-home-loading">
+      <ResponseLogicDialogueGate workbench={workbench} role="status">
         <Loader2 size={22} className="animate-spin" />
         <span>正在打开当前问题的专属会话…</span>
-      </div>
+      </ResponseLogicDialogueGate>
     );
   }
 

@@ -2283,6 +2283,12 @@ interface ConversationContextType {
     purpose?: "enterprise_qa" | "content_production";
     workbenchAgentId?: string;
   }) => string;
+  /** Restore an authoritative, not-yet-started response binding without rebinding it. */
+  restoreResponseLogicConversation: (
+    id: string,
+    title: string,
+    verifyEmptyBinding: () => Promise<boolean>,
+  ) => Promise<string>;
   setActive: (id: string) => void;
   addMessage: (conversationId: string, message: LocalMessage) => void;
   settleGeneralChatDispatch: (
@@ -2391,6 +2397,7 @@ export function ConversationProvider({
   const projectAssignmentIdRef = useRef(projectAssignmentId);
   const knowledgeBaseConversationIdsRef = useRef(new Set<string>());
   const locallyDiscardedConversationIdsRef = useRef(new Set<string>());
+  const responseLogicRestorationsRef = useRef(new Map<string, Promise<string>>());
   const knowledgeBaseCoordinatorRef =
     useRef<KnowledgeBasePollingCoordinator | null>(null);
   const applyKnowledgeBaseObservationRef = useRef<
@@ -3013,6 +3020,147 @@ export function ConversationProvider({
     [replaceState],
   );
 
+  const restoreResponseLogicConversation = useCallback(
+    (
+      id: string,
+      title: string,
+      verifyEmptyBinding: () => Promise<boolean>,
+    ): Promise<string> => {
+      const generation = hydrationGenerationRef.current;
+      const assertResponseAgent = (conversation: Conversation | undefined) => {
+        if (
+          (conversation?.workbenchAgentId &&
+            conversation.workbenchAgentId !== "response-logic") ||
+          (conversation?.workbench &&
+            conversation.workbench.agentId !== "response-logic")
+        ) {
+          throw new Error("该会话已属于其他智能体，不能作为应答任务恢复。");
+        }
+      };
+      const assertCurrentScope = () => {
+        if (
+          userId === null ||
+          accountIdRef.current !== userId ||
+          projectAssignmentIdRef.current !== projectAssignmentId ||
+          hydrationGenerationRef.current !== generation ||
+          !canSyncRef.current ||
+          (typeof window !== "undefined" &&
+            enterpriseWorkspaceScope(
+              window.location.pathname,
+              window.location.search,
+            ) !== workspaceScope)
+        ) {
+          throw new Error("会话所属项目已变化，请在当前项目重新打开任务。");
+        }
+        if (!id || locallyDiscardedConversationIdsRef.current.has(id)) {
+          throw new Error("当前应答会话已重置，请重新载入问题。");
+        }
+        assertResponseAgent(
+          stateRef.current.conversations.find((item) => item.id === id),
+        );
+      };
+      try {
+        assertCurrentScope();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const hasScopedLocal = () =>
+        stateRef.current.conversations.some(
+          (item) =>
+            item.id === id &&
+            conversationBelongsToAgent(item, "response-logic"),
+        );
+      if (hasScopedLocal()) {
+        return Promise.resolve(id);
+      }
+      const key = `${generation}:${id}`;
+      const pending = responseLogicRestorationsRef.current.get(key);
+      if (pending) return pending;
+
+      // Freeze the original workspace transports across both reads and writes.
+      const readSnapshots = listRefetchRef.current;
+      const syncSnapshot = syncSnapshotRef.current;
+      const restore = async () => {
+        const result = await readSnapshots();
+        assertCurrentScope();
+        if (result.error) throw result.error;
+        if (!result.data) throw new Error("应答会话列表尚未载入，请重试。");
+        if (hasScopedLocal()) {
+          return id;
+        }
+        let snapshot = result.data.find((item) => item.id === id);
+        if (!snapshot) {
+          if (stateRef.current.conversations.some((item) => item.id === id)) {
+            throw new Error("本地会话的归属尚未确认，请重新载入原会话。");
+          }
+          // The caller re-reads the response record here. A task that started,
+          // was confirmed, or lost this binding must never become an empty chat.
+          if (!(await verifyEmptyBinding())) {
+            throw new Error("应答任务绑定已变化，请重新载入原会话。");
+          }
+          assertCurrentScope();
+          if (hasScopedLocal()) {
+            return id;
+          }
+          if (stateRef.current.conversations.some((item) => item.id === id)) {
+            throw new Error("本地会话的归属尚未确认，请重新载入原会话。");
+          }
+          const now = Date.now();
+          snapshot = await syncSnapshot({
+            conversation: {
+              id,
+              title: title.trim() || "应答逻辑",
+              messages: [],
+              status: "idle",
+              workbenchAgentId: "response-logic",
+              executionKind: "response_logic",
+              createdAt: now,
+              updatedAt: now,
+            },
+            ...(projectAssignmentId ? { projectAssignmentId } : {}),
+          });
+          assertCurrentScope();
+        }
+        if (snapshot.id !== id) throw new Error("服务端返回的应答会话不匹配。");
+        assertResponseAgent(snapshot);
+        if (!conversationBelongsToAgent(snapshot, "response-logic")) {
+          throw new Error("服务端会话尚未关联当前应答任务，请重新载入。");
+        }
+        // syncSnapshot merges server history and returns that full snapshot.
+        // Never install the submitted empty shell or replace new local edits.
+        const local = stateRef.current.conversations.find(
+          (item) => item.id === id,
+        );
+        const restored = local
+          ? mergeDirtyConversationHydration(
+              local,
+              normalizeConversation(snapshot),
+            )
+          : normalizeConversation(snapshot);
+        // A legacy local snapshot may predate the server's response binding.
+        // Its body survives the merge; the authoritative classification wins.
+        restored.workbenchAgentId = "response-logic";
+        restored.executionKind = "response_logic";
+        replaceState({
+          ...stateRef.current,
+          conversations: [
+            restored,
+            ...stateRef.current.conversations.filter((item) => item.id !== id),
+          ],
+        });
+        return id;
+      };
+      const operation = restore().finally(() => {
+        if (responseLogicRestorationsRef.current.get(key) === operation) {
+          responseLogicRestorationsRef.current.delete(key);
+        }
+      });
+      responseLogicRestorationsRef.current.set(key, operation);
+      return operation;
+    },
+    [projectAssignmentId, replaceState, userId, workspaceScope],
+  );
+
   const setActive = useCallback(
     (id: string) => {
       commit({ type: "SET_ACTIVE", payload: id });
@@ -3239,6 +3387,7 @@ export function ConversationProvider({
         hydrated,
         syncError,
         createConversation,
+        restoreResponseLogicConversation,
         setActive,
         addMessage,
         settleGeneralChatDispatch,

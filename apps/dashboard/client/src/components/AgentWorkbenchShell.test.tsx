@@ -115,6 +115,11 @@ describe("AgentWorkbenchShell", () => {
       "aria-valuemin",
       "420",
     );
+    act(() => viewport(2256, 2000));
+    const separator = screen.getByRole("separator");
+    expect(separator).toHaveAttribute("aria-valuenow", "900");
+    fireEvent.keyDown(separator, { key: "End" });
+    expect(separator).toHaveAttribute("aria-valuenow", "1399");
   });
   it("bounds mouse and keyboard resizing to preserve 600px for main", () => {
     const { container } = render(<AgentWorkbenchShell {...props} />);

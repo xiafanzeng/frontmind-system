@@ -96,7 +96,7 @@ export function AgentWorkbenchShell({
   const minAux = isKnowledge ? 420 : 280;
   const maxAux = Math.max(
     minAux,
-    Math.min(isKnowledge ? 720 : 480, available - 601),
+    isKnowledge ? available - 601 : Math.min(480, available - 601),
   );
   const renderedWidth = Math.max(
     minAux,

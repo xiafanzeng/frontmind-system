@@ -4433,12 +4433,12 @@ export function MessageBubble({
                   >
                     {copied ? (
                       <>
-                        <CheckCircle2 className="w-3 h-3" />
+                        <CheckCircle2 className="w-3.5 h-3.5" />
                         已复制
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3 h-3" />
+                        <Copy className="w-3.5 h-3.5" />
                         复制
                       </>
                     )}

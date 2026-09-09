@@ -105,6 +105,9 @@
 .chat-message-content > .chat-message-actions {
   margin-top: 0;
 }
+.chat-message-content > .chat-message-body:has(+ .chat-message-actions) {
+  margin-block-end: 4px;
+}
 .chat-message-body .markdown-content > :last-child {
   margin-bottom: 0;
 }

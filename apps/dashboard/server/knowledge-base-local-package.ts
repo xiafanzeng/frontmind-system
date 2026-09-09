@@ -938,7 +938,7 @@ export async function generateKnowledgeBasePackageForUpdate(requestedBuild: Pick
   if (!knowledgeBasePackageSweepWriteApplied(claimed)) {
     throw new KnowledgeBasePackageUpdateError(
       "KNOWLEDGE_UPDATE_IN_PROGRESS",
-      "知识库正在更新，请稍候查看结果，当前正式版本继续可用",
+      "知识库正在更新，请稍候查看结果",
     );
   }
   onClaimed?.();
@@ -1050,7 +1050,7 @@ export async function generateKnowledgeBasePackageForUpdate(requestedBuild: Pick
     stageLog("failed", { errorCode: code });
     if (error instanceof KnowledgeBasePackageUpdateError) throw error;
     throw new KnowledgeBasePackageUpdateError(code,
-      "最终 ZIP 生成失败，修改已保存，当前正式版本未受影响，请重新点击更新知识库");
+      "最终 ZIP 生成失败，修改已保存，请重新点击更新知识库");
   } finally {
     clearTimeout(timer);
   }

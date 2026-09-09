@@ -449,6 +449,25 @@ export default function ChatInput({
     syncKnowledgeBaseSnapshot &&
     Boolean(knowledgeBaseProgress?.packageAllowed) &&
     !currentKnowledgeLeaf;
+  const knowledgeLockedPlaceholder = (() => {
+    if (knowledgeBaseLogoProvenanceRepairRequired)
+      return "请先补全企业主 Logo 来源，再继续";
+    if (knowledgeBaseAttachmentReconciliationPending)
+      return "正在核对本轮资料是否已受理…";
+    if (
+      knowledgeBaseAttachmentResumeRequired ||
+      knowledgeBaseDeferredUploadRecoveryRequired
+    )
+      return "请先处理本轮资料上传，再继续";
+    if (isRunning) return "正在根据你的补充资料更新当前节点…";
+    if (knowledgeEditingBlocked)
+      return "请先完成当前节点编辑或知识库更新，再继续对话";
+    if (knowledgeBaseProgress && !knowledgeBaseProgress.build.currentLeafId)
+      return "当前没有待回复节点，请在知识节点区查看内容";
+    if (activeConversation?.status === "error")
+      return "本轮已停止，请查看任务提示或节点状态";
+    return "当前节点暂不接受回复，请查看任务提示";
+  })();
   const officialLogoRequiredByBuild =
     syncKnowledgeBaseSnapshot &&
     knowledgeBaseProgress?.build.logoRequired === true;
@@ -1220,7 +1239,7 @@ export default function ChatInput({
                       ? "输入已保留，请核对当前节点后再发送"
                       : inputLocked
                         ? syncKnowledgeBaseSnapshot
-                          ? "正在根据你的补充资料更新当前节点…"
+                          ? knowledgeLockedPlaceholder
                           : purpose === "enterprise_qa"
                             ? "FrontMind 正在查阅企业知识库并回答…"
                             : purpose === "content_production"

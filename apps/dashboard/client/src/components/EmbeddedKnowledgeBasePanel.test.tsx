@@ -1101,7 +1101,7 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     fireEvent.click(screen.getByRole("button", { name: "更新知识库" }));
     expect(mocks.publishKnowledge).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toHaveTextContent(
-      "当前正式版本继续可用",
+      "生成成功前不会启用新版本",
     );
     fireEvent.click(screen.getByRole("button", { name: "确认更新" }));
     expect(mocks.publishKnowledge).toHaveBeenCalledWith(

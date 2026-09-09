@@ -1101,6 +1101,33 @@ fieldset.rl-editor-scroll:disabled select {
   margin-top: 22px;
 }
 
+.agent-workbench-shell .rl-confirmation-state {
+  min-height: 0;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 24px 0;
+  border: 0;
+  border-top: 1px solid #e9e9ec;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+  text-align: left;
+}
+.agent-workbench-shell .rl-confirmation-state-icon {
+  display: none;
+}
+.agent-workbench-shell .rl-confirmation-state h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.agent-workbench-shell .rl-confirmation-state p {
+  margin: 8px 0 0;
+}
+.agent-workbench-shell .rl-confirmation-state .rl-primary-button {
+  margin-top: 16px;
+}
+
 .rl-confirmation-head {
   display: flex;
   align-items: center;

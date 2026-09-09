@@ -79,7 +79,7 @@ describe("knowledge publication request lifetime", () => {
     const pending = syncKnowledgeBaseArchiveFromOutput({
       conversationId: "conversation-a", expectedBuildId: "build-a", expectedRevision: 12, expectedContentVersion: 3,
     });
-    await expect(pending).rejects.toThrow("当前正式版本未受影响");
+    await expect(pending).rejects.toThrow("知识库更新未完成，修改已保存，请重新更新");
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls[0]![1]!.method).toBe("POST");
   });

@@ -1070,7 +1070,23 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });
 
-  it("shows only a neutral word-bank waiting state before an upload exists", async () => {
+  it("shows the publication prerequisite before an upload exists without starting generation observation", async () => {
+    portalUseQuery.mockReturnValue({
+      data: {
+        portal: {
+          ...portalPayload,
+          knowledge: {
+            ...portalPayload.knowledge,
+            authenticatedForCurrentService: false,
+            authenticatedVersion: null,
+            status: "missing",
+          },
+        },
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
     dashboardUseQuery.mockReturnValue({
       data: {
         payload: {
@@ -1088,11 +1104,15 @@ describe("UserBrandDashboard formal workspace", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "品牌全域词库正在准备中" }),
+      screen.getByRole("heading", { name: "先发布企业知识库" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("内容发布后会自动显示在这里。"),
+      screen.getByRole("button", { name: "前往智能知识库" }),
     ).toBeInTheDocument();
+    expect(brandQuestionUniverseObserveUseQuery).toHaveBeenLastCalledWith(
+      undefined,
+      expect.objectContaining({ enabled: false }),
+    );
     expect(
       screen.queryByText(/配置工单|候选问题目录|AI 监控与优化工程师/),
     ).not.toBeInTheDocument();

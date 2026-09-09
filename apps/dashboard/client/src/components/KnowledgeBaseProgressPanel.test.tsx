@@ -140,28 +140,54 @@ describe("KnowledgeBaseProgressPanel", () => {
     expect(branch.open).toBe(false);
   });
 
-  it("shows completed content immediately while the package is still preparing", () => {
-    render(
-      <KnowledgeBaseProgressPanel
-        progress={{
-          ...progress,
-          build: {
-            ...progress.build,
-            status: "ready_to_publish",
-            currentLeafId: null,
-          },
-          packageAllowed: false,
-          packageState: "preparing",
-        }}
-      />,
-    );
+  it.each([
+    [
+      "progress panel",
+      KnowledgeBaseProgressPanel,
+      "preparing",
+      "正在生成 ZIP 并更新知识库。",
+    ],
+    [
+      "workspace status",
+      KnowledgeWorkspaceStatus,
+      "preparing",
+      "正在生成 ZIP 并更新知识库。",
+    ],
+    [
+      "progress panel retry",
+      KnowledgeBaseProgressPanel,
+      "retrying",
+      "正在重试生成 ZIP 并更新知识库（第 2 次）。",
+    ],
+    [
+      "workspace status retry",
+      KnowledgeWorkspaceStatus,
+      "retrying",
+      "正在重试生成 ZIP 并更新知识库（第 2 次）。",
+    ],
+  ] as const)(
+    "describes package preparation without assuming a published version in %s",
+    (_name, Component, packageState, message) => {
+      render(
+        <Component
+          progress={{
+            ...progress,
+            build: {
+              ...progress.build,
+              status: "ready_to_publish",
+              currentLeafId: null,
+            },
+            packageAllowed: false,
+            packageState,
+            packageAttemptCount: 2,
+          }}
+        />,
+      );
 
-    expect(
-      screen.getByText(
-        "正在生成 ZIP 并更新知识库；生成期间，当前正式版本继续可用。",
-      ),
-    ).toBeTruthy();
-  });
+      expect(screen.getByText(message)).toBeTruthy();
+      expect(screen.queryByText(/当前正式版本继续可用/)).toBeNull();
+    },
+  );
 
   it("never presents a stopped build as an operation being restored", () => {
     const { container } = render(
@@ -318,46 +344,62 @@ describe("KnowledgeBaseProgressPanel", () => {
     expect(screen.queryByText(/下载包正在后台准备/)).toBeNull();
   });
 
-  it("shows package attention as a local warning instead of endless preparation", () => {
-    render(
-      <KnowledgeBaseProgressPanel
-        progress={{
-          ...progress,
-          build: {
-            ...progress.build,
-            status: "ready_to_publish",
-            currentLeafId: null,
-          },
-          packageAllowed: false,
-          packageState: "attention_required",
-        }}
-      />,
-    );
+  it.each([
+    ["progress panel", KnowledgeBaseProgressPanel],
+    ["workspace status", KnowledgeWorkspaceStatus],
+  ] as const)(
+    "shows package attention without inventing a published version in %s",
+    (_name, Component) => {
+      render(
+        <Component
+          progress={{
+            ...progress,
+            build: {
+              ...progress.build,
+              status: "ready_to_publish",
+              currentLeafId: null,
+            },
+            packageAllowed: false,
+            packageState: "attention_required",
+          }}
+        />,
+      );
 
-    expect(
-      screen.getByText(
-        "知识库更新暂未完成，修改已保存；当前正式版本继续可用，请重试更新。",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/下载包正在后台准备/)).toBeNull();
-  });
+      expect(
+        screen.getByText("知识库更新暂未完成，修改已保存，请重试更新。"),
+      ).toBeTruthy();
+      expect(screen.queryByText(/当前正式版本继续可用/)).toBeNull();
+      expect(screen.queryByText(/下载包正在后台准备/)).toBeNull();
+    },
+  );
 
   it.each([
     ["progress panel", KnowledgeBaseProgressPanel],
     ["workspace status", KnowledgeWorkspaceStatus],
-  ] as const)("keeps a confirmed draft idle until explicit update in %s", (_name, Component) => {
-    render(
-      <Component progress={{
-        ...progress,
-        build: { ...progress.build, status: "ready_to_publish", currentLeafId: null },
-        updateAllowed: true,
-        packageAllowed: false,
-        packageState: "not_started",
-      }} />,
-    );
-    expect(screen.getByText("修改已保存，点击更新知识库生成并启用新版本。")).toBeVisible();
-    expect(screen.queryByText(/正在生成|后台准备|重试生成/)).toBeNull();
-  });
+  ] as const)(
+    "keeps a confirmed draft idle until explicit update in %s",
+    (_name, Component) => {
+      render(
+        <Component
+          progress={{
+            ...progress,
+            build: {
+              ...progress.build,
+              status: "ready_to_publish",
+              currentLeafId: null,
+            },
+            updateAllowed: true,
+            packageAllowed: false,
+            packageState: "not_started",
+          }}
+        />,
+      );
+      expect(
+        screen.getByText("修改已保存，点击更新知识库生成并启用新版本。"),
+      ).toBeVisible();
+      expect(screen.queryByText(/正在生成|后台准备|重试生成/)).toBeNull();
+    },
+  );
 
   it("shows partial safe nodes as view-only and never implies package eligibility", () => {
     render(

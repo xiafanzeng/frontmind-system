@@ -1238,6 +1238,53 @@ describe("knowledge-base ChatInput actions", () => {
     expect(container.querySelector("svg.lucide-send")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["error", null, "当前没有待回复节点，请在知识节点区查看内容"],
+    ["completed", null, "当前没有待回复节点，请在知识节点区查看内容"],
+    ["error", "identity.legal", "本轮已停止，请查看任务提示或节点状态"],
+    [
+      "awaiting_input",
+      "identity.legal",
+      "当前节点暂不接受回复，请查看任务提示",
+    ],
+    ["running", "identity.legal", "正在根据你的补充资料更新当前节点…"],
+  ])(
+    "describes a non-replyable %s build accurately without unlocking it",
+    (status, currentLeafId, placeholder) => {
+      mocks.activeConversation.status = status;
+      mocks.activeConversation.knowledgeBase.canReply = false;
+      render(
+        <ChatInput
+          syncKnowledgeBaseSnapshot
+          knowledgeBaseProgress={{
+            ...progress,
+            build: { ...progress.build, currentLeafId },
+          }}
+        />,
+      );
+      expect(screen.getByRole("textbox")).toBeDisabled();
+      expect(screen.getByRole("textbox")).toHaveAttribute(
+        "placeholder",
+        placeholder,
+      );
+    },
+  );
+
+  it("explains a node editing lock without claiming that the stopped task is running", () => {
+    render(
+      <ChatInput
+        syncKnowledgeBaseSnapshot
+        knowledgeEditingBlocked
+        knowledgeBaseProgress={progress}
+      />,
+    );
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "placeholder",
+      "请先完成当前节点编辑或知识库更新，再继续对话",
+    );
+  });
+
   it("offers continue and discard only for a matching page-memory attachment attempt", async () => {
     mocks.activeConversation.status = "running";
     mocks.activeConversation.knowledgeBase.canReply = false;

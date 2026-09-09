@@ -756,7 +756,7 @@ function ManualKnowledgeUpdateButton({
             <DialogTitle>更新知识库</DialogTitle>
             <DialogDescription>
               点击“确认更新”后，系统将根据当前已确认的工作稿生成知识库
-              ZIP，并启用新的正式版本供后续任务使用。生成期间，当前正式版本继续可用。正在执行和历史任务仍使用原来绑定的版本；此操作不会发布网站或投放媒体。
+              ZIP，并启用新的正式版本供后续任务使用。生成成功前不会启用新版本。正在执行和历史任务仍使用原来绑定的版本；此操作不会发布网站或投放媒体。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1328,6 +1328,7 @@ function RealBuildFlow({
     </div>
   ) : (
     <KnowledgeNodeWorkspace
+      detailPresentation={workbench ? "inline" : "drawer"}
       key={`${conversationId ?? "empty"}:${displayedProgress?.build.id ?? "empty"}:${displayedConversation?.knowledgeBase?.generation ?? 0}:${resetRevision}`}
       progress={displayedProgress}
       conversationId={conversationId ?? displayedConversation?.id ?? ""}
@@ -1781,6 +1782,7 @@ export function PreviewBuildFlow({
       }
       knowledge={
         <KnowledgeNodeWorkspace
+          detailPresentation={workbench ? "inline" : "drawer"}
           progress={progress}
           conversationId={progress.build.conversationId}
           generation={1}

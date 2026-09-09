@@ -568,6 +568,16 @@ function SettingsWorkspace({
           {label}
         </button>
       ))}
+      {entry === "settings" && (
+        <button
+          type="button"
+          className="kf-workbench-preview"
+          onClick={() => setPreview(true)}
+        >
+          <ExternalLink size={15} />
+          预览站点
+        </button>
+      )}
     </nav>
   );
   if (isWorkbench && entry !== "settings")
@@ -613,23 +623,23 @@ function SettingsWorkspace({
           />
         </>
       )}
-      <header className="kf-topbar">
-        {!isWorkbench && (
+      {!isWorkbench && (
+        <header className="kf-topbar">
           <div>
             <Settings2 size={21} />
             <strong>知识库前台</strong>
             <span>站点与内容展示</span>
           </div>
-        )}
-        <button
-          type="button"
-          className="kf-button"
-          onClick={() => setPreview(true)}
-        >
-          <ExternalLink size={15} />
-          预览站点
-        </button>
-      </header>
+          <button
+            type="button"
+            className="kf-button"
+            onClick={() => setPreview(true)}
+          >
+            <ExternalLink size={15} />
+            预览站点
+          </button>
+        </header>
+      )}
       <div className="kf-draft-notice">
         {demo ? "本地演示" : "界面预览"} ·
         设置仅保存为当前项目本地草稿，发布流程待配置。

@@ -280,7 +280,9 @@ function ContentProductionInner({
   const activeMode = progress?.mode ?? input?.mode ?? "new_reference_pack";
   const modeKnown = Boolean(progress || input);
   const modeLabel = !modeKnown
-    ? "正在读取任务信息"
+    ? taskId
+      ? "正在读取任务信息"
+      : (CONTENT_MODES.find((item) => item.value === mode)?.title ?? "尚未选择")
     : CONTENT_MODES.find(
         (item) =>
           item.value === activeMode ||

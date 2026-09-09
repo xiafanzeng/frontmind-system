@@ -20,7 +20,7 @@ export default function KnowledgeWorkspaceStatus({ progress }: { progress: Knowl
     : progress.billingPause ? null
     : progress.packageState === "attention_required" ? KNOWLEDGE_UPDATE_ATTENTION_COPY
     : progress.packageState === "preparing" ? KNOWLEDGE_UPDATE_PREPARING_COPY
-    : progress.packageState === "retrying" ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）；当前正式版本继续可用。`
+    : progress.packageState === "retrying" ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）。`
     : progress.build.status === "published" ? KNOWLEDGE_UPDATE_COMPLETE_COPY
     : (progress.updateAllowed ?? progress.packageAllowed) || progress.build.status === "ready_to_publish" ? KNOWLEDGE_DRAFT_READY_COPY
     : running ? progress.operationState === "normalizing" ? "正在处理已返回内容" : "正在处理当前任务"

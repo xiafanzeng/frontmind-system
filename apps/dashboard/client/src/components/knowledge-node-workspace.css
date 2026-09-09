@@ -14,6 +14,36 @@
 .knowledge-node-workspace button {
   white-space: normal;
 }
+.knowledge-node-workspace > [hidden] {
+  display: none;
+}
+.knowledge-node-workspace__inline-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+.knowledge-node-workspace__inline-detail:focus {
+  outline: none;
+}
+.knowledge-node-workspace__inline-detail
+  .knowledge-node-workspace__drawer-header {
+  padding: 18px 20px 14px;
+}
+.knowledge-node-workspace__inline-detail
+  .knowledge-node-workspace__drawer-header
+  h2 {
+  font-size: 1.125rem;
+  line-height: 1.625rem;
+}
+.knowledge-node-workspace__inline-detail
+  .knowledge-node-workspace__node-switch {
+  padding: 12px 20px;
+  background: #fff;
+}
 .knowledge-node-workspace button:focus-visible,
 .knowledge-node-workspace input:focus-visible,
 .knowledge-node-workspace textarea:focus-visible {

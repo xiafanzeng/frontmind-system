@@ -395,7 +395,7 @@ export default function KnowledgeBaseProgressPanel({
               : progress.packageState === "preparing"
                 ? KNOWLEDGE_UPDATE_PREPARING_COPY
                 : progress.packageState === "retrying"
-                  ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）；当前正式版本继续可用。`
+                  ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）。`
                   : progress.build.status === "published"
                     ? KNOWLEDGE_UPDATE_COMPLETE_COPY
                     : contentCompleted || (progress.updateAllowed ?? progress.packageAllowed)

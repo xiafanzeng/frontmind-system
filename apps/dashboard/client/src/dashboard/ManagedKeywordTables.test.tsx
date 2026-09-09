@@ -5,19 +5,58 @@ import {
   screen,
   within,
   waitFor,
+  act,
 } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ManagedKeywordTables, {
   BrandQuestionUniverseGenerationAction,
 } from "./ManagedKeywordTables";
+
+const mocks = vi.hoisted(() => ({
+  observe: vi.fn(),
+  refetch: vi.fn(async () => ({})),
+  cancel: vi.fn(async () => undefined),
+  start: vi.fn(async (_input: unknown) => ({})),
+  navigate: vi.fn(),
+}));
+vi.mock("wouter/use-browser-location", () => ({ navigate: mocks.navigate }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.observe.mockReturnValue({
+    data: {
+      canStart: true,
+      knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
+      dashboardRevision: 3,
+      reason: "ready",
+      operation: null,
+    },
+    error: null,
+    isSuccess: true,
+    refetch: mocks.refetch,
+  });
+});
+afterEach(() => vi.useRealTimers());
+
+const keywordWorkbench = (children: React.ReactNode) => (
+  <BusinessWorkspaceProvider
+    value={{
+      isWorkbench: true,
+      agentId: "keywords",
+      taskId: null,
+      setSummary: () => undefined,
+    }}
+  >
+    {children}
+  </BusinessWorkspaceProvider>
+);
 
 vi.mock("@/lib/trpc", () => ({
   trpc: {
     useUtils: () => ({
       workspace: {
         brandQuestionUniverse: {
-          observe: { invalidate: async () => undefined },
+          observe: { invalidate: async () => undefined, cancel: mocks.cancel },
         },
         dashboard: { invalidate: async () => undefined },
       },
@@ -25,20 +64,12 @@ vi.mock("@/lib/trpc", () => ({
     workspace: {
       brandQuestionUniverse: {
         observe: {
-          useQuery: () => ({
-            data: {
-              canStart: true,
-              knowledgeSnapshotId: "22222222-2222-4222-8222-222222222222",
-              dashboardRevision: 3,
-              reason: "ready",
-              operation: null,
-            },
-            error: null,
-          }),
+          useQuery: mocks.observe,
         },
         start: {
           useMutation: () => ({
             mutate: () => undefined,
+            mutateAsync: mocks.start,
             isPending: false,
             error: null,
           }),
@@ -309,6 +340,97 @@ describe("ManagedKeywordTables", () => {
       screen.getByRole("button", { name: "抓取品牌全域词库" }),
     ).toBeInTheDocument();
   });
+});
+
+it("shows the publication step immediately and disables observation when the real portal has no published knowledge", () => {
+  mocks.observe.mockReturnValue({
+    data: undefined,
+    error: null,
+    isPending: true,
+    refetch: mocks.refetch,
+  });
+  const { container } = render(
+    keywordWorkbench(
+      <ManagedKeywordTables
+        tables={[]}
+        generationEnabled
+        knowledgePublished={false}
+      />,
+    ),
+  );
+  expect(
+    screen.getByRole("heading", { name: "先发布企业知识库" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/节点确认后/)).toHaveTextContent("更新知识库");
+  expect(screen.getByRole("button", { name: "前往智能知识库" })).toBeEnabled();
+  expect(mocks.observe).toHaveBeenLastCalledWith(
+    undefined,
+    expect.objectContaining({ enabled: false }),
+  );
+  expect(screen.queryByText("正在检查抓取条件…")).toBeNull();
+  expect(screen.queryByRole("button", { name: "抓取品牌全域词库" })).toBeNull();
+  expect(container.querySelector(".panel")).toBeNull();
+  expect(container.querySelector(".keyword-start-step")).toBeInTheDocument();
+});
+
+it("keeps an existing real directory visible when published knowledge is unavailable", () => {
+  render(
+    keywordWorkbench(
+      <ManagedKeywordTables
+        tables={tables}
+        generationEnabled
+        knowledgePublished={false}
+      />,
+    ),
+  );
+  expect(screen.getByRole("table")).toBeInTheDocument();
+  expect(screen.getByText("行业问题")).toBeInTheDocument();
+  expect(mocks.observe).not.toHaveBeenCalled();
+  expect(
+    screen.queryByRole("heading", { name: "先发布企业知识库" }),
+  ).toBeNull();
+});
+
+it("surfaces a real observation error and retries the read without starting a generation", async () => {
+  mocks.observe.mockReturnValue({
+    data: undefined,
+    error: new Error("连接暂不可用"),
+    isError: true,
+    refetch: mocks.refetch,
+  });
+  render(
+    keywordWorkbench(
+      <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
+    ),
+  );
+  expect(screen.getByText("连接暂不可用")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+  await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
+  expect(mocks.cancel).toHaveBeenCalledOnce();
+  expect(mocks.start).not.toHaveBeenCalled();
+});
+
+it("offers a read retry after the initial observation stalls without declaring generation failed", () => {
+  vi.useFakeTimers();
+  mocks.observe.mockReturnValue({
+    data: undefined,
+    error: null,
+    isPending: true,
+    refetch: mocks.refetch,
+  });
+  render(
+    keywordWorkbench(
+      <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
+    ),
+  );
+  expect(
+    screen.getByRole("heading", { name: "正在读取词库生成条件" }),
+  ).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(12_000));
+  expect(screen.getByRole("button", { name: "重新读取" })).toBeEnabled();
+  expect(screen.getByText(/读取超时/)).toBeInTheDocument();
+  expect(screen.queryByText(/生成失败/)).toBeNull();
+  expect(mocks.start).not.toHaveBeenCalled();
 });
 
 it("shows a paged catalog and requires the selected row to be reviewed before handoff in workbench", async () => {

@@ -1046,11 +1046,12 @@
   color: #24242b;
   font-weight: 500;
 }
-.kf-conversation-flow .kf-topbar {
-  justify-content: flex-end;
-  padding-inline: 0;
-  background: #fff;
-  border: 0;
+.kf-workbench-entries .kf-workbench-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  border-color: #e9e9ec;
 }
 .kf-conversation-flow .kf-draft-notice {
   background: #fff;

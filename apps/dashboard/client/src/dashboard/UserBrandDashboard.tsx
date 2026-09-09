@@ -1244,6 +1244,11 @@ export function UserBrandDashboardContent({
           <ManagedKeywordTables
             tables={managedPayload?.keywordTables || []}
             dashboardRevision={managedRevision}
+            knowledgePublished={
+              servicePortalPayload?.knowledge?.authenticatedForCurrentService ??
+              servicePortalPayload?.portal?.knowledge
+                ?.authenticatedForCurrentService
+            }
             loading={dashboardLoading}
             error={dashboardError}
             onUseQuestion={useBrandQuestion}

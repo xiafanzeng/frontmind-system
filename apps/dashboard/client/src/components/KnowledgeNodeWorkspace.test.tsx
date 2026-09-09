@@ -27,6 +27,7 @@ vi.mock("@/contexts/ConversationContext", () => ({
 }));
 
 import KnowledgeNodeWorkspace from "./KnowledgeNodeWorkspace";
+import { AgentWorkbenchShell } from "./AgentWorkbenchShell";
 import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
 import { getUnsavedWorkspaceDrafts } from "@/lib/workspace-navigation-guard";
 
@@ -212,6 +213,86 @@ async function openEditor() {
 }
 
 describe("unified knowledge node workspace", () => {
+  it("keeps inline node reading in the auxiliary region and allows collaboration focus without dismissing it", async () => {
+    fixtureFetch();
+    render(
+      <>
+        <textarea aria-label="左侧协作输入" />
+        <KnowledgeNodeWorkspace
+          progress={progress}
+          conversationId="conversation"
+          resetRevision={2}
+          detailPresentation="inline"
+        />
+      </>,
+    );
+    const node = screen.getByRole("button", { name: "企业简介 当前节点" });
+    fireEvent.click(node);
+    const detail = await screen.findByRole("region", { name: "企业简介" });
+    expect(within(detail).getByText("原有企业介绍。")).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector('[data-slot="sheet-overlay"]')).toBeNull();
+    const composer = screen.getByRole("textbox", { name: "左侧协作输入" });
+    composer.focus();
+    fireEvent.change(composer, { target: { value: "继续协作" } });
+    expect(composer).toHaveFocus();
+    expect(detail).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+    await waitFor(() => expect(node).toHaveFocus());
+    expect(
+      screen.getByRole("navigation", { name: "知识节点目录" }),
+    ).toBeVisible();
+  });
+
+  it("preserves the real node editor across workbench resize and still guards an unsaved close", async () => {
+    fixtureFetch();
+    vi.stubGlobal("innerWidth", 1440);
+    render(
+      <AgentWorkbenchShell
+        projectId="node-test"
+        moduleId="knowledge"
+        title="智能知识库"
+        layout="knowledge"
+        main={<textarea aria-label="左侧协作输入" />}
+        auxiliary={
+          <KnowledgeNodeWorkspace
+            progress={progress}
+            conversationId="conversation"
+            resetRevision={2}
+            detailPresentation="inline"
+          />
+        }
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "企业简介 当前节点" }));
+    const editor = await openEditor();
+    fireEvent.change(editor, { target: { value: "跨尺寸保留的节点草稿" } });
+    vi.stubGlobal("innerWidth", 768);
+    fireEvent(window, new Event("resize"));
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    expect(
+      await screen.findByRole("textbox", { name: "编辑企业简介正文" }),
+    ).toBe(editor);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    vi.stubGlobal("innerWidth", 1440);
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("textbox", { name: "编辑企业简介正文" })).toBe(
+      editor,
+    );
+    expect(editor).toHaveValue("跨尺寸保留的节点草稿");
+    fireEvent.click(screen.getByRole("button", { name: "关闭节点详情" }));
+    const prompt = await screen.findByRole("dialog", {
+      name: "当前节点有未保存修改",
+    });
+    fireEvent.click(within(prompt).getByRole("button", { name: "继续编辑" }));
+    expect(editor).toHaveValue("跨尺寸保留的节点草稿");
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(
+      await screen.findByRole("dialog", { name: "当前节点有未保存修改" }),
+    ).toBeVisible();
+  });
+
   it("shows grouped progress without fetching content until a node is opened, and restores the tree on close", async () => {
     const fetcher = fixtureFetch();
     renderWorkspace({}, false);
@@ -232,9 +313,10 @@ describe("unified knowledge node workspace", () => {
     expect(screen.getByRole("navigation", { name: "知识节点目录" })).toBe(tree);
     expect(tree.scrollTop).toBe(145);
     await waitFor(() => expect(node).toHaveFocus());
-    expect(
-      screen.getByRole("button", { name: /企业身份/ }),
-    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /企业身份/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("keeps prefilled content in handled counts and the current node in pending without changing stored statuses", () => {
@@ -251,7 +333,9 @@ describe("unified knowledge node workspace", () => {
     expect(within(tree).getByText("待再次确认 0")).toBeVisible();
     expect(within(tree).getByText("待处理 1")).toBeVisible();
     expect(within(tree).queryByText(/预填/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "产品服务 已有资料" })).toHaveAttribute("data-status", "direct_prefilled");
+    expect(
+      screen.getByRole("button", { name: "产品服务 已有资料" }),
+    ).toHaveAttribute("data-status", "direct_prefilled");
     expect(branch.leaves[1]!.status).toBe("direct_prefilled");
   });
 
@@ -262,9 +346,18 @@ describe("unified knowledge node workspace", () => {
     branch.confirmed = 0;
     branch.directPrefilled = 2;
     branch.current = 0;
-    branch.leaves.forEach((leaf) => { leaf.status = "direct_prefilled"; });
+    branch.leaves.forEach((leaf) => {
+      leaf.status = "direct_prefilled";
+    });
     prefilled.build.currentLeafId = null;
-    prefilled.summary = { ...prefilled.summary, handled: 2, confirmed: 0, directPrefilled: 2, current: 0, overallPercent: 100 };
+    prefilled.summary = {
+      ...prefilled.summary,
+      handled: 2,
+      confirmed: 0,
+      directPrefilled: 2,
+      current: 0,
+      overallPercent: 100,
+    };
     renderWorkspace({ progress: prefilled }, false);
     const tree = screen.getByRole("navigation", { name: "知识节点目录" });
     expect(within(tree).getByText("2 / 2 · 100%")).toBeVisible();
@@ -409,7 +502,9 @@ describe("unified knowledge node workspace", () => {
     const images = await screen.findByRole("dialog", {
       name: "当前节点的图片",
     });
-    fireEvent.click(within(images).getByRole("button", { name: "移除 企业原图" }));
+    fireEvent.click(
+      within(images).getByRole("button", { name: "移除 企业原图" }),
+    );
     fireEvent.keyDown(images, { key: "Escape" });
     expect(
       screen.getByRole("dialog", { name: "当前节点的图片" }),

@@ -3463,7 +3463,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       code: "KNOWLEDGE_BASE_PACKAGE_ATTENTION_REQUIRED",
       severity: "warning",
       message:
-        "最终 ZIP 更新未完成，修改已保存，当前正式版本未受影响，请重新点击更新知识库。",
+        "最终 ZIP 更新未完成，修改已保存，请重新点击更新知识库。",
       retryable: false,
       failureClass: "terminal_nonregenerable",
       recoveryAction: "contact_support",

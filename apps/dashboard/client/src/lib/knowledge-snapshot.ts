@@ -80,7 +80,7 @@ export async function syncKnowledgeBaseArchiveFromOutput(input: {
         }
         if (build.status === "published") break;
         if (progress.packageState === "attention_required") {
-          throw new Error("知识库更新未完成，修改已保存，当前正式版本未受影响，请重新更新");
+          throw new Error("知识库更新未完成，修改已保存，请重新更新");
         }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
         operation.assertActive();

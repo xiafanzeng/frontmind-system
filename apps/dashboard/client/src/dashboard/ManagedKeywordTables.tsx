@@ -16,6 +16,9 @@ import {
   type KeywordCategoryKey,
 } from "@shared/keyword-categories";
 import { trpc } from "@/lib/trpc";
+import { projectWorkspaceUrl } from "@/lib/enterprise-project";
+import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
+import { navigate } from "wouter/use-browser-location";
 
 export type ManagedKeywordTable = {
   id: string;
@@ -49,6 +52,7 @@ type ManagedKeywordTablesProps = {
   quotaAvailability?: ManagedKeywordQuotaAvailability;
   generationEnabled?: boolean;
   dashboardRevision?: number | null;
+  knowledgePublished?: boolean;
 };
 
 const KEYWORD_SOURCE_DESCRIPTION =
@@ -125,6 +129,16 @@ function KeywordEmptyPanel({
   description: string;
   actions?: ReactNode;
 }) {
+  const { isWorkbench } = useBusinessWorkspace();
+  if (isWorkbench) {
+    return (
+      <section className="keyword-start-step">
+        <h2>{safeText(title)}</h2>
+        <p>{safeText(description)}</p>
+        {actions}
+      </section>
+    );
+  }
   return (
     <section className="panel">
       <div className="panel-head">
@@ -192,14 +206,26 @@ function brandQuestionUniverseStatus(
   return "已就绪，可基于当前知识库抓取品牌全域词库。";
 }
 
-function BrandQuestionUniverseGenerationControl() {
+function BrandQuestionUniverseGenerationControl({
+  knowledgePublished,
+}: {
+  knowledgePublished?: boolean;
+}) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const [bindingError, setBindingError] = useState<string | null>(null);
   const [binding, setBinding] = useState(false);
+  const [readTimedOut, setReadTimedOut] = useState(false);
+  const [readAttempt, setReadAttempt] = useState(0);
   const utils = trpc.useUtils();
   const observation = trpc.workspace.brandQuestionUniverse.observe.useQuery(
     undefined,
-    { refetchInterval: 5_000, refetchOnWindowFocus: true },
+    {
+      enabled: knowledgePublished !== false,
+      retry: false,
+      refetchInterval: 5_000,
+      refetchOnWindowFocus: true,
+      trpc: { abortOnUnmount: true },
+    },
   );
   const start = trpc.workspace.brandQuestionUniverse.start.useMutation({
     onSuccess: async () => {
@@ -214,13 +240,104 @@ function BrandQuestionUniverseGenerationControl() {
     clientRequestId: string;
   } | null>(null);
   const data = observation.data;
+  useEffect(() => {
+    setReadTimedOut(false);
+    if (knowledgePublished === false || data || observation.error) return;
+    const timeout = window.setTimeout(() => setReadTimedOut(true), 12_000);
+    return () => window.clearTimeout(timeout);
+  }, [knowledgePublished, data, observation.error, readAttempt]);
+  const openKnowledge = () =>
+    requestWorkspaceNavigation(() =>
+      navigate(projectWorkspaceUrl("/?view=knowledge")),
+    );
+  const knowledgeAction = (
+    <button
+      type="button"
+      className="keyword-optimize-button"
+      onClick={openKnowledge}
+    >
+      前往智能知识库
+    </button>
+  );
+  const retryRead = () =>
+    void (async () => {
+      setBindingError(null);
+      setReadTimedOut(false);
+      setReadAttempt((value) => value + 1);
+      try {
+        await utils.workspace.brandQuestionUniverse.observe.cancel();
+        await observation.refetch();
+        await utils.workspace.dashboard.invalidate();
+      } catch (cause) {
+        setBindingError(
+          cause instanceof Error ? cause.message : "读取失败，请重试。",
+        );
+      }
+    })();
+  if (knowledgePublished === false || data?.reason === "knowledge_required") {
+    return (
+      <KeywordEmptyPanel
+        title="先发布企业知识库"
+        description="节点确认后，在智能知识库中点击“更新知识库”发布。品牌全域词库将基于已发布的知识版本生成。"
+        actions={knowledgeAction}
+      />
+    );
+  }
+  if (!data) {
+    const failed = Boolean(
+      observation.error ||
+        readTimedOut ||
+        observation.isSuccess ||
+        bindingError,
+    );
+    return (
+      <KeywordEmptyPanel
+        title={failed ? "暂时无法读取词库状态" : "正在读取词库生成条件"}
+        description={
+          failed
+            ? bindingError ||
+              observation.error?.message ||
+              (readTimedOut
+                ? "读取超时。可以重新读取，或先检查知识库是否已经发布。"
+                : "未能取得有效状态，请重新读取。")
+            : "正在读取当前项目的知识版本和词库状态。"
+        }
+        actions={
+          <div className="keyword-start-actions">
+            {failed && (
+              <button
+                type="button"
+                className="keyword-optimize-button"
+                onClick={retryRead}
+              >
+                重新读取
+              </button>
+            )}
+            {knowledgeAction}
+          </div>
+        }
+      />
+    );
+  }
+  if (
+    data.reason === "safe_knowledge_required" ||
+    data.reason === "knowledge_scope_exceeded"
+  ) {
+    return (
+      <KeywordEmptyPanel
+        title="检查知识库内容"
+        description={brandQuestionUniverseStatus(data)}
+        actions={knowledgeAction}
+      />
+    );
+  }
   const disabled = !data?.canStart || start.isPending || binding;
   const status =
     bindingError ||
     start.error?.message ||
     observation.error?.message ||
     brandQuestionUniverseStatus(data);
-  return (
+  const generationAction = (
     <BrandQuestionUniverseGenerationAction
       disabled={disabled}
       status={status}
@@ -284,6 +401,39 @@ function BrandQuestionUniverseGenerationControl() {
       }
     />
   );
+  return (
+    <KeywordEmptyPanel
+      title={
+        data.reason === "ready"
+          ? "生成品牌全域词库"
+          : data.reason === "credential_required"
+            ? "词库生成服务尚未就绪"
+            : data.reason === "engineer_version"
+              ? "正式词库正在同步"
+              : "品牌全域词库生成进度"
+      }
+      description={
+        data.reason === "ready"
+          ? "从已发布的企业知识出发，整理可用于后续优化的问题。生成后，词库将直接显示在这里。"
+          : brandQuestionUniverseStatus(data)
+      }
+      actions={
+        data.canStart || binding || start.isPending ? (
+          generationAction
+        ) : (
+          <div className="keyword-start-actions">
+            <button
+              type="button"
+              className="keyword-optimize-button"
+              onClick={retryRead}
+            >
+              刷新词库状态
+            </button>
+          </div>
+        )
+      }
+    />
+  );
 }
 
 export function BrandQuestionUniverseGenerationAction({
@@ -340,6 +490,7 @@ export default function ManagedKeywordTables({
   quotaAvailability,
   generationEnabled = false,
   dashboardRevision,
+  knowledgePublished,
 }: ManagedKeywordTablesProps) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const [handoffError, setHandoffError] = useState<string | null>(null);
@@ -566,15 +717,16 @@ export default function ManagedKeywordTables({
           description="请稍后刷新页面重试。"
         />
       ) : tables.length === 0 ? (
-        <KeywordEmptyPanel
-          title="品牌全域词库正在准备中"
-          description="内容发布后会自动显示在这里。"
-          actions={
-            generationEnabled ? (
-              <BrandQuestionUniverseGenerationControl />
-            ) : undefined
-          }
-        />
+        generationEnabled ? (
+          <BrandQuestionUniverseGenerationControl
+            knowledgePublished={knowledgePublished}
+          />
+        ) : (
+          <KeywordEmptyPanel
+            title="品牌全域词库正在准备中"
+            description="内容发布后会自动显示在这里。"
+          />
+        )
       ) : (
         <>
           <div className="saas-toolbar keyword-toolbar-saas">

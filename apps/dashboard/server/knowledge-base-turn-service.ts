@@ -1,3 +1,4 @@
+import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
@@ -4630,6 +4631,10 @@ export async function reserveKnowledgeBaseTurnInTransaction(
   }
   const id = randomUUID();
   const leaseToken = randomUUID();
+  if (["revise", "confirm", "direct_prefill"].includes(input.operationType) &&
+      !(await knowledgeWorkbenchEditingAllowed(tx, build))) {
+    throw new KnowledgeBaseTurnReservationError("CONFLICT", "请先整体确认知识库初稿，再修改节点");
+  }
   const attachmentsFrozen =
     input.attachmentFileIds !== undefined || expectedAttachmentCount === 0;
   const sanitizedRecovery = sanitizeKnowledgeBaseRecoveryMetadata(
@@ -4637,6 +4642,14 @@ export async function reserveKnowledgeBaseTurnInTransaction(
   );
   const traceId = safeKnowledgeBaseTraceId(sanitizedRecovery.traceId);
   const metadata: KnowledgeBaseTurnMetadata = {
+    ...(input.operationType === "start" ? { knowledgeWorkbench: {
+      schemaVersion: 1, generation: build.generation,
+      originalAttachmentManifest: {
+        schemaVersion: 1, expectedCount: userAttachmentCount,
+        status: userAttachmentCount === 0 ? "complete" : "pending",
+        entries: [],
+      },
+    } } : {}),
     ...(deferredClientAttachments
       ? {}
       : { leaseOwnerHash: leaseOwnerHash(leaseToken) }),
@@ -6286,6 +6299,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
           prior.sizeBytes !== managedUploadProof.sizeBytes ||
           prior.contentSha256 !== managedUploadProof.contentSha256 ||
           (managedUploadProof.localStorageKey !== undefined &&
+            !(turn.operationType === "start" && prior.localStorageKey?.startsWith("knowledge-base/permanent-originals/")) &&
             prior.localStorageKey !== managedUploadProof.localStorageKey)))
     ) {
       throw new KnowledgeBaseTurnReservationError(
@@ -6305,12 +6319,16 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       "Customer files must be staged once in manifest order",
     );
   }
-  if (managedUploadProof && input.managedUploadBytes !== undefined) {
+  const originalBytes = managedUploadProof && turn.operationType === "start" && input.managedUploadBytes === undefined && managedUploadProof.localStorageKey
+    ? await readKnowledgeBaseLocalSource({ storageKey: managedUploadProof.localStorageKey, contentSha256: managedUploadProof.contentSha256, sizeBytes: managedUploadProof.sizeBytes })
+    : input.managedUploadBytes;
+  if (managedUploadProof && originalBytes !== undefined) {
     const retained = await persistKnowledgeBaseBuildSource({
       userId: input.userId,
       buildId: build.id,
       generation: build.generation,
-      bytes: input.managedUploadBytes,
+      bytes: originalBytes,
+      permanentOriginal: turn.operationType === "start",
     });
     if (
       retained.contentSha256 !== managedUploadProof.contentSha256 ||
@@ -6395,6 +6413,19 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
         : {}),
     })),
   });
+  if (turn.operationType === "start") {
+    const existingWorkbench = (metadata as Record<string, any>).knowledgeWorkbench ?? {};
+    (metadata as Record<string, any>).knowledgeWorkbench = {
+      ...existingWorkbench, schemaVersion: 1, generation: build.generation,
+      originalAttachmentManifest: {
+        schemaVersion: 1, expectedCount: metadata.userAttachmentCount,
+        status: staged.length === metadata.userAttachmentCount ? "complete" : "pending",
+        entries: staged.map((item) => ({ index: item.index, filename: item.filename,
+          mimeType: item.mimeType, sizeBytes: item.sizeBytes,
+          contentSha256: item.contentSha256, storageKey: item.localStorageKey })),
+      },
+    };
+  }
   const now = input.now ?? new Date();
   if (legacyResource?.conversationId === null) {
     await tx

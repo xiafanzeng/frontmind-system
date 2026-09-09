@@ -1,6 +1,8 @@
 /** Tenant-owned execution evidence, including thinking text returned by the provider.
  * Tool arguments and tool result payloads are not part of this contract. */
 export type GeneralThinkingText = {
+  /** Explicit provider-designated public summary; private thinkingText is not UI copy. */
+  publicSummary?: string;
   thinkingText?: string;
   thinkingSource?: "event" | "stream";
   thinkingComplete?: boolean;
@@ -91,9 +93,14 @@ export function generalToolLabel(
 export function generalThinkingText(
   value: GeneralThinkingText,
 ): GeneralThinkingText {
+  const publicSummary =
+    typeof value.publicSummary === "string" && value.publicSummary.trim()
+      ? value.publicSummary.trim().slice(0, 8000)
+      : undefined;
   if (typeof value.thinkingText !== "string" || !value.thinkingText.trim())
-    return {};
+    return publicSummary ? { publicSummary } : {};
   return {
+    ...(publicSummary ? { publicSummary } : {}),
     thinkingText: value.thinkingText,
     thinkingSource: value.thinkingSource === "stream" ? "stream" : "event",
     thinkingComplete: value.thinkingComplete !== false,

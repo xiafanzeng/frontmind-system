@@ -707,8 +707,13 @@ export default function RunDetailPage({
     let animationFrame = 0;
     const syncActiveAnchor = () => {
       animationFrame = 0;
+      const readingViewport = embedded
+        ? page.closest<HTMLElement>(".agent-workbench-shell__main-content")
+        : null;
       const activationLine =
-        (anchorNavRef.current?.getBoundingClientRect().bottom ?? 127) + 48;
+        (embedded
+          ? (readingViewport?.getBoundingClientRect().top ?? 0)
+          : (anchorNavRef.current?.getBoundingClientRect().bottom ?? 127)) + 48;
       const manualAnchor = manualAnchorRef.current;
       if (manualAnchor) {
         const target = sections.find(
@@ -771,7 +776,7 @@ export default function RunDetailPage({
       window.removeEventListener("resize", queueAnchorSync);
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
     };
-  }, [run?.id]);
+  }, [embedded, run?.id]);
 
   if (!run)
     return (

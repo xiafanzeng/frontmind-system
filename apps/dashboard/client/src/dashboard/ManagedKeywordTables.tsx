@@ -1,4 +1,5 @@
 import { useBusinessFlowState, readFlowString } from "./useBusinessFlowState";
+import { KeywordsWorkflow } from "./KeywordsWorkflow";
 import { Database, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -38,7 +39,7 @@ export type ManagedKeywordQuotaAvailability = Partial<
   >
 >;
 
-type ManagedKeywordTablesProps = {
+export type ManagedKeywordTablesProps = {
   tables: ManagedKeywordTable[];
   loading?: boolean;
   error?: unknown;
@@ -206,7 +207,7 @@ function brandQuestionUniverseStatus(
   return "已就绪，可基于当前知识库抓取品牌全域词库。";
 }
 
-function BrandQuestionUniverseGenerationControl({
+export function BrandQuestionUniverseGenerationControl({
   knowledgePublished,
 }: {
   knowledgePublished?: boolean;
@@ -482,7 +483,16 @@ function KeywordPanel({
   );
 }
 
-export default function ManagedKeywordTables({
+export default function ManagedKeywordTables(props: ManagedKeywordTablesProps) {
+  const { isWorkbench } = useBusinessWorkspace();
+  return isWorkbench ? (
+    <KeywordsWorkflow {...props} />
+  ) : (
+    <LegacyManagedKeywordTables {...props} />
+  );
+}
+
+function LegacyManagedKeywordTables({
   tables,
   loading = false,
   error,

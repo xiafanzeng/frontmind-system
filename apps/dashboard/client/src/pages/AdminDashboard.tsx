@@ -1,4 +1,8 @@
 import { AdminAiUsageReport } from "@/components/AdminAiUsageReport";
+import {
+  AdminDisclosure,
+  AdminRecordIdentity,
+} from "@/components/AdminRecordPresentation";
 import { agentCostDisplay, type AgentCost } from "@/lib/agent-cost";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
@@ -122,7 +126,11 @@ export function normalizeAgentUsageFields(value: unknown): AgentUsageFields {
             cacheReadInputTokens: count(usage.cacheReadInputTokens),
             observedTasks: count(usage.observedTasks),
             costCny: typeof usage.costCny === "string" ? usage.costCny : null,
-            costStatus: ["complete", "partial", "unknown"].includes(usage.costStatus) ? usage.costStatus : "unknown",
+            costStatus: ["complete", "partial", "unknown"].includes(
+              usage.costStatus,
+            )
+              ? usage.costStatus
+              : "unknown",
           },
         }
       : {}),
@@ -412,41 +420,82 @@ export function buildDeliveryEngineerStatusRows(
 }
 
 export const adminNav: PortalNavItem[] = [
-  { label: "API与人员管理", href: "/", icon: KeyRound, group: "运营" },
+  { label: "API与人员管理", href: "/", icon: KeyRound, group: "管理中心" },
   {
     label: "官网任务与AI建站",
     href: "/admin/presales",
     icon: BriefcaseBusiness,
-    group: "运营",
+    group: "管理中心",
   },
   {
     label: "客户交付工作台",
     href: "/admin/workspace",
     icon: UserCog,
-    group: "客户与服务",
+    group: "管理中心",
     activePrefixes: ["/admin/customers", "/admin/delivery-workbench"],
   },
   {
     label: "客户项目团队",
     href: "/admin/delivery-roles",
     icon: UsersRound,
-    group: "客户与服务",
+    group: "管理中心",
+  },
+  { label: "账号与权限", href: "/admin/users", icon: Users, group: "管理中心" },
+  {
+    label: "余额与收款",
+    href: issueMonitorUrl,
+    icon: Users,
+    group: "管理中心",
+    parentHref: "/admin/users",
   },
   {
-    label: "账号与权限",
-    href: "/admin/users",
-    icon: Users,
-    group: "系统管理",
+    label: "任务运行",
+    href: "/admin/monitoring/operations",
+    icon: Activity,
+    group: "进度监控管理",
   },
-  { label: "账号与余额", href: issueMonitorUrl, icon: Users, group: "问题监控管理" },
-  { label: "模型能力", href: "/admin/monitoring/models", icon: Bot, group: "问题监控管理" },
-  { label: "任务运行", href: "/admin/monitoring/operations", icon: Activity, group: "问题监控管理" },
-  { label: "内容查阅", href: "/admin/monitoring/content-review", icon: ClipboardList, group: "问题监控管理" },
-  { label: "操作记录", href: "/admin/monitoring/audit-log", icon: ClipboardList, group: "问题监控管理" },
-  { label: "发布集成", href: channelDistributionUrl, icon: Send, group: "媒体发布管理" },
-  { label: "目录同步", href: "/admin/monitoring/media-publishing/catalog", icon: RefreshCw, group: "媒体发布管理" },
-  { label: "图文能力", href: "/admin/monitoring/media-publishing/capabilities", icon: ClipboardList, group: "媒体发布管理" },
-  { label: "异常对账", href: "/admin/monitoring/media-publishing/reconciliation", icon: Activity, group: "媒体发布管理" },
+  {
+    label: "内容查阅",
+    href: "/admin/monitoring/content-review",
+    icon: ClipboardList,
+    group: "进度监控管理",
+  },
+  {
+    label: "模型能力",
+    href: "/admin/monitoring/models",
+    icon: Bot,
+    group: "进度监控管理",
+  },
+  {
+    label: "操作记录",
+    href: "/admin/monitoring/audit-log",
+    icon: ClipboardList,
+    group: "进度监控管理",
+  },
+  {
+    label: "发布集成",
+    href: channelDistributionUrl,
+    icon: Send,
+    group: "媒体发布管理",
+  },
+  {
+    label: "目录同步",
+    href: "/admin/monitoring/media-publishing/catalog",
+    icon: RefreshCw,
+    group: "媒体发布管理",
+  },
+  {
+    label: "图文能力",
+    href: "/admin/monitoring/media-publishing/capabilities",
+    icon: ClipboardList,
+    group: "媒体发布管理",
+  },
+  {
+    label: "异常对账",
+    href: "/admin/monitoring/media-publishing/reconciliation",
+    icon: Activity,
+    group: "媒体发布管理",
+  },
 ];
 
 export function getAdminNav(systemAdmin: boolean) {
@@ -466,7 +515,7 @@ export function getAdminNav(systemAdmin: boolean) {
       group: "交付管理",
     },
     {
-      label: "FrontMind Agent",
+      label: "通用智能体",
       href: "/admin/agent",
       icon: Bot,
       group: "Agent 与资源",
@@ -1258,8 +1307,8 @@ export function AdminOverviewApiKeyDialog({
           </AlertDialogHeader>
           <div className="rounded-lg border border-border/70 bg-muted/30 p-3 text-sm">
             新版本使用智谱 {upstreamEffort === "high" ? "High" : "Max"}
-            思考强度，已提交任务继续使用原绑定版本。
-            近 30 天自用按本地任务账本滚动累计，Key 轮换不会清空历史数字。
+            思考强度，已提交任务继续使用原绑定版本。 近 30
+            天自用按本地任务账本滚动累计，Key 轮换不会清空历史数字。
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
@@ -1488,7 +1537,7 @@ export function AdminBulkApiKeyDialog({
                     className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
                       scopeKind === value
                         ? "border-[#6f3a98] bg-[#f3edf7] text-[#5b2a86]"
-                        : "border-border bg-white text-[#5f576c] hover:border-[#a98cbd]"
+                        : "border-border bg-white text-black hover:border-[#a98cbd]"
                     }`}
                   >
                     {label}
@@ -1556,7 +1605,7 @@ export function AdminBulkApiKeyDialog({
                     </button>
                     <button
                       type="button"
-                      className="text-[#716a80] hover:underline"
+                      className="text-[#595959] hover:underline"
                       disabled={busy || engineerIds.length === 0}
                       onClick={() => {
                         setEngineerIds([]);
@@ -1600,7 +1649,7 @@ export function AdminBulkApiKeyDialog({
                             setReplaceExisting(false);
                           }}
                         />
-                        <span className="font-medium text-[#332842]">
+                        <span className="font-medium text-black">
                           {engineer.displayName}
                         </span>
                         <span className="text-xs text-muted-foreground">
@@ -1613,8 +1662,8 @@ export function AdminBulkApiKeyDialog({
               </div>
             )}
 
-            <div className="rounded-lg border border-[#e5ddea] bg-[#fbf9fd] p-3 text-sm text-[#5f576c]">
-              <p className="font-medium text-[#332842]">
+            <div className="rounded-lg border border-[#e5ddea] bg-white p-3 text-sm text-black">
+              <p className="font-medium text-black">
                 当前范围：{targets.length} 个启用账号
               </p>
               <p className="mt-1 text-xs leading-5">
@@ -1633,7 +1682,8 @@ export function AdminBulkApiKeyDialog({
                 targets.length > MAX_BULK_API_KEY_CHANGES &&
                 !scopeSnapshotLimitExceeded && (
                   <p className="mt-1 text-xs font-medium text-amber-700">
-                    提交后会按本次 Key 与思考强度排除无需变化的账号；若实际仍需变更超过
+                    提交后会按本次 Key
+                    与思考强度排除无需变化的账号；若实际仍需变更超过
                     {MAX_BULK_API_KEY_CHANGES} 个，整批将停止且不会写入。
                   </p>
                 )}
@@ -1654,7 +1704,7 @@ export function AdminBulkApiKeyDialog({
                 onChange={(event) => setReplaceExisting(event.target.checked)}
               />
               <span>
-                <span className="font-medium text-[#332842]">
+                <span className="font-medium text-black">
                   同时替换范围内已有 Key
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">
@@ -1833,7 +1883,7 @@ export function AdminBrandTrackingKeyManager({
 
   return (
     <div data-testid="brand-tracking-key-manager">
-      <div className="flex flex-col gap-3 border-b border-[#eee8f2] bg-[#fbf9fd] px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-3 border-b border-[#eaecf0] bg-white px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         {!restrictedUserId && (
           <Input
             value={search}
@@ -1906,11 +1956,11 @@ export function AdminBrandTrackingKeyManager({
       </div>
 
       {previewMode ? (
-        <div className="p-6 text-sm text-[#716a80]">
+        <div className="p-6 text-sm text-[#595959]">
           品牌追踪 Key 仅在真实系统管理员环境中配置。
         </div>
       ) : listQuery.isLoading ? (
-        <div className="p-6 text-sm text-[#716a80]">
+        <div className="p-6 text-sm text-[#595959]">
           正在读取海外客户的品牌追踪 Key 与积分…
         </div>
       ) : listQuery.error ? (
@@ -1918,35 +1968,32 @@ export function AdminBrandTrackingKeyManager({
           品牌追踪 Key 管理数据暂时无法读取。
         </div>
       ) : visibleRows.length === 0 ? (
-        <div className="p-6 text-sm text-[#716a80]">
+        <div className="p-6 text-sm text-[#595959]">
           没有符合条件的海外客户账号。
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <div className="min-w-[1240px]">
-            <div className="grid grid-cols-[minmax(190px,1.2fr)_170px_130px_130px_150px_130px_160px] gap-4 border-b border-[#eee8f2] px-5 py-3 text-xs font-medium text-[#716a80] sm:px-6">
+          <div className="min-w-[920px]">
+            <div className="grid grid-cols-[minmax(190px,1.2fr)_minmax(170px,1fr)_160px_160px_160px] gap-4 border-b border-[#eaecf0] px-5 py-3 text-sm font-semibold text-black sm:px-6">
               <span>海外客户</span>
               <span>Key 状态</span>
               <span>近 30 天用量</span>
-              <span>累计积分</span>
-              <span>共享 Key 归因积分</span>
               <span>品牌追踪积分余额</span>
               <span>操作</span>
             </div>
             {visibleRows.map((row) => (
               <div
                 key={row.userId}
-                className="grid grid-cols-[minmax(190px,1.2fr)_170px_130px_130px_150px_130px_160px] items-center gap-4 border-b border-[#eee8f2] px-5 py-4 last:border-b-0 sm:px-6"
+                className="grid grid-cols-[minmax(190px,1.2fr)_minmax(170px,1fr)_160px_160px_160px] items-center gap-4 border-b border-[#eaecf0] px-5 py-4 last:border-b-0 sm:px-6"
               >
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-[#332842]">
-                    {row.displayName}
-                  </p>
-                  <p className="mt-1 truncate text-xs text-[#857e91]">
-                    @{row.username} · 上限{" "}
-                    {formatAdminBrandTrackingCredits(row.limit)}
-                  </p>
-                </div>
+                <AdminRecordIdentity
+                  name={row.displayName}
+                  account={row.username}
+                >
+                  <span className="mt-1 block text-xs text-[#595959]">
+                    上限 {formatAdminBrandTrackingCredits(row.limit)}
+                  </span>
+                </AdminRecordIdentity>
                 <div className="text-xs">
                   <p
                     className={
@@ -1960,34 +2007,36 @@ export function AdminBrandTrackingKeyManager({
                       : "品牌追踪 Key 待配置"}
                   </p>
                   {row.keyConfigured && (
-                    <p className="mt-1 text-[#857e91]">
+                    <p className="mt-1 text-[#595959]">
                       {row.sharedAccountCount > 1
                         ? `同一 Key 供 ${row.sharedAccountCount} 个账号使用`
                         : "当前账号独享"}
                     </p>
                   )}
                 </div>
-                <p className="text-sm font-semibold tabular-nums text-[#5b2a86]">
-                  {formatAdminBrandTrackingCredits(row.rolling30DayCost)}
-                </p>
-                <p className="text-sm font-semibold tabular-nums text-[#332842]">
-                  {formatAdminBrandTrackingCredits(row.lifetimeCost)}
-                </p>
                 <div>
-                  <p className="text-sm font-semibold tabular-nums text-[#332842]">
-                    {formatAdminBrandTrackingCredits(
-                      row.sharedKeyAttributedCost,
-                    )}
+                  <p className="text-sm font-semibold tabular-nums text-black">
+                    {formatAdminBrandTrackingCredits(row.rolling30DayCost)}
                   </p>
-                  <p className="mt-1 text-xs text-[#857e91]">
-                    Dashboard 可归因积分
-                  </p>
+                  <AdminDisclosure label="历史与归因明细">
+                    <p>
+                      累计积分{" "}
+                      {formatAdminBrandTrackingCredits(row.lifetimeCost)}
+                    </p>
+                    <p>
+                      共享 Key 归因积分{" "}
+                      {formatAdminBrandTrackingCredits(
+                        row.sharedKeyAttributedCost,
+                      )}
+                    </p>
+                    <p>Dashboard 可归因积分</p>
+                  </AdminDisclosure>
                 </div>
                 <div>
-                  <p className="text-sm font-semibold tabular-nums text-[#332842]">
+                  <p className="text-sm font-semibold tabular-nums text-black">
                     {formatAdminBrandTrackingCredits(row.balance)}
                   </p>
-                  <p className="mt-1 text-xs text-[#857e91]">
+                  <p className="mt-1 text-xs text-[#595959]">
                     {row.balanceSyncedAt ? "上游已同步" : "尚未刷新"}
                   </p>
                 </div>
@@ -2574,11 +2623,11 @@ export default function AdminDashboard({
       <div className="space-y-5">
         {systemAdmin && (
           <PortalCard className="overflow-hidden">
-            <div className="flex flex-col gap-4 border-b border-[#eee8f2] px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-4 border-b border-[#eaecf0] px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <KeyRound className="h-5 w-5 text-[#5b2a86]" />
-                  <h2 className="font-semibold text-[#171321]">
+                  <h2 className="font-semibold text-black">
                     统一 API Key 管理
                   </h2>
                   {apiKeyManagementTab === "general" && (
@@ -2595,15 +2644,15 @@ export default function AdminDashboard({
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-sm leading-6 text-[#716a80]">
+                <AdminDisclosure label="用量与配置说明">
                   {apiKeyManagementTab === "general"
                     ? "客户、交付管理员和工程师统一使用智谱 Key；近 30 天自用金额按实际调用记录累计。"
                     : "只为海外客户分配 FrontMind 品牌追踪 Key。不同客户可以共享同一 Key，个人积分仍按每轮实际用量分别归因。"}
-                </p>
+                </AdminDisclosure>
               </div>
               {apiKeyManagementTab === "general" &&
                 (previewMode ? (
-                  <span className="rounded-full border border-[#ddd4e5] bg-white px-3 py-1.5 text-xs font-medium text-[#716a80]">
+                  <span className="rounded-full border border-[#ddd4e5] bg-white px-3 py-1.5 text-xs font-medium text-[#595959]">
                     只读验收预览 · 近 30 天
                   </span>
                 ) : (
@@ -2649,7 +2698,7 @@ export default function AdminDashboard({
             </div>
 
             <div
-              className="flex gap-2 border-b border-[#eee8f2] px-5 py-3 sm:px-6"
+              className="flex gap-2 border-b border-[#eaecf0] px-5 py-3 sm:px-6"
               role="tablist"
               aria-label="API Key 管理类型"
             >
@@ -2670,7 +2719,7 @@ export default function AdminDashboard({
                   className={`rounded-full border px-4 py-2 text-sm font-medium transition ${
                     apiKeyManagementTab === value
                       ? "border-[#6f3a98] bg-[#6f3a98] text-white"
-                      : "border-[#ddd4e5] bg-white text-[#5f576c] hover:border-[#a98cbd]"
+                      : "border-[#ddd4e5] bg-white text-black hover:border-[#a98cbd]"
                   }`}
                 >
                   {label}
@@ -2680,7 +2729,7 @@ export default function AdminDashboard({
 
             {apiKeyManagementTab === "general" ? (
               <>
-                <div className="flex flex-col gap-3 border-b border-[#eee8f2] bg-[#fbf9fd] px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-col gap-3 border-b border-[#eaecf0] bg-white px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex flex-wrap gap-2">
                     {[
                       ["all", "全部"],
@@ -2699,7 +2748,7 @@ export default function AdminDashboard({
                         className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
                           keyAccountType === value
                             ? "border-[#6f3a98] bg-[#6f3a98] text-white"
-                            : "border-[#ddd4e5] bg-white text-[#5f576c] hover:border-[#a98cbd]"
+                            : "border-[#ddd4e5] bg-white text-black hover:border-[#a98cbd]"
                         }`}
                       >
                         {label}
@@ -2719,7 +2768,7 @@ export default function AdminDashboard({
 
                 {usageHierarchyQuery.isLoading ||
                 deliveryRoleOverviewQuery.isLoading ? (
-                  <div className="p-6 text-sm text-[#716a80]">
+                  <div className="p-6 text-sm text-[#595959]">
                     正在读取账号 Key 与用量…
                   </div>
                 ) : usageHierarchyQuery.error ||
@@ -2728,38 +2777,34 @@ export default function AdminDashboard({
                     Key 管理数据暂时无法读取。
                   </div>
                 ) : visibleKeyManagementRows.length === 0 ? (
-                  <div className="p-6 text-sm text-[#716a80]">
+                  <div className="p-6 text-sm text-[#595959]">
                     没有符合当前筛选条件的账号。
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <div className="min-w-[1050px]">
-                      <div className="grid grid-cols-[minmax(200px,1.2fr)_110px_minmax(210px,1.2fr)_170px_130px_130px_140px] gap-4 border-b border-[#eee8f2] px-5 py-3 text-xs font-medium text-[#716a80] sm:px-6">
-                        <span>账号</span>
-                        <span>类型</span>
+                    <div className="min-w-[960px]">
+                      <div className="grid grid-cols-[minmax(190px,1.2fr)_minmax(160px,1fr)_170px_140px_140px_120px] gap-4 border-b border-[#eaecf0] px-5 py-3 text-sm font-semibold text-black sm:px-6">
+                        <span>账号与类型</span>
                         <span>归属范围</span>
                         <span>Key 状态</span>
                         <span>近 30 天自用量</span>
-                        <span>已记录任务</span>
+                        <span>异常与诊断</span>
                         <span>操作</span>
                       </div>
                       {visibleKeyManagementRows.map((row) => (
                         <div
                           key={`${row.kind}-${row.userId}`}
-                          className="grid grid-cols-[minmax(200px,1.2fr)_110px_minmax(210px,1.2fr)_170px_130px_130px_140px] items-center gap-4 border-b border-[#eee8f2] px-5 py-4 last:border-b-0 sm:px-6"
+                          className="grid grid-cols-[minmax(190px,1.2fr)_minmax(160px,1fr)_170px_140px_140px_120px] items-center gap-4 border-b border-[#eaecf0] px-5 py-4 last:border-b-0 sm:px-6"
                         >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-[#332842]">
-                              {row.displayName}
-                            </p>
-                            <p className="mt-1 truncate text-xs text-[#857e91]">
-                              @{row.username}
-                            </p>
-                          </div>
-                          <span className="w-fit rounded-full bg-[#f3edf7] px-2.5 py-1 text-xs font-medium text-[#6a338f]">
-                            {row.typeLabel}
-                          </span>
-                          <p className="truncate text-sm text-[#5f576c]">
+                          <AdminRecordIdentity
+                            name={row.displayName}
+                            account={row.username}
+                          >
+                            <span className="mt-2 inline-flex rounded-md border border-[#eaecf0] px-2 py-0.5 text-xs">
+                              {row.typeLabel}
+                            </span>
+                          </AdminRecordIdentity>
+                          <p className="truncate text-sm text-black">
                             {row.scopeLabel}
                           </p>
                           <div className="text-xs">
@@ -2779,7 +2824,7 @@ export default function AdminDashboard({
                                   : "Key 待配置"}
                             </p>
                             {row.configured && (
-                              <p className="mt-1 text-[#716a80]">
+                              <p className="mt-1 text-[#595959]">
                                 {row.provider === "zhipu"
                                   ? "智谱"
                                   : "历史服务凭据"}
@@ -2795,12 +2840,54 @@ export default function AdminDashboard({
                             <p className="text-sm font-semibold text-[#5b2a86]">
                               {managedUsageDisplay(row)}
                             </p>
-                            {row.nativeUsage && <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">Token 明细</summary><p>输入 {row.nativeUsage.inputTokens.toLocaleString()}</p><p>输出 {row.nativeUsage.outputTokens.toLocaleString()}</p><p>缓存 {row.nativeUsage.cacheReadInputTokens.toLocaleString()}</p></details>}
+                            <p className="mt-1 text-xs text-[#595959]">
+                              已记录 {row.nativeUsage?.observedTasks ?? 0}{" "}
+                              个任务
+                            </p>
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-[#332842]">
-                              {row.nativeUsage?.observedTasks ?? 0} 个
+                            <p
+                              className={
+                                row.keyHealth === "connected"
+                                  ? "text-xs text-[#16794f]"
+                                  : "text-xs text-[#946800]"
+                              }
+                            >
+                              {apiUsageSyncStatusCopy({
+                                keyHealth: row.keyHealth,
+                                issueCode: row.syncIssueCode,
+                              })}
                             </p>
+                            <AdminDisclosure label="诊断详情">
+                              <p>凭据版本 {row.version}</p>
+                              {row.fingerprint && (
+                                <p className="break-all">
+                                  指纹 {row.fingerprint}
+                                </p>
+                              )}
+                              {formatApiUsageLastSuccess(row.fetchedAt) && (
+                                <p>
+                                  最近同步{" "}
+                                  {formatApiUsageLastSuccess(row.fetchedAt)}
+                                </p>
+                              )}
+                              {row.nativeUsage && (
+                                <>
+                                  <p>
+                                    输入{" "}
+                                    {row.nativeUsage.inputTokens.toLocaleString()}
+                                  </p>
+                                  <p>
+                                    输出{" "}
+                                    {row.nativeUsage.outputTokens.toLocaleString()}
+                                  </p>
+                                  <p>
+                                    缓存{" "}
+                                    {row.nativeUsage.cacheReadInputTokens.toLocaleString()}
+                                  </p>
+                                </>
+                              )}
+                            </AdminDisclosure>
                           </div>
                           <Button
                             type="button"
@@ -2849,16 +2936,16 @@ export default function AdminDashboard({
         {!previewMode && systemAdmin && <AdminAiUsageReport />}
         {!previewMode && (
           <PortalCard className="overflow-hidden">
-            <div className="border-b border-[#eee8f2] px-5 py-4 sm:px-6">
-              <h2 className="font-semibold text-[#171321]">工程师状态</h2>
-              <p className="mt-1 text-sm text-[#716a80]">
+            <div className="border-b border-[#eaecf0] px-5 py-4 sm:px-6">
+              <h2 className="font-semibold text-black">工程师状态</h2>
+              <AdminDisclosure label="人员状态说明">
                 {systemAdmin
                   ? "按人员查看岗位、项目和近 30 天用量。统一展示人民币成本，Token 见用量明细。"
                   : "按人员查看专业岗位、负责项目和当前工作状态；项目岗位缺员请前往客户项目团队处理。"}
-              </p>
+              </AdminDisclosure>
             </div>
             {deliveryRoleOverviewQuery.isLoading ? (
-              <div className="p-6 text-sm text-[#716a80]">
+              <div className="p-6 text-sm text-[#595959]">
                 正在读取工程师状态…
               </div>
             ) : deliveryRoleOverviewQuery.error ? (
@@ -2866,7 +2953,7 @@ export default function AdminDashboard({
                 工程师状态暂时无法读取。
               </div>
             ) : deliveryEngineerStatusRows.length === 0 ? (
-              <div className="p-6 text-sm text-[#716a80]">
+              <div className="p-6 text-sm text-[#595959]">
                 当前权限范围内暂无工程师账号。
               </div>
             ) : (
@@ -2875,7 +2962,7 @@ export default function AdminDashboard({
                   className={systemAdmin ? "min-w-[1040px]" : "min-w-[720px]"}
                 >
                   <div
-                    className={`grid gap-4 border-b border-[#eee8f2] bg-[#fbf9fd] px-5 py-3 text-xs font-medium text-[#716a80] sm:px-6 ${
+                    className={`grid gap-4 border-b border-[#eaecf0] bg-white px-5 py-3 text-xs font-medium text-[#595959] sm:px-6 ${
                       systemAdmin
                         ? "grid-cols-[minmax(160px,1.1fr)_minmax(160px,1fr)_minmax(180px,1.2fr)_140px_170px_180px]"
                         : "grid-cols-[minmax(180px,1.2fr)_minmax(170px,1.1fr)_minmax(220px,1.4fr)_150px]"
@@ -2897,38 +2984,34 @@ export default function AdminDashboard({
                       engineer.workStatus === "available"
                         ? "bg-[#eaf7f0] text-[#16794f]"
                         : engineer.workStatus === "disabled"
-                          ? "bg-[#f2eff4] text-[#716a80]"
+                          ? "bg-[#f2eff4] text-[#595959]"
                           : "bg-[#fff1f4] text-[#a02652]";
                     return (
                       <div
                         key={engineer.id}
-                        className={`grid items-center gap-4 border-b border-[#eee8f2] px-5 py-4 last:border-b-0 sm:px-6 ${
+                        className={`grid items-center gap-4 border-b border-[#eaecf0] px-5 py-4 last:border-b-0 sm:px-6 ${
                           systemAdmin
                             ? "grid-cols-[minmax(160px,1.1fr)_minmax(160px,1fr)_minmax(180px,1.2fr)_140px_170px_180px]"
                             : "grid-cols-[minmax(180px,1.2fr)_minmax(170px,1.1fr)_minmax(220px,1.4fr)_150px]"
                         }`}
                       >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-[#332842]">
-                            {engineer.displayName}
-                          </p>
-                          <p className="mt-1 truncate text-xs text-[#857e91]">
-                            {engineer.username}
-                          </p>
-                        </div>
-                        <p className="text-sm text-[#484057]">
+                        <AdminRecordIdentity
+                          name={engineer.displayName}
+                          account={engineer.username}
+                        />
+                        <p className="text-sm text-black">
                           {engineer.roleType
                             ? DELIVERY_ROLE_LABELS[engineer.roleType]
                             : "岗位未设置"}
                         </p>
                         <div className="min-w-0">
-                          <p className="truncate text-sm text-[#484057]">
+                          <p className="truncate text-sm text-black">
                             {engineer.projectNames.length > 0
                               ? engineer.projectNames.join("、")
                               : "尚未负责客户项目"}
                           </p>
                           {engineer.projectCount > 1 && (
-                            <p className="mt-1 text-xs text-[#857e91]">
+                            <p className="mt-1 text-xs text-[#595959]">
                               共 {engineer.projectCount} 个项目
                             </p>
                           )}
@@ -2942,7 +3025,7 @@ export default function AdminDashboard({
                         </div>
                         {systemAdmin && (
                           <>
-                            <div className="space-y-1 text-xs text-[#716a80]">
+                            <div className="space-y-1 text-xs text-[#595959]">
                               <p>
                                 自用{" "}
                                 <span className="font-semibold text-[#5b2a86]">
@@ -2951,7 +3034,7 @@ export default function AdminDashboard({
                               </p>
                               <p>
                                 已记录任务{" "}
-                                <span className="font-semibold text-[#332842]">
+                                <span className="font-semibold text-black">
                                   {engineer.nativeUsage?.observedTasks ?? 0} 个
                                 </span>
                               </p>
@@ -2967,7 +3050,7 @@ export default function AdminDashboard({
                                     formatApiUsageLastSuccess(
                                       engineer.usageFetchedAt,
                                     ) && (
-                                      <p className="text-[#857e91]">
+                                      <p className="text-[#595959]">
                                         {`截至 ${formatApiUsageLastSuccess(engineer.usageFetchedAt)}，最新同步待恢复`}
                                       </p>
                                     )}
@@ -2979,7 +3062,7 @@ export default function AdminDashboard({
                                 className={
                                   engineer.isActive
                                     ? "text-[#16794f]"
-                                    : "text-[#857e91]"
+                                    : "text-[#595959]"
                                 }
                               >
                                 {engineer.isActive ? "账号启用" : "账号停用"}
@@ -2995,7 +3078,7 @@ export default function AdminDashboard({
                                   ? "Key 已配置"
                                   : "Key 未配置"}
                               </p>
-                              <p className="pt-1 text-[#857e91]">
+                              <p className="pt-1 text-[#595959]">
                                 在上方统一 Key 管理区操作
                               </p>
                             </div>

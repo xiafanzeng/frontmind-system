@@ -121,6 +121,7 @@ export async function persistKnowledgeBaseBuildSource(input: {
   buildId: string;
   generation: number;
   bytes: Buffer;
+  permanentOriginal?: boolean;
 }) {
   assertBytes(input.bytes);
   if (
@@ -138,7 +139,7 @@ export async function persistKnowledgeBaseBuildSource(input: {
   const contentSha256 = sha256(input.bytes);
   const storageKey = [
     "knowledge-base",
-    "build-sources",
+    input.permanentOriginal ? "permanent-originals" : "build-sources",
     String(input.userId),
     input.buildId.toLowerCase(),
     `g${input.generation}`,
@@ -187,4 +188,20 @@ export async function readKnowledgeBaseLocalSource(input: {
     );
   }
   return bytes;
+}
+
+/** Streams one immutable retained file and verifies the full byte proof. */
+export async function* streamKnowledgeBaseLocalSource(input: { storageKey: string; contentSha256: string; sizeBytes: number }) {
+  if (!SHA256_PATTERN.test(input.contentSha256) || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > MAX_SOURCE_BYTES)
+    throw new KnowledgeBaseLocalSourceError("INVALID", "Invalid source descriptor");
+  const { target } = assertStorageKey(input.storageKey);
+  const { createReadStream } = await import("node:fs");
+  const digest = createHash("sha256"); let size = 0;
+  for await (const chunk of createReadStream(target, { highWaterMark: 64 * 1024 })) {
+    size += chunk.length; digest.update(chunk);
+    if (size > input.sizeBytes) throw new KnowledgeBaseLocalSourceError("INTEGRITY_MISMATCH", "Source size changed");
+    yield chunk as Buffer;
+  }
+  if (size !== input.sizeBytes || digest.digest("hex") !== input.contentSha256)
+    throw new KnowledgeBaseLocalSourceError("INTEGRITY_MISMATCH", "Source proof mismatch");
 }

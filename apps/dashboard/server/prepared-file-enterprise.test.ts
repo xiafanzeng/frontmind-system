@@ -256,6 +256,17 @@ describe("prepared external files belong to one enterprise project", () => {
     expect(authorize).not.toHaveBeenCalled();
   });
   it("recovers queued external processing with persisted project ownership even when another request drains the queue", async () => {
+    // Scope restoration must not depend on this test host's disk pressure or
+    // trigger unrelated cache eviction; storage guards have dedicated coverage.
+    vi.spyOn(fs, "statfs").mockResolvedValue({
+      bsize: 4096,
+      blocks: 100_000_000,
+      bavail: 50_000_000,
+      bfree: 50_000_000,
+      files: 1_000_000,
+      ffree: 900_000,
+      type: 0,
+    });
     const { service: writer, directory } = await instance();
     const a = await scoped(projectA, () => writer.registerExternal(input));
     const account = await writer.registerExternal({

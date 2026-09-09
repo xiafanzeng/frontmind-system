@@ -1,3 +1,4 @@
+import { sweepKnowledgeBaseBuildSources } from "./knowledge-base-local-source-lifecycle";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   persistKnowledgeBaseGeneratedSource,
   persistKnowledgeBaseSkillArchive,
   readKnowledgeBaseLocalSource,
+  streamKnowledgeBaseLocalSource,
 } from "./knowledge-base-local-source-store";
 
 describe("knowledge-base immutable local sources", () => {
@@ -47,6 +49,17 @@ describe("knowledge-base immutable local sources", () => {
     await expect(readKnowledgeBaseLocalSource(retained)).resolves.toEqual(
       bytes,
     );
+  });
+
+  it("keeps permanent original uploads beyond the temporary terminal retention window", async () => {
+    const bytes = Buffer.from("original customer document");
+    const permanent = await persistKnowledgeBaseBuildSource({ userId: 7, buildId: "00000000-0000-4000-8000-000000000007", generation: 2, bytes, permanentOriginal: true });
+    expect(permanent.storageKey).toContain("knowledge-base/permanent-originals/");
+    const result = await sweepKnowledgeBaseBuildSources({ now: new Date("2030-01-01"), resolveBuildLifecycle: async () => ({ exists: true, status: "published", generation: 2, terminalAt: new Date("2026-01-01") }) });
+    expect(result.deleted).toBe(0);
+    const chunks: Buffer[] = [];
+    for await (const chunk of streamKnowledgeBaseLocalSource(permanent)) chunks.push(chunk);
+    expect(Buffer.concat(chunks)).toEqual(bytes);
   });
 
   it("rejects a descriptor whose SHA or byte count does not match storage", async () => {

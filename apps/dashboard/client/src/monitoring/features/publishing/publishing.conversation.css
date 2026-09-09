@@ -6,6 +6,40 @@
   padding: 4px 0 28px;
   background: #fff;
 }
+.publishing-conversation-business {
+  padding-top: 24px;
+  border-top: 1px solid #ebebee;
+  scroll-margin-top: 24px;
+}
+.publishing-confirmed-media-list {
+  list-style: none;
+  margin: 16px 0;
+  padding: 0;
+}
+.publishing-confirmed-media-list li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid #eeeef1;
+}
+.publishing-confirmed-media-list li > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.publishing-confirmed-media-list strong {
+  display: block;
+  font-size: 14px;
+}
+.publishing-confirmed-media-list small {
+  color: #737680;
+}
+.publishing-conversation-back {
+  margin-bottom: 20px;
+}
+.publishing-flow-step .publishing-flow-intro:empty {
+  display: none;
+}
 .publishing-flow-intro {
   display: flex;
   align-items: center;
@@ -241,4 +275,173 @@
   .publishing-inline-actions > button {
     flex: 1;
   }
+}
+
+/* Full manuscript and confirmation belong to the one task scroll. */
+.monitoring-module .publishing-flow-step .publishing-frozen-preview-body {
+  max-height: none;
+  overflow: visible;
+  padding-inline: 0;
+  font-size: 16px;
+}
+.monitoring-module .publishing-flow-step .publishing-review-confirm {
+  position: static;
+  overflow: visible;
+}
+
+/* The workbench owns the content column; legacy standalone page insets stop here. */
+.user-brand-dashboard.operator-mode
+  .monitoring-module
+  .publishing-page.publishing-flow-step {
+  --publishing-canvas: #fff;
+  --publishing-ink: #000;
+  --publishing-muted: #595959;
+  --publishing-purple: var(--module-color, #b33467);
+  --publishing-purple-dark: var(--module-color, #b33467);
+  --publishing-purple-soft: color-mix(
+    in srgb,
+    var(--publishing-purple) 7%,
+    white
+  );
+  --publishing-shadow: none;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  color: #000;
+  background: #fff;
+}
+.monitoring-module .publishing-flow-step .publishing-media-workbench,
+.monitoring-module .publishing-flow-step .publishing-panel {
+  padding-inline: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-kind-tabs,
+    .publishing-media-search-row,
+    .publishing-filter-groups
+  ) {
+  padding-inline: 0;
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-media-head,
+    .publishing-media-row,
+    .publishing-filter-line > strong,
+    .publishing-sort-field,
+    .publishing-kind-tabs button,
+    .publishing-filter-pills button,
+    .publishing-inline-step h2,
+    .publishing-flow-result strong
+  ) {
+  color: #000;
+}
+.monitoring-module .publishing-flow-step .publishing-media-head {
+  background: #fff;
+  font-size: 14px;
+}
+.monitoring-module
+  .publishing-flow-step
+  .publishing-filter-pills
+  button.is-active,
+.monitoring-module .publishing-flow-step .publishing-filter-pills button:hover {
+  border-color: color-mix(in srgb, var(--publishing-purple) 25%, white);
+  background: var(--publishing-purple-soft);
+  color: var(--publishing-purple);
+}
+.monitoring-module
+  .publishing-flow-step
+  .publishing-kind-tabs
+  button.is-active {
+  color: var(--publishing-purple);
+}
+.monitoring-module
+  .publishing-flow-step
+  label.publishing-media-row.is-selected {
+  background: var(--publishing-purple-soft);
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-flow-intro > p,
+    .publishing-inline-step > p,
+    .publishing-flow-result p,
+    .publishing-confirmed-media-list small
+  ) {
+  color: #595959;
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-media-search-row input,
+    .publishing-media-search-row select,
+    .publishing-sort-field select,
+    .publishing-filter-line select,
+    .publishing-advanced-grid select
+  ) {
+  min-height: 44px;
+  border-color: #d0d5dd;
+  border-radius: 8px;
+  color: #000;
+  font-size: 14px;
+}
+.monitoring-module
+  .publishing-flow-step
+  .publishing-media-search-row
+  .publishing-search-field
+  svg {
+  top: 13px;
+}
+
+.user-brand-dashboard.operator-mode
+  .publishing-flow-step
+  :is(.publishing-button-primary, .publishing-button-accent) {
+  border-color: var(--publishing-purple);
+  background: var(--publishing-purple);
+  color: #fff;
+}
+.user-brand-dashboard.operator-mode
+  .publishing-flow-step
+  :is(.publishing-button-primary, .publishing-button-accent):hover:not(
+    :disabled
+  ) {
+  border-color: var(--publishing-purple);
+  background: var(--publishing-purple);
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-overview-columns,
+    .publishing-import-layout,
+    .publishing-editor-layout,
+    .publishing-titles-layout,
+    .publishing-review-layout,
+    .publishing-shared-title
+  ) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+  width: 100%;
+  max-width: none;
+}
+.monitoring-module
+  .publishing-flow-step
+  :is(
+    .publishing-overview-columns,
+    .publishing-import-layout,
+    .publishing-editor-layout,
+    .publishing-titles-layout,
+    .publishing-review-layout
+  )
+  > * {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
 }

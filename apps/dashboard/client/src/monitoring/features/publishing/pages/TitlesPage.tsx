@@ -31,7 +31,13 @@ import {
   useWorkspaceDraftGuard,
 } from "@/lib/workspace-navigation-guard";
 
-export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
+export default function PublishingTitlesPage({
+  draftId,
+  onSaved,
+}: {
+  draftId: string;
+  onSaved?: () => void;
+}) {
   const gateway = usePublisherGateway();
   const flow = usePublishingFlow();
   const operationScope = usePublishingOperationScope(draftId);
@@ -159,7 +165,7 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
     setBusy(true);
     setError("");
     try {
-      await gateway.saveDraftTitles(draftId, {
+      const saved = await gateway.saveDraftTitles(draftId, {
         mode,
         ...(mode === "single" ? { sharedTitle: sharedTitle.trim() } : {}),
         titles,
@@ -169,20 +175,33 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
       setSavedSignature(signature);
       await flow
         ?.record({
-          id: `titles:${draftId}:${query.data.revision + 1}`,
+          id: `titles:${draftId}:${saved.revision}`,
           label: "发布标题已保存",
           detail: `${query.data.items.length} 家媒体 · ${mode === "single" ? "统一标题" : "逐家标题"}`,
           resources: [{ kind: "publication_draft", id: draftId }],
+          outputRefs: [
+            {
+              resource: {
+                kind: "publication_draft",
+                id: draftId,
+                label: query.data.articleTitle,
+              },
+              version: String(saved.revision),
+              sourceStepId: `titles:${draftId}:${saved.revision}`,
+            },
+          ],
         })
         .catch(() => undefined);
       if (isCurrent())
         performApprovedWorkspaceNavigation(() =>
-          navigate(
-            publishingTaskUrl(
-              `/publishing/drafts/${draftId}/review`,
-              flow?.taskId,
-            ),
-          ),
+          onSaved
+            ? onSaved()
+            : navigate(
+                publishingTaskUrl(
+                  `/publishing/drafts/${draftId}/review`,
+                  flow?.taskId,
+                ),
+              ),
         );
     } catch (reason) {
       if (!isCurrent()) return;
@@ -204,7 +223,7 @@ export default function PublishingTitlesPage({ draftId }: { draftId: string }) {
       description="使用同一标题快速发布，或为每家媒体设置独立标题。"
       busy={query.loading || busy}
     >
-      <PublishingSteps current={3} />
+      {!flow && <PublishingSteps current={3} />}
       {query.loading ? <PublishingLoading label="正在读取发布草稿…" /> : null}
       {query.error ? (
         <PublishingError error={query.error} onRetry={query.reload} />

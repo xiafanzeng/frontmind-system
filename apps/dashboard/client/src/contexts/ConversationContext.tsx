@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { mergeWorkbenchTaskProjection } from "@shared/workbench-task";
 import {
   ConversationSyncQueue,
   getErrorMessage,
@@ -1834,7 +1835,7 @@ export function mergeDirtyConversationHydration(
       remote.workbench?.agentId ??
       remote.workbenchAgentId ??
       local.workbenchAgentId,
-    workbench: remote.workbench ?? local.workbench,
+    workbench: mergeWorkbenchTaskProjection(local.workbench, remote.workbench),
     taskId: local.taskId ?? remote.taskId,
     previousResponseId: local.previousResponseId ?? remote.previousResponseId,
     startedAt: local.startedAt ?? remote.startedAt,

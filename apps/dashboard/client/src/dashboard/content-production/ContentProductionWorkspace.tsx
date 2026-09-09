@@ -1,3 +1,8 @@
+import {
+  WorkflowQuestion,
+  WorkflowCompleted,
+} from "@/dashboard/workflow/Workflow";
+import { BusinessWorkspaceInspector } from "@/dashboard/BusinessWorkspaceContext";
 import { WorkbenchTaskToolbar } from "../WorkbenchTaskToolbar";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -224,6 +229,7 @@ function ContentProductionInner({
   } = useConversation();
   const { sendMessage } = useSendMessage();
   const [showCreate, setShowCreate] = useState(false);
+  const [taskPanel, setTaskPanel] = useState<"outputs" | "tasks">("outputs");
   const [mode, setMode] = useState<ContentProductionMode | null>(null);
   const [enterpriseName, setEnterpriseName] = useState("");
   const [knowledgeSource, setKnowledgeSource] = useState<"published" | "files">(
@@ -659,239 +665,194 @@ function ContentProductionInner({
   }
   const createForm = (
     <>
-      <header>
-        <div>
-          {workbench ? (
-            <h3>确定本次内容任务</h3>
-          ) : (
-            <DialogTitle>新建内容任务</DialogTitle>
-          )}
-          {workbench ? (
-            <p>确定本次交付目标，再选择资料来源。</p>
-          ) : (
-            <DialogDescription>
-              确定本次交付目标，再选择资料来源。
-            </DialogDescription>
-          )}
-        </div>
-        <button
-          type="button"
-          className="cp-icon-button"
-          aria-label="关闭新建任务"
-          onClick={closeCreate}
-        >
-          <X size={20} />
-        </button>
-      </header>
-      <form onSubmit={startTask}>
-        <fieldset className="cp-mode-list">
-          <legend>本次要完成什么？</legend>
-          {CONTENT_MODES.map((item) => (
-            <label
-              key={item.value}
-              className={mode === item.value ? "is-selected" : ""}
-            >
-              <input
-                type="radio"
-                name="content-mode"
-                value={item.value}
-                checked={mode === item.value}
-                onChange={() => setMode(item.value)}
-              />
-              <span>
-                <strong>{item.title}</strong>
-                <small>{item.description}</small>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        {handoffName && (
-          <p className="cp-form-context">
-            已带入资料包：{contentProductionArtifactName(handoffName)}
-            。这是独立的新任务，开始后仍需确认使用已有资料包。
-          </p>
-        )}
-        <label className="cp-field">
-          企业名称
-          <input
-            required
-            maxLength={200}
-            value={enterpriseName}
-            onChange={(event) => setEnterpriseName(event.target.value)}
-            placeholder="输入本次任务的企业或品牌名称"
-          />
-        </label>
-        <label className="cp-field">
-          企业资料来源
-          <select
-            aria-label="企业资料来源"
-            value={knowledgeSource}
-            onChange={(event) =>
-              setKnowledgeSource(event.target.value as "published" | "files")
-            }
+      {!workbench && (
+        <header>
+          <div>
+            {workbench ? (
+              <h3>确定本次内容任务</h3>
+            ) : (
+              <DialogTitle>新建内容任务</DialogTitle>
+            )}
+            {workbench ? (
+              <p>确定本次交付目标，再选择资料来源。</p>
+            ) : (
+              <DialogDescription>
+                确定本次交付目标，再选择资料来源。
+              </DialogDescription>
+            )}
+          </div>
+          <button
+            type="button"
+            className="cp-icon-button"
+            aria-label="关闭新建任务"
+            onClick={closeCreate}
           >
-            <option value="published">使用我的已发布企业知识库</option>
-            <option value="files">上传材料（也可在后续步骤补充）</option>
-          </select>
-          <small>
-            企业知识库提供企业事实材料。品牌资料包进一步汇总市场研究、已确认定位和写作资料。文章任务开始后，需要确认使用已有资料包，或先创建资料包。
-          </small>
-        </label>
-        <label className="cp-field">
-          {handoffFile
-            ? "补充企业材料（可选，已保留带入的资料包）"
-            : mode === "refresh_reference_pack"
-              ? "上传已有品牌资料包与补充资料"
-              : "上传材料或品牌资料包（可选）"}
-          <input
-            type="file"
-            multiple
-            accept=".zip,.pdf,.docx,.doc,.txt,.md,.json,.csv,.xlsx,.png,.jpg,.jpeg,.webp"
-            onChange={(event) => {
-              const selected = Array.from(event.target.files ?? []);
-              if (handoffFile) {
-                setMaterials([
-                  handoffFile,
-                  ...selected.filter((file) => file.name !== handoffFile.name),
-                ]);
-                if (selected.some((file) => file.name === handoffFile.name))
-                  setNotice("已保留带入的资料包，同名附件未重复添加。");
-              } else setMaterials(selected);
-            }}
-          />
-          <small>
-            {materials.length
-              ? `已选择：${fileList(materials)}`
-              : "沿用原始文件内容，可在后续对话中补充资料。"}
-          </small>
-        </label>
-        {mode === "single_article" && (
+            <X size={20} />
+          </button>
+        </header>
+      )}
+      <form onSubmit={startTask}>
+        {workbench ? (
+          mode ? (
+            <WorkflowCompleted
+              id="content-selected-mode"
+              summary={`当前工作：${CONTENT_MODES.find((item) => item.value === mode)?.title ?? mode}`}
+              onRevise={() => setMode(null)}
+            />
+          ) : (
+            <WorkflowQuestion
+              question="本次要完成什么？"
+              selected={mode ?? undefined}
+              choices={CONTENT_MODES.map((item) => ({
+                id: item.value,
+                label: item.title,
+                description: item.description,
+              }))}
+              onSelect={(value) => setMode(value as ContentProductionMode)}
+            />
+          )
+        ) : (
+          <fieldset className="cp-mode-list">
+            <legend>本次要完成什么？</legend>
+            {CONTENT_MODES.map((item) => (
+              <label
+                key={item.value}
+                className={mode === item.value ? "is-selected" : ""}
+              >
+                <input
+                  type="radio"
+                  name="content-mode"
+                  value={item.value}
+                  checked={mode === item.value}
+                  onChange={() => setMode(item.value)}
+                />
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.description}</small>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        )}
+        {(mode || !workbench) && (
           <>
-            <p className="cp-form-context">
-              问题文章需要含已完成品牌文章的品牌资料包，以及来自两个不同 AI
-              平台的两篇完整答案。可在任务要求资料时补充。
-            </p>
+            {handoffName && (
+              <p className="cp-form-context">
+                已带入资料包：{contentProductionArtifactName(handoffName)}
+                。这是独立的新任务，开始后仍需确认使用已有资料包。
+              </p>
+            )}
             <label className="cp-field">
-              正式问题
-              <textarea
-                required={!questionId.trim()}
-                rows={2}
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                maxLength={20000}
-                placeholder="本篇文章只解决的一个问题"
-              />
-            </label>
-            <label className="cp-field">
-              问题编号（可选）
+              企业名称
               <input
+                required
                 maxLength={200}
-                value={questionId}
-                onChange={(event) => setQuestionId(event.target.value)}
-                placeholder="已有资料包中的问题编号；没有可留空"
+                value={enterpriseName}
+                onChange={(event) => setEnterpriseName(event.target.value)}
+                placeholder="输入本次任务的企业或品牌名称"
               />
             </label>
+            <label className="cp-field">
+              企业资料来源
+              <select
+                aria-label="企业资料来源"
+                value={knowledgeSource}
+                onChange={(event) =>
+                  setKnowledgeSource(
+                    event.target.value as "published" | "files",
+                  )
+                }
+              >
+                <option value="published">使用我的已发布企业知识库</option>
+                <option value="files">上传材料（也可在后续步骤补充）</option>
+              </select>
+              <small>
+                企业知识库提供企业事实材料。品牌资料包进一步汇总市场研究、已确认定位和写作资料。文章任务开始后，需要确认使用已有资料包，或先创建资料包。
+              </small>
+            </label>
+            <label className="cp-field">
+              {handoffFile
+                ? "补充企业材料（可选，已保留带入的资料包）"
+                : mode === "refresh_reference_pack"
+                  ? "上传已有品牌资料包与补充资料"
+                  : "上传材料或品牌资料包（可选）"}
+              <input
+                type="file"
+                multiple
+                accept=".zip,.pdf,.docx,.doc,.txt,.md,.json,.csv,.xlsx,.png,.jpg,.jpeg,.webp"
+                onChange={(event) => {
+                  const selected = Array.from(event.target.files ?? []);
+                  if (handoffFile) {
+                    setMaterials([
+                      handoffFile,
+                      ...selected.filter(
+                        (file) => file.name !== handoffFile.name,
+                      ),
+                    ]);
+                    if (selected.some((file) => file.name === handoffFile.name))
+                      setNotice("已保留带入的资料包，同名附件未重复添加。");
+                  } else setMaterials(selected);
+                }}
+              />
+              <small>
+                {materials.length
+                  ? `已选择：${fileList(materials)}`
+                  : "沿用原始文件内容，可在后续对话中补充资料。"}
+              </small>
+            </label>
+            {mode === "single_article" && (
+              <>
+                <p className="cp-form-context">
+                  问题文章需要含已完成品牌文章的品牌资料包，以及来自两个不同 AI
+                  平台的两篇完整答案。可在任务要求资料时补充。
+                </p>
+                <label className="cp-field">
+                  正式问题
+                  <textarea
+                    required={!questionId.trim()}
+                    rows={2}
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    maxLength={20000}
+                    placeholder="本篇文章只解决的一个问题"
+                  />
+                </label>
+                <label className="cp-field">
+                  问题编号（可选）
+                  <input
+                    maxLength={200}
+                    value={questionId}
+                    onChange={(event) => setQuestionId(event.target.value)}
+                    placeholder="已有资料包中的问题编号；没有可留空"
+                  />
+                </label>
+              </>
+            )}
+            {notice && (
+              <p className="cp-notice" role="alert">
+                {notice}
+              </p>
+            )}
+            <footer>
+              <button
+                type="button"
+                className="cp-secondary"
+                onClick={closeCreate}
+              >
+                取消
+              </button>
+              <button
+                className="cp-primary"
+                type="submit"
+                disabled={!mode || Boolean(pendingStart) || handoffPending}
+              >
+                创建并开始
+              </button>
+            </footer>
           </>
         )}
-        {notice && (
-          <p className="cp-notice" role="alert">
-            {notice}
-          </p>
-        )}
-        <footer>
-          <button type="button" className="cp-secondary" onClick={closeCreate}>
-            取消
-          </button>
-          <button
-            className="cp-primary"
-            type="submit"
-            disabled={!mode || Boolean(pendingStart) || handoffPending}
-          >
-            创建并开始
-          </button>
-        </footer>
       </form>
     </>
-  );
-  const conversationView = (
-    <div className="cp-dialogue">
-      <div className="cp-dialogue-heading">
-        <div>
-          {!workbench && <Sparkles size={18} />}
-          <strong>内容协作</strong>
-        </div>
-        <span>FrontMind 内容智能体</span>
-      </div>
-      {activeConversation ? (
-        <>
-          {failedStart?.id === activeConversation.id && (
-            <details className="cp-start-recovery">
-              <summary>查看已保留的开场信息</summary>
-              <p>{failedStart.prompt}</p>
-              {failedStart.files.length > 0 && (
-                <small>文件：{fileList(failedStart.files)}</small>
-              )}
-              <div className="cp-confirm-actions">
-                <button
-                  className="cp-secondary"
-                  onClick={retryStart}
-                  disabled={busy}
-                >
-                  重试本次开场请求
-                </button>
-              </div>
-            </details>
-          )}
-          <div className="cp-chat">
-            <Home
-              key={activeConversation.id}
-              embedded
-              operatorWorkspace
-              knowledgeEditingBlocked={
-                Boolean(pendingStart) || confirmationPending || handoffPending
-              }
-              hideSidebar
-              hidePortalNavigation
-              showKnowledgeBaseStarter={false}
-              showAccountMenu={false}
-              showSettings={false}
-              purpose="content_production"
-              contentProduction={input}
-              standardWelcomeVariant="simple"
-            />
-          </div>
-        </>
-      ) : (
-        <div className="cp-empty">
-          <FileText size={36} />
-          <h2>本次要完成什么？</h2>
-          <p className="cp-entry-description">
-            <span className="cp-entry-description-full">
-              新建或更新品牌资料包，制作品牌文章，或围绕具体问题开展研究与写作。
-            </span>
-            <span className="cp-entry-description-short">
-              整理资料，制作文章。
-            </span>
-          </p>
-          <div className="cp-entry-grid">
-            {CONTENT_MODES.map((item) => (
-              <button
-                key={item.value}
-                disabled={!hydrated}
-                onClick={() => {
-                  resetCreate();
-                  setMode(item.value);
-                  setShowCreate(true);
-                }}
-              >
-                <strong>{item.title}</strong>
-                <span>{item.description}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
   );
   const resultView = (
     <div className={`cp-result-surface ${workbench ? "is-agent" : ""}`}>
@@ -1045,32 +1006,34 @@ function ContentProductionInner({
                 )}
               </section>
             )}
-            <section className="cp-deliverables">
-              <header>
-                <strong>交付文件</strong>
-                <span>{deliverables.length} 份</span>
-              </header>
-              {deliverables.length ? (
-                deliverables.map((file) => (
-                  <FilePreview
-                    key={file.fileUrl}
-                    file={{
-                      id: file.fileUrl,
-                      type: "file",
-                      name: contentProductionArtifactName(file.fileName),
-                      blobUrl: contentProductionArtifactUrl(
-                        contentArtifactUrl(file.fileUrl)!,
-                      ),
-                    }}
-                    className="cp-deliverable-file"
-                  />
-                ))
-              ) : (
-                <p>
-                  任务生成的可用附件会显示在当前步骤，完整说明与表格保存在对话中。
-                </p>
-              )}
-            </section>
+            {!workbench && (
+              <section className="cp-deliverables">
+                <header>
+                  <strong>交付文件</strong>
+                  <span>{deliverables.length} 份</span>
+                </header>
+                {deliverables.length ? (
+                  deliverables.map((file) => (
+                    <FilePreview
+                      key={file.fileUrl}
+                      file={{
+                        id: file.fileUrl,
+                        type: "file",
+                        name: contentProductionArtifactName(file.fileName),
+                        blobUrl: contentProductionArtifactUrl(
+                          contentArtifactUrl(file.fileUrl)!,
+                        ),
+                      }}
+                      className="cp-deliverable-file"
+                    />
+                  ))
+                ) : (
+                  <p>
+                    任务生成的可用附件会显示在当前步骤，完整说明与表格保存在对话中。
+                  </p>
+                )}
+              </section>
+            )}
           </div>
         </aside>
       )}
@@ -1078,6 +1041,103 @@ function ContentProductionInner({
         <p className="cp-progress-empty">
           开始内容任务后，制作阶段、确认操作与交付文件会显示在这里。
         </p>
+      )}
+    </div>
+  );
+  const conversationView = (
+    <div className="cp-dialogue">
+      <div className="cp-dialogue-heading">
+        <div>
+          {!workbench && <Sparkles size={18} />}
+          <strong>内容协作</strong>
+        </div>
+        <span>FrontMind 内容智能体</span>
+      </div>
+      {activeConversation ? (
+        <>
+          {failedStart?.id === activeConversation.id && (
+            <details className="cp-start-recovery">
+              <summary>查看已保留的开场信息</summary>
+              <p>{failedStart.prompt}</p>
+              {failedStart.files.length > 0 && (
+                <small>文件：{fileList(failedStart.files)}</small>
+              )}
+              <div className="cp-confirm-actions">
+                <button
+                  className="cp-secondary"
+                  onClick={retryStart}
+                  disabled={busy}
+                >
+                  重试本次开场请求
+                </button>
+              </div>
+            </details>
+          )}
+          <div className="cp-chat">
+            <Home
+              key={activeConversation.id}
+              embedded
+              operatorWorkspace
+              knowledgeEditingBlocked={
+                Boolean(pendingStart) || confirmationPending || handoffPending
+              }
+              hideSidebar
+              hidePortalNavigation
+              showKnowledgeBaseStarter={false}
+              showAccountMenu={false}
+              showSettings={false}
+              purpose="content_production"
+              contentProduction={input}
+              standardWelcomeVariant="simple"
+              conversationFooter={workbench ? resultView : undefined}
+            />
+          </div>
+        </>
+      ) : workbench ? (
+        <WorkflowQuestion
+          question="本次要完成什么？"
+          description="选择交付目标，再补充企业材料。"
+          choices={CONTENT_MODES.map((item) => ({
+            id: item.value,
+            label: item.title,
+            description: item.description,
+            disabled: !hydrated,
+          }))}
+          onSelect={(value) => {
+            resetCreate();
+            setMode(value as ContentProductionMode);
+            setShowCreate(true);
+          }}
+        />
+      ) : (
+        <div className="cp-empty">
+          <FileText size={36} />
+          <h2>本次要完成什么？</h2>
+          <p className="cp-entry-description">
+            <span className="cp-entry-description-full">
+              新建或更新品牌资料包，制作品牌文章，或围绕具体问题开展研究与写作。
+            </span>
+            <span className="cp-entry-description-short">
+              整理资料，制作文章。
+            </span>
+          </p>
+          <div className="cp-entry-grid">
+            {CONTENT_MODES.map((item) => (
+              <button
+                key={item.value}
+                disabled={!hydrated}
+                onClick={() => {
+                  resetCreate();
+                  setMode(item.value);
+                  setShowCreate(true);
+                }}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1172,25 +1232,11 @@ function ContentProductionInner({
               : "新任务"
           }
           taskKey={activeConversation?.id ?? "empty"}
-          toolbar={
-            <WorkbenchTaskToolbar
-              tasks={state.conversations.map((item) => ({
-                ...item,
-                title: contentProductionTaskTitle(item.title),
-              }))}
-              currentId={activeConversation?.id}
-              onNew={openCreate}
-              onSelect={(id) => {
-                setFailedStart(null);
-                setActive(id);
-                setShowCreate(false);
-              }}
-              onDelete={deleteConversation}
-              disabled={!hydrated || Boolean(pendingStart) || handoffPending}
-            />
-          }
+          scrollMain={showCreate || !activeConversation}
           main={
-            <div className="cp-main-flow">
+            <div
+              className={`cp-main-flow ${!showCreate && activeConversation ? "has-conversation" : ""}`}
+            >
               {showCreate ? (
                 <section
                   className="cp-modal cp-inline-create"
@@ -1199,61 +1245,106 @@ function ContentProductionInner({
                   {createForm}
                 </section>
               ) : (
-                <>
-                  {conversationView}
-                  {activeConversation && resultView}
-                </>
+                <>{conversationView}</>
               )}
             </div>
           }
           auxiliary={
-            <section className="cp-task-summary" aria-label="内容制作任务摘要">
-              <dl>
-                <div>
-                  <dt>制作阶段</dt>
-                  <dd>
-                    {activeConversation ? statusLabel : "等待选择任务类型"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>任务类型</dt>
-                  <dd>{modeLabel}</dd>
-                </div>
-                <div>
-                  <dt>知识来源</dt>
-                  <dd>
-                    {progress?.knowledgeBase
-                      ? `知识库 v${progress.knowledgeBase.version}`
-                      : input?.knowledgeSource === "files"
-                        ? "上传材料"
-                        : "开始任务时确定"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>交付文件</dt>
-                  <dd>{deliverables.length} 份</dd>
-                </div>
-              </dl>
-              {activeConversation && (
-                <ol>
-                  {steps.map((step, index) => (
-                    <li
-                      key={step.title}
-                      aria-current={
-                        !finished && index === currentStep ? "step" : undefined
-                      }
-                    >
-                      {finished || index < currentStep ? (
-                        <Check size={13} />
-                      ) : (
-                        <span>{index + 1}</span>
-                      )}
-                      {step.title}
-                    </li>
-                  ))}
-                </ol>
+            <div className="workbench-task-panel">
+              <div
+                className="workbench-panel-tabs"
+                role="tablist"
+                aria-label="任务与成果"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={taskPanel === "tasks"}
+                  onClick={() => setTaskPanel("tasks")}
+                >
+                  任务
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={taskPanel === "outputs"}
+                  onClick={() => setTaskPanel("outputs")}
+                >
+                  成果
+                </button>
+              </div>
+              {taskPanel === "tasks" ? (
+                <WorkbenchTaskToolbar
+                  presentation="panel"
+                  tasks={state.conversations.map((item) => ({
+                    ...item,
+                    title: contentProductionTaskTitle(item.title),
+                  }))}
+                  currentId={activeConversation?.id}
+                  onNew={openCreate}
+                  onSelect={(id) => {
+                    setFailedStart(null);
+                    setActive(id);
+                    setShowCreate(false);
+                  }}
+                  onDelete={deleteConversation}
+                  disabled={
+                    !hydrated || Boolean(pendingStart) || handoffPending
+                  }
+                />
+              ) : (
+                <BusinessWorkspaceInspector
+                  summary={{
+                    status: statusLabel,
+                    items: modeKnown
+                      ? [
+                          { label: "任务类型", value: modeLabel ?? "尚未选择" },
+                          {
+                            label: "知识来源",
+                            value: progress?.knowledgeBase
+                              ? `知识库 v${progress.knowledgeBase.version}`
+                              : input?.knowledgeSource === "files"
+                                ? "上传材料"
+                                : "开始任务时确定",
+                          },
+                        ]
+                      : [],
+                    outputs: deliverables.map((file) => ({
+                      id: file.fileUrl,
+                      title: contentProductionArtifactName(file.fileName),
+                      type: "交付文件",
+                      status: "已交付",
+                      onOpen: () => {
+                        for (const message of activeConversation?.messages ??
+                          []) {
+                          const index =
+                            message.outputFiles?.findIndex(
+                              (item) => item.fileUrl === file.fileUrl,
+                            ) ?? -1;
+                          if (index >= 0) {
+                            const node = Array.from(
+                              document.querySelectorAll<HTMLElement>(
+                                "[data-workbench-output-key]",
+                              ),
+                            ).find(
+                              (item) =>
+                                item.dataset.workbenchOutputKey ===
+                                `${message.id}:${index}`,
+                            );
+                            node?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            });
+                            node?.click();
+                            break;
+                          }
+                        }
+                      },
+                    })),
+                  }}
+                />
               )}
-            </section>
+            </div>
           }
           resultTitle="任务摘要"
           resultKey={activeConversation?.id ?? "empty"}

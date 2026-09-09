@@ -33,6 +33,7 @@ import ResponseLogicWorkspace, {
   ResponseLogicTaskStatusError,
   reconcileResponseLogicDrafts,
   responseLogicPersistenceAvailability,
+  responseLogicInlineDraftAnchor,
   responseLogicContinuationRevision,
   scopedResponseLogicTaskStartFailure,
   responseLogicTaskStatusIsRetryable,
@@ -107,6 +108,96 @@ afterEach(() => {
 });
 
 describe("ResponseLogicWorkspace", () => {
+  it("anchors the saved editor only to its own question and conversation result", () => {
+    const conversation = {
+      id: "conversation-a",
+      messages: [
+        { id: "result-a", role: "assistant", content: "saved" },
+        { id: "later", role: "assistant", content: "newer unrelated message" },
+      ],
+    } as any;
+    const savedAnchor = {
+      questionId: "question-a",
+      conversationId: "conversation-a",
+      messageId: "result-a",
+    };
+    expect(
+      responseLogicInlineDraftAnchor({
+        conversation,
+        questionId: "question-a",
+        savedAnchor,
+      }),
+    ).toEqual({ kind: "message", messageId: "result-a" });
+    expect(
+      responseLogicInlineDraftAnchor({
+        conversation,
+        questionId: "question-b",
+        savedAnchor,
+      }),
+    ).toEqual({ kind: "initial" });
+    expect(
+      responseLogicInlineDraftAnchor({
+        conversation: { ...conversation, id: "conversation-b" },
+        questionId: "question-a",
+        savedAnchor,
+      }),
+    ).toEqual({ kind: "initial" });
+    expect(
+      responseLogicInlineDraftAnchor({
+        conversation,
+        questionId: "question-a",
+      }),
+    ).toEqual({ kind: "initial" });
+  });
+  it("opens a question choice in the main flow without creating a default dialogue", async () => {
+    render(
+      <ResponseLogicWorkspace
+        preview
+        workbench
+        questionGroups={intentQuestionGroups}
+      />,
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "想为哪个优化问题整理应答？",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "应答参考草稿" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "任务" }));
+    expect(screen.getByRole("button", { name: "新任务" })).toBeInTheDocument();
+    expect(
+      document.querySelector(".agent-workbench-shell__taskbar"),
+    ).not.toHaveTextContent("新任务历史");
+  });
+
+  it("honors an explicit question deep link over an older parent selection", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/?view=response-logic&questionId=scenario-kb",
+    );
+    try {
+      render(
+        <ResponseLogicWorkspace
+          preview
+          workbench
+          questionGroups={intentQuestionGroups}
+          initialQuestionId="reputation-company"
+        />,
+      );
+      await waitFor(() =>
+        expect(
+          document.querySelector(".agent-workbench-task-name"),
+        ).toHaveTextContent("企业如何系统搭建可被 AI 理解的知识库？"),
+      );
+      expect(
+        document.querySelector(".agent-workbench-task-name"),
+      ).not.toHaveTextContent("示例企业是一家什么样的公司？");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("has no built-in tenant questions when no server or preview data is injected", () => {
     render(<ResponseLogicWorkspace preview />);
 

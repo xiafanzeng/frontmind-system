@@ -20,6 +20,7 @@ export type RunConfirmationDialogProps = {
   estimatedCostTenThousandths?: string;
   quoteLoading?: boolean;
   quoteError?: string;
+  onRetryQuote?: () => void;
   scheduleSummary: string;
   screenshotPolicy?: ScreenshotPolicySummary;
   loading?: boolean;
@@ -55,6 +56,7 @@ export default function RunConfirmationDialog({
   estimatedCostTenThousandths,
   quoteLoading = false,
   quoteError,
+  onRetryQuote,
   scheduleSummary,
   screenshotPolicy,
   loading = false,
@@ -170,6 +172,16 @@ export default function RunConfirmationDialog({
       </div>
 
       <footer className="run-confirmation-footer">
+        {quoteError && onRetryQuote && (
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={onRetryQuote}
+            disabled={quoteLoading || loading}
+          >
+            重新估算费用
+          </button>
+        )}
         <button
           type="button"
           className="ghost-button"

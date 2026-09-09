@@ -1,4 +1,9 @@
 import {
+  useBusinessWorkspace,
+  type BusinessWorkspaceOutput,
+} from "../BusinessWorkspaceContext";
+import { useBusinessFlowState, readFlowBoolean } from "../useBusinessFlowState";
+import {
   useEffect,
   useId,
   useRef,
@@ -22,12 +27,7 @@ import {
   Send,
 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  HlButton,
-  HlField,
-  HlSelect,
-  type SettingsTab,
-} from "./shared";
+import { HlButton, HlField, HlSelect, type SettingsTab } from "./shared";
 import "./widget-settings.css";
 
 type LocalImage = { name: string; dataUrl: string };
@@ -78,6 +78,58 @@ const INITIAL_DRAFT: SettingsDraft = {
   forcedLead: false,
   leadDescription: "",
 };
+
+function serializeWidgetDraft(draft: SettingsDraft) {
+  const compact = { ...draft };
+  for (const field of ["icon", "avatar", "welcomeImage"] as const) {
+    const image = draft[field];
+    if (!image?.dataUrl.startsWith("data:")) continue;
+    let hash = 2166136261;
+    for (let index = 0; index < image.dataUrl.length; index++)
+      hash = Math.imul(hash ^ image.dataUrl.charCodeAt(index), 16777619);
+    const key = `frontmind:widget-image:${(hash >>> 0).toString(16)}:${image.dataUrl.length}`;
+    try {
+      localStorage.setItem(key, image.dataUrl);
+      compact[field] = { name: image.name, dataUrl: `local-image:${key}` };
+    } catch {
+      compact[field] = null;
+    }
+  }
+  return compact;
+}
+function parseWidgetDraft(value: unknown): SettingsDraft | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const candidate = value as Record<string, unknown>;
+  const draft = { ...INITIAL_DRAFT };
+  for (const key of Object.keys(INITIAL_DRAFT) as (keyof SettingsDraft)[]) {
+    if (["icon", "avatar", "welcomeImage"].includes(key)) continue;
+    if (typeof candidate[key] === typeof INITIAL_DRAFT[key])
+      (draft as unknown as Record<string, unknown>)[key] = candidate[key];
+  }
+  if (!["bottom-left", "bottom-right"].includes(draft.position))
+    draft.position = "bottom-right";
+  for (const field of ["icon", "avatar", "welcomeImage"] as const) {
+    const image = candidate[field] as LocalImage | null;
+    if (
+      !image ||
+      typeof image.name !== "string" ||
+      typeof image.dataUrl !== "string"
+    )
+      continue;
+    let dataUrl = image.dataUrl;
+    if (dataUrl.startsWith("local-image:")) {
+      try {
+        dataUrl = localStorage.getItem(dataUrl.slice(12)) ?? "";
+      } catch {
+        dataUrl = "";
+      }
+    }
+    if (/^data:image\/(png|jpeg|webp);base64,/u.test(dataUrl))
+      draft[field] = { name: image.name, dataUrl };
+  }
+  return draft;
+}
 
 const SETTINGS_TABS: Array<{ value: SettingsTab; label: string }> = [
   { value: "basic", label: "基础配置" },
@@ -703,21 +755,69 @@ export default function WidgetSettingsWorkspace({
   tab,
   onTabChange,
   active = true,
+  onOutputChange,
 }: {
+  onOutputChange?: (output: BusinessWorkspaceOutput | null) => void;
   tab: SettingsTab;
   onTabChange: (tab: SettingsTab) => void;
   active?: boolean;
 }) {
-  const [draft, setDraft] = useState<SettingsDraft>(() => ({
-    ...INITIAL_DRAFT,
-  }));
-  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const { isWorkbench, task, taskId } = useBusinessWorkspace();
+  const scope = `${task?.scopeKey ?? "standalone"}:${taskId ?? "new"}`;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [draft, setDraft] = useBusinessFlowState<SettingsDraft>(
+    "widgetDraft",
+    { ...INITIAL_DRAFT },
+    parseWidgetDraft,
+    serializeWidgetDraft,
+  );
+  const [savedSnapshot, , acceptSavedSnapshot] = useBusinessFlowState<
+    string | null
+  >(
+    "widgetSavedSnapshot",
+    null,
+    (value) => {
+      if (value === null) return null;
+      if (typeof value !== "string") return undefined;
+      try {
+        const restored = parseWidgetDraft(JSON.parse(value));
+        return restored ? JSON.stringify(restored) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    (value) =>
+      value ? JSON.stringify(serializeWidgetDraft(JSON.parse(value))) : null,
+  );
+  const draftSignature = JSON.stringify(draft);
+  useEffect(() => {
+    if (!onOutputChange) return;
+    if (!savedSnapshot) {
+      onOutputChange(null);
+      return;
+    }
+    const confirmed = JSON.parse(savedSnapshot) as SettingsDraft;
+    onOutputChange({
+      id: "widget-preview-config",
+      title: confirmed.name || "AI 部件预览",
+      type: "部件配置",
+      status: "仅预览，未正式发布",
+      pendingChanges: savedSnapshot !== draftSignature,
+    });
+  }, [draftSignature, savedSnapshot, onOutputChange]);
   const [errors, setErrors] = useState<{
     name?: string;
     customPrompt?: string;
     leads?: string;
   }>({});
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [previewOpen, setPreviewOpen] = useBusinessFlowState(
+    "widgetPreviewOpen",
+    true,
+    readFlowBoolean,
+  );
   const settingsFormRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!active || !Object.values(errors).some(Boolean)) return;
@@ -740,7 +840,8 @@ export default function WidgetSettingsWorkspace({
     if (key === "sidebar") setPreviewOpen(!value);
   };
 
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     const nextErrors: typeof errors = {};
     if (!draft.name.trim()) nextErrors.name = "请输入机器人名称";
     if (draft.customPromptEnabled && !draft.customPrompt.trim())
@@ -761,20 +862,48 @@ export default function WidgetSettingsWorkspace({
       toast.error("请完善留资配置后保存");
       return;
     }
-    setSavedSnapshot(JSON.stringify(draft));
-    toast.success("小部件设置已保留在本次预览");
+    const owner = scope;
+    const snapshot = JSON.stringify(draft);
+    setSaving(true);
+    setSaveError("");
+    try {
+      if (isWorkbench) {
+        if (!task) throw new Error("任务尚未就绪");
+        await task.saveState({
+          values: {
+            widgetDraft: serializeWidgetDraft(draft),
+            widgetSavedSnapshot: JSON.stringify(serializeWidgetDraft(draft)),
+          },
+        });
+      }
+      if (currentScope.current !== owner) return;
+      acceptSavedSnapshot(snapshot);
+      toast.success("小部件设置已保留在本次预览");
+    } catch {
+      if (currentScope.current === owner)
+        setSaveError("部件预览尚未保存，请重试；当前配置已保留。");
+    } finally {
+      if (currentScope.current === owner) setSaving(false);
+    }
   };
 
   return (
-    <section className="hl-widget-settings" aria-label="AI 小部件设置">
+    <section
+      className={`hl-widget-settings ${isWorkbench ? "hl-widget-conversation" : ""}`}
+      aria-label="AI 小部件设置"
+    >
       <div className="hl-widget-settings-panel">
         <div className="hl-widget-settings-form" ref={settingsFormRef}>
-          <h2 className="hl-widget-settings-title">
-            配置小部件 - 您的应用内帮助助手
-          </h2>
-          <p className="hl-widget-settings-subtitle">
-            使用帮助助手提供即时支持，还可以允许用户进行搜索快速查找
-          </p>
+          {!isWorkbench && (
+            <>
+              <h2 className="hl-widget-settings-title">
+                配置小部件 - 您的应用内帮助助手
+              </h2>
+              <p className="hl-widget-settings-subtitle">
+                使用帮助助手提供即时支持，还可以允许用户进行搜索快速查找
+              </p>
+            </>
+          )}
           <ToggleField
             label="小部件开关"
             hint="关闭后，所有形式分享的小部件都将失效"
@@ -786,17 +915,19 @@ export default function WidgetSettingsWorkspace({
             onValueChange={(value) => onTabChange(value as SettingsTab)}
             className="hl-widget-settings-tabs"
           >
-            <Tabs.List className="hl-widget-tab-list" aria-label="小部件设置">
-              {SETTINGS_TABS.map((item) => (
-                <Tabs.Trigger
-                  key={item.value}
-                  value={item.value}
-                  className="hl-widget-tab"
-                >
-                  {item.label}
-                </Tabs.Trigger>
-              ))}
-            </Tabs.List>
+            {!isWorkbench && (
+              <Tabs.List className="hl-widget-tab-list" aria-label="小部件设置">
+                {SETTINGS_TABS.map((item) => (
+                  <Tabs.Trigger
+                    key={item.value}
+                    value={item.value}
+                    className="hl-widget-tab"
+                  >
+                    {item.label}
+                  </Tabs.Trigger>
+                ))}
+              </Tabs.List>
+            )}
             <Tabs.Content value="basic" className="hl-widget-tab-content">
               <div
                 className="hl-widget-form-scroll"
@@ -1004,8 +1135,9 @@ export default function WidgetSettingsWorkspace({
                     : "有未保存的修改"}
                 </span>
               )}
-              <HlButton variant="primary" onClick={save}>
-                保存
+              {saveError && <span role="alert">{saveError}</span>}
+              <HlButton variant="primary" disabled={saving} onClick={save}>
+                {saving ? "正在保存…" : "保存"}
               </HlButton>
             </footer>
           )}

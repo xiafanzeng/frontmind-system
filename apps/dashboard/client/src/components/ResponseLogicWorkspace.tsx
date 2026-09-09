@@ -1,3 +1,8 @@
+import { useSearch } from "wouter";
+import {
+  requestWorkspaceNavigation,
+  useWorkspaceDraftGuard,
+} from "@/lib/workspace-navigation-guard";
 import { WorkbenchTaskToolbar } from "@/dashboard/WorkbenchTaskToolbar";
 import {
   AlertTriangle,
@@ -294,6 +299,29 @@ export function responseLogicResultMessageId(resultId: string) {
   }
   const readable = resultId.replace(/[^A-Za-z0-9_-]/gu, "-").slice(0, 72);
   return `response-logic-${readable || "result"}-${hash.toString(16)}`;
+}
+
+export function responseLogicInlineDraftAnchor(input: {
+  conversation?: Conversation;
+  questionId: string;
+  savedAnchor?: {
+    questionId: string;
+    conversationId: string;
+    messageId: string;
+  } | null;
+}) {
+  const anchor = input.savedAnchor;
+  if (
+    anchor?.questionId === input.questionId &&
+    anchor.conversationId === input.conversation?.id &&
+    input.conversation.messages.some(
+      (message) =>
+        message.id === anchor.messageId && message.role === "assistant",
+    )
+  ) {
+    return { kind: "message" as const, messageId: anchor.messageId };
+  }
+  return { kind: "initial" as const };
 }
 
 export function canReloadResponseLogicTask(input: {
@@ -831,16 +859,17 @@ function ResponseLogicEmptyWorkspace({
       taskTitle="选择优化问题"
       main={main}
       auxiliary={
-        <p className="p-5 text-sm text-muted-foreground">
-          每个优化问题分别保存应答逻辑会话、草稿与正式版本。
-        </p>
-      }
-      toolbar={
-        <WorkbenchTaskToolbar
-          tasks={[]}
-          onNew={openQuestions}
-          onSelect={() => undefined}
-        />
+        <div className="workbench-task-panel">
+          <WorkbenchTaskToolbar
+            presentation="panel"
+            tasks={[]}
+            onNew={openQuestions}
+            onSelect={() => undefined}
+          />
+          <p className="workbench-panel-empty">
+            每个优化问题保存独立的会话、草稿与正式版本。
+          </p>
+        </div>
       }
     />
   ) : (
@@ -1267,6 +1296,13 @@ function ResponseLogicWorkspaceContent({
   persistence: ResponseLogicPersistence | null;
   previewAdapter?: ResponseLogicPreviewAdapter;
 }) {
+  const search = useSearch();
+  const linkedQuestion = new URLSearchParams(search).get("questionId");
+  const requestedQuestion = workbench
+    ? (linkedQuestion ?? initialQuestionId)
+    : (initialQuestionId ?? linkedQuestion);
+  const restoredTask = useRef<string | null>(null);
+  const appliedQuestion = useRef<string | null>(null);
   const groups = questionGroups ?? EMPTY_QUESTION_GROUPS;
   const questionEntries = useMemo(
     () =>
@@ -1299,6 +1335,51 @@ function ResponseLogicWorkspaceContent({
   const [isPublishing, setIsPublishing] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [questionPickerOpen, setQuestionPickerOpen] = useState(false);
+  const [flowQuestionId, setFlowQuestionId] = useState<string | null>(
+    requestedQuestion ?? null,
+  );
+  const [taskPanel, setTaskPanel] = useState<"tasks" | "outputs">("outputs");
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSaveError, setDraftSaveError] = useState("");
+  const requestedTask = new URLSearchParams(search).get("workbenchTask");
+  const requestedRecord = persistence?.records?.find(
+    (record) => record.conversationId === requestedTask,
+  );
+  const invalidRequestedTask = Boolean(
+    requestedTask && persistence?.ready && !requestedRecord,
+  );
+  const conflictingRequestedTask = Boolean(
+    requestedQuestion &&
+      requestedRecord &&
+      requestedRecord.questionId !== requestedQuestion,
+  );
+  useEffect(() => {
+    if (!workbench || !persistence?.ready || requestedQuestion) return;
+    const restoreKey = requestedTask ?? "latest";
+    if (restoredTask.current === restoreKey) return;
+    const record = requestedTask
+      ? persistence.records?.find(
+          (item) => item.conversationId === requestedTask,
+        )
+      : [...(persistence.records ?? [])].sort(
+          (a, b) => b.updatedAt - a.updatedAt,
+        )[0];
+    restoredTask.current = restoreKey;
+    if (!record || !questionEntryById.has(record.questionId)) return;
+    const entry = questionEntryById.get(record.questionId)!;
+    setSelectedGroupId(entry.group.id);
+    setSelectedQuestionId(entry.question.id);
+    setFlowQuestionId(entry.question.id);
+  }, [
+    workbench,
+    requestedTask,
+    requestedQuestion,
+    persistence?.ready,
+    persistence?.records,
+    questionEntryById,
+    setSelectedGroupId,
+    setSelectedQuestionId,
+  ]);
   const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
 
   useEffect(() => {
@@ -1396,22 +1477,29 @@ function ResponseLogicWorkspaceContent({
   ]);
 
   useEffect(() => {
-    if (!initialQuestionId) return;
-    const entry = questionEntryById.get(initialQuestionId);
+    if (!requestedQuestion || appliedQuestion.current === requestedQuestion)
+      return;
+    const entry = questionEntryById.get(requestedQuestion);
     if (!entry) return;
+    appliedQuestion.current = requestedQuestion;
     setSelectedGroupId(entry.group.id);
-    setSelectedQuestionId(initialQuestionId);
+    setSelectedQuestionId(requestedQuestion);
+    setFlowQuestionId(requestedQuestion);
     setUpdateNotice("");
   }, [
-    initialQuestionId,
+    requestedQuestion,
     setSelectedGroupId,
     setSelectedQuestionId,
     setUpdateNotice,
     questionEntryById,
   ]);
 
+  const effectiveQuestionId =
+    requestedQuestion && appliedQuestion.current !== requestedQuestion
+      ? requestedQuestion
+      : selectedQuestionId;
   const selectedEntry =
-    questionEntryById.get(selectedQuestionId) ?? questionEntries[0];
+    questionEntryById.get(effectiveQuestionId) ?? questionEntries[0];
   const activeQuestionId = selectedEntry?.question.id ?? "";
   useEffect(() => {
     if (!selectedEntry) return;
@@ -1460,8 +1548,25 @@ function ResponseLogicWorkspaceContent({
     if (!entry) return;
     setSelectedGroupId(entry.group.id);
     setSelectedQuestionId(id);
+    setFlowQuestionId(id);
+    setQuestionPickerOpen(false);
     onSelectedQuestionChange?.(id);
     setUpdateNotice("");
+    if (workbench) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("questionId", id);
+      const bound =
+        conversationIds[id] ??
+        persistence?.records?.find((record) => record.questionId === id)
+          ?.conversationId;
+      if (bound) url.searchParams.set("workbenchTask", bound);
+      else url.searchParams.delete("workbenchTask");
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
+    }
   };
 
   const patchDraft = (patch: Partial<LogicDraft>) => {
@@ -1522,6 +1627,7 @@ function ResponseLogicWorkspaceContent({
       toast.error("应答会话保存失败", {
         description: error instanceof Error ? error.message : "请稍后重试",
       });
+      throw error;
     }
   };
 
@@ -1771,6 +1877,192 @@ function ResponseLogicWorkspaceContent({
     }
   };
 
+  const draftDirty =
+    !confirmed &&
+    JSON.stringify(draft) !==
+      JSON.stringify(
+        persistedRecord?.draft ?? createEmptyDraft(selectedEntry.question),
+      );
+  const saveCurrentDraft = async () => {
+    if (savingDraft || confirmed) return false;
+    setSavingDraft(true);
+    setDraftSaveError("");
+    try {
+      if (!preview) await persistDraft(draft);
+      setUpdateNotice("应答草稿已保存，正式版本保持原状态。");
+      return true;
+    } catch (error) {
+      setDraftSaveError(
+        error instanceof Error ? error.message : "草稿保存失败，请重试。",
+      );
+      return false;
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+  const resetControl = (
+    <QuestionActionDialog
+      mode="response_logic"
+      questions={
+        resetAvailable
+          ? [
+              {
+                id: activeQuestionId,
+                question: selectedEntry.question.question,
+              },
+            ]
+          : []
+      }
+      selectedQuestionId={resetAvailable ? activeQuestionId : null}
+      triggerLabel="重置应答逻辑"
+      expectedResponseLogicRevision={persistedRecord?.revision}
+      onSubmitted={async () => {
+        await persistence?.refresh?.();
+      }}
+      disabled={!resetAvailable}
+    />
+  );
+  const flowEditor = (
+    <section
+      className="rl-saved-draft"
+      data-reading-anchor={`response-draft:${activeQuestionId}:${persistedRecord?.revision ?? 0}`}
+    >
+      <ResponseLogicDraftGuard
+        dirty={draftDirty}
+        label={`应答草稿：${selectedEntry.question.question}`}
+        onSave={saveCurrentDraft}
+        onDiscard={async () => {
+          setDrafts((items) => ({
+            ...items,
+            [activeQuestionId]:
+              persistedRecord?.draft ??
+              createEmptyDraft(selectedEntry.question),
+          }));
+          return true;
+        }}
+      />
+      {updateNotice && <p role="status">{updateNotice}</p>}
+      <LogicEditor
+        draft={draft}
+        readOnly={Boolean(confirmed)}
+        allowLocalImageUpload={preview}
+        isPublishing={isPublishing}
+        onPatch={patchDraft}
+        onAddImages={addImages}
+        onRemoveImage={removeImage}
+        onUpdate={() => setConfirmDialogOpen(true)}
+      />
+      {!confirmed && (
+        <Button
+          variant="outline"
+          disabled={savingDraft || !draftDirty}
+          onClick={() => void saveCurrentDraft()}
+        >
+          {savingDraft ? "正在保存…" : "保存草稿"}
+        </Button>
+      )}
+      {draftSaveError && <p role="alert">{draftSaveError}</p>}
+      {confirmDialogOpen && (
+        <section className="rl-flow-confirm" aria-label="确认当前应答逻辑">
+          <h3>确认并启用这份应答逻辑</h3>
+          <p>
+            确认后将作为“{selectedEntry.question.question}
+            ”的正式版本；后续调整沿用重置流程。
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              disabled={isPublishing}
+              onClick={() => setConfirmDialogOpen(false)}
+            >
+              继续检查
+            </Button>
+            <Button
+              disabled={isPublishing}
+              onClick={() => void updateConfirmation()}
+            >
+              {isPublishing ? "正在确认…" : "确认并锁定"}
+            </Button>
+          </div>
+        </section>
+      )}
+    </section>
+  );
+  const pickQuestion = (
+    <section className="rl-flow-opening">
+      <h2>想为哪个优化问题整理应答？</h2>
+      {(Boolean(
+        requestedQuestion && !questionEntryById.has(requestedQuestion),
+      ) ||
+        invalidRequestedTask ||
+        conflictingRequestedTask) && (
+        <p role="alert">
+          链接中的问题或任务不可用，请从当前项目的问题中重新选择。
+        </p>
+      )}
+      <p>选择一个已确认的问题，继续它的专属会话，或开始整理新的应答草稿。</p>
+      <QuestionNavigator
+        groups={groups}
+        confirmedQuestionIds={new Set(Object.keys(confirmations))}
+        selectedGroupId={selectedGroupId}
+        selectedQuestionId={flowQuestionId ?? ""}
+        onSelectGroup={selectGroup}
+        onSelectQuestion={(id) =>
+          requestWorkspaceNavigation(() => selectQuestion(id))
+        }
+      />
+    </section>
+  );
+  const hasFlowQuestion = Boolean(
+    flowQuestionId &&
+      questionEntryById.has(flowQuestionId) &&
+      !invalidRequestedTask &&
+      !conflictingRequestedTask,
+  );
+  const unifiedDialogue =
+    !hasFlowQuestion || questionPickerOpen ? (
+      pickQuestion
+    ) : (
+      <div className="rl-unified-conversation rl-conversation-flow">
+        {preview && previewAdapter?.Dialogue ? (
+          <div className="rl-preview-unified">
+            <previewAdapter.Dialogue
+              question={selectedEntry.question}
+              onLoadLatestReply={loadModelReply}
+            />
+            {flowEditor}
+          </div>
+        ) : (
+          <RealResponseLogicDialogue
+            workbench
+            workbenchContent={
+              draft.conclusion ||
+              draft.facts ||
+              draft.boundaries ||
+              draft.images.length ||
+              draft.attachments.length ||
+              confirmed
+                ? flowEditor
+                : null
+            }
+            group={selectedEntry.group}
+            question={selectedEntry.question}
+            draft={draft}
+            conversationId={conversationId}
+            recordsLoading={Boolean(persistence?.loading)}
+            recordsReady={Boolean(persistence?.ready)}
+            recordsError={persistence?.error}
+            onRetryRecords={() => persistence?.retry()}
+            lastTaskId={persistedRecord?.lastTaskId}
+            lastTaskRevision={persistedRecord?.revision}
+            lastTaskRecordedAt={persistedRecord?.updatedAt}
+            readOnly={Boolean(confirmed)}
+            onConversationIdChange={bindConversation}
+            onLoadLatestReply={loadModelReply}
+          />
+        )}
+      </div>
+    );
   const workspace = (
     <section
       className={`response-logic-workspace page-shell ${workbench ? "rl-conversation-flow" : ""} ${workspaceExpanded ? "rl-workspace-expanded" : ""}`}
@@ -1941,73 +2233,152 @@ function ResponseLogicWorkspaceContent({
       projectId={activeEnterpriseProjectId() ?? "account"}
       moduleId="response-logic"
       title="应答逻辑"
-      taskTitle={selectedEntry.question.question}
+      taskTitle={hasFlowQuestion ? selectedEntry.question.question : "新任务"}
       taskKey={conversationId ?? activeQuestionId}
-      main={workspace}
+      main={unifiedDialogue}
+      scrollMain={!hasFlowQuestion || questionPickerOpen || preview}
       auxiliary={
-        <section className="rl-task-summary" aria-label="应答逻辑任务摘要">
-          <dl>
-            <div>
-              <dt>当前问题</dt>
-              <dd>{selectedEntry.question.question}</dd>
-            </div>
-            <div>
-              <dt>保存状态</dt>
-              <dd>
-                {confirmed
-                  ? "已确认并锁定"
-                  : persistedRecord
-                    ? "草稿已保存"
-                    : "等待首次生成"}
-              </dd>
-            </div>
-            <div>
-              <dt>正式版本</dt>
-              <dd>
-                {persistedRecord?.version
-                  ? `v${persistedRecord.version}`
-                  : "尚未发布"}
-              </dd>
-            </div>
-            <div>
-              <dt>关联会话</dt>
-              <dd>{conversationId ? "本问题的专属会话" : "首次操作时建立"}</dd>
-            </div>
-          </dl>
-        </section>
-      }
-      toolbar={
-        <WorkbenchTaskToolbar
-          tasks={questionEntries
-            .filter(
-              (entry) =>
-                conversationIds[entry.question.id] ||
-                persistence?.records?.some(
-                  (record) => record.questionId === entry.question.id,
-                ),
-            )
-            .map((entry) => ({
-              id: entry.question.id,
-              title: entry.question.question,
-              updatedAt:
-                new Date(
-                  persistence?.records?.find(
-                    (record) => record.questionId === entry.question.id,
-                  )?.updatedAt ?? 0,
-                ).getTime() || 0,
-            }))}
-          currentId={activeQuestionId}
-          onNew={() => setQuestionPickerOpen(true)}
-          onSelect={(id) => {
-            selectQuestion(id);
-            setQuestionPickerOpen(false);
-          }}
-        />
+        <div className="workbench-task-panel">
+          <div
+            className="workbench-panel-tabs"
+            role="tablist"
+            aria-label="任务与成果"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={taskPanel === "tasks"}
+              onClick={() => setTaskPanel("tasks")}
+            >
+              任务
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={taskPanel === "outputs"}
+              onClick={() => setTaskPanel("outputs")}
+            >
+              成果
+            </button>
+          </div>
+          {taskPanel === "tasks" ? (
+            <WorkbenchTaskToolbar
+              presentation="panel"
+              tasks={questionEntries
+                .filter(
+                  (entry) =>
+                    conversationIds[entry.question.id] ||
+                    persistence?.records?.some(
+                      (record) => record.questionId === entry.question.id,
+                    ),
+                )
+                .map((entry) => ({
+                  id: entry.question.id,
+                  title: entry.question.question,
+                  updatedAt:
+                    persistence?.records?.find(
+                      (record) => record.questionId === entry.question.id,
+                    )?.updatedAt ?? 0,
+                }))}
+              currentId={flowQuestionId}
+              onNew={() => {
+                restoredTask.current = "latest";
+                appliedQuestion.current = null;
+                setFlowQuestionId(null);
+                setQuestionPickerOpen(true);
+                const url = new URL(window.location.href);
+                url.searchParams.delete("questionId");
+                url.searchParams.delete("workbenchTask");
+                window.history.replaceState(
+                  window.history.state,
+                  "",
+                  `${url.pathname}${url.search}${url.hash}`,
+                );
+              }}
+              onSelect={(id) => {
+                selectQuestion(id);
+                setTaskPanel("outputs");
+              }}
+            />
+          ) : (
+            <section className="rl-task-summary" aria-label="应答逻辑任务摘要">
+              {hasFlowQuestion ? (
+                <>
+                  <dl>
+                    <div>
+                      <dt>当前问题</dt>
+                      <dd>{selectedEntry.question.question}</dd>
+                    </div>
+                    <div>
+                      <dt>保存状态</dt>
+                      <dd>
+                        {confirmed
+                          ? "已确认并锁定"
+                          : draftDirty
+                            ? "有未保存修改"
+                            : persistedRecord
+                              ? "草稿已保存"
+                              : "等待首次生成"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>正式版本</dt>
+                      <dd>
+                        {confirmed?.version
+                          ? `v${confirmed.version}`
+                          : "尚未发布"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>关联会话</dt>
+                      <dd>
+                        {conversationId ? "本问题的专属会话" : "首次操作时建立"}
+                      </dd>
+                    </div>
+                  </dl>
+                  {confirmed && (
+                    <article
+                      className="workflow-result"
+                      data-result-id={persistedRecord?.id ?? activeQuestionId}
+                    >
+                      <div className="workflow-result-meta">
+                        已确认应答 · v{confirmed.version}
+                      </div>
+                      <h3>{selectedEntry.question.question}</h3>
+                      <p>此版本可在优化问题中查看。</p>
+                      {resetControl}
+                    </article>
+                  )}
+                  {!confirmed && resetControl}
+                </>
+              ) : (
+                <p className="workbench-panel-empty">
+                  选定问题后，这里会保留保存状态和已确认的正式版本。
+                </p>
+              )}
+            </section>
+          )}
+        </div>
       }
     />
   ) : (
     workspace
   );
+}
+
+function ResponseLogicDraftGuard({
+  dirty,
+  label,
+  onSave,
+  onDiscard,
+}: {
+  dirty: boolean;
+  label: string;
+  onSave: () => Promise<boolean>;
+  onDiscard: () => Promise<boolean>;
+}) {
+  useWorkspaceDraftGuard({ dirty, label, save: onSave, discard: onDiscard });
+  return null;
 }
 
 function QuestionNavigator({
@@ -2226,7 +2597,9 @@ function DialoguePanel({
   );
 }
 
-function RealResponseLogicDialogue({
+export function RealResponseLogicDialogue({
+  workbench = false,
+  workbenchContent,
   group,
   question,
   draft,
@@ -2242,6 +2615,8 @@ function RealResponseLogicDialogue({
   onConversationIdChange,
   onLoadLatestReply,
 }: {
+  workbench?: boolean;
+  workbenchContent?: ReactNode;
   group: IntentQuestionGroup;
   question: IntentQuestion;
   draft: LogicDraft;
@@ -2268,6 +2643,12 @@ function RealResponseLogicDialogue({
     updateTitle,
   } = useConversation();
   const initializationRef = useRef<string | null>(null);
+  const [bindingFailure, setBindingFailure] = useState<{
+    questionId: string;
+    conversationId: string;
+    message: string;
+  } | null>(null);
+  const [retryingBinding, setRetryingBinding] = useState(false);
   const callbackRef = useRef(onConversationIdChange);
   callbackRef.current = onConversationIdChange;
   const unavailableTaskIdsRef = useRef(new Set<string>());
@@ -2294,6 +2675,13 @@ function RealResponseLogicDialogue({
     activeDedicatedTask.conversationId === conversationId
       ? activeDedicatedTask
       : null;
+  const [savedDraftAnchor, setSavedDraftAnchor] = useState<{
+    questionId: string;
+    conversationId: string;
+    messageId: string;
+    taskId: string;
+    operationRevision: number;
+  } | null>(null);
   const [lastCompletedObservation, setLastCompletedObservation] =
     useState<ResponseLogicTaskStatusEnvelope | null>(null);
   const [unsavedResultId, setUnsavedResultId] = useState<string | null>(null);
@@ -2399,20 +2787,36 @@ function RealResponseLogicDialogue({
     if (readOnly) return;
 
     const key = `${question.id}:${conversationId || "new"}`;
+    if (bindingFailure?.questionId === question.id) return;
     if (initializationRef.current === key) return;
     initializationRef.current = key;
-    const nextConversationId = createConversation();
+    const nextConversationId = createConversation({
+      title: `应答-${question.question}`,
+      reuseEmpty: false,
+      workbenchAgentId: "response-logic",
+    });
     // This draft already belongs to the response editor, even before its first
     // task starts. Keep it out of the workbench's general conversation pane.
     updateStatus(nextConversationId, "idle", {
       executionKind: "response_logic",
     });
     updateTitle(nextConversationId, `应答-${question.question}`);
-    void callbackRef.current(nextConversationId).finally(() => {
-      initializationRef.current = null;
-    });
+    void callbackRef
+      .current(nextConversationId)
+      .catch((error) =>
+        setBindingFailure({
+          questionId: question.id,
+          conversationId: nextConversationId,
+          message:
+            error instanceof Error ? error.message : "应答会话暂时未能保存",
+        }),
+      )
+      .finally(() => {
+        initializationRef.current = null;
+      });
   }, [
     activeConversation?.id,
+    bindingFailure?.questionId,
     scopedActiveDedicatedTask?.startedAt,
     scopedActiveDedicatedTask?.taskId,
     conversationId,
@@ -2521,6 +2925,13 @@ function RealResponseLogicDialogue({
     }
 
     setLastCompletedObservation(observation);
+    setSavedDraftAnchor({
+      questionId: question.id,
+      conversationId: conversation.id,
+      messageId: assistantMessage.id,
+      taskId: observation.taskId,
+      operationRevision: observation.operationRevision,
+    });
     setUnsavedResultId(
       outcome === "displayed_unsaved" ? observation.resultId : null,
     );
@@ -2681,6 +3092,59 @@ function RealResponseLogicDialogue({
     );
   }
 
+  if (bindingFailure?.questionId === question.id) {
+    const needsKnowledge =
+      /知识库/.test(bindingFailure.message) &&
+      /发布|完成/.test(bindingFailure.message);
+    return (
+      <div className="rl-home-frame rl-home-loading" role="alert">
+        <AlertTriangle size={22} />
+        <span>
+          {needsKnowledge
+            ? bindingFailure.message
+            : `应答会话尚未保存：${bindingFailure.message}`}
+          。当前问题和草稿已保留。
+        </span>
+        {needsKnowledge && (
+          <button
+            type="button"
+            onClick={() =>
+              requestWorkspaceNavigation(() =>
+                navigate(projectWorkspaceUrl("/?view=knowledge")),
+              )
+            }
+          >
+            前往智能知识库
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={retryingBinding}
+          onClick={() => {
+            setRetryingBinding(true);
+            void callbackRef
+              .current(bindingFailure.conversationId)
+              .then(() => setBindingFailure(null))
+              .catch((error) =>
+                setBindingFailure({
+                  ...bindingFailure,
+                  message:
+                    error instanceof Error ? error.message : "请稍后重试",
+                }),
+              )
+              .finally(() => setRetryingBinding(false));
+          }}
+        >
+          {retryingBinding
+            ? "正在重试…"
+            : needsKnowledge
+              ? "发布后重新检查"
+              : "重新保存会话"}
+        </button>
+      </div>
+    );
+  }
+
   if (
     recordsLoading ||
     !recordsReady ||
@@ -2699,9 +3163,15 @@ function RealResponseLogicDialogue({
 
   if (!scopedConversation) {
     return (
-      <div className="rl-home-frame rl-home-loading rl-home-read-only">
-        <ShieldCheck size={22} />
-        <span>应答逻辑已确认；本设备没有保留此前对话记录。</span>
+      <div
+        className={
+          workbench
+            ? "rl-saved-only"
+            : "rl-home-frame rl-home-loading rl-home-read-only"
+        }
+      >
+        <p>应答逻辑已确认；本设备没有保留此前对话记录。</p>
+        {workbench && workbenchContent}
       </div>
     );
   }
@@ -2717,7 +3187,7 @@ function RealResponseLogicDialogue({
     activeTaskRevision: scopedActiveDedicatedTask?.operationRevision,
   });
 
-  return (
+  const dialogueActions = (
     <>
       {scopedStartFailure && (
         <div
@@ -2828,6 +3298,16 @@ function RealResponseLogicDialogue({
               ? "重试保存已显示的模型输出"
               : "载入模型最新输出到应答草稿"}
       </button>
+    </>
+  );
+  const draftAnchor = responseLogicInlineDraftAnchor({
+    conversation: scopedConversation,
+    questionId: question.id,
+    savedAnchor: savedDraftAnchor,
+  });
+  return (
+    <>
+      {!workbench && dialogueActions}
       <fieldset
         className="rl-home-frame rl-home-fieldset"
         disabled={readOnly || scopedStartFailure?.resetRequired}
@@ -2836,6 +3316,39 @@ function RealResponseLogicDialogue({
         <Home
           key={scopedConversation.id}
           embedded
+          operatorWorkspace={workbench}
+          hidePortalNavigation={workbench}
+          showKnowledgeBaseStarter={false}
+          showAccountMenu={!workbench}
+          showSettings={!workbench}
+          inlineBlocks={
+            workbench
+              ? [
+                  {
+                    id: `response-actions:${question.id}:${scopedConversation.id}`,
+                    anchor: { kind: "initial" },
+                    content:
+                      reloadTaskId || scopedStartFailure
+                        ? dialogueActions
+                        : null,
+                  },
+                  {
+                    id: `response-draft:${question.id}:${scopedConversation.id}:${lastTaskId ?? "saved"}:${lastTaskRevision ?? 0}`,
+                    anchor: draftAnchor,
+                    content: workbenchContent ? (
+                      <div className="rl-inline-business">
+                        {draftAnchor.kind === "initial" && (
+                          <p className="rl-draft-provenance">
+                            {lastTaskId ? "已保存应答草稿" : "当前应答草稿"}
+                          </p>
+                        )}
+                        {workbenchContent}
+                      </div>
+                    ) : null,
+                  },
+                ]
+              : undefined
+          }
           hideSidebar
           fixedAgentProfile="frontmind-pro"
           composerPrefill={
@@ -3023,7 +3536,7 @@ function LogicEditor({
             <div className="rl-image-upload rl-image-upload-guidance">
               <ImagePlus size={20} />
               <span>
-                <strong>在左侧对话中上传图片</strong>
+                <strong>在对话输入区上传图片</strong>
                 <small>
                   图片会随真实任务上传；模型处理完成后载入输出即可进入当前草稿。
                 </small>

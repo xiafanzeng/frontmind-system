@@ -27,6 +27,7 @@ export function WorkbenchTaskToolbar({
   error,
   onRetry,
   onNavigate,
+  showNew = true,
 }: {
   tasks: WorkbenchHistoryItem[];
   currentId?: string | null;
@@ -35,7 +36,8 @@ export function WorkbenchTaskToolbar({
   onDelete?: (id: string) => void;
   disabled?: boolean;
   legacyTasks?: WorkbenchHistoryItem[];
-  presentation?: "toolbar" | "sidebar";
+  presentation?: "toolbar" | "sidebar" | "panel";
+  showNew?: boolean;
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
@@ -54,11 +56,11 @@ export function WorkbenchTaskToolbar({
       size="sm"
       disabled={disabled}
       onClick={() =>
-          requestWorkspaceNavigation(() => {
-            onNew();
-            setQuery("");
-            setLegacy(false);
-            onNavigate?.();
+        requestWorkspaceNavigation(() => {
+          onNew();
+          setQuery("");
+          setLegacy(false);
+          onNavigate?.();
         })
       }
     >
@@ -186,13 +188,12 @@ export function WorkbenchTaskToolbar({
       </div>
     </>
   );
-  if (presentation === "sidebar") {
+  if (presentation !== "toolbar") {
     return (
-      <section
-        className="workbench-task-navigation"
-        aria-label="通用智能体任务"
-      >
-        <div className="workbench-task-navigation__new">{newTaskButton}</div>
+      <section className="workbench-task-navigation" aria-label="智能体任务">
+        {showNew && (
+          <div className="workbench-task-navigation__new">{newTaskButton}</div>
+        )}
         {historyContent}
       </section>
     );

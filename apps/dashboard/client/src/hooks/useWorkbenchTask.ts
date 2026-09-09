@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   conversationBelongsToAgent,
   setWorkbenchTaskQuery,
@@ -81,8 +81,17 @@ export function useWorkbenchTask(
     agentId,
     options,
   };
-  const [pending, setPending] = useState(false);
+  const [pendingOwner, setPendingOwner] = useState<{
+    scopeKey: string;
+    taskId: string | null;
+  } | null>(null);
+  const pending =
+    pendingOwner?.scopeKey === scopeKey &&
+    (!pendingOwner.taskId || pendingOwner.taskId === taskId);
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    setError(null);
+  }, [scopeKey, taskId]);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const pendingBind = useRef<{ key: string; promise: Promise<string> } | null>(
     null,
@@ -99,7 +108,9 @@ export function useWorkbenchTask(
   const install = (key: string, id: string, next: WorkbenchTaskState) => {
     if (
       latest.current.scopeKey !== key ||
-      (latest.current.taskId && latest.current.taskId !== id)
+      (latest.current.taskId && latest.current.taskId !== id) ||
+      (latest.current.taskId === id &&
+        (latest.current.state?.revision ?? 0) > next.revision)
     )
       return;
     latest.current.state = next;
@@ -182,7 +193,8 @@ export function useWorkbenchTask(
           latest.current.taskId !== requestedTaskId
         )
           throw new Error("任务已切换，请在当前任务重试");
-        setPending(true);
+        const owner = { scopeKey: key, taskId: requestedTaskId };
+        setPendingOwner(owner);
         setError(null);
         try {
           return await operation();
@@ -196,14 +208,23 @@ export function useWorkbenchTask(
             );
           throw cause;
         } finally {
-          if (latest.current.scopeKey === key) setPending(false);
+          setPendingOwner((current) => (current === owner ? null : current));
         }
       });
     queue.current = next;
     return next;
   };
-  const saveState = (patch: WorkbenchStatePatch) =>
+  const saveState = (
+    patch: WorkbenchStatePatch,
+    owner?: { conversationId: string; scopeKey: string },
+  ) =>
     run(async () => {
+      if (
+        owner &&
+        (latest.current.taskId !== owner.conversationId ||
+          latest.current.scopeKey !== owner.scopeKey)
+      )
+        throw new Error("业务已保存；请回到来源任务同步成果记录");
       const id = await ensureTask();
       const current = latest.current;
       if (current.taskId !== id)
@@ -254,11 +275,29 @@ export function useWorkbenchTask(
     workspace.setActive(id);
   };
   const retry = async () => {
+    const current = latest.current;
     await workspace.refreshConversations();
-    setCached(null);
-    setError(null);
+    if (
+      latest.current.scopeKey !== current.scopeKey ||
+      latest.current.taskId !== current.taskId
+    )
+      return;
+    if (current.taskId && current.state) {
+      const next = await bindMutation.mutateAsync({
+        conversationId: current.taskId,
+        agentId: current.agentId,
+        ...scopeInput(),
+      });
+      install(current.scopeKey, current.taskId, next);
+    } else setCached(null);
+    if (
+      latest.current.scopeKey === current.scopeKey &&
+      latest.current.taskId === current.taskId
+    )
+      setError(null);
   };
   return {
+    scopeKey,
     taskId,
     task,
     tasks,

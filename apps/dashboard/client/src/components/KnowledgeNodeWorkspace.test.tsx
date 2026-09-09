@@ -157,6 +157,7 @@ afterEach(() => {
   disposeScope?.();
   disposeScope = undefined;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function fixtureFetch() {
@@ -213,7 +214,23 @@ async function openEditor() {
 }
 
 describe("unified knowledge node workspace", () => {
-  it("keeps inline node reading in the auxiliary region and allows collaboration focus without dismissing it", async () => {
+  it("renders node reading and editing in the main portal without mutating tree confirmation", async () => {
+    const fetcher = fixtureFetch();
+    const main = document.createElement("div"); main.setAttribute("aria-label", "主区编辑器"); document.body.append(main);
+    try {
+      const view = render(<KnowledgeNodeWorkspace progress={progress} conversationId="conversation" resetRevision={2} detailPresentation="inline" detailContainer={main} />);
+      fireEvent.click(screen.getByRole("button", { name: "企业简介 当前节点" }));
+      expect(await within(main).findByText("原有企业介绍。")).toBeVisible();
+      expect(within(view.container).queryByText("原有企业介绍。")).toBeNull();
+      expect(within(main).queryByRole("combobox", { name: "切换知识节点" })).toBeNull();
+      const editor = await openEditor();
+      expect(main.contains(editor)).toBe(true);
+      expect(screen.getByRole("button", { name: "产品服务 已确认" })).toBeVisible();
+      expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    } finally { main.remove(); }
+  });
+
+  it("supports standalone inline node reading and collaboration focus without dismissing it", async () => {
     fixtureFetch();
     render(
       <>
@@ -246,6 +263,7 @@ describe("unified knowledge node workspace", () => {
 
   it("preserves the real node editor across workbench resize and still guards an unsaved close", async () => {
     fixtureFetch();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => window.innerWidth);
     vi.stubGlobal("innerWidth", 1440);
     render(
       <AgentWorkbenchShell
@@ -269,7 +287,7 @@ describe("unified knowledge node workspace", () => {
     fireEvent.change(editor, { target: { value: "跨尺寸保留的节点草稿" } });
     vi.stubGlobal("innerWidth", 768);
     fireEvent(window, new Event("resize"));
-    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    fireEvent.click(await screen.findByRole("button", { name: "打开任务信息" }));
     expect(
       await screen.findByRole("textbox", { name: "编辑企业简介正文" }),
     ).toBe(editor);
@@ -640,6 +658,76 @@ describe("unified knowledge node workspace", () => {
     ).toBe(false);
   });
 
+  it("saves before downloading once and uses the returned version coordinates", async () => {
+    let resolveSave!: (result: Response) => void;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST")
+        return new Promise<Response>((resolve) => { resolveSave = resolve; });
+      const url = new URL(String(input), "https://frontmind.invalid");
+      return json(details("1.1", Number(url.searchParams.get("expectedContentVersion"))));
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      downloads.push(this.href);
+    });
+    renderWorkspace({ progress: {
+      ...progress,
+      contentAvailability: "complete",
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },
+    } });
+    fireEvent.change(await openEditor(), { target: { value: "这次修改需要包含在下载中。" } });
+    const saveAndDownload = screen.getByRole("button", { name: "保存后下载 ZIP" });
+    fireEvent.click(saveAndDownload);
+    fireEvent.click(saveAndDownload);
+    expect(downloads).toHaveLength(0);
+    expect(saveAndDownload).toBeDisabled();
+    await act(async () => resolveSave(json({ accepted: true, unchanged: false, observation: observation(5) })));
+    await waitFor(() => expect(downloads).toHaveLength(1));
+    const url = new URL(downloads[0]!);
+    expect(url.pathname).toBe("/api/knowledge-base/workspace-export");
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      conversationId: "conversation",
+      expectedGeneration: "1",
+      expectedRevision: "9",
+      expectedStateEpoch: "13",
+      expectedContentVersion: "5",
+      expectedResetRevision: "2",
+    });
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(screen.queryByRole("textbox", { name: "编辑企业简介正文" })).not.toBeInTheDocument();
+  });
+
+  it("retains the draft on save failure and only downloads after the same save succeeds", async () => {
+    let attempts = 0;
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        bodies.push(String(init.body));
+        if (++attempts === 1) return json({ error: { message: "保存暂时失败" } }, 503);
+        return json({ accepted: true, unchanged: false, observation: observation() });
+      }
+      const url = new URL(String(input), "https://frontmind.invalid");
+      return json(details("1.1", Number(url.searchParams.get("expectedContentVersion"))));
+    }));
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderWorkspace({ progress: {
+      ...progress,
+      contentAvailability: "complete",
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },
+    } });
+    const editor = await openEditor();
+    fireEvent.change(editor, { target: { value: "失败后应保留的正文。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存后下载 ZIP" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("保存暂时失败");
+    expect(editor).toHaveValue("失败后应保留的正文。");
+    expect(download).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "保存后下载 ZIP" }));
+    await waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+    expect(bodies).toHaveLength(2);
+    expect(JSON.parse(bodies[0]!).clientRequestId).toBe(JSON.parse(bodies[1]!).clientRequestId);
+  });
+
   it("keeps draft and old edit coordinates on conflict while reading the newer authoritative body", async () => {
     const fetcher = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -860,7 +948,7 @@ describe("unified knowledge node workspace", () => {
     expect(getUnsavedWorkspaceDrafts()).toHaveLength(0);
   });
 
-  it("does not commit a late save or show success after leaving its project scope", async () => {
+  it.each(["保存修改", "保存后下载 ZIP"])("does not commit or download a late %s after leaving its project scope", async (action) => {
     disposeScope = activateWorkspaceRestScope(
       "operator:project-a",
       "project-a",
@@ -880,9 +968,14 @@ describe("unified knowledge node workspace", () => {
       },
     );
     vi.stubGlobal("fetch", fetcher);
-    renderWorkspace();
+    const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderWorkspace({ progress: {
+      ...progress,
+      contentAvailability: "complete",
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },
+    } });
     fireEvent.change(await openEditor(), { target: { value: "A项目正文" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    fireEvent.click(screen.getByRole("button", { name: action }));
     await waitFor(() => expect(resolveSave).toBeTypeOf("function"));
     disposeScope = activateWorkspaceRestScope(
       "operator:project-b",
@@ -896,6 +989,7 @@ describe("unified knowledge node workspace", () => {
       }),
     );
     expect(context.commitKnowledgeBaseObservation).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
     expect(
       screen.queryByText("修改已保存，请确认后更新知识库。"),
     ).not.toBeInTheDocument();

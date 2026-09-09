@@ -143,11 +143,11 @@ describe("operator workspace navigation", () => {
       ) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     const general = within(modules).getByRole("button", {
-      name: "FrontMind通用智能体",
+      name: "通用智能体",
     });
     expect(
       within(modules)
-        .getByRole("button", { name: "项目工具" })
+        .getByRole("button", { name: "AI专用官网" })
         .compareDocumentPosition(general) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "品牌建设" })).toHaveAttribute(
@@ -171,25 +171,29 @@ describe("operator workspace navigation", () => {
     view.unmount();
   });
 
-  it("keeps the general entry and task list visible while its brand modules can be expanded", () => {
-    const props = sidebarProps();
+  it("keeps all seven modules visible and task navigation in the workbench panel", () => {
     render(
       <OperatorSidebar
-        {...props}
+        {...sidebarProps()}
         activeEntry="agent"
-        taskNavigation={<p>我的常驻任务列表</p>}
+        taskNavigation={<p>旧的左侧任务列表</p>}
       />,
     );
     const toggle = screen.getByRole("button", { name: "AI 智能品牌优化" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "品牌建设" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "通用智能体" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("旧的左侧任务列表")).toBeNull();
+    expect(screen.getByRole("button", { name: "品牌建设" })).toHaveStyle({
+      "--module-accent": "#16794f",
+    });
+    fireEvent.click(toggle);
     expect(screen.queryByRole("button", { name: "品牌建设" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "FrontMind通用智能体" }),
-    ).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText("我的常驻任务列表")).toBeVisible();
-    fireEvent.click(toggle);
-    expect(screen.getByRole("button", { name: "品牌建设" })).toBeVisible();
-    expect(screen.getByText("我的常驻任务列表")).toBeVisible();
+      screen.getByRole("button", { name: "通用智能体" }),
+    ).toBeVisible();
   });
 
   it("keeps the project capsule at the bottom with its list closed by default", () => {

@@ -4,6 +4,10 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  AdminDisclosure,
+  AdminRecordIdentity,
+} from "@/components/AdminRecordPresentation";
+import {
   aiUsageReportInput,
   chinaDate,
   type AiUsageReportInput,
@@ -309,17 +313,17 @@ export function AdminAiUsageReport({
                 缓存读取 {tokenCount(data.summary.cacheReadInputTokens)}
               </p>
             </div>
-            <p className="text-xs leading-6 text-muted-foreground">
+            <AdminDisclosure label="计费口径与同步说明">
               GLM-5.3 每百万 Token：输入 ¥8、输出 ¥28、缓存读取
               ¥2；三项独立相加，无档位倍率。官网成本由平台承担，历史观察不追扣。金额和
               Token 来自同一批事件；尚未与供应商完整账单自动核对。
               {data.summary.unknownEvents > 0 &&
                 ` ${data.summary.unknownEvents} 条事件待核价。`}{" "}
               最新入账：{dateTime(data.summary.lastRecordedAt)}。
-            </p>
+            </AdminDisclosure>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-left text-sm">
-                <thead className="bg-muted/40 text-xs text-muted-foreground">
+                <thead className="bg-white text-sm text-black">
                   <tr>
                     <th className="p-3">任务 / 负责人</th>
                     <th className="p-3">最近消耗时间</th>
@@ -332,12 +336,9 @@ export function AdminAiUsageReport({
                     <Fragment key={`${task.id}:${task.model}`}>
                       <tr className="border-t align-top">
                         <td className="max-w-[260px] p-3">
-                          <p
-                            className="truncate font-medium"
-                            title={task.title}
-                          >
-                            {task.title}
-                          </p>
+                          <AdminRecordIdentity
+                            name={<span title={task.title}>{task.title}</span>}
+                          />
                           <p className="mt-1 text-xs text-muted-foreground">
                             负责人：{task.businessOwnerName ?? "未归属"} ·{" "}
                             {task.scope === "website_frontend"

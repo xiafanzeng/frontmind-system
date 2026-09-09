@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Check,
@@ -8,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   Crosshair,
+  Download,
   Pencil,
   Search,
   X,
@@ -25,6 +27,7 @@ import type {
 } from "@shared/knowledge-node-workspace";
 import { useConversation } from "@/contexts/ConversationContext";
 import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
+import { projectResourceUrl } from "@/lib/enterprise-project";
 import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,6 +66,11 @@ export interface KnowledgeNodeWorkspaceProps {
   className?: string;
   /** The workbench owns its responsive drawer; node details stay in its auxiliary panel. */
   detailPresentation?: "drawer" | "inline";
+  detailContainer?: HTMLElement | null;
+  nodeConversation?: { leafId: string; content: React.ReactNode };
+  onDetailsOpenChange?: (open: boolean) => void;
+  autoOpenDetails?: boolean;
+  onNodeOpen?: () => void;
   onEditTargetChange?: (target: KnowledgeNodeEditTarget | null) => void;
   onDirtyChange?: (dirty: boolean) => void;
   onMutationPendingChange?: (pending: boolean) => void;
@@ -128,6 +136,11 @@ function KnowledgeNodeWorkspaceSession({
   loading = false,
   className = "",
   detailPresentation = "drawer",
+  detailContainer,
+  nodeConversation,
+  onDetailsOpenChange,
+  autoOpenDetails = false,
+  onNodeOpen,
   onEditTargetChange,
   onDirtyChange,
   onMutationPendingChange,
@@ -154,6 +167,9 @@ function KnowledgeNodeWorkspaceSession({
     () => new Set(),
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => {
+    if (autoOpenDetails) setDrawerOpen(true);
+  }, [autoOpenDetails]);
   const inlineDetails = detailPresentation === "inline";
   const detailTitleId = useId();
   const detailDescriptionId = useId();
@@ -167,6 +183,9 @@ function KnowledgeNodeWorkspaceSession({
   const [editBase, setEditBase] = useState<KnowledgeNodeDetailsDto | null>(
     null,
   );
+  useEffect(() => {
+    onDetailsOpenChange?.(drawerOpen);
+  }, [drawerOpen, onDetailsOpenChange]);
   const [draft, setDraft] = useState("");
   const [editorPreview, setEditorPreview] = useState(false);
   const [savePending, setSavePending] = useState(false);
@@ -493,7 +512,7 @@ function KnowledgeNodeWorkspaceSession({
     callbacks.current.onEditTargetChange?.(null);
   };
 
-  const saveDraft = async (): Promise<boolean> => {
+  const saveDraft = async (downloadAfterSave = false): Promise<boolean> => {
     if (
       !editBase ||
       readonlyPreview ||
@@ -587,6 +606,36 @@ function KnowledgeNodeWorkspaceSession({
       }
       finishEditing();
       setReload((value) => value + 1);
+      if (downloadAfterSave) {
+        // Export the authoritative saved observation, never the editor's old
+        // coordinates or a parent render that has not caught up with this save.
+        const savedProgress = saved.observation.interaction.progress;
+        if (!savedProgress?.build.contentVersion) {
+          setSavedMessage(
+            "修改已保存，暂未取得导出版本。请从右侧下载已保存工作稿。",
+          );
+          return true;
+        }
+        const params = new URLSearchParams({
+          conversationId,
+          expectedGeneration: String(saved.observation.generation),
+          expectedRevision: String(savedProgress.build.revision),
+          expectedStateEpoch: String(saved.observation.stateEpoch),
+          expectedContentVersion: String(savedProgress.build.contentVersion),
+          expectedResetRevision: String(coordinates.resetRevision),
+        });
+        rest.assertActive();
+        const download = document.createElement("a");
+        download.href = projectResourceUrl(
+          `/api/knowledge-base/workspace-export?${params}`,
+        );
+        download.download = "";
+        download.target = "_blank";
+        download.rel = "noreferrer";
+        document.body.appendChild(download);
+        download.click();
+        download.remove();
+      }
       return true;
     } catch (error) {
       if (!rest.signal.aborted)
@@ -619,10 +668,14 @@ function KnowledgeNodeWorkspaceSession({
       setSavedMessage(null);
     }
     setDrawerOpen(true);
+    onNodeOpen?.();
   };
   const selectLeaf = (leafId: string) => {
     if (mutationPending || imageDirty) return;
-    if (drawerOpen && leafId === selectedLeafId) return;
+    if (drawerOpen && leafId === selectedLeafId) {
+      onNodeOpen?.();
+      return;
+    }
     if (dirty) {
       setPendingDestination({ kind: "node", leafId });
       return;
@@ -863,25 +916,27 @@ function KnowledgeNodeWorkspaceSession({
           查看节点正文，直接编辑、使用 AI 修改或管理本地图片。
         </DetailDescription>
       </header>
-      <label className="knowledge-node-workspace__node-switch">
-        切换节点
-        <select
-          aria-label="切换知识节点"
-          value={selectedLeafId ?? ""}
-          onChange={(event) => selectLeaf(event.target.value)}
-          disabled={mutationPending || imageDirty}
-        >
-          {branches.map((branch) => (
-            <optgroup key={branch.id} label={branch.title}>
-              {branch.leaves.map((leaf) => (
-                <option key={leaf.id} value={leaf.id}>
-                  {leaf.title} · {leafStatusLabel(leaf)}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </label>
+      {!detailContainer && (
+        <label className="knowledge-node-workspace__node-switch">
+          切换节点
+          <select
+            aria-label="切换知识节点"
+            value={selectedLeafId ?? ""}
+            onChange={(event) => selectLeaf(event.target.value)}
+            disabled={mutationPending || imageDirty}
+          >
+            {branches.map((branch) => (
+              <optgroup key={branch.id} label={branch.title}>
+                {branch.leaves.map((leaf) => (
+                  <option key={leaf.id} value={leaf.id}>
+                    {leaf.title} · {leafStatusLabel(leaf)}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="knowledge-node-workspace__detail">
         <div className="knowledge-node-workspace__detail-heading">
           {!editing && (
@@ -1053,6 +1108,25 @@ function KnowledgeNodeWorkspaceSession({
               >
                 取消编辑
               </Button>
+              {progress?.workbench && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void saveDraft(true)}
+                  disabled={
+                    disabled ||
+                    !dirty ||
+                    !draft.trim() ||
+                    mutationPending ||
+                    conflicted ||
+                    progress.contentAvailability !== "complete" ||
+                    Boolean(progress.build.awaitingResponseSince)
+                  }
+                >
+                  <Download />
+                  保存后下载 ZIP
+                </Button>
+              )}
               <Button
                 type="button"
                 onClick={() => void saveDraft()}
@@ -1128,8 +1202,10 @@ function KnowledgeNodeWorkspaceSession({
                       title: currentDetails.node.title,
                       mode: "ai",
                     });
-                    returnToComposer.current = true;
-                    setDrawerOpen(false);
+                    if (!detailContainer) {
+                      returnToComposer.current = true;
+                      setDrawerOpen(false);
+                    }
                   }}
                 />
                 {!currentDetails.capabilities.aiEdit.allowed &&
@@ -1152,6 +1228,8 @@ function KnowledgeNodeWorkspaceSession({
             )}
           </>
         )}
+        {nodeConversation?.leafId === selectedLeafId &&
+          nodeConversation.content}
       </div>
     </>
   );
@@ -1164,7 +1242,7 @@ function KnowledgeNodeWorkspaceSession({
     >
       <header
         className="knowledge-node-workspace__header"
-        hidden={inlineDetails && drawerOpen}
+        hidden={inlineDetails && drawerOpen && !detailContainer}
       >
         <div>
           <h2>知识结构</h2>
@@ -1199,7 +1277,7 @@ function KnowledgeNodeWorkspaceSession({
         <>
           <div
             className="knowledge-node-workspace__directory"
-            hidden={inlineDetails && drawerOpen}
+            hidden={inlineDetails && drawerOpen && !detailContainer}
           >
             <div className="knowledge-node-workspace__search">
               <Search aria-hidden="true" />
@@ -1370,10 +1448,14 @@ function KnowledgeNodeWorkspaceSession({
             </nav>
           </div>
           {inlineDetails ? (
-            drawerOpen && (
+            drawerOpen &&
+            ((content: React.ReactNode) =>
+              detailContainer
+                ? createPortal(content, detailContainer)
+                : content)(
               <section
                 ref={inlineDetailsElement}
-                className="knowledge-node-workspace__inline-detail"
+                className="knowledge-node-workspace knowledge-node-workspace__inline-detail"
                 aria-labelledby={detailTitleId}
                 aria-describedby={detailDescriptionId}
                 tabIndex={-1}
@@ -1391,7 +1473,7 @@ function KnowledgeNodeWorkspaceSession({
                 }}
               >
                 {detailContent}
-              </section>
+              </section>,
             )
           ) : (
             <Sheet

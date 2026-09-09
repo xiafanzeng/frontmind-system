@@ -118,10 +118,7 @@ export function OperatorSidebar({
   onDeleteProject?: (project: EnterpriseProjectView) => Promise<void>;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
-  const [modulesExpanded, setModulesExpanded] = useState(
-    activeEntry !== "agent",
-  );
-  useEffect(() => setModulesExpanded(activeEntry !== "agent"), [activeEntry]);
+  const [modulesExpanded, setModulesExpanded] = useState(true);
   const [isMobile, setIsMobile] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -374,11 +371,14 @@ export function OperatorSidebar({
             <button
               type="button"
               className="operator-module-group-toggle"
+              aria-label="AI 智能品牌优化"
               aria-expanded={modulesExpanded}
               aria-controls="operator-brand-modules"
               onClick={() => setModulesExpanded((value) => !value)}
             >
-              <Sparkles size={20} aria-hidden="true" />
+              <span className="operator-brand-symbol" aria-hidden="true">
+                <Sparkles size={20} />
+              </span>
               <span>AI 智能品牌优化</span>
               <ChevronDown
                 size={14}
@@ -402,6 +402,7 @@ export function OperatorSidebar({
                   key={module.id}
                   type="button"
                   className={`operator-nav-entry operator-module-entry ${active ? "active" : ""}`}
+                  style={{ "--module-accent": module.color } as CSSProperties}
                   title={module.label}
                   aria-label={module.label}
                   aria-current={active ? "page" : undefined}
@@ -416,8 +417,9 @@ export function OperatorSidebar({
           <button
             type="button"
             className={`operator-nav-entry operator-module-entry operator-general-entry ${activeEntry === "agent" ? "active" : ""}`}
-            title="FrontMind通用智能体"
-            aria-label="FrontMind通用智能体"
+            style={{ "--module-accent": "#491060" } as CSSProperties}
+            title="通用智能体"
+            aria-label="通用智能体"
             aria-current={activeEntry === "agent" ? "page" : undefined}
             onClick={() =>
               requestWorkspaceNavigation(() => {
@@ -427,17 +429,9 @@ export function OperatorSidebar({
             }
           >
             <Bot size={20} />
-            <span>FrontMind通用智能体</span>
+            <span>通用智能体</span>
           </button>
         </nav>
-        {activeEntry === "agent" && (
-          <div
-            className="operator-task-navigation-slot"
-            ref={taskNavigationRef}
-          >
-            {taskNavigation}
-          </div>
-        )}
         <div className="operator-sidebar-bottom">
           <div
             className={`operator-project-group operator-project-capsule ${activeEntry === "project" ? "is-active" : ""}`}

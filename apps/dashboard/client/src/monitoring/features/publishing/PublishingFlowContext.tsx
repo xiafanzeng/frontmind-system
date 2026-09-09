@@ -1,3 +1,5 @@
+import { useOutcomeSync } from "@/dashboard/workflow/useOutcomeSync";
+import { WorkflowFeedback } from "@/dashboard/workflow/Workflow";
 import {
   createContext,
   useCallback,
@@ -9,9 +11,15 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "wouter";
-import { useBusinessWorkspace } from "@/dashboard/BusinessWorkspaceContext";
+import {
+  useBusinessWorkspace,
+  type BusinessWorkspaceOutput,
+} from "@/dashboard/BusinessWorkspaceContext";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
-import type { WorkbenchTaskState } from "@shared/workbench-task";
+import type {
+  WorkbenchTaskState,
+  WorkbenchOutputRef,
+} from "@shared/workbench-task";
 import {
   DEFAULT_MEDIA_FILTERS,
   readMediaRouteState,
@@ -30,21 +38,29 @@ export type PublishingFlowSummary = {
   title: string;
   items: Array<{ label: string; value: string }>;
   note?: string;
+  outputs?: BusinessWorkspaceOutput[];
 };
 export type PublishingFlow = {
   taskId?: string;
+  scopeKey?: string;
+  pending?: boolean;
+  outcomePending?: boolean;
   ensureTask: () => Promise<string>;
   agentId: string;
   selections?: Record<string, unknown>;
   resources?: PublishingResource[];
+  records?: WorkbenchTaskState["records"];
   setSummary: (summary: PublishingFlowSummary | null) => void;
   record: (input: {
     id: string;
     label: string;
     detail?: string;
     resources?: PublishingResource[];
+    outputRefs?: WorkbenchOutputRef[];
   }) => Promise<void>;
   saveSelections: (selections: Record<string, unknown>) => Promise<void>;
+  /** Presentation choices do not advance a business operation. */
+  saveValues?: (values: Record<string, unknown>) => Promise<void>;
   handoff: (input: {
     targetAgentId: "publishing" | "media" | "articles";
     title: string;
@@ -107,6 +123,7 @@ export function publishingTaskResumePath(
 
 export function PublishingFlowBridge({ children }: { children: ReactNode }) {
   const workspace = useBusinessWorkspace();
+  const outcome = useOutcomeSync();
   const [, navigate] = useLocation();
   const task = workspace.task;
   const routeScope = projectWorkspaceUrl("/");
@@ -159,9 +176,13 @@ export function PublishingFlowBridge({ children }: { children: ReactNode }) {
         ? null
         : {
             taskId: task.taskId ?? undefined,
+            scopeKey: task.scopeKey,
+            pending: task.pending,
+            outcomePending: Boolean(outcome.pending),
             agentId: workspace.agentId,
             ensureTask: () => task.ensureTask(),
             selections: task.state?.values,
+            records: task.state?.records,
             resources: task.state?.resources.filter(
               (resource): resource is PublishingResource =>
                 [
@@ -173,20 +194,31 @@ export function PublishingFlowBridge({ children }: { children: ReactNode }) {
             ),
             setSummary: publishSummary,
             record: async (record) => {
-              await task.saveState({
+              const patch = {
                 step: record.id.split(":")[0],
                 record: {
                   id: record.id,
                   label: record.label,
                   detail: record.detail,
-                  status: "completed",
+                  status: "completed" as const,
                 },
                 ...(record.resources ? { resources: record.resources } : {}),
-              });
+                ...(record.outputRefs ? { outputRefs: record.outputRefs } : {}),
+              };
+              if (record.outputRefs?.length)
+                await outcome.sync(patch, await task.ensureTask());
+              else await task.saveState(patch);
             },
             saveSelections: async (values) => {
               await task.saveState({
                 step: "media-selection",
+                values: values as Parameters<
+                  typeof task.saveState
+                >[0]["values"],
+              });
+            },
+            saveValues: async (values) => {
+              await task.saveState({
                 values: values as Parameters<
                   typeof task.saveState
                 >[0]["values"],
@@ -202,10 +234,23 @@ export function PublishingFlowBridge({ children }: { children: ReactNode }) {
               navigate(`${url.pathname}${url.search}`);
             },
           },
-    [workspace.isWorkbench, workspace.agentId, publishSummary, task, navigate],
+    [
+      workspace.isWorkbench,
+      workspace.agentId,
+      publishSummary,
+      task,
+      navigate,
+      outcome.sync,
+      outcome.pending,
+    ],
   );
   return (
     <PublishingFlowContext.Provider value={value}>
+      {outcome.error && (
+        <WorkflowFeedback error onRetry={() => void outcome.retry()}>
+          {outcome.error}
+        </WorkflowFeedback>
+      )}
       {children}
     </PublishingFlowContext.Provider>
   );
@@ -240,10 +285,30 @@ export function usePublishingOperationScope(resourceKey = "") {
 /** Summary changes follow business responses; they never initiate a paid action. */
 export function usePublishingSummary(summary: PublishingFlowSummary) {
   const flow = usePublishingFlow();
+  const latest = useRef(summary);
+  latest.current = summary;
   const key = JSON.stringify(summary);
   const setSummary = flow?.setSummary;
   useEffect(() => {
-    setSummary?.(JSON.parse(key) as PublishingFlowSummary);
+    const value = latest.current;
+    setSummary?.({
+      ...value,
+      outputs: value.outputs?.map((output) => ({
+        ...output,
+        onOpen: output.onOpen
+          ? () =>
+              latest.current.outputs
+                ?.find((item) => item.id === output.id)
+                ?.onOpen?.()
+          : undefined,
+        onRevise: output.onRevise
+          ? () =>
+              latest.current.outputs
+                ?.find((item) => item.id === output.id)
+                ?.onRevise?.()
+          : undefined,
+      })),
+    });
     return () => setSummary?.(null);
   }, [key, setSummary]);
 }
@@ -259,4 +324,13 @@ export async function publishingDraftRequestKey(
   );
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `publisher:draft:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Match the server-owned handoff receipt without inferring ownership from titles. */
+export async function publishingHandoffRecordId(idempotencyKey: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(idempotencyKey),
+  );
+  return `handoff-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

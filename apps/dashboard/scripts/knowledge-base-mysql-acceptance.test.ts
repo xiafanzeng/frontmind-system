@@ -1,5 +1,10 @@
+import JSZip from "jszip";
+import { createHash } from "node:crypto";
+import { exportKnowledgeBaseWorkspace } from "../server/knowledge-workbench-export";
+import { persistKnowledgeBaseBuildSource } from "../server/knowledge-base-local-source-store";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { eq } from "drizzle-orm";
@@ -15,6 +20,9 @@ import {
   apiUsagePolicies,
   apiUsageSnapshots,
   conversations,
+  conversationTurns,
+  knowledgeBaseBuilds,
+  knowledgeBaseBuildNodes,
 } from "../drizzle/schema";
 
 import {
@@ -38,6 +46,10 @@ import {
 } from "../server/api-usage-snapshot-service";
 import { prepareKnowledgeResetCleanupResource } from "../server/knowledge-base-reset-service";
 import { knowledgeBaseNewBuildPolicyBinding } from "../server/knowledge-base-tree-policy-rollout";
+
+import { acceptKnowledgeBaseInitialDraft } from "../server/knowledge-workbench-service";
+import { knowledgeWorkbenchStage } from "../server/knowledge-workbench-stage";
+import { materializeMysqlWorkbenchDraft } from "./knowledge-workbench-mysql-fixture";
 
 const ACCEPTANCE_ENV = "FRONTMIND_KB_MYSQL_ACCEPTANCE_DATABASE_URL";
 const REQUIRED_ENV = "FRONTMIND_KB_MYSQL_ACCEPTANCE_REQUIRED";
@@ -221,14 +233,25 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
   let executor: ReturnType<typeof drizzle>;
   let target: AcceptanceTarget;
   let userId: number | null = null;
+  let assetRoot: string;
+  const previousAssetRoot = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
   const runId = randomUUID().replaceAll("-", "");
 
   beforeAll(async () => {
     target = parseKnowledgeBaseMysqlAcceptanceTarget(acceptanceUrl);
+    assetRoot = await mkdtemp(
+      path.join(os.tmpdir(), "frontmind-kb-mysql-workbench-"),
+    );
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = assetRoot;
     pool = mysql.createPool({
       uri: target.url,
       connectionLimit: 12,
+      timezone: "Z",
       multipleStatements: false,
+    });
+    // Match production's UTC session contract for TIMESTAMP and server NOW().
+    pool.on("connection", (connection) => {
+      connection.query("SET SESSION time_zone = '+00:00'");
     });
     const [databaseRows] = await pool.query<RowDataPacket[]>(
       "SELECT DATABASE() AS databaseName",
@@ -285,6 +308,10 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
   }, 300_000);
 
   afterAll(async () => {
+    if (previousAssetRoot === undefined)
+      delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    else process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previousAssetRoot;
+    if (assetRoot) await rm(assetRoot, { recursive: true, force: true });
     if (pool && userId) {
       await pool.execute("DELETE FROM users WHERE id = ?", [userId]);
     }
@@ -497,6 +524,324 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
     );
   });
 
+  it("atomically accepts one real draft across concurrent connections and never reconfirms later edits", async () => {
+    const policy = knowledgeBaseNewBuildPolicyBinding();
+    const start = await reserveKnowledgeBaseStartBuild(
+      {
+        userId: userId!,
+        expectedResetRevision: 0,
+        conversationId: `kb-accept-${runId}`,
+        clientRequestId: `accept-start-${runId}`,
+        companyName: "FrontMind MySQL Acceptance",
+        companyWebsite: "https://acceptance.invalid",
+        skillName: "socratic-kb-builder",
+        skillVersion: policy.skillVersion,
+        skillContentHash: policy.skillContentHash,
+        userText: "开始构建企业知识库",
+        expectedAttachmentCount: 0,
+        requestPayload: { kind: "workbench-acceptance" },
+        recoveryMetadata: { kind: "start" },
+        leaseMs: 5_000,
+      },
+      executor,
+    );
+    const buildId = start.build.id;
+    await executor
+      .update(conversationTurns)
+      .set({
+        status: "completed",
+        completedAt: new Date(),
+        leaseExpiresAt: null,
+      })
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+    const coordinates = await materializeMysqlWorkbenchDraft(executor, buildId);
+    await expect(
+      reserveKnowledgeBaseTurn(
+        {
+          userId: userId!,
+          buildId,
+          operationType: "revise",
+          expectedGeneration: 1,
+          expectedRevision: coordinates.expectedRevision,
+          expectedLeafId: "1.1",
+          expectedAttachmentCount: 0,
+          userText: "修改",
+          clientRequestId: `premature-edit-${runId}`,
+          requestPayload: { edit: "before acceptance" },
+          recoveryMetadata: { kind: "turn" },
+        },
+        executor,
+      ),
+    ).rejects.toBeInstanceOf(KnowledgeBaseTurnReservationError);
+    await expect(
+      acceptKnowledgeBaseInitialDraft(
+        userId!,
+        {
+          ...coordinates,
+          expectedStateEpoch: coordinates.expectedStateEpoch + 1,
+        },
+        executor,
+      ),
+    ).rejects.toMatchObject({ code: "STALE_COORDINATES" });
+    const results = await Promise.all([
+      acceptKnowledgeBaseInitialDraft(userId!, coordinates, executor),
+      acceptKnowledgeBaseInitialDraft(userId!, coordinates, executor),
+      acceptKnowledgeBaseInitialDraft(
+        userId!,
+        {
+          ...coordinates,
+          clientRequestId: `second-click-${runId}`,
+        },
+        executor,
+      ),
+    ]);
+    expect(results.filter((result) => !result.unchanged)).toHaveLength(1);
+    expect(results.filter((result) => result.unchanged)).toHaveLength(2);
+    for (const result of results)
+      expect(result.receipt).toEqual(results[0].receipt);
+    const [acceptedBuild] = await executor
+      .select()
+      .from(knowledgeBaseBuilds)
+      .where(eq(knowledgeBaseBuilds.id, buildId));
+    const [acceptedStart] = await executor
+      .select()
+      .from(conversationTurns)
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+    const nodes = await executor
+      .select()
+      .from(knowledgeBaseBuildNodes)
+      .where(eq(knowledgeBaseBuildNodes.buildId, buildId));
+    expect(nodes).toHaveLength(30);
+    expect(
+      nodes.every((node) => node.status === "confirmed" && node.confirmedAt),
+    ).toBe(true);
+    expect(acceptedBuild).toMatchObject({
+      status: "ready_to_publish",
+      confirmedCount: 30,
+      publishedSnapshotId: null,
+      revision: coordinates.expectedRevision + 1,
+      stateEpoch: coordinates.expectedStateEpoch + 1,
+    });
+    const receipt = (acceptedStart!.metadata.knowledgeWorkbench as any)
+      .initialAcceptance;
+    expect(receipt).toMatchObject({
+      buildId,
+      generation: 1,
+      nodeCount: 30,
+      contentVersion: 1,
+    });
+    expect(receipt.nodesSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(knowledgeWorkbenchStage(acceptedBuild!, acceptedStart!).phase).toBe(
+      "editing",
+    );
+
+    const originalBytes = Buffer.from(
+      "用户上传的启动原件：保留精确字节。\n",
+      "utf8",
+    );
+    const original = await persistKnowledgeBaseBuildSource({
+      userId: userId!,
+      buildId,
+      generation: 1,
+      bytes: originalBytes,
+      permanentOriginal: true,
+    });
+    const originalManifest = {
+      schemaVersion: 1,
+      expectedCount: 1,
+      status: "complete",
+      entries: [{ index: 0, filename: "../品牌资料.txt", ...original }],
+    };
+    const withOriginal = {
+      ...acceptedStart!.metadata,
+      internalSystemPrompt: "PRIVATE_SYSTEM_INSTRUCTION_MUST_NOT_EXPORT",
+      knowledgeWorkbench: {
+        ...(acceptedStart!.metadata.knowledgeWorkbench as any),
+        originalAttachmentManifest: originalManifest,
+      },
+    };
+    await executor
+      .update(conversationTurns)
+      .set({ metadata: withOriginal })
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+    const { clientRequestId: _request, ...exportCoordinates } = coordinates;
+    exportCoordinates.expectedRevision = acceptedBuild!.revision;
+    exportCoordinates.expectedStateEpoch = acceptedBuild!.stateEpoch;
+    const archive = await exportKnowledgeBaseWorkspace(
+      userId!,
+      exportCoordinates,
+      executor,
+    );
+    const exportedChunks: Buffer[] = [];
+    for await (const chunk of archive.stream)
+      exportedChunks.push(Buffer.from(chunk));
+    const zip = await JSZip.loadAsync(Buffer.concat(exportedChunks), {
+      checkCRC32: true,
+    });
+    const fileNames = Object.keys(zip.files);
+    expect(fileNames.filter((name) => name.startsWith("nodes/"))).toHaveLength(
+      30,
+    );
+    expect(fileNames.some((name) => name.split("/").includes(".."))).toBe(
+      false,
+    );
+    const originalPath = fileNames.find((name) =>
+      name.startsWith("originals/"),
+    )!;
+    expect(await zip.file(originalPath)!.async("nodebuffer")).toEqual(
+      originalBytes,
+    );
+    const exportedManifest = JSON.parse(
+      await zip.file("manifest.json")!.async("string"),
+    );
+    const imageBytes = await zip
+      .file("resources/assets/product.png")!
+      .async("nodebuffer");
+    expect(
+      imageBytes
+        .subarray(0, 8)
+        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])),
+    ).toBe(true);
+    expect(createHash("sha256").update(imageBytes).digest("hex")).toBe(
+      exportedManifest.resources.find(
+        (resource: any) => resource.path === "resources/assets/product.png",
+      ).sha256,
+    );
+    expect(exportedManifest.originalAttachments).toMatchObject({
+      status: "complete",
+      expectedCount: 1,
+    });
+    expect(
+      fileNames.some((name) =>
+        /SKILL|prompt|instruction|build-sources|permanent-originals/i.test(
+          name,
+        ),
+      ),
+    ).toBe(false);
+    for (const name of fileNames.filter((name) =>
+      /\.(?:md|json|txt)$/.test(name),
+    ))
+      expect(await zip.file(name)!.async("string")).not.toContain(
+        "PRIVATE_SYSTEM_INSTRUCTION_MUST_NOT_EXPORT",
+      );
+    await expect(
+      exportKnowledgeBaseWorkspace(
+        userId!,
+        { ...exportCoordinates, storageKey: "/etc/passwd" },
+        executor,
+      ),
+    ).rejects.toMatchObject({ name: "ZodError" });
+    await expect(
+      exportKnowledgeBaseWorkspace(
+        userId! + 999999,
+        exportCoordinates,
+        executor,
+      ),
+    ).rejects.toMatchObject({ code: "BUILD_NOT_FOUND" });
+    await executor
+      .update(conversationTurns)
+      .set({
+        metadata: {
+          ...withOriginal,
+          knowledgeWorkbench: {
+            ...withOriginal.knowledgeWorkbench,
+            originalAttachmentManifest: {
+              ...originalManifest,
+              entries: [
+                {
+                  ...originalManifest.entries[0],
+                  storageKey: original.storageKey.replace(
+                    `/${userId}/`,
+                    `/${userId! + 1}/`,
+                  ),
+                },
+              ],
+            },
+          },
+        },
+      })
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+    await expect(
+      exportKnowledgeBaseWorkspace(userId!, exportCoordinates, executor),
+    ).rejects.toMatchObject({ code: "INVALID_BUILD_STATE" });
+    await executor
+      .update(conversationTurns)
+      .set({ metadata: withOriginal })
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+
+    // Install another genuine immutable version and edit projection after the
+    // receipt. Neither a transport replay nor another click may confirm it.
+    const editedCoordinates = await materializeMysqlWorkbenchDraft(
+      executor,
+      buildId,
+      2,
+    );
+    expect(
+      (await acceptKnowledgeBaseInitialDraft(userId!, coordinates, executor))
+        .unchanged,
+    ).toBe(true);
+    expect(
+      (
+        await acceptKnowledgeBaseInitialDraft(
+          userId!,
+          editedCoordinates,
+          executor,
+        )
+      ).unchanged,
+    ).toBe(true);
+    await expect(
+      acceptKnowledgeBaseInitialDraft(
+        userId!,
+        {
+          ...editedCoordinates,
+          clientRequestId: receipt.clientRequestId,
+        },
+        executor,
+      ),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    const editedNodes = await executor
+      .select()
+      .from(knowledgeBaseBuildNodes)
+      .where(eq(knowledgeBaseBuildNodes.buildId, buildId));
+    expect(
+      editedNodes.every(
+        (node) =>
+          node.status === "needs_verification" && node.confirmedAt === null,
+      ),
+    ).toBe(true);
+    const [unchangedBuild] = await executor
+      .select()
+      .from(knowledgeBaseBuilds)
+      .where(eq(knowledgeBaseBuilds.id, buildId));
+    const [unchangedStart] = await executor
+      .select()
+      .from(conversationTurns)
+      .where(eq(conversationTurns.id, start.reservation.turn.id));
+    expect(unchangedBuild).toMatchObject({
+      contentVersion: 2,
+      confirmedCount: 0,
+      publishedSnapshotId: null,
+      revision: editedCoordinates.expectedRevision,
+      stateEpoch: editedCoordinates.expectedStateEpoch,
+    });
+    expect(
+      (unchangedStart!.metadata.knowledgeWorkbench as any).initialAcceptance,
+    ).toEqual(receipt);
+    await expect(
+      acceptKnowledgeBaseInitialDraft(
+        userId!,
+        {
+          ...coordinates,
+          expectedResetRevision: 1,
+        },
+        executor,
+      ),
+    ).rejects.toMatchObject({ code: "STALE_COORDINATES" });
+    await expect(
+      acceptKnowledgeBaseInitialDraft(userId! + 999999, coordinates, executor),
+    ).rejects.toMatchObject({ code: "BUILD_NOT_FOUND" });
+  });
+
   it("proves exactly-once reservations, stale-write guards, leases and rollback", async () => {
     expect(userId).not.toBeNull();
     const ownerId = userId!;
@@ -581,12 +926,27 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
       revision: 0,
       leafId: "1.1",
     });
+    // The reservation test enters the real editing stage only after atomic
+    // acceptance of a complete, physically validated initial working set.
+    const initialCoordinates = await materializeMysqlWorkbenchDraft(
+      executor,
+      buildId,
+    );
+    await acceptKnowledgeBaseInitialDraft(
+      ownerId,
+      initialCoordinates,
+      executor,
+    );
+    await executor
+      .update(knowledgeBaseBuilds)
+      .set({ currentLeafId: "1.1", status: "confirming" })
+      .where(eq(knowledgeBaseBuilds.id, buildId));
     const confirmBase = {
       userId: ownerId,
       buildId,
       operationType: "confirm" as const,
       expectedGeneration: 1,
-      expectedRevision: 0,
+      expectedRevision: 1,
       expectedLeafId: "1.1",
       expectedAttachmentCount: 0,
       userText: "确认",
@@ -690,6 +1050,40 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
       }),
     ).toBe(0);
 
+    // A new generation has a distinct authoritative start and must accept
+    // its own draft; the previous generation's receipt grants no permission.
+    const [firstStart] = await executor
+      .select()
+      .from(conversationTurns)
+      .where(eq(conversationTurns.id, startTurnId));
+    await executor.insert(conversationTurns).values({
+      ...firstStart!,
+      id: randomUUID(),
+      buildGeneration: 2,
+      clientRequestId: `start-two-${runId}`,
+      operationKey: `start-two-${runId}`,
+      metadata: {
+        knowledgeWorkbench: {
+          schemaVersion: 1,
+          generation: 2,
+          originalAttachmentManifest: {
+            schemaVersion: 1,
+            expectedCount: 0,
+            status: "complete",
+            entries: [],
+          },
+        },
+      },
+    });
+    const secondCoordinates = await materializeMysqlWorkbenchDraft(
+      executor,
+      buildId,
+    );
+    await acceptKnowledgeBaseInitialDraft(ownerId, secondCoordinates, executor);
+    await executor
+      .update(knowledgeBaseBuilds)
+      .set({ currentLeafId: "1.1", status: "confirming" })
+      .where(eq(knowledgeBaseBuilds.id, buildId));
     const generationTwo = await reserveKnowledgeBaseTurn(
       {
         ...confirmBase,
@@ -706,9 +1100,9 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
         buildId,
         turnId: generationTwo.turn.id,
         generation: 2,
-        expectedRevision: 2,
+        expectedRevision: 3,
         expectedLeafId: "1.1",
-        nextRevision: 3,
+        nextRevision: 4,
         nextLeafId: "1.4",
         operationKey: "future-revision-must-not-apply",
       }),
@@ -719,9 +1113,9 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
         buildId,
         turnId: generationTwo.turn.id,
         generation: 2,
-        expectedRevision: 0,
+        expectedRevision: 1,
         expectedLeafId: "1.1",
-        nextRevision: 1,
+        nextRevision: 2,
         nextLeafId: "1.2",
         operationKey: generationTwo.turn.operationKey,
       }),
@@ -747,7 +1141,7 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
     );
     expect(appliedRows[0]).toMatchObject({
       generation: 2,
-      revision: 1,
+      revision: 2,
       currentLeafId: "1.2",
       activeTurnId: null,
       lastAppliedOperationKey: generationTwo.turn.operationKey,
@@ -759,7 +1153,7 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
         operationType: "revise",
         clientRequestId: `lease-${runId}`,
         expectedGeneration: 2,
-        expectedRevision: 1,
+        expectedRevision: 2,
         expectedLeafId: "1.2",
         requestPayload: { correction: "lease acceptance" },
       },
@@ -771,6 +1165,30 @@ mysqlDescribe("knowledge-base real MySQL state-machine acceptance", () => {
          WHERE id = ?`,
       [expiredReservation.turn.id],
     );
+    const [leaseBuild] = await executor
+      .select()
+      .from(knowledgeBaseBuilds)
+      .where(eq(knowledgeBaseBuilds.id, buildId));
+    const [leaseTurn] = await executor
+      .select()
+      .from(conversationTurns)
+      .where(eq(conversationTurns.id, expiredReservation.turn.id));
+    expect(leaseBuild).toMatchObject({
+      activeTurnId: expiredReservation.turn.id,
+      executionMode: "materialized_bundle_v1",
+      providerProtocol: "manus_v2",
+      skillVersion: "5",
+      contentVersion: 1,
+      handoffProvenance: {
+        materializedRecoveryContractVersion: 1,
+        materializedCompletionContractVersion: 2,
+      },
+    });
+    expect(leaseTurn!.metadata).toMatchObject({
+      materializedRecoveryContractVersion: 1,
+      materializedCompletionContractVersion: 2,
+      createAttemptState: "not_sent",
+    });
     const claimNow = new Date(Date.now() + 1_000);
     const claims = await Promise.all([
       claimKnowledgeBaseTurnForRecovery(

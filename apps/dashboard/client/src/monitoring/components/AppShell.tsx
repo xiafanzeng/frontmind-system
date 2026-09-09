@@ -5,6 +5,7 @@ import { getAdminNav } from "@/pages/AdminDashboard";
 import type { ProjectSummary, SessionUser } from "../domain";
 
 type AppShellProps = {
+  embedded?: boolean;
   user: SessionUser;
   accountBalance?: string;
   walletBalances?: { monitoring?: string; mediaPublishing?: string };
@@ -21,6 +22,7 @@ type AppShellProps = {
 /** Dashboard owns the shell, account menu, and logout; the module owns its business views. */
 export default function AppShell({
   user,
+  embedded = false,
   publishingEnabled,
   projects,
   activeProjectId,
@@ -41,8 +43,10 @@ export default function AppShell({
       .sort((a, b) => b.href.length - a.href.length)[0]?.label ||
     "监控与发布管理";
   const content = (
-    <div className="monitoring-module">
-      {!administration && !publishing && projects.length > 0 && (
+    <div
+      className={`monitoring-module ${embedded ? "monitoring-conversation-shell" : ""}`}
+    >
+      {!embedded && !administration && !publishing && projects.length > 0 && (
         <div className="module-toolbar">
           {!publishing && projects.length > 0 && (
             <label className="module-project-picker">

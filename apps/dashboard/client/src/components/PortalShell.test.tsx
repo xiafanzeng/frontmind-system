@@ -164,7 +164,7 @@ describe("PortalShell sidebar collapse", () => {
     expect(
       screen.getByRole("button", { name: "展开侧栏" }),
     ).toBeInTheDocument();
-    expect(shell).toHaveClass("lg:grid-cols-[76px_minmax(0,1fr)]");
+    expect(shell).toHaveClass("lg:grid-cols-[64px_minmax(0,1fr)]");
     expect(
       within(
         screen.getByRole("navigation", { name: "管理中心导航" }),
@@ -257,7 +257,7 @@ describe("PortalShell sidebar collapse", () => {
     );
     expect(logo.parentElement).toHaveClass("px-2", "pb-4", "pt-1.5");
     expect(navigation).toHaveClass("space-y-1");
-    expect(navigation.parentElement).toHaveClass("mt-4", "p-3");
+    expect(navigation.parentElement).toHaveClass("mt-4", "p-0");
     expect(screen.getByText("交付管理")).toHaveClass("pb-1", "pt-0");
     expect(screen.getByText("工具")).toHaveClass("pb-1", "pt-2.5");
     expect(customerLink).toHaveClass(
@@ -273,4 +273,32 @@ describe("PortalShell sidebar collapse", () => {
       "min-h-10",
     );
   });
+});
+
+it("highlights a child route under its explicit navigation owner", () => {
+  render(
+    <PortalShell
+      eyebrow="管理中心"
+      title="余额与收款"
+      navItems={[
+        { label: "账号与权限", href: "/admin/users", icon: Home },
+        {
+          label: "余额与收款",
+          href: "/delivery/workbench",
+          parentHref: "/admin/users",
+          icon: ClipboardList,
+        },
+      ]}
+    >
+      <p>余额明细</p>
+    </PortalShell>,
+  );
+  expect(screen.getByRole("link", { name: "账号与权限" })).toHaveAttribute(
+    "data-active-owner",
+    "true",
+  );
+  expect(screen.getByRole("link", { name: "余额与收款" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 });

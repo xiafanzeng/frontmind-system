@@ -1,46 +1,55 @@
-import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import ExecutionTrace from "./ExecutionTrace";
 
-const groups = [
-  {
-    id: "g1",
-    title: "读取知识库",
-    description: "核验资料内容",
-    steps: [
-      {
-        id: "s1",
-        type: "function_call",
-        label: "读取文档",
-        details: "manual.pdf",
-      },
-      { id: "s2", type: "reasoning", label: "分析文档" },
-    ],
-  },
-];
-
-describe("ExecutionTrace", () => {
-  it("shows a plain summary and preserves raw details when expanded", () => {
-    render(<ExecutionTrace stepGroups={groups} />);
-
-    expect(screen.getByText("读取知识库 · 分析文档")).toBeInTheDocument();
-    expect(screen.queryByText(/条记录|工具调用|完成/)).not.toBeInTheDocument();
-    expect(screen.queryByText("manual.pdf")).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "展开执行过程：读取知识库 · 分析文档",
-      }),
+describe("public execution process", () => {
+  it("shows useful observed operations without exposing raw code, details or reasoning", () => {
+    const { container } = render(
+      <ExecutionTrace
+        stepGroups={[
+          {
+            id: "g",
+            title: "private task prompt",
+            description: "internal instruction",
+            steps: [
+              {
+                id: "r",
+                type: "function_call",
+                label: "读取文档",
+                details: "/internal/secret.pdf",
+              },
+              {
+                id: "t",
+                type: "reasoning",
+                label: "private reasoning",
+                description: "hidden text",
+              },
+            ],
+          },
+        ]}
+      />,
     );
-    expect(screen.getByText("核验资料内容")).toBeInTheDocument();
-    expect(screen.getByText("manual.pdf")).toBeInTheDocument();
-    expect(screen.getByText("分析文档")).toBeInTheDocument();
+    expect(screen.getByText("读取文档 · 分析任务")).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/private|internal|hidden|secret/);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
   });
-
-  it("does not render decorative tool icons or connector markup", () => {
-    const { container } = render(<ExecutionTrace stepGroups={groups} />);
-    expect(container.querySelector("svg")).toBeTruthy(); // disclosure chevron remains usable
-    expect(container.querySelector(".border-l-2")).toBeNull();
+  it("deduplicates commands by call identity across provider groups", () => {
+    const step = {
+      id: "call-one",
+      type: "code_interpreter_call",
+      label: "python",
+      details: "print(secret)",
+    };
+    render(
+      <ExecutionTrace
+        stepGroups={[
+          { id: "one", title: "a", steps: [step] },
+          { id: "two", title: "b", steps: [step, { ...step, id: "call-two" }] },
+        ]}
+      />,
+    );
+    expect(screen.getByText("执行了 2 个命令")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

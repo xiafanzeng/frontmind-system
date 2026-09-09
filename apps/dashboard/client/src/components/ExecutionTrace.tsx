@@ -1,100 +1,62 @@
-/**
- * Text-first execution details for assistant responses.
- *
- * The collapsed state is one model supplied summary for the whole turn. The
- * expanded state exposes every group and its original labels/details without
- * introducing synthetic phases or aggregate counts.
- */
-import React, { useState } from "react";
-import { ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
+import type { StepGroup } from "@/contexts/ConversationContext";
 import "./ExecutionTrace.css";
-import type {
-  StepGroup,
-  IntermediateStep,
-} from "@/contexts/ConversationContext";
 
-function StepDetails({ step }: { step: IntermediateStep }) {
-  return (
-    <li className="min-w-0 py-1 text-[13px] leading-5 text-muted-foreground">
-      <p className="break-words">{step.label}</p>
-      {step.description && (
-        <p className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground/75">
-          {step.description}
-        </p>
-      )}
-      {step.details && step.details !== step.description && (
-        <p className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground/75">
-          {step.details}
-        </p>
-      )}
-    </li>
+const safeLabels: Record<string, string> = {
+  web_search_call: "检索网页",
+  web_search: "检索网页",
+  browser: "浏览网页",
+  computer_call: "浏览与操作",
+  file_search_call: "检索资料",
+  file_search: "检索资料",
+  reasoning: "分析任务",
+  thinking: "分析任务",
+};
+const allowedText = new Set([
+  "读取知识库",
+  "读取文档",
+  "读取资料",
+  "检索资料",
+  "检索文本",
+  "读取网页",
+  "检索网页",
+  "搜索网页",
+  "生成内容",
+  "检查结果",
+  "写入文件",
+  "编辑文件",
+  "查看目录",
+  "查找文件",
+]);
+
+/** Legacy provider steps have no public-summary designation. Project only
+ * known operations, never descriptions/details containing code or arguments. */
+export function publicExecutionSummaries(groups: StepGroup[]) {
+  const operations = new Map<string, string>();
+  for (const group of groups)
+    for (const step of group.steps) {
+      const command =
+        [
+          "code_interpreter_call",
+          "code_execution",
+          "bash",
+          "python",
+          "exec_command",
+        ].includes(step.type) || step.label === "执行命令";
+      operations.set(
+        step.id,
+        command
+          ? "执行命令"
+          : (safeLabels[step.type] ??
+              (allowedText.has(step.label) ? step.label : "执行工具操作")),
+      );
+    }
+  const counts = new Map<string, number>();
+  for (const label of operations.values())
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  return [...counts].map(([label, count]) =>
+    label === "执行命令" ? `执行了 ${count} 个命令` : label,
   );
 }
-
-function groupSummary(group: StepGroup) {
-  const latest = group.steps.at(-1);
-  return latest?.label && latest.label !== group.title
-    ? `${group.title} · ${latest.label}`
-    : group.title;
-}
-
-function StepGroupRow({
-  group,
-  isCurrent,
-  initialExpanded = false,
-}: {
-  group: StepGroup;
-  isCurrent: boolean;
-  initialExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(initialExpanded);
-  const summary = groupSummary(group);
-  return (
-    <div className="execution-trace__group min-w-0 border-b border-border/35 last:border-b-0">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-label={expanded ? `收起${summary}` : `展开${summary}`}
-        onClick={() => setExpanded((value) => !value)}
-        className={cn(
-          "execution-trace__group-summary flex min-h-8 w-full min-w-0 items-center gap-2 py-1.5 text-left",
-          "text-[13px] leading-5 text-muted-foreground transition-colors",
-          "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
-        {isCurrent && (
-          <span className="shrink-0 text-[11px] text-muted-foreground/70">
-            进行中
-          </span>
-        )}
-        <ChevronDown
-          aria-hidden="true"
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground/65 transition-transform",
-            expanded && "rotate-180",
-          )}
-        />
-      </button>
-      {expanded && (
-        <div className="pb-2 pl-1">
-          {group.description && (
-            <p className="mb-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-muted-foreground/80">
-              {group.description}
-            </p>
-          )}
-          <ul className="m-0 list-none p-0">
-            {group.steps.map((step) => (
-              <StepDetails key={step.id} step={step} />
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function ExecutionTrace({
   stepGroups,
   isRunning,
@@ -102,50 +64,23 @@ export default function ExecutionTrace({
   stepGroups: StepGroup[];
   isRunning?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!stepGroups?.length) return null;
-  const lastGroup = stepGroups.at(-1)!;
-  const summary = groupSummary(lastGroup);
-
+  const summaries = publicExecutionSummaries(stepGroups ?? []);
+  if (!summaries.length) return null;
   return (
-    <section className="execution-trace" aria-label="执行过程">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-label={expanded ? "收起执行过程" : `展开执行过程：${summary}`}
-        onClick={() => setExpanded((value) => !value)}
-        className={cn(
-          "execution-trace__summary flex min-h-8 w-full min-w-0 items-center gap-2 py-1.5 text-left",
-          "text-[13px] leading-5 text-muted-foreground transition-colors",
-          "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-        )}
-      >
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
-        {isRunning && (
-          <span className="shrink-0 text-[11px] text-muted-foreground/70">
-            进行中
-          </span>
-        )}
-        <ChevronDown
-          aria-hidden="true"
-          className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground/65 transition-transform",
-            expanded && "rotate-180",
-          )}
-        />
-      </button>
-      {expanded && (
-        <div className="pl-1">
-          {stepGroups.map((group, index) => (
-            <StepGroupRow
-              key={group.id}
-              group={group}
-              isCurrent={Boolean(isRunning && index === stepGroups.length - 1)}
-              initialExpanded
-            />
-          ))}
-        </div>
-      )}
+    <section
+      className="execution-trace"
+      aria-label="执行过程"
+      style={{
+        color: "#595959",
+        fontSize: 13,
+        lineHeight: "22px",
+        paddingBlock: 8,
+      }}
+    >
+      <p style={{ margin: 0 }}>
+        {summaries.join(" · ")}
+        {isRunning ? " · 进行中" : ""}
+      </p>
     </section>
   );
 }

@@ -1,3 +1,4 @@
+import { useBusinessWorkspace } from "@/dashboard/BusinessWorkspaceContext";
 import {
   ChevronRight,
   Download,
@@ -54,6 +55,8 @@ import "./monitoring.css";
 import "./reference-ui.css";
 
 type MonitoringWorkspaceProps = {
+  analysisOnly?: boolean;
+  initialTab?: "overview" | "trends";
   project: ProjectSummary;
   monitors: MonitorSummary[];
   deletedCount: number;
@@ -168,7 +171,12 @@ function MonitoringWorkspaceController({
   onRefresh,
   selectionRequest,
   useDataSource,
+  analysisOnly = false,
+  initialTab,
 }: MonitoringWorkspaceProps & { useDataSource: MonitoringDataSourceHook }) {
+  const { isWorkbench, task } = useBusinessWorkspace();
+  const [monitorSearch, setMonitorSearch] = useState("");
+  const [monitorPage, setMonitorPage] = useState(0);
   const allRuns = useMemo(
     () => runCollection(recentRuns, latestRun),
     [latestRun, recentRuns],
@@ -184,7 +192,13 @@ function MonitoringWorkspaceController({
     [allRuns, latestRun, serverData, monitors, project],
   );
   const initialSearchRef = useRef(
-    typeof window === "undefined" ? "" : window.location.search,
+    isWorkbench
+      ? typeof task?.state?.values.monitoringQuery === "string"
+        ? task.state.values.monitoringQuery
+        : `?tab=${initialTab ?? "overview"}`
+      : typeof window === "undefined"
+        ? ""
+        : window.location.search,
   );
   const hasHydratedDataRef = useRef(monitors.length > 0);
   const [query, setQuery] = useState<MonitoringQueryState>(() =>
@@ -261,9 +275,15 @@ function MonitoringWorkspaceController({
       const next = normalize({ ...current, ...nextPatch });
       queryRef.current = next;
       setQuery(next);
-      writeMonitoringQuery(next, mode);
+      if (isWorkbench && task)
+        void task
+          .saveState({
+            values: { monitoringQuery: monitoringQueryString(next) },
+          })
+          .catch(() => undefined);
+      else writeMonitoringQuery(next, mode);
     },
-    [normalize],
+    [normalize, isWorkbench, task],
   );
 
   useEffect(() => {
@@ -272,7 +292,7 @@ function MonitoringWorkspaceController({
     const next = readMonitoringQuery(initialSearchRef.current, context);
     queryRef.current = next;
     setQuery(next);
-    writeMonitoringQuery(next, "replace");
+    if (!isWorkbench) writeMonitoringQuery(next, "replace");
   }, [context, monitors.length]);
 
   useEffect(() => {
@@ -282,7 +302,7 @@ function MonitoringWorkspaceController({
     if (monitoringQueryString(next) === monitoringQueryString(current)) return;
     queryRef.current = next;
     setQuery(next);
-    writeMonitoringQuery(next, "replace");
+    if (!isWorkbench) writeMonitoringQuery(next, "replace");
   }, [normalize]);
 
   useEffect(() => {
@@ -299,6 +319,7 @@ function MonitoringWorkspaceController({
   }, [selectionRequest?.nonce]);
 
   useEffect(() => {
+    if (isWorkbench) return;
     const onPopState = () => {
       const next = readMonitoringQuery(window.location.search, context);
       queryRef.current = next;
@@ -306,13 +327,14 @@ function MonitoringWorkspaceController({
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [context]);
+  }, [context, isWorkbench]);
 
   const selectedMonitor = monitors.find(
     (monitor) => monitor.id === query.monitorId,
   );
   const visibleSelectedMonitor =
-    selectedMonitor && visibleMonitorIds.includes(selectedMonitor.id)
+    selectedMonitor &&
+    (isWorkbench || visibleMonitorIds.includes(selectedMonitor.id))
       ? selectedMonitor
       : undefined;
   const monitorRuns = allRuns.filter(
@@ -438,27 +460,113 @@ function MonitoringWorkspaceController({
 
   return (
     <div
-      className={`fm-monitoring-workspace ${listCollapsed ? "is-list-collapsed" : ""} ${monitors.length ? "" : "is-empty"} ${refreshing || loading || live.loading ? "is-refreshing" : ""}`}
+      className={`fm-monitoring-workspace ${isWorkbench ? "is-conversation-flow" : ""} ${listCollapsed ? "is-list-collapsed" : ""} ${monitors.length ? "" : "is-empty"} ${refreshing || loading || live.loading ? "is-refreshing" : ""}`}
       aria-busy={Boolean(refreshing || loading || live.loading)}
       data-refreshing={
         refreshing || loading || live.loading ? "true" : undefined
       }
     >
-      <MonitorListPanel
-        monitors={monitors}
-        selectedId={query.monitorId}
-        deletedCount={deletedCount}
-        collapsed={listCollapsed}
-        onCollapsedChange={setListCollapsed}
-        onSelect={selectMonitor}
-        onAdd={onAdd}
-        onOpenRecycle={onOpenRecycle}
-        onOpenDetails={onOpenDetails}
-        onRun={onRun}
-        onToggle={onToggle}
-        onDelete={onDelete}
-        onFilteredIdsChange={setVisibleMonitorIds}
-      />
+      {isWorkbench ? (
+        <section
+          className="monitoring-conversation-selector"
+          aria-label="选择监控对象"
+        >
+          <div className="monitoring-conversation-selector__heading">
+            <label>
+              <input
+                type="search"
+                aria-label="搜索监控对象"
+                placeholder="搜索监控对象"
+                value={monitorSearch}
+                onChange={(event) => {
+                  setMonitorSearch(event.target.value);
+                  setMonitorPage(0);
+                }}
+              />
+            </label>
+            <div>
+              {!analysisOnly && (
+                <button
+                  type="button"
+                  className="fm-primary-button"
+                  onClick={onAdd}
+                >
+                  <Plus size={15} />
+                  新建监控配置
+                </button>
+              )}
+              {!analysisOnly && (
+                <button
+                  type="button"
+                  className="fm-secondary-button"
+                  onClick={onOpenRecycle}
+                >
+                  回收站{deletedCount ? `（${deletedCount}）` : ""}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="monitoring-conversation-list">
+            {monitors
+              .filter((monitor) => monitor.name.includes(monitorSearch.trim()))
+              .slice(monitorPage * 10, (monitorPage + 1) * 10)
+              .map((monitor) => (
+                <button
+                  type="button"
+                  key={monitor.id}
+                  aria-pressed={query.monitorId === monitor.id}
+                  onClick={() => selectMonitor(monitor.id)}
+                >
+                  <strong>{monitor.name}</strong>
+                  <span>
+                    {monitor.questionsCount} 个问题 · {monitor.platformsCount}{" "}
+                    个平台 · {monitorStatusLabel(monitor.status)}
+                  </span>
+                </button>
+              ))}
+          </div>
+          {monitors.filter((monitor) =>
+            monitor.name.includes(monitorSearch.trim()),
+          ).length > 10 && (
+            <nav className="business-flow-pagination" aria-label="监控对象分页">
+              <button
+                disabled={monitorPage === 0}
+                onClick={() => setMonitorPage((value) => value - 1)}
+              >
+                上一页
+              </button>
+              <span>第 {monitorPage + 1} 页</span>
+              <button
+                disabled={
+                  (monitorPage + 1) * 10 >=
+                  monitors.filter((monitor) =>
+                    monitor.name.includes(monitorSearch.trim()),
+                  ).length
+                }
+                onClick={() => setMonitorPage((value) => value + 1)}
+              >
+                下一页
+              </button>
+            </nav>
+          )}
+        </section>
+      ) : (
+        <MonitorListPanel
+          monitors={monitors}
+          selectedId={query.monitorId}
+          deletedCount={deletedCount}
+          collapsed={listCollapsed}
+          onCollapsedChange={setListCollapsed}
+          onSelect={selectMonitor}
+          onAdd={onAdd}
+          onOpenRecycle={onOpenRecycle}
+          onOpenDetails={onOpenDetails}
+          onRun={onRun}
+          onToggle={onToggle}
+          onDelete={onDelete}
+          onFilteredIdsChange={setVisibleMonitorIds}
+        />
+      )}
       <section
         ref={detailRef}
         className="fm-monitor-detail"
@@ -492,7 +600,7 @@ function MonitoringWorkspaceController({
                   </span>
                 </p>
               </div>
-              <div className="fm-monitor-actions">
+              <div className="fm-monitor-actions" hidden={analysisOnly}>
                 {exportHref ? (
                   <a
                     className="fm-primary-button fm-report-button"
@@ -721,16 +829,22 @@ function MonitoringWorkspaceController({
           <div className="fm-detail-empty">
             <RadioTower size={30} />
             <h2>没有匹配的监控</h2>
-            <p>请调整左侧搜索词或状态筛选。</p>
+            <p>请调整搜索词或重新选择监控。</p>
           </div>
         ) : (
           <div className="fm-detail-empty">
             <RadioTower size={30} />
             <h2>添加第一个问题监控</h2>
             <p>配置问题、模型与执行计划后，这里将展示运行工作台。</p>
-            <button type="button" className="fm-primary-button" onClick={onAdd}>
-              <Plus size={16} /> 批量添加问题
-            </button>
+            {!analysisOnly && (
+              <button
+                type="button"
+                className="fm-primary-button"
+                onClick={onAdd}
+              >
+                <Plus size={16} /> 批量添加问题
+              </button>
+            )}
           </div>
         )}
       </section>

@@ -1,7 +1,7 @@
 import { useBusinessWorkspace } from "@/dashboard/BusinessWorkspaceContext";
 import { activeEnterpriseProjectId } from "@/lib/enterprise-project";
 import { ArchiveRestore, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 
 import Modal from "../components/Modal";
@@ -25,10 +25,19 @@ import type {
   RunCostQuoteView,
 } from "../runBilling";
 
+const InlineRunPanel = lazy(() =>
+  import("../Workspace").then((module) => ({
+    default: module.MonitoringRunPanel,
+  })),
+);
+
 export type MonitoringSaveResult = void | { monitorId: string; runId?: string };
 export type MonitoringRunResult = void | { runId: string };
 
 export type MonitoringPageProps = {
+  createMonitorRequest?: string;
+  analysisOnly?: boolean;
+  initialTab?: "overview" | "trends";
   project?: ProjectSummary;
   seedQuestions?: string[];
   monitors: MonitorSummary[];
@@ -108,6 +117,9 @@ function monitorInputScheduleLabel(value: MonitorInput) {
 export default function MonitoringPage({
   project,
   seedQuestions,
+  createMonitorRequest,
+  analysisOnly = false,
+  initialTab,
   monitors,
   deletedMonitors = [],
   models,
@@ -136,7 +148,35 @@ export default function MonitoringPage({
 }: MonitoringPageProps) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const [, navigate] = useLocation();
-  const [monitorEditor, setMonitorEditor] = useState<MonitorEditorState>();
+  const [expandedRunId, setExpandedRunId] = useState<string | undefined>(() =>
+    typeof task?.state?.values.selectedRunId === "string"
+      ? task.state.values.selectedRunId
+      : undefined,
+  );
+  const savedDraft = task?.state?.values.monitorForm as
+    | MonitorInput
+    | undefined;
+  const draftValid =
+    savedDraft &&
+    typeof savedDraft.name === "string" &&
+    Array.isArray(savedDraft.questions) &&
+    Array.isArray(savedDraft.platforms) &&
+    savedDraft.schedule &&
+    typeof savedDraft.schedule.timezone === "string";
+  const [monitorEditor, setMonitorEditor] = useState<
+    MonitorEditorState | undefined
+  >(() =>
+    isWorkbench && task?.state?.values.monitorEditorOpen === true && draftValid
+      ? task.state.values.monitorFormTarget === "new"
+        ? { kind: "create" }
+        : {
+            kind: "edit",
+            monitorId: String(task.state.values.monitorFormTarget),
+            loading: false,
+            initial: savedDraft,
+          }
+      : undefined,
+  );
   const [projectModal, setProjectModal] = useState(false);
   const [recycleModal, setRecycleModal] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<MonitorSummary>();
@@ -177,6 +217,19 @@ export default function MonitoringPage({
     }
   }, [loading, project?.id, seedQuestions]);
 
+  const openedCreateRequest = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (
+      !createMonitorRequest ||
+      openedCreateRequest.current === createMonitorRequest ||
+      loading ||
+      !project ||
+      !seedQuestions
+    )
+      return;
+    openedCreateRequest.current = createMonitorRequest;
+    setMonitorEditor({ kind: "create" });
+  }, [createMonitorRequest, loading, project?.id, seedQuestions]);
   const initialLoading = Boolean(
     loading && !hasCompletedInitialLoadRef.current && monitors.length === 0,
   );
@@ -204,34 +257,62 @@ export default function MonitoringPage({
     }
   };
 
-  const rememberMonitorResult = (monitorId: string, runId?: string) => {
+  type OperationOwner = { conversationId: string; scopeKey: string };
+  const operationOwner = async (): Promise<OperationOwner | undefined> =>
+    isWorkbench && task
+      ? { scopeKey: task.scopeKey, conversationId: await task.ensureTask() }
+      : undefined;
+  const rememberMonitorResult = async (
+    monitorId: string,
+    runId: string | undefined,
+    owner: OperationOwner | undefined,
+  ) => {
+    if (isWorkbench && runId) setExpandedRunId(runId);
     if (!isWorkbench || !task) return;
-    void task
-      .saveState({
-        step: runId ? "monitoring-running" : "monitoring-saved",
-        values: {
-          selectedMonitorId: monitorId,
-          ...(runId ? { selectedRunId: runId } : {}),
+    await task
+      .saveState(
+        {
+          step: runId ? "monitoring-running" : "monitoring-saved",
+          values: {
+            monitorEditorOpen: false,
+            selectedMonitorId: monitorId,
+            ...(runId ? { selectedRunId: runId } : {}),
+          },
+          outputRefs: [
+            {
+              resource: { kind: "monitor", id: monitorId },
+              sourceStepId: "monitoring-saved",
+            },
+            ...(runId
+              ? [
+                  {
+                    resource: { kind: "monitoring_run" as const, id: runId },
+                    sourceStepId: "monitoring-running",
+                  },
+                ]
+              : []),
+          ],
+          ...(runId
+            ? {
+                resources: [
+                  ...(task.state?.resources ?? []).filter(
+                    (item) => item.kind !== "monitoring_run",
+                  ),
+                  { kind: "monitoring_run" as const, id: runId },
+                ],
+              }
+            : {}),
+          record: {
+            id: `monitor-${runId ?? monitorId}`,
+            label: runId ? "监控已提交执行" : "监控配置已保存",
+            status: "completed",
+          },
         },
-        ...(runId
-          ? {
-              resources: [
-                ...(task.state?.resources ?? []).filter(
-                  (item) => item.kind !== "monitoring_run",
-                ),
-                { kind: "monitoring_run" as const, id: runId },
-              ],
-            }
-          : {}),
-        record: {
-          id: `monitor-${runId ?? monitorId}`,
-          label: runId ? "监控已提交执行" : "监控配置已保存",
-          status: "completed",
-        },
-      })
+        owner,
+      )
       .catch(() =>
         setActionError(
-          "监控操作已提交，任务记录同步失败；可在任务辅助区重试同步。",
+          "监控操作已提交，任务记录尚未同步；请回到来源任务查看真实监控结果。",
         ),
       );
   };
@@ -244,23 +325,31 @@ export default function MonitoringPage({
     setSubmitting(true);
     setSubmitError("");
     try {
+      const owner = await operationOwner();
       if (isWorkbench && task)
-        await task.saveState({
-          step: runNow ? "monitoring-confirmed" : "monitoring-saving",
-          values: { monitorForm: value },
-          record: {
-            id: "monitor-submit",
-            label: runNow ? "已确认监控费用并提交" : "保存监控配置",
-            status: "pending",
+        await task.saveState(
+          {
+            step: runNow ? "monitoring-confirmed" : "monitoring-saving",
+            values: { monitorForm: value },
+            record: {
+              id: "monitor-submit",
+              label: runNow ? "已确认监控费用并提交" : "保存监控配置",
+              status: "pending",
+            },
           },
-        });
+          owner,
+        );
       const result = monitorId
         ? await onUpdateMonitor?.(monitorId, value, runNow, idempotencyKey)
         : await onSaveMonitor(value, runNow, idempotencyKey);
       setMonitorEditor(undefined);
       const resolvedResult = result || (monitorId ? { monitorId } : undefined);
       if (resolvedResult) {
-        rememberMonitorResult(resolvedResult.monitorId, resolvedResult.runId);
+        await rememberMonitorResult(
+          resolvedResult.monitorId,
+          resolvedResult.runId,
+          owner,
+        );
         setSuccess({
           message: runNow
             ? monitorId
@@ -295,6 +384,15 @@ export default function MonitoringPage({
       monitorEditor?.kind === "edit" ? monitorEditor.monitorId : undefined;
     if (runNow) {
       quoteRequestId.current += 1;
+      if (isWorkbench && task)
+        await task.saveState({
+          step: "monitoring-fees",
+          values: {
+            monitorForm: value,
+            monitorFormTarget: monitorId ?? "new",
+            monitorEditorOpen: true,
+          },
+        });
       setPendingRun({ kind: "save", monitorId, value, idempotencyKey, quote });
       setPendingRunQuote(quote);
       setPendingRunQuoteLoading(false);
@@ -307,6 +405,10 @@ export default function MonitoringPage({
   const closeMonitorEditor = () => {
     editorRequestId.current += 1;
     setMonitorEditor(undefined);
+    if (isWorkbench && task)
+      void task
+        .saveState({ values: { monitorEditorOpen: false } })
+        .catch(() => undefined);
     setSubmitError("");
   };
 
@@ -393,23 +495,38 @@ export default function MonitoringPage({
   };
 
   const confirmPendingRun = async () => {
-    if (!pendingRun || confirmingRun) return;
+    if (
+      !pendingRun ||
+      confirmingRun ||
+      pendingRunQuoteLoading ||
+      pendingRunQuoteError ||
+      !pendingRunQuote
+    )
+      return;
     setConfirmingRun(true);
     if (pendingRun.kind === "existing") {
       setActionError("");
       try {
+        const owner = await operationOwner();
         if (isWorkbench && task)
-          await task.saveState({
-            step: "monitoring-confirmed",
-            values: { selectedMonitorId: pendingRun.monitor.id },
-            record: {
-              id: "monitor-submit",
-              label: "已确认监控费用并提交",
-              status: "pending",
+          await task.saveState(
+            {
+              step: "monitoring-confirmed",
+              values: { selectedMonitorId: pendingRun.monitor.id },
+              record: {
+                id: "monitor-submit",
+                label: "已确认监控费用并提交",
+                status: "pending",
+              },
             },
-          });
+            owner,
+          );
         const result = await onRunMonitor(pendingRun.monitor.id);
-        rememberMonitorResult(pendingRun.monitor.id, result?.runId);
+        await rememberMonitorResult(
+          pendingRun.monitor.id,
+          result?.runId,
+          owner,
+        );
         setSuccess({
           message: "监控已开始执行",
           monitorId: pendingRun.monitor.id,
@@ -459,7 +576,7 @@ export default function MonitoringPage({
       {success && (
         <div className="fm-workspace-toast" role="status">
           <span>{demoMode ? `演示：${success.message}` : success.message}</span>
-          {success.runId && !demoMode && (
+          {success.runId && !demoMode && !isWorkbench && (
             <Link
               href={`/monitoring-system/${success.monitorId}/runs/${success.runId}`}
             >
@@ -483,46 +600,52 @@ export default function MonitoringPage({
           <span>正在读取问题监控…</span>
         </div>
       ) : project ? (
-        <MonitoringWorkspace
-          project={project}
-          monitors={monitors}
-          deletedCount={deletedMonitors.length}
-          latestRun={latestRun}
-          recentRuns={recentRuns}
-          selectedRunId={selectedRunId}
-          loading={loading}
-          serverData={serverData}
-          canRefresh={Boolean(onRefresh)}
-          onSelectedRunChange={onSelectedRunChange}
-          onSelectedMonitorChange={onSelectedMonitorChange}
-          onAdd={openCreateMonitor}
-          onOpenRecycle={() => setRecycleModal(true)}
-          onOpenDetails={(monitor) => void openEditMonitor(monitor)}
-          onOpenRun={(monitor, runId) =>
-            demoMode
-              ? onSelectedRunChange?.(runId)
-              : navigate(`/monitoring-system/${monitor.id}/runs/${runId}`)
-          }
-          onRun={prepareExistingRun}
-          onToggle={(monitor) =>
-            void runAction(() =>
-              onToggleMonitor(monitor.id, monitor.status !== "paused"),
-            )
-          }
-          onDelete={setPendingDelete}
-          onRefresh={async () => {
-            await runAction(() => onRefresh?.());
-          }}
-          selectionRequest={
-            success
-              ? {
-                  monitorId: success.monitorId,
-                  runId: success.runId,
-                  nonce: success.nonce,
-                }
-              : undefined
-          }
-        />
+        <div hidden={isWorkbench && Boolean(monitorEditor || pendingRun)}>
+          <MonitoringWorkspace
+            analysisOnly={analysisOnly}
+            initialTab={initialTab}
+            project={project}
+            monitors={monitors}
+            deletedCount={deletedMonitors.length}
+            latestRun={latestRun}
+            recentRuns={recentRuns}
+            selectedRunId={selectedRunId}
+            loading={loading}
+            serverData={serverData}
+            canRefresh={Boolean(onRefresh)}
+            onSelectedRunChange={onSelectedRunChange}
+            onSelectedMonitorChange={onSelectedMonitorChange}
+            onAdd={openCreateMonitor}
+            onOpenRecycle={() => setRecycleModal(true)}
+            onOpenDetails={(monitor) => void openEditMonitor(monitor)}
+            onOpenRun={(monitor, runId) =>
+              isWorkbench
+                ? (setExpandedRunId(runId), onSelectedRunChange?.(runId))
+                : demoMode
+                  ? onSelectedRunChange?.(runId)
+                  : navigate(`/monitoring-system/${monitor.id}/runs/${runId}`)
+            }
+            onRun={prepareExistingRun}
+            onToggle={(monitor) =>
+              void runAction(() =>
+                onToggleMonitor(monitor.id, monitor.status !== "paused"),
+              )
+            }
+            onDelete={setPendingDelete}
+            onRefresh={async () => {
+              await runAction(() => onRefresh?.());
+            }}
+            selectionRequest={
+              success
+                ? {
+                    monitorId: success.monitorId,
+                    runId: success.runId,
+                    nonce: success.nonce,
+                  }
+                : undefined
+            }
+          />
+        </div>
       ) : (
         <section className="panel-state" aria-label="监控项目空态">
           <strong>尚未创建监控项目</strong>
@@ -537,6 +660,22 @@ export default function MonitoringPage({
         </section>
       )}
 
+      {isWorkbench && expandedRunId && !monitorEditor && !pendingRun && (
+        <section className="business-inline-step" aria-label="本次监控运行结果">
+          <div className="business-inline-step-heading">
+            <h3>运行结果</h3>
+            <button
+              aria-label="收起运行结果"
+              onClick={() => setExpandedRunId(undefined)}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <Suspense fallback={<p role="status">正在读取本次运行…</p>}>
+            <InlineRunPanel runId={expandedRunId} />
+          </Suspense>
+        </section>
+      )}
       <Modal
         inline={isWorkbench}
         open={projectModal}
@@ -558,61 +697,84 @@ export default function MonitoringPage({
         />
       </Modal>
       {project && monitorEditor && (
-        <Modal
-          inline={isWorkbench}
-          open
-          onClose={closeMonitorEditor}
-          title={
-            monitorEditor.kind === "edit" ? "编辑问题监控" : "批量添加问题"
-          }
-          description={
-            monitorEditor.kind === "edit"
-              ? "保存会创建新的不可变配置版本，历史运行保持原样。"
-              : undefined
-          }
-          size="wide"
-        >
-          {submitError && (
-            <p className="form-error modal-error" role="alert">
-              {submitError}
-            </p>
-          )}
-          {monitorEditor.kind === "edit" && !monitorEditor.initial ? (
-            monitorEditor.loading ? (
-              <div className="panel-state" aria-busy="true">
-                <strong>正在读取监控配置…</strong>
-              </div>
+        <div hidden={isWorkbench && Boolean(pendingRun)}>
+          <Modal
+            inline={isWorkbench}
+            open
+            onClose={closeMonitorEditor}
+            title={
+              monitorEditor.kind === "edit" ? "编辑问题监控" : "批量添加问题"
+            }
+            description={
+              monitorEditor.kind === "edit"
+                ? "保存会创建新的不可变配置版本，历史运行保持原样。"
+                : undefined
+            }
+            size="wide"
+          >
+            {submitError && (
+              <p className="form-error modal-error" role="alert">
+                {submitError}
+              </p>
+            )}
+            {monitorEditor.kind === "edit" && !monitorEditor.initial ? (
+              monitorEditor.loading ? (
+                <div className="panel-state" aria-busy="true">
+                  <strong>正在读取监控配置…</strong>
+                </div>
+              ) : (
+                <div className="panel-state">
+                  <strong>监控配置暂不可用</strong>
+                  <span>关闭后重试，或从旧详情页继续编辑。</span>
+                </div>
+              )
             ) : (
-              <div className="panel-state">
-                <strong>监控配置暂不可用</strong>
-                <span>关闭后重试，或从旧详情页继续编辑。</span>
-              </div>
-            )
-          ) : (
-            <MonitorForm
-              key={
-                monitorEditor.kind === "edit"
-                  ? monitorEditor.monitorId
-                  : "create"
-              }
-              project={project}
-              demoMode={demoMode}
-              seedQuestions={seedQuestions}
-              models={models}
-              availableBalanceTenThousandths={availableBalanceTenThousandths}
-              quoteRunCost={quoteRunCost}
-              regions={regions}
-              initial={
-                monitorEditor.kind === "edit"
-                  ? monitorEditor.initial
-                  : undefined
-              }
-              submitting={submitting}
-              onCancel={closeMonitorEditor}
-              onSubmit={saveMonitor}
-            />
-          )}
-        </Modal>
+              <MonitorForm
+                key={
+                  monitorEditor.kind === "edit"
+                    ? monitorEditor.monitorId
+                    : "create"
+                }
+                project={project}
+                demoMode={demoMode}
+                seedQuestions={seedQuestions}
+                models={models}
+                availableBalanceTenThousandths={availableBalanceTenThousandths}
+                quoteRunCost={quoteRunCost}
+                regions={regions}
+                initial={
+                  monitorEditor.kind === "edit"
+                    ? monitorEditor.initial
+                    : draftValid &&
+                        task?.state?.values.monitorFormTarget === "new"
+                      ? savedDraft
+                      : undefined
+                }
+                onDraftChange={
+                  isWorkbench && task
+                    ? (value) => {
+                        void task
+                          .saveState({
+                            values: {
+                              monitorForm: value,
+                              monitorFormTarget:
+                                monitorEditor.kind === "edit"
+                                  ? monitorEditor.monitorId
+                                  : "new",
+                              monitorEditorOpen: true,
+                            },
+                          })
+                          .catch(() => undefined);
+                      }
+                    : undefined
+                }
+                submitting={submitting}
+                onCancel={closeMonitorEditor}
+                onSubmit={saveMonitor}
+              />
+            )}
+          </Modal>
+        </div>
       )}
       {pendingRun && (
         <RunConfirmationDialog
@@ -644,6 +806,11 @@ export default function MonitoringPage({
           }
           quoteLoading={pendingRunQuoteLoading}
           quoteError={pendingRunQuoteError}
+          onRetryQuote={
+            pendingRun.kind === "existing"
+              ? () => prepareExistingRun(pendingRun.monitor)
+              : undefined
+          }
           scheduleSummary={
             pendingRun.kind === "existing"
               ? pendingRun.monitor.scheduleLabel

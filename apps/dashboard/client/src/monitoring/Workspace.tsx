@@ -14,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Redirect, Route, Switch, useLocation } from "wouter";
+import { Redirect, Route, Router, Switch, useLocation } from "wouter";
 
 import {
   bankTransferInputForApi,
@@ -192,6 +192,7 @@ export function firstUndismissedTopup<T extends { id: string }>(
 function useMonitoringProjectSelection(
   projects: readonly ProjectSummary[],
   initialProjectId?: string,
+  embedded = false,
 ) {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(
     () =>
@@ -206,6 +207,14 @@ function useMonitoringProjectSelection(
 
   useEffect(() => {
     const syncFromLocation = () => {
+      if (embedded && initialProjectId) {
+        setActiveProjectId(
+          projects.some((project) => project.id === initialProjectId)
+            ? initialProjectId
+            : undefined,
+        );
+        return;
+      }
       if (!projects.length) {
         setActiveProjectId(undefined);
         return;
@@ -234,16 +243,38 @@ function useMonitoringProjectSelection(
     syncFromLocation();
     window.addEventListener("popstate", syncFromLocation);
     return () => window.removeEventListener("popstate", syncFromLocation);
-  }, [activeProjectId, projects]);
+  }, [activeProjectId, projects, embedded, initialProjectId]);
 
-  const selectProject = useCallback((projectId: string) => {
-    if (window.location.pathname === "/monitoring-system") {
-      writeMonitoringProjectSelection(projectId);
-    }
-    setActiveProjectId(projectId);
-  }, []);
+  const selectProject = useCallback(
+    (projectId: string) => {
+      if (!embedded && window.location.pathname === "/monitoring-system") {
+        writeMonitoringProjectSelection(projectId);
+      }
+      setActiveProjectId(projectId);
+    },
+    [embedded],
+  );
 
   return [activeProjectId, selectProject] as const;
+}
+
+type InlineMonitoringOptions = {
+  embedded?: boolean;
+  selectedProjectId?: string;
+  createMonitorRequest?: string;
+  analysisOnly?: boolean;
+  initialTab?: "overview" | "trends";
+};
+function useInlineMonitoringLocation() {
+  const [location, setLocation] = useState(() =>
+    window.location.pathname.startsWith("/monitoring-system/")
+      ? window.location.pathname
+      : "/monitoring-system",
+  );
+  return [location, (to: string) => setLocation(to)] as [
+    string,
+    (to: string) => void,
+  ];
 }
 
 function ServerBackedWorkspace({
@@ -253,7 +284,12 @@ function ServerBackedWorkspace({
   legalRegistration,
   localServerBacked,
   questionSources,
-}: {
+  embedded,
+  selectedProjectId,
+  createMonitorRequest,
+  analysisOnly,
+  initialTab,
+}: InlineMonitoringOptions & {
   user: SessionUser;
   initialBilling: ApiOutputs["auth"]["me"]["billing"];
   publishingEnabled: boolean;
@@ -292,8 +328,11 @@ function ServerBackedWorkspace({
     () => (projectsQuery.data || []).map(mapProject),
     [projectsQuery.data],
   );
-  const [activeProjectId, selectActiveProject] =
-    useMonitoringProjectSelection(projects);
+  const [activeProjectId, selectActiveProject] = useMonitoringProjectSelection(
+    projects,
+    selectedProjectId,
+    embedded,
+  );
   const platformQuery = trpc.platforms.list.useQuery(undefined, {
     enabled: monitoringEnabled,
   });
@@ -677,6 +716,7 @@ function ServerBackedWorkspace({
 
   return (
     <AppShell
+      embedded={embedded}
       user={user}
       accountBalance={formatCnyTenThousandths(billing.availableTenThousandths)}
       walletBalances={{
@@ -1009,6 +1049,9 @@ function ServerBackedWorkspace({
           <Route path="/monitoring-system">
             {user.role === "user" ? (
               <MonitoringPage
+                createMonitorRequest={createMonitorRequest}
+                analysisOnly={analysisOnly}
+                initialTab={initialTab}
                 seedQuestions={
                   activeProject
                     ? questionSources?.[activeProject.id]
@@ -1696,6 +1739,7 @@ function AdminWorkspace({
     ]);
   return (
     <AdminPage
+      titleInShell
       section={section}
       walletScope={adminWalletScope}
       mediaWalletAvailable={publishingEnabled}
@@ -1997,7 +2041,8 @@ function numericProperty(value: object | null | undefined, key: string) {
 /** Resolve the linked tenant using the existing Dashboard cookie. Authentication belongs to Dashboard. */
 function LinkedMonitoringWorkspace({
   questionSources,
-}: {
+  ...inlineOptions
+}: InlineMonitoringOptions & {
   questionSources?: Record<string, string[]>;
 }) {
   const [location] = useLocation();
@@ -2035,13 +2080,17 @@ function LinkedMonitoringWorkspace({
       publishingEnabled={me.data.features?.mediaPublishing === true}
       localServerBacked={false}
       questionSources={questionSources}
+      {...inlineOptions}
     />
   );
 }
 
 export default function MonitoringModule({
   questionSources,
-}: { questionSources?: Record<string, string[]> } = {}) {
+  ...inlineOptions
+}: InlineMonitoringOptions & {
+  questionSources?: Record<string, string[]>;
+} = {}) {
   const { user } = useAuth();
   const [client] = useState(createTrpcClient);
   const queryClient = useMemo(createModuleQueryClient, [user?.id]);
@@ -2054,7 +2103,19 @@ export default function MonitoringModule({
   return (
     <QueryClientProvider client={queryClient}>
       <trpc.Provider client={client} queryClient={queryClient}>
-        <LinkedMonitoringWorkspace questionSources={questionSources} />
+        {inlineOptions.embedded ? (
+          <Router hook={useInlineMonitoringLocation}>
+            <LinkedMonitoringWorkspace
+              questionSources={questionSources}
+              {...inlineOptions}
+            />
+          </Router>
+        ) : (
+          <LinkedMonitoringWorkspace
+            questionSources={questionSources}
+            {...inlineOptions}
+          />
+        )}
       </trpc.Provider>
     </QueryClientProvider>
   );

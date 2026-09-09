@@ -83,6 +83,28 @@ describe("EmptyConversationHint", () => {
     vi.unstubAllGlobals();
   });
 
+  it("opens the real knowledge intake inline and retains input when returning to its entry", () => {
+    render(<EmptyConversationHint inline onStartKnowledgeBase={vi.fn()} companyName="验收企业" companyConfigured companyLoading={false} />);
+    expect(screen.getByRole("heading", { name: "先用哪些资料了解你的企业？" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /构建企业知识库/ }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const notes = screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容");
+    fireEvent.change(notes, { target: { value: "重点整理产品的适用范围" } });
+    addStarterFiles([sizedFile("企业宣传册.pdf", 1024)]);
+    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+    fireEvent.click(screen.getByRole("button", { name: /构建企业知识库/ }));
+    expect(screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容")).toHaveValue("重点整理产品的适用范围");
+    expect(screen.getByText("企业宣传册.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始构建" })).toBeEnabled();
+  });
+
+  it("does not replay the inline knowledge entry for an existing conversation", () => {
+    render(<EmptyConversationHint inline eligible={false} onStartKnowledgeBase={vi.fn()} companyName="验收企业" companyConfigured companyLoading={false} />);
+    expect(screen.queryByRole("heading", { name: "先用哪些资料了解你的企业？" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /构建企业知识库/ })).not.toBeInTheDocument();
+  });
+
   it("centers the enterprise knowledge-base action without the generic content-workflow copy", () => {
     render(
       <EmptyConversationHint

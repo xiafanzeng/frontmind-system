@@ -37,7 +37,15 @@ const REFRESHABLE_CATALOG_BLOCKERS = new Set([
   "TITLE_LIMIT_CHANGED",
 ]);
 
-export default function PublishingReviewPage({ draftId }: { draftId: string }) {
+export default function PublishingReviewPage({
+  draftId,
+  onSubmitted,
+  onRevise,
+}: {
+  draftId: string;
+  onSubmitted?: (batchId: string) => void;
+  onRevise?: () => void;
+}) {
   const gateway = usePublisherGateway();
   const flow = usePublishingFlow();
   const operationScope = usePublishingOperationScope(draftId);
@@ -113,15 +121,27 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
           label: "发布请求已受理",
           detail: `${batch.itemCount} 家媒体 · 批次结果由发布服务更新`,
           resources: [{ kind: "publication_batch", id: batch.id }],
+          outputRefs: [
+            {
+              resource: {
+                kind: "publication_batch",
+                id: batch.id,
+                label: "已受理发布批次",
+              },
+              sourceStepId: `submitted:${batch.id}`,
+            },
+          ],
         })
         .catch(() => undefined);
       if (isCurrent())
-        navigate(
-          publishingTaskUrl(
-            `/publishing/publications/${batch.id}?submitted=1`,
-            flow?.taskId,
-          ),
-        );
+        onSubmitted
+          ? onSubmitted(batch.id)
+          : navigate(
+              publishingTaskUrl(
+                `/publishing/publications/${batch.id}?submitted=1`,
+                flow?.taskId,
+              ),
+            );
     } catch (reason) {
       if (!isCurrent()) return;
       setSubmitError(
@@ -235,7 +255,7 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
       description="确认冻结版本、逐家媒体标题、单价与发布风险。"
       busy={query.loading || query.refreshing || submitting}
     >
-      <PublishingSteps current={4} />
+      {!flow && <PublishingSteps current={4} />}
       {query.loading ? (
         <PublishingLoading label="正在刷新价格与发布门禁…" />
       ) : null}
@@ -489,13 +509,24 @@ export default function PublishingReviewPage({ draftId }: { draftId: string }) {
               </p>
             ) : null}
             <div className="publishing-confirm-actions">
-              <Link
-                className="publishing-button publishing-button-secondary"
-                href={`/publishing/drafts/${draftId}/titles`}
-              >
-                <ArrowLeft size={16} />
-                返回修改
-              </Link>
+              {onRevise ? (
+                <button
+                  type="button"
+                  className="publishing-button publishing-button-secondary"
+                  onClick={onRevise}
+                >
+                  <ArrowLeft size={16} />
+                  返回修改标题
+                </button>
+              ) : (
+                <Link
+                  className="publishing-button publishing-button-secondary"
+                  href={`/publishing/drafts/${draftId}/titles`}
+                >
+                  <ArrowLeft size={16} />
+                  返回修改
+                </Link>
+              )}
               <button
                 className="publishing-button publishing-button-accent"
                 type="button"

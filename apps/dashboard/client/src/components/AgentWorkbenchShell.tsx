@@ -36,6 +36,7 @@ export type AgentWorkbenchShellProps = {
   taskTitle?: string;
   taskKey?: string;
   scrollMain?: boolean;
+  auxiliaryScroll?: boolean;
   conversation?: ReactNode;
   children?: ReactNode;
   result?: ReactNode;
@@ -46,12 +47,28 @@ export type AgentWorkbenchShellProps = {
   embedded?: boolean;
   showResult?: boolean;
   conversationFocusRequest?: object | null;
+  auxiliaryFocusRequest?: object | null;
 };
-function savedWidth(key: string) {
+export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v4.auxiliary-ratio";
+export const WORKBENCH_MIN_WIDTH = 948;
+export const WORKBENCH_MAX_WIDTH = 1584;
+
+export function workbenchPaneGeometry(available: number, ratio = 1 / 3) {
+  const content = Math.max(0, Math.min(available, WORKBENCH_MAX_WIDTH) - 48);
+  const maxAux = Math.max(300, content - 600);
+  return {
+    minAux: 300,
+    maxAux,
+    width: Math.max(300, Math.min(maxAux, content * ratio)),
+  };
+}
+
+function savedRatio() {
   try {
-    return Number(localStorage.getItem(key)) || null;
+    const value = Number(localStorage.getItem(WORKBENCH_RATIO_KEY));
+    return value > 0 && value < 1 ? value : 1 / 3;
   } catch {
-    return null;
+    return 1 / 3;
   }
 }
 export function AgentWorkbenchShell({
@@ -66,6 +83,7 @@ export function AgentWorkbenchShell({
   taskTitle,
   taskKey,
   scrollMain,
+  auxiliaryScroll = true,
   conversation,
   children,
   result,
@@ -74,41 +92,40 @@ export function AgentWorkbenchShell({
   status,
   showResult = true,
   conversationFocusRequest,
+  auxiliaryFocusRequest,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
   const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
   const isKnowledge = layout === "knowledge";
   const hasAux = layout !== "single";
   const ownsScroll = scrollMain ?? main !== undefined;
-  const preferenceKey = `frontmind.workbench.v2.width:${projectId}:${moduleId}:${layout}`;
-  const [width, setWidth] = useState<number | null>(() =>
-    savedWidth(preferenceKey),
-  );
+  const [ratio, setRatio] = useState(savedRatio);
   const [available, setAvailable] = useState(0);
-  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const root = useRef<HTMLElement>(null);
   const mainViewport = useRef<HTMLDivElement>(null);
+  const layoutRoot = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const stopDrag = useRef<() => void>(() => undefined);
   const focusMainAfterClose = useRef(false);
-  const minAux = isKnowledge ? 420 : 280;
-  const maxAux = Math.max(
+  const {
     minAux,
-    isKnowledge ? available - 601 : Math.min(480, available - 601),
-  );
-  const renderedWidth = Math.max(
-    minAux,
-    Math.min(maxAux, width ?? (isKnowledge ? available * 0.45 : 320)),
-  );
-  const narrow = viewport < 1280 || (available > 0 && available < 601 + minAux);
+    maxAux,
+    width: renderedWidth,
+  } = workbenchPaneGeometry(available, ratio);
+  const narrow =
+    viewportWidth < 1024 || (available > 0 && available < WORKBENCH_MIN_WIDTH);
   const inlineAux = hasAux && !narrow && !collapsed;
   const [auxHost] = useState(() => {
     const node = document.createElement("div");
     node.className = "agent-workbench-shell__auxiliary-content";
     return node;
   });
+  useEffect(() => {
+    auxHost.classList.toggle("has-native-scroll", !auxiliaryScroll);
+  }, [auxHost, auxiliaryScroll]);
   const attachAux = useCallback(
     (slot: HTMLDivElement | null) => {
       if (slot) slot.appendChild(auxHost);
@@ -118,7 +135,7 @@ export function AgentWorkbenchShell({
   useEffect(() => {
     const measure = () => {
       setAvailable(root.current?.clientWidth ?? 0);
-      setViewport(window.innerWidth);
+      setViewportWidth(window.innerWidth);
     };
     measure();
     const observer =
@@ -134,23 +151,31 @@ export function AgentWorkbenchShell({
     };
   }, []);
   useEffect(() => {
-    setWidth(savedWidth(preferenceKey));
     setCollapsed(false);
     setDrawerOpen(false);
-  }, [preferenceKey]);
+  }, [projectId, moduleId]);
   useEffect(() => {
     if (!narrow) setDrawerOpen(false);
   }, [narrow]);
+  const focusMain = useCallback(() => {
+    const viewport = mainViewport.current;
+    const target = viewport?.querySelector<HTMLElement>(
+      'textarea:not([disabled]), [tabindex="-1"]',
+    );
+    (target ?? viewport)?.focus({ preventScroll: true });
+  }, []);
   useEffect(() => {
     if (!conversationFocusRequest) return;
     if (drawerOpen) {
       focusMainAfterClose.current = true;
       setDrawerOpen(false);
-    } else
-      mainViewport.current
-        ?.querySelector<HTMLTextAreaElement>("textarea:not([disabled])")
-        ?.focus();
-  }, [conversationFocusRequest]);
+    } else focusMain();
+  }, [conversationFocusRequest, focusMain]);
+  useEffect(() => {
+    if (!auxiliaryFocusRequest) return;
+    if (narrow) setDrawerOpen(true);
+    else setCollapsed(false);
+  }, [auxiliaryFocusRequest, narrow]);
   const readingKey = `${projectId}:${moduleId}:${taskKey ?? "current"}`;
   const { showLatest, returnToLatest } = useChatReadingPosition(
     mainViewport,
@@ -160,18 +185,21 @@ export function AgentWorkbenchShell({
   );
   const changeWidth = (value: number) => {
     const next = Math.max(minAux, Math.min(maxAux, value));
-    setWidth(next);
+    const nextRatio =
+      next / Math.max(1, Math.min(available, WORKBENCH_MAX_WIDTH) - 48);
+    setRatio(nextRatio);
     try {
-      localStorage.setItem(preferenceKey, String(next));
+      localStorage.setItem(WORKBENCH_RATIO_KEY, String(nextRatio));
     } catch {}
   };
   const resize = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
     stopDrag.current();
-    const right = root.current?.getBoundingClientRect().right;
+    const right = layoutRoot.current?.getBoundingClientRect().right;
     if (right === undefined) return;
-    const move = (e: globalThis.PointerEvent) => changeWidth(right - e.clientX);
+    const move = (e: globalThis.PointerEvent) =>
+      changeWidth(right - 16 - e.clientX);
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
@@ -250,11 +278,13 @@ export function AgentWorkbenchShell({
         </div>
       </header>
       <div
+        ref={layoutRoot}
         className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"}`}
       >
         <section className="agent-workbench-shell__main" aria-label="主工作区">
           <div
             ref={mainViewport}
+            tabIndex={-1}
             className={`agent-workbench-shell__main-content ${ownsScroll ? "is-scrollable" : "has-native-scroll"}`}
           >
             {main ?? conversation}
@@ -279,12 +309,23 @@ export function AgentWorkbenchShell({
               role="separator"
               aria-label="调整任务信息面板宽度"
               aria-orientation="vertical"
+              title="拖动调整宽度；双击或按 Enter 恢复 2:1"
+              onDoubleClick={() =>
+                changeWidth((Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 3)
+              }
               aria-valuemin={minAux}
               aria-valuemax={maxAux}
               aria-valuenow={Math.round(renderedWidth)}
               tabIndex={0}
               onPointerDown={resize}
               onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  changeWidth(
+                    (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 3,
+                  );
+                  return;
+                }
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
                   return;
                 e.preventDefault();
@@ -320,11 +361,7 @@ export function AgentWorkbenchShell({
               event.preventDefault();
               if (focusMainAfterClose.current) {
                 focusMainAfterClose.current = false;
-                mainViewport.current
-                  ?.querySelector<HTMLTextAreaElement>(
-                    "textarea:not([disabled])",
-                  )
-                  ?.focus();
+                focusMain();
               } else toggle.current?.focus();
             }}
           >
@@ -340,6 +377,9 @@ export function AgentWorkbenchShell({
             />
           </SheetContent>
         </Sheet>
+      )}
+      {hasAux && !inlineAux && !drawerOpen && (
+        <div hidden aria-hidden="true" ref={attachAux} />
       )}
       {hasAux && createPortal(auxiliary ?? result ?? children, auxHost)}
     </section>

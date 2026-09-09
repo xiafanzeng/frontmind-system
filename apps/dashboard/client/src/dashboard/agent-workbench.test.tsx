@@ -7,7 +7,7 @@ import {
 import { OPERATOR_MODULES, operatorViewFromRoute } from "./operator-navigation";
 
 describe("module descriptors", () => {
-  it("selects the routed subagent with distinct colors and preserves its business destination", () => {
+  it("selects the routed subagent with its module color and preserves its business destination", () => {
     const open = vi.fn();
     const publishing = createWorkbenchModules(() => null, open, "media").find(
       (module) => module.id === "publishing",
@@ -18,7 +18,7 @@ describe("module descriptors", () => {
         .map((action) => action.id),
     ).toEqual(["media"]);
     expect(new Set(publishing.actions.map((action) => action.color)).size).toBe(
-      3,
+      1,
     );
     publishing.actions[1]!.run();
     expect(open).toHaveBeenCalledWith("articles");

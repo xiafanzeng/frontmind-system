@@ -5,6 +5,8 @@ import {
   publisherDrafts,
   publisherBatches,
   runs,
+  projects,
+  monitors,
 } from "./schema";
 
 /** Read-only bridge: the caller supplies its transaction and authenticated
@@ -53,5 +55,20 @@ export async function findWorkbenchMonitoringRun(
     .from(runs)
     .where(and(eq(runs.id, id), eq(runs.ownerId, ownerId)))
     .limit(1);
+  return row as { id: string; projectId: string } | undefined;
+}
+
+export async function findWorkbenchMonitoringResource(
+  executor: any,
+  ownerId: string,
+  kind: "monitoring_run" | "monitoring_project" | "monitor",
+  id: string,
+) {
+  if (kind === "monitoring_run") return findWorkbenchMonitoringRun(executor, ownerId, id);
+  const table = kind === "monitor" ? monitors : projects;
+  const [row] = await executor.select({
+    id: table.id,
+    projectId: kind === "monitor" ? monitors.projectId : projects.id,
+  }).from(table).where(and(eq(table.id, id), eq(table.ownerId, ownerId))).limit(1);
   return row as { id: string; projectId: string } | undefined;
 }

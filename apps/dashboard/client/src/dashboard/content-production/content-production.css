@@ -878,6 +878,11 @@
 .cp-workspace.cp-workspace--agent {
   background: #fff;
   padding: 0;
+  --cp-ink: #000;
+  --cp-muted: #595959;
+  --cp-primary: #8a6100;
+  --cp-primary-hover: #715000;
+  --cp-primary-soft: #faf7ee;
 }
 .cp-main-flow {
   width: 100%;
@@ -942,9 +947,26 @@
   display: none;
 }
 .cp-workspace--agent .cp-chat {
-  height: min(680px, 70dvh);
-  min-height: 380px;
-  flex: none;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+}
+.cp-workspace--agent .cp-main-flow.has-conversation {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+.cp-workspace--agent .cp-main-flow.has-conversation > .cp-dialogue {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+.cp-workspace--agent .cp-result-surface {
+  font-size: 16px;
 }
 .cp-workspace--agent .cp-empty {
   min-height: 430px;

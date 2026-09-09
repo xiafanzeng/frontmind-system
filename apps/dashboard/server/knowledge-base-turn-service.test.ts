@@ -1,6 +1,13 @@
+import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { createHash } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// Reservation tests exercise the already accepted editing phase. The complete
+// generation/receipt policy and initial rejection are covered in workbench tests.
+vi.mock("./knowledge-workbench-stage", async (original) => ({
+  ...(await original<typeof import("./knowledge-workbench-stage")>()),
+  knowledgeWorkbenchEditingAllowed: vi.fn().mockResolvedValue(true),
+}));
 
 import {
   apiCredentials,
@@ -6417,6 +6424,13 @@ describe("knowledge-base attachment-first turn reservation", () => {
       ...overrides,
     };
   }
+
+  it("rejects AI revisions before initial draft acceptance without reserving a turn", async () => {
+    const { executor, store } = createTurnServiceExecutor({ build: { ...build }, conversation: { ...conversation }, turnSelections: [[[], []]] });
+    vi.mocked(knowledgeWorkbenchEditingAllowed).mockResolvedValueOnce(false);
+    await expect(reserveKnowledgeBaseTurn(reserveInput(), executor)).rejects.toMatchObject({ code: "CONFLICT", message: "请先整体确认知识库初稿，再修改节点" });
+    expect(store.turns).toHaveLength(0);
+  });
 
   it("rejects a new turn on an exact-tuple build without birth provenance", async () => {
     const { executor, store } = createTurnServiceExecutor({

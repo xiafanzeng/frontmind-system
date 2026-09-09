@@ -48,6 +48,7 @@ type MonitorFormProps = {
   quoteRunCost: QuoteRunCost;
   regions?: RegionOption[];
   initial?: MonitorInput;
+  onDraftChange?: (value: MonitorInput) => void;
   seedQuestions?: string[];
   demoMode?: boolean;
   submitting?: boolean;
@@ -180,6 +181,7 @@ export default function MonitorForm({
   submitting,
   onCancel,
   onSubmit,
+  onDraftChange,
 }: MonitorFormProps) {
   const submitInFlight = useRef(false);
   const immediateRequest = useRef<{
@@ -703,6 +705,16 @@ export default function MonitorForm({
       weekday: scheduleType === "weekly" ? weekday : undefined,
     },
   });
+
+  const draftFingerprint = JSON.stringify(buildValue());
+  const lastDraftFingerprint = useRef(draftFingerprint);
+  const draftCallback = useRef(onDraftChange);
+  draftCallback.current = onDraftChange;
+  useEffect(() => {
+    if (lastDraftFingerprint.current === draftFingerprint) return;
+    lastDraftFingerprint.current = draftFingerprint;
+    draftCallback.current?.(JSON.parse(draftFingerprint));
+  }, [draftFingerprint]);
 
   const validateAndSubmit = async (runNow: boolean) => {
     if (submitting || submitInFlight.current) return;

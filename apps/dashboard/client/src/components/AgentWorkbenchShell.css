@@ -6,7 +6,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  color: #20232b;
+  color: #000;
   background: #fff;
 }
 .agent-workbench-shell__taskbar {
@@ -25,7 +25,7 @@
   gap: 9px;
   min-width: 0;
   flex: 1;
-  font-size: 14px;
+  font-size: 16px;
   white-space: nowrap;
 }
 .agent-workbench-task-name strong {
@@ -35,11 +35,11 @@
 .agent-workbench-task-name > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #667085;
+  color: #000;
 }
 .agent-workbench-task-status {
   font-size: 12px;
-  color: #667085;
+  color: #595959;
   white-space: nowrap;
 }
 .agent-workbench-task-actions {
@@ -53,7 +53,11 @@
 }
 .agent-workbench-shell__layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 1px var(--agent-aux-width, 320px);
+  width: 100%;
+  max-width: 1584px;
+  margin-inline: auto;
+  grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 33.333%);
+  padding: 16px;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -71,6 +75,11 @@
   overflow: hidden;
   background: #fff;
 }
+.agent-workbench-shell__auxiliary {
+  border: 1px solid #eaecf0;
+  border-radius: 20px;
+  box-shadow: 0 3px 16px rgb(24 24 27 / 4%);
+}
 .agent-workbench-shell__main-content {
   flex: 1;
   min-height: 0;
@@ -80,7 +89,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  padding: 28px 32px 40px;
+  padding: 32px;
 }
 .agent-workbench-shell__main-content.has-native-scroll {
   display: flex;
@@ -116,27 +125,32 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  padding: 24px 20px;
+  padding: 16px;
 }
-.layout-knowledge .agent-workbench-shell__auxiliary-content {
-  padding: 0;
+/* Native editors retain their own scroll controller inside the shared panel. */
+.agent-workbench-shell__auxiliary-content.has-native-scroll {
   overflow: hidden;
+  padding: 0;
 }
-.layout-knowledge .agent-workbench-shell__auxiliary-content > * {
+.agent-workbench-shell__auxiliary-content.has-native-scroll > * {
   min-height: 0;
   flex: 1;
 }
 .agent-workbench-shell__resize {
   position: relative;
   z-index: 2;
-  background: #eaecf0;
+  background: transparent;
   cursor: col-resize;
   touch-action: none;
 }
 .agent-workbench-shell__resize:after {
   content: "";
   position: absolute;
-  inset: 0 -4px;
+  top: 0;
+  bottom: 0;
+  left: 7px;
+  width: 1px;
+  background: transparent;
 }
 .agent-workbench-shell__resize:hover,
 .agent-workbench-shell__resize:focus-visible {
@@ -158,12 +172,12 @@
   min-width: 0;
   min-height: 36px;
   padding: 7px 10px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--subagent-color) 26%, white);
   border-radius: 9px;
   background: transparent;
   color: var(--subagent-color);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 20px;
   cursor: pointer;
   transition:
@@ -213,7 +227,7 @@
   margin: 0 0 18px;
 }
 .business-workspace-inspector p {
-  color: #667085;
+  color: #595959;
 }
 .business-workspace-inspector dl {
   margin: 0;
@@ -222,7 +236,7 @@
 }
 .business-workspace-inspector dt {
   font-size: 12px;
-  color: #667085;
+  color: #595959;
   margin-bottom: 5px;
 }
 .business-workspace-inspector dd {
@@ -262,7 +276,7 @@
 .workbench-operation-records {
   display: grid;
   gap: 8px;
-  color: #667085;
+  color: #595959;
   font-size: 13px;
   list-style: none;
   padding: 0;
@@ -298,7 +312,7 @@
 }
 @media (max-width: 1023px) {
   .agent-workbench-shell__taskbar {
-    padding-left: 58px;
+    padding-left: 72px;
     padding-right: 12px;
     gap: 8px;
   }
@@ -306,7 +320,7 @@
     display: none;
   }
   .agent-workbench-shell__main-content.is-scrollable {
-    padding: 22px 18px 32px;
+    padding: 16px;
   }
   .agent-workbench-task-actions button {
     gap: 3px;
@@ -331,7 +345,7 @@
     font-size: 12px;
   }
   .agent-workbench-shell__main-content.is-scrollable {
-    padding: 20px 14px 28px;
+    padding: 16px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -444,7 +458,7 @@
   padding: 8px 10px;
   border: 1px solid #e4e4e8;
   border-radius: 8px;
-  color: #667085;
+  color: #595959;
 }
 .workbench-history-search input {
   width: 100%;
@@ -468,7 +482,7 @@
 .workbench-source {
   margin: 0;
   font-size: 13px;
-  color: #667085;
+  color: #595959;
 }
 .workbench-source a {
   color: #491060;
@@ -512,7 +526,7 @@
 .enterprise-qa-unlock-steps small {
   display: block;
   font-size: 13px;
-  color: #667085;
+  color: #595959;
   line-height: 24px;
   margin-top: 3px;
 }
@@ -531,7 +545,7 @@
 }
 .enterprise-qa-source dt {
   font-size: 12px;
-  color: #667085;
+  color: #595959;
   margin-bottom: 4px;
 }
 .enterprise-qa-source dd {
@@ -541,7 +555,7 @@
 }
 .enterprise-qa-source p {
   font-size: 12px;
-  color: #667085;
+  color: #595959;
   margin-top: 20px;
 }
 .general-agent-welcome {
@@ -572,7 +586,7 @@
 .general-welcome-heading p {
   font-size: 14px;
   line-height: 24px;
-  color: #667085;
+  color: #595959;
   margin: 14px 0 0;
 }
 .knowledge-composer > div {
@@ -599,7 +613,7 @@
   border-radius: 18px;
   padding: 7px 14px;
   font-size: 13px;
-  color: #525866;
+  color: #595959;
   transition:
     background 0.15s,
     border-color 0.15s;
@@ -632,7 +646,7 @@
   box-shadow: 0 2px 10px #20232b0a;
   padding: 8px 14px;
   font-size: 12px;
-  color: #525866;
+  color: #595959;
   cursor: pointer;
 }
 @media (max-width: 767px) {
@@ -672,6 +686,212 @@
   border-radius: 24px;
   box-shadow: 0 2px 12px #20232b10;
   font-size: 12px;
-  color: #525866;
+  color: #595959;
   cursor: pointer;
+}
+
+/* A common task panel for every Agent, including the general assistant. */
+.workbench-panel-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid #eaecf0;
+  margin-bottom: 20px;
+  flex-shrink: 0;
+}
+.workbench-panel-tabs button {
+  padding: 0 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #595959;
+  font-size: 14px;
+  font-weight: 600;
+}
+.workbench-panel-tabs button[aria-selected="true"] {
+  color: #000;
+  border-bottom-color: #491060;
+}
+.workbench-task-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.workbench-task-panel [role="tabpanel"] {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.workbench-output-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.workbench-output-list button {
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  color: #000;
+  border: 1px solid #eaecf0;
+  border-radius: 12px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.workbench-output-list button:hover {
+  background: #fafafa;
+  border-color: #cec4d4;
+}
+.workbench-panel-empty {
+  margin: 12px 0;
+  color: #595959;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.general-agent-welcome {
+  padding-top: clamp(24px, 11vh, 120px);
+}
+.general-welcome-heading h3 {
+  font-size: clamp(26px, 2.4vw, 36px);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  color: #000;
+}
+.general-task-suggestions button {
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: #303038;
+}
+@media (max-width: 639px) {
+  .agent-workbench-shell__layout {
+    padding: 0;
+  }
+  .agent-workbench-shell__main-content.is-scrollable {
+    padding: 16px;
+  }
+}
+
+.workbench-output-list small {
+  display: block;
+  margin-top: 4px;
+  color: #595959;
+  font-size: 12px;
+}
+
+.agent-workbench-shell {
+  --foreground: #000;
+  --muted-foreground: #595959;
+  font-size: 16px;
+  line-height: 28px;
+}
+.agent-workbench-shell__main-content.is-scrollable > * {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+.agent-workbench-shell__auxiliary {
+  font-size: 13px;
+  line-height: 20px;
+}
+.agent-workbench-shell table {
+  font-size: 14px;
+  line-height: 22px;
+}
+.agent-workbench-shell label,
+.agent-workbench-shell th {
+  color: #000;
+}
+.agent-workbench-shell input:not([type="checkbox"]):not([type="radio"]),
+.agent-workbench-shell select,
+.agent-workbench-shell textarea,
+.agent-workbench-shell .workbench-history-search,
+.agent-workbench-shell .knowledge-composer .bg-card\/90 {
+  border-color: #d0d5dd;
+}
+.agent-workbench-drawer {
+  border-radius: 20px 0 0 20px;
+}
+
+.agent-workbench-shell
+  [data-testid="chat-messages-viewport"]:has(> .workbench-reading-column) {
+  padding: 32px;
+}
+.workbench-reading-column {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+.agent-workbench-shell .knowledge-composer {
+  width: 100%;
+  max-width: none;
+  padding: 16px 32px 32px;
+}
+.agent-workbench-shell .knowledge-composer > div {
+  max-width: 960px !important;
+  margin-inline: auto;
+}
+.agent-workbench-shell .chat-message-content {
+  color: #000;
+  font-size: 16px;
+  line-height: 28px;
+}
+.agent-workbench-shell .chat-message-content button[title="复制内容"] {
+  font-size: 12px;
+  line-height: 20px;
+  margin-top: 8px;
+}
+.agent-workbench-shell .chat-message-content button[title="复制内容"] svg {
+  width: 14px;
+  height: 14px;
+}
+@media (max-width: 1023px) {
+  .agent-workbench-shell
+    [data-testid="chat-messages-viewport"]:has(> .workbench-reading-column) {
+    padding: 16px;
+  }
+  .agent-workbench-shell .knowledge-composer {
+    padding: 12px 16px 16px;
+  }
+}
+
+.agent-workbench-shell .knowledge-composer .general-runtime-trigger {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #000;
+}
+.agent-workbench-shell .knowledge-composer .general-runtime-trigger:hover:not(:disabled) { background: #f5f5f5; }
+
+@media (max-width: 639px) {
+  .agent-workbench-shell .agent-composer-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .agent-workbench-shell .agent-composer-textarea {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+    padding-inline: 4px;
+  }
+  .agent-workbench-shell .agent-composer-attachments { grid-column: 1; grid-row: 2; }
+  .agent-workbench-shell .agent-composer-actions { grid-column: 2; grid-row: 2; }
+}
+
+.agent-workbench-shell [data-testid="chat-messages-viewport"] > .workbench-reading-column {
+  padding: 0;
+}
+.agent-workbench-shell .knowledge-composer textarea { padding-block: 8px; }
+
+.agent-workbench-shell__main-content.is-scrollable,
+.agent-workbench-shell [data-testid="chat-messages-viewport"] {
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
 }

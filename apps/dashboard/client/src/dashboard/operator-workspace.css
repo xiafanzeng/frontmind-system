@@ -89,6 +89,7 @@
   min-height: 0;
   min-width: 0;
   flex: 1;
+  padding: 0;
 }
 .user-brand-dashboard.operator-mode .dashboard-main > .page-shell {
   width: 100%;
@@ -1236,4 +1237,24 @@
 .operator-sidebar[data-collapsed="true"] .operator-brand-logo img {
   width: 125px;
   height: 36px;
+}
+
+/* Shared navigation and field typography for the conversational workspace. */
+.user-brand-dashboard.operator-mode .operator-sidebar .operator-module-entry {
+  color: #000;
+  font-size: 16px;
+  font-weight: 600;
+  min-height: 44px;
+}
+.user-brand-dashboard.operator-mode
+  .operator-sidebar
+  .operator-module-entry.active {
+  color: var(--module-accent, #491060);
+  background: color-mix(in srgb, var(--module-accent, #491060) 8%, white);
+}
+.user-brand-dashboard.operator-mode
+  .operator-sidebar
+  .operator-module-entry:hover:not(.active) {
+  color: #000;
+  background: #f2f2f4;
 }

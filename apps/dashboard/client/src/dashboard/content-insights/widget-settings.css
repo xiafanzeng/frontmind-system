@@ -799,3 +799,12 @@
     gap: 28px;
   }
 }
+
+/* The task owns the page scroll; the preview follows its editable step. */
+.helplook-preview .hl-widget-conversation { padding: 0; min-height: 0; background: #fff; }
+.helplook-preview .hl-widget-conversation .hl-widget-settings-panel { display: block; min-height: 0; border-radius: 0; }
+.helplook-preview .hl-widget-conversation .hl-widget-settings-form { padding: 0; }
+.helplook-preview .hl-widget-conversation .hl-widget-form-scroll { height: auto; max-height: none; overflow: visible; padding: 0; }
+.helplook-preview .hl-widget-conversation .hl-widget-preview-column { padding: 24px 0 0; border-top: 1px solid #e7e7eb; }
+.helplook-preview .hl-widget-conversation .hl-widget-preview-stage { width: 100%; max-width: none; }
+.helplook-preview .hl-widget-conversation .hl-widget-chat-card { width: min(376px, calc(100% - 16px)); }

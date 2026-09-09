@@ -331,7 +331,7 @@ describe("Enterprise QA source binding", () => {
     );
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
-        "当前企业项目尚无可用的已发布知识库",
+        "当前项目尚无可用的已发布知识库",
       ),
     );
   });
@@ -348,7 +348,7 @@ describe("Enterprise QA source binding", () => {
     );
     render(<EnterpriseQaWorkspace />);
     expect(
-      screen.getByRole("heading", { name: "正在确认知识库状态" }),
+      screen.getByRole("status"),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(
@@ -420,7 +420,7 @@ describe("Enterprise QA source binding", () => {
     render(<EnterpriseQaWorkspace />);
     expect(
       await screen.findByRole("heading", {
-        name: "发布知识库后，即可开始企业问答",
+        name: "先发布企业知识库，即可开始问答",
       }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
@@ -484,7 +484,7 @@ describe("Enterprise QA source binding", () => {
       resolveCurrent({ ok: true, json: async () => ({ knowledgeBase: null }) }),
     );
     expect(
-      screen.getByRole("heading", { name: "发布知识库后，即可开始企业问答" }),
+      screen.getByRole("heading", { name: "先发布企业知识库，即可开始问答" }),
     ).toBeInTheDocument();
     expect(fetchMock.mock.calls.at(-1)?.[1].headers).toMatchObject({
       "x-enterprise-project-id": "project-b",
@@ -518,7 +518,7 @@ describe("Enterprise QA source binding", () => {
     fireEvent(window, new Event("focus"));
     expect(
       await screen.findByRole("heading", {
-        name: "发布知识库后，即可开始企业问答",
+        name: "先发布企业知识库，即可开始问答",
       }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
@@ -687,7 +687,7 @@ describe("Enterprise QA source binding", () => {
       fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     });
     expect(
-      screen.getByRole("heading", { name: "发布知识库后，即可开始企业问答" }),
+      screen.getByRole("heading", { name: "先发布企业知识库，即可开始问答" }),
     ).toBeInTheDocument();
   });
 

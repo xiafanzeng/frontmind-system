@@ -17,6 +17,8 @@ export type PortalNavItem = {
   href: string;
   icon: LucideIcon;
   group?: string;
+  /** A child route belongs to this primary navigation entry. */
+  parentHref?: string;
   activePrefixes?: string[];
   external?: boolean;
   newWindow?: boolean;
@@ -74,7 +76,7 @@ export default function PortalShell({
       return next;
     });
   };
-  const activeHref = navItems
+  const activeItem = navItems
     .filter(
       (item) =>
         !item.external &&
@@ -95,13 +97,15 @@ export default function PortalShell({
         ...(right.activePrefixes ?? []).map((prefix) => prefix.length),
       );
       return rightLength - leftLength;
-    })[0]?.href;
+    })[0];
+  const activeHref = activeItem?.href;
+  const activeOwner = activeItem?.parentHref;
 
   return (
     <div
-      className={`bg-[radial-gradient(circle_at_34%_0%,rgba(91,42,134,.09),transparent_34%),radial-gradient(circle_at_92%_18%,rgba(200,144,19,.09),transparent_30%),#f6f3f8] text-[#443a50] transition-[grid-template-columns] duration-200 lg:grid ${
+      className={`bg-white text-[#18181b] transition-[grid-template-columns] duration-200 lg:grid ${
         sidebarCollapsed
-          ? "lg:grid-cols-[76px_minmax(0,1fr)]"
+          ? "lg:grid-cols-[64px_minmax(0,1fr)]"
           : "lg:grid-cols-[232px_minmax(0,1fr)]"
       } ${
         mode === "fullscreen" ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]"
@@ -109,7 +113,7 @@ export default function PortalShell({
     >
       <button
         type="button"
-        className="fixed left-4 top-4 z-[90] flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-[#11131b] text-white shadow-xl lg:hidden"
+        className="fixed left-4 top-4 z-[90] flex h-10 w-10 items-center justify-center rounded-xl border border-[#e4e4e8] bg-white text-[#18181b] shadow-sm lg:hidden"
         onClick={() => setMobileOpen((open) => !open)}
         aria-label="切换导航"
         aria-controls="portal-workspace-sidebar"
@@ -130,8 +134,8 @@ export default function PortalShell({
       <aside
         id="portal-workspace-sidebar"
         aria-label="工作台侧栏"
-        className={`fixed inset-y-0 left-0 z-[80] flex w-[232px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto bg-[radial-gradient(circle_at_20%_2%,rgba(120,74,176,.36),transparent_28%),linear-gradient(180deg,#11131b_0%,#090a10_48%,#06070b_100%)] px-4 pb-[18px] pt-[22px] text-white transition-[transform,width,padding] duration-200 lg:sticky lg:top-0 lg:h-[100dvh] lg:max-w-none lg:translate-x-0 ${
-          sidebarCollapsed ? "lg:w-[76px] lg:px-3" : "lg:w-[232px]"
+        className={`fixed inset-y-0 left-0 z-[80] flex w-[232px] max-w-[calc(100vw-48px)] flex-col overflow-y-auto border-r border-[#e4e4e8] bg-[#fafafa] px-4 pb-[18px] pt-[22px] text-[#18181b] transition-[transform,width,padding] duration-200 lg:sticky lg:top-0 lg:h-[100dvh] lg:max-w-none lg:translate-x-0 ${
+          sidebarCollapsed ? "lg:w-[64px] lg:px-3" : "lg:w-[232px]"
         } ${
           mobileOpen
             ? "visible translate-x-0"
@@ -139,14 +143,14 @@ export default function PortalShell({
         }`}
       >
         <div
-          className={`border-b border-white/[0.08] px-2 pb-4 pt-1.5 ${
+          className={`border-b border-[#e4e4e8] px-2 pb-4 pt-1.5 ${
             sidebarCollapsed ? "lg:flex lg:justify-center lg:px-0" : ""
           }`}
         >
           <img
             src="/assets/frontmind-wordmark.svg"
             alt="FrontMind"
-            className={`mt-0.5 h-auto w-[152px] max-w-full brightness-0 invert md:w-[164px] ${
+            className={`mt-0.5 h-auto w-[152px] max-w-full  md:w-[164px] ${
               sidebarCollapsed ? "lg:hidden" : ""
             }`}
           />
@@ -156,12 +160,12 @@ export default function PortalShell({
                 src="/assets/frontmind-wordmark.svg"
                 alt=""
                 aria-hidden="true"
-                className="h-9 w-[125px] max-w-none brightness-0 invert"
+                className="h-9 w-[125px] max-w-none "
               />
             </span>
           )}
           <p
-            className={`fm-eyebrow mt-2 text-[13px] font-bold tracking-[0.04em] text-white/[0.72] ${
+            className={`fm-eyebrow mt-2 text-[13px] font-bold tracking-[0.04em] text-[#525866] ${
               sidebarCollapsed ? "lg:hidden" : ""
             }`}
           >
@@ -170,25 +174,27 @@ export default function PortalShell({
         </div>
 
         <div
-          className={`mt-4 rounded-[22px] border border-white/[0.08] bg-white/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,.06)] ${
+          className={`mt-4 p-0 ${
             sidebarCollapsed ? "lg:rounded-2xl lg:p-2" : ""
           }`}
         >
           <nav className="space-y-1" aria-label="管理中心导航">
             {navItems.map((item, itemIndex) => {
               const Icon = item.icon;
-              const active = !item.external && item.href === activeHref;
+              const active =
+                !item.external &&
+                (item.href === activeHref || item.href === activeOwner);
               const className = `flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] leading-5 transition lg:min-h-9 lg:py-1.5 ${
                 sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
-              } ${
+              } ${item.parentHref && !sidebarCollapsed ? "pl-8 text-[12px]" : ""} ${
                 active
-                  ? "bg-white/12 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]"
-                  : "text-white/62 hover:bg-white/[0.075] hover:text-white"
+                  ? "bg-[#f0eaf4] text-[#491060] font-semibold"
+                  : "text-[#18181b] hover:bg-[#efeff1]"
               }`;
               const content = (
                 <>
                   <Icon
-                    className={`h-4 w-4 shrink-0 ${active ? "text-[#d7aa44]" : ""}`}
+                    className={`h-4 w-4 shrink-0 ${active ? "text-[#491060]" : ""}`}
                   />
                   <span className={sidebarCollapsed ? "lg:hidden" : ""}>
                     {item.label}
@@ -202,7 +208,7 @@ export default function PortalShell({
                 <div key={`${item.group || "workspace"}-${item.href}`}>
                   {showGroup && (
                     <p
-                      className={`px-2.5 pb-1 text-[11px] font-medium leading-4 text-white/38 ${
+                      className={`px-2.5 pb-1 text-[11px] font-medium leading-4 text-[#62626b] ${
                         itemIndex === 0 ? "pt-0" : "pt-2.5"
                       } ${sidebarCollapsed ? "lg:hidden" : ""}`}
                     >
@@ -224,7 +230,10 @@ export default function PortalShell({
                   ) : (
                     <Link
                       href={item.href}
-                      aria-current={active ? "page" : undefined}
+                      aria-current={
+                        item.href === activeHref ? "page" : undefined
+                      }
+                      data-active-owner={item.href === activeOwner || undefined}
                       className={className}
                       title={sidebarCollapsed ? item.label : undefined}
                       aria-label={sidebarCollapsed ? item.label : undefined}
@@ -240,31 +249,31 @@ export default function PortalShell({
         </div>
 
         <div
-          className={`mt-auto rounded-[18px] border border-white/10 bg-white/[0.055] p-4 ${
+          className={`mt-auto border-t border-[#e4e4e8] p-3 ${
             sidebarCollapsed ? "lg:p-2" : ""
           }`}
         >
           <div className={sidebarCollapsed ? "lg:hidden" : ""}>
-            <p className="text-xs text-white/48">当前账号</p>
-            <p className="mt-1 truncate text-sm font-semibold text-white">
+            <p className="text-xs text-[#62626b]">当前账号</p>
+            <p className="mt-1 truncate text-sm font-semibold text-[#18181b]">
               {accountLabel ||
                 user?.displayName ||
                 user?.username ||
                 "预览账号"}
             </p>
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-[#62626b]">
               {roleLabel || (user?.role === "admin" ? "管理员" : "用户")}
             </p>
           </div>
           {sidebarCollapsed && (
             <CircleUserRound
               aria-hidden="true"
-              className="mx-auto hidden h-5 w-5 text-white/65 lg:block"
+              className="mx-auto hidden h-5 w-5 text-[#525866] lg:block"
             />
           )}
           <button
             type="button"
-            className={`mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 py-2 text-xs text-white/65 transition hover:bg-white/10 hover:text-white lg:min-h-9 lg:py-1.5 ${
+            className={`mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#e4e4e8] py-2 text-xs text-[#525866] transition hover:bg-[#efeff1] hover:text-[#18181b] lg:min-h-9 lg:py-1.5 ${
               sidebarCollapsed ? "lg:mt-2 lg:h-9 lg:px-0 lg:py-0" : ""
             }`}
             onClick={() => {
@@ -283,7 +292,7 @@ export default function PortalShell({
 
         <button
           type="button"
-          className="mt-2 hidden min-h-[34px] w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-2 py-1.5 text-xs text-white/62 transition hover:bg-white/10 hover:text-white lg:flex"
+          className="mt-2 hidden min-h-[34px] w-full items-center justify-center gap-2 rounded-xl border border-[#e4e4e8] px-2 py-1.5 text-xs text-[#525866] transition hover:bg-[#efeff1] hover:text-[#18181b] lg:flex"
           onClick={toggleSidebar}
           aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
           aria-expanded={!sidebarCollapsed}
@@ -300,7 +309,7 @@ export default function PortalShell({
         </button>
         <button
           type="button"
-          className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-2 py-2 text-xs text-white/62 transition hover:bg-white/10 hover:text-white lg:hidden"
+          className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#e4e4e8] px-2 py-2 text-xs text-[#525866] transition hover:bg-[#efeff1] hover:text-[#18181b] lg:hidden"
           onClick={() => setMobileOpen(false)}
         >
           <ChevronLeft className="h-4 w-4" />
@@ -316,7 +325,7 @@ export default function PortalShell({
         }
       >
         {mode === "standard" && (
-          <header className="sticky top-0 z-40 flex min-h-[82px] flex-col items-stretch justify-center gap-2 border-b border-[#e8e1ee]/90 bg-white/82 px-4 py-3 pl-16 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-8 sm:py-0 sm:pl-20 lg:px-9 lg:pl-9">
+          <header className="sticky top-0 z-40 flex min-h-[82px] flex-col items-stretch justify-center gap-2 border-b border-[#eaecf0] bg-white px-4 py-3 pl-16  sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-8 sm:py-0 sm:pl-20 lg:px-9 lg:pl-9">
             <div className="min-w-0 sm:py-3">
               <p className="fm-eyebrow text-[#5b2a86]">{eyebrow}</p>
               <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-[#251e2d] sm:text-2xl">
@@ -351,7 +360,7 @@ export function PortalCard({
 }) {
   return (
     <section
-      className={`rounded-[18px] border border-[#e8e1ee] bg-white/92 text-[#4f485c] shadow-[0_18px_48px_rgba(33,19,58,.07)] ${className}`}
+      className={`rounded-xl border border-[#eaecf0] bg-white text-[#303038] ${className}`}
     >
       {children}
     </section>

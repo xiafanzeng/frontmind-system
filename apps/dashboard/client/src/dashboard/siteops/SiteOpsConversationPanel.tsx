@@ -1,3 +1,4 @@
+import { WorkflowSection } from "@/dashboard/workflow/Workflow";
 import { useBusinessFlowState, readFlowString } from "../useBusinessFlowState";
 import type { WorkbenchResourceRef } from "@shared/workbench-task";
 import {
@@ -29,7 +30,6 @@ import MarkdownRenderer from "@/components/MarkdownRenderer";
 import { copyToClipboard } from "@/lib/utils";
 import {
   AlertCircle,
-  Bot,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -360,39 +360,16 @@ function customerFacingMessage(content: string) {
   return sanitized || "任务暂时未完成，请稍后重试。";
 }
 
-const SITEOPS_TIME_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-  timeZone: "Asia/Shanghai",
-});
-
-function formatSiteOpsDuration(
-  startedAt: string,
-  completedAt: string | null,
-  now: number,
-) {
-  const started = Date.parse(startedAt);
-  const completed = completedAt ? Date.parse(completedAt) : now;
-  const totalSeconds = Math.max(0, Math.floor((completed - started) / 1_000));
-  if (totalSeconds < 60) return `${totalSeconds} 秒`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) return `${minutes} 分 ${seconds} 秒`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours} 小时 ${minutes % 60} 分`;
-}
-
 function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
   const [copied, setCopied] = useState(false);
   const content = customerFacingMessage(item.content);
   return (
     <article className="siteops-message" data-role={item.role}>
-      <span className="siteops-message-avatar" aria-hidden="true">
-        {item.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
-      </span>
+      {item.role === "user" && (
+        <span className="siteops-message-avatar" aria-hidden="true">
+          <UserRound size={17} />
+        </span>
+      )}
       <div className="siteops-message-bubble">
         <div className="siteops-message-meta">
           <strong>
@@ -413,9 +390,6 @@ function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
           <p>{content}</p>
         )}
         <footer className="siteops-message-footer">
-          <time dateTime={item.sentAt}>
-            {SITEOPS_TIME_FORMATTER.format(new Date(item.sentAt))}
-          </time>
           {item.role === "assistant" && (
             <button
               type="button"
@@ -428,8 +402,9 @@ function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
               {copied ? (
                 <Check size={13} aria-hidden="true" />
               ) : (
-                <Copy size={13} aria-hidden="true" />
+                <Copy size={14} aria-hidden="true" />
               )}
+              {copied ? "已复制" : "复制"}
             </button>
           )}
         </footer>
@@ -510,72 +485,42 @@ function SiteOpsExecutionTimeline({
 }: {
   steps: SiteOpsExecutionStep[];
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  const operationId = useMemo(() => {
-    const active = steps.find((step) =>
-      ["queued", "running"].includes(step.status),
-    );
-    const selected = active ?? steps[0];
-    return selected?.id.split(":", 1)[0] ?? null;
-  }, [steps]);
-  const visibleSteps = useMemo(
-    () =>
-      operationId
-        ? steps.filter((step) => step.id.startsWith(`${operationId}:`))
-        : [],
-    [operationId, steps],
+  if (!steps.length) return null;
+  const active = steps.find((step) =>
+    ["queued", "running"].includes(step.status),
   );
-  const isRunning = visibleSteps.some((step) => step.status === "running");
-
-  useEffect(() => {
-    if (!isRunning) return undefined;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [isRunning, operationId]);
-
-  if (visibleSteps.length === 0) return null;
+  const labels: Record<SiteOpsExecutionStep["stage"], string> = {
+    visual_searching: "查找视觉方案",
+    preparing: "准备建站资料",
+    design_compiling: "整理页面设计",
+    content_building: "制作网站内容",
+    qa_running: "检查网站",
+    completed: "完成本次操作",
+  };
+  const statuses: Record<SiteOpsExecutionStep["status"], string> = {
+    queued: "等待处理",
+    running: "进行中",
+    succeeded: "已完成",
+    failed: "未完成",
+    attention_required: "需要处理",
+    cancelled: "已取消",
+  };
   return (
-    <section
-      className="siteops-execution-timeline"
-      aria-labelledby="siteops-timeline-title"
-    >
-      <div className="siteops-timeline-heading">
-        <div>
-          <Clock3 size={17} aria-hidden="true" />
-          <h3 id="siteops-timeline-title">执行时间线</h3>
-        </div>
-        {isRunning && <span>运行中 · 每秒更新</span>}
-      </div>
-      <ol>
-        {visibleSteps.map((step) => (
-          <li key={step.id} data-status={step.status}>
-            <span className="siteops-timeline-icon" aria-hidden="true">
-              {step.status === "running" ? (
-                <Loader2 className="siteops-spin" size={15} />
-              ) : step.status === "succeeded" ? (
-                <Check size={15} />
-              ) : ["failed", "attention_required"].includes(step.status) ? (
-                <AlertCircle size={15} />
-              ) : (
-                <Clock3 size={14} />
-              )}
-            </span>
-            <div>
-              <strong>{step.label}</strong>
-              <time dateTime={step.startedAt}>
-                {SITEOPS_TIME_FORMATTER.format(new Date(step.startedAt))}
-              </time>
-            </div>
-            <span className="siteops-timeline-duration">
-              {step.status === "queued"
-                ? "等待开始"
-                : formatSiteOpsDuration(step.startedAt, step.completedAt, now)}
-            </span>
-          </li>
+    <details className="siteops-execution-summary">
+      <summary>
+        {active
+          ? `${labels[active.stage]} · ${statuses[active.status]}`
+          : "查看建站执行记录"}
+      </summary>
+      <div>
+        {steps.map((step) => (
+          <p key={step.id}>
+            <span>{labels[step.stage]}</span>
+            <small>{statuses[step.status]}</small>
+          </p>
         ))}
-      </ol>
-    </section>
+      </div>
+    </details>
   );
 }
 
@@ -676,12 +621,74 @@ export default function SiteOpsConversationPanel({
 }: SiteOpsConversationPanelProps) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const summaryBuild = observation?.builds[0];
+  const selectedVisual = (
+    observation?.visualCandidatePages?.flatMap((page) => page.candidates) ??
+    observation?.visualCandidates ??
+    []
+  ).find((item) => item.selected);
   const summaryDeployment = observation?.deployments.find(
     (item) => item.status === "active",
   );
   useBusinessWorkspaceSummary(
     isWorkbench
       ? {
+          outputs: [
+            ...(selectedVisual
+              ? [
+                  {
+                    id: `visual:${selectedVisual.id}`,
+                    title: selectedVisual.title,
+                    type: "已选视觉方案",
+                    status: "已确认",
+                    onOpen: () =>
+                      document
+                        .getElementById("siteops-visual-options")
+                        ?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        }),
+                  },
+                ]
+              : []),
+            ...(observation?.builds
+              .filter((build) => build.status === "approved")
+              .map((build) => ({
+                id: `build:${build.id}`,
+                title: `网站版本 v${build.ordinal}`,
+                type: "网站成品",
+                version: build.ordinal,
+                status: "已确认",
+                pendingChanges: Boolean(
+                  summaryBuild &&
+                    summaryBuild.id !== build.id &&
+                    summaryBuild.status !== "approved",
+                ),
+                onOpen: () =>
+                  document
+                    .getElementById("siteops-current-build")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+                onRevise: () =>
+                  document
+                    .getElementById("siteops-current-build")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+              })) ?? []),
+            ...(observation?.deployments
+              .filter((deployment) => deployment.status === "active")
+              .map((deployment) => ({
+                id: `deployment:${deployment.id}`,
+                title:
+                  deployment.target === "mainland_cn"
+                    ? "中国大陆站点"
+                    : "全球站点（中国大陆以外）",
+                type: "已发布站点",
+                description: deployment.publicUrl ?? undefined,
+                status: "已部署",
+                onOpen: () =>
+                  document
+                    .getElementById("siteops-current-build")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+              })) ?? []),
+          ],
           items: [
             {
               label: "站点状态",
@@ -1479,6 +1486,25 @@ export default function SiteOpsConversationPanel({
   };
   const globalDeployment = deploymentStateFor("global_excluding_cn");
   const mainlandDeployment = deploymentStateFor("mainland_cn");
+  const executionByMessage = new Map<string, SiteOpsExecutionStep[]>();
+  const historicalExecution: SiteOpsExecutionStep[] = [];
+  for (const step of observation.executionSteps ?? []) {
+    const message = step.buildId
+      ? [...visibleMessages]
+          .reverse()
+          .find(
+            (item) =>
+              item.role === "assistant" &&
+              item.metadata?.siteOps?.subjectId === step.buildId,
+          )
+      : undefined;
+    if (message)
+      executionByMessage.set(message.id, [
+        ...(executionByMessage.get(message.id) ?? []),
+        step,
+      ]);
+    else historicalExecution.push(step);
+  }
   const dnsReady = observation.domainState?.dnsStatus === "active";
   const mainlandReady =
     dnsReady && observation.domainState?.icpStatus === "approved";
@@ -1594,8 +1620,6 @@ export default function SiteOpsConversationPanel({
           <span>{customerFacingMessage(localError || error || "")}</span>
         </div>
       )}
-
-      <SiteOpsExecutionTimeline steps={observation.executionSteps ?? []} />
 
       {observation.project.status === "draft" &&
         observation.interactionState === "select_snapshot" && (
@@ -1747,11 +1771,22 @@ export default function SiteOpsConversationPanel({
           </div>
         ) : (
           visibleMessages.map((item) => (
-            <SiteOpsMessageBubble item={item} key={item.id} />
+            <div key={item.id} data-reading-anchor={`siteops-${item.id}`}>
+              <SiteOpsExecutionTimeline
+                steps={executionByMessage.get(item.id) ?? []}
+              />
+              <SiteOpsMessageBubble item={item} />
+            </div>
           ))
         )}
       </div>
 
+      {historicalExecution.length > 0 && (
+        <section aria-label="未关联消息的历史建站过程">
+          <SiteOpsExecutionTimeline steps={historicalExecution} />
+        </section>
+      )}
+      <span id="siteops-visual-options" />
       {visualPages.length === 0 &&
         visualGeneration.status === "retryable_error" &&
         (usesStaticTemplateCatalog ||
@@ -2081,6 +2116,7 @@ export default function SiteOpsConversationPanel({
 
       {latestBuild && (
         <section
+          id="siteops-current-build"
           className="siteops-build-card"
           aria-labelledby="siteops-build-title"
         >
@@ -2117,6 +2153,20 @@ export default function SiteOpsConversationPanel({
                 <p>本次没有生成可展示的版本，请刷新状态后重试。</p>
               )}
           </div>
+          {isWorkbench && latestBuild.previewUrl && (
+            <WorkflowSection
+              id={`site-preview-${latestBuild.id}`}
+              title={`网站完整预览 · v${latestBuild.ordinal}`}
+            >
+              <iframe
+                className="siteops-inline-preview"
+                title={`网站完整预览 v${latestBuild.ordinal}`}
+                src={latestBuild.previewUrl}
+                sandbox="allow-scripts allow-forms"
+                loading="lazy"
+              />
+            </WorkflowSection>
+          )}
           <div className="siteops-build-actions">
             {latestBuild.previewUrl && (
               <button

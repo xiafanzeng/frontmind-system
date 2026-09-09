@@ -9,7 +9,11 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import { AgentWorkbenchShell } from "./AgentWorkbenchShell";
+import {
+  AgentWorkbenchShell,
+  workbenchPaneGeometry,
+  WORKBENCH_RATIO_KEY,
+} from "./AgentWorkbenchShell";
 import {
   createWorkbenchModules,
   WorkbenchModuleContext,
@@ -50,6 +54,40 @@ afterEach(() => {
 });
 
 describe("AgentWorkbenchShell", () => {
+  it("uses the same 2:1 geometry at the 948px boundary for every layout", () => {
+    expect(workbenchPaneGeometry(948)).toEqual({
+      minAux: 300,
+      maxAux: 300,
+      width: 300,
+    });
+    expect(workbenchPaneGeometry(1248).width).toBe(400);
+    expect(workbenchPaneGeometry(2400).width).toBe(512);
+    expect(workbenchPaneGeometry(948, 0.5).width).toBe(300);
+    viewport(1200, 948);
+    render(<AgentWorkbenchShell {...props} layout="knowledge" />);
+    expect(screen.getByRole("separator")).toHaveAttribute(
+      "aria-valuenow",
+      "300",
+    );
+    act(() => viewport(1200, 947));
+    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+  });
+  it("restores a proportional preference when changing the available width", () => {
+    vi.mocked(localStorage.getItem).mockImplementation((key) =>
+      key === WORKBENCH_RATIO_KEY ? "0.4" : null,
+    );
+    viewport(1600, 1248);
+    render(<AgentWorkbenchShell {...props} />);
+    expect(screen.getByRole("separator")).toHaveAttribute(
+      "aria-valuenow",
+      "480",
+    );
+    act(() => viewport(1800, 1548));
+    expect(screen.getByRole("separator")).toHaveAttribute(
+      "aria-valuenow",
+      "600",
+    );
+  });
   it("keeps the dialogue left and contextual subagent controls right without remounting the main composer", () => {
     function Workbench() {
       const [view, setView] = useState<OperatorView>("publishing");
@@ -113,32 +151,34 @@ describe("AgentWorkbenchShell", () => {
     ).toHaveTextContent("固定知识节点");
     expect(screen.getByRole("separator")).toHaveAttribute(
       "aria-valuemin",
-      "420",
+      "300",
     );
     act(() => viewport(2256, 2000));
     const separator = screen.getByRole("separator");
-    expect(separator).toHaveAttribute("aria-valuenow", "900");
+    expect(separator).toHaveAttribute("aria-valuenow", "512");
     fireEvent.keyDown(separator, { key: "End" });
-    expect(separator).toHaveAttribute("aria-valuenow", "1399");
+    expect(separator).toHaveAttribute("aria-valuenow", "936");
   });
   it("bounds mouse and keyboard resizing to preserve 600px for main", () => {
     const { container } = render(<AgentWorkbenchShell {...props} />);
     const separator = screen.getByRole("separator");
-    expect(separator).toHaveAttribute("aria-valuenow", "320");
+    expect(separator).toHaveAttribute("aria-valuenow", "379");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
-    expect(separator).toHaveAttribute("aria-valuenow", "344");
+    expect(separator).toHaveAttribute("aria-valuenow", "403");
     fireEvent.keyDown(separator, { key: "Home" });
-    expect(separator).toHaveAttribute("aria-valuenow", "280");
+    expect(separator).toHaveAttribute("aria-valuenow", "300");
     act(() => viewport(1440, 1000));
     vi.spyOn(
-      container.querySelector(".agent-workbench-shell")!,
+      container.querySelector(".agent-workbench-shell__layout")!,
       "getBoundingClientRect",
     ).mockReturnValue({ left: 256, right: 1256, width: 1000 } as DOMRect);
     fireEvent.pointerDown(separator, { button: 0 });
     fireEvent.pointerMove(window, { clientX: 300 });
     fireEvent.pointerUp(window);
-    expect(separator).toHaveAttribute("aria-valuenow", "399");
+    expect(separator).toHaveAttribute("aria-valuenow", "352");
     expect(localStorage.setItem).toHaveBeenCalled();
+    fireEvent.keyDown(separator, { key: "Enter" });
+    expect(separator).toHaveAttribute("aria-valuenow", "317");
   });
   it.each([
     [1024, 768],
@@ -150,7 +190,7 @@ describe("AgentWorkbenchShell", () => {
       render(<AgentWorkbenchShell {...props} />);
       expect(screen.queryByRole("separator")).not.toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "任务草稿" })).toBeVisible();
-      expect(screen.queryByText("辅助摘要")).not.toBeInTheDocument();
+      expect(screen.getByText("辅助摘要")).not.toBeVisible();
       const toggle = screen.getByRole("button", { name: "打开任务信息" });
       fireEvent.click(toggle);
       expect(
@@ -208,6 +248,33 @@ describe("AgentWorkbenchShell", () => {
     await waitFor(() =>
       expect(screen.getByRole("textbox", { name: "任务草稿" })).toHaveFocus(),
     );
+  });
+  it("returns focus to a read-only node after closing the mobile auxiliary drawer", async () => {
+    viewport(390, 390);
+    const view = render(
+      <AgentWorkbenchShell
+        {...props}
+        main={
+          <article tabIndex={-1} aria-label="节点正文">
+            只读知识
+          </article>
+        }
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    view.rerender(
+      <AgentWorkbenchShell
+        {...props}
+        main={
+          <article tabIndex={-1} aria-label="节点正文">
+            只读知识
+          </article>
+        }
+        conversationFocusRequest={{ node: "2" }}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("article", { name: "节点正文" })).toHaveFocus();
   });
   it("restores each task's reading position without scrolling after ordinary updates", async () => {
     const view = render(

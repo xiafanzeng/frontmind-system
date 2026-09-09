@@ -1,3 +1,4 @@
+import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
@@ -740,6 +741,7 @@ export async function selectMaterializedKnowledgeBaseNode(input: {
     const build = (await tx.select().from(knowledgeBaseBuilds).where(and(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId), eq(knowledgeBaseBuilds.conversationId, input.conversationId))).limit(1).for("update"))[0] as KnowledgeBaseBuild | undefined;
     if (!build) fail("BUILD_NOT_FOUND", "知识库构建不存在");
     materializedBuild(build);
+    if (!(await knowledgeWorkbenchEditingAllowed(tx, build))) fail("INVALID_BUILD_STATE", "请先整体确认知识库初稿，再修改节点");
     if (build.generation !== input.expectedGeneration || build.revision !== input.expectedRevision || build.stateEpoch !== input.expectedStateEpoch) fail("STALE_COORDINATES", "知识库状态已更新，请刷新后选择节点");
     if (build.activeTurnId || !isMaterializedBuildPublishable(build) || !["confirming", "ready_to_publish", "published"].includes(build.status)) fail("INVALID_BUILD_STATE", "请等待当前操作结束后再编辑节点");
     const nodes = await tx.select().from(knowledgeBaseBuildNodes).where(eq(knowledgeBaseBuildNodes.buildId, build.id)).orderBy(asc(knowledgeBaseBuildNodes.ordinal)).for("update") as KnowledgeBaseBuildNode[];
@@ -837,6 +839,7 @@ export async function confirmMaterializedKnowledgeBaseNode(
     )[0] as KnowledgeBaseBuild | undefined;
     if (!build) fail("BUILD_NOT_FOUND", "知识库构建不存在");
     materializedBuild(build);
+    if (!(await knowledgeWorkbenchEditingAllowed(tx, build))) fail("INVALID_BUILD_STATE", "请先整体确认知识库初稿，再确认节点");
     if (!isMaterializedBuildPublishable(build)) {
       fail(
         "INVALID_BUILD_STATE",

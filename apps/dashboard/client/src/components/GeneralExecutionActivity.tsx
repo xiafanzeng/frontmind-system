@@ -61,8 +61,8 @@ function callSummary(calls: ActivityItem[], live: boolean) {
 function thinkingText(item: ActivityItem) {
   return item.kind === "status" &&
     item.status === "thinking" &&
-    item.thinkingText?.trim()
-    ? item.thinkingText
+    item.publicSummary?.trim()
+    ? item.publicSummary
     : null;
 }
 
@@ -75,7 +75,7 @@ function ThinkingBlock({
   expandedOverride?: boolean;
   onToggle?: () => void;
 }) {
-  const [localExpanded, setExpanded] = useState(false);
+  const [localExpanded, setExpanded] = useState(true);
   const expanded = expandedOverride ?? localExpanded;
   const detailsId = useId();
   const text = thinkingText(item);
@@ -143,9 +143,13 @@ function TurnActivity({
   expandedGroups?: ReadonlySet<string>;
   onToggleGroup?: (id: string) => void;
 }) {
-  const calls = items.filter(
-    (item) => item.kind === "tool" && !item.resultOnly,
-  );
+  const calls = [
+    ...new Map(
+      items
+        .filter((item) => item.kind === "tool" && !item.resultOnly)
+        .map((item) => [item.id, item]),
+    ).values(),
+  ];
   const active = [...items].reverse().find(isLive);
   const start = items.find(
     (item) => item.kind === "status" && item.status === "running",
@@ -164,7 +168,7 @@ function TurnActivity({
           item.id === summaryId ? (
             <ActivityLine key="commands" live={Boolean(active)}>
               {active
-                ? `${active.kind === "status" && active.status === "retrying" ? "正在重试…" : active.kind === "status" && active.status === "rescheduling" ? "正在恢复执行…" : "正在执行…"}${calls.length ? ` · ${callSummary(calls, true)}` : ""}`
+                ? `${active.kind === "status" && active.status === "retrying" ? "正在重试…" : active.kind === "status" && active.status === "rescheduling" ? "正在恢复执行…" : active.kind === "status" && active.status === "thinking" && !calls.length ? "正在分析任务…" : "正在执行…"}${calls.length ? ` · ${callSummary(calls, true)}` : ""}`
                 : calls.length
                   ? callSummary(calls, false)
                   : "开始执行"}
@@ -172,15 +176,7 @@ function TurnActivity({
           ) : null;
         let detail: React.ReactNode = null;
         if (thinkingText(item)) {
-          detail = (
-            <ThinkingBlock
-              item={item}
-              expandedOverride={expandedGroups?.has(item.id)}
-              onToggle={
-                onToggleGroup ? () => onToggleGroup(item.id) : undefined
-              }
-            />
-          );
+          detail = <ThinkingBlock item={item} />;
         } else if (item.kind === "tool") {
           if (
             item.resultOnly ||
@@ -239,7 +235,9 @@ export function GeneralExecutionActivity({
   )
     return null;
   const groups: ActivityItem[][] = [];
-  for (const item of items) {
+  for (const item of new Map(
+    items.map((item) => [JSON.stringify([item.turnId, item.id]), item]),
+  ).values()) {
     const last = groups.at(-1);
     if (last?.[0]?.turnId === item.turnId) last.push(item);
     else groups.push([item]);

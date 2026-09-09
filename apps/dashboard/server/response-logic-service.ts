@@ -1,5 +1,5 @@
 import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
-import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
+import { enterpriseOwnerPredicate, enterpriseProjectIdForOwner } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 
@@ -592,6 +592,7 @@ export async function saveResponseLogicEntry(input: {
     await tx.insert(responseLogicEntries).values({
       id: randomUUID(),
       userId: input.userId,
+      enterpriseProjectId: enterpriseProjectIdForOwner(input.userId),
       questionId: input.value.questionId,
       ...values,
       createdAt: now,
@@ -748,6 +749,7 @@ export async function saveResponseLogicEntriesBatch(input: {
         await tx.insert(responseLogicEntries).values({
           id: randomUUID(),
           userId: input.userId,
+          enterpriseProjectId: enterpriseProjectIdForOwner(input.userId),
           questionId: entry.value.questionId,
           ...values,
           createdAt: now,

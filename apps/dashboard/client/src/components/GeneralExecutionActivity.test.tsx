@@ -39,6 +39,25 @@ const phase = (
   }) as ExecutionDisplayEntry;
 
 describe("compact execution activity", () => {
+  it("deduplicates a repeated call and does not expose unmarked private provider reasoning", () => {
+    const { container } = render(
+      <GeneralExecutionActivity
+        items={[
+          phase("thinking-private", "thinking", {
+            thinkingText: "internal provider reasoning",
+            animate: true,
+            isCurrent: true,
+          }),
+          command("one"),
+          command("one"),
+        ]}
+      />,
+    );
+    expect(container.textContent).not.toContain("internal provider reasoning");
+    expect(container.textContent).not.toContain("2 个命令");
+    expect(screen.getByText(/1 个命令/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "思考过程" })).toBeNull();
+  });
   it("folds generic analysis and actual calls into a non-expandable count without timestamps or the ended marker", () => {
     const { container } = render(
       <GeneralExecutionActivity
@@ -206,13 +225,13 @@ describe("thinking text activity", () => {
       rank: 1,
       kind: "status",
       status: "thinking",
-      thinkingText: "先检查任务目标。\n再决定调用哪个工具。",
+      publicSummary: "先检查任务目标。\n再决定调用哪个工具。",
       thinkingComplete: true,
       animate: false,
       ...overrides,
     }) as unknown as ExecutionDisplayEntry;
 
-  it("shows a folded thinking summary and keeps provider text outside the tool group", () => {
+  it("shows designated public summaries immediately with observed operations", () => {
     render(
       <GeneralExecutionActivity
         items={[
@@ -232,23 +251,21 @@ describe("thinking text activity", () => {
       />,
     );
     expect(screen.getByText("思考过程")).toBeTruthy();
-    expect(screen.queryByText(/先检查任务目标。/)).toBeNull();
+    expect(screen.getByText(/先检查任务目标。/)).toBeTruthy();
     expect(screen.getByText("搜索 1 次")).toBeTruthy();
     expect(
       screen
         .getByRole("button", { name: "思考过程" })
         .getAttribute("aria-expanded"),
-    ).toBe("false");
+    ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
-    expect(screen.getByText(/先检查任务目标。/)).toBeTruthy();
+    expect(screen.queryByText(/先检查任务目标。/)).toBeNull();
     expect(screen.queryByText(/条记录|次工具调用/)).toBeNull();
   });
 
   it("can fold and unfold the complete thinking text", () => {
     render(<GeneralExecutionActivity items={[thinking()]} />);
     const toggle = screen.getByRole("button", { name: "思考过程" });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText(/先检查任务目标。/)).toBeTruthy();
     fireEvent.click(toggle);
@@ -261,10 +278,9 @@ describe("thinking text activity", () => {
       '<img src=x onerror="alert(1)"> [不要点我](https://evil.example)';
     render(
       <GeneralExecutionActivity
-        items={[thinking({ thinkingText: hostile })]}
+        items={[thinking({ publicSummary: hostile })]}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
     expect(screen.getByText(hostile)).toBeTruthy();
     expect(document.querySelector("img")).toBeNull();
     expect(document.querySelector('a[href="https://evil.example"]')).toBeNull();
@@ -277,10 +293,9 @@ describe("thinking text activity", () => {
     ).join("\n");
     render(
       <GeneralExecutionActivity
-        items={[thinking({ thinkingText: longText })]}
+        items={[thinking({ publicSummary: longText })]}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
     const content = screen.getByText(
       (_text, element) =>
         element?.tagName === "P" && element.textContent === longText,
@@ -294,7 +309,7 @@ describe("thinking text activity", () => {
     render(
       <GeneralExecutionActivity
         items={[
-          thinking({ thinkingText: undefined, thinkingComplete: undefined }),
+          thinking({ publicSummary: undefined, thinkingComplete: undefined }),
         ]}
       />,
     );
@@ -307,7 +322,7 @@ describe("thinking text activity", () => {
       <GeneralExecutionActivity
         items={[
           thinking({
-            thinkingText: "先检查目标（包含限制条件）。",
+            publicSummary: "先检查目标（包含限制条件）。",
             thinkingComplete: false,
             animate: true,
             isCurrent: true,
@@ -316,12 +331,11 @@ describe("thinking text activity", () => {
       />,
     );
     expect(screen.getByText("思考中")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
     view.rerender(
       <GeneralExecutionActivity
         items={[
           thinking({
-            thinkingText:
+            publicSummary:
               "先检查目标（包含限制条件）。\n结果为 f(x) = (x + 1) / 2。",
             thinkingComplete: true,
             animate: false,
@@ -341,7 +355,7 @@ describe("thinking text activity", () => {
       <GeneralExecutionActivity
         items={[
           thinking({
-            thinkingText: "先检查目标（包含限制条件）。",
+            publicSummary: "先检查目标（包含限制条件）。",
             thinkingComplete: false,
             animate: false,
             isCurrent: false,

@@ -2,12 +2,13 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
+import { FileText } from "lucide-react";
 import { operatorViewPath } from "./operator-navigation";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import {
@@ -56,6 +57,18 @@ function ScopedWorkbench({
   const task = useWorkbenchTask(agentId);
   const [summary, setSummary] = useState<BusinessWorkspaceSummary | null>(null);
   const creating = useRef(false);
+  const [panel, setPanel] = useState<"tasks" | "outputs">(
+    agentId === "general" ? "tasks" : "outputs",
+  );
+  const outputFiles =
+    workspace.activeConversation?.messages.flatMap((message) =>
+      message.role === "assistant"
+        ? (message.outputFiles ?? []).map((file, index) => ({
+            ...file,
+            key: `${message.id}:${index}`,
+          }))
+        : [],
+    ) ?? [];
   const native = agentId === "general" || purpose === "enterprise_qa";
   const label =
     purpose === "enterprise_qa"
@@ -84,7 +97,7 @@ function ScopedWorkbench({
     agentId,
     purpose,
   ]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     setSummary(null);
   }, [agentId, task.taskId]);
   const value = useMemo(
@@ -189,7 +202,8 @@ function ScopedWorkbench({
       loading={workspace.loading}
       error={workspace.syncError}
       onRetry={() => void task.retry().catch(() => undefined)}
-      presentation={agentId === "general" ? "sidebar" : "toolbar"}
+      presentation="panel"
+      showNew
       onNew={() => {
         task.newTask("新任务");
       }}
@@ -198,18 +212,102 @@ function ScopedWorkbench({
       onNavigate={agentId === "general" ? onTaskNavigate : undefined}
     />
   );
+  const panelContents = (
+    <div className="workbench-task-panel">
+      <div
+        className="workbench-panel-tabs"
+        role="tablist"
+        aria-label="任务与成果"
+      >
+        <button
+          type="button"
+          role="tab"
+          id={`tasks-tab-${agentId}`}
+          aria-controls={`tasks-panel-${agentId}`}
+          aria-selected={panel === "tasks"}
+          onClick={() => setPanel("tasks")}
+        >
+          任务
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id={`outputs-tab-${agentId}`}
+          aria-controls={`outputs-panel-${agentId}`}
+          aria-selected={panel === "outputs"}
+          onClick={() => setPanel("outputs")}
+        >
+          成果
+        </button>
+      </div>
+      <div
+        role="tabpanel"
+        id={`${panel}-panel-${agentId}`}
+        aria-labelledby={`${panel}-tab-${agentId}`}
+      >
+        {panel === "tasks" ? (
+          taskNavigation
+        ) : agentId === "general" ? (
+          outputFiles.length ? (
+            <ul className="workbench-output-list">
+              {outputFiles.map((file) => (
+                <li key={file.key}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const card = Array.from(
+                        document.querySelectorAll<HTMLElement>(
+                          "[data-workbench-output-key]",
+                        ),
+                      ).find(
+                        (node) => node.dataset.workbenchOutputKey === file.key,
+                      );
+                      if (card) {
+                        card.scrollIntoView({
+                          block: "center",
+                          behavior: "smooth",
+                        });
+                        (
+                          card.querySelector<HTMLElement>(
+                            "[data-output-download]",
+                          ) ?? card
+                        ).click();
+                      }
+                    }}
+                  >
+                    <FileText size={18} />
+                    <span>
+                      {file.fileName}
+                      <small>在对话中打开</small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="workbench-panel-empty">
+              任务生成的文件会显示在这里，也会保留在对应回复下。
+            </p>
+          )
+        ) : purpose === "enterprise_qa" ? (
+          children
+        ) : (
+          <BusinessWorkspaceInspector
+            summary={summary ?? { title: "当前任务成果", items: [] }}
+          />
+        )}
+      </div>
+    </div>
+  );
   return (
     <>
-      {agentId === "general" &&
-        taskNavigationTarget &&
-        createPortal(taskNavigation, taskNavigationTarget)}
       <AgentWorkbenchShell
         projectId={projectId}
         moduleId={agentId}
         title={label}
         taskTitle={task.task?.title ?? "新任务"}
         taskKey={task.taskId ?? "new"}
-        layout={agentId === "general" ? "single" : "workflow"}
+        layout="workflow"
         main={body}
         scrollMain={!native}
         status={
@@ -219,23 +317,7 @@ function ScopedWorkbench({
               ? workbenchStatus(workspace.activeConversation?.status)
               : undefined
         }
-        toolbar={agentId === "general" ? undefined : taskNavigation}
-        auxiliary={
-          purpose === "enterprise_qa" ? (
-            children
-          ) : (
-            <BusinessWorkspaceInspector
-              summary={
-                summary ?? {
-                  title: "当前任务",
-                  items: [
-                    { label: "任务", value: task.task?.title ?? "尚未开始" },
-                  ],
-                }
-              }
-            />
-          )
-        }
+        auxiliary={panelContents}
       />
     </>
   );

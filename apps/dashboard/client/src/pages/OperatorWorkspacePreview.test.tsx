@@ -6,7 +6,9 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import OperatorWorkspacePreview from "./OperatorWorkspacePreview";
+import OperatorWorkspacePreview, {
+  PREVIEW_STORAGE_KEY,
+} from "./OperatorWorkspacePreview";
 import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
 
 vi.mock("@/components/ChatArea", () => ({
@@ -62,6 +64,7 @@ vi.mock("@/dashboard/OperatorNavigation", async () => {
   };
 });
 beforeEach(() => {
+  sessionStorage.removeItem(PREVIEW_STORAGE_KEY);
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -131,11 +134,11 @@ describe("operator workspace layout acceptance", () => {
       }
     }
   });
-  it("shows the general welcome and attachment composer in a single workspace", () => {
+  it("keeps the polished general welcome and tasks/results in the shared workspace", () => {
     const { container } = render(<OperatorWorkspacePreview />);
     selectModule("通用智能体");
     expect(
-      container.querySelector('[data-layout="single"]'),
+      container.querySelector('[data-layout="workflow"]'),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "有什么想一起完成的？" }),
@@ -145,8 +148,11 @@ describe("operator workspace layout acceptance", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("添加预览附件")).toBeInTheDocument();
     expect(
-      screen.queryByRole("complementary", { name: "任务辅助区" }),
-    ).toBeNull();
+      screen.getByRole("complementary", { name: "任务辅助区" }),
+    ).toContainElement(screen.getByRole("button", { name: "新任务" }));
+    expect(
+      screen.getByRole("navigation", { name: "项目导航预览" }),
+    ).not.toContainElement(screen.getByRole("button", { name: "新任务" }));
   });
   it("keeps drafts and conversation history independent between agents and projects", () => {
     render(<OperatorWorkspacePreview />);
@@ -162,9 +168,7 @@ describe("operator workspace layout acceptance", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送预览消息" }));
     fireEvent.click(screen.getByRole("button", { name: "新任务" }));
     expect(screen.queryByText("通用任务草稿")).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /^历史$/ }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /^历史$/ })).toBeNull();
     fireEvent.click(
       within(screen.getByRole("listbox", { name: "任务历史" })).getByRole(
         "button",
@@ -178,11 +182,13 @@ describe("operator workspace layout acceptance", () => {
     selectModule("通用智能体");
     expect(screen.queryByText("通用任务草稿")).toBeNull();
   });
-  it("starts the media workflow with a directory and keeps the handoff steps in main", () => {
+  it("unfolds the media directory, confirms selection and hands off to a separate task", () => {
     render(<OperatorWorkspacePreview />);
     selectModule("媒体发布");
     selectAgent("媒体库");
     const main = screen.getByRole("region", { name: "主工作区" });
+    expect(within(main).queryByRole("table")).toBeNull();
+    fireEvent.click(within(main).getByRole("button", { name: "浏览媒体目录" }));
     expect(within(main).getByRole("table")).toBeInTheDocument();
     expect(
       within(main).queryByRole("textbox", { name: "继续对话" }),
@@ -196,9 +202,72 @@ describe("operator workspace layout acceptance", () => {
     expect(
       within(main).getByRole("heading", { name: "选择冻结稿件" }),
     ).toBeInTheDocument();
+    fireEvent.click(
+      within(main).getByRole("button", { name: /企业智能客服选型指南 · v1/ }),
+    );
+    fireEvent.click(within(main).getByRole("button", { name: "确认投放选择" }));
     fireEvent.click(within(main).getByRole("button", { name: "交给发布助手" }));
     expect(
       within(main).getByRole("heading", { name: "标题与发布预检" }),
     ).toBeInTheDocument();
+    selectAgent("媒体库");
+    fireEvent.click(within(main).getByRole("button", { name: "交给发布助手" }));
+    fireEvent.click(screen.getByRole("tab", { name: "任务" }));
+    expect(
+      within(screen.getByRole("listbox", { name: "任务历史" })).getAllByRole(
+        "option",
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByText("任务 3")).toBeNull();
+  });
+
+  it("selects a word-bank resource inside the question task and retains only confirmed outcomes", () => {
+    render(<OperatorWorkspacePreview />);
+    selectModule("意图优化");
+    const main = screen.getByRole("region", { name: "主工作区" });
+    const right = screen.getByRole("complementary", { name: "任务辅助区" });
+    fireEvent.click(within(main).getByRole("button", { name: "从词库挑选" }));
+    fireEvent.click(
+      within(main).getAllByRole("button", { name: "选择问题" })[0],
+    );
+    expect(
+      within(right).getByText("确认后的成果会保留在这里。"),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("navigation", { name: "切换子 Agent" }),
+      ).getByRole("button", { name: "优化问题" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(
+      within(main).getByRole("button", { name: "检查问题并继续" }),
+    );
+    fireEvent.click(
+      within(main).getByRole("button", { name: "确认加入优化问题" }),
+    );
+    expect(
+      within(right).getByText("已加入优化清单 · 待制作应答"),
+    ).toBeInTheDocument();
+    expect(within(right).queryByRole("table")).toBeNull();
+    fireEvent.click(within(main).getByRole("button", { name: "进入应答逻辑" }));
+    expect(
+      within(main).getByRole("heading", { name: "检查并完善应答草稿" }),
+    ).toBeInTheDocument();
+  });
+
+  it("restores a task draft after reloading the local preview without borrowing another agent's draft", () => {
+    const first = render(<OperatorWorkspacePreview />);
+    selectModule("通用智能体");
+    fireEvent.change(screen.getByRole("textbox", { name: "继续对话" }), {
+      target: { value: "刷新后仍保留的任务资料" },
+    });
+    first.unmount();
+    render(<OperatorWorkspacePreview />);
+    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue(
+      "刷新后仍保留的任务资料",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue("");
+    selectModule("内容制作");
+    expect(screen.queryByText("刷新后仍保留的任务资料")).toBeNull();
   });
 });

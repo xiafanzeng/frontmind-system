@@ -5,7 +5,6 @@ import {
   conversations,
   messages,
   monitoringAccountLinks,
-  enterpriseProjectQuestions,
   enterpriseProjectMonitoringLinks,
   knowledgeBaseSnapshots,
   siteProjects,
@@ -16,10 +15,14 @@ import {
   agentOperations,
 } from "../drizzle/schema";
 import {
-  findWorkbenchMonitoringRun,
+  findWorkbenchMonitoringResource,
   findWorkbenchPublishingResource,
 } from "../../../packages/monitoring-db/src/workbench-resource-access";
 import { currentEnterpriseProjectId } from "./enterprise-project-context";
+import {
+  workspaceQuestionTable,
+  workspaceQuestionOwnerPredicate,
+} from "./enterprise-project-questions";
 import {
   enterpriseOwnerPredicate,
   enterpriseProjectPredicate,
@@ -29,6 +32,7 @@ import { frozenGeneralAgentPurpose } from "./general-agent-purpose";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import {
   initialWorkbenchTaskState,
+  mergeWorkbenchOutputRefs,
   workbenchTaskStateSchema,
   type WorkbenchAgentId,
   type WorkbenchResourceRef,
@@ -312,6 +316,8 @@ export async function validateWorkbenchResources(
         "publication_draft",
         "publication_batch",
         "monitoring_run",
+        "monitoring_project",
+        "monitor",
       ].includes(resource.kind)
     ) {
       const [link] = await tx
@@ -320,10 +326,15 @@ export async function validateWorkbenchResources(
         .where(eq(monitoringAccountLinks.dashboardUserId, scope.userId))
         .limit(1);
       if (link) {
-        if (resource.kind === "monitoring_run") {
-          const run = await findWorkbenchMonitoringRun(
+        if (
+          resource.kind === "monitoring_run" ||
+          resource.kind === "monitoring_project" ||
+          resource.kind === "monitor"
+        ) {
+          const run = await findWorkbenchMonitoringResource(
             tx,
             link.monitoringUserId,
+            resource.kind,
             resource.id,
           );
           if (run)
@@ -359,12 +370,23 @@ export async function validateWorkbenchResources(
           });
         }
       }
+    } else if (resource.kind === "question") {
+      const table = workspaceQuestionTable();
+      [found] = await tx
+        .select({ id: table.id })
+        .from(table)
+        .where(
+          and(
+            eq(table.id, resource.id),
+            workspaceQuestionOwnerPredicate(scope.userId),
+          ),
+        )
+        .limit(1);
     } else {
       const table = {
-        question: enterpriseProjectQuestions,
         knowledge_snapshot: knowledgeBaseSnapshots,
         site: siteProjects,
-      }[resource.kind as "question" | "knowledge_snapshot" | "site"];
+      }[resource.kind as "knowledge_snapshot" | "site"];
       [found] = await tx
         .select({ id: table.id })
         .from(table)
@@ -389,17 +411,27 @@ export function applyWorkbenchPatch(
   patch: WorkbenchStatePatch,
   now = Date.now(),
 ): WorkbenchTaskState {
-  if (patch.record && /^(handoff-|received-)/.test(patch.record.id))
+  const incomingRecords = [
+    ...(patch.records ?? []),
+    ...(patch.record ? [patch.record] : []),
+  ];
+  if (incomingRecords.some((record) => /^(handoff-|received-)/.test(record.id)))
     throw new TRPCError({ code: "CONFLICT", message: "交接记录由服务端维护" });
   if (state.revision !== expectedRevision)
     throw new TRPCError({
       code: "CONFLICT",
       message: "任务已在其他窗口更新，请恢复最新状态后重试",
     });
-  const records = patch.record
+  const records = incomingRecords.length
     ? [
-        ...state.records.filter((item) => item.id !== patch.record!.id),
-        { ...patch.record, timestamp: now },
+        ...state.records.filter(
+          (item) => !incomingRecords.some((record) => record.id === item.id),
+        ),
+        ...[
+          ...new Map(
+            incomingRecords.map((record) => [record.id, record]),
+          ).values(),
+        ].map((record) => ({ ...record, timestamp: now })),
       ].slice(-500)
     : state.records;
   return workbenchTaskStateSchema.parse({
@@ -407,6 +439,14 @@ export function applyWorkbenchPatch(
     step: patch.step ?? state.step,
     values: patch.values ? { ...state.values, ...patch.values } : state.values,
     resources: patch.resources ?? state.resources,
+    ...(state.outputRefs || patch.outputRefs
+      ? {
+          outputRefs: mergeWorkbenchOutputRefs(
+            state.outputRefs,
+            patch.outputRefs,
+          ),
+        }
+      : {}),
     records,
     revision: state.revision + 1,
     updatedAt: now,
@@ -429,6 +469,12 @@ export async function saveWorkbenchTask(
   assertWorkbenchAgent(existing.state, input.agentId);
   if (input.patch.resources)
     await validateWorkbenchResources(tx, scope, input.patch.resources);
+  if (input.patch.outputRefs)
+    await validateWorkbenchResources(
+      tx,
+      scope,
+      input.patch.outputRefs.map((ref) => ref.resource),
+    );
   const state = applyWorkbenchPatch(
     existing.state,
     input.expectedRevision,

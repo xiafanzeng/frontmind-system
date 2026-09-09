@@ -9,16 +9,22 @@ import {
   siteProjects,
   agentTasks,
   agentOperations,
+  enterpriseProjectQuestions,
+  workspaceQuestions,
 } from "../drizzle/schema";
 import {
   publisherArticleVersions,
   publisherDrafts,
+  projects,
+  monitors,
 } from "../../../packages/monitoring-db/src/schema";
 import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 import {
   bindWorkbenchTask,
   handoffWorkbenchTask,
   saveWorkbenchTask,
+  applyWorkbenchPatch,
+  validateWorkbenchResources,
   workbenchStorageMessageId,
 } from "./workbench-task-service";
 import {
@@ -26,6 +32,11 @@ import {
   loadPersistedMessages,
   persistSnapshot,
 } from "./conversation-router";
+import {
+  initialWorkbenchTaskState,
+  mergeWorkbenchTaskProjection,
+  workbenchOutputRefSchema,
+} from "../shared/workbench-task";
 
 // Executes the actual service, SQL predicates and snapshot serializers against
 // a transactional fixture. It deliberately checks SQL ownership predicates;
@@ -162,6 +173,186 @@ const inProject = <T>(id: string, run: () => T) =>
   );
 
 describe("durable workbench tasks", () => {
+  it("replays accumulated receipts without losing earlier records or server handoff links", () => {
+    const state = initialWorkbenchTaskState("articles", 1);
+    state.records = [
+      {
+        id: "received-source",
+        label: "已接收交接内容",
+        status: "completed",
+        timestamp: 1,
+        targetTask: { conversationId: "source", agentId: "media" },
+      },
+      { id: "import", label: "已导入稿件", status: "completed", timestamp: 2 },
+    ];
+    const patch = {
+      records: [
+        { id: "freeze-a", label: "已冻结版本一", status: "completed" as const },
+      ],
+      record: {
+        id: "freeze-b",
+        label: "已冻结版本二",
+        status: "completed" as const,
+      },
+    };
+    const first = applyWorkbenchPatch(state, 1, patch, 3);
+    const replay = applyWorkbenchPatch(first, 2, patch, 4);
+    expect(replay.records.map((record) => record.id)).toEqual([
+      "received-source",
+      "import",
+      "freeze-a",
+      "freeze-b",
+    ]);
+    expect(replay.records[0]).toEqual(state.records[0]);
+    expect(replay.records[1]).toEqual(state.records[1]);
+    expect(() => applyWorkbenchPatch(replay, 2, patch)).toThrow("其他窗口更新");
+    expect(() =>
+      applyWorkbenchPatch(replay, 3, {
+        records: [
+          { id: "received-source", label: "篡改来源", status: "failed" },
+        ],
+      }),
+    ).toThrow("服务端维护");
+  });
+  it("uses the actual account question table and exact project ownership for question outputs", async () => {
+    const db = database();
+    db.get(workspaceQuestions).push(
+      { id: "legacy-owned", userId: 7 },
+      { id: "legacy-foreign", userId: 8 },
+    );
+    db.get(enterpriseProjectQuestions).push(
+      { id: "project-owned", userId: 7, enterpriseProjectId: project },
+      { id: "project-other", userId: 7, enterpriseProjectId: otherProject },
+      { id: "owner-other", userId: 8, enterpriseProjectId: project },
+    );
+    await expect(
+      validateWorkbenchResources(db.executor, scope, [
+        { kind: "question", id: "legacy-owned" },
+      ]),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateWorkbenchResources(db.executor, scope, [
+        { kind: "question", id: "legacy-foreign" },
+      ]),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await inProject(project, () =>
+      validateWorkbenchResources(db.executor, scope, [
+        { kind: "question", id: "project-owned" },
+      ]),
+    );
+    for (const id of ["legacy-owned", "project-other", "owner-other"]) {
+      await expect(
+        inProject(project, () =>
+          validateWorkbenchResources(db.executor, scope, [
+            { kind: "question", id },
+          ]),
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    await expect(
+      validateWorkbenchResources(db.executor, scope, [
+        { kind: "question", id: "project-owned" },
+      ]),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+  it("accumulates versioned outputs while resources still replace and old projections preserve outputs", () => {
+    const firstRef = {
+      resource: { kind: "question" as const, id: "one" },
+      version: "1",
+      sourceStepId: "question-one",
+    };
+    const secondRef = {
+      resource: { kind: "question" as const, id: "two" },
+      version: "1",
+      sourceStepId: "question-two",
+    };
+    const first = applyWorkbenchPatch(
+      initialWorkbenchTaskState("questions", 1),
+      1,
+      { resources: [firstRef.resource], outputRefs: [firstRef] },
+      2,
+    );
+    const second = applyWorkbenchPatch(
+      first,
+      2,
+      { resources: [secondRef.resource], outputRefs: [firstRef, secondRef] },
+      3,
+    );
+    expect(second.resources).toEqual([secondRef.resource]);
+    expect(second.outputRefs).toEqual([firstRef, secondRef]);
+    expect(
+      applyWorkbenchPatch(second, 3, { values: { entry: "start" } }).outputRefs,
+    ).toEqual(second.outputRefs);
+    expect(
+      mergeWorkbenchTaskProjection(second, {
+        ...second,
+        outputRefs: undefined,
+        revision: 4,
+      })?.outputRefs,
+    ).toEqual(second.outputRefs);
+    expect(mergeWorkbenchTaskProjection(second, first)?.revision).toBe(3);
+    expect(
+      workbenchOutputRefSchema.parse({ ...firstRef, status: "published" }),
+    ).not.toHaveProperty("status");
+  });
+  it("validates output ownership and survives a client snapshot omitting the output ledger", async () => {
+    const db = database();
+    db.get(monitoringAccountLinks).push({
+      dashboardUserId: 7,
+      monitoringUserId: "publisher-seven",
+    });
+    db.get(publisherArticleVersions).push({
+      id: "owned-version",
+      ownerId: "publisher-seven",
+      enterpriseProjectId: null,
+    });
+    await bindWorkbenchTask(db.executor, scope, {
+      conversationId: "outputs",
+      agentId: "articles",
+    });
+    const saved = await saveWorkbenchTask(db.executor, scope, {
+      conversationId: "outputs",
+      agentId: "articles",
+      expectedRevision: 1,
+      patch: {
+        outputRefs: [
+          {
+            resource: { kind: "article_version", id: "owned-version" },
+            sourceStepId: "freeze-one",
+          },
+        ],
+      },
+    });
+    await expect(
+      saveWorkbenchTask(db.executor, scope, {
+        conversationId: "outputs",
+        agentId: "articles",
+        expectedRevision: 2,
+        patch: {
+          outputRefs: [
+            {
+              resource: { kind: "article_version", id: "not-owned" },
+              sourceStepId: "forged",
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await persistSnapshot(db.executor, 7, {
+      id: "outputs",
+      title: "旧窗口",
+      messages: [],
+      status: "idle",
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    expect(
+      (await listSnapshots(7, null, db.executor))[0].workbench?.outputRefs,
+    ).toEqual(saved.outputRefs);
+    expect(
+      await loadPersistedMessages(db.executor, 7, "u7:outputs", null),
+    ).toEqual([]);
+  });
   it("round trips agent identity and flow state without model messages, surviving an old snapshot rewrite", async () => {
     const db = database();
     await db.transaction((tx) =>

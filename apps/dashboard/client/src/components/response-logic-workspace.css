@@ -1746,8 +1746,9 @@ fieldset.rl-editor-scroll:disabled select {
   padding-inline: 0;
 }
 .rl-conversation-flow .rl-dialogue-card {
-  height: min(680px, 70dvh);
-  min-height: 420px;
+  flex: 1;
+  height: auto;
+  min-height: 0;
 }
 .rl-conversation-flow .rl-dialogue-card,
 .rl-conversation-flow .rl-editor-card {
@@ -1808,4 +1809,77 @@ fieldset.rl-editor-scroll:disabled select {
   line-height: 1.8;
   margin: 0;
   color: #303038;
+}
+
+/* The specialist runtime and editable business blocks share ChatArea's scroll owner. */
+.rl-unified-conversation,
+.rl-unified-conversation .rl-home-frame,
+.rl-unified-conversation .rl-home-fieldset {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  background: #fff;
+}
+.rl-unified-conversation .rl-home-fieldset > * {
+  flex: 1;
+  min-height: 0;
+}
+.rl-inline-business {
+  padding-top: 20px;
+  margin-top: 20px;
+  border-top: 1px solid #eaecf0;
+}
+.rl-draft-provenance {
+  margin-bottom: 12px;
+  color: #525866;
+  font-size: 13px;
+}
+.rl-flow-opening h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 600;
+  color: #18181b;
+}
+.rl-flow-opening > p {
+  margin-bottom: 28px;
+  color: #525866;
+  font-size: 16px;
+  line-height: 1.8;
+}
+.rl-flow-opening .rl-question-nav {
+  position: static;
+  width: 100%;
+  max-height: none;
+  border: 0;
+  box-shadow: none;
+  background: #fff;
+}
+.rl-flow-opening .rl-question-list {
+  max-height: none;
+  overflow: visible;
+}
+.rl-saved-only {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+}
+.rl-preview-unified {
+  padding: 24px;
+}
+.rl-unified-conversation .rl-saved-draft .rl-title-icon {
+  display: none;
+}
+.rl-unified-conversation .rl-editor-card {
+  background: #fff;
+  color: #18181b;
+}
+.rl-task-summary .workflow-result {
+  margin-top: 24px;
 }

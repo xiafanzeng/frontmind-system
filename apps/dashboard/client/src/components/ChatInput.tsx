@@ -47,6 +47,12 @@ import { KNOWLEDGE_BASE_LOGO_PROVENANCE_REQUIRED_NOTICE_CODE } from "@/lib/knowl
 import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
 import GeneralAgentRuntimeBadge from "./GeneralAgentRuntimeBadge";
 
+export const ENTERPRISE_QA_SUGGESTIONS = [
+  { label: "产品与服务", prompt: "请根据已发布知识库介绍企业的主要产品与服务，并说明资料依据。" },
+  { label: "品牌定位", prompt: "请根据已发布知识库说明企业的品牌定位、目标客户和主要特点。" },
+  { label: "资料依据", prompt: "请梳理已发布知识库中的主要资料，以及这些资料可以支持解答的企业问题。" },
+] as const;
+
 interface FilePreview {
   file: File;
   id: string;
@@ -172,7 +178,7 @@ export default function ChatInput({
   purpose?: "enterprise_qa" | "content_production";
   contentProduction?: ContentProductionInput;
   composerPrefill?: string;
-  welcomeSuggestions?: boolean;
+  welcomeSuggestions?: boolean | "enterprise_qa";
   responseLogicContext?: ResponseLogicTaskContext;
   knowledgeBaseProgress?: KnowledgeBaseProgressDto | null;
   knowledgeBaseResetRevision?: number;
@@ -789,7 +795,7 @@ export default function ChatInput({
 
   return (
     <div
-      className={`knowledge-composer relative shrink-0 bg-white px-3 pb-3 pt-3 sm:px-5 sm:pb-5 ${welcomeSuggestions ? "is-welcome-composer" : ""}`}
+      className={`knowledge-composer relative shrink-0 bg-white px-3 pb-3 pt-3 sm:px-5 sm:pb-5 ${welcomeSuggestions === true ? "is-welcome-composer" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -1154,7 +1160,7 @@ export default function ChatInput({
                   exit={{ opacity: 0, scale: 0.8 }}
                   className="relative group"
                 >
-                  <div className="flex max-w-[240px] items-center gap-2 rounded-xl border border-border/40 bg-muted/30 px-3 py-2 shadow-sm">
+                  <div className="flex max-w-[240px] items-center gap-2 rounded-xl border border-[#E5E7EB] bg-white px-3 py-2 shadow-sm">
                     {officialLogoRequired ? (
                       <LogoFileThumbnail file={fp.file} />
                     ) : (
@@ -1187,14 +1193,14 @@ export default function ChatInput({
         {!officialLogoRequired && (
           <div
             className={cn(
-              "bg-card/90 border border-border/70 rounded-[1.5rem] transition-all duration-300 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl",
+              "bg-card/90 border border-[#D0D5DD] rounded-[1.5rem] transition-all duration-300 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur-xl",
               isDragging && "ring-2 ring-primary/30",
               "focus-within:shadow-[0_24px_70px_rgba(15,23,42,0.11)] focus-within:border-primary/35",
             )}
           >
-            <div className="flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
+            <div className="agent-composer-controls flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
               {/* File buttons */}
-              <div className="flex items-center gap-1 pb-0.5">
+              <div className="agent-composer-attachments flex items-center gap-1 pb-0.5">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -1267,11 +1273,11 @@ export default function ChatInput({
                 }
                 rows={1}
                 data-max-rows={AGENT_COMPOSER_MAX_ROWS}
-                className="min-h-11 flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground/55 focus:outline-none"
+                className="agent-composer-textarea min-h-11 flex-1 resize-none overflow-y-hidden bg-transparent py-2 text-[15px] leading-6 text-foreground placeholder:text-[#595959] focus:outline-none"
               />
 
               {/* Runtime status + Send button */}
-              <div className="flex items-center gap-1 pb-0.5">
+              <div className="agent-composer-actions flex items-center gap-1 pb-0.5">
                 {!fixedAgentProfile &&
                   !syncKnowledgeBaseSnapshot &&
                   !responseLogicContext && (
@@ -1316,7 +1322,7 @@ export default function ChatInput({
 
             {/* Hint text */}
             <div className="px-4 pb-2">
-              <p className="text-xs text-muted-foreground/40">
+              <p className="text-xs text-[#595959]">
                 {responseLogicInitialPromptLocked
                   ? "首轮使用固定提问发送 · 发送后可自由输入文字并上传图片或文件"
                   : syncKnowledgeBaseSnapshot
@@ -1328,7 +1334,7 @@ export default function ChatInput({
         )}
         {welcomeSuggestions && (
           <div className="general-task-suggestions" aria-label="快捷任务建议">
-            {GENERAL_TASK_SUGGESTIONS.map((item) => (
+            {(welcomeSuggestions === "enterprise_qa" ? ENTERPRISE_QA_SUGGESTIONS : GENERAL_TASK_SUGGESTIONS).map((item) => (
               <button
                 type="button"
                 key={item.label}

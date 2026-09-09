@@ -46,10 +46,10 @@
 .user-brand-dashboard.operator-mode .helplook-preview .hl-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .user-brand-dashboard.operator-mode .helplook-preview { container-type: inline-size; }
 @container (max-width: 900px) {
-  .user-brand-dashboard.operator-mode .helplook-preview .hl-widget-settings-panel { grid-template-columns: minmax(0, 1fr); min-height: 0; }
-  .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-widget-settings-form, .hl-widget-preview-column) { width: 100%; min-width: 0; padding: 16px; }
-  .user-brand-dashboard.operator-mode .helplook-preview .hl-widget-preview-stage { width: min(420px, 100%); margin-inline: auto; }
-  .user-brand-dashboard.operator-mode .helplook-preview .hl-widget-chat-card { max-width: calc(100% - 8px); }
+  .user-brand-dashboard.operator-mode .helplook-preview:not(.content-insights-flow) .hl-widget-settings-panel { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .user-brand-dashboard.operator-mode .helplook-preview:not(.content-insights-flow) :is(.hl-widget-settings-form, .hl-widget-preview-column) { width: 100%; min-width: 0; padding: 16px; }
+  .user-brand-dashboard.operator-mode .helplook-preview:not(.content-insights-flow) .hl-widget-preview-stage { width: min(420px, 100%); margin-inline: auto; }
+  .user-brand-dashboard.operator-mode .helplook-preview:not(.content-insights-flow) .hl-widget-chat-card { max-width: calc(100% - 8px); }
 }
 @container (max-width: 520px) {
   .user-brand-dashboard.operator-mode .helplook-preview .hl-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

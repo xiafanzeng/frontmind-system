@@ -25,6 +25,8 @@ export const workbenchResourceSchema = z.object({
     "publication_draft",
     "publication_batch",
     "monitoring_run",
+    "monitoring_project",
+    "monitor",
     "question",
     "knowledge_snapshot",
     "site",
@@ -33,6 +35,25 @@ export const workbenchResourceSchema = z.object({
   label: z.string().max(255).optional(),
 });
 export type WorkbenchResourceRef = z.infer<typeof workbenchResourceSchema>;
+/** An append-only index of saved outputs, never a cache of domain status. */
+export const workbenchOutputRefSchema = z.object({
+  resource: workbenchResourceSchema,
+  version: z.string().min(1).max(191).optional(),
+  sourceStepId: z.string().min(1).max(128),
+  sourceMessageId: z.string().min(1).max(191).optional(),
+});
+export type WorkbenchOutputRef = z.infer<typeof workbenchOutputRefSchema>;
+export function mergeWorkbenchOutputRefs(
+  previous: WorkbenchOutputRef[] = [],
+  additions: WorkbenchOutputRef[] = [],
+): WorkbenchOutputRef[] {
+  const refs = new Map<string, WorkbenchOutputRef>();
+  for (const ref of [...previous, ...additions]) {
+    const key = JSON.stringify([ref.resource.kind, ref.resource.id, ref.version ?? null]);
+    if (!refs.has(key)) refs.set(key, ref);
+  }
+  return [...refs.values()];
+}
 export const workbenchRecordSchema = z.object({
   id: z.string().min(1).max(128),
   label: z.string().min(1).max(255),
@@ -46,7 +67,9 @@ export const workbenchStatePatchSchema = z.object({
   step: z.string().min(1).max(128).optional(),
   values: workbenchValuesSchema.optional(),
   resources: z.array(workbenchResourceSchema).max(100).optional(),
+  outputRefs: z.array(workbenchOutputRefSchema).max(500).optional(),
   record: workbenchRecordSchema.optional(),
+  records: z.array(workbenchRecordSchema).max(100).optional(),
 });
 export type WorkbenchStatePatch = z.infer<typeof workbenchStatePatchSchema>;
 export const workbenchTaskStateSchema = z.object({
@@ -56,6 +79,7 @@ export const workbenchTaskStateSchema = z.object({
   step: z.string().max(128),
   values: workbenchValuesSchema,
   resources: z.array(workbenchResourceSchema).max(100),
+  outputRefs: z.array(workbenchOutputRefSchema).max(500).optional(),
   records: z
     .array(
       workbenchRecordSchema.extend({
@@ -75,6 +99,14 @@ export const workbenchTaskStateSchema = z.object({
   updatedAt: z.number(),
 });
 export type WorkbenchTaskState = z.infer<typeof workbenchTaskStateSchema>;
+
+export function mergeWorkbenchTaskProjection(local?: WorkbenchTaskState, remote?: WorkbenchTaskState) {
+  if (!remote) return local;
+  if (!local || local.agentId !== remote.agentId) return remote;
+  const newest = local.revision > remote.revision ? local : remote;
+  const outputRefs = mergeWorkbenchOutputRefs(local.outputRefs, remote.outputRefs);
+  return { ...newest, ...(outputRefs.length ? { outputRefs } : {}) };
+}
 
 /** Only presentation state lives here. Domain mutations still verify their own facts. */
 export function initialWorkbenchTaskState(

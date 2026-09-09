@@ -1,3 +1,6 @@
+import KnowledgeNodeConversation from "./KnowledgeNodeConversation";
+import KnowledgePublicExecution from "./KnowledgePublicExecution";
+import KnowledgeWorkbenchActions from "./KnowledgeWorkbenchActions";
 import {
   createContext,
   useContext,
@@ -300,7 +303,7 @@ export default function EmbeddedKnowledgeBasePanel({
   );
   return (
     <section
-      className={unified ? "knowledge-workspace" : "page-shell pb-8"}
+      className={unified ? `knowledge-workspace${workbench ? " knowledge-workspace--workbench" : ""}` : "page-shell pb-8"}
       data-layout-mode={mode}
     >
       {!workbench && (
@@ -830,6 +833,19 @@ function RealBuildFlow({
     "workbenchTask",
   );
   const requestedFreshConversationRef = useRef<string | null>(null);
+  const newKnowledgeTask = () => {
+    if (nodeDirty || nodePending || composerDirty || updating) return;
+    const id = createConversation({
+      title: "企业知识库构建",
+      workbenchAgentId: "knowledge",
+      reuseEmpty: false,
+    });
+    requestedFreshConversationRef.current = id;
+    setHistoricalId(id);
+    setConversationId(id);
+    setActive(id);
+    setWorkbenchTaskQuery(id);
+  };
   const [nodeDirty, setNodeDirty] = useState(false);
   const [nodePending, setNodePending] = useState(false);
   const [composerDirty, setComposerDirty] = useState(false);
@@ -1020,6 +1036,11 @@ function RealBuildFlow({
       retry: false,
     },
   );
+  const [nodeDetailContainer, setNodeDetailContainer] =
+    useState<HTMLDivElement | null>(null);
+  const [nodeDetailsOpen, setNodeDetailsOpen] = useState(false);
+  const [nodeFocusRequest, setNodeFocusRequest] = useState<object | null>(null);
+  const focusNode = useCallback(() => setNodeFocusRequest({}), []);
   const [liveProgress, setLiveProgress] =
     useState<KnowledgeBaseProgressDto | null>(null);
   const [progressTimedOut, setProgressTimedOut] = useState(false);
@@ -1252,6 +1273,28 @@ function RealBuildFlow({
     !lastGoodConversation &&
     !latestProgressQuery.data?.progress &&
     Boolean(fallbackSnapshot);
+  const executionState = displayedConversation?.knowledgeBase;
+  const executionTurnId =
+    executionState?.activeTurnId ?? executionState?.presentationTurnId;
+  const executionAssistant = [...(displayedConversation?.messages ?? [])]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "assistant" &&
+        executionTurnId &&
+        message.knowledgeBase?.turnId === executionTurnId,
+    );
+  const publicExecution = (
+    <KnowledgePublicExecution
+      phase={executionState?.processingPhase}
+      operationState={displayedProgress?.operationState}
+    />
+  );
+  const publicExecutionRunning = [
+    "creating",
+    "waiting_output",
+    "normalizing",
+  ].includes(displayedProgress?.operationState ?? "");
   const collaboration = (
     <>
       {!workbench && (
@@ -1260,6 +1303,24 @@ function RealBuildFlow({
         </header>
       )}
       <KnowledgeWorkspaceStatus progress={displayedProgress} />
+      {workbench && (
+        <KnowledgeWorkbenchActions
+          progress={displayedProgress}
+          conversationId={conversationId ?? ""}
+          resetRevision={resetRevision}
+          disabled={updating || nodeDirty || nodePending || composerDirty}
+          exportDisabled={updating || nodePending}
+          hasUnsavedChanges={nodeDirty || composerDirty}
+          onProgress={setLiveProgress}
+        />
+      )}
+      {workbench && (
+        <div
+          ref={setNodeDetailContainer}
+          className="knowledge-workbench-main-node"
+          data-open={nodeDetailsOpen}
+        />
+      )}
       {workbench && (
         <div className="knowledge-flow-actions">{knowledgeActions}</div>
       )}
@@ -1271,52 +1332,77 @@ function RealBuildFlow({
       )}
       {nodeDirty && (
         <div className="knowledge-workspace-edit-target">
-          请先保存或取消右侧修改，再提交任务消息。
+          请先保存或取消节点修改，再提交任务消息。
         </div>
       )}
-      <div className="knowledge-workspace-task">
-        {missingCurrentConversation || snapshotOnly ? (
-          <div className="knowledge-workspace-empty">
-            <p>
-              {snapshotOnly
-                ? "现有正式资料可预览。重新构建后可使用节点编辑。"
-                : "当前构建记录无法继续。请确认重置后重新上传资料。"}
-            </p>
-            <Button
-              variant="outline"
-              onClick={() =>
-                window.dispatchEvent(
-                  new Event(KNOWLEDGE_BASE_RESET_REQUEST_EVENT),
-                )
+      {!(workbench && nodeDetailsOpen) && (
+        <div className="knowledge-workspace-task">
+          {missingCurrentConversation || snapshotOnly ? (
+            <div className="knowledge-workspace-empty">
+              <p>
+                {snapshotOnly
+                  ? "现有正式资料可预览。重新构建后可使用节点编辑。"
+                  : "当前构建记录无法继续。请确认重置后重新上传资料。"}
+              </p>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  window.dispatchEvent(
+                    new Event(KNOWLEDGE_BASE_RESET_REQUEST_EVENT),
+                  )
+                }
+              >
+                重置后重新上传
+              </Button>
+            </div>
+          ) : displayedConversation ? (
+            <Home
+              key={displayedConversation.id}
+              embedded
+              hideSidebar
+              operatorWorkspace={mode === "workspace"}
+              fixedAgentProfile="frontmind-pro"
+              syncKnowledgeBaseSnapshot
+              inlineBlocks={
+                workbench && executionAssistant
+                  ? [
+                      {
+                        id: `knowledge-process:${executionTurnId}`,
+                        anchor: {
+                          kind: "message",
+                          messageId: executionAssistant.id,
+                        },
+                        placement: "before",
+                        content: publicExecution,
+                      },
+                    ]
+                  : undefined
               }
-            >
-              重置后重新上传
-            </Button>
-          </div>
-        ) : displayedConversation ? (
-          <Home
-            key={displayedConversation.id}
-            embedded
-            hideSidebar
-            operatorWorkspace={mode === "workspace"}
-            fixedAgentProfile="frontmind-pro"
-            syncKnowledgeBaseSnapshot
-            knowledgeBaseProgress={displayedProgress}
-            knowledgeBaseResetRevision={resetRevision}
-            knowledgeBaseAccountId={accountId}
-            knowledgeEditingBlocked={
-              updating ||
-              nodeDirty ||
-              nodePending ||
-              editTarget?.mode === "direct"
-            }
-            onComposerDirtyChange={setComposerDirty}
-            onKnowledgeBaseBatchCancelled={installCancelledBatchRevision}
-          />
-        ) : (
-          <div className="knowledge-workspace-empty">正在打开知识库工作台…</div>
-        )}
-      </div>
+              conversationFooter={
+                workbench && !executionAssistant && publicExecutionRunning
+                  ? publicExecution
+                  : undefined
+              }
+              knowledgeBaseProgress={displayedProgress}
+              knowledgeBaseResetRevision={resetRevision}
+              knowledgeBaseAccountId={accountId}
+              knowledgeEditingBlocked={
+                displayedProgress?.workbench?.phase === "initial" ||
+                updating ||
+                nodeDirty ||
+                nodePending ||
+                editTarget?.mode === "direct"
+              }
+              onComposerDirtyChange={setComposerDirty}
+              onKnowledgeBaseBatchCancelled={installCancelledBatchRevision}
+            />
+          ) : (
+            <div className="knowledge-workspace-empty">
+              正在打开知识库工作台…
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
   const knowledge = snapshotOnly ? (
@@ -1329,6 +1415,32 @@ function RealBuildFlow({
   ) : (
     <KnowledgeNodeWorkspace
       detailPresentation={workbench ? "inline" : "drawer"}
+      className={workbench ? "knowledge-node-workspace--workbench" : ""}
+      nodeConversation={
+        workbench && editTarget?.mode === "ai" && displayedProgress
+          ? {
+              leafId: editTarget.leafId,
+              content: (
+                <KnowledgeNodeConversation
+                  key={`${conversationId}:${editTarget.leafId}`}
+                  conversationId={conversationId ?? ""}
+                  leafId={editTarget.leafId}
+                  title={editTarget.title}
+                  progress={displayedProgress}
+                  resetRevision={resetRevision}
+                  disabled={updating || nodeDirty || nodePending}
+                  onDirtyChange={setComposerDirty}
+                />
+              ),
+            }
+          : undefined
+      }
+      detailContainer={workbench ? nodeDetailContainer : null}
+      onDetailsOpenChange={setNodeDetailsOpen}
+      onNodeOpen={focusNode}
+      autoOpenDetails={
+        workbench && displayedProgress?.workbench?.phase === "editing"
+      }
       key={`${conversationId ?? "empty"}:${displayedProgress?.build.id ?? "empty"}:${displayedConversation?.knowledgeBase?.generation ?? 0}:${resetRevision}`}
       progress={displayedProgress}
       conversationId={conversationId ?? displayedConversation?.id ?? ""}
@@ -1353,13 +1465,13 @@ function RealBuildFlow({
           tasks={historyTasks}
           currentId={conversationId}
           onSelect={chooseHistory}
-          onNew={() =>
-            window.dispatchEvent(new Event(KNOWLEDGE_BASE_RESET_REQUEST_EVENT))
-          }
+          onNew={newKnowledgeTask}
+          disabled={updating || nodeDirty || nodePending || composerDirty}
         />
       }
       collaboration={collaboration}
       knowledge={knowledge}
+      nodeFocusRequest={nodeFocusRequest}
       collaborationRequest={editTarget?.mode === "ai" ? editTarget : null}
       workbench={workbench}
       projectId={projectId}
@@ -1375,6 +1487,7 @@ function KnowledgeWorkspaceSurfaces({
   collaboration,
   knowledge,
   collaborationRequest,
+  nodeFocusRequest,
   workbench = false,
   projectId = "knowledge",
   resultKey,
@@ -1385,6 +1498,7 @@ function KnowledgeWorkspaceSurfaces({
   collaboration: React.ReactNode;
   knowledge: React.ReactNode;
   collaborationRequest?: object | null;
+  nodeFocusRequest?: object | null;
   workbench?: boolean;
   projectId?: string;
   resultKey?: string;
@@ -1392,6 +1506,13 @@ function KnowledgeWorkspaceSurfaces({
   const [view, setView] = useState<"collaboration" | "knowledge">(
     "collaboration",
   );
+  const [mainFocusRequest, setMainFocusRequest] = useState<object | null>(null);
+  useEffect(() => {
+    if (collaborationRequest) setMainFocusRequest(collaborationRequest);
+  }, [collaborationRequest]);
+  useEffect(() => {
+    if (nodeFocusRequest) setMainFocusRequest(nodeFocusRequest);
+  }, [nodeFocusRequest]);
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1410,18 +1531,31 @@ function KnowledgeWorkspaceSurfaces({
     return (
       <AgentWorkbenchShell
         layout="knowledge"
-        toolbar={toolbar}
         taskTitle={taskTitle}
         taskKey={taskKey}
         embedded
         projectId={projectId}
         moduleId="knowledge"
         title="智能知识库"
-        conversation={
+        main={
           <div className="knowledge-conversation-column">{collaboration}</div>
         }
-        conversationFocusRequest={collaborationRequest}
-        result={knowledge}
+        scrollMain={false}
+        auxiliaryScroll={false}
+        conversationFocusRequest={mainFocusRequest}
+        auxiliary={
+          <div className="knowledge-workbench-auxiliary">
+            {toolbar && (
+              <div
+                className="knowledge-workbench-task-entry"
+                aria-label="知识库任务入口"
+              >
+                {toolbar}
+              </div>
+            )}
+            <div className="knowledge-workbench-tree">{knowledge}</div>
+          </div>
+        }
         resultTitle="知识内容"
         resultKey={resultKey ?? projectId}
       />
@@ -1592,6 +1726,13 @@ export function PreviewBuildFlow({
   workbench?: boolean;
   projectId?: string;
 }) {
+  const [detailContainer, setDetailContainer] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [nodeFocusRequest, setNodeFocusRequest] = useState<object | null>(null);
+  const focusNode = useCallback(() => setNodeFocusRequest({}), []);
+  const [initialAccepted, setInitialAccepted] = useState(false);
   const [draft, setDraft] = useState("");
   const [previewTaskNumber, setPreviewTaskNumber] = useState(1);
   const [previewTaskCount, setPreviewTaskCount] = useState(1);
@@ -1612,7 +1753,8 @@ export function PreviewBuildFlow({
   >([
     {
       role: "assistant",
-      content: `当前节点“${currentLeaf?.title || "当前节点"}”仍有关键证据缺口，我已保留在待核验状态。请继续补充资料，或在内容准确后明确回复“确认”；回复“直接预填”则仅跳过这一个节点。`,
+      content:
+        "已将企业资料整理为知识库初稿。先浏览知识节点，整体确认后即可在主区编辑正文与图片。",
     },
   ]);
 
@@ -1724,6 +1866,7 @@ export function PreviewBuildFlow({
       workbench={workbench}
       projectId={projectId}
       resultKey={`${projectId}:${progress.build.id}:${progress.build.revision}:${progress.build.currentLeafId ?? ""}:${progress.build.contentVersion ?? ""}`}
+      nodeFocusRequest={nodeFocusRequest}
       collaboration={
         <div className="flex h-full min-h-0 flex-1 flex-col">
           {!workbench && (
@@ -1735,7 +1878,39 @@ export function PreviewBuildFlow({
           <div className="shrink-0">
             <KnowledgeWorkspaceStatus progress={progress} />
           </div>
-          <div className="min-h-0 flex-1 overflow-auto p-5">
+          {workbench && (
+            <section className="knowledge-workbench-stage">
+              <div>
+                <span className="knowledge-workbench-stage__eyebrow">
+                  {initialAccepted
+                    ? "工作稿 · 本地设计预览"
+                    : "初稿审阅 · 本地设计预览"}
+                </span>
+                <p>
+                  {initialAccepted
+                    ? "选择右侧节点，在主区查看正文。"
+                    : "整体确认后进入编辑阶段；预览不会操作真实知识库。"}
+                </p>
+              </div>
+              <Button
+                onClick={() => setInitialAccepted(true)}
+                disabled={initialAccepted}
+              >
+                {initialAccepted ? "初稿已确认" : "确认初稿，进入编辑"}
+              </Button>
+            </section>
+          )}
+          {workbench && (
+            <div
+              ref={setDetailContainer}
+              className="knowledge-workbench-main-node"
+              data-open={detailsOpen}
+            />
+          )}
+          <div
+            className="min-h-0 flex-1 overflow-auto p-5"
+            hidden={workbench && detailsOpen}
+          >
             {messages.map((message, index) => (
               <div
                 className="knowledge-preview-message"
@@ -1746,7 +1921,10 @@ export function PreviewBuildFlow({
               </div>
             ))}
           </div>
-          <div className="shrink-0 border-t p-4">
+          <div
+            className="shrink-0 border-t p-4"
+            hidden={workbench && detailsOpen}
+          >
             <label className="sr-only" htmlFor="knowledge-preview-input">
               样例任务输入
             </label>
@@ -1783,6 +1961,11 @@ export function PreviewBuildFlow({
       knowledge={
         <KnowledgeNodeWorkspace
           detailPresentation={workbench ? "inline" : "drawer"}
+          className={workbench ? "knowledge-node-workspace--workbench" : ""}
+          detailContainer={workbench ? detailContainer : null}
+          onDetailsOpenChange={setDetailsOpen}
+          onNodeOpen={focusNode}
+          autoOpenDetails={workbench && initialAccepted}
           progress={progress}
           conversationId={progress.build.conversationId}
           generation={1}

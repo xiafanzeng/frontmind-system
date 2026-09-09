@@ -244,7 +244,7 @@ function KnowledgeNodeLocalActionsInner({
         await selectNode(rest, await readLibrary(rest), crypto.randomUUID()),
       );
       onEditTargetSelected?.();
-      toast.success("已选择该节点，可在任务协作中填写修改要求");
+      toast.success("已选择该节点，请填写本次修改要求");
     } catch (error) {
       if (!rest.signal.aborted)
         toast.error(error instanceof Error ? error.message : "无法选择节点");

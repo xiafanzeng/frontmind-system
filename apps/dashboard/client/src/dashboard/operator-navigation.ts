@@ -59,7 +59,7 @@ export const OPERATOR_MODULES = [
   },
   {
     id: "extensions",
-    label: "项目工具",
+    label: "AI专用官网",
     color: "#5e6174",
     views: [
       { id: "enterprise-qa", label: "企业问答" },

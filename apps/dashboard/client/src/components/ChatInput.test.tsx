@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
-import ChatInput from "./ChatInput";
+import ChatInput, { ENTERPRISE_QA_SUGGESTIONS } from "./ChatInput";
 import GeneralAgentRuntimeBadge from "./GeneralAgentRuntimeBadge";
 import { DELIVERY_PROJECT_ASSIGNMENT_STORAGE_KEY } from "@/lib/delivery-project";
 
@@ -155,7 +155,9 @@ describe("General Agent administrator runtime display", () => {
       expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
     );
     expect(onProfile).toHaveBeenCalledWith("frontmind-base");
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "智能体推理档位" }),
+    ).toHaveTextContent("推理 · High");
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/frontmind/v2/runtime-config",
       expect.objectContaining({
@@ -198,14 +200,16 @@ describe("General Agent administrator runtime display", () => {
     expect(fetchMock.mock.calls[0][0]).toContain(`localTaskId=${taskId}`);
     rerender(<GeneralAgentRuntimeBadge onProfile={onProfile} />);
     await waitFor(() =>
-      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("Max"),
+      expect(screen.getByLabelText("智能体推理档位")).toHaveTextContent("High"),
     );
     expect(
-      screen.getByRole("combobox", { name: "智能体推理档位" }),
-    ).toHaveValue("frontmind-base");
-    fireEvent.change(screen.getByRole("combobox", { name: "智能体推理档位" }), {
-      target: { value: "frontmind-pro" },
-    });
+      screen.queryByRole("combobox", { name: "智能体推理档位" }),
+    ).toBeNull();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "智能体推理档位" }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
     expect(onProfile).toHaveBeenLastCalledWith("frontmind-pro");
   });
 
@@ -437,6 +441,21 @@ describe("knowledge-base ChatInput actions", () => {
     mocks.activeConversation.knowledgeBase.notice = null;
     mocks.activeConversation.knowledgeBase.activeTurnResetRevision = undefined;
     mocks.activeConversation.knowledgeBase.activeTurnAwaitingClientAttachments = false;
+  });
+
+  it("fills and focuses enterprise QA suggestions without sending or replacing a draft", async () => {
+    mocks.activeConversation.id = "qa-welcome";
+    mocks.activeConversation.status = "idle";
+    mocks.activeConversation.messages = [];
+    render(<ChatInput purpose="enterprise_qa" operatorWorkspace welcomeSuggestions="enterprise_qa" />);
+    const composer = screen.getByRole("textbox");
+    fireEvent.click(screen.getByRole("button", { name: "产品与服务" }));
+    expect(composer).toHaveValue(ENTERPRISE_QA_SUGGESTIONS[0].prompt);
+    await waitFor(() => expect(composer).toHaveFocus());
+    fireEvent.click(screen.getByRole("button", { name: "资料依据" }));
+    expect(composer).toHaveValue(`${ENTERPRISE_QA_SUGGESTIONS[0].prompt}\n${ENTERPRISE_QA_SUGGESTIONS[2].prompt}`);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "行业调研" })).not.toBeInTheDocument();
   });
 
   it("restores each task's own draft and attachments without rebinding them to another task", async () => {

@@ -64,6 +64,28 @@ export default function PublishingPublicationDetailPage({
       { label: "待核实", value: `${query.data?.unknownCount ?? 0} 项` },
     ],
     note: "回链、费用与执行状态来自当前批次。",
+    outputs: query.data
+      ? [
+          {
+            id: `publication-batch:${batchId}`,
+            title: query.data.articleTitle,
+            type: "发布批次",
+            description: `${query.data.successCount} / ${query.data.itemCount} 家已发布`,
+            status: {
+              queued: "等待发布",
+              processing: "发布中",
+              success: "全部成功",
+              failed: "全部失败",
+              partial_success: "部分成功",
+              action_required: "需要处理",
+            }[query.data.status],
+            onOpen: () =>
+              document
+                .querySelector('[aria-label="发布结果"]')
+                ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+          },
+        ]
+      : [],
   });
 
   useEffect(() => {

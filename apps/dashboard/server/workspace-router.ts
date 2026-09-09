@@ -733,7 +733,7 @@ export const workspaceRouter = router({
           }),
         };
       } catch (error) {
-        throw toTrpcError(error);
+        toServiceError(error);
       }
     }),
 

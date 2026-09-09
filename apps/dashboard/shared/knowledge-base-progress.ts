@@ -265,6 +265,7 @@ export interface KnowledgeBaseResultQualityDto {
 }
 
 export interface KnowledgeBaseProgressDto {
+  workbench?: { generation: number; stateEpoch: number; phase: "initial" | "editing"; acceptedAt: string | null; legacyPublished: boolean };
   build: {
     id: string;
     conversationId: string;

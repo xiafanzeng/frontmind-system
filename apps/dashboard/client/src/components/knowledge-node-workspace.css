@@ -535,3 +535,29 @@
     transition: none;
   }
 }
+
+/* The shared workbench surface owns the border and elevation. The tree is a
+   quiet navigation list; review status remains in compact text only. */
+.knowledge-node-workspace--workbench { border: 0; border-radius: 0; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__header { padding: 16px 0 12px; border-color: #eceef1; }
+.knowledge-node-workspace--workbench h2 { font-size: 16px; line-height: 24px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__header button { font-size: 12px; padding-inline: 8px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__directory,
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-body { background: #fff; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__search { margin: 14px 0 8px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__search input { height: 36px; border-radius: 8px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__tree { padding: 0 0 16px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-card { border: 0; border-bottom: 1px solid #eceef1; border-radius: 0; margin-bottom: 0; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch { min-height: 52px; padding: 12px 2px; gap: 8px; color: #272d35; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-number { width: 22px; height: 22px; border-radius: 4px; background: transparent; color: #8b929b; font-weight: 500; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-heading strong { font-weight: 600; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-progress,
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-counts { display: none; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-body { border: 0; padding: 0 0 12px 8px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__branch-body li + li { margin-top: 2px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__leaf { min-height: 42px; padding: 9px 8px; border: 0; border-radius: 7px; background: white; gap: 8px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__leaf:hover { background: #f7f8fa; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__leaf[aria-current="true"] { background: #f1f3f6; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__leaf-icon { background: transparent; width: 20px; height: 20px; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__leaf-title { font-size: 13px; line-height: 21px; color: #434b56; }
+.knowledge-node-workspace--workbench .knowledge-node-workspace__status { background: transparent; padding: 0; font-size: 11px; }

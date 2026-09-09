@@ -1529,3 +1529,13 @@
   width: 14px;
   height: 14px;
 }
+
+.siteops-execution-summary { margin: 18px 0; color: #65656e; font-size: 13px; }
+.siteops-execution-summary > summary { cursor: pointer; padding: 8px 0; }
+.siteops-execution-summary > div { padding: 4px 0 8px; }
+.siteops-execution-summary p { display: flex; gap: 16px; margin: 8px 0; }
+.siteops-execution-summary small { font-size: 12px; color: #85858e; }
+.siteops-inline-preview { display: block; width: 100%; height: min(720px, 75dvh); min-height: 400px; border: 1px solid #e6e6ea; border-radius: 10px; background: #fff; }
+.siteops-conversation-flow .siteops-message-footer button { display: inline-flex; gap: 5px; font-size: 12px; min-height: 30px; padding: 4px 6px; }
+.siteops-conversation-flow .siteops-message[data-role="assistant"] .siteops-message-meta { display: none; }
+.siteops-conversation-flow .siteops-message-list { overflow: visible; max-height: none; height: auto; }

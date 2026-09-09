@@ -1089,6 +1089,9 @@
   overflow: visible;
   background: #fff;
 }
+.kf-conversation-flow .kf-main {
+  margin: 0;
+}
 .kf-conversation-flow .kf-scroll {
   padding-inline: 0;
 }
@@ -1110,4 +1113,15 @@
   font-size: 13px;
   color: #777780;
   line-height: 1.8;
+}
+
+.kf-conversation-flow .kf-home-grid {
+  display: flex;
+  flex-direction: column;
+}
+.kf-conversation-flow .kf-field {
+  max-width: none;
+}
+.kf-conversation-flow .kf-template-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }

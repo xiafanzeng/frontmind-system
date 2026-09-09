@@ -20,7 +20,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import QuestionActionDialog from "@/components/QuestionActionDialog";
 import { trpc } from "@/lib/trpc";
-import type { WorkspaceQuestionCategory } from "@shared/service-portal";
+import type {
+  WorkspaceQuestionCategory,
+  PublicServicePortalQuestion,
+} from "@shared/service-portal";
 import type { ServicePortalView } from "./service-portal";
 
 export const questionCategoryOptions = [
@@ -211,7 +214,12 @@ function QuestionIntakeView({
   onSubmit,
   submitting: businessSubmitting,
 }: Props & {
-  onSubmit: (input: QuestionIntakeSubmitInput) => Promise<boolean>;
+  onSubmit: (
+    input: QuestionIntakeSubmitInput,
+  ) => Promise<Pick<
+    PublicServicePortalQuestion,
+    "id" | "question" | "revision"
+  > | null>;
   submitting: boolean;
 }) {
   const workbench = workbenchProp ?? portal.mode === "operator";
@@ -319,18 +327,28 @@ function QuestionIntakeView({
             status: "pending",
           },
         });
-      if (
-        await onSubmit({
-          question: question.trim(),
-          category,
-          libraryRef,
-          origin,
-        })
-      ) {
+      const savedEntity = await onSubmit({
+        question: question.trim(),
+        category,
+        libraryRef,
+        origin,
+      });
+      if (savedEntity) {
         if (workbench && task)
           void task
             .saveState({
               step: "question-saved",
+              outputRefs: [
+                {
+                  resource: {
+                    kind: "question",
+                    id: savedEntity.id,
+                    label: savedEntity.question.slice(0, 255),
+                  },
+                  version: String(savedEntity.revision),
+                  sourceStepId: `question-${savedEntity.id}`,
+                },
+              ],
               record: {
                 id: "question-confirm",
                 label: "已保存优化问题",
@@ -611,16 +629,17 @@ function PersistentQuestionIntake(props: Props) {
       submitting={mutation.isPending}
       onSubmit={async (input) => {
         try {
+          let result;
           if (input.origin === "brand_keyword_library") {
             if (!input.libraryRef)
               throw new Error("词库来源已更新，请重新选择。");
-            await mutation.mutateAsync({
+            result = await mutation.mutateAsync({
               mode: "brand_keyword_library",
               ...input.libraryRef,
             });
           } else {
             if (!input.category) throw new Error("请选择问题类别。");
-            await mutation.mutateAsync({
+            result = await mutation.mutateAsync({
               mode: "direct",
               question: input.question,
               category: input.category,
@@ -632,10 +651,10 @@ function PersistentQuestionIntake(props: Props) {
           ]);
           await props.onPortalRefresh?.();
           toast.success("优化问题已确认");
-          return true;
+          return result.question;
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "问题保存失败");
-          return false;
+          return null;
         }
       }}
     />
@@ -651,7 +670,11 @@ export default function QuestionIntakePanel(props: Props) {
         onSubmit={async (input) => {
           props.onPreviewBrandConfirmed?.(input);
           toast.success("预览问题已确认");
-          return true;
+          return {
+            id: `preview-${crypto.randomUUID()}`,
+            question: input.question,
+            revision: 1,
+          };
         }}
       />
     );

@@ -80,6 +80,126 @@ beforeEach(() => {
 afterEach(() => window.history.replaceState({}, "", "/"));
 
 describe("useWorkbenchTask persistence", () => {
+  it.each(["project", "task", "agent"] as const)(
+    "clears the previous task error when the %s changes through route restoration",
+    async (change) => {
+      let project = "account-7:project-1";
+      let currentId = "a";
+      let agentId: "media" | "publishing" = "media";
+      api.save.mockRejectedValueOnce(new Error("旧媒体任务保存冲突"));
+      const view = renderHook(
+        () => useWorkbenchTask(agentId, { conversationId: currentId }),
+        { wrapper: wrapper([task("a"), task("b")], () => project) },
+      );
+      await act(async () => {
+        await expect(
+          view.result.current.saveState({ values: { query: "draft" } }),
+        ).rejects.toThrow("旧媒体任务保存冲突");
+      });
+      expect(view.result.current.error).toBe("旧媒体任务保存冲突");
+      if (change === "project") project = "account-7:project-2";
+      if (change === "task") currentId = "b";
+      if (change === "agent") agentId = "publishing";
+      view.rerender();
+      expect(view.result.current.error).toBeNull();
+    },
+  );
+  it("stops showing a previous project's in-flight save as pending in the selected project", async () => {
+    let finish!: (value: ReturnType<typeof initialWorkbenchTaskState>) => void;
+    api.save.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    let scopeKey = "account-7:project-1";
+    const view = renderHook(() => useWorkbenchTask("media"), {
+      wrapper: wrapper([task("a")], () => scopeKey),
+    });
+    let request!: Promise<unknown>;
+    act(() => {
+      request = view.result.current.saveState({ values: { query: "old" } });
+    });
+    await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
+    expect(view.result.current.pending).toBe(true);
+    scopeKey = "account-7:project-2";
+    view.rerender();
+    expect(view.result.current.pending).toBe(false);
+    await act(async () => {
+      finish({ ...initialWorkbenchTaskState("media"), revision: 2 });
+      await request;
+    });
+    expect(view.result.current.pending).toBe(false);
+    expect(view.result.current.revision).toBe(1);
+  });
+  it("does not let an old recovery discard a newly saved task state", async () => {
+    let refresh!: () => void;
+    api.refresh.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          refresh = resolve;
+        }),
+    );
+    api.save.mockResolvedValue({
+      ...initialWorkbenchTaskState("media"),
+      revision: 2,
+      values: { query: "new task" },
+    });
+    const view = renderHook(() => useWorkbenchTask("media"), {
+      wrapper: wrapper([task("a"), task("b")]),
+    });
+    let recovery!: Promise<void>;
+    act(() => {
+      recovery = view.result.current.retry();
+    });
+    act(() => {
+      view.result.current.selectTask("b");
+    });
+    await act(() =>
+      view.result.current.saveState({ values: { query: "new task" } }),
+    );
+    await act(async () => {
+      refresh();
+      await recovery;
+    });
+    expect(view.result.current.taskId).toBe("b");
+    expect(view.result.current.revision).toBe(2);
+    expect(view.result.current.state?.values).toEqual({ query: "new task" });
+    expect(api.bind).not.toHaveBeenCalled();
+  });
+  it("does not regress a newer saved revision when recovery returns an older projection", async () => {
+    let finishBind!: (
+      value: ReturnType<typeof initialWorkbenchTaskState>,
+    ) => void;
+    api.bind.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishBind = resolve;
+        }),
+    );
+    api.save.mockResolvedValue({
+      ...initialWorkbenchTaskState("media"),
+      revision: 2,
+      values: { query: "confirmed" },
+    });
+    const view = renderHook(() => useWorkbenchTask("media"), {
+      wrapper: wrapper([task("a")]),
+    });
+    let recovery!: Promise<void>;
+    act(() => {
+      recovery = view.result.current.retry();
+    });
+    await waitFor(() => expect(api.bind).toHaveBeenCalledTimes(1));
+    await act(() =>
+      view.result.current.saveState({ values: { query: "confirmed" } }),
+    );
+    await act(async () => {
+      finishBind(initialWorkbenchTaskState("media"));
+      await recovery;
+    });
+    expect(view.result.current.revision).toBe(2);
+    expect(view.result.current.state?.values).toEqual({ query: "confirmed" });
+  });
   it("keeps browsing and new tasks local until the first operation binds them", async () => {
     api.bind.mockResolvedValue(initialWorkbenchTaskState("media"));
     const { result } = renderHook(() => useWorkbenchTask("media"), {

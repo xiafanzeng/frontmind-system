@@ -1,3 +1,6 @@
+import { acceptKnowledgeBaseInitialDraft } from "./knowledge-workbench-service";
+import { exportKnowledgeBaseWorkspace } from "./knowledge-workbench-export";
+import { pipeline as streamPipeline } from "node:stream/promises";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
 import { sendAiBillingError } from "./ai-billing-http";
 import { assertAiAccountFunds } from "./ai-billing-service";
@@ -6010,6 +6013,36 @@ async function sendKnowledgeNodeWorkspaceError(
     ...(observation ? { observation } : {}),
   });
 }
+
+router.post("/initial-draft/accept", async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!req.frontmindUser) { res.status(401).json({ error: { code: "UNAUTHORIZED", message: "请先登录" } }); return; }
+  const userId = enterpriseWorkspaceUserId(req.frontmindUser.id);
+  if (!(await requireKnowledgeBuildCapability(userId, res))) return;
+  try {
+    await assertKnowledgeBaseWritable(userId);
+    const receipt = await acceptKnowledgeBaseInitialDraft(userId, req.body);
+    const observation = await getKnowledgeBaseObservation({ userId, conversationId: req.body.conversationId, upstreamStatus: "local" });
+    res.json({ ...receipt, observation });
+  } catch (error) { await sendKnowledgeNodeWorkspaceError(res,error,userId,req.body?.conversationId); }
+});
+
+router.get("/workspace-export", async (req, res) => {
+  res.setHeader("Cache-Control", "private, no-store");
+  if (!req.frontmindUser) { res.status(401).json({ error: { code: "UNAUTHORIZED", message: "请先登录" } }); return; }
+  const userId = enterpriseWorkspaceUserId(req.frontmindUser.id);
+  if (!(await requireKnowledgeBuildCapability(userId, res))) return;
+  try {
+    const { enterpriseProjectId: _project, operatorOwnerId: _owner, ...coordinates } = req.query;
+    const archive = await exportKnowledgeBaseWorkspace(userId, coordinates);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${archive.filename}"`);
+    await streamPipeline(archive.stream, res);
+  } catch (error) {
+    if (res.headersSent || res.destroyed) { res.destroy(); return; }
+    await sendKnowledgeNodeWorkspaceError(res,error,userId,req.query.conversationId);
+  }
+});
 
 router.get("/node/content", async (req, res) => {
   res.setHeader("Cache-Control", "private, no-store");

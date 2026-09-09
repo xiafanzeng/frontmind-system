@@ -153,7 +153,7 @@ export default function PublishingArticleEditorPage({
   usePublishingSummary({
     title: "当前稿件",
     items: [
-      { label: "稿件", value: title || "正在读取" },
+      { label: "稿件", value: article?.title || "正在读取" },
       {
         label: "保存状态",
         value:
@@ -165,9 +165,33 @@ export default function PublishingArticleEditorPage({
           ? `v${article.currentVersion}`
           : "尚未冻结",
       },
-      { label: "图片", value: `${images.length} 张` },
+      { label: "图片", value: `${article?.images.length ?? 0} 张` },
     ],
     note: frozenResult ? "版本已冻结，可交给媒体助手选择投放资源。" : undefined,
+    outputs: article?.currentVersionId
+      ? [
+          {
+            id: `article-version:${article.currentVersionId}`,
+            title: `稿件冻结版本 v${article.currentVersion}`,
+            description: `关联稿件：${article.title}`,
+            type: "冻结稿件",
+            version: article.currentVersion,
+            status:
+              dirty || article.status !== "frozen"
+                ? "新修改保存在当前草稿，已冻结版本继续保留"
+                : "已冻结",
+            pendingChanges: dirty || article.status !== "frozen",
+            onOpen: () =>
+              document
+                .getElementById("publishing-current-article")
+                ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+            onRevise: () =>
+              document
+                .querySelector<HTMLInputElement>('[aria-label="稿件标题"]')
+                ?.focus(),
+          },
+        ]
+      : [],
   });
 
   const saveNow = useCallback(async () => {
@@ -224,7 +248,8 @@ export default function PublishingArticleEditorPage({
   }, [dirty, saveNow, saving, signature]);
 
   const freezeAndContinue = async () => {
-    if (!article || saving || freezeLock.current) return;
+    if (!article || saving || freezeLock.current || flow?.outcomePending)
+      return;
     const isCurrent = operationScope();
     freezeLock.current = true;
     setFreezing(true);
@@ -255,6 +280,17 @@ export default function PublishingArticleEditorPage({
             resources: [
               { kind: "article", id: frozen.id },
               { kind: "article_version", id: frozen.currentVersionId! },
+            ],
+            outputRefs: [
+              {
+                resource: {
+                  kind: "article_version",
+                  id: frozen.currentVersionId!,
+                  label: frozen.title,
+                },
+                version: String(frozen.currentVersion),
+                sourceStepId: `article-frozen:${frozen.currentVersionId}`,
+              },
             ],
           })
           .catch(() => undefined);
@@ -308,12 +344,18 @@ export default function PublishingArticleEditorPage({
   const uploadImage = useCallback(
     async (file: File) => {
       if (!article) throw new Error("稿件尚未就绪");
+      const isCurrent = operationScope();
       const defaultAlt = file.name.replace(/\.[^.]+$/u, "").trim();
       const uploaded = await gateway.uploadArticleImage(
         article.id,
         file,
         defaultAlt,
       );
+      if (!isCurrent()) {
+        if (uploaded.previewUrlIsObject && uploaded.previewUrl)
+          URL.revokeObjectURL(uploaded.previewUrl);
+        throw new Error("任务已切换，请在原稿件任务查看上传结果。");
+      }
       if (uploaded.previewUrlIsObject && uploaded.previewUrl) {
         previewObjectUrls.current.add(uploaded.previewUrl);
       }
@@ -323,7 +365,7 @@ export default function PublishingArticleEditorPage({
       ]);
       return uploaded;
     },
-    [article, gateway],
+    [article, gateway, operationScope],
   );
 
   return (
@@ -352,7 +394,11 @@ export default function PublishingArticleEditorPage({
               type="button"
               onClick={freezeAndContinue}
               disabled={
-                saving || freezing || !title.trim() || !content.text.trim()
+                saving ||
+                freezing ||
+                flow?.outcomePending ||
+                !title.trim() ||
+                !content.text.trim()
               }
             >
               <FileCheck2 size={17} />
@@ -418,7 +464,11 @@ export default function PublishingArticleEditorPage({
             </span>
           </div>
           <div className="publishing-editor-layout">
-            <section className="publishing-panel publishing-editor-card">
+            <section
+              className="publishing-panel publishing-editor-card"
+              id="publishing-current-article"
+              data-reading-anchor="article-editor"
+            >
               <label className="publishing-title-field">
                 <span>稿件标题</span>
                 <input
@@ -472,75 +522,82 @@ export default function PublishingArticleEditorPage({
                 {article.importChecks.externalLinkCount} 个链接
               </footer>
             </section>
-            <aside className="publishing-editor-inspector">
-              <section className="publishing-panel">
-                <h2>版本与发布准备</h2>
-                <div className="publishing-version-current">
-                  <span>当前版本</span>
-                  <strong>v{article.currentVersion}</strong>
-                  <code>
-                    {article.currentVersionHash?.slice(0, 12) || "尚未冻结"}
-                  </code>
-                </div>
-                <div className="publishing-check-list">
-                  <p>
-                    <ShieldCheck size={17} />
-                    DOCX 导入检查 <strong>已通过</strong>
-                  </p>
-                  <p>
-                    <CheckCircle2 size={17} />
-                    正文结构 <strong>已通过</strong>
-                  </p>
-                  <p>
-                    <ImageIcon size={17} />
-                    图片 <strong>{images.length} 张</strong>
-                  </p>
-                </div>
-              </section>
-              <section className="publishing-panel">
-                <h2>
-                  版本历史{" "}
-                  <small>最近 {Math.min(article.versions.length, 3)} 版</small>
-                </h2>
-                <ol className="publishing-version-list">
-                  {article.versions.slice(0, 3).map((version) => (
-                    <li key={version.id}>
-                      <span>v{version.version}</span>
-                      <div>
-                        <strong>{version.frozen ? "已冻结" : "草稿"}</strong>
-                        <small>
-                          {publishingDateTime(version.createdAt)} ·{" "}
-                          {version.createdBy}
-                        </small>
-                      </div>
-                      {version.version === article.currentVersion ? (
-                        <Check size={15} />
-                      ) : (
-                        <Clock3 size={15} />
-                      )}
-                    </li>
-                  ))}
-                </ol>
-              </section>
-              {!flow && (
-                <button
-                  className="publishing-button publishing-button-accent publishing-button-block"
-                  type="button"
-                  onClick={freezeAndContinue}
-                  disabled={
-                    saving || freezing || !title.trim() || !content.text.trim()
-                  }
+            {!flow && (
+              <aside className="publishing-editor-inspector">
+                <section className="publishing-panel">
+                  <h2>版本与发布准备</h2>
+                  <div className="publishing-version-current">
+                    <span>当前版本</span>
+                    <strong>v{article.currentVersion}</strong>
+                    <code>
+                      {article.currentVersionHash?.slice(0, 12) || "尚未冻结"}
+                    </code>
+                  </div>
+                  <div className="publishing-check-list">
+                    <p>
+                      <ShieldCheck size={17} />
+                      DOCX 导入检查 <strong>已通过</strong>
+                    </p>
+                    <p>
+                      <CheckCircle2 size={17} />
+                      正文结构 <strong>已通过</strong>
+                    </p>
+                    <p>
+                      <ImageIcon size={17} />
+                      图片 <strong>{images.length} 张</strong>
+                    </p>
+                  </div>
+                </section>
+                <section className="publishing-panel">
+                  <h2>
+                    版本历史{" "}
+                    <small>
+                      最近 {Math.min(article.versions.length, 3)} 版
+                    </small>
+                  </h2>
+                  <ol className="publishing-version-list">
+                    {article.versions.slice(0, 3).map((version) => (
+                      <li key={version.id}>
+                        <span>v{version.version}</span>
+                        <div>
+                          <strong>{version.frozen ? "已冻结" : "草稿"}</strong>
+                          <small>
+                            {publishingDateTime(version.createdAt)} ·{" "}
+                            {version.createdBy}
+                          </small>
+                        </div>
+                        {version.version === article.currentVersion ? (
+                          <Check size={15} />
+                        ) : (
+                          <Clock3 size={15} />
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+                {!flow && (
+                  <button
+                    className="publishing-button publishing-button-accent publishing-button-block"
+                    type="button"
+                    onClick={freezeAndContinue}
+                    disabled={
+                      saving ||
+                      freezing ||
+                      !title.trim() ||
+                      !content.text.trim()
+                    }
+                  >
+                    选择媒体
+                  </button>
+                )}
+                <Link
+                  className="publishing-button publishing-button-secondary publishing-button-block"
+                  href="/publishing/articles"
                 >
-                  选择媒体
-                </button>
-              )}
-              <Link
-                className="publishing-button publishing-button-secondary publishing-button-block"
-                href="/publishing/articles"
-              >
-                返回稿件列表
-              </Link>
-            </aside>
+                  返回稿件列表
+                </Link>
+              </aside>
+            )}
           </div>
         </>
       ) : null}

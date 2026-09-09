@@ -2197,7 +2197,7 @@ describe("SiteOps core contracts", () => {
             agentProfile: "frontmind-pro",
           },
         }),
-      ).toThrow("智谱");
+      ).toThrow("当前账号的智能建站服务尚未配置，请联系管理员。");
     },
   );
 

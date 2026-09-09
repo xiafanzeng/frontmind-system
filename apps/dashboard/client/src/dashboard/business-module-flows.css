@@ -165,17 +165,26 @@
   font-size: 16px;
   font-weight: 600;
 }
-.monitoring-inline-report .run-page {
+.monitoring-module.monitoring-inline-report .run-page {
   padding: 0;
+  min-height: 0;
+  background: #fff;
 }
-.monitoring-inline-report .run-page-head {
+.monitoring-module.monitoring-inline-report .run-page-head,
+.monitoring-module.monitoring-inline-report .run-content {
+  max-width: none;
   padding-inline: 0;
 }
 .monitoring-inline-report .run-title-row h1 {
   font-size: 18px;
 }
-.monitoring-inline-report .run-anchor-nav {
+.monitoring-module.monitoring-inline-report .anchor-nav {
   position: static;
+  padding-inline: 0;
+  background: #fff;
+}
+.monitoring-module.monitoring-inline-report .run-section {
+  scroll-margin-top: 16px;
 }
 .user-brand-dashboard .question-intake-panel.question-intake-flow {
   border: 0;
@@ -317,3 +326,10 @@
   box-shadow: none;
   background: #fff;
 }
+
+.business-monitor-project-list, .business-report-entries { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,220px),1fr)); gap: 10px; margin: 16px 0; }
+.business-monitor-project-list > button, .business-report-entries > button { display: flex; align-items: flex-start; flex-direction: column; gap: 8px; text-align: left; padding: 18px; border: 1px solid #e5e8ed; border-radius: 12px; background: #fff; }
+.business-monitor-project-list > button[aria-pressed="true"], .business-report-entries > button[aria-pressed="true"] { border-color: #aeb9c8; background: #f8f9fb; }
+.business-monitor-project-list strong, .business-report-entries strong { font-size: 14px; font-weight: 600; }
+.business-monitor-project-list span, .business-report-entries span { color: #7d8590; font-size: 12px; }
+.business-report-flow > [hidden], .monitoring-reference-page > [hidden] { display: none; }

@@ -106,7 +106,7 @@ const {
     enterpriseProjects: { list: { setData: vi.fn(), invalidate: vi.fn() } },
     workspace: {
       brandQuestionUniverse: { observe: { invalidate: vi.fn() } },
-      dashboard: { invalidate: vi.fn() },
+      dashboard: { invalidate: vi.fn(), fetch: vi.fn() },
       questionPortfolio: { invalidate: vi.fn() },
       portal: { invalidate: vi.fn() },
       responseLogic: { invalidate: vi.fn() },
@@ -352,6 +352,7 @@ vi.mock("@/lib/trpc", () => ({
       responseLogic: {
         useQuery: responseLogicUseQuery,
       },
+      saveResponseLogic: { useMutation: () => ({ mutateAsync: vi.fn() }) },
       questionPortfolio: {
         useQuery: questionPortfolioUseQuery,
       },
@@ -722,10 +723,15 @@ describe("UserBrandDashboard formal workspace", () => {
       isPending: false,
       error: null,
     });
+    trpcUtils.workspace.dashboard.fetch.mockResolvedValue({
+      payload: managedPayload,
+      revision: 7,
+    });
     dashboardUseQuery.mockReturnValue({
       data: { payload: managedPayload, revision: 7 },
       isLoading: false,
       isError: false,
+      refetch: vi.fn(),
     });
     portalUseQuery.mockReturnValue({
       data: { portal: portalPayload },
@@ -745,10 +751,10 @@ describe("UserBrandDashboard formal workspace", () => {
       "进度监控",
       "内容制作",
       "媒体发布",
-      "项目工具",
+      "AI专用官网",
     ].map((name) => within(modules).getByRole("button", { name }));
     const general = within(modules).getByRole("button", {
-      name: "FrontMind通用智能体",
+      name: "通用智能体",
     });
     expect(
       Array.from(modules.querySelectorAll(".operator-module-entry")),
@@ -787,12 +793,12 @@ describe("UserBrandDashboard formal workspace", () => {
       .getByRole("button", { name: "项目总览" })
       .closest("aside");
     fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
+    expect(screen.queryByTestId("embedded-monitoring-business")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
     expect(
-      await screen.findByTestId("embedded-monitoring-business"),
+      screen.getByRole("heading", { name: "选择本次要监控的问题" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "从优化问题新建" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "监控项目名称" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /媒体发布/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "稿件" })[0]!);
     expect(window.location.pathname).toBe("/publishing/articles");
@@ -805,7 +811,7 @@ describe("UserBrandDashboard formal workspace", () => {
   });
   it("opens enterprise QA under project tools while preserving project navigation", async () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /AI专用官网/ }));
     expect(
       await screen.findByTestId("enterprise-qa-workspace"),
     ).toBeInTheDocument();
@@ -971,10 +977,10 @@ describe("UserBrandDashboard formal workspace", () => {
     authState.marketEdition = "overseas";
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /AI专用官网/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "网站管理" })[0]!);
 
-    fireEvent.click(screen.getByRole("button", { name: "建站与部署" }));
+    fireEvent.click(screen.getByRole("button", { name: /^建站与部署/ }));
     expect(screen.getByTestId("connected-siteops-panel")).toHaveTextContent(
       "OAuth-only SiteOps 已连接",
     );
@@ -987,7 +993,7 @@ describe("UserBrandDashboard formal workspace", () => {
   it("retains published website content after removing the content operations page", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /AI专用官网/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "网站管理" })[0]!);
 
     expect(
@@ -997,7 +1003,7 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.queryByRole("button", { name: "编辑内容资产" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("提交内容需求")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看已发布内容" }));
+    fireEvent.click(screen.getByRole("button", { name: /^查看已发布内容/ }));
     expect(screen.getByText("首个企业资产")).toBeInTheDocument();
     expect(screen.getByText("管理员发布的文章")).toBeInTheDocument();
     expect(
@@ -1020,9 +1026,11 @@ describe("UserBrandDashboard formal workspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
 
+    fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
     expect(
-      screen.getByRole("heading", { name: "当前项目尚无优化问题" }),
+      screen.getByRole("heading", { name: "继续处理哪个问题？" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("共 0 项")).toBeInTheDocument();
     expect(
       screen.queryByText("FrontMind 超前智能是一家什么样的公司？"),
     ).toBeNull();
@@ -1042,41 +1050,26 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(
       screen.queryByRole("heading", { name: "品牌全域词库" }),
     ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
+    const main = screen.getByRole("region", { name: "主工作区" });
     expect(
-      within(screen.getByRole("region", { name: "主工作区" })).getByRole(
-        "table",
-      ),
+      within(main).getByRole("button", { name: /如何选择新企业？/ }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "全域词库" }),
+      within(main).getByRole("combobox", { name: "问题类别" }),
     ).toBeInTheDocument();
+    expect(within(main).getByText(/词库版本 7/)).toBeInTheDocument();
     expect(
       screen.queryByText(/配置工单|AI 监控与优化工程师|正式词表/),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "候选问题目录" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText(/个候选问题|已确认/)).not.toBeInTheDocument();
-    expect(screen.getByText("如何选择新企业？")).toBeInTheDocument();
-    const keywordTable = screen.getByRole("table");
     expect(
-      within(keywordTable)
-        .getAllByRole("columnheader")
-        .map((header) => header.textContent),
-    ).toEqual(["问题", "主分类", "问题细分", "问题优化"]);
-    expect(screen.queryByLabelText("排序")).not.toBeInTheDocument();
-    expect(
-      within(keywordTable).queryByRole("columnheader", { name: "核心词" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(keywordTable).queryByRole("columnheader", { name: "创建日期" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(keywordTable).queryByRole("columnheader", { name: "序号" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(keywordTable).getByRole("columnheader", { name: "问题优化" }),
-    ).toBeInTheDocument();
+      screen
+        .getByRole("complementary", { name: "任务辅助区" })
+        .querySelector("table"),
+    ).toBeNull();
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });
 
@@ -1113,6 +1106,7 @@ describe("UserBrandDashboard formal workspace", () => {
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
     expect(
       screen.getByRole("heading", { name: "先发布企业知识库" }),
     ).toBeInTheDocument();
@@ -1139,6 +1133,9 @@ describe("UserBrandDashboard formal workspace", () => {
     requestQuestionSelectionMutateAsync.mockResolvedValue({
       question: {
         id: "selected-question-from-word-bank",
+        question: "如何选择新企业？",
+        category: "product_scenario",
+        revision: 1,
         status: "selected",
         selectionApprovalStatus: "approved",
         locked: true,
@@ -1149,33 +1146,25 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
+    fireEvent.click(screen.getByRole("button", { name: /如何选择新企业？/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /选择词条|选择并进入问题优化/ }),
+      await screen.findByRole("button", { name: "交给问题优化" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "确认选择并交给问题优化" }),
-    );
-
-    const questionInput = await screen.findByRole("textbox", {
-      name: "目标问题",
-    });
-    expect(questionInput).toHaveValue("如何选择新企业？");
-    expect(questionInput).toHaveAttribute("readonly");
-    expect(screen.getByRole("textbox", { name: "问题来源" })).toHaveValue(
-      "品牌全域词库",
-    );
-    expect(
-      screen.queryByRole("combobox", { name: "问题类别" }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "确认优化问题" }),
-    );
-    expect(
-      screen.getByRole("region", { name: "确认优化问题" }),
-    ).toHaveTextContent("保存到当前企业项目后即可开展应答优化与监控。");
+    const confirmation = (
+      await screen.findByRole("heading", {
+        name: "确认将这个问题加入优化清单？",
+      })
+    ).closest("section")!;
+    expect(confirmation).toHaveTextContent("如何选择新企业？");
+    expect(confirmation).toHaveTextContent("品牌全域词库 · 版本 7");
+    expect(within(confirmation).queryByRole("textbox")).toBeNull();
+    expect(within(confirmation).queryByRole("combobox")).toBeNull();
     expect(requestQuestionSelectionMutateAsync).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
+    fireEvent.click(
+      within(confirmation).getByRole("button", { name: "确认并保存" }),
+    );
 
     await waitFor(() =>
       expect(requestQuestionSelectionMutateAsync).toHaveBeenCalledWith({
@@ -1201,41 +1190,43 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
+    fireEvent.click(screen.getByRole("button", { name: /如何选择新企业？/ }));
+    fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
     fireEvent.click(
-      screen.getByRole("button", { name: /选择词条|选择并进入问题优化/ }),
+      await screen.findByRole("button", { name: "交给问题优化" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "确认选择并交给问题优化" }),
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "确认优化问题" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认并保存" }));
 
     await waitFor(() =>
       expect(requestQuestionSelectionMutateAsync).toHaveBeenCalledTimes(1),
     );
     expect(
-      screen.getByRole("region", { name: "确认优化问题" }),
-    ).toHaveTextContent("保存到当前企业项目后即可开展应答优化与监控。");
-    expect(
-      screen.getByRole("region", { name: "确认优化问题" }),
+      screen
+        .getByRole("heading", { name: "确认将这个问题加入优化清单？" })
+        .closest("section"),
     ).toHaveTextContent("如何选择新企业？");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "额度刚刚发生变化",
+    );
+    expect(screen.getByRole("button", { name: "确认并保存" })).toBeEnabled();
   });
 
   it("immediately selects a directly entered question with its category", async () => {
     requestQuestionSelectionMutateAsync.mockResolvedValue({
       question: {
         id: "direct-question-1",
+        question: "新企业如何验证产品交付能力？",
+        category: "industry",
+        revision: 1,
+        status: "selected",
         selectionApprovalStatus: "approved",
       },
     });
     render(<UserBrandDashboard />);
 
     fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
-    expect(screen.getByRole("textbox", { name: "问题来源" })).toHaveValue(
-      "自主填写",
-    );
+    fireEvent.click(screen.getByRole("button", { name: "自己输入" }));
     expect(
       screen.getByRole("combobox", { name: "问题类别" }),
     ).toBeInTheDocument();
@@ -1245,10 +1236,9 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "问题类别" }), {
       target: { value: "industry" },
     });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "确认优化问题" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
+    fireEvent.click(screen.getByRole("button", { name: "检查这个问题" }));
+    expect(requestQuestionSelectionMutateAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认并保存" }));
 
     await waitFor(() =>
       expect(requestQuestionSelectionMutateAsync).toHaveBeenCalledWith({
@@ -1259,7 +1249,7 @@ describe("UserBrandDashboard formal workspace", () => {
     );
   });
 
-  it("projects only the response logic published by the agent into problem optimization", () => {
+  it("projects only the response logic published by the agent into problem optimization and preserves the question-bound continuation", () => {
     const question = {
       id: "formal-question-1",
       contractId: "formal-contract",
@@ -1363,22 +1353,29 @@ describe("UserBrandDashboard formal workspace", () => {
       refetch: vi.fn(),
     });
 
+    questionPortfolioUseQuery.mockReturnValue({
+      data: { questions: [{ ...question, responseLogicConfirmed: true }] },
+      isLoading: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    });
     render(<UserBrandDashboard />);
     fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
 
-    expect(screen.getByText("问题目录")).toBeInTheDocument();
-    expect(screen.getAllByText("产品场景词").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
     expect(
-      screen.getByText("企业希望确认官网能否成为稳定、可追溯的 AI 信源。"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/先核验企业身份与核心能力。/)).toBeInTheDocument();
-    expect(screen.getByText(/企业官网正式资料/)).toBeInTheDocument();
+      screen.getByRole("button", {
+        name: /企业官网怎样成为 AI 可引用的权威信源？/,
+      }),
+    ).toHaveTextContent("已有正式应答");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /企业官网怎样成为 AI 可引用的权威信源？/,
+      }),
+    );
+    expect(screen.getByText(question.question)).toBeInTheDocument();
     expect(screen.queryByText("客户案例公开授权")).toBeNull();
     expect(screen.queryByText("引自知识库文档。")).toBeNull();
-    expect(
-      screen.getByText("不使用无法核验的行业第一表述"),
-    ).toBeInTheDocument();
-    expect(screen.getByAltText("官网事实证据")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "修改问题" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "删除问题" })).toBeEnabled();
     expect(
@@ -1402,5 +1399,12 @@ describe("UserBrandDashboard formal workspace", () => {
     ]) {
       expect(screen.queryByText(redundantCopy)).toBeNull();
     }
+    fireEvent.click(screen.getByRole("button", { name: "进入应答逻辑" }));
+    expect(new URLSearchParams(window.location.search).get("questionId")).toBe(
+      question.id,
+    );
+    expect(new URLSearchParams(window.location.search).get("view")).toBe(
+      "response-logic",
+    );
   });
 });

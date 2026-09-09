@@ -1,3 +1,4 @@
+import { conversationInlineSlots, type ConversationInlineBlock } from "@/lib/conversation-inline-blocks";
 import { GeneralAgentWelcome } from "./GeneralAgentWelcome";
 import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
 export {
@@ -117,6 +118,8 @@ import {
   normalizedKnowledgeBaseUploadMimeType,
 } from "@/lib/attachment-files";
 import { isAttachmentExpired } from "@/lib/attachment-expiry";
+import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
+import { WorkflowCompleted, WorkflowQuestion, WorkflowSection } from "@/dashboard/workflow/Workflow";
 
 export const KNOWLEDGE_BASE_FOUNDATION_COPY =
   "企业知识库是品牌事实与产品信息的统一底稿，也是构建 AI 专用友好官网、生成内容与准确回答客户问题的基础。";
@@ -1215,6 +1218,8 @@ export default function ChatArea({
   composerPrefill,
   responseLogicContext,
   messageProjection,
+  inlineBlocks,
+  conversationFooter,
   showKnowledgeBaseStarter = true,
   standardWelcomeVariant = "simple",
   reserveOuterMobileNav = false,
@@ -1233,6 +1238,8 @@ export default function ChatArea({
   composerPrefill?: string;
   responseLogicContext?: ResponseLogicTaskContext;
   messageProjection?: (message: LocalMessage) => LocalMessage;
+  inlineBlocks?: ConversationInlineBlock[];
+  conversationFooter?: React.ReactNode;
   showKnowledgeBaseStarter?: boolean;
   standardWelcomeVariant?: "simple" | "workflow" | "enterprise_qa";
   reserveOuterMobileNav?: boolean;
@@ -1766,11 +1773,15 @@ export default function ChatArea({
       ? projectFrontMindIdentityMessages(rows)
       : rows;
   }, [activeConversation, messageProjection, purpose]);
+  const inlineSlots = useMemo(() => conversationInlineSlots(messages, inlineBlocks), [messages, inlineBlocks]);
+  const renderInlineBlocks = (blocks: ConversationInlineBlock[] | undefined) => blocks?.map((block) => (
+    <div key={block.id} data-reading-anchor={`business-${block.id}`} data-business-block={block.id}>{block.content}</div>
+  ));
   const executionSlots = useMemo(
     () =>
       generalExecutionSlots(
         messages,
-        activeConversation?.executionKind === "general_chat_v2" && !purpose
+        activeConversation?.executionKind === "general_chat_v2"
           ? activeConversation.execution
           : undefined,
         activeConversation?.status === "running" ||
@@ -1823,6 +1834,7 @@ export default function ChatArea({
     !responseLogicContext &&
     !purpose &&
     messages.length === 0 &&
+    inlineSlots.initial.length === 0 &&
     status === "idle";
   return (
     <div
@@ -1900,8 +1912,8 @@ export default function ChatArea({
         data-testid="chat-messages-viewport"
         style={{ overflowAnchor: "none" }}
       >
-        <div className="max-w-4xl mx-auto px-3 py-6 space-y-6 sm:px-5 sm:py-8 sm:space-y-7">
-          {messages.length === 0 &&
+        <div className={operatorWorkspace ? "workbench-reading-column space-y-7" : "max-w-4xl mx-auto px-3 py-6 space-y-6 sm:px-5 sm:py-8 sm:space-y-7"}>
+          {inlineSlots.initial.length ? null : messages.length === 0 &&
           status === "idle" &&
           responseLogicContext ? (
             <ResponseLogicConversationHint
@@ -1918,6 +1930,8 @@ export default function ChatArea({
                 )
               }
               eligible={messages.length === 0 && status === "idle"}
+              inline={operatorWorkspace}
+              onDirtyChange={onComposerDirtyChange}
               companyName={
                 dashboardQuery.data?.enterpriseName ||
                 dashboardQuery.data?.payload?.brandName ||
@@ -1937,9 +1951,11 @@ export default function ChatArea({
             <StandardConversationHint variant={standardWelcomeVariant} />
           ) : null}
 
+          {renderInlineBlocks(inlineSlots.initial)}
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
               <div key={msg.id} data-reading-anchor={msg.id}>
+                {renderInlineBlocks(inlineSlots.before.get(msg.id))}
                 <GeneralExecutionActivity
                   items={executionSlots.before.get(msg.id)}
                   expandedGroups={expandedExecutionGroups}
@@ -1947,6 +1963,7 @@ export default function ChatArea({
                 />
                 <MessageBubble
                   message={msg}
+                  inlineContent={renderInlineBlocks(inlineSlots.after.get(msg.id))}
                   isRunning={displayActiveTask}
                   generalChatLinks={
                     activeConversation.executionKind === "general_chat_v2"
@@ -2147,6 +2164,7 @@ export default function ChatArea({
               />
             )}
 
+          {conversationFooter && <div data-reading-anchor="business-footer">{conversationFooter}</div>}
           <div aria-hidden="true" />
         </div>
       </div>
@@ -2160,9 +2178,9 @@ export default function ChatArea({
           ↓ 回到最新
         </button>
       )}
-      {/* The same composer stays mounted when the first message is sent. */}
-      <ChatInput
-        welcomeSuggestions={welcome}
+      {/* Knowledge intake owns its initial fields; its real conversation starts after submission. */}
+      {!(operatorWorkspace && showKnowledgeBaseStarter && messages.length === 0 && status === "idle") && <ChatInput
+        welcomeSuggestions={welcome || (purpose === "enterprise_qa" && messages.length === 0 && status === "idle" ? "enterprise_qa" : false)}
         fixedAgentProfile={fixedAgentProfile}
         syncKnowledgeBaseSnapshot={syncKnowledgeBaseSnapshot}
         purpose={purpose}
@@ -2174,7 +2192,7 @@ export default function ChatArea({
         operatorWorkspace={operatorWorkspace}
         knowledgeEditingBlocked={knowledgeEditingBlocked}
         onComposerDirtyChange={onComposerDirtyChange}
-      />
+      />}
     </div>
   );
 }
@@ -2245,10 +2263,9 @@ function StandardConversationHint({
 }) {
   if (variant === "enterprise_qa") {
     return (
-      <div className="mx-auto max-w-xl py-14 text-center">
-        <BookOpen className="mx-auto h-8 w-8 text-primary" />
-        <h3 className="mt-4 text-lg font-semibold">有什么企业问题需要解答？</h3>
-        <p className="mt-2 text-sm text-muted-foreground">
+      <div className="enterprise-qa-starter w-full py-4">
+        <h3 className="text-base font-semibold leading-7">你想先了解企业的哪方面？</h3>
+        <p className="mt-2 text-base leading-7 text-[#595959]">
           回答会参考本会话绑定的已发布知识库；资料未覆盖的内容会明确说明。
         </p>
       </div>
@@ -2441,6 +2458,8 @@ export function EmptyConversationHint({
   companyConfigured,
   companyLoading,
   resetRevision = 0,
+  inline = false,
+  onDirtyChange,
 }: {
   onStartKnowledgeBase: (
     input: DeepReportStartInput,
@@ -2452,6 +2471,8 @@ export function EmptyConversationHint({
   companyConfigured: boolean;
   companyLoading: boolean;
   resetRevision?: number;
+  inline?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -2461,6 +2482,10 @@ export function EmptyConversationHint({
     Array<{ itemId: string; file: File }>
   >([]);
   const files = useMemo(() => fileItems.map((item) => item.file), [fileItems]);
+  const starterDirty = eligible && Boolean(companyWebsite.trim() || operatorNotes.trim() || files.length);
+  useWorkspaceDraftGuard({ dirty: inline && starterDirty, label: "知识库资料和补充说明" });
+  useEffect(() => { if (inline) onDirtyChange?.(starterDirty); }, [inline, starterDirty, onDirtyChange]);
+  useEffect(() => () => { if (inline) onDirtyChange?.(false); }, [inline, onDirtyChange]);
   const [isDragging, setIsDragging] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [isDiscarding, setIsDiscarding] = useState(false);
@@ -3097,7 +3122,18 @@ export function EmptyConversationHint({
 
   return (
     <>
-      <motion.div
+      {inline ? (
+        dialogOpen ? (
+          <WorkflowCompleted id="knowledge-materials-entry" summary="准备企业资料，构建知识库初稿" onRevise={isStarting || isDiscarding || batchLocked ? undefined : () => setDialogOpen(false)} />
+        ) : (
+          <WorkflowQuestion
+            question="先用哪些资料了解你的企业？"
+            description="提供企业官网、宣传册或补充说明，构建后可以逐项审阅知识内容。"
+            choices={[{ id: "materials", label: "构建企业知识库", description: "填写官网与说明，上传企业资料" }]}
+            onSelect={() => setDialogOpen(true)}
+          />
+        )
+      ) : <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         className="flex min-h-[420px] flex-col items-center justify-center px-4 py-10 text-center"
@@ -3134,9 +3170,10 @@ export function EmptyConversationHint({
             />
           </div>
         </div>
-      </motion.div>
+      </motion.div>}
 
-      <Dialog
+      <KnowledgeStarterSurface
+        inline={inline}
         open={dialogOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -3147,16 +3184,10 @@ export function EmptyConversationHint({
           void discardBatchAndClose();
         }}
       >
-        <DialogContent className="w-[calc(100vw-1rem)] sm:max-w-[560px] max-h-[calc(100dvh-1rem)] overflow-y-auto p-4 sm:p-6">
-          <DialogTitle>构建企业知识库</DialogTitle>
-          <DialogDescription>
-            系统会深度采集官网全站，并检索全网企业情报与图文来源，逐项核验后构建知识库。
-          </DialogDescription>
-
           <div className="space-y-5 py-2">
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground/80">
-                当前账号绑定企业
+                当前企业项目
               </label>
               <Input
                 value={companyName}
@@ -3168,7 +3199,7 @@ export function EmptyConversationHint({
               />
               {!companyLoading && !companyConfigured && (
                 <p className="text-xs leading-5 text-amber-700">
-                  请联系管理员配置当前账号的企业名称后，再开始构建知识库。
+                  请先配置当前项目的企业名称，再开始构建知识库。
                 </p>
               )}
             </div>
@@ -3426,7 +3457,7 @@ export function EmptyConversationHint({
             </div>
           </div>
 
-          <DialogFooter>
+          <div className="workflow-actions">
             <Button
               type="button"
               variant="outline"
@@ -3484,10 +3515,32 @@ export function EmptyConversationHint({
                         : "重试并继续"
                   : "开始构建"}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+      </KnowledgeStarterSurface>
     </>
+  );
+}
+
+function KnowledgeStarterSurface({ inline, open, onOpenChange, children }: {
+  inline: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}) {
+  const description = "系统会采集官网与公开资料，并结合上传内容构建可审阅的知识库初稿。";
+  if (inline) return open ? (
+    <WorkflowSection id="knowledge-materials" title="填写资料与补充说明" description={description}>
+      {children}
+    </WorkflowSection>
+  ) : null;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[calc(100vw-1rem)] sm:max-w-[560px] max-h-[calc(100dvh-1rem)] overflow-y-auto p-4 sm:p-6">
+        <DialogTitle>构建企业知识库</DialogTitle>
+        <DialogDescription>{description}</DialogDescription>
+        {children}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -4061,6 +4114,7 @@ function UserAttachmentImage({ attachment }: { attachment: Attachment }) {
 
 export function MessageBubble({
   message,
+  inlineContent,
   isRunning,
   generalChatLinks,
   fixedElapsedTime,
@@ -4068,6 +4122,7 @@ export function MessageBubble({
   onDelete,
 }: {
   message: LocalMessage;
+  inlineContent?: React.ReactNode;
   isRunning?: boolean;
   generalChatLinks?: boolean;
   fixedElapsedTime?: number;
@@ -4226,8 +4281,9 @@ export function MessageBubble({
           {/* Message content */}
           <div
             className={cn(
-              "chat-message-content max-w-[92%] space-y-2 sm:max-w-[80%]",
-              isUser ? "items-end" : "items-start",
+              "chat-message-content space-y-2",
+              isUser ? "max-w-[92%] items-end sm:max-w-[80%]" : "w-full max-w-none items-start",
+              inlineContent ? "w-full !max-w-full" : undefined,
             )}
           >
             {/* Intermediate steps (assistant only) */}
@@ -4303,6 +4359,8 @@ export function MessageBubble({
               </div>
             )}
 
+            {inlineContent}
+
             {/* Output files (assistant) - with PDF/HTML inline viewer and MD reader */}
             {visibleOutputFiles && visibleOutputFiles.length > 0 && (
               <div className="space-y-1.5 mt-1">
@@ -4319,6 +4377,7 @@ export function MessageBubble({
                   return (
                     <div
                       key={i}
+                      data-workbench-output-key={`${message.id}:${i}`}
                       onClick={(e) => {
                         if (isMarkdown) {
                           e.preventDefault();
@@ -4366,6 +4425,7 @@ export function MessageBubble({
                         </div>
                       ) : (
                         <div
+                          data-output-download
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {

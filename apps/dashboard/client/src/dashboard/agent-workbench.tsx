@@ -26,7 +26,7 @@ const resultTitles: Record<WorkbenchModuleId, string> = {
   progress: "监控与报告",
   content: "内容与稿件",
   publishing: "发布与媒体",
-  extensions: "项目工具",
+  extensions: "AI专用官网",
 };
 const subagents: Record<
   Exclude<OperatorView, "knowledge-display">,
@@ -71,6 +71,7 @@ export function createWorkbenchModules(
       id: view.id,
       label: view.label,
       ...subagents[view.id],
+      color: module.color,
       active: view.id === (canonical ?? module.views[0].id),
       kind: "open-panel",
       run: () => openView(view.id),

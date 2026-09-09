@@ -29,7 +29,15 @@ const portal = {
   purchasedQuestions: [],
 } as unknown as ServicePortalView;
 beforeEach(() => {
-  mocks.select.mockReset().mockResolvedValue({});
+  mocks.select
+    .mockReset()
+    .mockImplementation(async (input) => ({
+      question: {
+        id: "saved-question",
+        question: input.question ?? "哪个品牌适合企业？",
+        revision: 1,
+      },
+    }));
   mocks.invalidate.mockReset().mockResolvedValue(undefined);
 });
 describe("customer question selection", () => {

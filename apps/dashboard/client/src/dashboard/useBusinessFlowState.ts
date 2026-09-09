@@ -8,15 +8,16 @@ export function useBusinessFlowState<T>(
   initial: T,
   parse: (value: unknown) => T | undefined,
   serialize: (value: T) => unknown = (value) => value,
-): [T, Dispatch<SetStateAction<T>>] {
+): [T, Dispatch<SetStateAction<T>>, (value: T) => void] {
   const workspace = useBusinessWorkspace();
-  const scope = `${workspace.agentId}:${workspace.taskId ?? "new"}`;
+  const scopePrefix = `${workspace.task?.scopeKey ?? workspace.agentId}:`;
+  const scope = `${scopePrefix}${workspace.taskId ?? "new"}`;
   const drafts = useRef(new Map<string, T>());
   const previousScope = useRef(scope);
   const [, updateRender] = useReducer((value) => value + 1, 0);
   if (
     previousScope.current !== scope &&
-    previousScope.current === `${workspace.agentId}:new` &&
+    previousScope.current === `${scopePrefix}new` &&
     workspace.task?.pending &&
     drafts.current.has(previousScope.current)
   ) {
@@ -34,6 +35,8 @@ export function useBusinessFlowState<T>(
   latest.current = { workspace, scope, value, serialize };
   const update: Dispatch<SetStateAction<T>> = (next) => {
     const current = latest.current;
+    // Late domain callbacks retain their task ownership across navigation.
+    if (current.scope !== scope) return;
     const resolved =
       typeof next === "function"
         ? (next as (value: T) => T)(current.value)
@@ -49,7 +52,14 @@ export function useBusinessFlowState<T>(
         .catch(() => undefined);
     }
   };
-  return [value, update];
+  // Confirmations call this only after saveState acknowledges the snapshot.
+  const acceptSaved = (confirmed: T) => {
+    if (latest.current.scope !== scope) return;
+    latest.current.value = confirmed;
+    drafts.current.set(scope, confirmed);
+    updateRender();
+  };
+  return [value, update, acceptSaved];
 }
 export const readFlowString = (value: unknown) =>
   typeof value === "string" ? value : undefined;

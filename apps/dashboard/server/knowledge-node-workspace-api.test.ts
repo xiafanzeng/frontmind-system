@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   details: vi.fn(),
+  accept: vi.fn(),
+  exportWorkspace: vi.fn(),
   save: vi.fn(),
   capability: vi.fn(),
   projection: vi.fn(),
@@ -10,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   candidates: vi.fn(),
   claim: vi.fn(),
   manual: vi.fn(),
+}));
+vi.mock("./knowledge-workbench-service", async (actual) => ({
+  ...(await actual<typeof import("./knowledge-workbench-service")>()), acceptKnowledgeBaseInitialDraft: mocks.accept,
+}));
+vi.mock("./knowledge-workbench-export", async (actual) => ({
+  ...(await actual<typeof import("./knowledge-workbench-export")>()), exportKnowledgeBaseWorkspace: mocks.exportWorkspace,
 }));
 vi.mock("./knowledge-node-workspace-service", async (actual) => ({
   ...(await actual<typeof import("./knowledge-node-workspace-service")>()),
@@ -140,6 +148,23 @@ beforeEach(() => {
 });
 
 describe("knowledge node workspace HTTP", () => {
+  it("requires login for initial acceptance and workspace export", async () => {
+    expect((await invoke("/initial-draft/accept", "post", {}, false)).statusCode).toBe(401);
+    expect((await invoke("/workspace-export", "get", {}, false)).statusCode).toBe(401);
+    expect(mocks.accept).not.toHaveBeenCalled(); expect(mocks.exportWorkspace).not.toHaveBeenCalled();
+  });
+  it("returns an observation after initial acceptance without model credentials", async () => {
+    mocks.accept.mockResolvedValue({ accepted: true, unchanged: false });
+    const result = await invoke("/initial-draft/accept", "post", request);
+    expect(result.statusCode).toBe(200); expect(result.body.observation.stateEpoch).toBe(9);
+    expect(mocks.accept).toHaveBeenCalledWith(7, request); expect(mocks.credential).not.toHaveBeenCalled();
+  });
+  it("keeps native download project context outside strict coordinates and reports missing sources before streaming", async () => {
+    mocks.exportWorkspace.mockRejectedValue(new KnowledgeBaseMaterializedError("INVALID_BUILD_STATE", "原件暂不可读取"));
+    const result = await invoke("/workspace-export", "get", { conversationId: "conversation", enterpriseProjectId: "project-a", expectedGeneration: "1" });
+    expect(mocks.exportWorkspace).toHaveBeenCalledWith(7, { conversationId: "conversation", expectedGeneration: "1" });
+    expect(result.statusCode).toBe(409); expect(result.body.observation.stateEpoch).toBe(9);
+  });
   it("requires login before either read or write", async () => {
     expect((await invoke("/node/content", "get", {}, false)).statusCode).toBe(
       401,

@@ -1243,7 +1243,7 @@ describe("SiteOpsConversationPanel", () => {
     expect(screen.getByRole("button", { name: "选择 P2-A" })).toBeEnabled();
   });
 
-  it("renders Markdown messages with timestamps and freezes completed stage durations", () => {
+  it("renders Markdown with concise safe execution records and no timestamps", () => {
     render(
       <SiteOpsConversationPanel
         observation={observation({
@@ -1279,18 +1279,18 @@ describe("SiteOpsConversationPanel", () => {
     expect(
       screen.getByRole("button", { name: "复制消息" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("1 分 5 秒")).toBeInTheDocument();
-    expect(screen.getByText("08/22 08:00")).toBeInTheDocument();
-    expect(screen.getByText("08/22 08:01")).toBeInTheDocument();
+    expect(screen.getByText("查看建站执行记录")).toBeInTheDocument();
+    expect(screen.getByText("检查网站")).toBeInTheDocument();
+    expect(document.querySelector(".siteops-message-footer time")).toBeNull();
+    expect(document.querySelector(".siteops-execution-timeline")).toBeNull();
     expect(
-      document.querySelector(".siteops-message-footer time"),
-    ).toHaveAttribute("datetime", "2026-08-22T00:01:05.000Z");
-    expect(
-      document.querySelector(".siteops-execution-timeline time"),
-    ).toHaveAttribute("datetime", "2026-08-22T00:00:00.000Z");
+      document.querySelector(
+        '.siteops-message[data-role="assistant"] .siteops-message-avatar',
+      ),
+    ).toBeNull();
   });
 
-  it("updates a running stage timer every second", () => {
+  it("keeps running stage status independent of elapsed time", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-22T00:00:05.000Z"));
@@ -1312,9 +1312,11 @@ describe("SiteOpsConversationPanel", () => {
           })}
         />,
       );
-      expect(screen.getByText("5 秒")).toBeInTheDocument();
+      expect(screen.getByText("整理页面设计 · 进行中")).toBeInTheDocument();
+      expect(screen.queryByText("5 秒")).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1_000));
-      expect(screen.getByText("6 秒")).toBeInTheDocument();
+      expect(screen.getByText("整理页面设计 · 进行中")).toBeInTheDocument();
+      expect(screen.queryByText("6 秒")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

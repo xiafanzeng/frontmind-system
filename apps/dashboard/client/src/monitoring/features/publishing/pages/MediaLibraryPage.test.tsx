@@ -21,6 +21,7 @@ import MediaLibraryPage from "./MediaLibraryPage";
 import {
   PublishingFlowProvider,
   type PublishingFlow,
+  publishingHandoffRecordId,
 } from "../PublishingFlowContext";
 import { webcrypto } from "node:crypto";
 
@@ -143,7 +144,9 @@ function openFlow(
     <Router hook={location.hook} searchHook={location.searchHook}>
       <PublishingGatewayProvider gateway={g as unknown as PublisherGateway}>
         <PublishingFlowProvider value={flow}>
-          <MediaLibraryPage />
+          <Route path="/publishing/media">
+            <MediaLibraryPage />
+          </Route>
         </PublishingFlowProvider>
       </PublishingGatewayProvider>
     </Router>,
@@ -152,9 +155,13 @@ function openFlow(
 }
 
 describe("media business conversation", () => {
-  it("shows the real directory first, chooses the article inline and explicitly hands its saved draft to publishing", async () => {
+  it("starts with a choice, then opens the real directory and hands its confirmed draft to publishing", async () => {
     const g = gateway();
     const { flow, location } = openFlow(g);
+    expect(
+      screen.queryByRole("checkbox", { name: "选择 新闻测试媒体" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /浏览媒体目录/ }));
     fireEvent.click(
       await screen.findByRole("checkbox", { name: "选择 新闻测试媒体" }),
     );
@@ -165,11 +172,28 @@ describe("media business conversation", () => {
         }),
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "选择稿件并继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认媒体，选择稿件" }));
+    await waitFor(() =>
+      expect(flow.setSummary).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          outputs: [
+            expect.objectContaining({
+              id: "confirmed-media-selection",
+              title: "已确认 1 家媒体",
+              status: expect.stringContaining("待选择稿件"),
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(g.createDraft).not.toHaveBeenCalled();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "选择冻结稿件" }), {
-      target: { value: "version" },
-    });
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+      {
+        target: { value: "version" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "确认稿件与媒体" }));
     await screen.findByRole("button", { name: "交给发布助手" });
     expect(g.createDraft).toHaveBeenCalledWith(
@@ -197,6 +221,61 @@ describe("media business conversation", () => {
     );
   });
 
+  it("does not confirm metadata or expose an output until save succeeds, and restores the article step", async () => {
+    const g = gateway();
+    const selections: Record<string, unknown> = {};
+    let rejectConfirmation!: (reason: Error) => void;
+    let fail = true;
+    const saveValues = vi.fn(async (patch: Record<string, unknown>) => {
+      if (patch.mediaConfirmedSelection && fail)
+        await new Promise<void>((_yes, no) => {
+          rejectConfirmation = no;
+        });
+      Object.assign(selections, patch);
+    });
+    const { flow } = openFlow(g, { selections, saveValues });
+    fireEvent.click(screen.getByRole("button", { name: /浏览媒体目录/ }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: "选择 新闻测试媒体" }),
+    );
+    await screen.findByText("已选 1 家媒体");
+    expect(flow.setSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ items: [], outputs: [] }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认媒体，选择稿件" }));
+    expect(
+      screen.queryByRole("combobox", { name: "选择冻结稿件" }),
+    ).not.toBeInTheDocument();
+    expect(flow.setSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ outputs: [] }),
+    );
+    await act(async () => rejectConfirmation(new Error("offline")));
+    expect(
+      await screen.findByText("媒体清单尚未确认保存，请重试；当前选择已保留。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 新闻测试媒体" }),
+    ).toBeChecked();
+    expect(g.createDraft).not.toHaveBeenCalled();
+    expect(flow.record).not.toHaveBeenCalled();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "确认媒体，选择稿件" }));
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+      { target: { value: "version" } },
+    );
+    expect(selections.mediaStep).toBe("article");
+    cleanup();
+    openFlow(g, { selections, saveValues });
+    expect(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+    ).toHaveValue("version");
+    expect(
+      screen.queryByRole("heading", { name: "这次想怎样选择媒体？" }),
+    ).not.toBeInTheDocument();
+    expect(g.createDraft).not.toHaveBeenCalled();
+  });
+
   it("restores a saved media task from its actual draft reference without creating another draft", async () => {
     const g = gateway();
     const saved = await g.createDraft("version", ["news"]);
@@ -219,18 +298,56 @@ describe("media business conversation", () => {
     expect(g.createDraft).not.toHaveBeenCalled();
   });
 
+  it("restores the exact server handoff receipt for the saved draft", async () => {
+    const g = gateway();
+    const saved = await g.createDraft("version", ["news"]);
+    g.getDraft.mockResolvedValue(saved);
+    const recordId = await publishingHandoffRecordId("media-publishing-draft");
+    const { flow, location } = openFlow(g, {
+      resources: [
+        { kind: "publication_draft", id: "draft" },
+        { kind: "article_version", id: "version" },
+      ],
+      records: [
+        {
+          id: recordId,
+          label: "已交接",
+          status: "completed",
+          timestamp: 1,
+          targetTask: { agentId: "publishing", conversationId: "same-target" },
+        },
+      ],
+    });
+    const openTarget = await screen.findByRole("button", {
+      name: "打开发布任务",
+    });
+    expect(flow.setSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outputs: [expect.objectContaining({ status: "已交接到发布任务" })],
+      }),
+    );
+    fireEvent.click(openTarget);
+    expect(flow.handoff).not.toHaveBeenCalled();
+    expect(location.history.at(-1)).toContain("workbenchTask=same-target");
+    expect(screen.queryByText("等待交给发布助手")).not.toBeInTheDocument();
+  });
+
   it("keeps the selected article and uses the same draft request key after an uncertain creation response", async () => {
     const g = gateway();
     g.createDraft.mockRejectedValueOnce(new Error("连接中断，请重试"));
     openFlow(g);
+    fireEvent.click(screen.getByRole("button", { name: /浏览媒体目录/ }));
     fireEvent.click(
       await screen.findByRole("checkbox", { name: "选择 新闻测试媒体" }),
     );
     await screen.findByText("已选 1 家媒体");
-    fireEvent.click(screen.getByRole("button", { name: "选择稿件并继续" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "选择冻结稿件" }), {
-      target: { value: "version" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "确认媒体，选择稿件" }));
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+      {
+        target: { value: "version" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "确认稿件与媒体" }));
     await waitFor(() => expect(g.createDraft).toHaveBeenCalledTimes(1));
     await waitFor(() =>
@@ -319,9 +436,12 @@ describe("media selection flow", () => {
     expect(screen.getByText("已选 2 家媒体")).toBeInTheDocument();
     expect(screen.getByText("粉丝 1.2万")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择稿件并继续" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "选择冻结稿件" }), {
-      target: { value: "version" },
-    });
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+      {
+        target: { value: "version" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "绑定稿件并配置标题" }));
     expect(await screen.findByText("标题配置页面")).toBeInTheDocument();
     expect(g.createDraft).toHaveBeenCalledTimes(1);
@@ -361,9 +481,12 @@ describe("media selection flow", () => {
     ).toBeChecked();
     g.createDraft.mockRejectedValueOnce(new Error("报价已变更，请重新确认"));
     fireEvent.click(screen.getByRole("button", { name: "选择稿件并继续" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "选择冻结稿件" }), {
-      target: { value: "version" },
-    });
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "选择冻结稿件" }),
+      {
+        target: { value: "version" },
+      },
+    );
     fireEvent.click(screen.getByRole("button", { name: "绑定稿件并配置标题" }));
     await waitFor(() =>
       expect(

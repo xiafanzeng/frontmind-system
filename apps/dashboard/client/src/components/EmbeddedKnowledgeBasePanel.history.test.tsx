@@ -1,5 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ConversationContextProvider,
@@ -62,17 +68,17 @@ vi.mock("@/components/KnowledgeNodeWorkspace", () => ({
 }));
 vi.mock("@/components/AgentWorkbenchShell", () => ({
   AgentWorkbenchShell: ({
-    conversation,
-    result,
+    main,
+    auxiliary,
     taskKey,
   }: {
-    conversation: ReactNode;
-    result: ReactNode;
+    main: ReactNode;
+    auxiliary: ReactNode;
     taskKey: string;
   }) => (
     <section data-testid="shell" data-task={taskKey}>
-      {conversation}
-      {result}
+      {main}
+      {auxiliary}
     </section>
   ),
 }));
@@ -150,6 +156,31 @@ beforeEach(() => {
 afterEach(() => window.history.replaceState({}, "", "/"));
 
 describe("knowledge history restoration", () => {
+  it("creates an independent knowledge task without emitting reset or removing history", async () => {
+    const reset = vi.fn();
+    window.addEventListener("frontmind:request-knowledge-reset", reset);
+    try {
+      render(<Workspace />);
+      await waitFor(() =>
+        expect(screen.getByLabelText("conversation")).toHaveTextContent(
+          /^historical:historical$/,
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("conversation")).toHaveTextContent(
+          /^fresh:empty$/,
+        ),
+      );
+      expect(reset).not.toHaveBeenCalled();
+      expect(rows.map((row) => row.id)).toContain("historical");
+      expect(
+        new URLSearchParams(window.location.search).get("workbenchTask"),
+      ).toBe("fresh");
+    } finally {
+      window.removeEventListener("frontmind:request-knowledge-reset", reset);
+    }
+  });
   it("restores the historical conversation and its nodes together when a newer build exists", async () => {
     render(<Workspace />);
     await waitFor(() =>

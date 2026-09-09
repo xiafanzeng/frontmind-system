@@ -1,3 +1,4 @@
+import { KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT } from "../shared/knowledge-base-message";
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
@@ -1531,7 +1532,7 @@ describe("knowledge-base observation consistency", () => {
                 userId: 7,
                 turnId: completionTurn.id,
                 role: "assistant",
-                content: "知识库内容已完成。下载包正在准备中。",
+                content: KNOWLEDGE_BASE_COMPLETION_MESSAGE_CONTENT,
                 sequence: 9,
                 metadata: {
                   knowledgeBase: {

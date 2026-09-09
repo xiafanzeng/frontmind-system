@@ -25,7 +25,9 @@ import {
   PublishingSteps,
 } from "../components/PublishingUi";
 
-export default function PublishingImportPage() {
+export default function PublishingImportPage({
+  onImported,
+}: { onImported?: (articleId: string) => void } = {}) {
   const gateway = usePublisherGateway();
   const flow = usePublishingFlow();
   const operationScope = usePublishingOperationScope("import");
@@ -80,16 +82,28 @@ export default function PublishingImportPage() {
           label: "稿件已导入并完成检查",
           detail: file.name,
           resources: [{ kind: "article", id: result.articleId }],
+          outputRefs: [
+            {
+              resource: {
+                kind: "article",
+                id: result.articleId,
+                label: file.name,
+              },
+              sourceStepId: `import:${result.articleId}`,
+            },
+          ],
         })
         .catch(() => undefined);
       if (isCurrent())
         performApprovedWorkspaceNavigation(() =>
-          navigate(
-            publishingTaskUrl(
-              `/publishing/articles/${result.articleId}/edit`,
-              flow?.taskId,
-            ),
-          ),
+          onImported
+            ? onImported(result.articleId)
+            : navigate(
+                publishingTaskUrl(
+                  `/publishing/articles/${result.articleId}/edit`,
+                  flow?.taskId,
+                ),
+              ),
         );
     } catch (reason) {
       if (!isCurrent()) return;

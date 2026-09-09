@@ -1,3 +1,4 @@
+import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -213,8 +214,8 @@ async function materializedNode(
   return { node, workingSet, manifest, leaf, contentMarkdown };
 }
 
-export function knowledgeNodeEditCapability(build: KnowledgeBaseBuild) {
-  const reason = knowledgeBaseWritesAreEmergencyBlocked()
+export function knowledgeNodeEditCapability(build: KnowledgeBaseBuild, editingAllowed = true) {
+  const reason = !editingAllowed ? "请先整体确认知识库初稿，再修改节点" : knowledgeBaseWritesAreEmergencyBlocked()
     ? "知识库写入已临时关闭，请稍后重试"
     : build.activeTurnId || build.awaitingResponseSince
       ? "请等待当前操作完成后再编辑"
@@ -280,7 +281,7 @@ export async function getKnowledgeNodeDetails(
         sameOriginUrl: enterpriseProjectUrl(resource.sameOriginUrl),
       };
     });
-    const capability = knowledgeNodeEditCapability(build);
+    const capability = knowledgeNodeEditCapability(build, await knowledgeWorkbenchEditingAllowed(tx, build));
     return {
       coordinates: {
         buildId: build.id,
@@ -486,7 +487,7 @@ export async function saveKnowledgeNodeContent(
         "STALE_COORDINATES",
         "节点已被更新，当前修改尚未保存；请重新读取最新内容",
       );
-    const capability = knowledgeNodeEditCapability(build);
+    const capability = knowledgeNodeEditCapability(build, await knowledgeWorkbenchEditingAllowed(tx, build));
     if (!capability.allowed) fail("INVALID_BUILD_STATE", capability.reason!);
     const current = await materializedNode(tx, build, input.leafId);
     const contentMarkdown = projectKnowledgeBaseCustomerMarkdown({

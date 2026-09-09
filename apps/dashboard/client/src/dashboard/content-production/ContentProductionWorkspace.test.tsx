@@ -45,7 +45,11 @@ vi.mock("@/components/FilePreview", () => ({
 vi.mock("@/pages/Home", () => ({
   default: (props: any) => {
     mocks.home(props);
-    return <div data-testid="original-chat">原聊天与附件</div>;
+    return (
+      <div data-testid="original-chat">
+        原聊天与附件{props.conversationFooter}
+      </div>
+    );
   },
 }));
 import ContentProductionWorkspace, {
@@ -1003,9 +1007,24 @@ it("places native chat and actionable stage confirmation in main, keeping only a
   expect(
     screen.queryByRole("combobox", { name: "选择内容制作任务" }),
   ).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "新任务" }));
+  expect(within(main).queryByRole("button", { name: "新任务" })).toBeNull();
+  expect(within(main).queryByRole("button", { name: "历史" })).toBeNull();
+  fireEvent.click(within(auxiliary).getByRole("tab", { name: "任务" }));
+  expect(within(main).getByTestId("original-chat")).toBeInTheDocument();
+  expect(
+    within(auxiliary).getByRole("listbox", { name: "任务历史" }),
+  ).toBeInTheDocument();
+  fireEvent.click(within(auxiliary).getByRole("button", { name: "新任务" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(
     within(main).getByRole("region", { name: "新建内容任务" }),
+  ).toBeInTheDocument();
+  expect(within(main).queryByText("确定本次内容任务")).toBeNull();
+  fireEvent.click(within(main).getByRole("button", { name: /新建品牌资料包/ }));
+  expect(
+    within(main).queryByRole("heading", { name: "本次要完成什么？" }),
+  ).toBeNull();
+  expect(
+    within(main).getByText("当前工作：新建品牌资料包"),
   ).toBeInTheDocument();
 });

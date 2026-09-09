@@ -18,7 +18,10 @@ import {
   useConversation,
   type Conversation,
 } from "@/contexts/ConversationContext";
-import { useBusinessWorkspace } from "./BusinessWorkspaceContext";
+import {
+  useBusinessWorkspace,
+  useBusinessWorkspaceSummary,
+} from "./BusinessWorkspaceContext";
 import { initialWorkbenchTaskState } from "@shared/workbench-task";
 import { WorkbenchTaskToolbar } from "./WorkbenchTaskToolbar";
 const api = vi.hoisted(() => ({
@@ -115,6 +118,54 @@ afterEach(() => {
   window.history.replaceState({}, "", "/");
 });
 describe("conversational project workbench", () => {
+  it("keeps an already restored business outcome visible on first mount", () => {
+    function RestoredBusiness() {
+      useBusinessWorkspaceSummary({
+        items: [],
+        outputs: [
+          {
+            id: "saved-question",
+            title: "已保存的优化问题",
+            status: "已确认",
+            version: "1",
+          },
+        ],
+      });
+      return <p>已恢复的业务步骤</p>;
+    }
+    const module = createWorkbenchModules(
+      () => null,
+      () => undefined,
+      "questions",
+    ).find((item) => item.id === "intent")!;
+    render(
+      <Workspace
+        initialConversations={[
+          {
+            id: "restored",
+            title: "原任务",
+            messages: [],
+            status: "idle",
+            createdAt: 1,
+            updatedAt: 1,
+            workbenchAgentId: "questions",
+            workbench: initialWorkbenchTaskState("questions"),
+          },
+        ]}
+      >
+        <WorkbenchModuleContext.Provider value={module}>
+          <ProjectAgentWorkbench projectId="a">
+            <RestoredBusiness />
+          </ProjectAgentWorkbench>
+        </WorkbenchModuleContext.Provider>
+      </Workspace>,
+    );
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "任务辅助区" }),
+      ).getByText("已保存的优化问题"),
+    ).toBeInTheDocument();
+  });
   it("starts real business content in the main pane without a placeholder chat", () => {
     const open = vi.fn();
     const module = createWorkbenchModules(() => null, open, "media").find(
@@ -188,7 +239,7 @@ describe("conversational project workbench", () => {
     expect(screen.getByRole("textbox", { name: "媒体搜索" })).toBe(input);
     expect(input).toHaveValue("人工智能");
   });
-  it("opens a local native general task with no auxiliary pane", async () => {
+  it("opens a local native general task with its task and results panel", async () => {
     render(
       <Workspace>
         <ProjectAgentWorkbench projectId="account" />
@@ -198,8 +249,10 @@ describe("conversational project workbench", () => {
       "data-task",
       "local-0",
     );
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "任务辅助区" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("separator")).toBeInTheDocument();
     expect(api.bind).not.toHaveBeenCalled();
   });
 
@@ -242,7 +295,10 @@ describe("conversational project workbench", () => {
         <GeneralWithSidebar />
       </Workspace>,
     );
-    const sidebar = screen.getByRole("complementary", { name: "左侧任务" });
+    expect(
+      screen.getByRole("complementary", { name: "左侧任务" }),
+    ).not.toHaveTextContent("任务历史");
+    const sidebar = screen.getByRole("complementary", { name: "任务辅助区" });
     const list = within(sidebar).getByRole("listbox", { name: "任务历史" });
     expect(await screen.findByLabelText("对话输入")).toHaveAttribute(
       "data-task",
@@ -251,12 +307,8 @@ describe("conversational project workbench", () => {
     expect(
       within(sidebar).getByRole("button", { name: "新任务" }),
     ).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: /^历史$/ }),
-    ).toBeNull();
-    expect(
-      screen.getAllByRole("button", { name: /^新任务$/ }),
-    ).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /^历史$/ })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^新任务$/ })).toHaveLength(1);
     expect(screen.queryByText("不应出现的媒体任务")).toBeNull();
     fireEvent.change(
       within(sidebar).getByRole("textbox", { name: "搜索任务" }),
@@ -291,9 +343,7 @@ describe("conversational project workbench", () => {
       within(sidebar).getByRole("textbox", { name: "搜索任务" }),
       { target: { value: "旧通用" } },
     );
-    fireEvent.click(
-      within(sidebar).getByRole("button", { name: /^新任务$/ }),
-    );
+    fireEvent.click(within(sidebar).getByRole("button", { name: /^新任务$/ }));
     expect(
       within(sidebar).getByRole("textbox", { name: "搜索任务" }),
     ).toHaveValue("");

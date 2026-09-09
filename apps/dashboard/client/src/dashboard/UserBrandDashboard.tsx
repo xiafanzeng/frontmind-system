@@ -47,6 +47,7 @@ import ManagedCitationWorkbench, {
   PreviewCitationWorkbench,
 } from "./ManagedCitationWorkbench";
 import ManagedKeywordTables from "./ManagedKeywordTables";
+import { QuestionsWorkflow } from "./QuestionsWorkflow";
 import QuestionIntakePanel, {
   previewQuestionCategoryMeta,
   type PreviewConfirmedQuestion,
@@ -944,7 +945,6 @@ export function UserBrandDashboardContent({
   const responseLogicWorkspaceState =
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [taskNavigationTarget, setTaskNavigationTarget] = useState<HTMLDivElement | null>(null);
   const navigatePath = (path) => {
     const next = projectWorkspaceUrl(path, operatorProject?.id);
     setLocation(next);
@@ -1022,6 +1022,12 @@ export function UserBrandDashboardContent({
   };
   const openResponseLogic = (questionId) => {
     setResponseQuestionId(questionId);
+    if (operatorMode) {
+      navigatePath(
+        `/?view=response-logic&questionId=${encodeURIComponent(questionId)}`,
+      );
+      return;
+    }
     navigate("response-logic", "agent");
   };
   const handleResponseLogicPublished = (questionId) => {
@@ -1424,7 +1430,7 @@ export function UserBrandDashboardContent({
   return (
     <OperatorThemeProvider enabled={operatorMode}>
       <div
-        className={`user-brand-dashboard ${operatorMode ? `operator-mode ${sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
+        className={`user-brand-dashboard ${operatorMode ? `operator-mode ${(compactViewport && !mobileNavOpen) || sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
           immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
         }`}
       >
@@ -1452,7 +1458,6 @@ export function UserBrandDashboardContent({
           )}
           {operatorMode ? (
             <OperatorSidebar
-              taskNavigationRef={setTaskNavigationTarget}
               projects={operatorProjects}
               activeProject={operatorProject}
               projectsLoading={operatorProjectsLoading}
@@ -1535,7 +1540,6 @@ export function UserBrandDashboardContent({
                   businessContent
                 ) : (
                   <ProjectAgentWorkbench
-                    taskNavigationTarget={taskNavigationTarget}
                     onTaskNavigate={() => setMobileNavOpen(false)}
                     projectId={agentRoute ? "account" : operatorProject.id}
                     purpose="general"
@@ -2590,6 +2594,16 @@ function ProblemOptimizationResults({
     }
     return groups;
   }, [preview, previewConfirmedQuestions, questionGroups]);
+  if (!preview && portal.mode === "operator")
+    return (
+      <QuestionsWorkflow
+        portal={portal}
+        intakeDraft={intakeDraft}
+        onIntakeDraftChange={onIntakeDraftChange}
+        onPortalRefresh={onPortalRefresh}
+        onOpenResponseLogic={onOpenResponseLogic}
+      />
+    );
   return (
     <section className="response-logic-workspace page-shell">
       {displayedPortal.mode !== "operator" && (

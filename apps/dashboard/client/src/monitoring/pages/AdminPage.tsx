@@ -1,4 +1,8 @@
 import {
+  AdminDisclosure,
+  AdminRecordIdentity,
+} from "@/components/AdminRecordPresentation";
+import {
   Activity,
   AlertTriangle,
   Banknote,
@@ -97,7 +101,11 @@ export type AdminRunSummary = {
 };
 
 export type AdminSection =
-  "accounts" | "models" | "operations" | "content-review" | "audit-log";
+  | "accounts"
+  | "models"
+  | "operations"
+  | "content-review"
+  | "audit-log";
 
 export type AdminAuditEntry = {
   id: string;
@@ -110,6 +118,7 @@ export type AdminAuditEntry = {
 };
 
 type AdminPageProps = {
+  titleInShell?: boolean;
   section?: AdminSection;
   error?: string;
   users: AdminUser[];
@@ -323,6 +332,7 @@ function executionStatusLabel(
 }
 
 export default function AdminPage({
+  titleInShell = false,
   section = "accounts",
   error,
   users,
@@ -417,8 +427,16 @@ export default function AdminPage({
       )}
       <section className="page-heading">
         <div>
-          <h1>{sectionCopy.title}</h1>
-          <p>{sectionCopy.description}</p>
+          {titleInShell ? (
+            <AdminDisclosure label="使用说明">
+              {sectionCopy.description}
+            </AdminDisclosure>
+          ) : (
+            <>
+              <h1>{sectionCopy.title}</h1>
+              <p>{sectionCopy.description}</p>
+            </>
+          )}
         </div>
         {section === "accounts" && (
           <button
@@ -547,7 +565,9 @@ export default function AdminPage({
           <div className="card-heading">
             <div>
               <h2>账号与统一余额</h2>
-              <p>问题监控、媒体发布与智能体共用账户余额；每次资金操作必须填写原因。</p>
+              <p>
+                问题监控、媒体发布与智能体共用账户余额；每次资金操作必须填写原因。
+              </p>
             </div>
           </div>
           <div
@@ -1143,50 +1163,18 @@ export default function AdminPage({
       )}
 
       {section === "content-review" && (
-        <section className="content-card">
-          <div className="card-heading">
-            <div>
-              <h2>回答与引用来源只读查阅</h2>
-              <p>
-                仅用于客服、质量与合规排查；每次打开客户内容都会写入操作记录。
-              </p>
-            </div>
-          </div>
-          <div className="admin-run-table">
-            {runs.length ? (
-              runs.map((run) => (
-                <div key={run.id}>
-                  <span>
-                    <strong>{run.monitorName}</strong>
-                    <small>
-                      @{run.username} · {formatDateTime(run.createdAt)}
-                    </small>
-                  </span>
-                  <span className={`status-chip ${run.status}`}>
-                    {runStatusLabel(run.status)}
-                  </span>
-                  <span>
-                    成功 {run.completed} · 失败 {run.failed} · 总计{" "}
-                    {run.expected}
-                  </span>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    aria-label={`查阅 @${run.username} 的“${run.monitorName}”运行内容`}
-                    onClick={() => onInspectRun?.(run.id)}
-                  >
-                    <Eye size={14} />
-                    查阅内容
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div className="panel-state">
-                <strong>尚无可查阅运行</strong>
-              </div>
-            )}
-          </div>
-        </section>
+        <OperationsRunList
+          mode="content"
+          users={users}
+          runs={runs}
+          filters={runFilters}
+          summary={runSummary}
+          hasMore={runsHasMore}
+          loadingMore={runsLoadingMore}
+          onFiltersChange={onRunFiltersChange}
+          onInspect={onInspectRun}
+          onLoadMore={onLoadOlderRuns}
+        />
       )}
 
       {section === "audit-log" && (
@@ -1372,6 +1360,7 @@ export default function AdminPage({
 }
 
 function OperationsRunList({
+  mode = "operations",
   users,
   runs,
   filters,
@@ -1382,6 +1371,7 @@ function OperationsRunList({
   onInspect,
   onLoadMore,
 }: {
+  mode?: "operations" | "content";
   users: AdminUser[];
   runs: AdminRun[];
   filters: AdminRunFilters;
@@ -1398,10 +1388,16 @@ function OperationsRunList({
     <section className="content-card admin-operations-card">
       <div className="card-heading">
         <div>
-          <h2>本系统任务</h2>
-          <p>
-            这里只展示本系统所有用户创建的任务，不包含使用同一供应商凭证从其他系统提交的任务。
-          </p>
+          <h2>
+            {mode === "content" ? "回答与引用来源只读查阅" : "本系统任务"}
+          </h2>
+          <AdminDisclosure
+            label={mode === "content" ? "查阅范围与操作记录" : "数据范围"}
+          >
+            {mode === "content"
+              ? "仅用于客服、质量与合规排查；每次打开客户内容都会写入操作记录。"
+              : "这里只展示本系统所有用户创建的任务，不包含使用同一供应商凭证从其他系统提交的任务。"}
+          </AdminDisclosure>
         </div>
         {summary && (
           <div className="admin-inline-summary" aria-label="运行汇总">
@@ -1492,10 +1488,11 @@ function OperationsRunList({
           runs.map((run) => (
             <div key={run.id} role="row">
               <span data-label="运行" role="cell">
-                <strong>{run.monitorName}</strong>
-                <small>
-                  @{run.username} · {formatDateTime(run.createdAt)}
-                </small>
+                <AdminRecordIdentity
+                  name={run.monitorName}
+                  account={run.username}
+                />
+                <small>{formatDateTime(run.createdAt)}</small>
               </span>
               <span data-label="状态" role="cell">
                 <i className={`status-chip ${run.status}`}>
@@ -1509,16 +1506,23 @@ function OperationsRunList({
                 <button
                   type="button"
                   className="secondary-button"
+                  aria-label={
+                    mode === "content"
+                      ? `查阅 @${run.username} 的“${run.monitorName}”运行内容`
+                      : undefined
+                  }
                   onClick={() => onInspect?.(run.id)}
                 >
-                  查看执行详情
+                  {mode === "content" ? "查阅内容" : "查看执行详情"}
                 </button>
               </span>
             </div>
           ))
         ) : (
           <div className="panel-state">
-            <strong>没有符合筛选条件的运行</strong>
+            <strong>
+              {mode === "content" ? "尚无可查阅运行" : "没有符合筛选条件的运行"}
+            </strong>
           </div>
         )}
       </div>

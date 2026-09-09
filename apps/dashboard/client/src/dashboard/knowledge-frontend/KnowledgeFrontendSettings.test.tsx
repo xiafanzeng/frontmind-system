@@ -148,27 +148,40 @@ it("restores each website task's entry, form and tab while keeping deployment se
     </BusinessWorkspaceProvider>
   );
   const { rerender, unmount } = render(workspace("website-a"));
-  expect(screen.getByText("真实建站步骤")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "配置内容展示" }));
+  expect(screen.queryByText("真实建站步骤")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /配置内容展示/ }));
   fireEvent.change(screen.getByLabelText("站点名称"), {
     target: { value: "任务甲的配置" },
   });
-  fireEvent.click(screen.getByRole("tab", { name: "SEO配置" }));
+  fireEvent.click(screen.getByRole("button", { name: "SEO配置" }));
   expect(saved["website-a"].websiteEntry).toBe("settings");
   expect(saved["website-a"].websiteDraft).toEqual(
     expect.objectContaining({ name: "任务甲的配置" }),
   );
   rerender(workspace("website-b"));
-  expect(screen.getByText("真实建站步骤")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "配置内容展示" }));
+  expect(screen.queryByText("真实建站步骤")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /配置内容展示/ }));
   expect(screen.getByLabelText("站点名称")).toHaveValue("品牌知识中心");
   unmount();
   render(workspace("website-a"));
-  expect(screen.getByRole("tab", { name: "SEO配置" })).toHaveAttribute(
-    "aria-selected",
+  expect(screen.getByRole("button", { name: "SEO配置" })).toHaveAttribute(
+    "aria-pressed",
     "true",
   );
-  fireEvent.click(screen.getByRole("tab", { name: "站点信息" }));
+  fireEvent.click(screen.getByRole("button", { name: "站点信息" }));
   expect(screen.getByLabelText("站点名称")).toHaveValue("任务甲的配置");
   expect(localStorage.getItem(portalDraftKey(1, "project"))).toBeNull();
+});
+
+it("keeps the saved draft fingerprint stable across JSON object key ordering", async () => {
+  const { portalDraftFingerprint } = await import(
+    "./KnowledgeFrontendSettings"
+  );
+  const { createPortalDraft } = await import("./settings-state");
+  const draft = createPortalDraft();
+  const restored = {
+    ...draft,
+    flags: Object.fromEntries(Object.entries(draft.flags).reverse()),
+  };
+  expect(portalDraftFingerprint(restored)).toBe(portalDraftFingerprint(draft));
 });

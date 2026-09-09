@@ -15,6 +15,7 @@ import ManagedKeywordTables, {
 
 const mocks = vi.hoisted(() => ({
   observe: vi.fn(),
+  dashboardFetch: vi.fn(),
   refetch: vi.fn(async () => ({})),
   cancel: vi.fn(async () => undefined),
   start: vi.fn(async (_input: unknown) => ({})),
@@ -58,7 +59,10 @@ vi.mock("@/lib/trpc", () => ({
         brandQuestionUniverse: {
           observe: { invalidate: async () => undefined, cancel: mocks.cancel },
         },
-        dashboard: { invalidate: async () => undefined },
+        dashboard: {
+          invalidate: async () => undefined,
+          fetch: mocks.dashboardFetch,
+        },
       },
     }),
     workspace: {
@@ -342,7 +346,7 @@ describe("ManagedKeywordTables", () => {
   });
 });
 
-it("shows the publication step immediately and disables observation when the real portal has no published knowledge", () => {
+it("shows the real publication prerequisite after choosing generation", () => {
   mocks.observe.mockReturnValue({
     data: undefined,
     error: null,
@@ -358,6 +362,7 @@ it("shows the publication step immediately and disables observation when the rea
       />,
     ),
   );
+  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
   expect(
     screen.getByRole("heading", { name: "先发布企业知识库" }),
   ).toBeInTheDocument();
@@ -373,18 +378,22 @@ it("shows the publication step immediately and disables observation when the rea
   expect(container.querySelector(".keyword-start-step")).toBeInTheDocument();
 });
 
-it("keeps an existing real directory visible when published knowledge is unavailable", () => {
+it("opens the existing directory on request even when published knowledge is unavailable", () => {
   render(
     keywordWorkbench(
       <ManagedKeywordTables
         tables={tables}
+        dashboardRevision={7}
         generationEnabled
         knowledgePublished={false}
       />,
     ),
   );
-  expect(screen.getByRole("table")).toBeInTheDocument();
-  expect(screen.getByText("行业问题")).toBeInTheDocument();
+  expect(screen.queryByRole("table")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
+  expect(
+    screen.getByRole("region", { name: "品牌全域词库选择器" }),
+  ).toBeInTheDocument();
   expect(mocks.observe).not.toHaveBeenCalled();
   expect(
     screen.queryByRole("heading", { name: "先发布企业知识库" }),
@@ -403,6 +412,7 @@ it("surfaces a real observation error and retries the read without starting a ge
       <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
     ),
   );
+  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
   expect(screen.getByText("连接暂不可用")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
   await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
@@ -423,6 +433,7 @@ it("offers a read retry after the initial observation stalls without declaring g
       <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
     ),
   );
+  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
   expect(
     screen.getByRole("heading", { name: "正在读取词库生成条件" }),
   ).toBeInTheDocument();
@@ -433,51 +444,71 @@ it("offers a read retry after the initial observation stalls without declaring g
   expect(mocks.start).not.toHaveBeenCalled();
 });
 
-it("shows a paged catalog and requires the selected row to be reviewed before handoff in workbench", async () => {
+it("confirms a versioned selection before an explicit idempotent handoff", async () => {
   const handoff = vi.fn();
-  const saveState = vi.fn(async () => ({}));
+  let failConfirmation = true;
+  const saveState = vi.fn(async (patch: any) => {
+    if (patch.step === "keyword-confirmed" && failConfirmation) {
+      failConfirmation = false;
+      throw new Error("选题记录未保存，请重试");
+    }
+    return {};
+  });
   const createHandoff = vi.fn(async () => ({
     conversationId: "target-question-task",
   }));
+  const catalog = [
+    {
+      id: "words",
+      title: "全域问题",
+      columns: ["问题", "主分类"],
+      rows: Array.from({ length: 25 }, (_, index) => [
+        `问题 ${index + 1}`,
+        "产品场景词",
+      ]),
+    },
+  ];
+  mocks.dashboardFetch.mockResolvedValue({
+    revision: 7,
+    payload: { keywordTables: catalog },
+  });
   render(
     <BusinessWorkspaceProvider
       value={{
         isWorkbench: true,
         agentId: "keywords",
         taskId: "task-1",
-        task: { saveState, handoff: createHandoff, state: null } as any,
+        task: {
+          scopeKey: "p1:keywords",
+          taskId: "task-1",
+          ensureTask: async () => "task-1",
+          saveState,
+          handoff: createHandoff,
+          state: null,
+        } as any,
         setSummary: () => undefined,
       }}
     >
       <ManagedKeywordTables
         dashboardRevision={7}
-        tables={[
-          {
-            id: "words",
-            title: "全域问题",
-            columns: ["问题", "主分类"],
-            rows: Array.from({ length: 25 }, (_, index) => [
-              `问题 ${index + 1}`,
-              "产品场景词",
-            ]),
-          },
-        ]}
+        tables={catalog}
         onUseQuestion={handoff}
       />
     </BusinessWorkspaceProvider>,
   );
-  expect(screen.getAllByRole("row")).toHaveLength(21);
-  expect(screen.queryByText("MindPromise智诺 / 品牌建设")).toBeNull();
-  fireEvent.click(screen.getAllByRole("button", { name: "选择词条" })[0]);
+  expect(screen.queryByText("问题 1")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
+  expect(screen.getAllByRole("listitem")).toHaveLength(10);
+  fireEvent.click(screen.getByRole("button", { name: /^问题 1\s*产品场景词/ }));
   expect(handoff).not.toHaveBeenCalled();
-  expect(saveState).toHaveBeenCalledWith(
-    expect.objectContaining({
-      values: { selectedKeyword: expect.objectContaining({ rowIndex: 0 }) },
-    }),
-  );
-  fireEvent.click(
-    screen.getByRole("button", { name: "确认选择并交给问题优化" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
+  await screen.findByText("选题记录未保存，请重试");
+  expect(screen.queryByRole("button", { name: "交给问题优化" })).toBeNull();
+  expect(screen.queryByText(/业务已保存/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
+  await screen.findByRole("button", { name: "交给问题优化" });
+  expect(createHandoff).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "交给问题优化" }));
   await waitFor(() =>
     expect(handoff).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -493,8 +524,6 @@ it("shows a paged catalog and requires the selected row to be reviewed before ha
       targetAgentId: "questions",
       idempotencyKey: "keyword:7:words:0",
       values: expect.objectContaining({
-        questionDraft: "问题 1",
-        questionOrigin: "brand_keyword_library",
         questionLibraryRef: {
           dashboardRevision: 7,
           tableId: "words",
@@ -504,5 +533,5 @@ it("shows a paged catalog and requires the selected row to be reviewed before ha
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-  expect(screen.getAllByRole("row")).toHaveLength(6);
+  expect(screen.getAllByRole("listitem")).toHaveLength(10);
 });

@@ -1,3 +1,4 @@
+import { knowledgeWorkbenchStart, knowledgeWorkbenchStage } from "./knowledge-workbench-stage";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
@@ -2264,6 +2265,7 @@ export async function getKnowledgeBaseProgress(input: {
   const build = buildRows[0];
   if (!build) return null;
   const progress = buildDto(build, await loadNodes(db, build.id));
+  progress.workbench = knowledgeWorkbenchStage(build, await knowledgeWorkbenchStart(db, build));
   if (
     build.executionMode !== "materialized_bundle_v1" ||
     build.skillVersion !== "5"
@@ -2487,6 +2489,7 @@ async function readKnowledgeBaseObservationProjection(
     knowledgeBaseNodeBackedPresentationGeneration(build);
   const rows = await loadNodes(db, build.id);
   const progress = buildDto(build, rows);
+  progress.workbench = knowledgeWorkbenchStage(build, await knowledgeWorkbenchStart(db, build));
   const currentRow = build.currentLeafId
     ? rows.find((row) => row.leafId === build.currentLeafId) || null
     : null;

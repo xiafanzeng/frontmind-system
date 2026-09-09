@@ -23,8 +23,9 @@ const ArticlesPage = lazy(() => import("./pages/ArticlesPage"));
 const ImportPage = lazy(() => import("./pages/ImportPage"));
 const ArticleEditorPage = lazy(() => import("./pages/ArticleEditorPage"));
 const MediaLibraryPage = lazy(() => import("./pages/MediaLibraryPage"));
-const TitlesPage = lazy(() => import("./pages/TitlesPage"));
-const ReviewPage = lazy(() => import("./pages/ReviewPage"));
+const DraftConversationPage = lazy(
+  () => import("./pages/DraftConversationPage"),
+);
 const PublicationDetailPage = lazy(
   () => import("./pages/PublicationDetailPage"),
 );
@@ -61,10 +62,20 @@ export default function PublishingRoutes({ gateway }: PublishingRoutesProps) {
               {(params) => <MediaLibraryPage draftId={params.draftId} />}
             </Route>
             <Route path="/publishing/drafts/:draftId/titles">
-              {(params) => <TitlesPage draftId={params.draftId} />}
+              {(params) => (
+                <DraftConversationPage
+                  draftId={params.draftId}
+                  initialStage="titles"
+                />
+              )}
             </Route>
             <Route path="/publishing/drafts/:draftId/review">
-              {(params) => <ReviewPage draftId={params.draftId} />}
+              {(params) => (
+                <DraftConversationPage
+                  draftId={params.draftId}
+                  initialStage="review"
+                />
+              )}
             </Route>
             <Route path="/publishing/publications/:batchId">
               {(params) => <PublicationDetailPage batchId={params.batchId} />}

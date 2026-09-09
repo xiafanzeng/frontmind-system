@@ -94,7 +94,7 @@ describe("administrator channel navigation", () => {
         "客户项目团队",
         "账号与权限",
         ...(_name === "real"
-          ? ["账号与余额", "模型能力", "任务运行", "内容查阅", "操作记录", "发布集成", "目录同步", "图文能力", "异常对账"]
+          ? ["余额与收款", "任务运行", "内容查阅", "模型能力", "操作记录", "发布集成", "目录同步", "图文能力", "异常对账"]
           : ["问题监控", "渠道分发"]),
       ]);
     },
@@ -110,9 +110,10 @@ describe("administrator channel navigation", () => {
     expect(issueIndex).toBeGreaterThanOrEqual(0);
     expect(distributionIndex).toBe(issueIndex + 5);
     expect(adminNav[issueIndex]).toMatchObject({
-      label: "账号与余额",
+      label: "余额与收款",
       href: "/admin/monitoring/accounts",
-      group: "问题监控管理",
+      group: "管理中心",
+      parentHref: "/admin/users",
     });
     expect(adminNav[distributionIndex]).toMatchObject({
       label: "发布集成",
@@ -142,7 +143,7 @@ describe("administrator channel navigation", () => {
       ).toBe(false);
       expect(
         navigation.find((item) => item.label === "官网任务与AI建站"),
-      ).toMatchObject({ group: "运营" });
+      ).toMatchObject({ group: _name === "real" ? "管理中心" : "运营" });
     },
   );
 
@@ -152,7 +153,7 @@ describe("administrator channel navigation", () => {
     expect(deliveryAdminNavigation.map((item) => item.label)).toEqual([
       "客户管理",
       "客户项目团队",
-      "FrontMind Agent",
+      "通用智能体",
       "账号与权限",
     ]);
     expect(

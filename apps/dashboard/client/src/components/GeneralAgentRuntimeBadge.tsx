@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { deliveryProjectHeaders } from "@/lib/delivery-project";
+import { ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type RuntimeConfig = {
   configured: boolean;
@@ -73,20 +81,51 @@ export default function GeneralAgentRuntimeBadge({
   // only the account's general agent exposes model choices and effort labels.
   if (purpose) return null;
 
-  if (!localTaskId) return (
-    <select
-      aria-label="智能体推理档位"
-      title="选择新会话的推理档位"
-      value={selected}
-      disabled={runtime?.configured === false}
-      onChange={(event) => setSelected(event.target.value)}
-      className="rounded-xl border border-border bg-secondary/80 px-2 py-2 text-xs font-medium"
-    >
-      <option value="frontmind-lite">Low</option>
-      <option value="frontmind-base">High</option>
-      <option value="frontmind-pro">Max</option>
-    </select>
-  );
+  if (!localTaskId)
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            aria-label="智能体推理档位"
+            title="选择新会话的推理档位"
+            disabled={runtime?.configured === false}
+            className="general-runtime-trigger inline-flex h-11 items-center gap-1.5 rounded-lg border-0 bg-transparent px-3 text-xs font-medium text-[#303038] shadow-none outline-none hover:bg-[#f5f5f5] focus-visible:ring-2 focus-visible:ring-[#7545a0]/30 disabled:cursor-default"
+          >
+            <span>
+              推理 ·{" "}
+              {
+                (
+                  {
+                    "frontmind-lite": "Low",
+                    "frontmind-base": "High",
+                    "frontmind-pro": "Max",
+                  } as Record<string, string>
+                )[selected]
+              }
+            </span>
+            <ChevronDown size={13} aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          side="top"
+          className="min-w-36 rounded-xl border-[#e4e4e8] bg-white p-1.5 shadow-lg"
+        >
+          <DropdownMenuRadioGroup value={selected} onValueChange={setSelected}>
+            <DropdownMenuRadioItem value="frontmind-lite">
+              Low
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="frontmind-base">
+              High
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="frontmind-pro">
+              Max
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
 
   const label = runtime?.upstreamEffort
     ? { low: "Low", high: "High", max: "Max" }[runtime.upstreamEffort]
@@ -101,9 +140,9 @@ export default function GeneralAgentRuntimeBadge({
           ? "当前任务沿用启动时的推理档位"
           : "新任务使用管理员设置的推理档位"
       }
-      className="rounded-xl bg-secondary/80 px-2.5 py-2 text-xs font-medium text-muted-foreground"
+      className="inline-flex min-h-11 items-center rounded-lg border border-[#e4e4e8] bg-white px-3 py-1.5 text-xs font-medium text-[#525866]"
     >
-      {label}
+      推理 · {label}
     </span>
   );
 }

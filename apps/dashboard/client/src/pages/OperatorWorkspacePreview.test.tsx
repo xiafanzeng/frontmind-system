@@ -33,6 +33,7 @@ vi.mock("@/dashboard/OperatorNavigation", async () => {
       onSelectProject,
       onSelectView,
       onNavigate,
+      taskNavigation,
     }: any) => (
       <nav aria-label="项目导航预览">
         <button onClick={() => onNavigate("/agent")}>通用智能体</button>
@@ -55,6 +56,7 @@ vi.mock("@/dashboard/OperatorNavigation", async () => {
             {module.label}
           </button>
         ))}
+        {taskNavigation}
       </nav>
     ),
   };
@@ -160,11 +162,13 @@ describe("operator workspace layout acceptance", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送预览消息" }));
     fireEvent.click(screen.getByRole("button", { name: "新任务" }));
     expect(screen.queryByText("通用任务草稿")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    expect(
+      screen.queryByRole("button", { name: /^历史$/ }),
+    ).toBeNull();
     fireEvent.click(
-      within(screen.getByRole("region", { name: "预览任务历史" })).getByRole(
+      within(screen.getByRole("listbox", { name: "任务历史" })).getByRole(
         "button",
-        { name: "任务 1" },
+        { name: /^任务 1/ },
       ),
     );
     expect(screen.getByText("通用任务草稿")).toBeInTheDocument();

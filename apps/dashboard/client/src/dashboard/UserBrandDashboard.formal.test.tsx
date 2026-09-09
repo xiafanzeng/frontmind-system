@@ -738,11 +738,21 @@ describe("UserBrandDashboard formal workspace", () => {
   it("opens the selected enterprise project with six modules and no plan chrome", async () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
+    const modules = screen.getByRole("navigation", { name: "项目模块" });
+    const moduleEntries = [
+      "品牌建设",
+      "意图优化",
+      "进度监控",
+      "内容制作",
+      "媒体发布",
+      "项目工具",
+    ].map((name) => within(modules).getByRole("button", { name }));
+    const general = within(modules).getByRole("button", {
+      name: "FrontMind通用智能体",
+    });
     expect(
-      within(screen.getByRole("navigation", { name: "项目模块" })).getAllByRole(
-        "button",
-      ),
-    ).toHaveLength(6);
+      Array.from(modules.querySelectorAll(".operator-module-entry")),
+    ).toEqual([...moduleEntries, general]);
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();

@@ -1,6 +1,7 @@
 import { useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
+  generalExecutionActivity,
   generalExecutionStatusText,
   generalToolStatusText,
 } from "@shared/frontmind-general-execution";
@@ -8,39 +9,6 @@ import type { ExecutionDisplayEntry } from "@/lib/general-execution-display";
 import "./GeneralExecutionActivity.css";
 
 type ActivityItem = ExecutionDisplayEntry;
-
-function formatClock(value: number | undefined) {
-  // Fixtures and older records can use small sequence values instead of an
-  // epoch. Do not render a misleading 1970 time for those records.
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < 1_000_000_000_000 ||
-    Number.isNaN(new Date(value).getTime())
-  )
-    return null;
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
-}
-
-function formatDuration(start: number, end: number | undefined) {
-  if (
-    end === undefined ||
-    !Number.isFinite(end) ||
-    !Number.isFinite(start) ||
-    end < start ||
-    start < 1_000_000_000_000
-  )
-    return null;
-  const seconds = Math.round((end - start) / 1000);
-  if (seconds < 1) return "不到 1 秒";
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes} 分 ${seconds % 60} 秒`;
-}
 
 function isLive(item: ActivityItem) {
   if (item.animate === false || item.isCurrent === false) return false;
@@ -51,55 +19,51 @@ function isLive(item: ActivityItem) {
   );
 }
 
-function isCurrentVisible(item: ActivityItem) {
-  if (isLive(item)) return true;
-  return item.status === "waiting" && item.isCurrent === true;
-}
-
-function activityStatusLabel(item: ActivityItem) {
-  if (item.kind === "tool") {
-    if (item.status === "running" && !isLive(item)) return "已记录执行";
-    return generalToolStatusText[item.status];
-  }
-  const label = generalExecutionStatusText[item.status];
-  if (isLive(item)) return label;
-  if (item.status === "running") return "开始执行";
-  if (item.status === "rescheduling") return "恢复执行";
-  if (item.status === "retrying") return "重试执行";
-  return label.replace(/^正在/, "").replace(/[.…]+$/, "");
+function safeToolLabel(item: ActivityItem) {
+  if (item.kind !== "tool") return "调用工具";
+  // Keep the public label allowlist at the display boundary too. Historical
+  // records must never turn a raw command/argument into a customer summary.
+  const safe = generalExecutionActivity({
+    kind: "tool_use",
+    label: item.label,
+    toolKind: item.toolKind,
+  });
+  return item.resultOnly
+    ? "工具结果"
+    : safe?.kind === "tool_use"
+      ? safe.label
+      : "调用工具";
 }
 
 function activityTitle(item: ActivityItem) {
-  return item.kind === "tool"
-    ? `${item.label} · ${activityStatusLabel(item)}`
-    : activityStatusLabel(item);
+  if (item.kind === "tool")
+    return `${safeToolLabel(item)} · ${generalToolStatusText[item.status]}`;
+  return generalExecutionStatusText[item.status];
 }
 
-function isResultOnly(item: ActivityItem) {
-  return item.kind === "tool" && item.resultOnly === true;
+function callSummary(calls: ActivityItem[], live: boolean) {
+  const counts = new Map<string, number>();
+  for (const call of calls) {
+    const label = safeToolLabel(call);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  if (counts.size === 1 && counts.has("执行命令"))
+    return live ? `${calls.length} 个命令` : `执行了 ${calls.length} 个命令`;
+  return [...counts]
+    .map(([label, count]) =>
+      label === "执行命令"
+        ? `执行 ${count} 个命令`
+        : `${label === "搜索网页" ? "搜索" : label === "调用工具" ? "工具操作" : label} ${count} 次`,
+    )
+    .join(" · ");
 }
 
-type ThinkingDetails = {
-  thinkingText?: string;
-  thinkingSource?: "event" | "stream";
-  thinkingComplete?: boolean;
-};
-
-function thinkingDetails(item: ActivityItem): ThinkingDetails | null {
-  if (item.kind !== "status" || item.status !== "thinking") return null;
-  const candidate = item as ActivityItem & ThinkingDetails;
-  return typeof candidate.thinkingText === "string" &&
-    candidate.thinkingText.length > 0
-    ? {
-        thinkingText: candidate.thinkingText,
-        thinkingSource: candidate.thinkingSource,
-        thinkingComplete: candidate.thinkingComplete,
-      }
+function thinkingText(item: ActivityItem) {
+  return item.kind === "status" &&
+    item.status === "thinking" &&
+    item.thinkingText?.trim()
+    ? item.thinkingText
     : null;
-}
-
-function isThinkingText(item: ActivityItem) {
-  return Boolean(thinkingDetails(item));
 }
 
 function ThinkingBlock({
@@ -111,13 +75,12 @@ function ThinkingBlock({
   expandedOverride?: boolean;
   onToggle?: () => void;
 }) {
-  const details = thinkingDetails(item);
   const [localExpanded, setExpanded] = useState(false);
   const expanded = expandedOverride ?? localExpanded;
   const detailsId = useId();
-  if (!details) return <ActivityLine item={item} />;
+  const text = thinkingText(item);
+  if (!text || item.kind !== "status") return null;
   const live = isLive(item);
-  const clock = formatClock(item.timestamp);
   return (
     <section className="general-execution__thinking" aria-label="思考过程">
       <button
@@ -137,7 +100,7 @@ function ThinkingBlock({
           className="general-execution__metadata"
           aria-live={live ? "polite" : undefined}
         >
-          {details.thinkingComplete === true
+          {item.thinkingComplete === true
             ? "已完成"
             : live
               ? "思考中"
@@ -146,118 +109,110 @@ function ThinkingBlock({
       </button>
       {expanded && (
         <div id={detailsId} className="general-execution__details">
-          {clock && (
-            <time
-              className="general-execution__metadata"
-              dateTime={new Date(item.timestamp).toISOString()}
-            >
-              {clock}
-            </time>
-          )}
-          <p className="general-execution__thinking-text">
-            {details.thinkingText}
-          </p>
+          <p className="general-execution__thinking-text">{text}</p>
         </div>
       )}
     </section>
   );
 }
 
-function ActivityLine({ item }: { item: ActivityItem }) {
-  const clock = formatClock(item.timestamp);
-  const duration =
-    item.kind === "tool"
-      ? formatDuration(item.timestamp, item.finishedAt)
-      : null;
+function ActivityLine({
+  children,
+  live = false,
+}: {
+  children: React.ReactNode;
+  live?: boolean;
+}) {
   return (
     <div
       className="general-execution__line"
-      data-live={isLive(item) || undefined}
+      data-live={live || undefined}
+      aria-live={live ? "polite" : undefined}
     >
-      <span className="general-execution__label">{activityTitle(item)}</span>
-      {(duration || clock) && (
-        <span className="general-execution__metadata">
-          {duration && <span>{duration}</span>}
-          {duration && clock && <span aria-hidden>·</span>}
-          {clock && (
-            <time dateTime={new Date(item.timestamp).toISOString()}>
-              {clock}
-            </time>
-          )}
-        </span>
-      )}
+      <span className="general-execution__label">{children}</span>
     </div>
   );
 }
 
-function ActivityGroup({
+function TurnActivity({
   items,
-  expandedOverride,
-  onToggle,
+  expandedGroups,
+  onToggleGroup,
 }: {
   items: ActivityItem[];
-  expandedOverride?: boolean;
-  onToggle?: () => void;
+  expandedGroups?: ReadonlySet<string>;
+  onToggleGroup?: (id: string) => void;
 }) {
-  const [localExpanded, setExpanded] = useState(false);
-  const expanded = expandedOverride ?? localExpanded;
-  const detailsId = useId();
-  if (items.length === 1)
-    return isThinkingText(items[0]!) ? (
-      <ThinkingBlock
-        item={items[0]!}
-        expandedOverride={expandedOverride}
-        onToggle={onToggle}
-      />
-    ) : (
-      <ActivityLine item={items[0]!} />
-    );
-  const active = [...items].reverse().find((item) => isCurrentVisible(item));
-  const lastItem = items.at(-1);
-  const currentTerminal =
-    lastItem?.kind === "status" &&
-    ["ended", "cancelled", "error"].includes(lastItem.status)
-      ? lastItem
-      : undefined;
-  // Only observed activity can describe the stage. A historical error remains
-  // in details when a later successful terminal event supersedes it.
-  const currentSummary = active ?? currentTerminal ?? lastItem!;
-  const summary = activityTitle(currentSummary);
+  const calls = items.filter(
+    (item) => item.kind === "tool" && !item.resultOnly,
+  );
+  const active = [...items].reverse().find(isLive);
+  const start = items.find(
+    (item) => item.kind === "status" && item.status === "running",
+  );
+  const lastLifecycle = items.findLast(
+    (item) => item.kind === "status" && item.status !== "thinking",
+  );
+  const summaryId =
+    calls[0]?.id ??
+    start?.id ??
+    (active && !thinkingText(active) ? active.id : undefined);
   return (
-    <div className="general-execution__group">
-      <button
-        type="button"
-        className="general-execution__toggle"
-        aria-label={`执行过程：${summary}`}
-        aria-expanded={expanded}
-        aria-controls={detailsId}
-        onClick={() => (onToggle ? onToggle() : setExpanded((value) => !value))}
-      >
-        <ChevronRight
-          aria-hidden="true"
-          className="general-execution__chevron"
-        />
-        <span
-          className="general-execution__summary"
-          aria-live={active ? "polite" : undefined}
-        >
-          {summary}
-        </span>
-      </button>
-      {expanded && (
-        <div id={detailsId} className="general-execution__details">
-          {items.map((item) => (
-            <div key={item.id}>
-              {isThinkingText(item) ? (
-                <ThinkingBlock item={item} />
-              ) : (
-                <ActivityLine item={item} />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <>
+      {items.map((item) => {
+        const summary =
+          item.id === summaryId ? (
+            <ActivityLine key="commands" live={Boolean(active)}>
+              {active
+                ? `${active.kind === "status" && active.status === "retrying" ? "正在重试…" : active.kind === "status" && active.status === "rescheduling" ? "正在恢复执行…" : "正在执行…"}${calls.length ? ` · ${callSummary(calls, true)}` : ""}`
+                : calls.length
+                  ? callSummary(calls, false)
+                  : "开始执行"}
+            </ActivityLine>
+          ) : null;
+        let detail: React.ReactNode = null;
+        if (thinkingText(item)) {
+          detail = (
+            <ThinkingBlock
+              item={item}
+              expandedOverride={expandedGroups?.has(item.id)}
+              onToggle={
+                onToggleGroup ? () => onToggleGroup(item.id) : undefined
+              }
+            />
+          );
+        } else if (item.kind === "tool") {
+          if (
+            item.resultOnly ||
+            ["failed", "unconfirmed"].includes(item.status) ||
+            (item.status === "waiting" && item.isCurrent !== false)
+          )
+            detail = <ActivityLine>{activityTitle(item)}</ActivityLine>;
+        } else if (
+          item.status === "error" ||
+          item.status === "cancelled" ||
+          (item.status === "waiting" && item.isCurrent !== false)
+        ) {
+          detail = (
+            <ActivityLine>
+              {item.status === "error" && lastLifecycle?.id !== item.id
+                ? "过程记录：执行曾遇到问题"
+                : activityTitle(item)}
+            </ActivityLine>
+          );
+        }
+        // Preserve the observed start row; empty analysis labels and terminal
+        // completion markers add no detail.
+        // Only real call records contribute to the count; a lone result cannot
+        // manufacture an earlier invocation.
+        return summary || detail ? (
+          <div key={item.id}>
+            {summary}
+            {detail}
+          </div>
+        ) : null;
+      })}
+    </>
   );
 }
 
@@ -265,36 +220,42 @@ export function GeneralExecutionActivity({
   items,
   expandedGroups,
   onToggleGroup,
+  placement = "before",
 }: {
   items?: ActivityItem[];
   expandedGroups?: ReadonlySet<string>;
   onToggleGroup?: (id: string) => void;
+  placement?: "before" | "after";
 }) {
-  if (!items?.length) return null;
+  if (
+    !items?.some(
+      (item) =>
+        thinkingText(item) ||
+        isLive(item) ||
+        item.kind === "tool" ||
+        ["running", "error", "cancelled"].includes(item.status) ||
+        (item.status === "waiting" && item.isCurrent !== false),
+    )
+  )
+    return null;
   const groups: ActivityItem[][] = [];
   for (const item of items) {
-    const last = groups[groups.length - 1];
-    if (
-      !isResultOnly(item) &&
-      !isThinkingText(item) &&
-      last &&
-      !isResultOnly(last[last.length - 1]!) &&
-      !isThinkingText(last[last.length - 1]!) &&
-      last[0]?.turnId === item.turnId
-    )
-      last.push(item);
+    const last = groups.at(-1);
+    if (last?.[0]?.turnId === item.turnId) last.push(item);
     else groups.push([item]);
   }
   return (
-    <div className="general-execution" aria-label="执行过程">
+    <div
+      className="general-execution"
+      aria-label="执行过程"
+      data-placement={placement}
+    >
       {groups.map((group) => (
-        <ActivityGroup
+        <TurnActivity
           key={group[0]!.id}
           items={group}
-          expandedOverride={expandedGroups?.has(group[0]!.id)}
-          onToggle={
-            onToggleGroup ? () => onToggleGroup(group[0]!.id) : undefined
-          }
+          expandedGroups={expandedGroups}
+          onToggleGroup={onToggleGroup}
         />
       ))}
     </div>

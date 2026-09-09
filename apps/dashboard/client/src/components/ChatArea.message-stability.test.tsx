@@ -40,7 +40,7 @@ describe("ordinary-chat elapsed presentation", () => {
     );
   });
 
-  it("shows only the fixed completed duration in the final message footer", () => {
+  it("keeps the completed reply footer to its copy action without timestamps or duration", () => {
     render(
       <MessageBubble
         fixedElapsedTime={48.3}
@@ -53,19 +53,45 @@ describe("ordinary-chat elapsed presentation", () => {
       />,
     );
 
-    expect(screen.getByText("48.3s")).toBeInTheDocument();
+    expect(screen.queryByText("48.3s")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
+    expect(document.querySelector(".chat-message-actions")?.textContent).toBe(
+      "复制",
+    );
+    expect(
+      document.querySelector(".chat-message-content")?.textContent,
+    ).not.toMatch(/\d{2}:\d{2}/);
   });
 });
 
 describe("workbench message presentation", () => {
   it("preserves model parentheses and formulas without assistant avatars or tool totals", () => {
     const content = "计算结果为 f(x) = (x + 1) / 2（适用于 x ≥ 0）。";
-    const { container } = render(<MessageBubble message={{
-      id: "model-math", role: "assistant", content, timestamp: 0,
-      stepGroups: [{ id: "steps", title: "校验资料", steps: Array.from({ length: 4 }, (_, index) => ({ id: String(index), type: "function_call", label: "读取资料" })) }],
-    }} />);
+    const { container } = render(
+      <MessageBubble
+        message={{
+          id: "model-math",
+          role: "assistant",
+          content,
+          timestamp: 0,
+          stepGroups: [
+            {
+              id: "steps",
+              title: "校验资料",
+              steps: Array.from({ length: 4 }, (_, index) => ({
+                id: String(index),
+                type: "function_call",
+                label: "读取资料",
+              })),
+            },
+          ],
+        }}
+      />,
+    );
     expect(screen.getByText(content)).toBeInTheDocument();
     expect(container.querySelector(".lucide-bot")).toBeNull();
-    expect(container.textContent).not.toMatch(/4\s*次工具调用|完成\s*4|已完成\s*4\s*项/);
+    expect(container.textContent).not.toMatch(
+      /4\s*次工具调用|完成\s*4|已完成\s*4\s*项/,
+    );
   });
 });

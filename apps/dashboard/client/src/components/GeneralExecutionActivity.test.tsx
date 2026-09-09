@@ -1,220 +1,198 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
 import type { ExecutionDisplayEntry } from "@/lib/general-execution-display";
 
+const base = {
+  turnId: "turn",
+  userSequence: 1,
+  timestamp: 1_800_000_000_000,
+  animate: false,
+  isCurrent: false,
+};
+const command = (
+  id: string,
+  extra: Record<string, unknown> = {},
+): ExecutionDisplayEntry =>
+  ({
+    ...base,
+    id,
+    rank: 1,
+    kind: "tool",
+    label: "执行命令",
+    status: "completed",
+    finishedAt: base.timestamp + 1000,
+    ...extra,
+  }) as ExecutionDisplayEntry;
+const phase = (
+  id: string,
+  status: string,
+  extra: Record<string, unknown> = {},
+): ExecutionDisplayEntry =>
+  ({
+    ...base,
+    id,
+    rank: 0,
+    kind: "status",
+    status,
+    ...extra,
+  }) as ExecutionDisplayEntry;
+
 describe("compact execution activity", () => {
-  it("surfaces a current confirmation wait while folded and keeps its complete history available", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 1,
-      timestamp: 1_800_000_000_000,
-      animate: false,
-    };
+  it("folds generic analysis and actual calls into a non-expandable count without timestamps or the ended marker", () => {
+    const { container } = render(
+      <GeneralExecutionActivity
+        items={[
+          phase("analysis", "thinking"),
+          command("first"),
+          command("second"),
+          phase("ended", "ended"),
+        ]}
+      />,
+    );
+    expect(screen.getByText("执行了 2 个命令")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /分析任务|执行命令|本轮已结束|1 秒|\d{2}:\d{2}/,
+    );
+    expect(container.querySelector("time")).toBeNull();
+  });
+  it("keeps confirmation, failed, and unconfirmed results visible without an empty disclosure", () => {
     render(
       <GeneralExecutionActivity
         items={[
-          {
-            ...base,
-            id: "analysis",
-            rank: 0,
-            kind: "status",
-            status: "thinking",
-            isCurrent: false,
-          },
-          {
-            ...base,
-            id: "wait",
-            rank: 1,
-            kind: "status",
-            status: "waiting",
+          command("failed", { label: "搜索网页", status: "failed" }),
+          command("uncertain", { label: "写入文件", status: "unconfirmed" }),
+          phase("wait", "waiting", { isCurrent: true }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("等待确认")).toBeInTheDocument();
+    expect(screen.getByText("搜索网页 · 调用失败")).toBeInTheDocument();
+    expect(screen.getByText("写入文件 · 结果未确认")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+  it("keeps a historical error as historical evidence without reviving it as current or showing an ended marker", () => {
+    const { container } = render(
+      <GeneralExecutionActivity
+        items={[phase("problem", "error"), phase("end", "ended")]}
+      />,
+    );
+    expect(screen.getByText("过程记录：执行曾遇到问题")).toBeInTheDocument();
+    expect(screen.queryByText("本轮已结束")).toBeNull();
+    expect(container.querySelector('[data-live="true"]')).toBeNull();
+  });
+  it("renders nothing for an ended-only record, even when its timestamp is invalid", () => {
+    const { container } = render(
+      <GeneralExecutionActivity
+        items={[phase("end", "ended", { timestamp: Number.MAX_VALUE })]}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+  it("uses the same compact row as an invocation settles and leaves its failure visible", () => {
+    const view = render(
+      <GeneralExecutionActivity
+        placement="after"
+        items={[
+          command("one", {
+            status: "running",
+            finishedAt: undefined,
+            animate: true,
             isCurrent: true,
-          },
+          }),
         ]}
       />,
     );
-    expect(screen.getByText("等待确认")).toBeTruthy();
-    expect(screen.queryByText("分析任务")).toBeNull();
-    expect(document.querySelector(".animate-spin")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /执行过程/ }));
-    expect(screen.getByText("分析任务")).toBeTruthy();
-    expect(document.querySelector("time")?.getAttribute("datetime")).toBe(
-      new Date(base.timestamp).toISOString(),
+    const row = screen
+      .getByText("正在执行… · 1 个命令")
+      .closest(".general-execution__line");
+    const surface = view.container.querySelector(".general-execution");
+    view.rerender(
+      <GeneralExecutionActivity
+        placement="after"
+        items={[command("one", { status: "failed" }), phase("end", "ended")]}
+      />,
     );
-    expect(document.querySelector("time")?.textContent).toMatch(
-      /\d{2}:\d{2}:\d{2}/,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /执行过程/ }));
-    expect(screen.queryByText("分析任务")).toBeNull();
-    expect(screen.getByText("等待确认")).toBeTruthy();
+    expect(
+      screen.getByText("执行了 1 个命令").closest(".general-execution__line"),
+    ).toBe(row);
+    expect(view.container.querySelector(".general-execution")).toBe(surface);
+    expect(surface).toHaveAttribute("data-placement", "after");
+    expect(screen.getByText("执行命令 · 调用失败")).toBeInTheDocument();
   });
-  it("shows a terminal summary after completion without reviving a historical error", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 1,
-      timestamp: 1_800_000_000_000,
-      animate: false,
-      isCurrent: false,
-      kind: "status" as const,
-    };
-    render(
+  it("does not invent a call from result-only evidence or reveal an untrusted command label", () => {
+    const view = render(
       <GeneralExecutionActivity
         items={[
-          { ...base, id: "problem", rank: 0, status: "error" },
-          { ...base, id: "end", rank: 1, status: "ended" },
+          phase("start", "running"),
+          command("result", { resultOnly: true, status: "returned" }),
+          phase("end", "ended"),
         ]}
       />,
     );
-    expect(screen.getByText("本轮已结束")).toBeTruthy();
-    expect(screen.queryByText("执行遇到问题")).toBeNull();
-    expect(document.querySelector(".animate-spin")).toBeNull();
-  });
-  it("does not crash the conversation when an optional timestamp is invalid", () => {
-    render(
-      <GeneralExecutionActivity
-        items={[
-          {
-            id: "bad-time",
-            turnId: "turn",
-            userSequence: 1,
-            timestamp: Number.MAX_VALUE,
-            rank: 0,
-            kind: "status",
-            status: "ended",
-            animate: false,
-          },
-        ]}
-      />,
-    );
-    expect(screen.getByText("本轮已结束")).toBeTruthy();
-    expect(document.querySelector("time")).toBeNull();
-  });
-  it("keeps a group expanded across polling updates and shows each actual result state", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 0,
-      timestamp: 1,
-      kind: "tool" as const,
-      label: "读取文件",
-    };
-    const items: ExecutionDisplayEntry[] = [
-      { ...base, id: "use-1", rank: 1, status: "running" },
-      { ...base, id: "use-2", rank: 2, status: "returned" },
-    ];
-    const view = render(<GeneralExecutionActivity items={items} />);
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /执行过程/,
-      }),
-    );
+    expect(screen.getByText("工具结果 · 已返回结果")).toBeInTheDocument();
+    expect(screen.queryByText(/执行了/)).toBeNull();
     view.rerender(
       <GeneralExecutionActivity
         items={[
-          { ...items[0]!, status: "failed" } as ExecutionDisplayEntry,
-          items[1]!,
-        ]}
-      />,
-    );
-    expect(
-      screen
-        .getByRole("button", {
-          name: /执行过程/,
-        })
-        .getAttribute("aria-expanded"),
-    ).toBe("true");
-    expect(screen.getByText("读取文件 · 调用失败")).toBeTruthy();
-    const details = document.getElementById(
-      screen
-        .getByRole("button", { name: /执行过程/ })
-        .getAttribute("aria-controls")!,
-    )!;
-    expect(within(details).getByText("读取文件 · 已返回结果")).toBeTruthy();
-  });
-
-  it("shows elapsed time for finished tools and never animates historical activity", () => {
-    const start = 1_800_000_000_000;
-    render(
-      <GeneralExecutionActivity
-        items={[
-          {
-            id: "old-tool",
-            turnId: "old-turn",
-            userSequence: 1,
-            timestamp: start,
-            rank: 1,
-            kind: "tool",
-            label: "读取文件",
-            status: "running",
-            finishedAt: start + 4_000,
-            animate: false,
-          },
-          {
-            id: "done",
-            turnId: "new-turn",
-            userSequence: 2,
-            timestamp: start,
-            rank: 2,
-            kind: "status",
-            status: "ended",
-            animate: false,
-          },
-        ]}
-      />,
-    );
-    expect(screen.getByText("读取文件 · 已记录执行")).toBeTruthy();
-    expect(screen.getByText("4 秒")).toBeTruthy();
-    expect(screen.getByText("本轮已结束")).toBeTruthy();
-    expect(document.querySelector(".animate-spin")).toBeNull();
-  });
-
-  it("keeps the current action visible while history is collapsed and exposes waiting and failed states when expanded", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 0,
-      timestamp: 1,
-      kind: "tool" as const,
-    };
-    render(
-      <GeneralExecutionActivity
-        items={[
-          {
-            ...base,
-            id: "wait",
-            rank: 1,
-            label: "读取文件",
-            status: "waiting",
-            animate: false,
-          },
-          {
-            ...base,
-            id: "fail",
-            rank: 2,
-            label: "搜索网页",
+          command("raw", {
+            label: "bash -lc 'cat /internal/secret'",
             status: "failed",
-            animate: false,
-          },
-          {
-            ...base,
-            id: "now",
-            rank: 3,
-            label: "运行代码",
-            status: "running",
-            animate: true,
-          },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("调用工具 · 调用失败")).toBeInTheDocument();
+    expect(view.container.textContent).not.toMatch(/bash|internal|secret/);
+  });
+  it("never merges calls from separate turns", () => {
+    render(
+      <GeneralExecutionActivity
+        items={[command("first"), command("second", { turnId: "other" })]}
+      />,
+    );
+    expect(screen.getAllByText("执行了 1 个命令")).toHaveLength(2);
+  });
+  it("retains useful safe operation categories instead of counting searches as shell commands", () => {
+    render(
+      <GeneralExecutionActivity
+        items={[
+          command("bash"),
+          command("search-a", { label: "搜索网页" }),
+          command("search-b", { label: "搜索网页" }),
+          command("read", { label: "读取文件" }),
         ]}
       />,
     );
     expect(
-      screen.getAllByText("运行代码 · 执行中").length,
-    ).toBeGreaterThanOrEqual(1);
-    const toggle = screen.getByRole("button", {
-      name: /执行过程/,
-    });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggle);
-    expect(screen.getByText("读取文件 · 等待确认")).toBeTruthy();
-    expect(screen.getByText("搜索网页 · 调用失败")).toBeTruthy();
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      screen.getByText("执行 1 个命令 · 搜索 2 次 · 读取文件 1 次"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+  it("preserves the same start row and height contract when a simple reply finishes without tools", () => {
+    const view = render(
+      <GeneralExecutionActivity
+        placement="after"
+        items={[phase("start", "running", { animate: true, isCurrent: true })]}
+      />,
+    );
+    const row = screen
+      .getByText("正在执行…")
+      .closest(".general-execution__line");
+    view.rerender(
+      <GeneralExecutionActivity
+        placement="after"
+        items={[phase("start", "running"), phase("end", "ended")]}
+      />,
+    );
+    expect(
+      screen.getByText("开始执行").closest(".general-execution__line"),
+    ).toBe(row);
+    expect(screen.queryByText("本轮已结束")).toBeNull();
+    expect(
+      view.container.querySelectorAll(".general-execution__line"),
+    ).toHaveLength(1);
   });
 });
 
@@ -255,7 +233,7 @@ describe("thinking text activity", () => {
     );
     expect(screen.getByText("思考过程")).toBeTruthy();
     expect(screen.queryByText(/先检查任务目标。/)).toBeNull();
-    expect(screen.getByText("搜索网页 · 已完成")).toBeTruthy();
+    expect(screen.getByText("搜索 1 次")).toBeTruthy();
     expect(
       screen
         .getByRole("button", { name: "思考过程" })
@@ -304,7 +282,8 @@ describe("thinking text activity", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
     const content = screen.getByText(
-      (_text, element) => element?.textContent === longText,
+      (_text, element) =>
+        element?.tagName === "P" && element.textContent === longText,
     );
     expect(content).toBeTruthy();
     expect(content.textContent).toContain("步骤 1");
@@ -319,7 +298,7 @@ describe("thinking text activity", () => {
         ]}
       />,
     );
-    expect(screen.getByText("分析任务")).toBeTruthy();
+    expect(screen.queryByText("分析任务")).toBeNull();
     expect(screen.queryByRole("button", { name: "思考过程" })).toBeNull();
   });
 
@@ -396,101 +375,5 @@ describe("thinking text activity", () => {
       "true",
     );
     expect(screen.getByText(/先检查任务目标。/)).toBeTruthy();
-  });
-});
-
-describe("workbench execution presentation", () => {
-  it("uses only textual states and disclosure arrows, without statistics or decorative nodes", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 1,
-      timestamp: 1,
-      animate: false,
-      isCurrent: false,
-    };
-    const { container } = render(
-      <GeneralExecutionActivity
-        items={[
-          {
-            ...base,
-            id: "failed",
-            rank: 0,
-            kind: "tool",
-            label: "搜索网页",
-            toolKind: "builtin",
-            status: "failed",
-          },
-          {
-            ...base,
-            id: "returned",
-            rank: 1,
-            kind: "tool",
-            label: "调用扩展工具",
-            toolKind: "mcp",
-            status: "returned",
-          },
-          {
-            ...base,
-            id: "unconfirmed",
-            rank: 2,
-            kind: "tool",
-            label: "写入文件",
-            status: "unconfirmed",
-          },
-        ]}
-      />,
-    );
-    expect(screen.getByText("写入文件 · 结果未确认")).toBeTruthy();
-    expect(screen.queryByText("搜索网页 · 调用失败")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /执行过程/ }));
-    expect(screen.getByText("搜索网页 · 调用失败")).toBeTruthy();
-    expect(screen.getByText("调用扩展工具 · 已返回结果")).toBeTruthy();
-    expect(container.textContent).not.toMatch(
-      /\d+\s*(条记录|次工具调用)|完成\s*\d+|失败\s*\d+/,
-    );
-    expect(
-      container.querySelector(
-        "img, circle, [class*='border-l'], [class*='rounded-full']",
-      ),
-    ).toBeNull();
-    expect(
-      [...container.querySelectorAll("svg")].every((icon) =>
-        icon.classList.contains("lucide-chevron-right"),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps result-only activity separate and does not invent an earlier tool call", () => {
-    const base = {
-      turnId: "turn",
-      userSequence: 1,
-      timestamp: 1,
-      animate: false,
-      isCurrent: false,
-    };
-    const { container } = render(
-      <GeneralExecutionActivity
-        items={[
-          { ...base, id: "start", rank: 0, kind: "status", status: "running" },
-          {
-            ...base,
-            id: "result",
-            rank: 1,
-            kind: "tool",
-            label: "工具结果",
-            status: "returned",
-            resultOnly: true,
-          },
-          { ...base, id: "end", rank: 2, kind: "status", status: "ended" },
-        ]}
-      />,
-    );
-    expect(screen.getByText("开始执行")).toBeTruthy();
-    expect(screen.getByText("工具结果 · 已返回结果")).toBeTruthy();
-    expect(screen.getByText("本轮已结束")).toBeTruthy();
-    expect(screen.queryByRole("button")).toBeNull();
-    expect(container.querySelectorAll(".general-execution__line")).toHaveLength(
-      3,
-    );
   });
 });

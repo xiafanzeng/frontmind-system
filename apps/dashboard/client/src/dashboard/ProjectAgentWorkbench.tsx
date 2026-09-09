@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { operatorViewPath } from "./operator-navigation";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import {
@@ -39,12 +40,16 @@ function ScopedWorkbench({
   purpose,
   children,
   originalWorkspace,
+  taskNavigationTarget,
+  onTaskNavigate,
 }: {
   projectId: string;
   agentId: WorkbenchAgentId;
   purpose: "general" | "enterprise_qa";
   children?: ReactNode;
   originalWorkspace: ReturnType<typeof useConversation>;
+  taskNavigationTarget?: HTMLElement | null;
+  onTaskNavigate?: () => void;
 }) {
   const module = useWorkbenchModule();
   const workspace = useConversation();
@@ -175,63 +180,78 @@ function ScopedWorkbench({
       </div>
     </BusinessWorkspaceProvider>
   );
-  return (
-    <AgentWorkbenchShell
-      projectId={projectId}
-      moduleId={agentId}
-      title={label}
-      taskTitle={task.task?.title ?? "新任务"}
-      taskKey={task.taskId ?? "new"}
-      layout={agentId === "general" ? "single" : "workflow"}
-      main={body}
-      scrollMain={!native}
-      status={
-        task.pending
-          ? "正在保存"
-          : native
-            ? workbenchStatus(workspace.activeConversation?.status)
-            : undefined
-      }
-      toolbar={
-        <WorkbenchTaskToolbar
-          tasks={historyTasks}
-          legacyTasks={legacyTasks}
-          currentId={task.taskId}
-          disabled={!task.hydrated}
-          onNew={() => {
-            task.newTask("新任务");
-          }}
-          onSelect={task.selectTask}
-          onDelete={workspace.deleteConversation}
-        />
-      }
-      auxiliary={
-        purpose === "enterprise_qa" ? (
-          children
-        ) : (
-          <BusinessWorkspaceInspector
-            summary={
-              summary ?? {
-                title: "当前任务",
-                items: [
-                  { label: "任务", value: task.task?.title ?? "尚未开始" },
-                ],
-              }
-            }
-          />
-        )
-      }
+  const taskNavigation = (
+    <WorkbenchTaskToolbar
+      tasks={historyTasks}
+      legacyTasks={legacyTasks}
+      currentId={task.taskId}
+      disabled={!task.hydrated}
+      loading={workspace.loading}
+      error={workspace.syncError}
+      onRetry={() => void task.retry().catch(() => undefined)}
+      presentation={agentId === "general" ? "sidebar" : "toolbar"}
+      onNew={() => {
+        task.newTask("新任务");
+      }}
+      onSelect={task.selectTask}
+      onDelete={workspace.deleteConversation}
+      onNavigate={agentId === "general" ? onTaskNavigate : undefined}
     />
+  );
+  return (
+    <>
+      {agentId === "general" &&
+        taskNavigationTarget &&
+        createPortal(taskNavigation, taskNavigationTarget)}
+      <AgentWorkbenchShell
+        projectId={projectId}
+        moduleId={agentId}
+        title={label}
+        taskTitle={task.task?.title ?? "新任务"}
+        taskKey={task.taskId ?? "new"}
+        layout={agentId === "general" ? "single" : "workflow"}
+        main={body}
+        scrollMain={!native}
+        status={
+          task.pending
+            ? "正在保存"
+            : native
+              ? workbenchStatus(workspace.activeConversation?.status)
+              : undefined
+        }
+        toolbar={agentId === "general" ? undefined : taskNavigation}
+        auxiliary={
+          purpose === "enterprise_qa" ? (
+            children
+          ) : (
+            <BusinessWorkspaceInspector
+              summary={
+                summary ?? {
+                  title: "当前任务",
+                  items: [
+                    { label: "任务", value: task.task?.title ?? "尚未开始" },
+                  ],
+                }
+              }
+            />
+          )
+        }
+      />
+    </>
   );
 }
 export default function ProjectAgentWorkbench({
   projectId,
   purpose = "general",
   children,
+  taskNavigationTarget,
+  onTaskNavigate,
 }: {
   projectId: string;
   purpose?: "general" | "enterprise_qa";
   children?: ReactNode;
+  taskNavigationTarget?: HTMLElement | null;
+  onTaskNavigate?: () => void;
 }) {
   const originalWorkspace = useConversation();
   const module = useWorkbenchModule();
@@ -248,6 +268,8 @@ export default function ProjectAgentWorkbench({
           agentId={agentId}
           purpose={purpose}
           originalWorkspace={originalWorkspace}
+          taskNavigationTarget={taskNavigationTarget}
+          onTaskNavigate={onTaskNavigate}
         >
           {children}
         </ScopedWorkbench>

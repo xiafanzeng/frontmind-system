@@ -1972,6 +1972,7 @@ export default function ChatArea({
                 />
                 <GeneralExecutionActivity
                   items={executionSlots.after.get(msg.id)}
+                  placement="after"
                   expandedGroups={expandedExecutionGroups}
                   onToggleGroup={toggleExecutionGroup}
                 />
@@ -3244,10 +3245,10 @@ export function EmptyConversationHint({
                   }
                 }}
                 className={cn(
-                  "flex min-h-[132px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed bg-card/70 px-4 py-5 text-center transition-colors",
+                  "flex min-h-[132px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-4 py-5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
                   isDragging
                     ? "border-primary/70 bg-primary/5"
-                    : "border-border hover:border-primary/40 hover:bg-muted/40",
+                    : "border-[#C8CDD5] bg-[#F0F1F3] hover:border-primary/40 hover:bg-[#E8EAED]",
                   (isStarting || isDiscarding || batchLocked) &&
                     "cursor-not-allowed opacity-60",
                 )}
@@ -4113,22 +4114,6 @@ export function MessageBubble({
     [],
   );
 
-  const getCompletedElapsed = () => {
-    // Conversation settlement timestamps survive hydrate; prefer that fixed
-    // duration so refresh never changes the completed footer.
-    const elapsed = fixedElapsedTime ?? message.elapsedTime;
-    if (elapsed != null && elapsed >= 0) {
-      if (elapsed < 60) return `${elapsed.toFixed(1)}s`;
-      const mins = Math.floor(elapsed / 60);
-      const secs = (elapsed % 60).toFixed(0);
-      return `${mins}m ${secs}s`;
-    }
-    return null;
-  };
-
-  const completedElapsed = getCompletedElapsed();
-  const elapsedDisplay = completedElapsed;
-
   // Check file types
   const isMdFile = (fileName: string) => {
     const ext = fileName.split(".").pop()?.toLowerCase();
@@ -4241,7 +4226,7 @@ export function MessageBubble({
           {/* Message content */}
           <div
             className={cn(
-              "max-w-[92%] space-y-2 sm:max-w-[80%]",
+              "chat-message-content max-w-[92%] space-y-2 sm:max-w-[80%]",
               isUser ? "items-end" : "items-start",
             )}
           >
@@ -4286,7 +4271,7 @@ export function MessageBubble({
                   "text-[16px] leading-relaxed",
                   isUser
                     ? "rounded-2xl rounded-tr-md border border-[#e4e4e7] bg-[#f4f4f5] px-4 py-3 text-foreground"
-                    : "px-0 py-1 text-foreground",
+                    : "chat-message-body px-0 pt-1 text-foreground",
                 )}
               >
                 {isUser ? (
@@ -4426,33 +4411,20 @@ export function MessageBubble({
               </div>
             )}
 
-            {/* Timestamp, elapsed time, and copy button */}
-            {!(message.isStepsPlaceholder && !displayContent?.trim()) && (
+            {/* Keep the reply action beside the content, without time metadata. */}
+            {!isUser && displayContent?.trim() && (
               <div
                 className={cn(
-                  "flex items-center gap-2 mt-1 px-1",
-                  isUser ? "justify-end" : "justify-start",
+                  "chat-message-actions flex items-center justify-start",
                 )}
               >
-                <p className="text-xs text-muted-foreground/40">
-                  {new Date(message.timestamp).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </p>
-                {!isUser && elapsedDisplay && (
-                  <span className="text-xs font-mono text-muted-foreground/50 flex items-center gap-0.5">
-                    <Clock className="w-2.5 h-2.5" />
-                    {elapsedDisplay}
-                  </span>
-                )}
                 {/* Copy button for assistant messages */}
                 {!isUser && displayContent && displayContent.trim() !== "" && (
                   <button
                     type="button"
                     onClick={handleCopyMessage}
                     className={cn(
-                      "ml-1 inline-flex items-center gap-1 rounded-md bg-transparent px-2 py-0.5 text-[12px] font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
+                      "inline-flex min-h-7 items-center gap-1 rounded-md bg-transparent px-0 py-1 text-[12px] font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
                       copied
                         ? "text-emerald-600 dark:text-emerald-400"
                         : "text-muted-foreground hover:text-primary",

@@ -20,6 +20,7 @@ import {
 } from "@/contexts/ConversationContext";
 import { useBusinessWorkspace } from "./BusinessWorkspaceContext";
 import { initialWorkbenchTaskState } from "@shared/workbench-task";
+import { WorkbenchTaskToolbar } from "./WorkbenchTaskToolbar";
 const api = vi.hoisted(() => ({
   bind: vi.fn(),
   save: vi.fn(),
@@ -42,19 +43,30 @@ vi.mock("@/pages/Home", () => ({
     );
   },
 }));
-function Workspace({ children }: { children: React.ReactNode }) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+function Workspace({
+  children,
+  initialConversations = [],
+}: {
+  children: React.ReactNode;
+  initialConversations?: Conversation[];
+}) {
+  const [conversations, setConversations] =
+    useState<Conversation[]>(initialConversations);
   const [active, setActive] = useState<string | null>(null);
   return (
     <ConversationContextProvider
       value={
         {
           hydrated: true,
+          loading: false,
+          syncError: null,
           workbenchScopeKey: "workbench-integration",
           state: { conversations, activeConversationId: active },
           activeConversation:
             conversations.find((item) => item.id === active) ?? null,
           setActive,
+          deleteConversation: (id: string) =>
+            setConversations((items) => items.filter((item) => item.id !== id)),
           isKnowledgeBaseConversation: () => false,
           flushConversation: async () => true,
           refreshConversations: async () => undefined,
@@ -189,5 +201,138 @@ describe("conversational project workbench", () => {
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     expect(screen.queryByRole("separator")).not.toBeInTheDocument();
     expect(api.bind).not.toHaveBeenCalled();
+  });
+
+  it("runs visible sidebar search, selection, creation and management against the same general task owner", async () => {
+    const onNavigate = vi.fn();
+    function GeneralWithSidebar() {
+      const [target, setTarget] = useState<HTMLDivElement | null>(null);
+      return (
+        <>
+          <aside aria-label="左侧任务">
+            <div ref={setTarget} />
+          </aside>
+          <ProjectAgentWorkbench
+            projectId="account"
+            taskNavigationTarget={target}
+            onTaskNavigate={onNavigate}
+          />
+        </>
+      );
+    }
+    const seed = (id: string, title: string, workbenchAgentId?: string) =>
+      ({
+        id,
+        title,
+        workbenchAgentId,
+        messages: [],
+        status: "idle",
+        createdAt: 1,
+        updatedAt: id === "general-2" ? 2 : 1,
+      }) as Conversation;
+    render(
+      <Workspace
+        initialConversations={[
+          seed("general-2", "产品规划", "general"),
+          seed("general-1", "品牌调研", "general"),
+          seed("legacy", "旧通用任务"),
+          seed("media", "不应出现的媒体任务", "media"),
+        ]}
+      >
+        <GeneralWithSidebar />
+      </Workspace>,
+    );
+    const sidebar = screen.getByRole("complementary", { name: "左侧任务" });
+    const list = within(sidebar).getByRole("listbox", { name: "任务历史" });
+    expect(await screen.findByLabelText("对话输入")).toHaveAttribute(
+      "data-task",
+      "general-2",
+    );
+    expect(
+      within(sidebar).getByRole("button", { name: "新任务" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /^历史$/ }),
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: /^新任务$/ }),
+    ).toHaveLength(1);
+    expect(screen.queryByText("不应出现的媒体任务")).toBeNull();
+    fireEvent.change(
+      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
+      { target: { value: "品牌" } },
+    );
+    expect(within(list).getAllByRole("option")).toHaveLength(1);
+    fireEvent.click(within(list).getByRole("button", { name: /^品牌调研/ }));
+    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
+      "data-task",
+      "general-1",
+    );
+    expect(
+      new URLSearchParams(window.location.search).get("workbenchTask"),
+    ).toBe("general-1");
+    fireEvent.change(
+      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
+      { target: { value: "" } },
+    );
+    const first = within(list).getByRole("button", { name: /^产品规划/ });
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(
+      within(list).getByRole("button", { name: /^品牌调研/ }),
+    ).toHaveFocus();
+    fireEvent.click(within(sidebar).getByRole("button", { name: "旧任务" }));
+    fireEvent.click(within(list).getByRole("button", { name: /^旧通用任务/ }));
+    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
+      "data-task",
+      "legacy",
+    );
+    fireEvent.change(
+      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
+      { target: { value: "旧通用" } },
+    );
+    fireEvent.click(
+      within(sidebar).getByRole("button", { name: /^新任务$/ }),
+    );
+    expect(
+      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
+    ).toHaveValue("");
+    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
+      "data-task",
+      "local-4",
+    );
+    expect(
+      within(list).getByRole("option", { selected: true }),
+    ).toHaveTextContent("新任务");
+    fireEvent.click(
+      within(sidebar).getByRole("button", { name: "删除任务 品牌调研" }),
+    );
+    expect(within(list).queryByText("品牌调研")).toBeNull();
+    expect(onNavigate).toHaveBeenCalledTimes(3);
+    expect(api.bind).not.toHaveBeenCalled();
+  });
+
+  it("shows loading and retry states in the visible task list", () => {
+    const retry = vi.fn();
+    const props = {
+      tasks: [],
+      onNew: vi.fn(),
+      onSelect: vi.fn(),
+      presentation: "sidebar" as const,
+    };
+    const view = render(<WorkbenchTaskToolbar {...props} disabled loading />);
+    expect(screen.getByRole("status")).toHaveTextContent("正在读取任务");
+    expect(screen.getByRole("button", { name: "新任务" })).toBeDisabled();
+    expect(screen.queryByText("暂无任务历史")).toBeNull();
+    view.rerender(
+      <WorkbenchTaskToolbar
+        {...props}
+        error="任务列表暂时无法读取"
+        onRetry={retry}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("任务列表暂时无法读取");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 });

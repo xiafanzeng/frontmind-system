@@ -136,11 +136,19 @@ describe("operator workspace navigation", () => {
       name: "AI 智能品牌优化",
       level: 2,
     });
-    expect(within(modules).getAllByRole("button")).toHaveLength(6);
+    expect(within(modules).getAllByRole("button")).toHaveLength(8);
     expect(
       groupLabel.compareDocumentPosition(
-        within(modules).getAllByRole("button")[0],
+        within(modules).getByRole("button", { name: "品牌建设" }),
       ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const general = within(modules).getByRole("button", {
+      name: "FrontMind通用智能体",
+    });
+    expect(
+      within(modules)
+        .getByRole("button", { name: "项目工具" })
+        .compareDocumentPosition(general) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "品牌建设" })).toHaveAttribute(
       "aria-current",
@@ -161,6 +169,27 @@ describe("operator workspace navigation", () => {
       within(screen.getByRole("banner")).getByText("品牌建设"),
     ).toBeInTheDocument();
     view.unmount();
+  });
+
+  it("keeps the general entry and task list visible while its brand modules can be expanded", () => {
+    const props = sidebarProps();
+    render(
+      <OperatorSidebar
+        {...props}
+        activeEntry="agent"
+        taskNavigation={<p>我的常驻任务列表</p>}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "AI 智能品牌优化" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "品牌建设" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "FrontMind通用智能体" }),
+    ).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("我的常驻任务列表")).toBeVisible();
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "品牌建设" })).toBeVisible();
+    expect(screen.getByText("我的常驻任务列表")).toBeVisible();
   });
 
   it("keeps the project capsule at the bottom with its list closed by default", () => {
@@ -418,18 +447,16 @@ describe("operator workspace navigation", () => {
   });
 
   it("contains mobile keyboard focus and releases the main work area when closed", () => {
-    const query = vi
-      .spyOn(window, "matchMedia")
-      .mockImplementation(() => ({
-        matches: true,
-        media: "(max-width: 1023px)",
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }));
+    const query = vi.spyOn(window, "matchMedia").mockImplementation(() => ({
+      matches: true,
+      media: "(max-width: 1023px)",
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     try {
       const props = sidebarProps();
       const close = vi.fn();
@@ -442,9 +469,13 @@ describe("operator workspace navigation", () => {
       const drawer = screen.getByRole("dialog", { name: "工作区导航" });
       expect(drawer).toHaveAttribute("aria-modal", "true");
       expect(screen.getByTestId("main")).toHaveProperty("inert", true);
-      const first = within(drawer).getByRole("button", { name: "项目总览" });
+      const first = within(drawer).getByRole("button", {
+        name: "AI 智能品牌优化",
+      });
       const last = within(drawer).getByRole("button", { name: "收起侧边栏" });
-      last.focus();
+      first.focus();
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+      expect(last).toHaveFocus();
       fireEvent.keyDown(last, { key: "Tab" });
       expect(first).toHaveFocus();
       fireEvent.keyDown(first, { key: "Escape" });

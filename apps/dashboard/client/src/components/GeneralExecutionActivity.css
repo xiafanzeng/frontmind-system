@@ -1,14 +1,20 @@
 .general-execution {
   min-width: 0;
   max-width: 100%;
-  margin: -0.75rem 0 0.5rem;
+  margin: 0 0 0.5rem;
   color: var(--muted-foreground);
   font-size: 0.8125rem;
   line-height: 1.6;
 }
 
-.general-execution:first-child {
-  margin-top: 0;
+.general-execution[data-placement="after"] {
+  margin-top: 1.5rem;
+}
+
+@media (min-width: 640px) {
+  .general-execution[data-placement="after"] {
+    margin-top: 1.75rem;
+  }
 }
 
 .general-execution__toggle {
@@ -94,6 +100,13 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.85;
+}
+
+.chat-message-content > .chat-message-actions {
+  margin-top: 0;
+}
+.chat-message-body .markdown-content > :last-child {
+  margin-bottom: 0;
 }
 
 @media (max-width: 640px) {

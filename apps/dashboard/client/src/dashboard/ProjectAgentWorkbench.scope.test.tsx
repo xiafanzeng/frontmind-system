@@ -138,16 +138,33 @@ describe("workbench task scopes", () => {
     ).toBeInTheDocument();
   });
   it("keeps unclassified conversations in the general legacy history entry", () => {
+    function GeneralWithSidebar() {
+      const [target, setTarget] = useState<HTMLDivElement | null>(null);
+      return (
+        <>
+          <aside aria-label="通用任务导航">
+            <div ref={setTarget} />
+          </aside>
+          <ProjectAgentWorkbench
+            projectId="account"
+            taskNavigationTarget={target}
+          />
+        </>
+      );
+    }
     render(
       <Workspace>
-        <ProjectAgentWorkbench projectId="account" />
+        <GeneralWithSidebar />
       </Workspace>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "历史" }));
-    fireEvent.click(screen.getByRole("button", { name: "旧任务" }));
-    const history = screen.getByRole("listbox", { name: "任务历史" });
+    const sidebar = screen.getByRole("complementary", { name: "通用任务导航" });
+    expect(screen.queryByRole("button", { name: "历史" })).toBeNull();
+    fireEvent.click(within(sidebar).getByRole("button", { name: "旧任务" }));
+    const history = within(sidebar).getByRole("listbox", { name: "任务历史" });
     expect(within(history).getAllByRole("option")).toHaveLength(1);
     expect(history).toHaveTextContent("general");
     expect(history).not.toHaveTextContent("media-a");
+    expect(history).not.toHaveTextContent("logic");
+    expect(history).not.toHaveTextContent("qa");
   });
 });

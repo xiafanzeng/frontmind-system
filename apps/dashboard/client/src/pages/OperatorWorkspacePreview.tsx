@@ -21,6 +21,7 @@ import {
 } from "@/dashboard/OperatorNavigation";
 import { OperatorThemeProvider } from "@/components/ui/operator-theme";
 import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
+import { WorkbenchTaskToolbar } from "@/dashboard/WorkbenchTaskToolbar";
 import { MessageBubble } from "@/components/ChatArea";
 import {
   ConversationProvider,
@@ -653,28 +654,33 @@ function OperatorWorkspacePreviewContent() {
       </article>
     );
   })();
+  const newPreviewTask = () => {
+    const next = (taskCounts[scope] ?? 1) + 1;
+    setTaskCounts((items) => ({ ...items, [scope]: next }));
+    setTaskNumbers((items) => ({ ...items, [scope]: next }));
+    setHistoryOpen(false);
+  };
   const toolbar = (
     <>
       <small className="workbench-preview-label">设计预览</small>
-      <button
-        className="operator-secondary-button"
-        onClick={() => {
-          const next = (taskCounts[scope] ?? 1) + 1;
-          setTaskCounts((items) => ({ ...items, [scope]: next }));
-          setTaskNumbers((items) => ({ ...items, [scope]: next }));
-          setHistoryOpen(false);
-        }}
-      >
-        <Plus size={14} />
-        新任务
-      </button>
-      <button
-        className="operator-secondary-button"
-        aria-expanded={historyOpen}
-        onClick={() => setHistoryOpen((value) => !value)}
-      >
-        历史
-      </button>
+      {!general && (
+        <>
+          <button
+            className="operator-secondary-button"
+            onClick={newPreviewTask}
+          >
+            <Plus size={14} />
+            新任务
+          </button>
+          <button
+            className="operator-secondary-button"
+            aria-expanded={historyOpen}
+            onClick={() => setHistoryOpen((value) => !value)}
+          >
+            历史
+          </button>
+        </>
+      )}
       {nativeChat && (
         <button
           className="operator-secondary-button"
@@ -735,6 +741,30 @@ function OperatorWorkspacePreviewContent() {
             />
           )}
           <OperatorSidebar
+            taskNavigation={
+              general ? (
+                <WorkbenchTaskToolbar
+                  presentation="sidebar"
+                  tasks={Array.from(
+                    { length: taskCounts[scope] ?? 1 },
+                    (_, index) => ({
+                      id: String(index + 1),
+                      title: `任务 ${index + 1}`,
+                      updatedAt: 1788912000000 + index * 60000,
+                    }),
+                  ).reverse()}
+                  currentId={String(taskNumber)}
+                  onNew={newPreviewTask}
+                  onSelect={(id) =>
+                    setTaskNumbers((items) => ({
+                      ...items,
+                      [scope]: Number(id),
+                    }))
+                  }
+                  onNavigate={() => setMobileOpen(false)}
+                />
+              ) : undefined
+            }
             projects={projects}
             activeProject={active}
             activeEntry={general ? "agent" : "project"}

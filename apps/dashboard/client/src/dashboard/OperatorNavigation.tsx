@@ -24,6 +24,8 @@ import {
   useRef,
   type CSSProperties,
   type FormEvent,
+  type ReactNode,
+  type Ref,
 } from "react";
 import {
   Bot,
@@ -89,10 +91,14 @@ export function OperatorSidebar({
   onSelectView,
   projectsLoading = false,
   projectsError,
+  taskNavigation,
+  taskNavigationRef,
 }: {
   projects: EnterpriseProjectView[];
   projectsLoading?: boolean;
   projectsError?: string;
+  taskNavigation?: ReactNode;
+  taskNavigationRef?: Ref<HTMLDivElement>;
   activeProject?: EnterpriseProjectView;
   activeEntry: "project" | "agent" | "account";
   collapsed: boolean;
@@ -112,6 +118,10 @@ export function OperatorSidebar({
   onDeleteProject?: (project: EnterpriseProjectView) => Promise<void>;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
+  const [modulesExpanded, setModulesExpanded] = useState(
+    activeEntry !== "agent",
+  );
+  useEffect(() => setModulesExpanded(activeEntry !== "agent"), [activeEntry]);
   const [isMobile, setIsMobile] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -156,12 +166,24 @@ export function OperatorSidebar({
           'button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]',
         ),
       ];
-      const project = sidebar.querySelector<HTMLElement>(
-        ".operator-project-entry",
-      );
-      return project
-        ? [project, ...items.filter((item) => item !== project)]
-        : items;
+      return items.filter((item) => {
+        for (
+          let node: HTMLElement | null = item;
+          node && node !== sidebar;
+          node = node.parentElement
+        ) {
+          const style = window.getComputedStyle(node);
+          if (
+            node.hidden ||
+            node.inert ||
+            node.getAttribute("aria-hidden") === "true" ||
+            style.display === "none" ||
+            style.visibility === "hidden"
+          )
+            return false;
+        }
+        return true;
+      });
     };
     (
       sidebar.querySelector<HTMLButtonElement>(".operator-project-entry") ||
@@ -340,6 +362,7 @@ export function OperatorSidebar({
         className="global-nav operator-sidebar"
         aria-label="工作区导航"
         data-collapsed={collapsed}
+        data-entry={activeEntry}
       >
         <div className="operator-brand">
           <div className="operator-brand-logo">
@@ -348,44 +371,73 @@ export function OperatorSidebar({
         </div>
         <nav className="operator-module-nav" aria-label="项目模块">
           <h2 className="operator-module-group-label">
-            <Sparkles size={20} aria-hidden="true" />
-            <span>AI 智能品牌优化</span>
+            <button
+              type="button"
+              className="operator-module-group-toggle"
+              aria-expanded={modulesExpanded}
+              aria-controls="operator-brand-modules"
+              onClick={() => setModulesExpanded((value) => !value)}
+            >
+              <Sparkles size={20} aria-hidden="true" />
+              <span>AI 智能品牌优化</span>
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={modulesExpanded ? "is-open" : ""}
+              />
+            </button>
           </h2>
-          {OPERATOR_MODULES.map((module) => {
-            const Icon = moduleIcons[module.id];
-            const active =
-              activeEntry === "project" &&
-              module.views.some((item) => item.id === selectedView);
-            return (
-              <button
-                key={module.id}
-                type="button"
-                className={`operator-nav-entry operator-module-entry ${active ? "active" : ""}`}
-                title={module.label}
-                aria-label={module.label}
-                aria-current={active ? "page" : undefined}
-                onClick={() => navigateView(module.views[0].id)}
-              >
-                <Icon size={20} />
-                <span>{module.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <div className="operator-general-nav">
+          <div
+            id="operator-brand-modules"
+            className="operator-brand-modules"
+            hidden={!modulesExpanded}
+          >
+            {OPERATOR_MODULES.map((module) => {
+              const Icon = moduleIcons[module.id];
+              const active =
+                activeEntry === "project" &&
+                module.views.some((item) => item.id === selectedView);
+              return (
+                <button
+                  key={module.id}
+                  type="button"
+                  className={`operator-nav-entry operator-module-entry ${active ? "active" : ""}`}
+                  title={module.label}
+                  aria-label={module.label}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => navigateView(module.views[0].id)}
+                >
+                  <Icon size={20} />
+                  <span>{module.label}</span>
+                </button>
+              );
+            })}
+          </div>
           <button
             type="button"
-            className={`operator-nav-entry ${activeEntry === "agent" ? "active" : ""}`}
+            className={`operator-nav-entry operator-module-entry operator-general-entry ${activeEntry === "agent" ? "active" : ""}`}
             title="FrontMind通用智能体"
             aria-label="FrontMind通用智能体"
+            aria-current={activeEntry === "agent" ? "page" : undefined}
             onClick={() =>
-              requestWorkspaceNavigation(() => onNavigate("/agent"))
+              requestWorkspaceNavigation(() => {
+                onNavigate("/agent");
+                onCloseMobile?.();
+              })
             }
           >
             <Bot size={20} />
             <span>FrontMind通用智能体</span>
           </button>
-        </div>
+        </nav>
+        {activeEntry === "agent" && (
+          <div
+            className="operator-task-navigation-slot"
+            ref={taskNavigationRef}
+          >
+            {taskNavigation}
+          </div>
+        )}
         <div className="operator-sidebar-bottom">
           <div
             className={`operator-project-group operator-project-capsule ${activeEntry === "project" ? "is-active" : ""}`}

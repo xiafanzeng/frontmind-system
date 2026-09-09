@@ -944,6 +944,7 @@ export function UserBrandDashboardContent({
   const responseLogicWorkspaceState =
     useResponseLogicWorkspaceState(activeQuestionGroups);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [taskNavigationTarget, setTaskNavigationTarget] = useState<HTMLDivElement | null>(null);
   const navigatePath = (path) => {
     const next = projectWorkspaceUrl(path, operatorProject?.id);
     setLocation(next);
@@ -1451,6 +1452,7 @@ export function UserBrandDashboardContent({
           )}
           {operatorMode ? (
             <OperatorSidebar
+              taskNavigationRef={setTaskNavigationTarget}
               projects={operatorProjects}
               activeProject={operatorProject}
               projectsLoading={operatorProjectsLoading}
@@ -1533,6 +1535,8 @@ export function UserBrandDashboardContent({
                   businessContent
                 ) : (
                   <ProjectAgentWorkbench
+                    taskNavigationTarget={taskNavigationTarget}
+                    onTaskNavigate={() => setMobileNavOpen(false)}
                     projectId={agentRoute ? "account" : operatorProject.id}
                     purpose="general"
                   >

@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
 import { createPortal } from "react-dom";
-import { PanelRightClose, PanelRightOpen, Sparkles } from "lucide-react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -199,7 +199,6 @@ export function AgentWorkbenchShell({
           }
           onClick={() => requestWorkspaceNavigation(action.run)}
         >
-          <Sparkles size={14} aria-hidden="true" />
           <span>{action.label}</span>
         </button>
       ))}

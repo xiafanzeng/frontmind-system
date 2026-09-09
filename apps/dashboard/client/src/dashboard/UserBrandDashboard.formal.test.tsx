@@ -10,11 +10,37 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-
-const projectMocks = vi.hoisted(() => ({ id: "11111111-1111-4111-8111-111111111111", list: vi.fn(), create: vi.fn(), delete: vi.fn(), select: vi.fn() }));
-vi.mock("./HistoricalResultsReadOnly", () => ({ default: ({ questionId, onBack }: { questionId: string; onBack: () => void }) => <section data-testid="historical-question-result">{questionId}<button onClick={onBack}>返回优化问题</button></section> }));
-vi.mock("@/components/EmbeddedKnowledgeBasePanel", () => ({ default: () => <div data-testid="knowledge-agent">知识库节点工作区</div> }));
-vi.mock("@/lib/enterprise-project", async original => ({ ...await original<typeof import("@/lib/enterprise-project")>(), switchEnterpriseProject: projectMocks.select }));
+const projectMocks = vi.hoisted(() => ({
+  id: "11111111-1111-4111-8111-111111111111",
+  list: vi.fn(),
+  create: vi.fn(),
+  delete: vi.fn(),
+  select: vi.fn(),
+}));
+vi.mock("./HistoricalResultsReadOnly", () => ({
+  default: ({
+    questionId,
+    onBack,
+  }: {
+    questionId: string;
+    onBack: () => void;
+  }) => (
+    <section data-testid="historical-question-result">
+      {questionId}
+      <button onClick={onBack}>返回优化问题</button>
+    </section>
+  ),
+}));
+vi.mock("@/components/EmbeddedKnowledgeBasePanel", async () => {
+  const { AgentWorkbenchShell } = await import("@/components/AgentWorkbenchShell");
+  return { default: (props: { workbench?: boolean; projectId?: string }) => props.workbench
+    ? <AgentWorkbenchShell embedded projectId={props.projectId ?? "test"} moduleId="brand" title="品牌建设" resultTitle="知识内容" conversation={<div>知识库对话</div>} result={<div data-testid="knowledge-agent">知识库节点工作区</div>} />
+    : <div data-testid="knowledge-agent">知识库节点工作区</div> };
+});
+vi.mock("@/lib/enterprise-project", async (original) => ({
+  ...(await original<typeof import("@/lib/enterprise-project")>()),
+  switchEnterpriseProject: projectMocks.select,
+}));
 
 const {
   dashboardUseQuery,
@@ -102,10 +128,22 @@ vi.mock("@/contexts/ConversationContext", () => ({
       {children}
     </div>
   ),
+  useConversation: () => ({
+    state: { conversations: [] },
+    activeConversation: null,
+    hydrated: true,
+    loading: false,
+  }),
+  ConversationContextProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-vi.mock("./EnterpriseQaWorkspace", () => ({
-  default: () => <div data-testid="enterprise-qa-workspace" />,
-}));
+vi.mock("./EnterpriseQaWorkspace", async () => {
+  const { AgentWorkbenchShell } = await import("@/components/AgentWorkbenchShell");
+  return {
+    default: ({ workbench, projectId }: { workbench?: boolean; projectId?: string }) => workbench ? (
+      <AgentWorkbenchShell projectId={projectId ?? "test"} moduleId="extensions" title="企业问答" resultTitle="项目工具" conversation={<div data-testid="enterprise-qa-workspace" />} result={<div>知识库来源</div>} />
+    ) : <div data-testid="enterprise-qa-workspace" />,
+  };
+});
 
 vi.mock("@/pages/Home", () => ({
   default: (props: {
@@ -135,8 +173,25 @@ vi.mock("@/lib/trpc", () => ({
       create: { useMutation: () => ({ mutateAsync: projectMocks.create }) },
       rename: { useMutation: () => ({ mutateAsync: vi.fn() }) },
       delete: { useMutation: () => ({ mutateAsync: projectMocks.delete }) },
-      monitoringProgress: { useQuery: () => ({ data: { projects: [], runs: [], summary: { projectCount: 0, runCount: 0, expectedAttempts: 0, completedAttempts: 0, failedAttempts: 0 } }, isLoading: false }) },
-      createMonitoringProject: { useMutation: () => ({ mutateAsync: vi.fn() }) },
+      monitoringProgress: {
+        useQuery: () => ({
+          data: {
+            projects: [],
+            runs: [],
+            summary: {
+              projectCount: 0,
+              runCount: 0,
+              expectedAttempts: 0,
+              completedAttempts: 0,
+              failedAttempts: 0,
+            },
+          },
+          isLoading: false,
+        }),
+      },
+      createMonitoringProject: {
+        useMutation: () => ({ mutateAsync: vi.fn() }),
+      },
     },
     workspace: {
       portal: {
@@ -400,12 +455,34 @@ describe("UserBrandDashboard formal workspace", () => {
     localStorage.removeItem("frontmind.operator.sidebarCollapsed");
     projectMocks.delete.mockReset();
     projectMocks.select.mockClear();
-    trpcUtils.enterpriseProjects.list.setData.mockReset().mockImplementation((_input, update) => {
-      const query = projectMocks.list();
-      projectMocks.list.mockReturnValue({ ...query, data: update(query.data) });
+    trpcUtils.enterpriseProjects.list.setData
+      .mockReset()
+      .mockImplementation((_input, update) => {
+        const query = projectMocks.list();
+        projectMocks.list.mockReturnValue({
+          ...query,
+          data: update(query.data),
+        });
+      });
+    window.history.replaceState(
+      null,
+      "",
+      `/?enterpriseProjectId=${projectMocks.id}`,
+    );
+    projectMocks.list.mockReturnValue({
+      data: {
+        projects: [
+          {
+            id: projectMocks.id,
+            name: "企业项目A",
+            ownerUserId: 7,
+            revision: 1,
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: vi.fn(),
     });
-    window.history.replaceState(null, "", `/?enterpriseProjectId=${projectMocks.id}`);
-    projectMocks.list.mockReturnValue({ data: { projects: [{ id: projectMocks.id, name: "企业项目A", ownerUserId: 7, revision: 1 }] }, isLoading: false, refetch: vi.fn() });
     authState.marketEdition = "domestic";
     purchaseIntentMutateAsync.mockReset();
     purchaseIntentUseMutation.mockReset();
@@ -507,49 +584,77 @@ describe("UserBrandDashboard formal workspace", () => {
     });
   });
 
-
   it("opens the selected enterprise project with six modules and no plan chrome", async () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "项目板块" })).getAllByRole("link")).toHaveLength(6);
+    expect(
+      within(screen.getByRole("navigation", { name: "项目模块" })).getAllByRole(
+        "button",
+      ),
+    ).toHaveLength(6);
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();
     expect(screen.queryByText("续费套餐")).toBeNull();
-    expect(portalUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: true, retry: false }));
+    expect(portalUseQuery).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ enabled: true, retry: false }),
+    );
   });
   it("restores historical results from a project URL and returns to its optimization questions", async () => {
-    window.history.replaceState(null, "", `/?view=historical-results&questionId=archived-question&enterpriseProjectId=${projectMocks.id}`);
+    window.history.replaceState(
+      null,
+      "",
+      `/?view=historical-results&questionId=archived-question&enterpriseProjectId=${projectMocks.id}`,
+    );
     render(<UserBrandDashboard />);
-    expect(await screen.findByTestId("historical-question-result")).toHaveTextContent("archived-question");
+    expect(
+      await screen.findByTestId("historical-question-result"),
+    ).toHaveTextContent("archived-question");
     expect(screen.queryByTestId("knowledge-agent")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "返回优化问题" }));
-    expect(new URLSearchParams(window.location.search).get("view")).toBe("questions");
-    expect(new URLSearchParams(window.location.search).get("enterpriseProjectId")).toBe(projectMocks.id);
+    expect(new URLSearchParams(window.location.search).get("view")).toBe(
+      "questions",
+    );
+    expect(
+      new URLSearchParams(window.location.search).get("enterpriseProjectId"),
+    ).toBe(projectMocks.id);
   });
   it("keeps monitoring and publishing in the same project shell", async () => {
     render(<UserBrandDashboard />);
-    const sidebar = screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside");
-    fireEvent.click(screen.getByRole("link", { name: /进度监控/ }));
-    expect(await screen.findByTestId("embedded-monitoring-business")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "从优化问题新建监控项目" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("link", { name: /媒体发布/ }));
-    fireEvent.click(screen.getByRole("link", { name: "稿件" }));
+    const sidebar = screen
+      .getByRole("button", { name: "项目总览" })
+      .closest("aside");
+    fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
+    expect(
+      await screen.findByTestId("embedded-monitoring-business"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "从优化问题新建监控项目" }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /媒体发布/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "稿件" })[0]!);
     expect(window.location.pathname).toBe("/publishing/articles");
-    expect(new URLSearchParams(window.location.search).get("enterpriseProjectId")).toBe(projectMocks.id);
-    expect(screen.getByRole("button", { name: "AI智能品牌优化" }).closest("aside")).toBe(sidebar);
+    expect(
+      new URLSearchParams(window.location.search).get("enterpriseProjectId"),
+    ).toBe(projectMocks.id);
+    expect(
+      screen.getByRole("button", { name: "项目总览" }).closest("aside"),
+    ).toBe(sidebar);
   });
   it("opens enterprise QA under project tools while preserving project navigation", async () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
+    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
     expect(await screen.findByTestId("enterprise-qa-workspace")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/enterprise-qa");
-    expect(screen.getByRole("button", { name: "账号与余额" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "账号与余额" }),
+    ).toBeInTheDocument();
   });
   it("shows actual monitoring report counts instead of invented results", () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("link", { name: /进度监控/ }));
-    fireEvent.click(screen.getByRole("link", { name: "进度报告" }));
+    fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
+    fireEvent.click(within(screen.getByRole("region", { name: "监控与报告" })).getByRole("button", { name: "进度报告" }));
     expect(screen.getByText(/尚无监控运行记录/)).toBeInTheDocument();
     expect(screen.getByText("运行次数")).toBeInTheDocument();
   });
@@ -557,6 +662,7 @@ describe("UserBrandDashboard formal workspace", () => {
     projectMocks.list.mockReturnValue({ data: undefined, isLoading: true });
     const view = render(<UserBrandDashboard />);
     const sidebar = screen.getByRole("complementary", { name: "工作区导航" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "项目总览" }));
     expect(within(sidebar).getByRole("status")).toHaveTextContent("正在读取企业项目");
     expect(screen.queryByText(/从项目管理中|点击上方加号新建企业项目/)).toBeNull();
     expect(screen.queryByText("从一个企业项目开始")).toBeNull();
@@ -567,11 +673,17 @@ describe("UserBrandDashboard formal workspace", () => {
   });
 
   it("keeps project modules unmounted when project access is denied", () => {
-    projectMocks.list.mockReturnValue({ error: new Error("无权访问企业项目"), isLoading: false });
+    projectMocks.list.mockReturnValue({
+      error: new Error("无权访问企业项目"),
+      isLoading: false,
+    });
     render(<UserBrandDashboard />);
     expect(within(screen.getByRole("main")).getByRole("alert")).toHaveTextContent("无权访问企业项目");
     expect(screen.queryByTestId("knowledge-agent")).toBeNull();
-    expect(portalUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: false }));
+    expect(portalUseQuery).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ enabled: false }),
+    );
   });
   it("lets a new operator create the first enterprise project even with a collapsed sidebar", async () => {
     window.history.replaceState(null, "", "/");
@@ -582,32 +694,68 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(within(screen.getByRole("complementary", { name: "工作区导航" })).getByRole("button", { name: "新建企业项目" }));
     fireEvent.change(screen.getByRole("textbox", { name: "项目名称" }), { target: { value: "新品牌" } });
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
-    await waitFor(() => expect(projectMocks.create).toHaveBeenCalledWith(expect.objectContaining({ name: "新品牌", ownerUserId: 7 })));
+    await waitFor(() =>
+      expect(projectMocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "新品牌", ownerUserId: 7 }),
+      ),
+    );
     expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
     expect(projectMocks.list().data.projects).toEqual([expect.objectContaining({ id: projectMocks.id, name: "新品牌" })]);
   });
   it("removes a confirmed deletion from cache before leaving the last project", async () => {
-    projectMocks.delete.mockResolvedValue({ enterpriseProjectId: projectMocks.id, revision: 2 });
+    projectMocks.delete.mockResolvedValue({
+      enterpriseProjectId: projectMocks.id,
+      revision: 2,
+    });
     render(<UserBrandDashboard />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "删除项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), {
+      key: "Enter",
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "删除项目" }),
+    );
     expect(projectMocks.delete).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
-    await waitFor(() => expect(projectMocks.delete).toHaveBeenCalledWith({ enterpriseProjectId: projectMocks.id, expectedRevision: 1 }));
-    await waitFor(() => expect(trpcUtils.enterpriseProjects.list.setData).toHaveBeenCalled());
-    const update = trpcUtils.enterpriseProjects.list.setData.mock.calls.at(-1)![1];
-    expect(update({ projects: [{ id: projectMocks.id }, { id: "remaining" }] })).toEqual({ projects: [{ id: "remaining" }] });
-    expect(new URLSearchParams(window.location.search).has("enterpriseProjectId")).toBe(false);
+    await waitFor(() =>
+      expect(projectMocks.delete).toHaveBeenCalledWith({
+        enterpriseProjectId: projectMocks.id,
+        expectedRevision: 1,
+      }),
+    );
+    await waitFor(() =>
+      expect(trpcUtils.enterpriseProjects.list.setData).toHaveBeenCalled(),
+    );
+    const update =
+      trpcUtils.enterpriseProjects.list.setData.mock.calls.at(-1)![1];
+    expect(
+      update({ projects: [{ id: projectMocks.id }, { id: "remaining" }] }),
+    ).toEqual({ projects: [{ id: "remaining" }] });
+    expect(
+      new URLSearchParams(window.location.search).has("enterpriseProjectId"),
+    ).toBe(false);
   });
   it("does not override a new destination after deletion completes", async () => {
     let finish!: (value: unknown) => void;
-    projectMocks.delete.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    projectMocks.delete.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     render(<UserBrandDashboard />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("menuitem", { name: "删除项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业项目A" }), {
+      key: "Enter",
+    });
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "删除项目" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
     window.history.replaceState(null, "", "/agent");
-    await act(async () => finish({ enterpriseProjectId: projectMocks.id, revision: 2 }));
+    await act(async () =>
+      finish({ enterpriseProjectId: projectMocks.id, revision: 2 }),
+    );
     expect(window.location.pathname).toBe("/agent");
     expect(projectMocks.select).not.toHaveBeenCalled();
   });
@@ -625,15 +773,16 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(source).not.toMatch(new RegExp(privateTrackerBrand, "iu"));
   });
 
-
   it("routes legacy website metadata through OAuth-only SiteOps", () => {
     authState.marketEdition = "overseas";
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
-    fireEvent.click(screen.getByRole("link", { name: "网站管理" }));
+    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "网站管理" })[0]!);
 
-    expect(screen.queryByTestId("connected-siteops-panel")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("connected-siteops-panel"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "AI友好官网" }));
     fireEvent.click(screen.getByRole("button", { name: "现有工作流" }));
     expect(screen.getByTestId("connected-siteops-panel")).toHaveTextContent(
@@ -645,12 +794,11 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByLabelText("已购买域名")).not.toBeInTheDocument();
   });
 
-
   it("retains published website content after removing the content operations page", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: /项目工具/ }));
-    fireEvent.click(screen.getByRole("link", { name: "网站管理" }));
+    fireEvent.click(screen.getByRole("button", { name: /项目工具/ }));
+    fireEvent.click(screen.getAllByRole("button", { name: "网站管理" })[0]!);
 
     expect(
       screen.queryByRole("button", { name: "内容资产运营" }),
@@ -670,7 +818,6 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText("3,500-6,000")).toBeNull();
   });
 
-
   it("does not expose the retired content-system entry", () => {
     render(<UserBrandDashboard />);
 
@@ -679,11 +826,10 @@ describe("UserBrandDashboard formal workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-
   it("does not substitute built-in sample questions when a formal account has no questions", () => {
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
 
     expect(
       screen.getByRole("heading", { name: "当前项目尚无优化问题" }),
@@ -693,15 +839,16 @@ describe("UserBrandDashboard formal workspace", () => {
     ).toBeNull();
   });
 
-
-  it("replaces the submitted ticket workspace with the published customer word bank", () => {
+  it("replaces the submitted ticket workspace with the published customer word bank", async () => {
     render(<UserBrandDashboard />);
 
     expect(
       screen.queryByRole("button", { name: "企业资料看板" }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "品牌全域词库" }),
+    );
 
     expect(
       screen.getByRole("heading", { name: "品牌全域词库" }),
@@ -744,8 +891,7 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });
 
-
-  it("shows only a neutral word-bank waiting state before an upload exists", () => {
+  it("shows only a neutral word-bank waiting state before an upload exists", async () => {
     dashboardUseQuery.mockReturnValue({
       data: {
         payload: {
@@ -758,7 +904,9 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "品牌全域词库" }),
+    );
 
     expect(
       screen.getByRole("heading", { name: "品牌全域词库正在准备中" }),
@@ -770,7 +918,6 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.queryByText(/配置工单|候选问题目录|AI 监控与优化工程师/),
     ).not.toBeInTheDocument();
   });
-
 
   it("locks and confirms an authoritative word-bank question before it enters service", async () => {
     const refetch = vi.fn().mockResolvedValue(undefined);
@@ -790,7 +937,9 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "品牌全域词库" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "选择并进入问题优化" }));
 
     const questionInput = screen.getByRole("textbox", { name: "目标问题" });
@@ -825,14 +974,15 @@ describe("UserBrandDashboard formal workspace", () => {
     );
   });
 
-
   it("keeps the word-bank warning open when confirmation fails", async () => {
     requestQuestionSelectionMutateAsync.mockRejectedValueOnce(
       new Error("额度刚刚发生变化"),
     );
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: "品牌全域词库" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "品牌全域词库" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "选择并进入问题优化" }));
     fireEvent.click(screen.getByRole("button", { name: "确认优化问题" }));
     fireEvent.click(screen.getByRole("button", { name: "确认并开启进度" }));
@@ -848,7 +998,6 @@ describe("UserBrandDashboard formal workspace", () => {
     );
   });
 
-
   it("immediately selects a directly entered question with its category", async () => {
     requestQuestionSelectionMutateAsync.mockResolvedValue({
       question: {
@@ -858,7 +1007,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
     render(<UserBrandDashboard />);
 
-    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
     expect(screen.getByRole("textbox", { name: "问题来源" })).toHaveValue(
       "自主填写",
     );
@@ -882,7 +1031,6 @@ describe("UserBrandDashboard formal workspace", () => {
       }),
     );
   });
-
 
   it("projects only the response logic published by the agent into problem optimization", () => {
     const question = {
@@ -989,7 +1137,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
 
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("link", { name: /意图优化/ }));
+    fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
 
     expect(screen.getByText("问题目录")).toBeInTheDocument();
     expect(screen.getAllByText("产品场景词").length).toBeGreaterThan(0);
@@ -1028,6 +1176,4 @@ describe("UserBrandDashboard formal workspace", () => {
       expect(screen.queryByText(redundantCopy)).toBeNull();
     }
   });
-
-
 });

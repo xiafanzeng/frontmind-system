@@ -26,6 +26,27 @@ describe("enterprise workspace navigation", () => {
     expect(sessionStorage.setItem).toHaveBeenCalledWith("frontmind.enterpriseProject", JSON.stringify({ ownerUserId: 3, id: "new-project" }));
   });
 
+  it("keeps the active module and drops prior project entity ids when switching", () => {
+    window.history.replaceState(null, "", "/publishing/articles?enterpriseProjectId=old-project&operatorOwnerId=3&articleId=old-article&status=success");
+    switchEnterpriseProject(3, "new-project");
+    expect(window.location.pathname).toBe("/publishing/articles");
+    const query = new URLSearchParams(window.location.search);
+    expect(query.get("enterpriseProjectId")).toBe("new-project");
+    expect(query.get("articleId")).toBeNull();
+    expect(query.get("status")).toBe("success");
+  });
+
+  it("falls back to the module root for unknown deep pages and leaves agent/account", () => {
+    window.history.replaceState(null, "", "/monitoring-system/runs/old-run?enterpriseProjectId=old-project&runId=old-run");
+    switchEnterpriseProject(3, "new-project");
+    expect(window.location.pathname).toBe("/monitoring-system");
+    expect(new URLSearchParams(window.location.search).get("runId")).toBeNull();
+    window.history.replaceState(null, "", "/agent");
+    switchEnterpriseProject(3, "another-project");
+    expect(window.location.pathname).toBe("/");
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("knowledge");
+  });
+
   it("removes enterprise context for account tools and does not widen admin links", () => {
     window.history.replaceState(null, "", "/?enterpriseProjectId=project-a&operatorOwnerId=3");
     expect(projectWorkspaceUrl("/agent")).toBe("/agent");

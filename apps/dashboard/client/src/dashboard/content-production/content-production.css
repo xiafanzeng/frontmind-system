@@ -1,5 +1,6 @@
 .cp-workspace,
-.cp-modal {
+.cp-modal,
+.cp-result-surface {
   --cp-ink: #20232b;
   --cp-muted: #5d6573;
   --cp-line: #e2e5eb;
@@ -20,6 +21,47 @@
   height: 100%;
   padding: 24px;
   background: var(--cp-soft);
+}
+
+/* AgentWorkbenchShell owns the split-pane sizing and scrolling in opt-in mode. */
+.cp-workspace.cp-workspace--agent {
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+  padding: 12px 0 0;
+  overflow: hidden;
+}
+.cp-workspace.cp-workspace--agent .cp-heading,
+.cp-workspace.cp-workspace--agent .cp-taskbar { margin-inline: 20px; }
+.cp-workspace.cp-workspace--agent .cp-heading { margin-bottom: 10px; }
+.cp-workspace.cp-workspace--agent .cp-heading h1 { font-size: 16px; }
+.cp-workspace.cp-workspace--agent .cp-kicker { display: none; }
+.cp-workspace.cp-workspace--agent .cp-empty { min-height:0; overflow:auto; }
+.cp-workspace.cp-workspace--agent .cp-body {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.cp-workspace.cp-workspace--agent .cp-dialogue {
+  min-height: 0;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.cp-workspace.cp-workspace--agent .cp-chat {
+  min-height: 0;
+}
+.cp-workspace.cp-workspace--agent .cp-results {
+  display: contents;
+}
+.cp-workspace.cp-workspace--agent .cp-results-heading--agent {
+  min-height: 32px; padding: 0; justify-content: flex-end; border: 0;
+}
+.cp-workspace.cp-workspace--agent .cp-results-heading--agent > div { display:none; }
+.cp-workspace.cp-workspace--agent .cp-results-scroll {
+  min-height: 0;
+  overflow: visible;
 }
 .cp-heading {
   display: flex;
@@ -790,3 +832,11 @@
   color: var(--cp-muted);
   font-size: 14px;
 }
+
+/* Result portals retain their business theme when moved to the mobile drawer. */
+.cp-result-surface { display: contents; }
+.cp-result-surface.is-agent { display:block; min-width:0; }
+.cp-result-surface.is-agent .cp-results { display:contents; }
+.cp-result-surface.is-agent .cp-results-heading--agent { min-height:32px; padding:0; justify-content:flex-end; border:0; }
+.cp-result-surface.is-agent .cp-results-heading--agent > div { display:none; }
+.cp-result-surface.is-agent .cp-results-scroll { min-height:0; overflow:visible; padding:8px 0; }

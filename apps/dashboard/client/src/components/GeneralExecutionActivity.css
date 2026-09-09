@@ -1,0 +1,110 @@
+.general-execution {
+  min-width: 0;
+  max-width: 100%;
+  margin: -0.75rem 0 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.general-execution:first-child {
+  margin-top: 0;
+}
+
+.general-execution__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  padding: 0.375rem 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.general-execution__toggle:hover,
+.general-execution__toggle[aria-expanded="true"] {
+  color: var(--foreground);
+}
+
+.general-execution__toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.general-execution__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.general-execution__chevron {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  flex: 0 0 auto;
+  transition: transform 150ms ease;
+}
+
+.general-execution__toggle[aria-expanded="true"] .general-execution__chevron {
+  transform: rotate(90deg);
+}
+
+.general-execution__details {
+  min-width: 0;
+  margin: 0.125rem 0 0.5rem;
+  padding: 0.5rem 0 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.general-execution__line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+  padding: 0.25rem 0;
+}
+
+.general-execution__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.general-execution__metadata {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.general-execution__thinking-text {
+  max-height: 28rem;
+  margin: 0.375rem 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.85;
+}
+
+@media (max-width: 640px) {
+  .general-execution__line {
+    flex-wrap: wrap;
+    gap: 0.125rem 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .general-execution__chevron {
+    transition: none;
+  }
+}

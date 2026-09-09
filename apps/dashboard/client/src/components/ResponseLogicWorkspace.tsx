@@ -2225,6 +2225,9 @@ function RealResponseLogicDialogue({
     if (initializationRef.current === key) return;
     initializationRef.current = key;
     const nextConversationId = createConversation();
+    // This draft already belongs to the response editor, even before its first
+    // task starts. Keep it out of the workbench's general conversation pane.
+    updateStatus(nextConversationId, "idle", { executionKind: "response_logic" });
     updateTitle(nextConversationId, `应答-${question.question}`);
     void callbackRef.current(nextConversationId).finally(() => {
       initializationRef.current = null;

@@ -2316,6 +2316,9 @@ interface ConversationContextType {
 }
 
 const ConversationContext = createContext<ConversationContextType | null>(null);
+/** Advanced workbench composition can bridge the unfiltered owner context
+ * around a purpose-filtered child without taking over persistence. */
+export const ConversationContextProvider = ConversationContext.Provider;
 
 export function ConversationProvider({
   children,
@@ -3217,6 +3220,17 @@ export function conversationBelongsToPurpose(
   );
 }
 
+// Selection belongs to the long-lived persistence provider rather than to a
+// filtered purpose view. A module switch can temporarily make the parent's
+// active conversation a knowledge-base row; retaining this scoped selection
+// lets the original conversation be restored when the view returns. The
+// WeakMap key is the parent's stable setActive callback, so selections do not
+// cross ConversationProvider instances (or their workspace/account scopes).
+const purposeSelectionsByOwner = new WeakMap<
+  ConversationContextType["setActive"],
+  Map<"general" | "enterprise_qa" | "content_production", string>
+>();
+
 /** Keep the original persistence and poll owner while separating workspaces. */
 export function ConversationPurposeProvider({
   purpose,
@@ -3226,15 +3240,35 @@ export function ConversationPurposeProvider({
   children: React.ReactNode;
 }) {
   const parent = useConversation();
+  const selections = (() => {
+    const owner = parent.setActive;
+    const existing = purposeSelectionsByOwner.get(owner);
+    if (existing) return existing;
+    const created = new Map<
+      "general" | "enterprise_qa" | "content_production",
+      string
+    >();
+    purposeSelectionsByOwner.set(owner, created);
+    return created;
+  })();
+  // Auth/workspace changes reset the parent state to EMPTY_STATE before the
+  // next hydration. Clear remembered IDs at that boundary so a reused server
+  // conversation ID cannot carry a selection across scopes.
+  if (parent.state.conversations.length === 0) selections.clear();
   const conversations = parent.state.conversations.filter(
     (conversation) =>
       conversationBelongsToPurpose(conversation, purpose) &&
       !parent.isKnowledgeBaseConversation(conversation.id),
   );
+  const parentActive = conversations.find(
+    (conversation) => conversation.id === parent.activeConversation?.id,
+  );
+  const remembered = conversations.find(
+    (conversation) => conversation.id === selections.get(purpose),
+  );
   const activeConversation =
-    conversations.find(
-      (conversation) => conversation.id === parent.activeConversation?.id,
-    ) ?? null;
+    parentActive ?? remembered ?? conversations[0] ?? null;
+  if (activeConversation) selections.set(purpose, activeConversation.id);
   const createConversation = useCallback(
     (options?: {
       title?: string;
@@ -3266,8 +3300,10 @@ export function ConversationPurposeProvider({
         activeConversation,
         createConversation,
         setActive: (id) => {
-          if (conversations.some((conversation) => conversation.id === id))
+          if (conversations.some((conversation) => conversation.id === id)) {
+            selections.set(purpose, id);
             parent.setActive(id);
+          }
         },
       }}
     >

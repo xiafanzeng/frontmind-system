@@ -56,3 +56,16 @@ describe("ordinary-chat elapsed presentation", () => {
     expect(screen.getByText("48.3s")).toBeInTheDocument();
   });
 });
+
+describe("workbench message presentation", () => {
+  it("preserves model parentheses and formulas without assistant avatars or tool totals", () => {
+    const content = "计算结果为 f(x) = (x + 1) / 2（适用于 x ≥ 0）。";
+    const { container } = render(<MessageBubble message={{
+      id: "model-math", role: "assistant", content, timestamp: 0,
+      stepGroups: [{ id: "steps", title: "校验资料", steps: Array.from({ length: 4 }, (_, index) => ({ id: String(index), type: "function_call", label: "读取资料" })) }],
+    }} />);
+    expect(screen.getByText(content)).toBeInTheDocument();
+    expect(container.querySelector(".lucide-bot")).toBeNull();
+    expect(container.textContent).not.toMatch(/4\s*次工具调用|完成\s*4|已完成\s*4\s*项/);
+  });
+});

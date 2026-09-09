@@ -1,23 +1,11 @@
-import { useState } from "react";
-import {
-  Check,
-  CheckCircle2,
-  Brain,
-  ChevronRight,
-  Circle,
-  FileText,
-  Loader2,
-  PauseCircle,
-  PlugZap,
-  Search,
-  Terminal,
-  TriangleAlert,
-} from "lucide-react";
+import { useId, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   generalExecutionStatusText,
   generalToolStatusText,
 } from "@shared/frontmind-general-execution";
 import type { ExecutionDisplayEntry } from "@/lib/general-execution-display";
+import "./GeneralExecutionActivity.css";
 
 type ActivityItem = ExecutionDisplayEntry;
 
@@ -81,13 +69,10 @@ function activityStatusLabel(item: ActivityItem) {
   return label.replace(/^正在/, "").replace(/[.…]+$/, "");
 }
 
-function toolActionIcon(item: ActivityItem) {
-  if (item.kind !== "tool") return Circle;
-  if (item.toolKind === "mcp" || item.toolKind === "custom") return PlugZap;
-  if (/搜索|检索|查找|浏览网页|读取网页/.test(item.label)) return Search;
-  if (/命令|代码|执行/.test(item.label)) return Terminal;
-  if (/文件|目录|写入|编辑|读取/.test(item.label)) return FileText;
-  return Circle;
+function activityTitle(item: ActivityItem) {
+  return item.kind === "tool"
+    ? `${item.label} · ${activityStatusLabel(item)}`
+    : activityStatusLabel(item);
 }
 
 function isResultOnly(item: ActivityItem) {
@@ -117,107 +102,81 @@ function isThinkingText(item: ActivityItem) {
   return Boolean(thinkingDetails(item));
 }
 
-function ThinkingBlock({ item }: { item: ActivityItem }) {
+function ThinkingBlock({
+  item,
+  expandedOverride,
+  onToggle,
+}: {
+  item: ActivityItem;
+  expandedOverride?: boolean;
+  onToggle?: () => void;
+}) {
   const details = thinkingDetails(item);
-  const [expanded, setExpanded] = useState(true);
+  const [localExpanded, setExpanded] = useState(false);
+  const expanded = expandedOverride ?? localExpanded;
+  const detailsId = useId();
   if (!details) return <ActivityLine item={item} />;
   const live = isLive(item);
   const clock = formatClock(item.timestamp);
   return (
-    <section
-      className="my-1.5 rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2.5"
-      aria-label="思考过程"
-    >
+    <section className="general-execution__thinking" aria-label="思考过程">
       <button
         type="button"
-        className="flex w-full items-center gap-2 text-left text-[13px] font-medium text-foreground/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="general-execution__toggle"
         aria-label="思考过程"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        aria-controls={detailsId}
+        onClick={() => (onToggle ? onToggle() : setExpanded((value) => !value))}
       >
-        <Brain
-          className={`h-3.5 w-3.5 shrink-0 text-primary ${live ? "animate-pulse motion-reduce:animate-none" : ""}`}
-          aria-hidden
+        <ChevronRight
+          className="general-execution__chevron"
+          aria-hidden="true"
         />
-        <span>思考过程</span>
-        <span className="font-normal text-muted-foreground">
+        <span className="general-execution__summary">思考过程</span>
+        <span
+          className="general-execution__metadata"
+          aria-live={live ? "polite" : undefined}
+        >
           {details.thinkingComplete === true
             ? "已完成"
             : live
               ? "思考中"
               : "过程记录"}
         </span>
-        {clock && (
-          <time
-            className="ml-auto shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/70"
-            dateTime={new Date(item.timestamp).toISOString()}
-          >
-            {clock}
-          </time>
-        )}
-        <ChevronRight
-          className={`h-3 w-3 shrink-0 text-muted-foreground/70 transition-transform ${expanded ? "rotate-90" : ""}`}
-          aria-hidden
-        />
       </button>
       {expanded && (
-        <p className="mt-2 max-h-[28rem] overflow-auto whitespace-pre-wrap break-words border-l-2 border-primary/25 pl-3 text-[13px] leading-6 text-muted-foreground">
-          {details.thinkingText}
-        </p>
+        <div id={detailsId} className="general-execution__details">
+          {clock && (
+            <time
+              className="general-execution__metadata"
+              dateTime={new Date(item.timestamp).toISOString()}
+            >
+              {clock}
+            </time>
+          )}
+          <p className="general-execution__thinking-text">
+            {details.thinkingText}
+          </p>
+        </div>
       )}
     </section>
   );
 }
 
 function ActivityLine({ item }: { item: ActivityItem }) {
-  const spinning = isLive(item);
-  const failed =
-    item.kind === "tool" ? item.status === "failed" : item.status === "error";
-  const waiting = item.status === "waiting";
-  const Icon = spinning
-    ? Loader2
-    : failed
-      ? TriangleAlert
-      : waiting
-        ? PauseCircle
-        : item.kind === "tool" && item.status === "completed"
-          ? Check
-          : item.kind === "status" && item.status === "ended"
-            ? CheckCircle2
-            : Circle;
-  const ActionIcon = toolActionIcon(item);
   const clock = formatClock(item.timestamp);
   const duration =
     item.kind === "tool"
       ? formatDuration(item.timestamp, item.finishedAt)
       : null;
   return (
-    <div className="group flex min-w-0 items-center gap-2 py-1 text-[13px] leading-5 text-muted-foreground">
-      <span className="flex shrink-0 items-center gap-1.5" aria-hidden>
-        <Icon
-          className={`h-3.5 w-3.5 ${
-            spinning
-              ? "animate-spin motion-reduce:animate-none text-primary"
-              : failed
-                ? "text-destructive"
-                : waiting
-                  ? "text-amber-600"
-                  : item.kind === "status" && item.status === "ended"
-                    ? "text-emerald-600"
-                    : "text-muted-foreground/80"
-          }`}
-        />
-        {item.kind === "tool" && (
-          <ActionIcon className="h-3.5 w-3.5 text-muted-foreground/60" />
-        )}
-      </span>
-      <span className="min-w-0 truncate">
-        {item.kind === "tool"
-          ? `${item.label} · ${activityStatusLabel(item)}`
-          : activityStatusLabel(item)}
-      </span>
+    <div
+      className="general-execution__line"
+      data-live={isLive(item) || undefined}
+    >
+      <span className="general-execution__label">{activityTitle(item)}</span>
       {(duration || clock) && (
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground/70">
+        <span className="general-execution__metadata">
           {duration && <span>{duration}</span>}
           {duration && clock && <span aria-hidden>·</span>}
           {clock && (
@@ -242,9 +201,14 @@ function ActivityGroup({
 }) {
   const [localExpanded, setExpanded] = useState(false);
   const expanded = expandedOverride ?? localExpanded;
+  const detailsId = useId();
   if (items.length === 1)
     return isThinkingText(items[0]!) ? (
-      <ThinkingBlock item={items[0]!} />
+      <ThinkingBlock
+        item={items[0]!}
+        expandedOverride={expandedOverride}
+        onToggle={onToggle}
+      />
     ) : (
       <ActivityLine item={items[0]!} />
     );
@@ -255,43 +219,33 @@ function ActivityGroup({
     ["ended", "cancelled", "error"].includes(lastItem.status)
       ? lastItem
       : undefined;
-  const currentSummary = active ?? currentTerminal;
-  const completed = items.filter(
-    (item) => item.kind === "tool" && item.status === "completed",
-  ).length;
-  const failed = items.filter(
-    (item) => item.kind === "tool" && item.status === "failed",
-  ).length;
-  const toolCount = items.filter((item) => item.kind === "tool").length;
+  // Only observed activity can describe the stage. A historical error remains
+  // in details when a later successful terminal event supersedes it.
+  const currentSummary = active ?? currentTerminal ?? lastItem!;
+  const summary = activityTitle(currentSummary);
   return (
-    <div>
+    <div className="general-execution__group">
       <button
         type="button"
-        className="flex w-full min-w-0 items-start gap-1.5 rounded-md py-1 text-left text-xs leading-5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="general-execution__toggle"
+        aria-label={`执行过程：${summary}`}
         aria-expanded={expanded}
+        aria-controls={detailsId}
         onClick={() => (onToggle ? onToggle() : setExpanded((value) => !value))}
       >
         <ChevronRight
-          aria-hidden
-          className={`mt-1 h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+          aria-hidden="true"
+          className="general-execution__chevron"
         />
-        <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          <span className="text-[13px] font-medium text-foreground/80">
-            执行过程 · {items.length} 条记录
-          </span>
-          {toolCount > 0 && (
-            <span>
-              {toolCount} 次工具调用
-              {completed > 0 ? ` · 完成 ${completed}` : ""}
-              {failed > 0 && (
-                <span className="text-destructive"> · 失败 {failed}</span>
-              )}
-            </span>
-          )}
+        <span
+          className="general-execution__summary"
+          aria-live={active ? "polite" : undefined}
+        >
+          {summary}
         </span>
       </button>
       {expanded && (
-        <div className="ml-1.5 border-l border-border/60 pl-3">
+        <div id={detailsId} className="general-execution__details">
           {items.map((item) => (
             <div key={item.id}>
               {isThinkingText(item) ? (
@@ -301,11 +255,6 @@ function ActivityGroup({
               )}
             </div>
           ))}
-        </div>
-      )}
-      {!expanded && currentSummary && (
-        <div className="ml-4 border-l border-primary/30 pl-3">
-          <ActivityLine item={currentSummary} />
         </div>
       )}
     </div>
@@ -337,10 +286,7 @@ export function GeneralExecutionActivity({
     else groups.push([item]);
   }
   return (
-    <div
-      className="-mt-4 mb-2 border-l border-border/60 pl-3 pt-2 first:mt-0"
-      aria-label="执行过程"
-    >
+    <div className="general-execution" aria-label="执行过程">
       {groups.map((group) => (
         <ActivityGroup
           key={group[0]!.id}

@@ -23,6 +23,18 @@ import {
   type Conversation,
 } from "./ConversationContext";
 
+function ParentCapture({
+  onReady,
+  children,
+}: {
+  onReady: (value: ReturnType<typeof useConversation>) => void;
+  children: React.ReactNode;
+}) {
+  const value = useConversation();
+  onReady(value);
+  return <>{children}</>;
+}
+
 describe("general-chat terminal message upsert", () => {
   it("atomically replaces the same deterministic notice and leaves ordinary duplicate repair unchanged", () => {
     const terminalId = generalChatTerminalMessagePublicId({
@@ -784,6 +796,37 @@ describe("ConversationProvider cloud hydration", () => {
         )
         .map(({ id }) => id),
     ).toEqual(["production"]);
+  });
+
+  it("restores the purpose-scoped selection when the parent moves to another module", async () => {
+    const generalOne = conversation("general-one");
+    const generalTwo = conversation("general-two");
+    const knowledgeBase = {
+      ...conversation("knowledge-base"),
+      title: "企业知识库构建",
+      knowledgeBase: { initialized: true } as Conversation["knowledgeBase"],
+    };
+    mocks.listRefetch.mockResolvedValue({
+      data: [generalOne, generalTwo, knowledgeBase],
+    });
+    let parentApi!: ReturnType<typeof useConversation>;
+    const wrapperWithCapture = ({ children }: { children: React.ReactNode }) => (
+      <ConversationProvider>
+        <ParentCapture onReady={(value) => (parentApi = value)}>
+          <ConversationPurposeProvider purpose="general">
+            {children}
+          </ConversationPurposeProvider>
+        </ParentCapture>
+      </ConversationProvider>
+    );
+    const { result } = renderHook(() => useConversation(), {
+      wrapper: wrapperWithCapture,
+    });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    act(() => result.current.setActive(generalTwo.id));
+    expect(result.current.activeConversation?.id).toBe(generalTwo.id);
+    act(() => parentApi.setActive(knowledgeBase.id));
+    expect(result.current.activeConversation?.id).toBe(generalTwo.id);
   });
 
   it("accepts a higher durable KB revision even when its display sequence is lower", () => {

@@ -34,7 +34,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Bot,
   MessageSquareText,
   User,
   Sparkles,
@@ -1801,7 +1800,6 @@ export default function ChatArea({
             >
               {executionModel && (
                 <span className="inline-flex items-center gap-1">
-                  <Bot className="h-3 w-3" />
                   {syncKnowledgeBaseSnapshot || responseLogicContext || purpose || fixedAgentProfile
                     ? "FrontMind Agent"
                     : getModelDisplayName(executionModel)}
@@ -4154,28 +4152,15 @@ export function MessageBubble({
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
           className={cn("flex items-start gap-3", isUser && "flex-row-reverse")}
         >
-          {/* Avatar */}
-          <div
-            className={cn(
-              "flex flex-col items-center flex-shrink-0 gap-0.5",
-              isUser && "items-center",
-            )}
-          >
-            <div
-              className={cn(
-                "w-8 h-8 rounded-full flex items-center justify-center mt-0.5",
-                isUser
-                  ? "bg-accent/15 text-accent"
-                  : "bg-primary/10 text-primary",
-              )}
-            >
-              {isUser ? (
-                <User className="w-4 h-4" />
-              ) : (
-                <Bot className="w-4 h-4" />
-              )}
+          {/* User identity stays visible; assistant messages are intentionally
+              text-first and do not carry a robot avatar. */}
+          {isUser && (
+            <div className="flex flex-shrink-0 flex-col items-center gap-0.5">
+              <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-accent/15 text-accent">
+                <User className="h-4 w-4" />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Message content */}
           <div
@@ -4222,10 +4207,10 @@ export function MessageBubble({
             {displayContent && displayContent.trim() !== "" && (
               <div
                 className={cn(
-                  "rounded-3xl px-4.5 py-3 text-[14px] leading-relaxed",
+                  "text-[14px] leading-relaxed",
                   isUser
-                    ? "bg-primary text-primary-foreground rounded-tr-md shadow-sm"
-                    : "bg-card/80 border border-border/70 rounded-tl-md text-foreground shadow-sm",
+                    ? "rounded-2xl rounded-tr-md border border-border/55 bg-muted/45 px-4 py-3 text-foreground"
+                    : "px-0 py-1 text-foreground",
                 )}
               >
                 {isUser ? (

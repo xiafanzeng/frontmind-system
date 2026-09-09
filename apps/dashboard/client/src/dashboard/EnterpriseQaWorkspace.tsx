@@ -10,6 +10,14 @@ import {
 import { deliveryProjectHeaders } from "@/lib/delivery-project";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import type { TaskResponse } from "@/lib/frontmind-api";
+import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
+import ProjectAgentWorkbench from "./ProjectAgentWorkbench";
+import { useWorkbenchModule } from "./agent-workbench";
+
+type EnterpriseQaWorkspaceProps = {
+  workbench?: boolean;
+  projectId?: string;
+};
 
 type SourceState = {
   knowledgeBase: TaskResponse["knowledgeBase"];
@@ -208,11 +216,15 @@ export function EnterpriseQaSourceNote({
   );
 }
 
-function EnterpriseQaPublishedWorkspace() {
+function EnterpriseQaPublishedWorkspace({
+  workbench = false,
+  projectId = "account",
+}: EnterpriseQaWorkspaceProps) {
   // A historical conversation's frozen snapshot cannot unlock a project with no current publication.
   const { source, retry } = useKnowledgeSource();
+  const module = useWorkbenchModule();
   if (!source.loaded || source.failed || !source.knowledgeBase) {
-    return (
+    const lockedView = (
       <div className="h-full min-h-0 overflow-y-auto bg-[#f7f6f9] px-4 py-8 sm:px-6 lg:px-8">
         <section
           aria-label="企业问答暂未解锁"
@@ -283,6 +295,41 @@ function EnterpriseQaPublishedWorkspace() {
         </section>
       </div>
     );
+    if (!workbench) return lockedView;
+    return (
+      <AgentWorkbenchShell
+        embedded
+        projectId={projectId}
+        moduleId={module?.id ?? "extensions"}
+        title="企业问答"
+        resultTitle={module?.resultTitle ?? "知识来源"}
+        conversation={lockedView}
+        result={
+          <section
+            className="space-y-3 text-sm leading-7"
+            aria-label="企业问答知识来源"
+          >
+            <h2 className="font-semibold">以已发布知识库为依据</h2>
+            <p className="text-muted-foreground">
+              企业问答使用当前项目已发布的知识版本。完成知识库构建与发布后，重新检查即可开始问答。
+            </p>
+            <p className="text-muted-foreground">
+              企业事实、产品与服务范围将作为回答依据。每次新会话会使用当时已发布的知识版本。
+            </p>
+          </section>
+        }
+      />
+    );
+  }
+  if (workbench) {
+    return (
+      <ProjectAgentWorkbench projectId={projectId} purpose="enterprise_qa">
+        <EnterpriseQaSourceNote
+          currentPublication={source}
+          onRetryPublication={retry}
+        />
+      </ProjectAgentWorkbench>
+    );
   }
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -305,7 +352,13 @@ function EnterpriseQaPublishedWorkspace() {
   );
 }
 
-export default function EnterpriseQaWorkspace() {
+export default function EnterpriseQaWorkspace({
+  workbench = false,
+  projectId,
+}: EnterpriseQaWorkspaceProps = {}) {
+  if (workbench) {
+    return <EnterpriseQaPublishedWorkspace workbench projectId={projectId} />;
+  }
   return (
     <ConversationPurposeProvider purpose="enterprise_qa">
       <EnterpriseQaPublishedWorkspace />

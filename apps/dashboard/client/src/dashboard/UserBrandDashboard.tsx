@@ -82,7 +82,9 @@ import {
   ServiceQuotaOverview,
 } from "./service-portal-ui";
 import "./dashboard-styles.css";
-import { OperatorSidebar, OperatorTabs, OperatorEmptyProject } from "./OperatorNavigation";
+import { OperatorSidebar, OperatorEmptyProject } from "./OperatorNavigation";
+import ProjectAgentWorkbench from "./ProjectAgentWorkbench";
+import { createWorkbenchModules, workbenchModuleForView, WorkbenchModuleContext } from "./agent-workbench";
 import AdminAccountBalance from "@/components/AdminAccountBalance";
 import { operatorRouteForView, operatorViewFromRoute, operatorViewPath } from "./operator-navigation";
 import { activeEnterpriseProjectId, projectWorkspaceUrl, rememberedEnterpriseProject, rememberEnterpriseProject, switchEnterpriseProject } from "@/lib/enterprise-project";
@@ -704,7 +706,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
   );
 }
 
-function UserBrandDashboardContent({
+export function UserBrandDashboardContent({
   preview,
   workspaceOwnerId,
   operatorProjects,
@@ -949,87 +951,9 @@ function UserBrandDashboardContent({
                     ? SITEOPS_CUSTOMER_DISPLAY_NAME
                     : "AI 友好内容资产"
                   : "服务页面";
-  return (
-    <OperatorThemeProvider enabled={operatorMode}>
-    <div
-      className={`user-brand-dashboard ${operatorMode ? `operator-mode ${sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
-        immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
-      }`}
-    >
-      <div
-        className={`app-shell ${mobileNavOpen ? "nav-open" : ""} ${
-          immersiveAgentWorkspace ? "knowledge-build-app-shell" : ""
-        }`}
-      >
-        {/* 移动端汉堡按钮 */}
-        <button
-          className="mobile-menu-btn"
-          onClick={() => setMobileNavOpen(!mobileNavOpen)}
-          aria-label="切换菜单"
-          aria-expanded={mobileNavOpen}
-          aria-controls="operator-project-navigation"
-        >
-          {mobileNavOpen ? <X size={22} /> : <BarChart3 size={22} />}
-        </button>
-        {/* 移动端遮罩层 */}
-        {mobileNavOpen && (
-          <div
-            className="mobile-nav-overlay"
-            onClick={() => setMobileNavOpen(false)}
-          />
-        )}
-        {operatorMode ? <OperatorSidebar
-          projects={operatorProjects} activeProject={operatorProject}
-          projectsLoading={operatorProjectsLoading} projectsError={operatorProjectsError}
-          activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
-          collapsed={compactViewport ? !mobileNavOpen : sidebarCollapsed} onCollapse={compactViewport ? () => setMobileNavOpen(value => !value) : toggleSidebar}
-          accountName={operatorAccountLabel}
-          mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)}
-          onNavigate={navigatePath} onSelectProject={id => { onSelectProject(id); setMobileNavOpen(false); }}
-          onCreateProject={onCreateProject} onRenameProject={onRenameProject} onDeleteProject={onDeleteProject}
-        /> : <Sidebar
-          route={route}
-          onNavigate={navigate}
-          brandName={
-            managedPayload?.brandName ||
-            servicePortal.account.displayName ||
-            (previewMode ? previewBrandName : "企业看板")
-          }
-          portal={servicePortal}
-          preview={previewMode}
-          marketEdition={marketEdition}
-          accountOpen={accountOpen}
-          onAccountOpenChange={setAccountOpen}
-        />}
-        <main
-          className={`dashboard-main ${
-            immersiveAgentWorkspace ? "knowledge-build-main" : ""
-          }`}
-        >
-          {operatorMode && !agentRoute && !accountRoute && operatorProject && <OperatorTabs view={operatorViewFromRoute(route)} projectName={operatorProject.name} onSelect={view => navigatePath(operatorViewPath(view))} />}
-          {!operatorMode && !immersiveAgentWorkspace && (
-            <ProjectRibbon
-              brandName={
-                managedPayload?.brandName ||
-                servicePortal.account.displayName ||
-                (previewMode ? previewBrandName : "企业看板")
-              }
-            />
-          )}
-          {!operatorMode && !immersiveAgentWorkspace &&
-            !moduleRoute &&
-            !insightsRoute &&
-            onEditDashboard && (
-              <div className="flex justify-end px-6 py-3">
-                <Button
-                  variant="outline"
-                  onClick={() => onEditDashboard("home")}
-                >
-                  编辑看板内容
-                </Button>
-              </div>
-            )}
-          {accountRoute ? (
+  const currentView = operatorViewFromRoute(route);
+  const activeModuleId = workbenchModuleForView(currentView).id;
+  const businessContent = (accountRoute ? (
             administratorOwnerId ? <div className="p-7"><a href={`/admin/customers/${administratorOwnerId}/workspace`} className="text-sm text-muted-foreground">返回客户管理</a><AdminAccountBalance userId={administratorOwnerId} /></div> : <Suspense fallback={<div role="status">正在读取账号与余额…</div>}><MonitoringModule /></Suspense>
           ) : operatorMode && !agentRoute && !operatorProject ? (
             operatorProjectsLoading ? <div className="operator-empty-project" role="status">正在读取企业项目…</div> : operatorProjectsError ? <div className="operator-empty-project" role="alert">{operatorProjectsError}</div> : <OperatorEmptyProject onCreate={() => window.dispatchEvent(new CustomEvent("operator-create-project"))} />
@@ -1060,11 +984,11 @@ function UserBrandDashboardContent({
             </Suspense>
           ) : enterpriseQaRoute ? (
             <Suspense fallback={<div role="status">正在打开企业问答…</div>}>
-              <EnterpriseQaWorkspace />
+              <EnterpriseQaWorkspace workbench={operatorMode} projectId={operatorProject?.id} />
             </Suspense>
           ) : contentProductionRoute ? (
             <Suspense fallback={<div role="status">正在打开内容制作…</div>}>
-              <ContentProductionWorkspace />
+              <ContentProductionWorkspace workbench={operatorMode} projectId={operatorProject?.id} />
             </Suspense>
           ) : route.section === "service" ? (
             <ServiceHome
@@ -1224,6 +1148,8 @@ function UserBrandDashboardContent({
                   <EmbeddedKnowledgeBasePanel
                     preview={previewMode}
                     previewData={previewKnowledgeData}
+                    workbench={operatorMode}
+                    projectId={operatorProject?.id}
                     page={operatorMode ? "build" : route.sub === "display" ? "display" : "build"}
                     onPageChange={(page) => { if (!operatorMode) navigate("knowledge-agent", page); }}
                     mode={operatorMode || route.sub !== "display" ? "workspace" : "standard"}
@@ -1249,7 +1175,103 @@ function UserBrandDashboardContent({
                 </Suspense>
               )}
             </>
+          ));
+  const workbenchModules = createWorkbenchModules(
+    id => id === activeModuleId ? businessContent : null,
+    view => navigatePath(operatorViewPath(view)),
+    currentView,
+  );
+  const currentModule = workbenchModules.find(module => module.id === activeModuleId);
+  const projectWorkbench = operatorMode && !accountRoute && (operatorProject || agentRoute);
+  return (
+    <OperatorThemeProvider enabled={operatorMode}>
+    <div
+      className={`user-brand-dashboard ${operatorMode ? `operator-mode ${sidebarCollapsed ? "operator-collapsed" : ""}` : ""} ${
+        immersiveAgentWorkspace ? "knowledge-build-workspace" : ""
+      }`}
+    >
+      <div
+        className={`app-shell ${mobileNavOpen ? "nav-open" : ""} ${
+          immersiveAgentWorkspace ? "knowledge-build-app-shell" : ""
+        }`}
+      >
+        {/* 移动端汉堡按钮 */}
+        <button
+          className="mobile-menu-btn"
+          onClick={() => setMobileNavOpen(!mobileNavOpen)}
+          aria-label="切换菜单"
+          aria-expanded={mobileNavOpen}
+          aria-controls="operator-project-navigation"
+        >
+          {mobileNavOpen ? <X size={22} /> : <BarChart3 size={22} />}
+        </button>
+        {/* 移动端遮罩层 */}
+        {mobileNavOpen && (
+          <div
+            className="mobile-nav-overlay"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        )}
+        {operatorMode ? <OperatorSidebar
+          projects={operatorProjects} activeProject={operatorProject}
+          projectsLoading={operatorProjectsLoading} projectsError={operatorProjectsError}
+          view={currentView} onSelectView={view => navigatePath(operatorViewPath(view))}
+          activeEntry={agentRoute ? "agent" : accountRoute ? "account" : "project"}
+          collapsed={compactViewport ? !mobileNavOpen : sidebarCollapsed} onCollapse={compactViewport ? () => setMobileNavOpen(value => !value) : toggleSidebar}
+          accountName={operatorAccountLabel}
+          mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)}
+          onNavigate={navigatePath} onSelectProject={id => { onSelectProject(id); setMobileNavOpen(false); }}
+          onCreateProject={onCreateProject} onRenameProject={onRenameProject} onDeleteProject={onDeleteProject}
+        /> : <Sidebar
+          route={route}
+          onNavigate={navigate}
+          brandName={
+            managedPayload?.brandName ||
+            servicePortal.account.displayName ||
+            (previewMode ? previewBrandName : "企业看板")
+          }
+          portal={servicePortal}
+          preview={previewMode}
+          marketEdition={marketEdition}
+          accountOpen={accountOpen}
+          onAccountOpenChange={setAccountOpen}
+        />}
+        <main
+          className={`dashboard-main ${projectWorkbench ? "workbench-main" : ""} ${
+            immersiveAgentWorkspace ? "knowledge-build-main" : ""
+          }`}
+        >
+          {!operatorMode && !immersiveAgentWorkspace && (
+            <ProjectRibbon
+              brandName={
+                managedPayload?.brandName ||
+                servicePortal.account.displayName ||
+                (previewMode ? previewBrandName : "企业看板")
+              }
+            />
           )}
+          {!operatorMode && !immersiveAgentWorkspace &&
+            !moduleRoute &&
+            !insightsRoute &&
+            onEditDashboard && (
+              <div className="flex justify-end px-6 py-3">
+                <Button
+                  variant="outline"
+                  onClick={() => onEditDashboard("home")}
+                >
+                  编辑看板内容
+                </Button>
+              </div>
+            )}
+          {projectWorkbench ? <WorkbenchModuleContext.Provider value={agentRoute ? null : currentModule}>
+            <header className="operator-project-context" aria-label="工作台上下文">
+              <strong>{agentRoute ? "FrontMind" : operatorProject.name}</strong>
+              <span>{agentRoute ? "通用智能体" : currentModule.label}</span>
+            </header>
+            {knowledgeBuildWorkspace || contentProductionRoute || enterpriseQaRoute ? businessContent : <ProjectAgentWorkbench projectId={agentRoute ? "account" : operatorProject.id} purpose="general">
+              {agentRoute ? null : currentModule.renderResult()}
+            </ProjectAgentWorkbench>}
+          </WorkbenchModuleContext.Provider> : businessContent}
         </main>
       </div>
       <SalesAdvisorDialog

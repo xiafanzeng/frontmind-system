@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import Home from "@/pages/Home";
+import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import FilePreview from "@/components/FilePreview";
 import {
   Dialog,
@@ -205,7 +206,7 @@ export function contentProductionFinished(
     progress.jobKind === "article" && progress.workflowStatus === "completed"
   );
 }
-function ContentProductionInner() {
+function ContentProductionInner({ workbench = false, projectId = "content-production" }: { workbench?: boolean; projectId?: string }) {
   const { state, activeConversation, createConversation, setActive, hydrated } =
     useConversation();
   const { sendMessage } = useSendMessage();
@@ -641,83 +642,11 @@ function ContentProductionInner() {
       setHandoffPending(false);
     }
   }
-  return (
-    <section className="cp-workspace" aria-label="内容制作">
-      <header className="cp-heading">
-        <div>
-          <span className="cp-kicker">内容工作台</span>
-          <h1>内容制作</h1>
-        </div>
-        <button
-          className="cp-primary"
-          onClick={openCreate}
-          disabled={!hydrated || Boolean(pendingStart) || handoffPending}
-        >
-          <Plus size={18} />
-          新建任务
-        </button>
-      </header>
-      <div className="cp-taskbar">
-        <label className="cp-field cp-task-select">
-          当前任务
-          <div>
-            <select
-              aria-label="选择内容制作任务"
-              value={activeConversation?.id ?? ""}
-              disabled={Boolean(pendingStart) || handoffPending}
-              onChange={(event) => {
-                const id = event.target.value;
-                requestWorkspaceNavigation(() => {
-                  setFailedStart(null);
-                  setActive(id);
-                });
-              }}
-            >
-              <option value="" disabled>
-                选择任务
-              </option>
-              {state.conversations.map((conversation) => (
-                <option key={conversation.id} value={conversation.id}>
-                  {contentProductionTaskTitle(conversation.title)}
-                  {["running", "pending"].includes(conversation.status)
-                    ? " · 执行中"
-                    : ["error", "failed"].includes(conversation.status)
-                      ? " · 本轮失败"
-                      : ""}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={16} />
-          </div>
-        </label>
-        <div className="cp-task-context">
-          <strong>
-            {activeConversation ? modeLabel : "选择一种任务，开始内容制作"}
-          </strong>
-          <span>
-            {progress?.knowledgeBase
-              ? `企业知识库 v${progress.knowledgeBase.version} · ${progress.knowledgeBase.documentCount} 份资料`
-              : input?.knowledgeSource === "files"
-                ? "使用上传材料，可在对话中继续补充"
-                : "资料与确认记录随任务保存"}
-          </span>
-        </div>
-        {activeConversation && (
-          <span className={`cp-status ${turnFailed ? "is-error" : ""}`}>
-            {statusLabel}
-          </span>
-        )}
-      </div>
-      {notice && (
-        <div className="cp-notice" role="status">
-          {notice}
-        </div>
-      )}
-      <div className={`cp-body ${!activeConversation ? "is-empty" : ""}`}>
+  const conversationView = (
         <div className="cp-dialogue">
           <div className="cp-dialogue-heading">
             <div>
-              <Sparkles size={18} />
+              {!workbench && <Sparkles size={18} />}
               <strong>内容协作</strong>
             </div>
             <span>FrontMind 内容智能体</span>
@@ -794,9 +723,11 @@ function ContentProductionInner() {
             </div>
           )}
         </div>
+  );
+  const resultView = (<div className={`cp-result-surface ${workbench ? "is-agent" : ""}`}>
         {activeConversation && (
           <aside className="cp-results" aria-label="任务进度与交付成果">
-            <header className="cp-results-heading">
+            <header className={`cp-results-heading ${workbench ? "cp-results-heading--agent" : ""}`}>
               <div>
                 <strong>任务成果</strong>
                 <span>阶段确认与交付文件</span>
@@ -971,7 +902,88 @@ function ContentProductionInner() {
             </div>
           </aside>
         )}
+    {!activeConversation && workbench && <p className="cp-progress-empty">开始内容任务后，制作阶段、确认操作与交付文件会显示在这里。</p>}
+  </div>);
+  return (
+    <section className={`cp-workspace ${workbench ? "cp-workspace--agent" : ""}`} aria-label="内容制作">
+      <header className="cp-heading">
+        <div>
+          <span className="cp-kicker">内容工作台</span>
+          <h1>内容制作</h1>
+                  </div>
+        <button
+          className="cp-primary"
+          onClick={openCreate}
+          disabled={!hydrated || Boolean(pendingStart) || handoffPending}
+        >
+          <Plus size={18} />
+          新建任务
+        </button>
+      </header>
+      <div className="cp-taskbar">
+        <label className="cp-field cp-task-select">
+          当前任务
+          <div>
+            <select
+              aria-label="选择内容制作任务"
+              value={activeConversation?.id ?? ""}
+              disabled={Boolean(pendingStart) || handoffPending}
+              onChange={(event) => {
+                const id = event.target.value;
+                requestWorkspaceNavigation(() => {
+                  setFailedStart(null);
+                  setActive(id);
+                });
+              }}
+            >
+              <option value="" disabled>
+                选择任务
+              </option>
+              {state.conversations.map((conversation) => (
+                <option key={conversation.id} value={conversation.id}>
+                  {contentProductionTaskTitle(conversation.title)}
+                  {["running", "pending"].includes(conversation.status)
+                    ? " · 执行中"
+                    : ["error", "failed"].includes(conversation.status)
+                      ? " · 本轮失败"
+                      : ""}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={16} />
+          </div>
+        </label>
+        <div className="cp-task-context">
+          <strong>
+            {activeConversation ? modeLabel : "选择一种任务，开始内容制作"}
+          </strong>
+          <span>
+            {progress?.knowledgeBase
+              ? `企业知识库 v${progress.knowledgeBase.version} · ${progress.knowledgeBase.documentCount} 份资料`
+              : input?.knowledgeSource === "files"
+                ? "使用上传材料，可在对话中继续补充"
+                : "资料与确认记录随任务保存"}
+          </span>
+        </div>
+        {activeConversation && (
+          <span className={`cp-status ${turnFailed ? "is-error" : ""}`}>
+            {statusLabel}
+          </span>
+        )}
       </div>
+      {notice && (
+        <div className="cp-notice" role="status">
+          {notice}
+        </div>
+      )}
+      {workbench ? (
+        <AgentWorkbenchShell embedded projectId={projectId} moduleId="content-production" title="内容制作" conversation={conversationView} result={resultView} resultTitle="任务成果" resultKey={`${activeConversation?.id ?? "empty"}:${taskId ?? ""}:${progress?.runnerRevision ?? ""}`} status={statusLabel} />
+      ) : (
+        <div className={`cp-body ${!activeConversation ? "is-empty" : ""}`}>
+          {conversationView}
+          {resultView}
+        </div>
+      )}
       <Dialog
         open={showCreate}
         onOpenChange={(open) => {
@@ -1140,10 +1152,10 @@ function ContentProductionInner() {
     </section>
   );
 }
-export default function ContentProductionWorkspace() {
+export default function ContentProductionWorkspace({ workbench = false, projectId = "content-production" }: { workbench?: boolean; projectId?: string } = {}) {
   return (
     <ConversationPurposeProvider purpose="content_production">
-      <ContentProductionInner />
+      <ContentProductionInner workbench={workbench} projectId={projectId} />
     </ConversationPurposeProvider>
   );
 }

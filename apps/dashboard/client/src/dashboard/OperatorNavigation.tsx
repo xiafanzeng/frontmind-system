@@ -2,32 +2,43 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuTrigger,
+  DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type FormEvent, type MouseEvent } from "react";
-import { Bot, ChartNoAxesCombined, ChevronDown, Database, Folder, FolderOpen, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, Plus, Send, Sparkles, Target, Trash2, Wallet, Wrench } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties, type FormEvent } from "react";
+import { Bot, ChartNoAxesCombined, ChevronDown, Database, Folder, FolderOpen, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, Plus, Search, Send, Settings, Target, Trash2, Wallet, Wrench } from "lucide-react";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import { OPERATOR_MODULES, operatorViewPath, type OperatorView } from "./operator-navigation";
 import "./operator-workspace.css";
+import "./operator-navigation.css";
 
 export type EnterpriseProjectView = { id: string; name: string; ownerUserId: number; revision: number; isLegacyDefault?: boolean };
 type ProjectDialog = "create" | "rename" | "delete";
 type ProjectDialogState = { kind: ProjectDialog; project?: EnterpriseProjectView; activeProjectId?: string };
 
-export function OperatorSidebar({ projects, activeProject, activeEntry, collapsed, onCollapse, onNavigate, onSelectProject, onCreateProject, onRenameProject, onDeleteProject, mobileOpen = false, onCloseMobile, accountName, projectsLoading = false, projectsError }: {
+export function OperatorSidebar({ projects, activeProject, activeEntry, collapsed, onCollapse, onNavigate, onSelectProject, onCreateProject, onRenameProject, onDeleteProject, mobileOpen = false, onCloseMobile, accountName, view, onSelectView, projectsLoading = false, projectsError }: {
   projects: EnterpriseProjectView[]; projectsLoading?: boolean; projectsError?: string; activeProject?: EnterpriseProjectView; activeEntry: "project" | "agent" | "account";
   collapsed: boolean; onCollapse: () => void; onNavigate: (path: string) => void;
   mobileOpen?: boolean; onCloseMobile?: () => void; accountName?: string;
+  view?: OperatorView; onSelectView?: (view: OperatorView) => void;
   onSelectProject: (id: string) => void; onCreateProject: (name: string) => Promise<void>;
   onRenameProject: (name: string, project: EnterpriseProjectView) => Promise<void>;
   onDeleteProject?: (project: EnterpriseProjectView) => Promise<void>;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches);
+  const [isPhone, setIsPhone] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches);
+  const [expanded, setExpanded] = useState(false);
+  const [projectQuery, setProjectQuery] = useState("");
   useEffect(() => {
     const query = window.matchMedia("(max-width: 1279px)");
     const update = () => setIsMobile(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 1023px)");
+    const update = () => setIsPhone(query.matches);
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
@@ -40,12 +51,16 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
     const main = sidebar.closest(".app-shell")?.querySelector<HTMLElement>("main");
     const originalInert = main?.inert;
     if (main) main.inert = true;
-    const controls = () => [...sidebar.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]')];
-    controls()[0]?.focus();
+    const controls = () => {
+      const items = [...sidebar.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), [tabindex="0"]')];
+      const project = sidebar.querySelector<HTMLElement>(".operator-project-entry");
+      return project ? [project, ...items.filter(item => item !== project)] : items;
+    };
+    (sidebar.querySelector<HTMLButtonElement>(".operator-project-entry") || controls()[0])?.focus();
     const keydown = (event: globalThis.KeyboardEvent) => {
       // A Radix popup owns its own Escape and focus containment while open.
       if (document.querySelector('[data-slot="dialog-content"], [data-slot="dropdown-menu-content"]')) return;
-      if (event.key === "Escape") { event.preventDefault(); closeMobile.current?.(); }
+      if (event.key === "Escape") { event.preventDefault(); if (expanded) { setExpanded(false); setProjectQuery(""); } else closeMobile.current?.(); }
       if (event.key !== "Tab") return;
       const items = controls();
       const first = items[0], last = items.at(-1);
@@ -58,11 +73,19 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
       if (main) main.inert = originalInert ?? false;
       if (origin?.isConnected) origin.focus();
     };
-  }, [mobileOpen, isMobile]);
+  }, [mobileOpen, isMobile, expanded]);
+  useEffect(() => {
+    if (!expanded) return;
+    const closeOutside = (event: globalThis.MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !sidebarRef.current?.querySelector(".operator-project-capsule")?.contains(target)) { setExpanded(false); setProjectQuery(""); }
+    };
+    document.addEventListener("mousedown", closeOutside);
+    return () => document.removeEventListener("mousedown", closeOutside);
+  }, [expanded]);
   const projectMenuTrigger = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const submitting = useRef(false);
-  const [expanded, setExpanded] = useState(true);
   const [dialog, setDialog] = useState<ProjectDialogState | null>(null);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -108,32 +131,56 @@ export function OperatorSidebar({ projects, activeProject, activeEntry, collapse
     const target = returnFocus.current?.isConnected ? returnFocus.current : projectMenuTrigger.current;
     target?.focus();
   };
+  const selectedView = view === "knowledge-display" ? "knowledge" : view;
+  const navigateView = (next: OperatorView) => requestWorkspaceNavigation(() => {
+    if (onSelectView) onSelectView(next);
+    else onNavigate(projectWorkspaceUrl(operatorViewPath(next)));
+    onCloseMobile?.();
+  });
+  const visibleProjects = projectQuery.trim() ? projects.filter(project => project.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())) : projects;
   return <>
-    <aside ref={sidebarRef} role={mobileOpen && isMobile ? "dialog" : undefined} aria-modal={mobileOpen && isMobile ? true : undefined} id="operator-project-navigation" className="global-nav operator-sidebar" aria-label="工作区导航" data-collapsed={collapsed}>
+    <aside ref={sidebarRef} role={mobileOpen && isMobile ? "dialog" : undefined} aria-modal={mobileOpen && isMobile ? true : undefined} aria-hidden={isPhone && !mobileOpen ? true : undefined} inert={isPhone && !mobileOpen ? true : undefined} id="operator-project-navigation" className="global-nav operator-sidebar" aria-label="工作区导航" data-collapsed={collapsed}>
       <div className="operator-brand">
         <div className="operator-brand-logo"><img src="/frontmind-contract-logo-white.svg" alt="FrontMind" /></div>
       </div>
-      <div className={`operator-project-group ${activeEntry === "project" ? "is-active" : ""}`}>
+      <nav className="operator-module-nav" aria-label="项目模块">
+        <h2 className="operator-module-group-label">AI 智能品牌优化</h2>
+        {OPERATOR_MODULES.map(module => {
+          const Icon = moduleIcons[module.id];
+          const active = module.views.some(item => item.id === selectedView);
+          return <button key={module.id} type="button" className={`operator-nav-entry operator-module-entry ${active ? "active" : ""}`} title={module.label} aria-label={module.label} aria-current={active ? "page" : undefined} onClick={() => navigateView(module.views[0].id)}><Icon size={20} /><span>{module.label}</span></button>;
+        })}
+      </nav>
+      <div className="operator-general-nav">
+        <button type="button" className={`operator-nav-entry ${activeEntry === "agent" ? "active" : ""}`} title="FrontMind通用智能体" aria-label="FrontMind通用智能体" onClick={() => requestWorkspaceNavigation(() => onNavigate("/agent"))}><Bot size={20} /><span>FrontMind通用智能体</span></button>
+      </div>
+      <div className="operator-sidebar-bottom">
+      <div className={`operator-project-group operator-project-capsule ${activeEntry === "project" ? "is-active" : ""}`}>
         <div className="operator-project-heading">
-          <button type="button" className={`operator-nav-entry operator-project-entry ${activeEntry === "project" ? "active" : ""}`} title="AI智能品牌优化" aria-label="AI智能品牌优化" onClick={() => { if (collapsed) onCollapse(); setExpanded(!expanded || collapsed); if (activeEntry !== "project") requestWorkspaceNavigation(() => onNavigate("/?view=knowledge")); }} aria-expanded={expanded && !collapsed} aria-controls="operator-project-list">
-            <Sparkles size={20} /><span>AI智能品牌优化</span><ChevronDown size={16} className={expanded ? "is-open" : ""} />
+          <button type="button" className={`operator-nav-entry operator-project-entry ${activeEntry === "project" ? "active" : ""}`} title={`项目总览${activeProject ? ` · ${activeProject.name}` : ""}`} aria-label="项目总览" onClick={() => { if (collapsed) onCollapse(); setExpanded(!expanded || collapsed); if (activeEntry !== "project") requestWorkspaceNavigation(() => onNavigate("/?view=knowledge")); }} aria-expanded={expanded && !collapsed} aria-controls="operator-project-list">
+            <FolderOpen size={20} /><span className="operator-project-capsule-label"><strong>项目总览</strong><small>{activeProject?.name || "选择企业项目"}</small></span><ChevronDown size={16} className={expanded ? "is-open" : ""} />
           </button>
           <button ref={projectMenuTrigger} type="button" className="operator-project-menu-trigger" aria-label="新建企业项目" title="新建企业项目" disabled={saving} onClick={() => open("create")}><Plus size={18} /></button>
         </div>
         {expanded && !collapsed && <div id="operator-project-list" className="operator-projects" aria-label="企业项目">
           <div className="operator-projects-caption"><span>企业项目</span><span>{projectsLoading && !projects.length ? "—" : projects.length}</span></div>
-          {projects.map(project => <ProjectRow key={project.id} project={project} selected={project.id === activeProject?.id} saving={saving} canDelete={Boolean(onDeleteProject)} onSelect={() => requestWorkspaceNavigation(() => onSelectProject(project.id))} onAction={(kind, trigger) => open(kind, project, trigger)} dialogOpen={Boolean(dialog)} />)}
+          <label className="operator-project-search"><Search size={15} aria-hidden="true" /><input aria-label="搜索项目" value={projectQuery} onChange={event => setProjectQuery(event.target.value)} placeholder="搜索项目" /></label>
+          {visibleProjects.map(project => <ProjectRow key={project.id} project={project} selected={project.id === activeProject?.id} saving={saving} canDelete={Boolean(onDeleteProject)} onSelect={() => requestWorkspaceNavigation(() => { onSelectProject(project.id); setExpanded(false); setProjectQuery(""); onCloseMobile?.(); })} onAction={(kind, trigger) => open(kind, project, trigger)} dialogOpen={Boolean(dialog)} />)}
           {!projects.length && (projectsLoading ? <p className="operator-project-hint" role="status">正在读取企业项目…</p> : projectsError ? <p className="operator-project-hint" role="alert">企业项目暂时无法读取</p> : <p className="operator-project-hint">点击上方加号新建企业项目，开始整理品牌知识。</p>)}
+          {projects.length > 0 && !visibleProjects.length && <p className="operator-project-hint">没有匹配的项目。</p>}
         </div>}
       </div>
-      <div className="operator-general-nav">
-        <button type="button" className={`operator-nav-entry ${activeEntry === "agent" ? "active" : ""}`} title="FrontMind通用智能体" aria-label="FrontMind通用智能体" onClick={() => requestWorkspaceNavigation(() => onNavigate("/agent"))}><Bot size={20} /><span>FrontMind通用智能体</span></button>
+      <div className={`operator-account-row ${activeEntry === "account" ? "is-active" : ""}`}>
+        <button type="button" className="operator-account-identity" title={accountName || "账号与余额"} aria-label={accountName || "账号与余额"} onClick={() => requestWorkspaceNavigation(() => onNavigate("/account"))}><span aria-hidden="true">{Array.from(accountName || "账").slice(0, 1).join("")}</span><strong>{accountName || "账号"}</strong></button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild><button type="button" className="operator-account-settings" aria-label="账号设置" title="账号设置"><Settings size={18} /></button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end" side="top" sideOffset={8} className="operator-account-menu">
+            <DropdownMenuLabel>{accountName || "账号"}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => requestWorkspaceNavigation(() => onNavigate("/account"))}><Wallet />账号与余额</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      <div className="operator-sidebar-bottom">
-      <div className="operator-account-nav">
-        <button type="button" className={`operator-nav-entry ${activeEntry === "account" ? "active" : ""}`} title="账号与余额" aria-label="账号与余额" onClick={() => requestWorkspaceNavigation(() => onNavigate("/account"))}><Wallet size={20} /><span>账号与余额</span></button>
-      </div>
-      {accountName && <div className="operator-account-identity" title={accountName}><span aria-hidden="true">{Array.from(accountName).slice(0, 1).join("")}</span><strong>{accountName}</strong></div>}
       <div className="operator-sidebar-footer"><button type="button" onClick={onCollapse} aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}>{collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}<span>收起侧边栏</span></button></div>
       </div>
     </aside>
@@ -180,48 +227,11 @@ function ProjectRow({ project, selected, saving, canDelete, onSelect, onAction, 
 
 const moduleIcons = { brand: Database, intent: Target, progress: ChartNoAxesCombined, content: PenLine, publishing: Send, extensions: Wrench };
 
-export function OperatorTabs({ view, onSelect }: { view: OperatorView; projectName?: string; onSelect: (view: OperatorView) => void }) {
+export function OperatorTabs({ view, projectName, onSelect: _onSelect }: { view: OperatorView; projectName?: string; onSelect?: (view: OperatorView) => void }) {
   const selectedView = view === "knowledge-display" ? "knowledge" : view;
   const activeModule = OPERATOR_MODULES.find(module => module.views.some(item => item.id === selectedView)) || OPERATOR_MODULES[0];
-  const tabsRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const nav = tabsRef.current;
-    if (!nav) return;
-    const revealCurrent = () => {
-      const current = nav.querySelector<HTMLElement>('[aria-current="page"]');
-      if (!current) return;
-      const row = nav.getBoundingClientRect(), tab = current.getBoundingClientRect();
-      // Deep links and resized windows reveal the active module without moving the page.
-      if (tab.left < row.left) nav.scrollLeft -= row.left - tab.left;
-      else if (tab.right > row.right) nav.scrollLeft += tab.right - row.right;
-    };
-    revealCurrent();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(revealCurrent);
-    observer?.observe(nav);
-    return () => observer?.disconnect();
-  }, [activeModule.id]);
-  const select = (event: MouseEvent<HTMLAnchorElement>, next: OperatorView) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    onSelect(next);
-  };
   return <header className="operator-workspace-header" style={{ "--module-accent": activeModule.color } as CSSProperties}>
-    <nav ref={tabsRef} className="operator-module-tabs" aria-label="项目板块">
-      {OPERATOR_MODULES.map(module => {
-        const Icon = moduleIcons[module.id];
-        return <a key={module.id} href={projectWorkspaceUrl(operatorViewPath(module.views[0].id))} aria-current={module.id === activeModule.id ? "page" : undefined} className={module.id === activeModule.id ? "active" : ""} style={{ "--tab-color": module.color } as CSSProperties} onClick={event => select(event, module.views[0].id)}>
-          <svg className="operator-module-tab-shape" viewBox="0 0 200 52" preserveAspectRatio="none" aria-hidden="true" focusable="false">
-            <path className="operator-module-tab-fill" d="M1 52V13Q1 1 13 1H174Q182 1 185 11L199 52Z" />
-            <path className="operator-module-tab-edge" d="M1 52V13Q1 1 13 1H174Q182 1 185 11L199 52" vectorEffect="non-scaling-stroke" />
-            <path className="operator-module-tab-accent" d="M2 12Q2 2 13 2H174Q180 2 183 8" vectorEffect="non-scaling-stroke" />
-          </svg>
-          <Icon className="operator-module-tab-icon" size={18} aria-hidden="true" /><span>{module.label}</span>
-        </a>;
-      })}
-    </nav>
-    {activeModule.views.length > 1 && <nav className="operator-sub-tabs" aria-label={`${activeModule.label}功能`}>
-      {activeModule.views.map(item => <a href={projectWorkspaceUrl(operatorViewPath(item.id))} aria-current={item.id === selectedView ? "page" : undefined} key={item.id} onClick={event => select(event, item.id)}>{item.label}</a>)}
-    </nav>}
+    <div className="operator-workspace-caption"><span>AI智能品牌优化</span><span aria-hidden="true">/</span><span>{activeModule.label}</span>{projectName && <><span aria-hidden="true">/</span><strong title={projectName}>{projectName}</strong></>}</div>
   </header>;
 }
 

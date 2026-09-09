@@ -9,6 +9,8 @@ async function chooseProjectAction(name: string) {
   if (name === "新建企业项目") {
     fireEvent.click(screen.getByRole("button", { name }));
   } else {
+    const overview = screen.getByRole("button", { name: "项目总览" });
+    if (overview.getAttribute("aria-expanded") !== "true") fireEvent.click(overview);
     fireEvent.keyDown(screen.getByRole("button", { name: "管理项目：企业甲" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: name.replace("当前", "") }));
   }
@@ -19,6 +21,7 @@ describe("operator workspace navigation", () => {
   it("never presents an empty project hint during loading or a failed initial request, and retains known rows while refreshing", () => {
     const props = sidebarProps();
     const view = render(<OperatorSidebar {...props} projects={[]} activeProject={undefined} projectsLoading />);
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
     expect(screen.getByRole("status")).toHaveTextContent("正在读取企业项目");
     expect(screen.queryByText(/点击上方加号新建企业项目/)).toBeNull();
     view.rerender(<OperatorSidebar {...props} projects={[]} activeProject={undefined} projectsError="连接失败" />);
@@ -36,6 +39,7 @@ describe("operator workspace navigation", () => {
     const longProject = { ...project, name: "很长的中文企业项目名称：完整名称在键盘聚焦时同样可见" };
     const view = render(<OperatorSidebar {...props} projects={[longProject]} activeProject={longProject} />);
     try {
+      fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
       act(() => screen.getByRole("button", { name: longProject.name }).focus());
       expect(await screen.findByRole("tooltip")).toHaveTextContent(longProject.name);
       expect(props.onSelectProject).not.toHaveBeenCalled();
@@ -45,26 +49,52 @@ describe("operator workspace navigation", () => {
     }
   });
 
-  it("offers six linked modules and a single knowledge entry", () => {
+  it("offers six module entries in the sidebar and keeps tabs as context only", () => {
     const select = vi.fn();
-    render(<OperatorTabs view="knowledge-display" projectName="企业甲" onSelect={select} />);
-    const modules = screen.getByRole("navigation", { name: "项目板块" });
-    expect(within(modules).getAllByRole("link")).toHaveLength(6);
-    expect(within(modules).getAllByRole("link").filter(link => link.getAttribute("aria-current") === "page")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "知识库展示" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "智能知识库" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "项目工具" })).toBeInTheDocument();
-    expect(screen.queryByText(/^0[1-6]$/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("link", { name: "意图优化" }));
+    const props = sidebarProps();
+    render(<OperatorSidebar {...props} view="knowledge-display" onSelectView={select} />);
+    const modules = screen.getByRole("navigation", { name: "项目模块" });
+    const groupLabel = within(modules).getByRole("heading", { name: "AI 智能品牌优化", level: 2 });
+    expect(within(modules).getAllByRole("button")).toHaveLength(6);
+    expect(groupLabel.compareDocumentPosition(within(modules).getAllByRole("button")[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "品牌建设" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "意图优化" }));
     expect(select).toHaveBeenCalledWith("questions");
-    select.mockClear();
-    const nativeLink = screen.getByRole("link", { name: "意图优化" });
-    nativeLink.addEventListener("click", event => event.preventDefault(), { once: true });
-    fireEvent.click(nativeLink, { ctrlKey: true });
-    expect(select).not.toHaveBeenCalled();
-    expect(screen.queryByText("服务首页")).not.toBeInTheDocument();
-    expect(screen.queryByText("AI智能品牌优化")).not.toBeInTheDocument();
-    expect(screen.queryByText("企业甲")).not.toBeInTheDocument();
+    const view = render(<OperatorTabs view="knowledge-display" projectName="企业甲" />);
+    expect(screen.queryByRole("navigation", { name: "项目板块" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("AI智能品牌优化")).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("品牌建设")).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it("keeps the project capsule at the bottom with its list closed by default", () => {
+    const props = sidebarProps();
+    render(<OperatorSidebar {...props} />);
+    const sidebar = screen.getByRole("complementary");
+    const bottom = sidebar.querySelector(".operator-sidebar-bottom")!;
+    expect(bottom.querySelector(".operator-project-capsule")).toBeTruthy();
+    expect(within(bottom as HTMLElement).getByRole("button", { name: "项目总览" })).toHaveAttribute("title", "项目总览 · 企业甲");
+    expect(screen.queryByRole("button", { name: "AI智能品牌优化" })).not.toBeInTheDocument();
+    expect(bottom.querySelector(".operator-account-row")).toBeTruthy();
+    expect(bottom.querySelector(".operator-project-capsule")!.compareDocumentPosition(bottom.querySelector(".operator-account-row")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sidebar.querySelector("#operator-project-list")).toBeNull();
+  });
+
+  it("searches and switches projects through the renamed overview capsule", () => {
+    const props = sidebarProps();
+    const second = { ...project, id: "project-b", name: "企业乙" };
+    render(<OperatorSidebar {...props} projects={[project, second]} />);
+    const overview = screen.getByRole("button", { name: "项目总览" });
+    fireEvent.click(overview);
+    expect(overview).toHaveAttribute("aria-expanded", "true");
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索项目" }), { target: { value: "乙" } });
+    expect(screen.queryByRole("button", { name: "企业甲" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "企业乙" }));
+    expect(props.onSelectProject).toHaveBeenCalledWith("project-b");
+    expect(overview).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(overview);
+    expect(screen.getByRole("textbox", { name: "搜索项目" })).toHaveValue("");
+    expect(screen.getByRole("button", { name: "企业甲" })).toBeInTheDocument();
   });
 
   it("opens creation directly from the plus button and reuses the FrontMind logo", async () => {
@@ -167,6 +197,7 @@ describe("operator workspace navigation", () => {
     const props = sidebarProps();
     const second = { ...project, id: "project-b", name: "企业乙", revision: 3 };
     render(<OperatorSidebar {...props} projects={[project, second]} />);
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
     const trigger = screen.getByRole("button", { name: "管理项目：企业乙" });
     fireEvent.keyDown(trigger, { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "重命名项目" }));
@@ -207,7 +238,7 @@ describe("operator workspace navigation", () => {
       const drawer = screen.getByRole("dialog", { name: "工作区导航" });
       expect(drawer).toHaveAttribute("aria-modal", "true");
       expect(screen.getByTestId("main")).toHaveProperty("inert", true);
-      const first = within(drawer).getByRole("button", { name: "AI智能品牌优化" });
+      const first = within(drawer).getByRole("button", { name: "项目总览" });
       const last = within(drawer).getByRole("button", { name: "收起侧边栏" });
       last.focus();
       fireEvent.keyDown(last, { key: "Tab" });
@@ -216,6 +247,21 @@ describe("operator workspace navigation", () => {
       expect(close).toHaveBeenCalledTimes(1);
       view.rerender(<div className="app-shell"><OperatorSidebar {...props} mobileOpen={false} onCloseMobile={close} /><main data-testid="main">工作内容</main></div>);
       expect(screen.getByTestId("main")).toHaveProperty("inert", false);
+    } finally { query.mockRestore(); }
+  });
+
+  it("hides the closed phone drawer from assistive technology while keeping the compact rail visible", () => {
+    const query = vi.spyOn(window, "matchMedia").mockImplementation((value) => ({ matches: value.includes("1023px") || value.includes("1279px"), media: value, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+    try {
+      const props = sidebarProps();
+      const closed = render(<OperatorSidebar {...props} mobileOpen={false} onCloseMobile={vi.fn()} />);
+      const drawer = screen.getByRole("complementary", { hidden: true });
+      expect(drawer).toHaveAttribute("aria-hidden", "true");
+      expect(drawer).toHaveAttribute("inert", "");
+      closed.rerender(<OperatorSidebar {...props} mobileOpen />);
+      const open = screen.getByRole("dialog", { name: "工作区导航" });
+      expect(open).not.toHaveAttribute("aria-hidden", "true");
+      expect(open).not.toHaveAttribute("inert");
     } finally { query.mockRestore(); }
   });
 

@@ -1,4 +1,5 @@
 import { navigate } from "wouter/use-browser-location";
+import { requestWorkspaceNavigation } from "./workspace-navigation-guard";
 
 /** WorkspaceQueryProvider replaces transports and caches when this scope changes. */
 const PROJECT_KEY = "frontmind.enterpriseProject";
@@ -56,8 +57,36 @@ export function projectWorkspaceUrl(path: string, id = activeEnterpriseProjectId
 }
 
 export function switchEnterpriseProject(ownerUserId: number, id: string) {
-  rememberEnterpriseProject(ownerUserId, id);
-  navigate(projectWorkspaceUrl("/?view=knowledge", id));
+  const target = projectSwitchPath();
+  requestWorkspaceNavigation(() => {
+    rememberEnterpriseProject(ownerUserId, id);
+    navigate(projectWorkspaceUrl(target, id));
+  });
+}
+
+/** Keep the current module when switching projects while dropping entity-specific
+ * detail parameters that belong to the previous project. */
+function projectSwitchPath() {
+  if (typeof window === "undefined") return "/?view=knowledge";
+  const { pathname, search } = window.location;
+  if (pathname === "/agent" || pathname === "/account") return "/?view=knowledge";
+  const query = new URLSearchParams(search);
+  query.delete("enterpriseProjectId");
+  ["questionId", "conversationId", "sessionId", "articleId", "mediaId", "runId", "draftId", "publicationId"].forEach(key => query.delete(key));
+  if (pathname === "/" || pathname === "/knowledge-base") {
+    const view = query.get("view");
+    const known = new Set(["knowledge", "knowledge-display", "keywords", "questions", "response-logic", "monitoring", "reports", "content", "publishing", "articles", "media", "enterprise-qa", "website", "content-insights"]);
+    if (!view || !known.has(view)) query.set("view", "knowledge");
+    if (query.get("view") === "knowledge-display") query.set("view", "knowledge");
+    return `/?${query}`;
+  }
+  if (pathname.startsWith("/monitoring-system")) return `/monitoring-system${query.toString() ? `?${query}` : ""}`;
+  if (pathname.startsWith("/publishing/media")) return `/publishing/media${query.toString() ? `?${query}` : ""}`;
+  if (pathname.startsWith("/publishing/articles")) return `/publishing/articles${query.toString() ? `?${query}` : ""}`;
+  if (pathname.startsWith("/publishing")) return `/publishing${query.toString() ? `?${query}` : ""}`;
+  if (pathname === "/content-production") return `/content-production${query.toString() ? `?${query}` : ""}`;
+  if (pathname === "/enterprise-qa") return `/enterprise-qa${query.toString() ? `?${query}` : ""}`;
+  return "/?view=knowledge";
 }
 
 /** Preserve the project on browser-native image and download requests. */

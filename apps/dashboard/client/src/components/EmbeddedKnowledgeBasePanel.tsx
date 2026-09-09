@@ -40,6 +40,7 @@ import {
 } from "@/lib/knowledge-progress";
 import { trpc } from "@/lib/trpc";
 import Home from "@/pages/Home";
+import { AgentWorkbenchShell } from "@/components/AgentWorkbenchShell";
 import type {
   KnowledgeBaseLeafStatus,
   KnowledgeBaseProgressDto,
@@ -130,6 +131,8 @@ export default function EmbeddedKnowledgeBasePanel({
   page,
   onPageChange,
   mode = "standard",
+  workbench = false,
+  projectId = "knowledge",
 }: {
   preview?: boolean;
   previewData?: {
@@ -139,6 +142,9 @@ export default function EmbeddedKnowledgeBasePanel({
   page: "build" | "display";
   onPageChange: (page: "build" | "display") => void;
   mode?: "standard" | "workspace";
+  /** Opt in to the conversation + knowledge result workbench shell. */
+  workbench?: boolean;
+  projectId?: string;
 }) {
   const previewMode = import.meta.env.DEV && preview && Boolean(previewData);
   const unified = mode === "workspace";
@@ -298,6 +304,8 @@ export default function EmbeddedKnowledgeBasePanel({
           progress={previewProgress}
           onProgressChange={setPreviewProgress}
           mode={mode}
+          workbench={workbench}
+          projectId={projectId}
         />
       ) : resetQuery.isError ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -335,6 +343,8 @@ export default function EmbeddedKnowledgeBasePanel({
           fallbackSnapshot={displayedSnapshot ?? null}
           onEditingBlockedChange={setEditingBlocked}
           updating={knowledgeUpdating}
+          workbench={workbench}
+          projectId={projectId}
         />
       )}
     </section>
@@ -664,6 +674,8 @@ function RealBuildFlow({
   fallbackSnapshot,
   onEditingBlockedChange,
   updating,
+  workbench,
+  projectId,
 }: {
   updating: boolean;
   fallbackSnapshot: KnowledgeSnapshotView | null;
@@ -671,6 +683,8 @@ function RealBuildFlow({
   mode: "standard" | "workspace";
   resetRevision: number;
   accountId: number;
+  workbench?: boolean;
+  projectId: string;
 }) {
   const {
     state,
@@ -1082,10 +1096,13 @@ function RealBuildFlow({
       onMutationPendingChange={setNodePending}
       onEditTargetChange={setEditTarget}
     />;
-  return <KnowledgeWorkspaceSurfaces collaboration={collaboration} knowledge={knowledge} collaborationRequest={editTarget?.mode === "ai" ? editTarget : null} />;
+  const resultKey = displayedProgress
+    ? `${projectId}:${displayedProgress.build.id}:${displayedProgress.build.revision}:${displayedProgress.build.currentLeafId ?? ""}:${displayedProgress.build.contentVersion ?? ""}:${displayedProgress.build.updatedAt}`
+    : `${projectId}:empty`;
+  return <KnowledgeWorkspaceSurfaces collaboration={collaboration} knowledge={knowledge} collaborationRequest={editTarget?.mode === "ai" ? editTarget : null} workbench={workbench} projectId={projectId} resultKey={resultKey} />;
 }
 
-function KnowledgeWorkspaceSurfaces({ collaboration, knowledge, collaborationRequest }: { collaboration: React.ReactNode; knowledge: React.ReactNode; collaborationRequest?: object | null }) {
+function KnowledgeWorkspaceSurfaces({ collaboration, knowledge, collaborationRequest, workbench = false, projectId = "knowledge", resultKey }: { collaboration: React.ReactNode; knowledge: React.ReactNode; collaborationRequest?: object | null; workbench?: boolean; projectId?: string; resultKey?: string }) {
   const [view, setView] = useState<"collaboration" | "knowledge">("collaboration");
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -1095,6 +1112,9 @@ function KnowledgeWorkspaceSurfaces({ collaboration, knowledge, collaborationReq
     const frame = window.requestAnimationFrame(() => root.current?.querySelector<HTMLTextAreaElement>(".knowledge-workspace-task textarea")?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [collaborationRequest]);
+  if (workbench) {
+    return <AgentWorkbenchShell embedded projectId={projectId} moduleId="brand-knowledge" title="智能知识库" conversation={collaboration} conversationFocusRequest={collaborationRequest} result={knowledge} resultTitle="知识内容" resultKey={resultKey ?? projectId} />;
+  }
   return <div className="knowledge-workspace-surfaces" ref={root}>
     <div className="knowledge-workspace-view-switch" role="tablist" aria-label="知识库工作区域" onKeyDown={(event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -1200,10 +1220,14 @@ function PreviewBuildFlow({
   progress,
   onProgressChange,
   mode,
+  workbench = false,
+  projectId = "knowledge",
 }: {
   progress: KnowledgeBaseProgressDto;
   onProgressChange: (progress: KnowledgeBaseProgressDto) => void;
   mode: "standard" | "workspace";
+  workbench?: boolean;
+  projectId?: string;
 }) {
   const [draft, setDraft] = useState("");
   const currentLeaf = progress.branches
@@ -1264,7 +1288,7 @@ function PreviewBuildFlow({
     resources: [],
     capabilities: { directEdit: { allowed: false, reason: "设计预览不提交修改" }, aiEdit: { allowed: false, reason: "设计预览不创建任务" }, manageImages: { allowed: false, reason: "设计预览不上传资料" } },
   }));
-  return <KnowledgeWorkspaceSurfaces collaboration={<>
+  return <KnowledgeWorkspaceSurfaces workbench={workbench} projectId={projectId} resultKey={`${projectId}:${progress.build.id}:${progress.build.revision}:${progress.build.currentLeafId ?? ""}:${progress.build.contentVersion ?? ""}`} collaboration={<>
     <header className="knowledge-collaboration-header"><h3>任务协作</h3><p>本地设计预览 · 不会执行真实任务</p></header>
     <KnowledgeWorkspaceStatus progress={progress} />
     <div className="min-h-0 flex-1 overflow-auto p-5">

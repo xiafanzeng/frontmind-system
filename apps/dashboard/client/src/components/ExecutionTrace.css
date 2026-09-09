@@ -1,0 +1,22 @@
+/* Text-first execution trace. Keep this surface quiet so response content remains primary. */
+.execution-trace {
+  min-width: 0;
+  max-width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.execution-trace__summary,
+.execution-trace__group-summary {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .execution-trace__summary,
+  .execution-trace__group-summary {
+    font-size: 0.8125rem;
+  }
+}

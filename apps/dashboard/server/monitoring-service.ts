@@ -2380,6 +2380,7 @@ export async function getMonitoringFilterOptions(
       revision: monitoringBatches.revision,
       sampleCount: monitoringBatches.sampleCount,
       citationCount: monitoringBatches.citationCount,
+      importedAt: monitoringBatches.createdAt,
       updatedAt: monitoringBatches.updatedAt,
     })
     .from(monitoringBatches)
@@ -2396,8 +2397,10 @@ export async function getMonitoringFilterOptions(
       desc(monitoringBatches.updatedAt),
     );
   const publicBatches = batches.map(
-    ({ id: _id, updatedAt: _updatedAt, ...batch }) => ({
+    ({ id: _id, updatedAt, importedAt, ...batch }) => ({
       ...batch,
+      importedAt: importedAt?.getTime(),
+      updatedAt: updatedAt?.getTime(),
       collectedAt: batch.collectedAt.getTime(),
     }),
   );

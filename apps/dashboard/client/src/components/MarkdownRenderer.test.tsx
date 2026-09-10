@@ -136,3 +136,10 @@ describe("MarkdownRenderer security", () => {
     );
   });
 });
+
+it("hides code-copy controls on intermediate messages and enables them on final replies", () => {
+  const view = render(<MarkdownRenderer content={"```js\nconst value = 1;\n```"} allowCopy={false} />);
+  expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+  view.rerender(<MarkdownRenderer content={"```js\nconst value = 1;\n```"} allowCopy />);
+  expect(screen.getByRole("button", { name: "复制" })).toBeInTheDocument();
+});

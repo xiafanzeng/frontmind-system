@@ -1,3 +1,4 @@
+import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
 import { useBusinessFlowState, readFlowString } from "./useBusinessFlowState";
 import { KeywordsWorkflow } from "./KeywordsWorkflow";
 import { Database, Search, X } from "lucide-react";
@@ -402,7 +403,8 @@ export function BrandQuestionUniverseGenerationControl({
       }
     />
   );
-  return (
+  return (<>
+    {data.execution && <BusinessExecutionActivity execution={data.execution} />}
     <KeywordEmptyPanel
       title={
         data.reason === "ready"
@@ -434,7 +436,7 @@ export function BrandQuestionUniverseGenerationControl({
         )
       }
     />
-  );
+  </>);
 }
 
 export function BrandQuestionUniverseGenerationAction({

@@ -2,6 +2,8 @@ import { useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   generalExecutionActivity,
+  businessExecutionLabels,
+  orderExecutionTimeline,
   generalExecutionStatusText,
   generalToolStatusText,
 } from "@shared/frontmind-general-execution";
@@ -36,6 +38,17 @@ function safeToolLabel(item: ActivityItem) {
 }
 
 function activityTitle(item: ActivityItem) {
+  if (item.phase && item.kind === "status")
+    return {
+      thinking: "分析中",
+      running: "进行中",
+      rescheduling: "重新安排中",
+      waiting: "等待中",
+      retrying: "重试中",
+      error: "失败",
+      ended: "已完成",
+      cancelled: "已停止",
+    }[item.status];
   if (item.kind === "tool")
     return `${safeToolLabel(item)} · ${generalToolStatusText[item.status]}`;
   return generalExecutionStatusText[item.status];
@@ -165,7 +178,10 @@ function TurnActivity({
     <>
       {items.map((item) => {
         const summary =
-          item.id === summaryId && (active || calls.length > 0) ? (
+          !item.phase &&
+          !(item.kind === "status" && item.publicSummary) &&
+          item.id === summaryId &&
+          (active || calls.length > 0) ? (
             <ActivityLine key="commands" live={Boolean(active)}>
               {active
                 ? `${active.kind === "status" && active.status === "retrying" ? "正在重试…" : active.kind === "status" && active.status === "rescheduling" ? "正在恢复执行…" : active.kind === "status" && active.status === "thinking" && !calls.length ? "正在分析任务…" : "正在执行…"}${calls.length ? ` · ${callSummary(calls, true)}` : ""}`
@@ -173,8 +189,34 @@ function TurnActivity({
             </ActivityLine>
           ) : null;
         let detail: React.ReactNode = null;
-        if (thinkingText(item)) {
-          detail = <ThinkingBlock item={item} />;
+        if (item.phase && Object.hasOwn(businessExecutionLabels, item.phase)) {
+          detail = (
+            <ActivityLine live={isLive(item)}>
+              {businessExecutionLabels[item.phase]} · {activityTitle(item)}
+            </ActivityLine>
+          );
+        } else if (
+          item.kind === "status" &&
+          item.status !== "thinking" &&
+          item.publicSummary?.trim()
+        ) {
+          detail = (
+            <ActivityLine live={isLive(item)}>
+              {item.publicSummary}
+            </ActivityLine>
+          );
+        } else if (thinkingText(item)) {
+          detail = (
+            <ThinkingBlock
+              item={item}
+              expandedOverride={
+                expandedGroups ? expandedGroups.has(item.id) : undefined
+              }
+              onToggle={
+                onToggleGroup ? () => onToggleGroup(item.id) : undefined
+              }
+            />
+          );
         } else if (item.kind === "tool") {
           if (
             item.resultOnly ||
@@ -224,6 +266,8 @@ export function GeneralExecutionActivity({
   if (
     !items?.some(
       (item) =>
+        item.phase ||
+        (item.kind === "status" && item.publicSummary) ||
         thinkingText(item) ||
         isLive(item) ||
         item.kind === "tool" ||
@@ -233,9 +277,7 @@ export function GeneralExecutionActivity({
   )
     return null;
   const groups: ActivityItem[][] = [];
-  for (const item of new Map(
-    items.map((item) => [JSON.stringify([item.turnId, item.id]), item]),
-  ).values()) {
+  for (const item of orderExecutionTimeline(items) as ActivityItem[]) {
     const last = groups.at(-1);
     if (last?.[0]?.turnId === item.turnId) last.push(item);
     else groups.push([item]);
@@ -248,7 +290,7 @@ export function GeneralExecutionActivity({
     >
       {groups.map((group) => (
         <TurnActivity
-          key={group[0]!.id}
+          key={group[0]!.turnId}
           items={group}
           expandedGroups={expandedGroups}
           onToggleGroup={onToggleGroup}

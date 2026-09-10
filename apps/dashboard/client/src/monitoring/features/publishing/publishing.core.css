@@ -752,3 +752,18 @@
     font-size: 22px;
   }
 }
+
+/* Loading is a line inside the white workspace at every route boundary. */
+.monitoring-module .publishing-page.publishing-page-loading {
+  min-height: 0;
+  padding-block: 16px;
+}
+.monitoring-module :where(.publishing-page) .publishing-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-block: 16px;
+  color: #595959;
+  background: transparent;
+  font-size: 13px;
+}

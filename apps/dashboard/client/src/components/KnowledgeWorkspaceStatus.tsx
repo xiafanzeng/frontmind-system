@@ -5,8 +5,6 @@ import { Button } from "./ui/button";
 import {
   KNOWLEDGE_DRAFT_READY_COPY,
   KNOWLEDGE_UPDATE_ATTENTION_COPY,
-  KNOWLEDGE_UPDATE_COMPLETE_COPY,
-  KNOWLEDGE_UPDATE_PREPARING_COPY,
 } from "@shared/knowledge-base-copy";
 
 export default function KnowledgeWorkspaceStatus({ progress }: { progress: KnowledgeBaseProgressDto | null }) {
@@ -19,9 +17,7 @@ export default function KnowledgeWorkspaceStatus({ progress }: { progress: Knowl
     ? partial ? "内容不完整，已保留的节点可预览。请确认重置后重新上传资料。" : "当前构建无法继续，请确认重置后重新上传资料并创建全新任务。"
     : progress.billingPause ? null
     : progress.packageState === "attention_required" ? KNOWLEDGE_UPDATE_ATTENTION_COPY
-    : progress.packageState === "preparing" ? KNOWLEDGE_UPDATE_PREPARING_COPY
-    : progress.packageState === "retrying" ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）。`
-    : progress.build.status === "published" ? KNOWLEDGE_UPDATE_COMPLETE_COPY
+    : progress.packageState === "preparing" || progress.packageState === "retrying" || progress.build.status === "published" ? null
     : (progress.updateAllowed ?? progress.packageAllowed) || progress.build.status === "ready_to_publish" ? KNOWLEDGE_DRAFT_READY_COPY
     // Routine execution belongs in the conversation's public execution
     // timeline. Keeping it out of this strip avoids a redundant status row.

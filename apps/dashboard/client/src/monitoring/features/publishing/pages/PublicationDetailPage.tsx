@@ -1,3 +1,5 @@
+import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
+import { publishingPublicExecution } from "@/lib/business-execution-adapters";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -152,6 +154,7 @@ export default function PublishingPublicationDetailPage({
       ) : null}
       {query.data ? (
         <>
+          <BusinessExecutionActivity execution={publishingPublicExecution(query.data)} />
           <section className="publishing-batch-title">
             <div>
               <h2>{query.data.articleTitle}</h2>

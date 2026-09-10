@@ -1,4 +1,6 @@
+import { persistKnowledgeBaseExecution, persistKnowledgeBaseStage } from "./knowledge-base-execution";
 import { acceptKnowledgeBaseInitialDraft } from "./knowledge-workbench-service";
+import { recordKnowledgeBaseUploadHeartbeat } from "./knowledge-base-turn-service";
 import { exportKnowledgeBaseWorkspace } from "./knowledge-workbench-export";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
@@ -3741,6 +3743,8 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
       "旧知识库构建不再续跑；请重置并重新上传资料",
     );
   }
+  const executionScope = { userId: claim.turn.userId, buildId: build.id, generation: build.generation, turnId: claim.turn.id };
+  await persistKnowledgeBaseStage({ ...executionScope, phase: "staging", rank: -90 });
   const prepared = await input.ensureDispatch({ claim, credential });
   const title = `FrontMind KB ${build.id} g${build.generation} ${claim.turn.id}`;
   const client = input.createClient({
@@ -3780,6 +3784,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     const bodyHash = createHash("sha256")
       .update(JSON.stringify(frozenBody))
       .digest("hex");
+    await persistKnowledgeBaseStage({ ...executionScope, phase: "dispatching", rank: -80 });
     const authority = await input.beginDispatch({
       userId: claim.turn.userId,
       turnId: claim.turn.id,
@@ -3876,6 +3881,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   await promoteManualKnowledgeBaseLogoAfterTaskAcknowledged(claim, {
     activation: "materialized_patch",
   });
+  await persistKnowledgeBaseStage({ ...executionScope, phase: "researching", rank: -70 });
   const priorCompletion = claim.turn.materializedCompletion;
   let events: Awaited<ReturnType<typeof client.listAllMessages>> = [];
   // A persisted stop attempt freezes a fully validated local CAS. Recovery of
@@ -3906,6 +3912,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
       throw error;
     }
   }
+  await persistKnowledgeBaseExecution({ ...executionScope, events });
   let status = latestManusV2TaskState(events) || "unknown";
   let output = normalizeManusV2Output(events);
   let descriptors = collectKnowledgeArchiveDescriptors(output);
@@ -3922,6 +3929,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
     // settling reset; this is read-only and never searches, adopts, sends or
     // creates another task.
     events = await client.listAllMessages({ taskId, order: "desc" });
+    await persistKnowledgeBaseExecution({ ...executionScope, events });
     status = latestManusV2TaskState(events) || status;
     output = normalizeManusV2Output(events);
     descriptors = collectKnowledgeArchiveDescriptors(output);
@@ -3933,6 +3941,7 @@ async function dispatchMaterializedKnowledgeBaseClaim(input: {
   const downloadableDescriptors = descriptors.filter(
     (descriptor) => descriptor.url || descriptor.fileId,
   );
+  if (downloadableDescriptors.length) await persistKnowledgeBaseStage({ ...executionScope, phase: "normalizing", rank: Math.max(0, ...events.map((event, index) => event.providerOriginalRank ?? index)) + 1 });
   // `normalizeManusV2Output` and the collector preserve chronological order.
   // Prefer the operation-bound name, but never let a Provider rename hide a
   // safe direct-assistant ZIP. Each group is newest-first, so a bad latest
@@ -6431,6 +6440,24 @@ router.post("/turn/reserve", async (req, res) => {
       },
       ...(observation ? { observation } : {}),
     });
+  }
+});
+
+router.post("/turn/upload-heartbeat", async (req, res) => {
+  const parsed = z.object({
+    conversationId: z.string().trim().min(1).max(191), turnId: z.string().min(1).max(36),
+    clientRequestId: z.string().min(1).max(128), expectedResetRevision: z.number().int().nonnegative(),
+    status: z.enum(["active", "cancelled"]), uploadedBytes: z.number().int().nonnegative().max(10 * 1024 ** 3),
+  }).safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: { code: "INVALID_UPLOAD_HEARTBEAT", message: "上传状态参数无效" } }); return; }
+  if (!req.frontmindUser || !(await requireKnowledgeBuildCapability(enterpriseWorkspaceUserId(req.frontmindUser.id), res))) return;
+  try {
+    const result = await recordKnowledgeBaseUploadHeartbeat({ ...parsed.data, userId: enterpriseWorkspaceUserId(req.frontmindUser.id) });
+    res.json(result);
+  } catch (error) {
+    res.status(error instanceof KnowledgeBaseTurnReservationError ? knowledgeBaseTurnReservationErrorStatus(error) : 503)
+      .json({ error: { code: error instanceof KnowledgeBaseTurnReservationError ? error.code : "UPLOAD_HEARTBEAT_UNAVAILABLE",
+        message: "暂时无法更新上传状态，请检查连接或重新进入知识库" } });
   }
 });
 

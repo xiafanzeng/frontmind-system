@@ -78,6 +78,7 @@ import {
   reserveKnowledgeBaseStartBuild,
   reserveKnowledgeBaseTurn,
   recordKnowledgeNodeEditPatch,
+  recordKnowledgeBaseUploadHeartbeat,
   stageAndClaimKnowledgeBaseDeferredTurnAttachment,
   stageKnowledgeBaseDeferredTurnAttachment,
   sanitizeKnowledgeBaseRecoveryMetadata,
@@ -699,202 +700,28 @@ describe("failed not-sent legacy business handoff", () => {
     }
   });
 
-  it("creates one hidden replacement with no second customer message or charge", async () => {
-    const source = failedNotSentLegacyHandoffTurn();
-    const build = legacyBuild(source);
-    const conversation = {
-      id: source.conversationId,
-      userId: source.userId,
-      apiCredentialId: source.apiCredentialId,
-      projectAssignmentId: null,
-      status: "failed",
-      version: 9,
-      deletedAt: null,
-      deletedMessageIds: [],
-    };
-    const sourceSelection = (store: TurnServiceStore) =>
-      store.turns.filter((candidate) => candidate.id === source.id);
-    const harness = createTurnServiceExecutor({
-      build,
-      conversation,
-      turns: [source],
-      turnSelections: [[sourceSelection, sourceSelection]],
-    });
-    const serviceDb = {
-      ...harness.executor,
-      select: (...args: any[]) => {
-        const projection = args[0];
-        return {
-          from: (table: unknown) => ({
-            where: () => ({
-              limit: async () =>
-                table === knowledgeBaseBuilds
-                  ? [harness.store.build]
-                  : projection === undefined
-                    ? [harness.store.turns[0]]
-                    : [],
-            }),
-          }),
-        };
-      },
-    };
-    const result = await reserveKnowledgeBaseFailedNotSentLegacyHandoff(
-      {
-        userId: 1,
-        buildId: build.id,
-        sourceTurnId: source.id,
-        expectedGeneration: 3,
-        expectedStateEpoch: 7,
-        expectedRevision: 7,
-        expectedLeafId: "1.8",
-        now: new Date("2026-08-01T00:01:00.000Z"),
-      },
-      serviceDb,
-      { proveLocalSources: localProof as any },
-    );
-
-    expect(result.state).toBe("reserved");
-    expect(harness.store.turns).toHaveLength(2);
-    expect(harness.store.messages).toEqual([]);
-    expect(harness.store.turns[0]).toMatchObject({
-      status: "cancelled",
-      metadata: { supersededReason: "legacy_failed_not_sent_handoff" },
-    });
-    expect(harness.store.turns[1]).toMatchObject({
-      operationType: "confirm",
-      status: "queued",
-      upstreamTaskId: null,
-      attachmentFileIds: [],
-      metadata: {
-        repairKind: "legacy_failed_not_sent_handoff",
-        hiddenReplacement: true,
-        chargeDisposition: "reuse_original_no_charge",
-        createAttemptState: "not_sent",
-        providerAttemptState: "not_sent",
-      },
-    });
-    expect(harness.store.build).toMatchObject({
-      activeTurnId: result.replacementTurnId,
-      providerProtocol: "legacy_v1",
-      status: "confirming",
-    });
-
-    const replay = await reserveKnowledgeBaseFailedNotSentLegacyHandoff(
-      {
-        userId: 1,
-        buildId: build.id,
-        sourceTurnId: source.id,
-        expectedGeneration: 3,
-        expectedStateEpoch: 7,
-        expectedRevision: 7,
-        expectedLeafId: "1.8",
-      },
-      serviceDb,
-      {
-        proveLocalSources: async () => {
-          throw new Error("a duplicate worker must not repeat local proof");
-        },
-      },
-    );
-    expect(replay).toEqual({
-      state: "already_reserved",
-      sourceTurnId: source.id,
-      replacementTurnId: result.replacementTurnId,
-      buildId: build.id,
-    });
-    expect(harness.store.turns).toHaveLength(2);
-    expect(harness.store.messages).toEqual([]);
+  it("rejects retired reserveKnowledgeBaseFailedNotSentLegacyHandoff before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [reserveKnowledgeBaseFailedNotSentLegacyHandoff]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
+      });
+    }
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 
-  it("uses one current credential and generation+1 when the never-sent pinned credential was deleted", async () => {
-    const source = failedNotSentLegacyHandoffTurn();
-    const build = legacyBuild(source);
-    const sourceSelection = (store: TurnServiceStore) =>
-      store.turns.filter((candidate) => candidate.id === source.id);
-    const harness = createTurnServiceExecutor({
-      build,
-      conversation: {
-        id: source.conversationId,
-        userId: source.userId,
-        apiCredentialId: source.apiCredentialId,
-        projectAssignmentId: null,
-        status: "failed",
-        version: 9,
-        deletedAt: null,
-        deletedMessageIds: [],
-      },
-      turns: [source],
-      credentials: [
-        { id: "credential-1", userId: 1, status: "deleted" },
-        { id: "credential-current", userId: 1, status: "active" },
-      ],
-      turnSelections: [[sourceSelection, sourceSelection]],
-    });
-    const serviceDb = {
-      ...harness.executor,
-      select: (...args: any[]) => {
-        const projection = args[0];
-        return {
-          from: (table: unknown) => ({
-            where: () => ({
-              limit: async () =>
-                table === knowledgeBaseBuilds
-                  ? [harness.store.build]
-                  : projection === undefined
-                    ? [harness.store.turns[0]]
-                    : [],
-            }),
-          }),
-        };
-      },
-    };
-
-    const result = await reserveKnowledgeBaseFailedNotSentLegacyHandoff(
-      {
-        userId: 1,
-        buildId: build.id,
-        sourceTurnId: source.id,
-        expectedGeneration: 3,
-        expectedStateEpoch: 7,
-        expectedRevision: 7,
-        expectedLeafId: "1.8",
-        replacementCredentialId: "credential-current",
-        now: new Date("2026-08-01T00:01:00.000Z"),
-      },
-      serviceDb,
-      { proveLocalSources: localProof as any },
-    );
-
-    expect(result.state).toBe("reserved");
-    expect(harness.store.turns[0]).toMatchObject({
-      status: "cancelled",
-      buildGeneration: 3,
-    });
-    expect(harness.store.turns[1]).toMatchObject({
-      apiCredentialId: "credential-current",
-      buildGeneration: 4,
-      upstreamTaskId: null,
-      metadata: {
-        createAttemptState: "not_sent",
-        providerAttemptState: "not_sent",
-        receiptSourceGeneration: 3,
-        credentialRebound: true,
-      },
-    });
-    expect(harness.store.build).toMatchObject({
-      generation: 4,
-      activeTurnId: result.replacementTurnId,
-      providerProtocol: "legacy_v1",
-      handoffProvenance: {
-        sourceGeneration: 3,
-        targetGeneration: 4,
-        receiptSourceGeneration: 3,
-      },
-    });
-    expect(harness.store.conversation).toMatchObject({
-      apiCredentialId: "credential-current",
-      status: "running",
-    });
+  it("rejects retired reserveKnowledgeBaseFailedNotSentLegacyHandoff before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [reserveKnowledgeBaseFailedNotSentLegacyHandoff]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
+      });
+    }
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 });
 
@@ -1871,73 +1698,16 @@ describe("Manus v2 canonical task writer fence", () => {
     });
   });
 
-  it("commits one crash-safe legacy handoff digest and resumes it idempotently", async () => {
-    const leaseToken = "handoff-lease";
-    const snapshotSha256 = "f".repeat(64);
-    const activeTurn = turn({
-      metadata: {
-        attachmentsFrozen: true,
-        providerProtocol: "legacy_v1",
-        createAttemptState: "not_sent",
-        leaseOwnerHash: createHash("sha256")
-          .update(leaseToken, "utf8")
-          .digest("hex"),
-      },
-    });
-    const harness = createTurnServiceExecutor({
-      build: build({ providerProtocol: "legacy_v1" }),
-      turns: [activeTurn],
-      turnSelections: [[(store) => store.turns], [(store) => store.turns]],
-    });
-
-    await expect(
-      activateKnowledgeBaseManusV2Handoff(
-        {
-          userId: 1,
-          turnId: activeTurn.id,
-          leaseToken,
-          expectedGeneration: 3,
-          expectedRevision: 7,
-          expectedLeafId: "1.8",
-          snapshotSha256,
-          legacyTaskIdSha256: "e".repeat(64),
-          now: new Date("2026-08-01T00:00:30.000Z"),
-        },
-        harness.executor,
-      ),
-    ).resolves.toMatchObject({ migrated: true, snapshotSha256 });
-    expect(harness.store.build).toMatchObject({
-      providerProtocol: "manus_v2",
-      canonicalTaskState: "unbound",
-      canonicalTaskId: null,
-      handoffProvenance: {
-        schemaVersion: 1,
-        sourceProtocol: "legacy_v1",
-        snapshotSha256,
-        pendingTurnId: activeTurn.id,
-      },
-    });
-    expect(harness.store.turns[0]!.metadata).toMatchObject({
-      providerProtocol: "manus_v2",
-      providerAttemptState: "not_sent",
-      operationToken: activeTurn.operationKey,
-      repairKind: "legacy_handoff",
-    });
-
-    await expect(
-      activateKnowledgeBaseManusV2Handoff(
-        {
-          userId: 1,
-          turnId: activeTurn.id,
-          leaseToken,
-          expectedGeneration: 3,
-          expectedRevision: 7,
-          expectedLeafId: "1.8",
-          snapshotSha256,
-        },
-        harness.executor,
-      ),
-    ).resolves.toEqual({ migrated: false, snapshotSha256 });
+  it("rejects retired activateKnowledgeBaseManusV2Handoff before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [activateKnowledgeBaseManusV2Handoff]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
+      });
+    }
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 
   it("atomically rejects one invalid materialized result, releases recovery, and deduplicates the settlement", async () => {
@@ -3717,172 +3487,16 @@ describe("knowledge-base HTTP replay receipts", () => {
     });
   });
 
-  it("replays only an exact fully verified legacy start browser intent", async () => {
-    const completedAt = new Date("2026-08-01T00:00:10.000Z");
-    const attachment = {
-      file_id: "customer-file-legacy-start",
-      filename: "company-profile.pdf",
-    };
-    const build = {
-      id: turn().buildId,
-      userId: 1,
-      conversationId: "conversation-1",
-      companyName: "FrontMind",
-      companyWebsite: "https://www.frontmind.net/",
-      skillVersion: "4",
-      skillContentHash: "c".repeat(64),
-      generation: 3,
-      status: "protocol_error",
-      activeTurnId: turn().id,
-      upstreamTaskId: "provider-task-legacy-start",
-      currentLeafId: "1.8",
-      revision: 7,
-      protocolErrorCode: "PROGRESS_PROTOCOL_INVALID",
-    };
-    const recovery = {
-      kind: "start",
-      conversationId: "conversation-1",
-      companyName: build.companyName,
-      companyWebsite: build.companyWebsite,
-      operatorNotes: "",
-      attachments: [attachment],
-      skillVersion: build.skillVersion,
-      skillContentHash: build.skillContentHash,
-      includePrefill: false,
-      prefillSnapshotId: null,
-      protocolFailureObservation: {
-        observationKeyHash: "d".repeat(64),
-        count: 3,
-        firstObservedAt: "2026-08-01T00:00:00.000Z",
-        lastObservedAt: completedAt.toISOString(),
-      },
-    };
-    const requestBody = {
-      prompt: "Pinned legacy start prompt",
-      agentProfile: "frontmind-pro",
-      taskMode: "agent" as const,
-      attachments: [
-        { file_id: "skill-file-legacy-start", filename: "skill.zip" },
-        attachment,
-      ],
-    };
-    const operationKey = createKnowledgeBaseOperationKey({
-      buildId: build.id,
-      buildGeneration: build.generation,
-      operationType: "start",
-      expectedRevision: build.revision,
-      expectedLeafId: build.currentLeafId,
-    });
-    const incident = turn({
-      operationKey,
-      operationType: "start",
-      requestHash: hashKnowledgeBaseTurnRequest({
-        operationType: "start",
-        generation: build.generation,
-        revision: build.revision,
-        leafId: build.currentLeafId,
-        expectedAttachmentCount: 2,
-        userAttachmentCount: 1,
-        payload: {
-          companyName: recovery.companyName,
-          companyWebsite: recovery.companyWebsite,
-          operatorNotes: recovery.operatorNotes,
-          attachments: recovery.attachments,
-          skillVersion: recovery.skillVersion,
-          skillContentHash: recovery.skillContentHash,
-          prefillSnapshotId: recovery.prefillSnapshotId,
-        },
-      }),
-      upstreamIdempotencyKeyHash: hashKnowledgeBaseUpstreamIdempotencyKey(
-        createKnowledgeBaseUpstreamIdempotencyKey(operationKey),
-      ),
-      status: "failed",
-      upstreamTaskId: build.upstreamTaskId,
-      errorCode: "PROGRESS_PROTOCOL_INVALID",
-      completedAt,
-      leaseExpiresAt: null,
-      attachmentFileIds: ["skill-file-legacy-start", attachment.file_id],
-      metadata: {
-        attachmentsFrozen: true,
-        expectedAttachmentCount: 2,
-        userAttachmentCount: 1,
-        dispatchingAt: "2026-07-31T23:59:59.000Z",
-        recovery,
-        preparedDispatch: {
-          schemaVersion: 1,
-          baseUrl: "https://api.example.test",
-          requestBody,
-          bodySha256: hashKnowledgeBaseTurnRequest(requestBody),
-          preparedAt: "2026-08-01T00:00:00.000Z",
-        },
-      },
-    });
-    const exactInput = {
-      userId: 1,
-      conversationId: "conversation-1",
-      clientRequestId: incident.clientRequestId,
-      companyName: build.companyName,
-      companyWebsite: ` ${build.companyWebsite} `,
-      operatorNotes: "  ",
-      attachments: [attachment],
-    };
-
-    await expect(
-      inspectKnowledgeBaseLegacyStartReplay(
-        exactInput,
-        replayExecutor([[incident], [build as any]]),
-      ),
-    ).resolves.toMatchObject({
-      state: "terminal",
-      turn: {
-        id: incident.id,
-        dispatchState: "failed",
-        failureClass: "terminal_nonregenerable",
-        recoveryAction: "contact_support",
-        canRegenerate: false,
-      },
-    });
-
-    for (const changed of [
-      { companyName: "Other Brand" },
-      { companyWebsite: "https://other.example/" },
-      { operatorNotes: "changed" },
-      { attachments: [{ ...attachment, filename: "other.pdf" }] },
-      { attachments: [] },
-    ]) {
-      await expect(
-        inspectKnowledgeBaseLegacyStartReplay(
-          { ...exactInput, ...changed },
-          replayExecutor([[incident], [build as any]]),
-        ),
-      ).rejects.toMatchObject({
-        code: "KNOWLEDGE_BASE_REQUEST_REPLAY_MISMATCH",
+  it("rejects retired inspectKnowledgeBaseLegacyStartReplay before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [inspectKnowledgeBaseLegacyStartReplay]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
       });
     }
-
-    await expect(
-      inspectKnowledgeBaseLegacyStartReplay(
-        exactInput,
-        replayExecutor([
-          [
-            {
-              ...incident,
-              metadata: {
-                ...(incident.metadata as Record<string, unknown>),
-                recovery: {
-                  ...recovery,
-                  protocolFailureObservation: {
-                    ...recovery.protocolFailureObservation,
-                    count: "3",
-                  },
-                },
-              },
-            },
-          ],
-          [build as any],
-        ]),
-      ),
-    ).resolves.toBeNull();
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 
   it("rejects different content under the same request id with a stable code", async () => {
@@ -4102,99 +3716,28 @@ describe("knowledge-base HTTP replay receipts", () => {
     ).resolves.toBeNull();
   });
 
-  it("replays a legacy deferred reservation from immutable coordinates and manifest", async () => {
-    const manifest = [{ filename: "brief.txt", sha256: "b".repeat(64) }];
-    const awaiting = replayTurn({
-      operationType: "revise",
-      leaseExpiresAt: null,
-      metadata: {
-        awaitingClientAttachments: true,
-        clientAttachmentManifestHash: hashKnowledgeBaseTurnRequest(manifest),
-        userAttachmentCount: 1,
-      },
-    });
-    await expect(
-      inspectKnowledgeBaseLegacyDeferredReservationReplay(
-        {
-          userId: 1,
-          conversationId: "conversation-1",
-          clientRequestId: awaiting.clientRequestId,
-          clientAttachmentManifest: manifest,
-          operationType: "revise",
-          expectedGeneration: 3,
-          expectedRevision: 7,
-          expectedLeafId: "1.8",
-        },
-        replayExecutor([[awaiting]]),
-      ),
-    ).resolves.toMatchObject({
-      state: "awaiting_attachments",
-      turn: { id: awaiting.id },
-    });
+  it("rejects retired inspectKnowledgeBaseLegacyDeferredReservationReplay before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [inspectKnowledgeBaseLegacyDeferredReservationReplay]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
+      });
+    }
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 
-  it("only replays a legacy upload-first request after its exact takeover ledger is durable", async () => {
-    const manifest = [{ filename: "logo.png", sha256: "c".repeat(64) }];
-    const attachments = [{ file_id: "file-logo", filename: "logo.png" }];
-    const beforeTakeover = replayTurn({
-      operationType: "revise",
-      leaseExpiresAt: null,
-      metadata: {
-        awaitingClientAttachments: true,
-        clientAttachmentManifestHash: hashKnowledgeBaseTurnRequest(manifest),
-        recovery: { attachmentManifest: manifest, attachments: [] },
-      },
-    });
-    const input = {
-      userId: 1,
-      conversationId: "conversation-1",
-      clientRequestId: beforeTakeover.clientRequestId,
-      clientAttachmentManifest: manifest,
-      attachments,
-      operationType: "revise" as const,
-      expectedGeneration: 3,
-      expectedRevision: 7,
-      expectedLeafId: "1.8",
-    };
-    await expect(
-      inspectKnowledgeBaseLegacyAttachmentTakeoverReplay(
-        input,
-        replayExecutor([[beforeTakeover]]),
-      ),
-    ).resolves.toBeNull();
-
-    const afterTakeover = replayTurn({
-      operationType: "revise",
-      metadata: {
-        awaitingClientAttachments: false,
-        legacyUploadFirstTakeover: true,
-        clientAttachmentManifestHash: hashKnowledgeBaseTurnRequest(manifest),
-        userAttachmentCount: 1,
-        recovery: {
-          kind: "turn",
-          conversationId: "conversation-1",
-          attachmentManifest: manifest,
-          attachments,
-        },
-      },
-    });
-    await expect(
-      inspectKnowledgeBaseLegacyAttachmentTakeoverReplay(
-        input,
-        replayExecutor([[afterTakeover]]),
-      ),
-    ).resolves.toMatchObject({
-      state: "pending",
-      turn: { id: afterTakeover.id },
-    });
-    await expect(
-      inspectKnowledgeBaseLegacyAttachmentTakeoverReplay(
-        { ...input, attachments: [{ ...attachments[0]!, file_id: "other" }] },
-        replayExecutor([[afterTakeover]]),
-      ),
-    ).rejects.toMatchObject({
-      code: "KNOWLEDGE_BASE_REQUEST_REPLAY_MISMATCH",
-    });
+  it("rejects retired inspectKnowledgeBaseLegacyAttachmentTakeoverReplay before reading or changing history", async () => {
+    const executor = { select: vi.fn(), transaction: vi.fn() };
+    for (const service of [inspectKnowledgeBaseLegacyAttachmentTakeoverReplay]) {
+      await expect(service({} as never, executor)).rejects.toMatchObject({
+        code: "RESET_REQUIRED",
+        message: "旧知识库任务已停止支持，请批准重置后重新上传完整资料。",
+      });
+    }
+    expect(executor.select).not.toHaveBeenCalled();
+    expect(executor.transaction).not.toHaveBeenCalled();
   });
 
   it("rejects a new reservation against a stale presentation key", async () => {
@@ -6567,6 +6110,25 @@ describe("knowledge-base attachment-first turn reservation", () => {
     });
   });
 
+  it("persists upload cancellation without losing files and fences late heartbeats after reset", async () => {
+    const { executor, store } = createTurnServiceExecutor({
+      build: { ...build }, conversation: { ...conversation },
+      turnSelections: [[[], []], [(s) => s.turns], [(s) => s.turns], [(s) => s.turns]],
+    });
+    const reserved = await reserveKnowledgeBaseTurn(reserveInput(), executor);
+    const input = { userId: 1, conversationId: build.conversationId, turnId: reserved.turn.id,
+      clientRequestId: reserved.turn.clientRequestId, expectedResetRevision: 0, uploadedBytes: 1024 };
+    await recordKnowledgeBaseUploadHeartbeat({ ...input, status: "active", now: new Date(100_000) }, executor);
+    await recordKnowledgeBaseUploadHeartbeat({ ...input, status: "cancelled", now: new Date(115_000) }, executor);
+    expect(store.turns[0]!.metadata).toMatchObject({ awaitingClientAttachments: true,
+      browserUpload: { status: "cancelled", uploadedBytes: 1024, lastHeartbeatAt: 115_000, lastProgressAt: 100_000 } });
+    expect(store.turns[0]!.upstreamTaskId).toBeNull();
+    store.resetRevision = 1;
+    await expect(recordKnowledgeBaseUploadHeartbeat({ ...input, status: "active" }, executor))
+      .rejects.toMatchObject({ code: "KNOWLEDGE_BASE_RESET_REVISION_CHANGED" });
+    expect((store.turns[0]!.metadata as any).browserUpload.status).toBe("cancelled");
+  });
+
   it("reads only the frozen customer manifest for an active deferred reservation", async () => {
     const { executor } = createTurnServiceExecutor({
       build: { ...build },
@@ -7447,119 +7009,12 @@ describe("knowledge-base attachment-first turn reservation", () => {
     },
   );
 
-  it("atomically takes over without local text and coalesces a lost-202 replay", async () => {
-    const { executor, store } = createTurnServiceExecutor({
-      build: { ...build },
-      conversation: { ...conversation },
-      resources: deferredUploadResources(),
-      turnSelections: [
-        [[], []],
-        [(current) => current.turns],
-        [(current) => current.turns, (current) => current.turns],
-        [(current) => current.turns, (current) => current.turns],
-      ],
-    });
-    const reserved = await reserveKnowledgeBaseTurn(reserveInput(), executor);
-    expect(reserved.state).toBe("awaiting_attachments");
-    const originalTurnId = reserved.turn.id;
-    const originalOperationKey = reserved.turn.operationKey;
-    const originalUpstreamIdempotencyKey =
-      createKnowledgeBaseUpstreamIdempotencyKey(originalOperationKey);
-
-    await stageKnowledgeBaseDeferredTurnAttachment(
-      {
-        userId: 1,
-        buildId: build.id,
-        turnId: originalTurnId,
-        clientRequestId: reserved.turn.clientRequestId,
-        clientAttachmentManifest: manifest,
-        expectedResetRevision: 0,
-        index: 0,
-        attachment: { file_id: "old-staged-facts", filename: "facts.pdf" },
-      },
-      executor,
-    );
-
-    const missingLocalMessageInput = uploadFirstTakeoverInput();
-    const takeoverWithoutLocalMessage = {
-      ...missingLocalMessageInput,
-      userText: "",
-      requestPayload: {
-        ...(missingLocalMessageInput.requestPayload as Record<string, unknown>),
-        userMessage: "",
-      },
-      recoveryMetadata: {
-        ...(missingLocalMessageInput.recoveryMetadata as Record<
-          string,
-          unknown
-        >),
-        userMessage: "",
-      },
-    };
-    const takenOver = await reserveKnowledgeBaseTurn(
-      takeoverWithoutLocalMessage,
-      executor,
-    );
-    expect(takenOver).toMatchObject({
-      state: "acquired",
-      turn: {
-        id: originalTurnId,
-        clientRequestId: "deferred-request-1",
-        operationKey: originalOperationKey,
-        attachmentFileIds: [],
-        awaitingClientAttachments: false,
-      },
-      upstreamIdempotencyKey: originalUpstreamIdempotencyKey,
-    });
-    expect(store.turns).toHaveLength(1);
-    expect(store.messages).toHaveLength(1);
-    expect(store.turns[0]).toMatchObject({
-      id: originalTurnId,
-      upstreamTaskId: null,
-      attachmentFileIds: [],
-      metadata: {
-        attachmentsFrozen: false,
-        awaitingClientAttachments: false,
-        expectedAttachmentCount: 3,
-        userAttachmentCount: 2,
-        recovery: {
-          userMessage: "请结合附件修订",
-          attachments: [
-            { file_id: "replacement-facts", filename: "facts.pdf" },
-            {
-              file_id: "replacement-logo-notes",
-              filename: "logo-notes.txt",
-            },
-          ],
-        },
-      },
-    });
-    expect((store.turns[0]!.metadata as any).clientAttachmentManifestHash).toBe(
-      hashKnowledgeBaseTurnRequest(manifest),
-    );
-    expect((store.turns[0]!.metadata as any).clientStagedAttachments).toBe(
-      undefined,
-    );
-    expect(store.build).toMatchObject({
-      activeTurnId: originalTurnId,
-      stateEpoch: 4,
-      lastTurnUserText: "请结合附件修订",
-      lastTurnAttachmentCount: 2,
-    });
-
-    const replay = await reserveKnowledgeBaseTurn(
-      {
-        ...takeoverWithoutLocalMessage,
-        now: new Date("2026-08-01T00:01:01.000Z"),
-      },
-      executor,
-    );
-    expect(replay).toMatchObject({
-      state: "pending",
-      turn: { id: originalTurnId, operationKey: originalOperationKey },
-    });
-    expect(store.turns).toHaveLength(1);
-    expect(store.turns[0]!.upstreamTaskId).toBeNull();
+  it("rejects upload-first legacy takeover without replacing the fresh reservation", async () => {
+    const { executor, store } = createTurnServiceExecutor({ build: { ...build }, conversation: { ...conversation }, turnSelections: [[[], []]] });
+    await reserveKnowledgeBaseTurn(reserveInput(), executor);
+    const before = structuredClone(store);
+    await expect(reserveKnowledgeBaseTurn(uploadFirstTakeoverInput(), executor)).rejects.toMatchObject({ code: "RESET_REQUIRED" });
+    expect(store).toEqual(before);
   });
 
   it.each([
@@ -7636,7 +7091,7 @@ describe("knowledge-base attachment-first turn reservation", () => {
 
       await expect(
         reserveKnowledgeBaseTurn(nextInput() as any, executor),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      ).rejects.toMatchObject({ code: "RESET_REQUIRED" });
       expect(store.turns).toHaveLength(1);
       expect(store.turns[0]).toMatchObject({
         id: reserved.turn.id,
@@ -7673,7 +7128,7 @@ describe("knowledge-base attachment-first turn reservation", () => {
 
       await expect(
         reserveKnowledgeBaseTurn(input as any, executor),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      ).rejects.toMatchObject({ code: "RESET_REQUIRED" });
       expect(store.turns).toHaveLength(1);
       expect(store.turns[0]).toMatchObject({
         id: reserved.turn.id,

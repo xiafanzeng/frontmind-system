@@ -376,3 +376,10 @@
     padding-top: 16px;
   }
 }
+
+@media (max-width: 1023px) {
+  /* Keep reset/update actions beside the fixed mobile navigation control. */
+  .user-brand-dashboard.operator-mode .knowledge-flow-actions {
+    padding-left: 72px;
+  }
+}

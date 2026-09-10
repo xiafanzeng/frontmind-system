@@ -1228,6 +1228,10 @@ export async function uploadKnowledgeBaseLocalAsset(
           isRetryableUploadStatus(
             Number((error as { status?: unknown } | null)?.status || 0),
           ));
+      // A stalled transfer/confirmation has already exhausted its bounded wait.
+      // Surface the retained batch for an explicit check instead of hiding it
+      // behind another five-minute automatic attempt.
+      if (["UPLOAD_BROWSER_STALLED", "UPLOAD_SERVER_RESPONSE_TIMEOUT"].includes(errorCode)) throw error;
       const resumableRevisionConflict =
         Boolean(coordinate) &&
         options.resumeScope?.operationType === "revise" &&
@@ -3695,6 +3699,7 @@ function installFileUploadWatchdog(
     | "UPLOAD_SERVER_RESPONSE_TIMEOUT"
     | undefined;
   let uploadComplete = false;
+  let greatestLoadedBytes = 0;
   const armIdleTimeout = () => {
     if (idleTimeoutId !== undefined) clearTimeout(idleTimeoutId);
     idleTimeoutId = setTimeout(() => {
@@ -3725,10 +3730,8 @@ function installFileUploadWatchdog(
       event.lengthComputable && event.loaded >= event.total;
     if (transferComplete) {
       markUploadComplete();
-    } else {
-      // This is an idle watchdog, not a total upload deadline. Browsers may
-      // emit repeated byte counts while their network stack is still active,
-      // so every upload progress event refreshes the idle window.
+    } else if (event.loaded > greatestLoadedBytes) {
+      greatestLoadedBytes = event.loaded;
       armIdleTimeout();
     }
     if (event.lengthComputable) {

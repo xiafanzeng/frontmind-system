@@ -23,6 +23,7 @@ import { toast } from "sonner";
 
 interface MessageActionsProps {
   message: LocalMessage;
+  allowCopy?: boolean;
   onDelete?: () => void;
   onRegenerate?: () => void;
   children: React.ReactNode;
@@ -31,6 +32,7 @@ interface MessageActionsProps {
 
 export default function MessageActions({
   message,
+  allowCopy = true,
   onDelete,
   onRegenerate,
   children,
@@ -80,7 +82,7 @@ export default function MessageActions({
     }
   };
 
-  const hasContent = !!message.content;
+  const hasContent = allowCopy && !!message.content;
   const hasCode = message.content?.includes("```");
 
   return (

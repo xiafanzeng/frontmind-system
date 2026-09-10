@@ -217,6 +217,7 @@ export interface KnowledgeBaseClientState {
   activeTurnResetRevision?: number;
   activeTurnOperationType?: KnowledgeBaseOperationType;
   activeTurnAwaitingClientAttachments?: boolean;
+  browserUpload?: import("@shared/knowledge-base-upload-status").KnowledgeBaseBrowserUpload;
   activeTurnStagedAttachmentCount?: number;
   activeTurnExpectedAttachmentCount?: number;
   /** Provenance of the currently approved presentation; remains after the reservation is released. */
@@ -1655,6 +1656,7 @@ export function applyKnowledgeBaseObservation(
     ...conversation,
     messages,
     status: nextStatus,
+    execution: observation.execution ?? observation.interaction.progress?.execution ?? (observation.generation === conversation.knowledgeBase?.generation ? conversation.execution : undefined),
     taskId:
       observation.authoritativeTaskId === null
         ? undefined
@@ -1713,6 +1715,7 @@ export function applyKnowledgeBaseObservation(
       activeTurnMessageSequence: observation.activeTurn?.messageSequence,
       activeTurnResetRevision: observation.activeTurn?.resetRevision,
       activeTurnOperationType: observation.activeTurn?.operationType,
+      browserUpload: observation.activeTurn?.browserUpload,
       activeTurnAwaitingClientAttachments:
         observation.activeTurn?.awaitingClientAttachments ??
         observation.activeTurn?.requiresAttachmentReselection ??

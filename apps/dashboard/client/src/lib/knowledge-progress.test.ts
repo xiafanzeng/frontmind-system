@@ -17,6 +17,14 @@ afterEach(() => {
 });
 
 describe("reconcileKnowledgeBaseObservation", () => {
+  it("keeps real execution evidence through observation normalization", () => {
+    const execution = { schemaVersion: 1, taskId: "build", runId: "build", coverage: "partial", timeline: [
+      { id: "upload", turnId: "turn", userSequence: 1, rank: 0, timestamp: 100, kind: "status", status: "waiting", publicSummary: "正在上传资料" },
+    ] };
+    const observation = knowledgeBaseObservationFromPayload({ observation: { stateEpoch: 1, generation: 1,
+      execution, authoritativeTaskId: null, interaction: { progress: null, interactionState: "processing" } } });
+    expect(observation.execution).toEqual(execution);
+  });
   it("preserves the accepted same-turn resume receipt from the reconcile envelope", async () => {
     const observation = {
       stateEpoch: 4,

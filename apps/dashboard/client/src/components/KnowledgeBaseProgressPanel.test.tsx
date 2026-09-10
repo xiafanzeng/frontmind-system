@@ -148,20 +148,8 @@ describe("KnowledgeBaseProgressPanel", () => {
       "正在生成 ZIP 并更新知识库。",
     ],
     [
-      "workspace status",
-      KnowledgeWorkspaceStatus,
-      "preparing",
-      "正在生成 ZIP 并更新知识库。",
-    ],
-    [
       "progress panel retry",
       KnowledgeBaseProgressPanel,
-      "retrying",
-      "正在重试生成 ZIP 并更新知识库（第 2 次）。",
-    ],
-    [
-      "workspace status retry",
-      KnowledgeWorkspaceStatus,
       "retrying",
       "正在重试生成 ZIP 并更新知识库（第 2 次）。",
     ],
@@ -188,6 +176,26 @@ describe("KnowledgeBaseProgressPanel", () => {
       expect(screen.queryByText(/当前正式版本继续可用/)).toBeNull();
     },
   );
+
+  it.each(["preparing", "retrying"] as const)("leaves ordinary %s execution in the conversation without a duplicate top row", (packageState) => {
+    const { container } = render(<KnowledgeWorkspaceStatus progress={{
+      ...progress,
+      build: { ...progress.build, status: "ready_to_publish", currentLeafId: null },
+      packageState,
+      packageAllowed: false,
+    }} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it.each(["creating", "waiting_output", "normalizing"] as const)("has no empty or duplicate top strip during %s", (operationState) => {
+    const { container } = render(<KnowledgeWorkspaceStatus progress={{
+      ...progress,
+      build: { ...progress.build, status: "researching", currentLeafId: null },
+      operationState,
+      packageAllowed: false,
+    }} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 
   it("never presents a stopped build as an operation being restored", () => {
     const { container } = render(

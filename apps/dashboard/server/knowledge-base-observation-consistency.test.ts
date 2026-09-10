@@ -25,6 +25,11 @@ const dependencies = vi.hoisted(() => ({
 }));
 
 vi.mock("./db", () => ({ getDb: dependencies.getDb }));
+// Execution events have their own owned-generation query tests; keep these
+// snapshot/receipt fixtures focused on observation transaction consistency.
+vi.mock("./knowledge-base-execution", () => ({
+  loadKnowledgeBaseExecution: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("./knowledge-base-customer-upload", () => ({
   knowledgeBaseCustomerUploadResources: dependencies.customerUploadResources,
   logKnowledgeBaseCustomerUploadEnrichmentSkipped:
@@ -38,7 +43,7 @@ vi.mock("./knowledge-base-materialized-assets", () => ({
     dependencies.projectWorkingSetResources,
 }));
 
-import { getKnowledgeBaseObservationProjection } from "./knowledge-base-progress-service";
+import { getKnowledgeBaseObservationProjection, getKnowledgeBaseProgress } from "./knowledge-base-progress-service";
 import { KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH } from "./knowledge-base-tree-policy-rollout";
 
 function query(values: Record<string, unknown>[]) {
@@ -197,6 +202,19 @@ const RESET_REQUIRED_NOTICE = {
 } as const;
 
 describe("knowledge-base observation consistency", () => {
+  it("never hydrates retired reset messages, provider tasks or nodes into a blank workspace", async () => {
+    const executor = snapshotExecutor({
+      build: build({ executionMode: "reset_retired", activeTurnId: null }),
+      nodes: [node()],
+      conversation: { id: "7:conversation-snapshot", status: "archived" },
+      messages: [{ role: "assistant", content: "旧任务正文" }],
+    });
+    dependencies.getDb.mockResolvedValue({ ...executor, transaction: (run: any) => run(executor) });
+    await expect(getKnowledgeBaseProgress({ userId: 7 })).resolves.toBeNull();
+    await expect(getKnowledgeBaseProgress({ userId: 7, conversationId: "conversation-snapshot" })).resolves.toBeNull();
+    await expect(getKnowledgeBaseObservationProjection({ userId: 7, conversationId: "conversation-snapshot" })).resolves.toBeNull();
+  });
+
   it("keeps completed pre-v5 content visible but requires an approved reset", async () => {
     const completedAt = new Date("2026-08-01T00:00:10.000Z");
     dependencies.getDb.mockResolvedValue({

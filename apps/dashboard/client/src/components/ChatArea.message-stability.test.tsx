@@ -66,6 +66,7 @@ describe("ordinary-chat elapsed presentation", () => {
   it("does not expose copy on an intermediate process message", () => {
     render(
       <MessageBubble
+        isFinalReply={false}
         message={{
           id: "assistant-process",
           role: "assistant",

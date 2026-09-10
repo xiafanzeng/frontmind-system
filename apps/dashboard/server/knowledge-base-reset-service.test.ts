@@ -33,6 +33,8 @@ vi.mock("./credential-agent-client", () => ({
 }));
 
 import {
+  conversations,
+  conversationTurns,
   deliveryProjectAssignments,
   knowledgeBaseBuilds,
   knowledgeBaseConversationRetentionTombstones,
@@ -370,12 +372,29 @@ describe("direct knowledge reset", () => {
     return { writes, deletes };
   }
   const actor = { id: 42, username: "customer", role: "user" } as any;
-  it("clears owned content and advances the revision without tickets or an engineer", async () => {
+  it("retires execution atomically and advances the revision while preserving audit records", async () => {
     const h = harness();
     await expect(
       resetKnowledgeBase({ actor, expectedRevision: 2 }),
     ).resolves.toMatchObject({ revision: 3, cleanup: { builds: 1 } });
-    expect(h.deletes).toContain(knowledgeBaseBuilds);
+    expect(h.deletes).toEqual([]);
+    expect(h.writes.find((row) => row.table === knowledgeBaseBuilds)?.value).toMatchObject({
+      executionMode: "reset_retired", status: "failed", activeTurnId: null,
+      activeWorkingSetId: null, currentLeafId: null, currentPresentationKey: null,
+      recoveryLeaseOwnerHash: null, recoveryLeaseExpiresAt: null,
+      canonicalTaskState: "reset_retired", protocolErrorCode: "RESET_COMPLETED",
+    });
+    expect(h.writes.find((row) => row.table === conversationTurns)?.value).toMatchObject({
+      status: "cancelled", leaseExpiresAt: null, errorCode: "RESET_COMPLETED",
+    });
+    expect(h.writes.find((row) => row.table === conversations)?.value).toMatchObject({
+      status: "archived", deletedAt: expect.any(Date),
+    });
+    expect(h.writes.find((row) => row.table === knowledgeImportReceipts)?.value).toMatchObject({
+      status: "failed", errorCode: "RESET_COMPLETED",
+    });
+    const revisionWrite = h.writes.findIndex((row) => row.table === knowledgeBaseResetStates && row.value.revision === 3);
+    expect(revisionWrite).toBeGreaterThan(h.writes.findIndex((row) => row.table === conversationTurns));
     const tombstone = h.writes.find(
       (row) => row.table === knowledgeBaseConversationRetentionTombstones,
     )?.value[0];
@@ -421,10 +440,10 @@ describe("direct knowledge reset", () => {
       expect(cleanup.map((row) => row.localAssetKey)).not.toContain(
         `knowledge-archives/42/${snapshot.id}.zip`,
       );
-      expect(h.deletes).toContain(knowledgeBaseBuilds);
+      expect(h.deletes).toEqual([]);
     },
   );
-  it("deletes an unreferenced snapshot and queues its archive", async () => {
+  it("archives an unreferenced snapshot and preserves its evidence", async () => {
     const snapshot = {
       id: "00000000-0000-4000-8000-000000000123",
       sourceConversationId: "conversation-1",
@@ -433,11 +452,12 @@ describe("direct knowledge reset", () => {
     };
     const h = harness({ snapshots: [snapshot] });
     await resetKnowledgeBase({ actor, expectedRevision: 2 });
-    expect(h.deletes).toContain(knowledgeBaseSnapshots);
+    expect(h.deletes).toEqual([]);
+    expect(h.writes.find((row) => row.table === knowledgeBaseSnapshots)?.value).toEqual({ status: "archived" });
     const cleanup = h.writes
       .filter((row) => row.table === knowledgeBaseResetCleanupJobs)
       .flatMap((row) => row.value);
-    expect(cleanup.map((row) => row.localAssetKey)).toContain(
+    expect(cleanup.map((row) => row.localAssetKey)).not.toContain(
       `knowledge-archives/42/${snapshot.id}.zip`,
     );
   });
@@ -448,7 +468,11 @@ describe("direct knowledge reset", () => {
           query(
             table === knowledgeBaseSnapshots
               ? [{ id: "retained", status: "archived", assets: [] }]
-              : [],
+              : table === knowledgeBaseBuilds
+                ? [{ id: "retired-build", executionMode: "reset_retired" }]
+                : table === knowledgeImportReceipts
+                  ? [{ id: "retired-receipt", errorCode: "RESET_COMPLETED" }]
+                  : [],
           ),
       }),
     });
@@ -463,6 +487,7 @@ describe("direct knowledge reset", () => {
       resetKnowledgeBase({ actor, expectedRevision: 2 }),
     ).rejects.toThrow("知识库已更新");
     expect(h.deletes).toEqual([]);
+    expect(h.writes.every((row) => row.table === knowledgeBaseResetStates)).toBe(true);
   });
   it("returns an earlier reset result without clearing content created afterwards", async () => {
     const prior = {

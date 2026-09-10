@@ -2888,7 +2888,7 @@ describe("uploadFile", () => {
     await expect(upload).rejects.toThrow("长时间没有进度");
   });
 
-  it("refreshes the idle deadline for every continuing progress event", async () => {
+  it("does not extend the idle deadline for repeated identical byte counts", async () => {
     vi.useFakeTimers();
     let xhr: MockXMLHttpRequest | undefined;
     let aborted = false;
@@ -2934,8 +2934,6 @@ describe("uploadFile", () => {
     xhr!.progress(1, 4);
     await vi.advanceTimersByTimeAsync(FILE_UPLOAD_IDLE_TIMEOUT_MS - 1);
     xhr!.progress(1, 4);
-    expect(aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(FILE_UPLOAD_IDLE_TIMEOUT_MS - 1);
     expect(aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await rejected;

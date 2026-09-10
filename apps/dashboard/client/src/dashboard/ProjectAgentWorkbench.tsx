@@ -1,3 +1,4 @@
+import { WorkbenchExecutionActivity } from "@/components/WorkbenchExecutionActivity";
 import {
   Suspense,
   lazy,
@@ -196,36 +197,10 @@ function ScopedWorkbench({
             </a>
           </p>
         )}
-        {Boolean(task.state?.records.length) && (
-          <ol
-            className="workbench-operation-records"
-            aria-label="已完成的业务步骤"
-          >
-            {task.state?.records.map((record) => (
-              <li key={record.id} data-reading-anchor={record.id}>
-                {record.status === "completed"
-                  ? "✓ "
-                  : record.status === "failed"
-                    ? "待重试 · "
-                    : "进行中 · "}
-                {record.label}
-                {record.detail && <span> · {record.detail}</span>}
-                {record.targetTask && (
-                  <a
-                    href={taskUrl(
-                      projectId,
-                      record.targetTask.agentId,
-                      record.targetTask.conversationId,
-                    )}
-                  >
-                    {" "}
-                    打开接续任务
-                  </a>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
+        {task.state && task.taskId && <WorkbenchExecutionActivity runId={task.taskId} records={task.state.records} />}
+        {task.state?.records.filter(record => record.targetTask).map(record => <p key={record.id} data-reading-anchor={record.id}>
+          <a href={taskUrl(projectId, record.targetTask!.agentId, record.targetTask!.conversationId)}>打开接续任务</a>
+        </p>)}
         <ConversationContextProvider value={originalWorkspace}>
           {children}
         </ConversationContextProvider>

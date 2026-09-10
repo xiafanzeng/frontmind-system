@@ -410,15 +410,13 @@ describe("EmptyConversationHint", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "重试并继续" })).toBeEnabled();
     });
-    expect(screen.getAllByText("Dashboard 已确认，等待其余文件")).toHaveLength(
+    expect(screen.getAllByText("资料已确认，等待其余文件")).toHaveLength(
       3,
     );
     expect(screen.getAllByText("第4个文件上传失败")).toHaveLength(2);
     expect(screen.getByText("等待上传")).toBeInTheDocument();
-    expect(screen.getByText("已从浏览器传出100 B/150 B")).toBeInTheDocument();
-    expect(
-      screen.getByText("Dashboard 已完整确认60 B/150 B"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("已从浏览器传出100 B/150 B")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard 已完整确认60 B/150 B")).not.toBeInTheDocument();
     expect(startRequests).not.toHaveBeenCalled();
     expect(files.every((file) => screen.getByText(file.name))).toBe(true);
 
@@ -771,13 +769,11 @@ describe("EmptyConversationHint", () => {
       });
     });
     expect(screen.getByText("13%")).toBeInTheDocument();
-    expect(screen.getByText("已从浏览器传出50 B/400 B")).toBeInTheDocument();
-    expect(
-      screen.getByText("Dashboard 已完整确认0 B/400 B"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("已从浏览器传出50 B/400 B")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard 已完整确认0 B/400 B")).not.toBeInTheDocument();
     expect(screen.getByText("正在上传 50%")).toBeInTheDocument();
     expect(
-      screen.getByText("资料上传中，尚未启动知识库构建"),
+      screen.getByText("正在上传资料，完成后将自动开始调研"),
     ).toBeInTheDocument();
 
     act(() => {
@@ -789,12 +785,10 @@ describe("EmptyConversationHint", () => {
       });
     });
     expect(screen.getByText("25%")).toBeInTheDocument();
-    expect(screen.getByText("已从浏览器传出100 B/400 B")).toBeInTheDocument();
+    expect(screen.queryByText("已从浏览器传出100 B/400 B")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard 已完整确认0 B/400 B")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Dashboard 已完整确认0 B/400 B"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("文件已接收，正在等待云端就绪"),
+      screen.getByText("资料已收到，正在准备"),
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "停止上传" }));
@@ -841,7 +835,7 @@ describe("EmptyConversationHint", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始构建" }));
 
     await waitFor(() => {
-      expect(screen.getByText("正在确认云端上传状态")).toBeInTheDocument();
+      expect(screen.getByText("正在确认资料状态")).toBeInTheDocument();
     });
     nowSpy.mockReturnValue(now + 5_000);
     await act(async () => {
@@ -933,7 +927,7 @@ describe("EmptyConversationHint", () => {
       expect(screen.getByRole("button", { name: "重试启动" })).toBeEnabled();
     });
     expect(
-      screen.getByText("Dashboard 已确认，等待其余文件"),
+      screen.getByText("资料已确认，等待其余文件"),
     ).toBeInTheDocument();
     expect(screen.getByText("品牌手册.pdf")).toBeInTheDocument();
     expect(
@@ -1140,7 +1134,7 @@ describe("EmptyConversationHint", () => {
       expect(screen.getByRole("button", { name: "重试并继续" })).toBeEnabled();
     });
     expect(
-      screen.getByText("重试时会先确认云端状态，再清理旧记录并创建新上传。"),
+      screen.getByText("继续时将核对已保存资料，再重新上传未完成文件。"),
     ).toBeInTheDocument();
     expect(screen.getByText("第 1 次尝试")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(
@@ -1149,10 +1143,8 @@ describe("EmptyConversationHint", () => {
     expect(document.body.textContent).not.toContain(
       "33333333-3333-4333-8333-333333333333",
     );
-    expect(screen.getByText("已从浏览器传出48 B/48 B")).toBeInTheDocument();
-    expect(
-      screen.getByText("Dashboard 已完整确认0 B/48 B"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("已从浏览器传出48 B/48 B")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dashboard 已完整确认0 B/48 B")).not.toBeInTheDocument();
   });
 
   it("discards an explicitly removed unbound file and keeps the modal open when cancellation cleanup is still in progress", async () => {

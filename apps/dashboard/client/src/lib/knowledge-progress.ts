@@ -322,6 +322,7 @@ function normalizeObservation(payload: any): KnowledgeBaseObservationDto {
       : undefined;
   return {
     stateEpoch: Number(source.stateEpoch ?? 0),
+    ...(source.execution ?? progress?.execution ? { execution: source.execution ?? progress?.execution } : {}),
     generation: Number(source.generation ?? 0),
     ...(hasDisplaySequence ? { displaySequence } : {}),
     ...(syncState ? { syncState } : {}),

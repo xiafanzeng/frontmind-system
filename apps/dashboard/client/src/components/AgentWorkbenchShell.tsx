@@ -247,7 +247,7 @@ export function AgentWorkbenchShell({
     >
       <div
         ref={layoutRoot}
-        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"} ${hasAux && !inlineAux ? "has-floating-toggle" : ""}`}
+        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"} ${hasAux && !narrow ? "has-panel-clearance" : ""} ${hasAux && !inlineAux ? "has-floating-toggle" : ""}`}
       >
         {hasAux && (
           <Button

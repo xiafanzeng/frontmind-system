@@ -1,3 +1,4 @@
+import type { GeneralExecutionDto } from "./frontmind-general-execution";
 export const knowledgeBaseLeafStatuses = [
   "pending",
   "current",
@@ -265,6 +266,7 @@ export interface KnowledgeBaseResultQualityDto {
 }
 
 export interface KnowledgeBaseProgressDto {
+  execution?: GeneralExecutionDto;
   workbench?: { generation: number; stateEpoch: number; phase: "initial" | "editing"; acceptedAt: string | null; legacyPublished: boolean };
   build: {
     id: string;
@@ -340,6 +342,7 @@ export interface KnowledgeBaseInteractionDto {
  * client may use for diagnostics, never for state mutation.
  */
 export interface KnowledgeBaseActiveTurnDto {
+  browserUpload?: import("./knowledge-base-upload-status").KnowledgeBaseBrowserUpload;
   id: string;
   clientRequestId: string;
   operationKey: string;
@@ -476,6 +479,7 @@ export interface KnowledgeBaseNoticeDto {
  * recovery endpoints. Consumers commit this object as one state transition.
  */
 export interface KnowledgeBaseObservationDto {
+  execution?: GeneralExecutionDto;
   stateEpoch: number;
   generation: number;
   /** Monotonic display authority backed by messages.sequence. */

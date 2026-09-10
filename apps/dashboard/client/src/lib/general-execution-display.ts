@@ -1,3 +1,4 @@
+import { orderExecutionTimeline } from "@shared/frontmind-general-execution";
 import type {
   GeneralExecutionDto,
   GeneralExecutionEntry,
@@ -47,7 +48,7 @@ export function generalExecutionSlots(
     ),
   );
   const byTurn = new Map<string, GeneralExecutionEntry[]>();
-  for (const entry of execution.timeline) {
+  for (const entry of orderExecutionTimeline(execution.timeline)) {
     const items = byTurn.get(entry.turnId) ?? [];
     items.push(entry);
     byTurn.set(entry.turnId, items);

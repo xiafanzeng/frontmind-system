@@ -40,7 +40,7 @@ export default function PublishingRoutes({ gateway }: PublishingRoutesProps) {
       <PublishingFlowBridge>
         <Suspense
           fallback={
-            <div className="publishing-page">
+            <div className="publishing-page publishing-page-loading">
               <PublishingLoading label="正在准备媒体发布工作台…" />
             </div>
           }

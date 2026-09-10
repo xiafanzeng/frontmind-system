@@ -1,3 +1,6 @@
+import { siteOpsFinalReplyIds } from "@/lib/siteops-final-reply";
+import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
+import { siteOpsPublicExecution } from "@/lib/business-execution-adapters";
 import { WorkflowSection } from "@/dashboard/workflow/Workflow";
 import { useBusinessFlowState, readFlowString } from "../useBusinessFlowState";
 import type { WorkbenchResourceRef } from "@shared/workbench-task";
@@ -360,7 +363,7 @@ function customerFacingMessage(content: string) {
   return sanitized || "任务暂时未完成，请稍后重试。";
 }
 
-function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
+function SiteOpsMessageBubble({ item, allowCopy }: { item: SiteOpsMessageProjection; allowCopy: boolean }) {
   const [copied, setCopied] = useState(false);
   const content = customerFacingMessage(item.content);
   return (
@@ -384,12 +387,13 @@ function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
         {item.role === "assistant" ? (
           <MarkdownRenderer
             content={content}
+            allowCopy={allowCopy}
             className="siteops-message-markdown"
           />
         ) : (
           <p>{content}</p>
         )}
-        <footer className="siteops-message-footer">
+        {allowCopy && <footer className="siteops-message-footer">
           {item.role === "assistant" && (
             <button
               type="button"
@@ -407,7 +411,7 @@ function SiteOpsMessageBubble({ item }: { item: SiteOpsMessageProjection }) {
               {copied ? "已复制" : "复制"}
             </button>
           )}
-        </footer>
+        </footer>}
       </div>
     </article>
   );
@@ -486,42 +490,7 @@ function SiteOpsExecutionTimeline({
   steps: SiteOpsExecutionStep[];
 }) {
   if (!steps.length) return null;
-  const active = steps.find((step) =>
-    ["queued", "running"].includes(step.status),
-  );
-  const labels: Record<SiteOpsExecutionStep["stage"], string> = {
-    visual_searching: "查找视觉方案",
-    preparing: "准备建站资料",
-    design_compiling: "整理页面设计",
-    content_building: "制作网站内容",
-    qa_running: "检查网站",
-    completed: "完成本次操作",
-  };
-  const statuses: Record<SiteOpsExecutionStep["status"], string> = {
-    queued: "等待处理",
-    running: "进行中",
-    succeeded: "已完成",
-    failed: "未完成",
-    attention_required: "需要处理",
-    cancelled: "已取消",
-  };
-  return (
-    <details className="siteops-execution-summary">
-      <summary>
-        {active
-          ? `${labels[active.stage]} · ${statuses[active.status]}`
-          : "查看建站执行记录"}
-      </summary>
-      <div>
-        {steps.map((step) => (
-          <p key={step.id}>
-            <span>{labels[step.stage]}</span>
-            <small>{statuses[step.status]}</small>
-          </p>
-        ))}
-      </div>
-    </details>
-  );
+  return <BusinessExecutionActivity execution={siteOpsPublicExecution(steps)} />;
 }
 
 function customerDomainStateLabel(value: string | null | undefined) {
@@ -1468,6 +1437,7 @@ export default function SiteOpsConversationPanel({
       item.id === currentVisualGenerationMessage?.id
     );
   });
+  const copyableMessages = siteOpsFinalReplyIds(visibleMessages, ["building", "visual_searching"].includes(observation.interactionState));
   const currentSnapshotId = observation.project.currentKnowledgeSnapshotId;
   const managedDomain = observation.domainState?.domain ?? "";
   const deploymentStateFor = (
@@ -1775,7 +1745,7 @@ export default function SiteOpsConversationPanel({
               <SiteOpsExecutionTimeline
                 steps={executionByMessage.get(item.id) ?? []}
               />
-              <SiteOpsMessageBubble item={item} />
+              <SiteOpsMessageBubble item={item} allowCopy={copyableMessages.has(item.id)} />
             </div>
           ))
         )}

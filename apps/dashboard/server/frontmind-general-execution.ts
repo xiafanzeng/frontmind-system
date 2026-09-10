@@ -2,6 +2,9 @@ import { inArray } from "drizzle-orm";
 import { agentEvents } from "../drizzle/schema";
 import {
   generalExecutionActivity,
+  orderExecutionTimeline,
+  businessExecutionLabels,
+  type BusinessExecutionPhase,
   generalThinkingText,
   type GeneralExecutionDto,
   type GeneralExecutionEntry,
@@ -32,7 +35,7 @@ export function projectGeneralExecution(
     Extract<GeneralExecutionEntry, { kind: "tool" }>
   >();
   const ordered = own
-    .filter((row) => row.normalizedPayload?.kind === "provider_event")
+    .filter((row) => ["provider_event", "business_event"].includes(String(row.normalizedPayload?.kind)))
     .sort(
       (a, b) =>
         Number(
@@ -43,6 +46,7 @@ export function projectGeneralExecution(
               Number.MAX_SAFE_INTEGER,
           ) || Number(a.providerTimestampMs) - Number(b.providerTimestampMs),
     );
+  const seen = new Set<string>();
   const prepared = ordered.flatMap((row) => {
     const p = row.normalizedPayload!;
     const turn = p.executionTurn as
@@ -57,6 +61,9 @@ export function projectGeneralExecution(
     )
       return [];
     if (row.providerTimestampMs === null) return [];
+    const eventKey = JSON.stringify([turn.id, row.providerEventId]);
+    if (seen.has(eventKey)) return [];
+    seen.add(eventKey);
     const timestamp = Number(row.providerTimestampMs);
     if (!Number.isFinite(timestamp)) return [];
     const base = {
@@ -124,6 +131,8 @@ export function projectGeneralExecution(
         ...base,
         kind: "status",
         status: activity.status,
+        ...(p.kind === "business_event" && typeof p.businessPhase === "string" && Object.hasOwn(businessExecutionLabels, p.businessPhase)
+          ? { runId: taskId, phase: p.businessPhase as BusinessExecutionPhase, label: businessExecutionLabels[p.businessPhase as BusinessExecutionPhase] } : {}),
         ...(activity.status === "thinking"
           ? generalThinkingText(activity)
           : {}),
@@ -152,7 +161,8 @@ export function projectGeneralExecution(
     schemaVersion: 1,
     taskId,
     coverage: complete ? "complete" : "pending",
-    timeline: entries,
+    runId: taskId,
+    timeline: orderExecutionTimeline(entries),
   };
 }
 

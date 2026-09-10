@@ -1,4 +1,4 @@
-/** Tenant-owned execution evidence, including thinking text returned by the provider.
+/** Tenant-owned execution evidence with explicit public summaries only.
  * Tool arguments and tool result payloads are not part of this contract. */
 export type GeneralThinkingText = {
   /** Explicit provider-designated public summary; private thinkingText is not UI copy. */
@@ -33,6 +33,11 @@ export type GeneralExecutionActivity =
 
 export type GeneralExecutionEntry = {
   id: string;
+  runId?: string;
+  phase?: BusinessExecutionPhase;
+  label?: string;
+  isCurrent?: boolean;
+  finishedAt?: number;
   turnId: string;
   /** Durable sequence of the user message that owns this evidence. */
   userSequence: number;
@@ -58,7 +63,10 @@ export type GeneralExecutionEntry = {
 export interface GeneralExecutionDto {
   schemaVersion: 1;
   taskId: string;
-  coverage: "complete" | "pending" | "unavailable";
+  /** Stable business run identity, including preparation before a model task exists. */
+  runId?: string;
+  phase?: string;
+  coverage: "complete" | "partial" | "pending" | "unavailable";
   timeline: GeneralExecutionEntry[];
 }
 
@@ -89,7 +97,7 @@ export function generalToolLabel(
       : "调用工具";
 }
 
-/** Only explicit thinking text is accepted; arbitrary provider objects are never serialized. */
+/** Private reasoning is never persisted or exposed by execution projections. */
 export function generalThinkingText(
   value: GeneralThinkingText,
 ): GeneralThinkingText {
@@ -97,14 +105,7 @@ export function generalThinkingText(
     typeof value.publicSummary === "string" && value.publicSummary.trim()
       ? value.publicSummary.trim().slice(0, 8000)
       : undefined;
-  if (typeof value.thinkingText !== "string" || !value.thinkingText.trim())
-    return publicSummary ? { publicSummary } : {};
-  return {
-    ...(publicSummary ? { publicSummary } : {}),
-    thinkingText: value.thinkingText,
-    thinkingSource: value.thinkingSource === "stream" ? "stream" : "event",
-    thinkingComplete: value.thinkingComplete !== false,
-  };
+  return publicSummary ? { publicSummary } : {};
 }
 
 /** Strict whitelist at both normalization and persisted-data read boundaries. */
@@ -200,3 +201,116 @@ export const generalExecutionStatusText: Record<
   ended: "本轮已结束",
   cancelled: "本轮已停止",
 };
+
+/** Public business phases are an allowlist, never provider payload labels. */
+export const businessExecutionLabels = {
+  uploading: "上传资料",
+  staging: "校验资料",
+  dispatching: "准备调研",
+  researching: "采集公开资料",
+  normalizing: "整理结果",
+  published: "生成知识库",
+  analyzing_question: "分析问题",
+  searching_knowledge: "查找企业知识",
+  organizing_evidence: "整理依据",
+  answering: "生成回答",
+  identifying_questions: "识别问题",
+  checking_knowledge: "检查知识依据",
+  suggesting: "提出优化建议",
+  generating_result: "生成结果",
+  preparing_requirements: "整理需求",
+  searching_materials: "检索资料",
+  generating_content: "生成内容",
+  checking_content: "校验内容",
+  delivering: "准备交付",
+  reading_requirements: "读取需求",
+  preparing_assets: "准备素材",
+  generating_pages: "生成页面",
+  checking_pages: "运行检查",
+  previewing: "生成预览",
+  creating_monitor: "创建监控问题",
+  preparing_collection: "准备采集",
+  collecting: "执行采集",
+  organizing_samples: "整理样本",
+  reporting: "生成报告",
+  importing_samples: "导入监控数据",
+  reading_monitor: "读取已有项目或导入批次",
+  loading_run: "加载运行",
+  showing_samples: "展示样本和引用",
+  checking_assets: "校验素材",
+  submitting_publication: "提交发布",
+  awaiting_publication: "等待发布结果",
+  showing_publication: "展示发布状态",
+} as const;
+export type BusinessExecutionPhase = keyof typeof businessExecutionLabels;
+export type PublicBusinessEvidence = {
+  id: string;
+  turnId: string;
+  userSequence?: number;
+  userMessageId?: string;
+  phase: BusinessExecutionPhase;
+  status: Extract<GeneralExecutionEntry, { kind: "status" }>["status"];
+  timestamp: number;
+  rank: number;
+  finishedAt?: number;
+};
+/** Deterministic hydration: dedupe within the owning turn before any rendering. */
+export function orderExecutionTimeline(
+  entries: readonly GeneralExecutionEntry[],
+) {
+  return [
+    ...new Map(
+      entries.map((entry) => [JSON.stringify([entry.turnId, entry.id]), entry]),
+    ).values(),
+  ].sort(
+    (a, b) =>
+      a.userSequence - b.userSequence ||
+      a.turnId.localeCompare(b.turnId) ||
+      a.rank - b.rank ||
+      a.timestamp - b.timestamp,
+  );
+}
+export function projectBusinessExecution(
+  runId: string,
+  evidence: readonly PublicBusinessEvidence[],
+): GeneralExecutionDto {
+  const timeline = orderExecutionTimeline(
+    evidence
+      .filter(
+        (event) =>
+          Number.isFinite(event.timestamp) &&
+          Number.isFinite(event.rank) &&
+          Object.hasOwn(businessExecutionLabels, event.phase),
+      )
+      .map((event) => ({
+        id: event.id,
+        runId,
+        turnId: event.turnId,
+        userSequence: event.userSequence ?? 0,
+        ...(event.userMessageId ? { userMessageId: event.userMessageId } : {}),
+        timestamp: event.timestamp,
+        rank: event.rank,
+        kind: "status" as const,
+        status: event.status,
+        phase: event.phase,
+        label: businessExecutionLabels[event.phase],
+        ...(event.finishedAt === undefined
+          ? {}
+          : { finishedAt: event.finishedAt }),
+      })),
+  );
+  const last = timeline.at(-1);
+  for (const item of timeline)
+    item.isCurrent =
+      item.id === last?.id &&
+      !["ended", "error", "cancelled"].includes(
+        (item as Extract<GeneralExecutionEntry, { kind: "status" }>).status,
+      );
+  return {
+    schemaVersion: 1,
+    taskId: runId,
+    runId,
+    coverage: timeline.length ? "partial" : "unavailable",
+    timeline,
+  };
+}

@@ -81,7 +81,7 @@ export function PublishingLoading({
   label?: string;
 }) {
   return (
-    <div className="publishing-state" role="status" aria-live="polite">
+    <div className="publishing-loading" role="status" aria-live="polite">
       <LoaderCircle className="publishing-spin" size={22} />
       <strong>{label}</strong>
     </div>

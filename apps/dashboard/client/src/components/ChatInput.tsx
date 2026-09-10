@@ -1071,6 +1071,41 @@ export default function ChatInput({
             </div>
           )}
 
+        {knowledgeBaseDeferredUploadRecoveryRequired &&
+          activeConversation?.knowledgeBase?.activeTurnId &&
+          activeConversation.knowledgeBase.activeClientRequestId &&
+          Number.isSafeInteger(
+            activeConversation.knowledgeBase.activeTurnResetRevision,
+          ) && (
+            <KnowledgeBaseManagedUploadRecovery
+              conversationId={activeConversation.id}
+              turnId={activeConversation.knowledgeBase.activeTurnId}
+              clientRequestId={
+                activeConversation.knowledgeBase.activeClientRequestId
+              }
+              expectedResetRevision={
+                activeConversation.knowledgeBase.activeTurnResetRevision!
+              }
+              onObservation={(observation) => {
+                commitKnowledgeBaseObservation(
+                  activeConversation.id,
+                  observation,
+                );
+                wakeKnowledgeBaseConversation(activeConversation.id);
+              }}
+              onRecovered={() =>
+                wakeKnowledgeBaseConversation(activeConversation.id)
+              }
+              onCancelled={() => {
+                rollbackPendingKnowledgeBaseTurn(
+                  activeConversation.id,
+                  activeConversation.knowledgeBase!.activeClientRequestId!,
+                );
+                wakeKnowledgeBaseConversation(activeConversation.id);
+              }}
+            />
+          )}
+
         {/* Upload progress indicator */}
         <AnimatePresence>
           {isUploading && uploadProgress && (

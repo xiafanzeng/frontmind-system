@@ -31,6 +31,7 @@ vi.mock("@/lib/frontmind-api", () => ({
   createKnowledgeBaseTurnTask: mocks.createKnowledgeBaseTurnTask,
   resumeKnowledgeBaseTurnAttachments: mocks.resumeKnowledgeBaseTurnAttachments,
   uploadKnowledgeBaseLocalAsset: mocks.uploadKnowledgeBaseLocalAsset,
+  stageKnowledgeBaseTurnAttachment: vi.fn(),
 }));
 
 import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
@@ -105,11 +106,11 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
 
     expect(
       await screen.findByText(
-        "Dashboard 已保留 4/9，仍缺 5 份资料。可选择缺失资料，也可重新选择全部原文件；已保留文件不会重复上传。",
+        "已保存 4/9，仍缺 5 份资料。可选择缺失资料，也可重新选择全部原文件；已保留文件不会重复上传。",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "继续补充缺失资料" }),
+      screen.getByRole("button", { name: "重新选择缺失文件" }),
     ).toBeEnabled();
     expect(mocks.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
   });
@@ -147,7 +148,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
       .mockResolvedValueOnce(ready);
 
     renderRecovery();
-    await screen.findByRole("button", { name: "继续补充缺失资料" });
+    await screen.findByRole("button", { name: "重新选择缺失文件" });
     const allFiles = attachmentManifest.map(fileForManifest);
     fireEvent.change(screen.getByLabelText("选择本轮缺失的知识库原文件"), {
       target: { files: allFiles },
@@ -181,7 +182,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
         turnId: coordinate.turnId,
         attachmentManifest,
       },
-    });
+    }, expect.any(AbortSignal));
     expect(mocks.onRecovered).toHaveBeenCalledOnce();
   });
 
@@ -202,14 +203,14 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
     mocks.sha256UploadFile.mockResolvedValue("b".repeat(64));
 
     renderRecovery();
-    await screen.findByRole("button", { name: "继续补充缺失资料" });
+    await screen.findByRole("button", { name: "重新选择缺失文件" });
     fireEvent.change(screen.getByLabelText("选择本轮缺失的知识库原文件"), {
       target: { files: [fileForManifest(digestManifest[0]!)] },
     });
 
     expect(
       await screen.findByText(
-        `所选文件与本轮冻结清单不一致：${digestManifest[0]!.filename}`,
+        `所选文件与本轮资料清单不一致：${digestManifest[0]!.filename}`,
       ),
     ).toBeInTheDocument();
     expect(mocks.uploadKnowledgeBaseLocalAsset).not.toHaveBeenCalled();
@@ -231,7 +232,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
     });
 
     renderRecovery();
-    await screen.findByRole("button", { name: "继续补充缺失资料" });
+    await screen.findByRole("button", { name: "重新选择缺失文件" });
     fireEvent.change(screen.getByLabelText("选择本轮缺失的知识库原文件"), {
       target: { files: [fileForManifest(duplicateManifest[1]!)] },
     });

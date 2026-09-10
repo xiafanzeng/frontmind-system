@@ -1683,7 +1683,7 @@ export class ZhipuDashboardAgentProvider implements DashboardAgentClient {
   }
 }
 
-/** Normalize actual provider evidence. Thinking text is retained verbatim; tool payloads stay separate. */
+/** Normalize actual provider evidence; only explicit public summaries cross the boundary. */
 export function nativeGeneralExecutionActivity(
   event: ZhipuRecord,
   includeThinkingText = true,
@@ -1724,16 +1724,13 @@ export function nativeGeneralExecutionActivity(
     };
   }
   if (type === "agent.thinking") {
-    const thinkingText = includeThinkingText
-      ? nativeThinkingText(event.content)
-      : "";
     return {
       kind: "status",
       status: "thinking",
       ...generalThinkingText({
-        thinkingText,
-        thinkingSource: "event",
-        thinkingComplete: Boolean(event.processed_at),
+        publicSummary: typeof event.publicSummary === "string"
+          ? event.publicSummary
+          : typeof event.public_summary === "string" ? event.public_summary : undefined,
       }),
     };
   }
@@ -1953,95 +1950,8 @@ export function normalizeDashboardZhipuEvents(
     }
     return activity ? [{ ...base, type: "execution_activity" }] : [];
   });
-  // Thinking captures are only a general-agent capability. Never project a
-  // stream transcript into ordinary provider conversations.
-  const captures = runtime.generalIdentitySystem
-    ? (runtime.thinkingCaptures ?? [])
-    : [];
-  for (const capture of captures) {
-    if (!capture.text.trim()) continue;
-    const command = runtime.commands.find(
-      (item) => item.key === capture.commandKey,
-    );
-    const startRank = command?.eventId
-      ? raw.findIndex(
-          (event) =>
-            event.id === command.eventId && event.type === "user.message",
-        )
-      : -1;
-    if (startRank < 0) continue;
-    const nextRank = raw.findIndex(
-      (event, rank) => rank > startRank && event.type === "user.message",
-    );
-    const endRank = nextRank < 0 ? raw.length : nextRank;
-    // Provider event IDs are expected to be stable, but a reconnect or a
-    // later turn can repeat one. Resolve the ID only inside this command's
-    // chronological boundary so one turn cannot steal another's text.
-    const actualRank = raw.findIndex(
-      (event, rank) =>
-        rank > startRank &&
-        rank < endRank &&
-        event.id === capture.eventId &&
-        event.type === "agent.thinking",
-    );
-    const thinking = generalThinkingText({
-      thinkingText: capture.text,
-      thinkingSource: "stream",
-      thinkingComplete: capture.complete,
-    });
-    if (actualRank >= 0) {
-      if (
-        actualRank <= startRank ||
-        actualRank >= endRank ||
-        raw[actualRank]?.type !== "agent.thinking"
-      )
-        continue;
-      const target = native.find(
-        (event) =>
-          event.id === capture.eventId &&
-          Number(event.providerOriginalRank) === actualRank,
-      );
-      const activity = target?.executionActivity as
-        | GeneralExecutionActivity
-        | undefined;
-      if (
-        target &&
-        activity?.kind === "status" &&
-        activity.status === "thinking" &&
-        !activity.thinkingText
-      ) {
-        target.executionActivity = { ...activity, ...thinking };
-      }
-    } else {
-      // A matching complete event exists outside this command's boundary. It
-      // belongs to another turn, so do not manufacture a preview in this one.
-      if (
-        raw.some(
-          (event) =>
-            event.id === capture.eventId && event.type === "agent.thinking",
-        )
-      )
-        continue;
-      // event_start supplied this real provider ID. Its local receipt time is
-      // used only until the complete event supplies an authoritative timestamp.
-      const anchorRank = capture.afterEventId
-        ? raw.findIndex((event) => event.id === capture.afterEventId)
-        : startRank;
-      if (anchorRank < startRank || anchorRank >= endRank) continue;
-      const timestamp = stamp(capture.startedAt);
-      if (timestamp === null) continue;
-      native.push({
-        // Preserve the provider event ID so the preview is reconciled with a
-        // later complete event by the existing event UPSERT path.
-        id: capture.eventId,
-        type: "execution_activity",
-        timestamp,
-        providerOriginalRank: anchorRank + 0.01,
-        executionActivity: { kind: "status", status: "thinking", ...thinking },
-        providerProjection: "zhipu_thinking_stream_preview",
-      });
-    }
-  }
+  // Private stream captures are never a public execution summary. Only
+  // explicitly designated public summaries on actual events are projected.
   return native.sort(
     (a, b) => Number(a.providerOriginalRank) - Number(b.providerOriginalRank),
   );

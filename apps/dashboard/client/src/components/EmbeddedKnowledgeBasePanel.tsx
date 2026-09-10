@@ -1,3 +1,4 @@
+import { useRetireKnowledgeUploads } from "@/lib/knowledge-base-upload-manager";
 import KnowledgeNodeConversation from "./KnowledgeNodeConversation";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
 import KnowledgeWorkbenchActions from "./KnowledgeWorkbenchActions";
@@ -407,6 +408,7 @@ function KnowledgeResetButton({
 }) {
   const [open, setOpen] = useState(false);
   const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
+  const retireUploads = useRetireKnowledgeUploads();
   const resetMutation = trpc.workspace.knowledgeReset.reset.useMutation();
   const submittingRef = useRef(false);
   const resetButtonRef = useRef<HTMLButtonElement>(null);
@@ -430,6 +432,7 @@ function KnowledgeResetButton({
     try {
       await resetMutation.mutateAsync({ expectedRevision });
       operation.assertActive();
+      retireUploads();
       await onReset();
       operation.assertActive();
       setOpen(false);

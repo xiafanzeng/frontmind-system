@@ -3,7 +3,6 @@ import { projectResourceUrl } from "@/lib/enterprise-project";
 import type { AppRouter } from "@frontmind/monitoring-api";
 import type { TRPCClient } from "@trpc/client";
 import type { inferRouterOutputs } from "@trpc/server";
-import { useMemo } from "react";
 
 import { PublisherGatewayError, type PublisherGateway } from "./gateway";
 import {
@@ -850,13 +849,16 @@ export function createServerBackedPublisherGateway(
 export const createProductionPublisherGateway =
   createServerBackedPublisherGateway;
 
+const gatewayCache = new WeakMap<PublisherTrpcClient, PublisherGateway>();
+
 export default function ServerBackedPublishingEntry({
   client,
 }: ServerBackedPublishingEntryProps) {
-  const gateway = useMemo(
-    () => createServerBackedPublisherGateway(client),
-    [client],
-  );
+  let gateway = gatewayCache.get(client);
+  if (!gateway) {
+    gateway = createServerBackedPublisherGateway(client);
+    gatewayCache.set(client, gateway);
+  }
   return <PublishingRoutes gateway={gateway} />;
 }
 

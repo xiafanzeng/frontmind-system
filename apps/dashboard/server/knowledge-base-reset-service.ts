@@ -1,5 +1,4 @@
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
-import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
 import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
@@ -14,16 +13,13 @@ import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
 import {
   attachments,
   conversations,
+  conversationTurns,
   knowledgeBaseBuilds,
   knowledgeBaseConversationRetentionTombstones,
   knowledgeBaseResetCleanupJobs,
   knowledgeBaseSnapshots,
   knowledgeImportReceipts,
   localAssets,
-  siteBuilds,
-  siteProjects,
-  socialPackages,
-  visualCandidatePools,
   upstreamResources,
   workspaceAuditEvents,
 } from "../drizzle/schema";
@@ -73,6 +69,7 @@ type KnowledgeCounts = {
     upstreamTaskId: string | null;
     logoStorageKey: string | null;
     packageStorageKey: string | null;
+    executionMode?: string | null;
   }>;
   snapshots: Array<{
     id: string;
@@ -84,6 +81,7 @@ type KnowledgeCounts = {
     id: string;
     taskId: string | null;
     fileId: string | null;
+    errorCode?: string | null;
   }>;
   hasKnowledge: boolean;
 };
@@ -152,6 +150,7 @@ async function getKnowledgeCounts(
         upstreamTaskId: knowledgeBaseBuilds.upstreamTaskId,
         logoStorageKey: knowledgeBaseBuilds.logoStorageKey,
         packageStorageKey: knowledgeBaseBuilds.packageStorageKey,
+        executionMode: knowledgeBaseBuilds.executionMode,
       })
       .from(knowledgeBaseBuilds)
       .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId)),
@@ -161,49 +160,28 @@ async function getKnowledgeCounts(
         id: knowledgeImportReceipts.id,
         taskId: knowledgeImportReceipts.taskId,
         fileId: knowledgeImportReceipts.fileId,
+        errorCode: knowledgeImportReceipts.errorCode,
       })
       .from(knowledgeImportReceipts)
       .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId)),
   ]);
+  // Approved reset keeps the old evidence immutable but removes it from the
+  // customer's active workspace. Archived history alone must not offer reset.
+  const activeBuilds = builds.filter(
+    (build: KnowledgeCounts["builds"][number]) => build.executionMode !== "reset_retired",
+  );
+  const activeSnapshots = snapshots.filter(
+    (snapshot: KnowledgeCounts["snapshots"][number]) => snapshot.status !== "archived",
+  );
+  const activeReceipts = receipts.filter(
+    (receipt: KnowledgeCounts["receipts"][number]) => receipt.errorCode !== "RESET_COMPLETED",
+  );
   return {
-    builds,
-    snapshots,
-    receipts,
-    hasKnowledge:
-      builds.length > 0 ||
-      snapshots.some(
-        (snapshot: KnowledgeCounts["snapshots"][number]) =>
-          snapshot.status !== "archived",
-      ) ||
-      receipts.length > 0,
+    builds: activeBuilds,
+    snapshots: activeSnapshots,
+    receipts: activeReceipts,
+    hasKnowledge: activeBuilds.length > 0 || activeSnapshots.length > 0 || activeReceipts.length > 0,
   };
-}
-
-/** Keep immutable inputs still used by current or historical downstream work. */
-async function retainedKnowledgeSnapshotIds(
-  executor: any,
-  snapshotIds: string[],
-) {
-  if (!snapshotIds.length) return new Set<string>();
-  const references = [
-    [siteProjects, siteProjects.currentKnowledgeSnapshotId],
-    [siteBuilds, siteBuilds.knowledgeSnapshotId],
-    [visualCandidatePools, visualCandidatePools.knowledgeSnapshotId],
-    [socialPackages, socialPackages.knowledgeSnapshotId],
-    [workspaceQuestionTable(), workspaceQuestionTable().knowledgeSnapshotId],
-  ] as const;
-  const rows = await Promise.all(
-    references.map(([table, column]) =>
-      executor
-        .select({ snapshotId: column })
-        .from(table)
-        .where(inArray(column, snapshotIds))
-        .for("update"),
-    ),
-  );
-  return new Set<string>(
-    rows.flat().map((row: { snapshotId: string }) => row.snapshotId),
-  );
 }
 
 /** Recheck references at cleanup time, including archived immutable snapshots. */
@@ -324,8 +302,8 @@ export async function resetKnowledgeBase(input: {
     await lockCustomerProjectBusinessWrite(tx, userId, input.actor);
     const now = new Date();
     // Serialize reset with every new start/upload path before reading or
-    // deleting knowledge-base state. A delayed browser request holding the old
-    // revision either commits before this lock (and is deleted below) or waits
+    // retiring knowledge-base state. A delayed browser request holding the old
+    // revision either commits before this lock (and is retired below) or waits
     // and observes the incremented revision; it cannot recreate the old build
     // after cleanup.
     await tx
@@ -379,21 +357,6 @@ export async function resetKnowledgeBase(input: {
 
     // Snapshot locks fence concurrent downstream FK references until reset commits.
     const counts = await getKnowledgeCounts(tx, userId, true);
-    const retainedSnapshotIds = await retainedKnowledgeSnapshotIds(
-      tx,
-      counts.snapshots.map((snapshot) => snapshot.id),
-    );
-    const removableSnapshots = counts.snapshots.filter(
-      (snapshot) => !retainedSnapshotIds.has(snapshot.id),
-    );
-    const retainedAssetKeys = new Set(
-      knowledgeSnapshotCleanupStorageKeys(
-        userId,
-        counts.snapshots.filter((snapshot) =>
-          retainedSnapshotIds.has(snapshot.id),
-        ),
-      ),
-    );
     resetBuildSourceScopes = counts.builds.map((build) => ({
       userId: userId,
       buildId: build.id,
@@ -421,11 +384,6 @@ export async function resetKnowledgeBase(input: {
       .map((receipt) => receipt.fileId)
       .filter((id): id is string => Boolean(id));
     const receiptResourceIds = [...receiptTaskIds, ...receiptFileIds];
-    const localAssetKeys = knowledgeSnapshotCleanupStorageKeys(
-      userId,
-      removableSnapshots,
-      counts.builds,
-    ).filter((key) => !retainedAssetKeys.has(key));
     const [conversationRows, attachmentRows, resourceRows] = await Promise.all([
       storedIds.length
         ? tx
@@ -508,7 +466,10 @@ export async function resetKnowledgeBase(input: {
       }
     >();
     for (const resource of resourceRows) {
-      cleanupResources.set(`${resource.kind}:${resource.upstreamId}`, resource);
+      // Stop paid work after approval; retain files and ownership for audit.
+      if (resource.kind === "task") {
+        cleanupResources.set(`${resource.kind}:${resource.upstreamId}`, resource);
+      }
     }
     for (const upstreamId of receiptTaskIds) {
       const key = `task:${upstreamId}`;
@@ -519,23 +480,6 @@ export async function resetKnowledgeBase(input: {
           apiCredentialId: null,
         });
       }
-    }
-    for (const upstreamId of receiptFileIds) {
-      const key = `file:${upstreamId}`;
-      if (!cleanupResources.has(key)) {
-        cleanupResources.set(key, {
-          kind: "file",
-          upstreamId,
-          apiCredentialId: null,
-        });
-      }
-    }
-    for (const assetKey of localAssetKeys) {
-      cleanupResources.set(`local_asset:${assetKey}`, {
-        kind: "local_asset",
-        upstreamId: assetKey,
-        apiCredentialId: null,
-      });
     }
     if (cleanupResources.size) {
       await tx
@@ -557,47 +501,62 @@ export async function resetKnowledgeBase(input: {
         )
         .onDuplicateKeyUpdate({ set: { updatedAt: now } });
     }
-    await tx
-      .update(knowledgeBaseBuilds)
-      .set({ publishedSnapshotId: null })
-      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId));
-    await tx
-      .delete(knowledgeImportReceipts)
-      .where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId));
-    if (retainedSnapshotIds.size) {
-      await tx
-        .update(knowledgeBaseSnapshots)
-        .set({ status: "archived" })
-        .where(
-          and(
-            enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
-            inArray(knowledgeBaseSnapshots.id, [...retainedSnapshotIds]),
-          ),
-        );
+    // All old execution pointers are retired in the same reset-epoch
+    // transaction. Late worker binds fail their generation/active-turn fence.
+    if (counts.builds.length) {
+      const buildIds = counts.builds.map((build) => build.id);
+      await tx.update(knowledgeBaseBuilds).set({
+        executionMode: "reset_retired",
+        status: "failed",
+        activeTurnId: null,
+        activeWorkingSetId: null,
+        currentLeafId: null,
+        currentPresentationKey: null,
+        awaitingResponseSince: null,
+        recoveryLeaseOwnerHash: null,
+        recoveryLeaseExpiresAt: null,
+        canonicalTaskState: "reset_retired",
+        generation: sql`${knowledgeBaseBuilds.generation} + 1`,
+        stateEpoch: sql`${knowledgeBaseBuilds.stateEpoch} + 1`,
+        protocolErrorCode: "RESET_COMPLETED",
+        protocolError: "当前任务已失效，请重新上传完整资料创建全新任务。",
+        updatedAt: now,
+      }).where(and(
+        enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
+        inArray(knowledgeBaseBuilds.id, buildIds),
+      ));
+      await tx.update(conversationTurns).set({
+        status: "cancelled",
+        leaseExpiresAt: null,
+        completedAt: now,
+        errorCode: "RESET_COMPLETED",
+        errorMessage: "已批准重置，本轮不再执行。",
+        updatedAt: now,
+      }).where(and(
+        enterpriseOwnerPredicate(conversationTurns, userId),
+        inArray(conversationTurns.buildId, buildIds),
+        inArray(conversationTurns.status, ["queued", "running"]),
+      ));
     }
-    if (removableSnapshots.length) {
-      await tx.delete(knowledgeBaseSnapshots).where(
-        and(
-          enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId),
-          inArray(
-            knowledgeBaseSnapshots.id,
-            removableSnapshots.map((snapshot) => snapshot.id),
-          ),
-        ),
-      );
-    }
-    await tx
-      .delete(knowledgeBaseBuilds)
-      .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, userId));
+    await tx.update(knowledgeImportReceipts).set({
+      status: "failed",
+      errorCode: "RESET_COMPLETED",
+      errorMessage: "已批准重置，该导入记录仅供审计。",
+      updatedAt: now,
+    }).where(enterpriseOwnerPredicate(knowledgeImportReceipts, userId));
+    await tx.update(knowledgeBaseSnapshots).set({ status: "archived" })
+      .where(enterpriseOwnerPredicate(knowledgeBaseSnapshots, userId));
     if (storedIds.length) {
-      await tx
-        .delete(conversations)
-        .where(
-          and(
-            enterpriseOwnerPredicate(conversations, userId),
-            inArray(conversations.id, storedIds),
-          ),
-        );
+      await tx.update(conversations).set({
+        status: "archived",
+        deletedAt: now,
+        completedAt: now,
+        version: sql`${conversations.version} + 1`,
+        updatedAt: now,
+      }).where(and(
+        enterpriseOwnerPredicate(conversations, userId),
+        inArray(conversations.id, storedIds),
+      ));
     }
     await tx
       .update(enterpriseResetStateTable())

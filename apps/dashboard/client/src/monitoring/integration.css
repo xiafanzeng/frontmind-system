@@ -9,7 +9,7 @@
   padding: 20px 0;
 }
 .monitoring-module .boot-state {
-  min-height: 260px;
+  min-height: 0;
 }
 .monitoring-module .module-toolbar {
   display: flex;

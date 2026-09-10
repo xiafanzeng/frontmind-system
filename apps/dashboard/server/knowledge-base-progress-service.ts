@@ -1,10 +1,11 @@
+import { loadKnowledgeBaseExecution } from "./knowledge-base-execution";
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchStart, knowledgeWorkbenchStage } from "./knowledge-workbench-stage";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 
 import {
   conversations,
@@ -1993,12 +1994,14 @@ async function loadBuild(
       and(
         enterpriseOwnerPredicate(knowledgeBaseBuilds, userId),
         eq(knowledgeBaseBuilds.conversationId, conversationId),
+        or(isNull(knowledgeBaseBuilds.executionMode), ne(knowledgeBaseBuilds.executionMode, "reset_retired")),
       ),
     )
     .limit(1);
   if (lock) query = query.for("update");
   const rows = await query;
-  return rows[0] as KnowledgeBaseBuild | undefined;
+  const build = rows[0] as KnowledgeBaseBuild | undefined;
+  return build?.executionMode === "reset_retired" ? undefined : build;
 }
 
 async function loadNodes(executor: any, buildId: string) {
@@ -2244,6 +2247,7 @@ export async function getKnowledgeBaseProgress(input: {
         .where(
           and(
             enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
+            or(isNull(knowledgeBaseBuilds.executionMode), ne(knowledgeBaseBuilds.executionMode, "reset_retired")),
             eq(
               knowledgeBaseBuilds.conversationId,
               normalizeConversationId(input.conversationId),
@@ -2254,7 +2258,10 @@ export async function getKnowledgeBaseProgress(input: {
     : await db
         .select()
         .from(knowledgeBaseBuilds)
-        .where(enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId))
+        .where(and(
+          enterpriseOwnerPredicate(knowledgeBaseBuilds, input.userId),
+          or(isNull(knowledgeBaseBuilds.executionMode), ne(knowledgeBaseBuilds.executionMode, "reset_retired")),
+        ))
         // Background reconciliation can touch an older build long after a
         // newer conversation was created. Creation time is the stable notion
         // of "current" when the caller has no conversation id; id breaks the
@@ -2265,9 +2272,11 @@ export async function getKnowledgeBaseProgress(input: {
         )
         .limit(1);
   const build = buildRows[0];
-  if (!build) return null;
+  // Retained reset history is audit evidence, never an active workspace.
+  if (!build || build.executionMode === "reset_retired") return null;
   const progress = buildDto(build, await loadNodes(db, build.id));
   progress.workbench = knowledgeWorkbenchStage(build, await knowledgeWorkbenchStart(db, build));
+  progress.execution = await loadKnowledgeBaseExecution({ userId: input.userId, buildId: build.id, generation: build.generation, executor: db });
   if (
     build.executionMode !== "materialized_bundle_v1" ||
     build.skillVersion !== "5"
@@ -2492,6 +2501,7 @@ async function readKnowledgeBaseObservationProjection(
   const rows = await loadNodes(db, build.id);
   const progress = buildDto(build, rows);
   progress.workbench = knowledgeWorkbenchStage(build, await knowledgeWorkbenchStart(db, build));
+  progress.execution = await loadKnowledgeBaseExecution({ userId: input.userId, buildId: build.id, generation: build.generation, executor: db });
   const currentRow = build.currentLeafId
     ? rows.find((row) => row.leafId === build.currentLeafId) || null
     : null;
@@ -3055,6 +3065,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
         : {}),
       awaitingClientAttachments: requiresAttachmentReselection,
       requiresAttachmentReselection,
+      ...(requiresAttachmentReselection ? { browserUpload: knowledgeBaseBrowserUpload(activeTurnMetadata.browserUpload) } : {}),
       stagedAttachmentCount: stagedClientAttachments,
       expectedAttachmentCount:
         Number.isSafeInteger(expectedClientAttachments) &&
@@ -3576,6 +3587,7 @@ function projectKnowledgeBaseObservationSnapshot(input: {
   }
   return {
     progress: businessProgress,
+    execution: businessProgress.execution,
     stateEpoch: build.stateEpoch,
     generation: build.generation,
     // The latest accepted presentation/completion receipt is the monotonic
@@ -5816,3 +5828,4 @@ export async function markKnowledgeBasePublished(input: {
     }).catch(() => undefined);
   }
 }
+import { knowledgeBaseBrowserUpload } from "../shared/knowledge-base-upload-status";

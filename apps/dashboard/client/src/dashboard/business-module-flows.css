@@ -24,6 +24,12 @@
 .workflow-completed + .business-inline-step {
   border-top: 0;
 }
+.business-inline-step:has(+ .workflow-completed) {
+  border-bottom: 0;
+}
+.business-inline-step + .business-inline-step {
+  border-top: 0;
+}
 .business-inline-step > p {
   color: #65656f;
   font-size: 14px;

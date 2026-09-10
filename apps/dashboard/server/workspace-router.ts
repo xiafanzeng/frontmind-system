@@ -1,3 +1,4 @@
+import { listCustomerAiUsage } from "./customer-ai-usage";
 import { listWorkspaceWorkRecords, workRecordsListSchema } from "./workspace-work-record-service";
 import { assertCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
@@ -208,6 +209,10 @@ export function toSiteOpsServiceError(error: unknown): never {
 }
 
 export const workspaceRouter = router({
+  aiTaskUsage: protectedProcedure.input(z.object({ page: z.number().int().min(1).default(1), enterpriseProjectId: z.string().uuid().optional() })).query(async ({ ctx, input }) => {
+    try { return await listCustomerAiUsage(ctx.user, input); }
+    catch (error) { throw toTrpcError(error); }
+  }),
   workRecords: router({
     list: protectedProcedure.input(workRecordsListSchema).query(async ({ ctx, input }) => {
       try { return await listWorkspaceWorkRecords(ctx.user, input); }

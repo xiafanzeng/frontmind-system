@@ -17,9 +17,26 @@ import { trpc } from "@/lib/trpc";
 import { createDashboardTransport } from "@/lib/dashboard-transport";
 import { enterpriseWorkspaceScope } from "@/lib/enterprise-project";
 import { ProjectDirectory } from "@/lib/project-directory";
-import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
+import { activateWorkspaceRestScope, retireWorkspaceRestScope } from "@/lib/workspace-rest-scope";
+import { KnowledgeBaseUploadProvider } from "@/lib/knowledge-base-upload-manager";
 
 const DirectoryContext = createContext<ProjectDirectory | null>(null);
+type ModuleRuntime = { dispose: () => void };
+const ModuleRuntimeContext = createContext<Map<string, ModuleRuntime> | null>(null);
+
+/** Module caches live for the authenticated project, not a routed page. */
+export function useWorkspaceModuleRuntime<T extends ModuleRuntime>(key: string, create: () => T) {
+  const runtimes = useContext(ModuleRuntimeContext);
+  const fallback = useMemo(() => runtimes ? null : create(), [runtimes]);
+  useLayoutEffect(() => () => fallback?.dispose(), [fallback]);
+  if (!runtimes) return fallback!;
+  let runtime = runtimes.get(key) as T | undefined;
+  if (!runtime) {
+    runtime = create();
+    runtimes.set(key, runtime);
+  }
+  return runtime;
+}
 export function useProjectDirectory() {
   const directory = useContext(DirectoryContext);
   if (!directory) throw new Error("项目目录必须在客户工作区中读取。");
@@ -54,12 +71,18 @@ export function WorkspaceQueryProvider({
       ? requestedOwner
       : userId;
   const identity = `${userId}:${ownerUserId}`;
+  const uploadIdentity = useRef({ identity, projectId });
+  if (uploadIdentity.current.identity !== identity || projectId) {
+    uploadIdentity.current = { identity, projectId };
+  }
+  const uploadScopeKey = `${identity}:${uploadIdentity.current.projectId || "account"}`;
   return (
     <OwnerDirectoryScope
       key={identity}
       viewerUserId={userId}
       ownerUserId={ownerUserId}
     >
+      <KnowledgeBaseUploadProvider key={uploadScopeKey} scopeKey={uploadScopeKey}>
       <WorkspaceQueryScope
         key={projectId || "account"}
         scopeKey={`${identity}:${projectId || "account"}`}
@@ -67,6 +90,7 @@ export function WorkspaceQueryProvider({
       >
         {children}
       </WorkspaceQueryScope>
+      </KnowledgeBaseUploadProvider>
     </OwnerDirectoryScope>
   );
 }
@@ -124,6 +148,7 @@ function WorkspaceQueryScope({
     return {
       controller,
       queryClient,
+      moduleRuntimes: new Map<string, ModuleRuntime>(),
       client: createDashboardTransport(
         projectId ? { "x-enterprise-project-id": projectId } : {},
         controller.signal,
@@ -141,16 +166,21 @@ function WorkspaceQueryScope({
       // StrictMode replays effects without retiring the mounted workspace.
       queueMicrotask(() => {
         if (generation.current !== current) return;
+        retireWorkspaceRestScope(scopeKey);
         state.controller.abort();
         void state.queryClient.cancelQueries();
         state.queryClient.clear();
+        for (const runtime of state.moduleRuntimes.values()) runtime.dispose();
+        state.moduleRuntimes.clear();
       });
     };
   }, [state]);
   return (
     <trpc.Provider client={state.client} queryClient={state.queryClient}>
       <QueryClientProvider client={state.queryClient}>
-        {children}
+        <ModuleRuntimeContext.Provider value={state.moduleRuntimes}>
+          {children}
+        </ModuleRuntimeContext.Provider>
       </QueryClientProvider>
     </trpc.Provider>
   );

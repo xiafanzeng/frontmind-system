@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { activateWorkspaceRestScope, captureWorkspaceRestOperation } from "./workspace-rest-scope";
+import { activateWorkspaceRestScope, activateWorkspaceUploadScope, captureWorkspaceRestOperation, retireWorkspaceRestScope } from "./workspace-rest-scope";
 import { fetchCreditUsage, reserveKnowledgeBaseStart, uploadChatLocalAsset } from "./frontmind-api";
 
 let dispose: (() => void) | undefined;
@@ -8,6 +8,18 @@ const activate = (id?: string) => { dispose = activateWorkspaceRestScope(`1:${id
 const startInput = { conversationId: "conversation-a", clientRequestId: "request-a", expectedResetRevision: 1, companyName: "企业甲", attachmentManifest: [] };
 
 describe("business REST scope", () => {
+  it("keeps upload requests scoped to their enterprise through general-agent navigation, then aborts on an actual project switch", async () => {
+    activate("project-a");
+    const releaseUpload = activateWorkspaceUploadScope("1:project-a");
+    const operation = captureWorkspaceRestOperation(undefined, undefined, { detached: true });
+    retireWorkspaceRestScope("1:project-a");
+    activate();
+    expect(operation.signal.aborted).toBe(false);
+    expect(operation.headers()).toMatchObject({ "x-enterprise-project-id": "project-a" });
+    const releaseNext = activateWorkspaceUploadScope("1:project-b");
+    expect(operation.signal.aborted).toBe(true);
+    releaseUpload(); releaseNext(); await Promise.resolve();
+  });
   it("survives StrictMode setup replay and retires the final unmounted scope", async () => {
     const release = activateWorkspaceRestScope("1:strict-project", "strict-project");
     const operation = captureWorkspaceRestOperation();

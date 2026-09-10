@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
+import { monitoringImportExecution } from "@/lib/business-execution-adapters";
 import {
   EnterpriseMonitoringWorkspace,
   EnterpriseProgressReport,
@@ -3069,7 +3071,8 @@ function ManagedQuestionMonitoringWorkspace({
     <LockedMonitoringDistribution access={channelDistributionAccess} />
   );
 
-  return (
+  return (<>
+    {!baseFiltersQuery.isLoading && <BusinessExecutionActivity execution={monitoringImportExecution((baseFiltersQuery.data?.batches ?? []).filter(batch => { const date = monitoringDateKey(batch.collectedAt); return (!activeDateFrom || date >= activeDateFrom) && (!activeDateTo || date <= activeDateTo); }))} />}
     <QuestionMonitoringWorkspace
       questionGroups={questionGroups}
       monitoringAnswers={monitoringAnswers}
@@ -3096,7 +3099,7 @@ function ManagedQuestionMonitoringWorkspace({
         }
       }}
     />
-  );
+  </>);
 }
 
 function metricDisplayName(name, intentId) {

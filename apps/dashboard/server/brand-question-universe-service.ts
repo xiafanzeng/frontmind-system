@@ -1,3 +1,5 @@
+import { projectBrandQuestionExecution } from "./brand-question-execution";
+import { generalExecutionActivity } from "../shared/frontmind-general-execution";
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
@@ -1363,6 +1365,7 @@ async function persistProviderEvents(
     const normalizedPayload: Record<string, unknown> = {
       kind: "brand_question_universe_provider_event",
       type: event.type,
+      executionActivity: generalExecutionActivity(event.executionActivity),
     };
     if (
       Number.isSafeInteger(event.providerOriginalRank) &&
@@ -1431,6 +1434,7 @@ async function cachedProviderEvents(taskId: string) {
       id: row.providerEventId,
       type: String(payload.type ?? row.eventType),
       timestamp: row.providerTimestampMs,
+      executionActivity: generalExecutionActivity(payload.executionActivity) ?? undefined,
       providerOriginalRank:
         typeof payload.providerOriginalRank === "number"
           ? payload.providerOriginalRank
@@ -2270,6 +2274,7 @@ export async function observeBrandQuestionUniverse(actor: AuthenticatedUser) {
     credentialReady: Boolean(credential),
     engineerVersionPresent,
     operation: publicOperation(operation, context),
+    execution: operation ? projectBrandQuestionExecution({ taskId: operation.task.id, status: operation.operation.status, createdAt: operation.operation.createdAt.getTime(), updatedAt: operation.operation.updatedAt.getTime(), events: await cachedProviderEvents(operation.task.id) }) : undefined,
   } as const;
 }
 

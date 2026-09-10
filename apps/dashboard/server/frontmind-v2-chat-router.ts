@@ -2382,7 +2382,7 @@ async function taskDto(operation: AgentOperation, task: AgentTask) {
           : purpose?.purpose === "content_production" ? "FrontMind 内容流程" : "FrontMind 通用智能体",
     },
     output: await cachedOutput(task.id),
-    ...(!purpose ? { execution: (await loadGeneralExecutions(await requireDb(), [task.id])).get(task.id) } : {}),
+    execution: (await loadGeneralExecutions(await requireDb(), [task.id])).get(task.id),
     ...(!task.providerTaskId &&
     ["failed", "cancelled"].includes(operation.status)
       ? { clearTaskPointer: true }
@@ -3334,7 +3334,7 @@ async function syncTask(input: { userId: number; localTaskId: string }) {
     if (!latestTurn || ["completed", "cancelled"].includes(latestTurn.status)) {
       // Old completed conversations need one GET-only projection backfill.
       const execution = (await loadGeneralExecutions(await requireDb(), [owned.task.id])).get(owned.task.id);
-      if (frozenGeneralAgentPurpose(owned.task, input.userId) || execution?.coverage === "complete") return owned;
+      if (execution?.coverage === "complete") return owned;
       const frozenCredential = await getDecryptedCredentialForAccountById(input.userId, owned.operation.apiCredentialId);
       if (frozenCredential && frozenCredential.version === owned.operation.credentialVersion && owned.task.providerTaskId) {
         try {

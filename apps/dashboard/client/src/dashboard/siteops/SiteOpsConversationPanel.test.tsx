@@ -1279,8 +1279,8 @@ describe("SiteOpsConversationPanel", () => {
     expect(
       screen.getByRole("button", { name: "复制消息" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("查看建站执行记录")).toBeInTheDocument();
-    expect(screen.getByText("检查网站")).toBeInTheDocument();
+    expect(screen.getByText("执行过程")).toBeInTheDocument();
+    expect(screen.getByText("运行检查 · 已完成")).toBeInTheDocument();
     expect(document.querySelector(".siteops-message-footer time")).toBeNull();
     expect(document.querySelector(".siteops-execution-timeline")).toBeNull();
     expect(
@@ -1312,10 +1312,10 @@ describe("SiteOpsConversationPanel", () => {
           })}
         />,
       );
-      expect(screen.getByText("整理页面设计 · 进行中")).toBeInTheDocument();
+      expect(screen.getByText("准备素材 · 进行中")).toBeInTheDocument();
       expect(screen.queryByText("5 秒")).not.toBeInTheDocument();
       act(() => vi.advanceTimersByTime(1_000));
-      expect(screen.getByText("整理页面设计 · 进行中")).toBeInTheDocument();
+      expect(screen.getByText("准备素材 · 进行中")).toBeInTheDocument();
       expect(screen.queryByText("6 秒")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
@@ -2946,4 +2946,18 @@ it("binds the real site and knowledge version before executing a workbench actio
       }),
     ),
   );
+});
+
+it("shows copy only on the final site reply, never on progress messages or their code blocks", () => {
+  const progress = {
+    id: "progress-message", role: "assistant" as const, sequence: 1, sentAt: "2026-08-22T00:00:00Z",
+    content: "正在检查页面。\n```text\n处理中\n```",
+    metadata: { siteOps: { kind: "build_progress" as const, subjectId: "build-op", revision: 1, status: "active" as const, payload: { stage: "content_building" } } },
+  };
+  const view = render(<SiteOpsConversationPanel observation={observation({ interactionState: "building", messages: [progress] })} />);
+  expect(screen.queryByRole("button", { name: "复制消息" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+  view.rerender(<SiteOpsConversationPanel observation={observation({ interactionState: "preview_ready", messages: [progress, { id: "result-message", role: "assistant", sequence: 2, sentAt: "2026-08-22T00:00:01Z", content: "官网预览已完成。", metadata: null }] })} />);
+  expect(screen.getAllByRole("button", { name: "复制消息" })).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
 });

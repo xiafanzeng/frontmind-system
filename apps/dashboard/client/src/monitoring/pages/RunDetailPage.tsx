@@ -1,3 +1,5 @@
+import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
+import { monitoringPublicExecution } from "@/lib/business-execution-adapters";
 import { projectResourceUrl } from "@/lib/enterprise-project";
 import { safeArchivedMediaUrl } from "../mediaUrls";
 import {
@@ -826,6 +828,7 @@ export default function RunDetailPage({
   };
   return (
     <div className="run-page" ref={runPageRef}>
+      <BusinessExecutionActivity execution={monitoringPublicExecution(run)} />
       <div className="run-page-head">
         {!embedded && (
           <Link

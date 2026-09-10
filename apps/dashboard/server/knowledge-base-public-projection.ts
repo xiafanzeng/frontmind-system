@@ -115,6 +115,11 @@ function publicNoticeCreatedAt(value: unknown) {
 }
 
 function publicNotice(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.code === "PACKAGE_REBIND_REQUIRED" || ["retry_request", "start_new_generation", "create_new_canonical_from_snapshot", "regenerate_turn", "resume_start_from_retained_sources", "reselect_start_sources"].includes(String(value.recoveryAction))) {
+    return { key: `frontmind-kb:reset:${publicNoticeCreatedAt(value.createdAt)}`, code: "FRONTMIND_KB_RESET_REQUIRED",
+      severity: "warning", message: "当前任务已失效，请批准重置后重新上传完整资料。", retryable: false,
+      recoveryAction: "approve_reset", recoveryToken: null, canRegenerate: false, turnId: null, createdAt: value.createdAt ?? null };
+  }
   const action = publicRecoveryAction(value.recoveryAction);
   const copy =
     action === "approve_reset" &&

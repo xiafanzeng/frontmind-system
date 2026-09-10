@@ -1,4 +1,6 @@
+import CustomerAiTaskUsage from "@/components/CustomerAiTaskUsage";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useWorkspaceModuleRuntime } from "@/contexts/WorkspaceQueryProvider";
 import "./styles.css";
 import "./integration.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -152,6 +154,18 @@ function createModuleQueryClient() {
       mutations: { retry: false },
     },
   });
+}
+
+function createModuleRuntime() {
+  const queryClient = createModuleQueryClient();
+  return {
+    client: createTrpcClient(),
+    queryClient,
+    dispose() {
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    },
+  };
 }
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"] as const;
@@ -785,7 +799,7 @@ function ServerBackedWorkspace({
           </button>
         </div>
       )}
-      <Suspense fallback={<div className="boot-state">正在读取页面…</div>}>
+      <Suspense fallback={<div className="boot-state" role="status">正在读取页面…</div>}>
         <Switch>
           <Route path="/publishing/*">
             {user.role === "user" && publishingEnabled ? (
@@ -981,6 +995,7 @@ function ServerBackedWorkspace({
                 return view;
               }}
             />
+            <CustomerAiTaskUsage />
           </Route>
           <Route path="/monitoring-system/:monitorId/runs/:runId">
             {(params) =>
@@ -2053,7 +2068,7 @@ function LinkedMonitoringWorkspace({
   if (!me.data)
     return (
       <div className="monitoring-module">
-        <div className="panel-state" role={me.error ? "alert" : "status"}>
+        <div className="boot-state" role={me.error ? "alert" : "status"}>
           <strong>
             {me.error ? "监控与发布工作区暂时无法读取" : "正在读取工作区…"}
           </strong>
@@ -2092,13 +2107,9 @@ export default function MonitoringModule({
   questionSources?: Record<string, string[]>;
 } = {}) {
   const { user } = useAuth();
-  const [client] = useState(createTrpcClient);
-  const queryClient = useMemo(createModuleQueryClient, [user?.id]);
-  useEffect(
-    () => () => {
-      queryClient.clear();
-    },
-    [queryClient],
+  const { client, queryClient } = useWorkspaceModuleRuntime(
+    `monitoring:${user?.id ?? "anonymous"}`,
+    createModuleRuntime,
   );
   return (
     <QueryClientProvider client={queryClient}>
@@ -2124,13 +2135,9 @@ export default function MonitoringModule({
 /** The report agent expands the existing, owner-checked run analysis in place. */
 export function MonitoringRunPanel({ runId }: { runId: string }) {
   const { user } = useAuth();
-  const [client] = useState(createTrpcClient);
-  const queryClient = useMemo(createModuleQueryClient, [user?.id]);
-  useEffect(
-    () => () => {
-      queryClient.clear();
-    },
-    [queryClient],
+  const { client, queryClient } = useWorkspaceModuleRuntime(
+    `monitoring:${user?.id ?? "anonymous"}`,
+    createModuleRuntime,
   );
   return (
     <QueryClientProvider client={queryClient}>

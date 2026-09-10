@@ -3480,7 +3480,7 @@ export async function listSnapshots(
     const binding = ownedGeneralChatTaskBindings.get(
       upstreamResourceKey("task", taskId),
     );
-    return binding && !binding.purpose;
+    return Boolean(binding);
   });
   const executions = await loadGeneralExecutions(db, executionTaskIds);
   return conversationRows.map((row) => ({

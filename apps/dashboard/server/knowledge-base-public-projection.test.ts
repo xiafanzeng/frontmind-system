@@ -63,8 +63,8 @@ describe("knowledge-base customer public projection", () => {
     });
 
     expect(payload.notice).toMatchObject({
-      code: "FRONTMIND_KB_NEW_GENERATION_REQUIRED",
-      message: "需要你确认后创建新的知识库任务。已完成内容不受影响。",
+      code: "FRONTMIND_KB_RESET_REQUIRED",
+      message: "当前任务已失效，请批准重置后重新上传完整资料。",
     });
     expect(JSON.stringify(payload)).not.toMatch(/manus/iu);
   });
@@ -163,7 +163,10 @@ describe("knowledge-base customer public projection", () => {
         },
       });
 
-      expect(payload.notice).toMatchObject({ recoveryAction, code, message });
+      if (["retry_request", "start_new_generation", "regenerate_turn", "resume_start_from_retained_sources", "reselect_start_sources", "create_new_canonical_from_snapshot"].includes(recoveryAction)) {
+        expect(payload.notice).toMatchObject({ recoveryAction: "approve_reset", code: "FRONTMIND_KB_RESET_REQUIRED",
+          message: "当前任务已失效，请批准重置后重新上传完整资料。", recoveryToken: null, canRegenerate: false });
+      } else expect(payload.notice).toMatchObject({ recoveryAction, code, message });
       expect(payload.notice).not.toHaveProperty("traceId");
       expect(JSON.stringify(payload)).not.toMatch(/(?:supportId|排查编号)/iu);
     },
@@ -226,7 +229,7 @@ describe("knowledge-base customer public projection", () => {
     );
   });
 
-  it("publishes only the opaque explicit token and provider-neutral action", () => {
+  it("retires legacy recovery tokens instead of exposing an executable action", () => {
     const payload = toKnowledgeBasePublicPayload({
       notice: {
         key: "private-source-turn",
@@ -242,9 +245,9 @@ describe("knowledge-base customer public projection", () => {
     });
 
     expect(payload.notice).toMatchObject({
-      code: "FRONTMIND_KB_RETRY_AVAILABLE",
-      recoveryAction: "retry_request",
-      recoveryToken: "a".repeat(64),
+      code: "FRONTMIND_KB_RESET_REQUIRED",
+      recoveryAction: "approve_reset",
+      recoveryToken: null,
       turnId: null,
     });
     expect(payload.notice).not.toHaveProperty("sourceTurnId");

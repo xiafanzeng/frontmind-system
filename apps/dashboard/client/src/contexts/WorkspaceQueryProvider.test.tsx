@@ -15,7 +15,8 @@ const transports = vi.hoisted(() => ({
 vi.mock("@/lib/dashboard-transport", () => ({
   createDashboardTransport: transports.create,
 }));
-vi.mock("@/lib/workspace-rest-scope", () => ({
+vi.mock("@/lib/workspace-rest-scope", async (original) => ({
+  ...await original<typeof import("@/lib/workspace-rest-scope")>(),
   activateWorkspaceRestScope: transports.activate,
 }));
 vi.mock("@/lib/trpc", () => ({

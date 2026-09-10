@@ -10,6 +10,8 @@ import { cn, copyToClipboard } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Components } from "react-markdown";
 
+const MarkdownCopyContext = React.createContext(true);
+
 // Custom code block component with better styling
 const CodeBlock = ({
   className,
@@ -17,6 +19,7 @@ const CodeBlock = ({
   ...props
 }: React.ComponentProps<"pre">) => {
   const codeRef = React.useRef<HTMLElement>(null);
+  const allowCopy = React.useContext(MarkdownCopyContext);
 
   return (
     <pre
@@ -29,7 +32,7 @@ const CodeBlock = ({
       <code ref={codeRef} className={cn("font-mono", className)}>
         {children}
       </code>
-      <CopyButton text={String(children)} />
+      {allowCopy && <CopyButton text={String(children)} />}
     </pre>
   );
 };
@@ -381,6 +384,7 @@ const components: Components = {
 };
 
 interface MarkdownRendererProps {
+  allowCopy?: boolean;
   content: string;
   className?: string;
   generalChatLinks?: boolean;
@@ -449,6 +453,7 @@ class MarkdownErrorBoundary extends React.Component<
 }
 
 export default function MarkdownRenderer({
+  allowCopy = true,
   content,
   className,
   generalChatLinks,
@@ -457,13 +462,15 @@ export default function MarkdownRenderer({
   if (!content || typeof content !== "string") return null;
 
   return (
-    <MarkdownErrorBoundary fallbackContent={content}>
-      <MarkdownRendererInner
-        content={content}
-        className={className}
-        generalChatLinks={generalChatLinks}
-        onArtifactDownload={onArtifactDownload}
-      />
-    </MarkdownErrorBoundary>
+    <MarkdownCopyContext.Provider value={allowCopy}>
+      <MarkdownErrorBoundary fallbackContent={content}>
+        <MarkdownRendererInner
+          content={content}
+          className={className}
+          generalChatLinks={generalChatLinks}
+          onArtifactDownload={onArtifactDownload}
+        />
+      </MarkdownErrorBoundary>
+    </MarkdownCopyContext.Provider>
   );
 }

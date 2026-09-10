@@ -396,6 +396,30 @@ describe("AgentWorkbenchShell", () => {
     );
     await waitFor(() => expect(scroll.scrollTop).toBe(280));
   });
+  it("preserves the desktop column, mounted composer and reading anchor across ten panel toggles", async () => {
+    const { container } = render(<AgentWorkbenchShell {...props} taskKey="long-running-task" />);
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    const main = screen.getByRole("region", { name: "主工作区" });
+    const scroll = main.firstElementChild!;
+    const composer = screen.getByRole("textbox", { name: "任务草稿" });
+    const layout = container.querySelector(".agent-workbench-shell__layout")!;
+    const shell = container.querySelector(".agent-workbench-shell") as HTMLElement;
+    const panelWidth = shell.style.getPropertyValue("--agent-aux-width");
+    scroll.scrollTop = 280;
+    fireEvent.scroll(scroll);
+    for (let index = 0; index < 10; index += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
+      expect(layout).toHaveClass("has-panel-clearance");
+      expect(shell.style.getPropertyValue("--agent-aux-width")).toBe(panelWidth);
+      expect(screen.getByRole("textbox", { name: "任务草稿" })).toBe(composer);
+      expect(main.firstElementChild).toBe(scroll);
+      expect(scroll.scrollTop).toBe(280);
+      fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+      expect(layout).toHaveClass("has-panel-clearance");
+      expect(shell.style.getPropertyValue("--agent-aux-width")).toBe(panelWidth);
+      expect(scroll.scrollTop).toBe(280);
+    }
+  });
   it("remains usable when local preferences are blocked", () => {
     vi.mocked(localStorage.getItem).mockImplementation(() => {
       throw new Error("blocked");

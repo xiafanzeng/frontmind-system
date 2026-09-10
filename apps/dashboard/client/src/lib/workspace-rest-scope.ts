@@ -4,8 +4,24 @@ type RestScope = { key: string; generation: number; headers: Record<string, stri
 type OperationScope = { headers: Record<string, string>; signal: AbortSignal };
 let activeScope: RestScope | undefined;
 let projectScope: RestScope | undefined;
+let uploadScope: RestScope | undefined;
 const inheritedScopes = new WeakMap<AbortSignal, OperationScope>();
 const scopeHeaderNames = ["x-enterprise-project-id", "x-delivery-project-assignment-id"];
+
+/** Uploads keep the selected enterprise while the user visits account/general pages. */
+export function activateWorkspaceUploadScope(key: string) {
+  if (!uploadScope || uploadScope.key !== key || uploadScope.controller.signal.aborted) {
+    uploadScope?.controller.abort();
+    uploadScope = { key, generation: 0, headers: {}, controller: new AbortController() };
+  }
+  const scope = uploadScope;
+  const generation = ++scope.generation;
+  return () => queueMicrotask(() => {
+    if (scope.generation !== generation) return;
+    scope.controller.abort();
+    if (uploadScope === scope) uploadScope = undefined;
+  });
+}
 
 /** The mounted protected workspace owns the lifetime of its business REST requests. */
 export function activateWorkspaceRestScope(key: string, projectId?: string): () => void {
@@ -33,6 +49,12 @@ export function activateWorkspaceRestScope(key: string, projectId?: string): () 
   };
 }
 
+/** Called only by the authenticated project provider's final teardown. */
+export function retireWorkspaceRestScope(key: string) {
+  if (projectScope?.key === key) { projectScope.controller.abort(); projectScope = undefined; }
+  if (activeScope?.key === key) { activeScope.controller.abort(); activeScope = undefined; }
+}
+
 export type WorkspaceRestOperation = ReturnType<typeof captureWorkspaceRestOperation>;
 
 /** Capture once before an await; pass signal to nested operations so retries inherit this identity. */
@@ -58,7 +80,7 @@ export function captureWorkspaceRestOperation(
   // mounted page's abort signal. Account/project changes pass a new explicit
   // scope and cancel the manager-owned signal separately.
   const lifetimeSignal = inherited?.signal ?? (options.detached
-    ? projectScope?.controller.signal
+    ? (uploadScope ?? projectScope)?.controller.signal
     : activeScope?.controller.signal);
   const signals = [...new Set([lifetimeSignal, externalSignal].filter((signal): signal is AbortSignal => Boolean(signal)))];
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0] ?? new AbortController().signal;

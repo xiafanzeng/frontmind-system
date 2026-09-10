@@ -1188,6 +1188,9 @@ function mapPublicationItem(
     priceTenThousandths: item.priceTenThousandths,
     ...(item.publishedUrl ? { resultUrl: item.publishedUrl } : {}),
     ...(resultMessage ? { resultMessage } : {}),
+    ...(item.submittedAt ? { submittedAt: toIso(item.submittedAt) } : {}),
+    ...(item.completedAt ? { completedAt: toIso(item.completedAt) } : {}),
+    submissionAttempts: item.submissionAttempts?.map(attempt => ({ id: attempt.id, number: attempt.number, startedAt: toIso(attempt.startedAt), ...(attempt.completedAt ? { completedAt: toIso(attempt.completedAt) } : {}), ...(attempt.result ? { result: attempt.result } : {}) })),
     updatedAt: toIso(item.completedAt ?? item.submittedAt ?? batch.updatedAt),
   };
 }

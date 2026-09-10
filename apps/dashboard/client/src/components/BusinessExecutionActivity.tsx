@@ -12,6 +12,7 @@ export function BusinessExecutionActivity({
   return (
     <details className="business-execution-disclosure" open>
       <summary>执行过程</summary>
+      {execution.coverage !== "complete" && <p className="text-xs text-muted-foreground">部分历史过程未记录，仅展示已有活动。</p>}
       <GeneralExecutionActivity
         items={items.map((item) => ({
           ...item,

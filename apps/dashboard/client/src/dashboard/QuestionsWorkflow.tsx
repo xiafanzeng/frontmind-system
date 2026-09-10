@@ -580,6 +580,7 @@ export function QuestionsWorkflow({
           {flow.entry === "direct" && !flow.confirming && (
             <WorkflowSection
               id={`${flow.instanceId}-input`}
+              divider="none"
               title="你想优化的具体问题是什么？"
             >
               <div className="workflow-fields">
@@ -630,6 +631,7 @@ export function QuestionsWorkflow({
           {flow.entry === "library" && !flow.confirming && (
             <WorkflowSection
               id={`${flow.instanceId}-library`}
+              divider="none"
               title="从词库中选择一个问题"
             >
               {dashboard.isLoading ? (

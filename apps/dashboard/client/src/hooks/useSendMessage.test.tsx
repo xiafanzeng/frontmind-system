@@ -1,6 +1,7 @@
+import { KnowledgeBaseUploadProvider } from "@/lib/knowledge-base-upload-manager";
 import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { render, renderHook, act, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
 import {
   GENERAL_CHAT_PARTIAL_RESULT_ERROR_CODE,
@@ -2073,6 +2074,28 @@ describe("useSendMessage", () => {
     expect(toast.info).toHaveBeenCalledWith("本轮已提交", {
       description: "正在处理当前节点，请稍候。",
     });
+  });
+
+  it("continues the first node supplement upload after its page unmounts", async () => {
+    const file = new File(["facts"], "facts.pdf", { type: "application/pdf", lastModified: 1_700_000_000_000 });
+    mockPreparedFiles([file]);
+    let current!: ReturnType<typeof useSendMessage>;
+    function Page() { current = useSendMessage(); return null; }
+    const page = (visible: boolean) => <KnowledgeBaseUploadProvider>{visible ? <Page/> : <div>账户页</div>}</KnowledgeBaseUploadProvider>;
+    let finishUpload!: (result: unknown) => void;
+    mocks.uploadFile.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve; }));
+    const view = render(page(true));
+    let submitted!: Promise<boolean>;
+    await act(async () => { submitted = current.sendMessage("请结合附件修订", [file], { syncKnowledgeBaseSnapshot: true, knowledgeBaseExpectedResetRevision: 4, knowledgeBaseExpectedGeneration: 3, knowledgeBaseExpectedRevision: 7, knowledgeBaseExpectedLeafId: "2.1" }); });
+    await waitFor(() => expect(finishUpload).toBeDefined());
+    const signal = mocks.uploadFile.mock.calls[0]![3].signal as AbortSignal;
+    view.rerender(page(false));
+    await act(async () => { await Promise.resolve(); });
+    expect(signal.aborted).toBe(false);
+    await act(async () => { finishUpload({ fileId: "retained-facts", filename: "facts.pdf", uploadedAt: 1_000, expiresAt: 2_593_000_000 }); expect(await submitted).toBe(true); });
+    expect(mocks.stageKnowledgeBaseTurnAttachment).toHaveBeenCalledOnce();
+    expect(mocks.createKnowledgeBaseTurnTask).toHaveBeenCalledOnce();
+    expect(mocks.reserveKnowledgeBaseTurnWithAttachments).toHaveBeenCalledOnce();
   });
 
   it("reserves, uploads, stages and dispatches one knowledge attachment in order", async () => {

@@ -1,6 +1,7 @@
+import { createKnowledgeBaseUploadRouter } from "./knowledge-base-upload-api";
 import { persistKnowledgeBaseExecution, persistKnowledgeBaseStage } from "./knowledge-base-execution";
 import { acceptKnowledgeBaseInitialDraft } from "./knowledge-workbench-service";
-import { recordKnowledgeBaseUploadHeartbeat } from "./knowledge-base-turn-service";
+import { failKnowledgeBaseUpload, recordKnowledgeBaseUploadHeartbeat } from "./knowledge-base-turn-service";
 import { exportKnowledgeBaseWorkspace } from "./knowledge-workbench-export";
 import { pipeline as streamPipeline } from "node:stream/promises";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
@@ -408,6 +409,8 @@ export function knowledgeBaseReservationReceipt(
     state: reservation.state,
     dispatchState,
     turnId: reservation.turn.id,
+    uploadAttemptId: reservation.turn.uploadAttemptId ?? null,
+    uploadStatusVersion: reservation.turn.uploadStatusVersion ?? 0,
     clientRequestId: reservation.turn.clientRequestId,
     generation: reservation.turn.buildGeneration,
     stateEpoch: stateEpoch ?? null,
@@ -1478,21 +1481,21 @@ export async function getKnowledgeBaseObservation(input: {
   userId: number;
   conversationId: string;
   upstreamStatus: unknown;
-}): Promise<KnowledgeBaseObservationDto | null> {
-  const projection = await getKnowledgeBaseObservationProjection(input);
+}, executor?: any): Promise<KnowledgeBaseObservationDto | null> {
+  const projection = await getKnowledgeBaseObservationProjection(input, executor);
   if (!projection) return null;
   const { progress, ...observation } = projection;
   let interaction = deriveKnowledgeBaseInteraction(
     progress,
     input.upstreamStatus,
   );
-  if (projection.processingPhase === "uploading") {
+  if (projection.processingPhase === "uploading" || projection.runPhase === "cancelled") {
     interaction = {
       ...interaction,
       interactionState: "queued",
       canReply: false,
       canPublish: false,
-      lockReason: "正在接收并校验本轮资料，任务尚未派发",
+      lockReason: projection.runPhase === "cancelled" ? "上传已停止，请明确继续后再处理资料" : "正在接收并校验本轮资料，任务尚未派发",
     };
   }
   const presentationProjection = applyKnowledgeBasePresentationProjectionGuard({
@@ -1559,6 +1562,8 @@ export async function getKnowledgeBaseObservation(input: {
 
 const respondKnowledgeBaseLogoProvenanceError =
   createKnowledgeBaseLogoProvenanceErrorResponder(getKnowledgeBaseObservation);
+
+router.use(createKnowledgeBaseUploadRouter({requireKnowledgeBuildCapability,getKnowledgeBaseObservation}));
 
 router.use(
   createKnowledgeBaseLogoProvenanceRouter({
@@ -6447,6 +6452,7 @@ router.post("/turn/upload-heartbeat", async (req, res) => {
   const parsed = z.object({
     conversationId: z.string().trim().min(1).max(191), turnId: z.string().min(1).max(36),
     clientRequestId: z.string().min(1).max(128), expectedResetRevision: z.number().int().nonnegative(),
+    uploadAttemptId: z.string().min(1).max(128).optional(),
     status: z.enum(["active", "cancelled"]), uploadedBytes: z.number().int().nonnegative().max(10 * 1024 ** 3),
   }).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: { code: "INVALID_UPLOAD_HEARTBEAT", message: "上传状态参数无效" } }); return; }
@@ -6500,6 +6506,7 @@ router.post("/turn/attachments/resume", async (req, res) => {
   try {
     await assertKnowledgeBaseWritable(enterpriseWorkspaceUserId(req.frontmindUser.id));
     const result = await resumeKnowledgeBaseDeferredTurnAttachments({
+      uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
@@ -6743,6 +6750,7 @@ router.post("/turn/attachments/stage", async (req, res) => {
     // the same live reset fence. This endpoint never claims or launches a
     // Provider task; `/turn/dispatch` is the sole dispatch boundary.
     const turn = await stageKnowledgeBaseDeferredTurnAttachment({
+      uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: build.id,
       turnId,
@@ -6770,6 +6778,8 @@ router.post("/turn/attachments/stage", async (req, res) => {
       reservation: {
         state: "awaiting_attachments",
         turnId: turn.id,
+        uploadAttemptId: turn.uploadAttemptId ?? null,
+        uploadStatusVersion: turn.uploadStatusVersion ?? 0,
         clientRequestId: turn.clientRequestId,
         stagedAttachmentCount: turn.stagedUserAttachmentCount,
         expectedAttachmentCount: turn.expectedUserAttachmentCount,
@@ -6950,19 +6960,13 @@ router.post("/turn/dispatch", async (req, res) => {
     }
     const projectAssignmentId =
       req.frontmindDeliveryProjectContext?.projectAssignmentId;
-    const startCredential = isStartReservation
-      ? await getDecryptedCredentialForKnowledgeBaseUploadReservation({
+    const startCredential = await getDecryptedCredentialForKnowledgeBaseUploadReservation({
           userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           conversationId,
           turnId,
           projectAssignmentId: projectAssignmentId ?? null,
-        })
-      : null;
-    const taskCredential = selectMaterializedKnowledgeBaseAttachmentCredential({
-      isStartReservation,
-      startCredential,
-      currentCredential: req.frontmindCredential ?? null,
-    });
+        });
+    const taskCredential = startCredential;
     if (!taskCredential) {
       if (await replayAfterMutableFailure()) return;
       const observation = await getKnowledgeBaseObservation({
@@ -6981,6 +6985,7 @@ router.post("/turn/dispatch", async (req, res) => {
     }
     await assertKnowledgeBaseDispatchFunds(enterpriseWorkspaceUserId(req.frontmindUser.id),turnId);
     acquiredClaim = await claimKnowledgeBaseDeferredTurnDispatch({
+      uploadAttemptId: typeof req.body.uploadAttemptId === "string" ? req.body.uploadAttemptId : undefined,
       userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       buildId: build.id,
       turnId,
@@ -7197,6 +7202,10 @@ router.post("/turn/dispatch", async (req, res) => {
       outcomeUnknownCode: "TURN_DISPATCH_OUTCOME_UNKNOWN",
     });
   } catch (caught) {
+    if (caught instanceof AuthServiceError && ["INVALID_CREDENTIAL", "INVALID_MASTER_KEY"].includes(caught.code)) {
+      await failKnowledgeBaseUpload({userId:enterpriseWorkspaceUserId(req.frontmindUser!.id),conversationId,turnId,clientRequestId,expectedResetRevision,code:"FROZEN_CREDENTIAL_UNAVAILABLE",message:"本轮冻结的连接配置不可用，请联系管理员检查配置"}).catch(() => undefined);
+      res.status(428).json({error:{code:"FROZEN_CREDENTIAL_UNAVAILABLE",message:"本轮冻结的连接配置不可用，请联系管理员检查配置",retryable:false}});return;
+    }
     if (sendAiBillingError(res, caught)) return;
     let error = caught;
     if (replayAfterMutableFailure && !acquiredClaim) {

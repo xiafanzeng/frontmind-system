@@ -343,7 +343,7 @@ function Router() {
 export function WorkspaceLoadingState() {
   return (
     <div
-      className="flex min-h-[100dvh] items-center justify-center bg-background"
+      className="workspace-surface flex min-h-[100dvh] items-center justify-center bg-background"
       role="status"
       aria-live="polite"
     >
@@ -392,7 +392,7 @@ export function AuthBoundary() {
 
   if (!user && error) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-background p-4">
+      <div className="workspace-surface flex min-h-[100dvh] items-center justify-center bg-background p-4">
         <div className="glass-card w-full max-w-sm rounded-2xl p-7 text-center">
           <h1 className="text-lg font-semibold">暂时无法连接服务</h1>
           <p className="mt-2 break-words text-sm text-muted-foreground">
@@ -458,6 +458,7 @@ function AppContent() {
     ) : null;
 
   return (
+    <div className={/^\/publishing(?:\/|$)/.test(location) ? "publishing-route-surface" : undefined}>
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
@@ -467,6 +468,7 @@ function AppContent() {
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
+    </div>
   );
 }
 

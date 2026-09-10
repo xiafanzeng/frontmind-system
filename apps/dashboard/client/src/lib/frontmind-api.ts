@@ -1,5 +1,6 @@
 import type { GeneralExecutionDto } from "@shared/frontmind-general-execution";
 import { captureWorkspaceRestOperation } from "./workspace-rest-scope";
+import { waitForKnowledgeBaseReply } from "./knowledge-base-reply";
 import type {
   ContentProductionInput,
   ContentProductionAction,
@@ -527,6 +528,7 @@ export type ManagedUploadRecovery =
 
 export type FileUploadStageEvent = {
   stage: FileUploadStage;
+  attempt?: number;
   itemId?: string;
   intentId?: string;
   fileId?: string;
@@ -567,6 +569,7 @@ export type UploadFileOptions = {
     turnId: string;
     clientRequestId: string;
     expectedResetRevision?: number;
+    uploadAttemptId?: string;
   };
   signal?: AbortSignal;
   /** Reuses an already-created provider file after an unknown client outcome. */
@@ -1140,6 +1143,7 @@ export async function uploadKnowledgeBaseLocalAsset(
           clientRequestId: options.resumeScope.clientRequestId,
           itemId,
           expectedResetRevision,
+          ...(options.resumeScope.uploadAttemptId ? { uploadAttemptId: options.resumeScope.uploadAttemptId } : {}),
           ...(contentSha256 ? { contentSha256 } : {}),
           ordinal,
         } satisfies KnowledgeBaseLocalUploadCoordinate;
@@ -1180,12 +1184,13 @@ export async function uploadKnowledgeBaseLocalAsset(
         onTransfer: (loadedBytes, totalBytes) =>
           options.onStage?.({
             stage: "uploading_to_dashboard",
+            attempt: retryIndex + 1,
             loadedBytes,
             totalBytes,
           }),
         onUploadComplete: () =>
           options.onStage?.({
-            stage: "uploading_to_dashboard",
+            stage: "server_processing",
             loadedBytes: file.size,
             totalBytes: file.size,
           }),
@@ -1231,62 +1236,28 @@ export async function uploadKnowledgeBaseLocalAsset(
       // A stalled transfer/confirmation has already exhausted its bounded wait.
       // Surface the retained batch for an explicit check instead of hiding it
       // behind another five-minute automatic attempt.
-      if (["UPLOAD_BROWSER_STALLED", "UPLOAD_SERVER_RESPONSE_TIMEOUT"].includes(errorCode)) throw error;
-      const resumableRevisionConflict =
-        Boolean(coordinate) &&
-        options.resumeScope?.operationType === "revise" &&
-        errorCode === "UPLOAD_OPERATION_CONFLICT";
-      if (!retryable && !resumableRevisionConflict) throw error;
-      if (coordinate && options.resumeScope?.operationType === "revise") {
-        const resumed = await resumeKnowledgeBaseTurnAttachments(
-          {
-            conversationId: coordinate.conversationId,
-            turnId: coordinate.turnId,
-            clientRequestId: coordinate.clientRequestId,
-            expectedResetRevision: coordinate.expectedResetRevision,
-          },
-          options.signal,
-        );
-        if (resumed.stagedCustomerAttachmentCount >= coordinate.ordinal) {
-          const resumedAt = Date.now();
-          return {
-            fileId: "",
-            filename,
-            sizeBytes: file.size,
-            ...(coordinate.contentSha256
-              ? { contentSha256: coordinate.contentSha256 }
-              : {}),
-            uploadedAt: resumedAt,
-            dashboardReadyAt: resumedAt,
-            expiresAt: resumedAt,
-            replayed: true,
-            recovered: true,
-            alreadyStaged: true,
-            knowledgeObservation: resumed.knowledgeObservation,
-          };
+      const emptyBadRequest = Number((error as { status?: unknown })?.status) === 400 && errorCode === "UPLOAD_REJECTED";
+      const operationConflict = Boolean(coordinate) && errorCode === "UPLOAD_OPERATION_CONFLICT";
+      if (!retryable && !emptyBadRequest && !operationConflict) throw error;
+      if (coordinate) {
+        const status = await getKnowledgeBaseUploadStatus(coordinate, options.signal);
+        if (status.controlState === "stopped") throw error;
+        const saved = status.files.find(item => item.itemId === coordinate.itemId && item.ordinal === coordinate.ordinal);
+        if (saved && saved.status !== "missing" && saved.resourceId) {
+          const recoveredAt = Date.now();
+          return { fileId: saved.resourceId, filename, sizeBytes: file.size, uploadedAt: recoveredAt, expiresAt: recoveredAt, replayed: true, recovered: true,
+            ...(saved.status === "confirmed" ? { alreadyStaged: true as const } : {}), knowledgeObservation: status.knowledgeObservation };
         }
-        if (resumableRevisionConflict) throw error;
-        const currentFileIsMissing = resumed.missingCustomerAttachments.some(
-          (item) =>
-            item.ordinal === coordinate.ordinal &&
-            item.itemId === coordinate.itemId,
-        );
-        if (!currentFileIsMissing) {
-          throw Object.assign(
-            new Error("Dashboard 正在恢复当前附件，请稍后继续"),
-            {
-              code: "KNOWLEDGE_BASE_ATTACHMENT_RESUME_PENDING",
-              retryable: true,
-              knowledgeObservation: resumed.knowledgeObservation,
-            },
-          );
-        }
+        // The GET above is read-only. A missing file can use the same original
+        // request identity after the bounded retry delay; no resume mutation.
+        if (!saved || saved.status !== "missing" || !status.allowedActions.includes("upload") || operationConflict) throw error;
       }
-      if (retryIndex >= maxRetries) throw error;
+      if (["UPLOAD_BROWSER_STALLED", "UPLOAD_SERVER_RESPONSE_TIMEOUT"].includes(errorCode) || retryIndex >= maxRetries) throw error;
       const delayMs = Math.min(maxDelay, initialDelay * 3 ** retryIndex);
       retryIndex += 1;
       options.onStage?.({
         stage: "recovering",
+        attempt: retryIndex + 1,
         itemId: options.itemId,
         loadedBytes: 0,
         totalBytes: file.size,
@@ -1537,6 +1508,8 @@ export interface KnowledgeBaseAttachmentTurnReservation {
   turnId: string;
   clientRequestId: string;
   sourceResetRevision: number;
+  uploadAttemptId?: string;
+  uploadStatusVersion?: number;
   generation: number;
   revision: number;
   leafId: string | null;
@@ -1561,6 +1534,7 @@ export interface KnowledgeBaseTurnAttachmentResumeResult {
 }
 
 export interface KnowledgeBaseTurnAttachmentCoordinate {
+  uploadAttemptId?: string;
   conversationId: string;
   turnId: string;
   clientRequestId: string;
@@ -1575,8 +1549,21 @@ export type KnowledgeBaseRequestError = Error & {
   knowledgeObservation?: KnowledgeBaseObservationDto;
 };
 
-const KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS = 4;
+const KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS = 3;
 const KNOWLEDGE_BASE_REQUEST_MAX_RETRY_DELAY_MS = 10_000;
+
+function boundedKnowledgeBaseFetch(rest: ReturnType<typeof captureWorkspaceRestOperation>, url: string, init: RequestInit, timeoutMs = 6 * 60_000) {
+  return waitForKnowledgeBaseReply({ signal: rest.signal, timeoutMs, request: async signal => {
+    const response = await rest.fetch(url, { ...init, signal });
+    // Bound body parsing too: receiving headers is not business progress.
+    let payload: unknown;
+    let parseError: unknown;
+    try { payload = await response.json(); } catch (error) { parseError = error; }
+    return { ok: response.ok, status: response.status, headers: response.headers,
+      json: async () => { if (parseError) throw parseError; return payload; },
+    } as Response;
+  } });
+}
 
 export async function reserveKnowledgeBaseStart(
   input: {
@@ -1603,7 +1590,7 @@ export async function reserveKnowledgeBaseStart(
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await rest.fetch("/api/knowledge-base/start/reserve", {
+      const response = await boundedKnowledgeBaseFetch(rest, "/api/knowledge-base/start/reserve", {
         method: "POST",
         headers: rest.headers({
           "Content-Type": "application/json",
@@ -1695,7 +1682,7 @@ export async function cancelKnowledgeBaseStartReservation(input: {
 function isTransientKnowledgeBaseRequestError(error: unknown) {
   const status = Number((error as { status?: unknown })?.status || 0);
   const code = String((error as { code?: unknown })?.code || "");
-  if (code.startsWith("AI_")) return false;
+  if (code.startsWith("AI_") || code === "KB_REPLY_PENDING") return false;
   return (
     !status ||
     code === "IDEMPOTENCY_PENDING" ||
@@ -1710,7 +1697,7 @@ function knowledgeBaseRequestRetryDelay(error: unknown, attempt: number) {
   const serverDelay = Number(
     (error as { retryAfterMs?: unknown })?.retryAfterMs,
   );
-  const backoffDelay = 500 * 2 ** attempt;
+  const backoffDelay = attempt === 0 ? 1_000 : 3_000;
   return Math.min(
     KNOWLEDGE_BASE_REQUEST_MAX_RETRY_DELAY_MS,
     Math.max(
@@ -1866,7 +1853,7 @@ export async function reserveKnowledgeBaseTurnWithAttachments(
     attempt += 1
   ) {
     try {
-      const response = await rest.fetch("/api/knowledge-base/turn/reserve", {
+      const response = await boundedKnowledgeBaseFetch(rest, "/api/knowledge-base/turn/reserve", {
         method: "POST",
         headers: rest.headers({ "Content-Type": "application/json" }),
         credentials: "include",
@@ -1936,6 +1923,53 @@ function assertKnowledgeBaseTurnAttachmentCoordinate(
   }
 }
 
+export type KnowledgeBaseUploadStatus = {
+  reservation?: KnowledgeBaseAttachmentTurnReservation;
+  enterpriseProjectId?: string | null;
+  operationKey?: string;
+  dispatchState?: string;
+  createAttemptState?: "not_sent" | "sending" | "acknowledged" | "rejected" | "unknown";
+  upstreamTaskId?: string | null;
+  dispatchRecoveryAction?: "safe_dispatch" | "observe" | "confirm_dispatch" | "none";
+  buildId: string; conversationId: string; turnId: string; generation: number;
+  resetRevision: number; clientRequestId: string; stateEpoch: number;
+  uploadStatusVersion: number; uploadAttemptId: string | null;
+  runPhase: "reserved" | "uploading" | "staging" | "dispatching" | "researching" | "normalizing" | "published" | "failed" | "cancelled" | "reset_required";
+  controlState: "active" | "stopped";
+  totalFiles: number; totalBytes: number; confirmedFiles: number; confirmedBytes: number;
+  files: Array<{ itemId: string; ordinal: number; filename: string; sizeBytes: number; mimeType: string; lastModified: number; sha256?: string; status: "missing" | "retained" | "confirmed"; missingReason?: string; resourceId?: string }>;
+  readyToDispatch: boolean; allowedActions: Array<"stop" | "resume" | "upload" | "dispatch">;
+  connection?: unknown; error?: { code?: string; message: string } | null;
+  lastBusinessActivityAt?: number; knowledgeObservation?: KnowledgeBaseObservationDto;
+};
+
+async function readUploadStatusResponse(response: Response, coordinate: Omit<KnowledgeBaseTurnAttachmentCoordinate, "turnId"> & { turnId?: string }): Promise<KnowledgeBaseUploadStatus> {
+  if (!response.ok) throw await knowledgeBaseRequestError(response, "暂时无法读取资料状态");
+  const status = await response.json() as KnowledgeBaseUploadStatus;
+  if (status.conversationId !== coordinate.conversationId || (coordinate.turnId && status.turnId !== coordinate.turnId) || !status.turnId || status.clientRequestId !== coordinate.clientRequestId || status.resetRevision !== coordinate.expectedResetRevision || !Array.isArray(status.files) || !Number.isSafeInteger(status.uploadStatusVersion)) throw Object.assign(new Error("资料状态与当前批次不一致，请刷新后重试"), { status: 409, code: "UPLOAD_STATUS_COORDINATE_MISMATCH" });
+  if (status.knowledgeObservation) status.knowledgeObservation = knowledgeBaseObservationFromPayload(status.knowledgeObservation);
+  return status;
+}
+
+/** Pure read: never stage files, release a stop, or create a model task. */
+export async function getKnowledgeBaseUploadStatus(coordinate: Omit<KnowledgeBaseTurnAttachmentCoordinate, "turnId"> & { turnId?: string }, signal?: AbortSignal): Promise<KnowledgeBaseUploadStatus> {
+  assertKnowledgeBaseTurnAttachmentCoordinate({ ...coordinate, turnId: coordinate.turnId ?? "reservation-lookup" });
+  const rest = captureWorkspaceRestOperation(signal);
+  const query = new URLSearchParams(Object.entries(coordinate).filter(([,value]) => value !== undefined).map(([key,value]) => [key, String(value)]));
+  return readUploadStatusResponse(await boundedKnowledgeBaseFetch(rest, `/api/knowledge-base/turn/upload-status?${query}`, { credentials: "include" }, 10_000), coordinate);
+}
+
+export async function controlKnowledgeBaseUpload(input: KnowledgeBaseTurnAttachmentCoordinate & { action: "stop" | "resume" }, signal?: AbortSignal): Promise<KnowledgeBaseUploadStatus> {
+  assertKnowledgeBaseTurnAttachmentCoordinate(input);
+  const rest = captureWorkspaceRestOperation(signal);
+  return readUploadStatusResponse(await boundedKnowledgeBaseFetch(rest, "/api/knowledge-base/turn/upload-control", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }, 10_000), input);
+}
+
+export function uploadStatusToAttachmentResume(status: KnowledgeBaseUploadStatus): KnowledgeBaseTurnAttachmentResumeResult {
+  const attachmentManifest = status.files.map(file => ({ itemId: file.itemId, ordinal: file.ordinal, total: status.totalFiles, filename: file.filename, sizeBytes: file.sizeBytes, mimeType: file.mimeType, lastModified: file.lastModified, ...(file.sha256 ? { sha256: file.sha256 } : {}) }));
+  return { stagedCustomerAttachmentCount: status.confirmedFiles, retainedCustomerAttachmentCount: status.files.filter(file => file.status !== "missing").length, missingCustomerAttachments: attachmentManifest.filter(item => status.files.find(file => file.itemId === item.itemId)?.status === "missing"), readyToDispatch: status.readyToDispatch && status.allowedActions.includes("dispatch"), attachmentManifest, knowledgeObservation: status.knowledgeObservation };
+}
+
 export async function resumeKnowledgeBaseTurnAttachments(
   input: KnowledgeBaseTurnAttachmentCoordinate,
   signal?: AbortSignal,
@@ -1954,7 +1988,7 @@ export async function resumeKnowledgeBaseTurnAttachments(
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await rest.fetch(
+      const response = await boundedKnowledgeBaseFetch(rest,
         "/api/knowledge-base/turn/attachments/resume",
         {
           method: "POST",
@@ -2057,6 +2091,7 @@ export async function cancelKnowledgeBaseTurnAttachments(
 }
 
 export async function stageKnowledgeBaseTurnAttachment(input: {
+  uploadAttemptId?: string;
   conversationId: string;
   turnId: string;
   clientRequestId: string;
@@ -2076,8 +2111,8 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
   }
   // Staging is a replay-safe database append. Retry the same file id so a lost
   // response cannot force a second upload or a replacement at this index.
-  const maxAttempts = 4;
-  const maxRetryDelayMs = 10_000;
+  const maxAttempts = 3;
+  const maxRetryDelayMs = 3_000;
   const { signal, ...requestInput } = input;
   const requestBody = JSON.stringify(requestInput);
   let lastError: unknown;
@@ -2086,7 +2121,7 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
       if (signal?.aborted) {
         throw signal.reason ?? new DOMException("上传已停止", "AbortError");
       }
-      const response = await rest.fetch(
+      const response = await boundedKnowledgeBaseFetch(rest,
         "/api/knowledge-base/turn/attachments/stage",
         {
           method: "POST",
@@ -2111,6 +2146,7 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
       const code = String((error as { code?: unknown })?.code || "");
       const retryable =
         !signal?.aborted &&
+        code !== "KB_REPLY_PENDING" &&
         (!status ||
           code === "IDEMPOTENCY_PENDING" ||
           status === 408 ||
@@ -2122,7 +2158,7 @@ export async function stageKnowledgeBaseTurnAttachment(input: {
       const serverDelay = Number(
         (error as { retryAfterMs?: unknown })?.retryAfterMs,
       );
-      const backoffDelay = 500 * 2 ** attempt;
+      const backoffDelay = attempt === 0 ? 1_000 : 3_000;
       const retryDelay = Math.min(
         maxRetryDelayMs,
         Math.max(
@@ -2156,6 +2192,7 @@ export async function createKnowledgeBaseTurnTask(
     /** Exact browser bytes for upload-first knowledge-base attachments. */
     attachmentManifest?: KnowledgeBaseAttachmentManifestItem[];
     attachmentReservation?: {
+      uploadAttemptId?: string;
       turnId: string;
       attachmentManifest: KnowledgeBaseAttachmentManifestItem[];
     };
@@ -2173,7 +2210,7 @@ export async function createKnowledgeBaseTurnTask(
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),
-    CREATE_TASK_TIMEOUT_MS,
+    FILE_UPLOAD_SERVER_RESPONSE_TIMEOUT_MS,
   );
   try {
     const userMessage = buildPromptText(input);
@@ -2212,6 +2249,7 @@ export async function createKnowledgeBaseTurnTask(
         : context.attachmentReservation
           ? {
               turnId: context.attachmentReservation.turnId,
+              uploadAttemptId: context.attachmentReservation.uploadAttemptId,
               expectedResetRevision: context.expectedResetRevision,
               attachmentManifest:
                 context.attachmentReservation.attachmentManifest,
@@ -2251,6 +2289,7 @@ export async function createKnowledgeBaseTurnTask(
       } catch (error) {
         lastError = error;
         if (
+          context.attachmentReservation ||
           rest.signal.aborted || controller.signal.aborted ||
           attempt === KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS - 1
         ) {
@@ -2267,6 +2306,7 @@ export async function createKnowledgeBaseTurnTask(
         );
         lastError = error;
         if (
+          context.attachmentReservation ||
           !isTransientKnowledgeBaseRequestError(error) ||
           attempt === KNOWLEDGE_BASE_TURN_REQUEST_MAX_ATTEMPTS - 1
         ) {

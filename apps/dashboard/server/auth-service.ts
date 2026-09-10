@@ -1,3 +1,4 @@
+import { knowledgeBaseSessionStorageId } from "./enterprise-conversation-storage";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseProjectIdForOwner } from "./enterprise-project-scope";
 import {
@@ -2894,7 +2895,7 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
   executor?: any,
 ): Promise<KnowledgeBaseUploadReservationCredential | null> {
   const db = executor ?? (await requireDb());
-  const storedConversationId = `u${input.userId}:${input.conversationId}`;
+  const storedConversationId = knowledgeBaseSessionStorageId(input.userId, input.conversationId);
   return db.transaction(async (tx: any) => {
     const turn = (
       await tx
@@ -3074,13 +3075,16 @@ export async function getDecryptedCredentialForKnowledgeBaseUploadReservation(
       credential.provider !== "zhipu" ||
       (credential.status !== "active" && credential.status !== "retired")
     ) {
-      return null;
+      throw new AuthServiceError("INVALID_CREDENTIAL", "本轮冻结的连接配置不可用，请联系管理员检查配置");
     }
+    let frozenApiKey: string;
+    try { frozenApiKey = decryptApiKey(credential); }
+    catch { throw new AuthServiceError("INVALID_CREDENTIAL", "本轮冻结的连接配置无法读取，请联系管理员检查配置"); }
     return {
       id: credential.id,
       userId: credential.userId,
       version: credential.version,
-      apiKey: decryptApiKey(credential),
+      apiKey: frozenApiKey,
       fingerprint: credential.fingerprint,
       status: credential.status,
       verifiedAt: credential.verifiedAt,

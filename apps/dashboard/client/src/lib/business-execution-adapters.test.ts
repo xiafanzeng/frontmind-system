@@ -40,3 +40,28 @@ describe("real business execution evidence", () => {
     expect(result.timeline.map(item => item.id)).toEqual(["one", "two"]);
   });
 });
+
+describe("final manual truthful process regressions", () => {
+  it("does not turn local batch creation into supplier acceptance", () => {
+    const result = publishingPublicExecution({ id: "batch", createdAt: date, status: "queued", items: [] } as any);
+    expect(result.timeline.map(entry => entry.phase)).toEqual(["creating_publication"]);
+  });
+  it("does not invent a sample organization operation at monitoring completion", () => {
+    const result = monitoringPublicExecution({ id: "run", createdAt: date, startedAt: date, completedAt: date, status: "completed", attempts: [] } as any);
+    expect(result.timeline.map(entry => entry.phase)).not.toContain("organizing_samples");
+  });
+  it("distinguishes a completed deployment from a generated preview", () => {
+    const result = siteOpsPublicExecution([{ id: "deploy:completed", buildId: "build", operationKind: "deploy", stage: "completed", status: "succeeded", startedAt: date, completedAt: date, label: "完成" }]);
+    expect(result.timeline[0]?.phase).toBe("publishing_site");
+  });
+});
+
+it("shows every media item and distinguishes attempted submission from acceptance", () => {
+  const result = publishingPublicExecution({ id: "batch", createdAt: date, status: "processing", items: [
+    { id: "one", media: { name: "媒体甲" }, updatedAt: date, status: "submission_unknown", submissionAttempts: [{ id: "attempt", number: 1, startedAt: date, result: "submission_unknown" }] },
+    { id: "two", media: { name: "媒体乙" }, updatedAt: date, submittedAt: date, status: "processing" },
+  ] } as any);
+  expect(result.timeline.filter(entry => entry.phase === "accepted_publication")).toHaveLength(1);
+  expect(result.timeline.find(entry => entry.phase === "submitting_publication")).toMatchObject({ status: "waiting" });
+  expect(result.timeline.filter(entry => entry.phase === "awaiting_publication")).toHaveLength(2);
+});

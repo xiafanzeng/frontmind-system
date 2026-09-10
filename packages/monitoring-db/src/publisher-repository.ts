@@ -1817,6 +1817,9 @@ export class PublishingRepository {
         ),
       )
       .orderBy(asc(publisherItems.id));
+    const publicAttempts = items.length ? await this.db.select({ id: publisherSubmissionAttempts.id, itemId: publisherSubmissionAttempts.itemId, number: publisherSubmissionAttempts.attemptNumber, startedAt: publisherSubmissionAttempts.startedAt, completedAt: publisherSubmissionAttempts.completedAt, result: publisherSubmissionAttempts.result })
+      .from(publisherSubmissionAttempts).where(and(eq(publisherSubmissionAttempts.ownerId, ownerId), inArray(publisherSubmissionAttempts.itemId, items.map(({ item }) => item.id))))
+      .orderBy(asc(publisherSubmissionAttempts.attemptNumber)) : [];
     return {
       ...batchDto(row.batch, {
         article: {
@@ -1868,6 +1871,7 @@ export class PublishingRepository {
         actionRequiredReason: item.actionRequiredReason,
         submittedAt: item.submittedAt,
         completedAt: item.completedAt,
+        submissionAttempts: publicAttempts.filter(attempt => attempt.itemId === item.id).map(({ itemId: _itemId, ...attempt }) => attempt),
       })),
     };
   }

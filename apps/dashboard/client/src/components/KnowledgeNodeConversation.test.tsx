@@ -2,7 +2,9 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { LocalMessage } from "@/contexts/ConversationContext";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
-import { knowledgeNodeConversationMessages } from "./KnowledgeNodeConversation";
+import KnowledgeNodeConversation, { knowledgeNodeConversationMessages } from "./KnowledgeNodeConversation";
+const context = vi.hoisted(() => ({ activeConversation: null as any }));
+vi.mock("@/contexts/ConversationContext", async (importOriginal) => ({ ...await importOriginal<typeof import("@/contexts/ConversationContext")>(), useConversation: () => ({ activeConversation: context.activeConversation, registerKnowledgeBaseConversation: vi.fn(), wakeKnowledgeBaseConversation: vi.fn() }) }));
 vi.mock("./ChatInput", () => ({ default: () => null }));
 const message = (
   id: string,
@@ -100,5 +102,19 @@ describe("node-local AI conversation", () => {
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("本轮内容已处理完成");
+  });
+});
+
+describe("node final content copy controls", () => {
+  it("removes both whole-answer and code copy from intermediate summaries while retaining the accepted receipt", () => {
+    context.activeConversation = { id: "conversation", messages: [
+      { ...message("summary", 400, "1.1"), content: "```js\nconst progress = true;\n```", knowledgeBase: { kind: "presentation", turnId: "turn", leafId: "1.1", generation: 1 } },
+      { ...message("answer", 500, "1.1"), content: "```js\nconst result = true;\n```", knowledgeBase: { kind: "presentation", turnId: "turn", leafId: "1.1", generation: 1, serverOwned: true, presentationKey: "verified", contentSha256: "verified" } },
+    ], knowledgeBase: { generation: 1, operationState: "completed", leafId: "1.1", activeTurnId: "turn" } };
+    const { container } = render(<KnowledgeNodeConversation conversationId="conversation" leafId="1.1" title="企业介绍" progress={{ workbench: { generation: 1, acceptedAt: new Date(300).toISOString() }, build: { currentLeafId: "1.1" } } as any} resetRevision={1} disabled={false} onDirtyChange={() => {}} />);
+    const replies = container.querySelectorAll(".knowledge-node-conversation__assistant");
+    expect(replies[0]?.querySelector("button")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "复制完整回答" })).toHaveLength(1);
+    expect(replies[1]?.querySelectorAll("button").length).toBeGreaterThan(1);
   });
 });

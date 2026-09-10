@@ -458,8 +458,9 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
     expect(manifest.map((item) => item.ordinal)).toEqual([1, 2, 3, 4, 5]);
     expect(manifest.every((item) => item.total === 5)).toBe(true);
     for (const call of mocks.uploadKnowledgeBaseLocalAsset.mock.calls) {
-      expect(call[3]?.resumeScope).toEqual({
+      expect(call[3]?.resumeScope).toMatchObject({
         kind: "knowledge_base",
+        operationType: "start",
         conversationId: "knowledge-conversation",
         turnId: "turn-start-1",
         clientRequestId,
@@ -897,11 +898,11 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
       screen.queryByText(/sk-secret|provider raw|filename\.pdf/i),
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "新建知识库构建" }),
+      screen.getByRole("button", { name: "重置后重新上传" }),
     ).toBeEnabled();
   });
 
-  it("starts a fresh conversation without mutating the failed build", async () => {
+  it("requests approved reset without creating a conversation that bypasses reset", async () => {
     mocks.listRefetch.mockResolvedValue({
       data: [
         {
@@ -943,7 +944,7 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
     renderIntegratedChat();
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "新建知识库构建" }),
+        screen.getByRole("button", { name: "重置后重新上传" }),
       ).toBeEnabled(),
     );
     expect(screen.getByTestId("conversation-probe")).toHaveTextContent(
@@ -953,18 +954,12 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
       '"conversationCount":1',
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "新建知识库构建" }));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("conversation-probe")).toHaveTextContent(
-        '"conversationCount":2',
-      ),
-    );
-    expect(screen.getByTestId("conversation-probe")).not.toHaveTextContent(
-      '"activeId":"knowledge-conversation"',
-    );
-    expect(
-      screen.getByRole("button", { name: "构建企业知识库" }),
-    ).toBeEnabled();
+    const requestedReset = vi.fn();
+    window.addEventListener("frontmind:request-knowledge-reset", requestedReset);
+    fireEvent.click(screen.getByRole("button", { name: "重置后重新上传" }));
+    expect(screen.getByTestId("conversation-probe")).toHaveTextContent('"conversationCount":1');
+    expect(screen.getByTestId("conversation-probe")).toHaveTextContent('"activeId":"knowledge-conversation"');
+    expect(requestedReset).toHaveBeenCalledOnce();
+    window.removeEventListener("frontmind:request-knowledge-reset", requestedReset);
   });
 });

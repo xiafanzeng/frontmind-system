@@ -120,6 +120,14 @@ export async function attachOptionalActiveCredential(
     return;
   }
 
+  // These routes authenticate the actor/project but use the reservation's frozen
+  // credential (or no provider at all). A newer broken key must not strand status or stop.
+  const pathname=String(req.originalUrl ?? req.url ?? "").split("?")[0];
+  if (/^\/api\/knowledge-base\/turn\/(?:upload-status|upload-control|upload-heartbeat|dispatch|attachments(?:\/|$))/u.test(pathname) ||
+      (pathname === "/api/frontmind/v2/assets" && req.headers["x-frontmind-kb-turn-id"])) {
+    next();return;
+  }
+
   try {
     const credential = await getEffectiveDecryptedCredentialForAccount(
       enterpriseWorkspaceUserId(req.frontmindUser.id),

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { GeneralExecutionDto } from "./frontmind-general-execution";
 
 export const responseLogicAuthorizationSchema = z.enum([
   "公开可用",
@@ -100,6 +101,7 @@ export const responseLogicStructuredDraftSchema = z
 const responseLogicTaskStatusBaseSchema = z.object({
   taskId: z.string().trim().min(1).max(255),
   operationRevision: z.number().int().positive(),
+  execution: z.custom<GeneralExecutionDto>((value) => !!value && typeof value === "object" && (value as GeneralExecutionDto).schemaVersion === 1 && Array.isArray((value as GeneralExecutionDto).timeline)).optional(),
   model: z.string().trim().min(1).max(128),
 });
 

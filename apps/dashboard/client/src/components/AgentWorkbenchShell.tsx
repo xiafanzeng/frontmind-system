@@ -8,15 +8,6 @@ import {
   type PointerEvent,
 } from "react";
 import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
-import { createPortal } from "react-dom";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   useWorkbenchModule,
   type WorkbenchAction,
@@ -50,31 +41,30 @@ export type AgentWorkbenchShellProps = {
   conversationFocusRequest?: object | null;
   auxiliaryFocusRequest?: object | null;
 };
-export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v4.auxiliary-ratio";
-export const WORKBENCH_MIN_WIDTH = 1280;
-export const WORKBENCH_MAX_WIDTH = 1584;
+export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v5.auxiliary-ratio";
+export const WORKBENCH_MIN_WIDTH = 768;
+const DEFAULT_AUXILIARY_RATIO = 2 / 7;
 
-export function workbenchPaneGeometry(available: number, ratio = 1 / 3) {
-  const content = Math.max(0, Math.min(available, WORKBENCH_MAX_WIDTH) - 48);
-  // Keep 600px for the centred main surface, with equal panel clearance on
-  // both sides. The reference width sizes the panel; it never caps the shell.
-  const maxAux = Math.max(
-    300,
-    Math.min((available - 664) / 2, available < 2000 ? content / 4 : Infinity),
-  );
+export function workbenchPaneGeometry(
+  available: number,
+  ratio = DEFAULT_AUXILIARY_RATIO,
+) {
+  // Two 16px outer gutters and one 16px resize track belong to neither pane.
+  const content = Math.max(0, available - 48);
+  const maxAux = Math.max(200, content - 480);
   return {
-    minAux: 300,
+    minAux: 200,
     maxAux,
-    width: Math.max(300, Math.min(maxAux, content * ratio)),
+    width: Math.max(200, Math.min(maxAux, content * ratio)),
   };
 }
 
 function savedRatio() {
   try {
     const value = Number(localStorage.getItem(WORKBENCH_RATIO_KEY));
-    return value > 0 && value < 1 ? value : 1 / 3;
+    return value > 0 && value < 1 ? value : DEFAULT_AUXILIARY_RATIO;
   } catch {
-    return 1 / 3;
+    return DEFAULT_AUXILIARY_RATIO;
   }
 }
 export function AgentWorkbenchShell({
@@ -107,40 +97,35 @@ export function AgentWorkbenchShell({
   const [ratio, setRatio] = useState(savedRatio);
   const [available, setAvailable] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const [collapsed, setCollapsed] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [visibleHeight, setVisibleHeight] = useState<number | null>(null);
   const root = useRef<HTMLElement>(null);
   const mainViewport = useRef<HTMLDivElement>(null);
   const layoutRoot = useRef<HTMLDivElement>(null);
-  const toggle = useRef<HTMLButtonElement>(null);
+  const auxiliaryPanel = useRef<HTMLElement>(null);
   const stopDrag = useRef<() => void>(() => undefined);
-  const focusMainAfterClose = useRef(false);
   const paneGeometry = workbenchPaneGeometry(available, ratio);
   const minAux = paneGeometry.minAux;
   const maxAux = paneGeometry.maxAux;
   const renderedWidth = paneGeometry.width;
-  const narrow =
-    viewportWidth < 1024 ||
-    (available > 0 && available < WORKBENCH_MIN_WIDTH);
-  const inlineAux = hasAux && !narrow && !collapsed;
-  const [auxHost] = useState(() => {
-    const node = document.createElement("div");
-    node.className = "agent-workbench-shell__auxiliary-content";
-    return node;
-  });
-  useEffect(() => {
-    auxHost.classList.toggle("has-native-scroll", !auxiliaryScroll);
-  }, [auxHost, auxiliaryScroll]);
-  const attachAux = useCallback(
-    (slot: HTMLDivElement | null) => {
-      if (slot) slot.appendChild(auxHost);
-    },
-    [auxHost],
-  );
+  const narrow = viewportWidth < WORKBENCH_MIN_WIDTH;
   useEffect(() => {
     const measure = () => {
       setAvailable(root.current?.clientWidth ?? 0);
       setViewportWidth(window.innerWidth);
+      const viewport = window.visualViewport;
+      setVisibleHeight(
+        viewport && viewport.scale === 1
+          ? Math.max(
+              0,
+              viewport.height -
+                Math.max(
+                  0,
+                  (root.current?.getBoundingClientRect().top ?? 0) -
+                    viewport.offsetTop,
+                ),
+            )
+          : null,
+      );
     };
     measure();
     const observer =
@@ -149,19 +134,16 @@ export function AgentWorkbenchShell({
         : new ResizeObserver(measure);
     if (root.current) observer?.observe(root.current);
     window.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("scroll", measure);
     return () => {
       observer?.disconnect();
       window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("scroll", measure);
       stopDrag.current();
     };
   }, []);
-  useEffect(() => {
-    setCollapsed(false);
-    setDrawerOpen(false);
-  }, [projectId, moduleId]);
-  useEffect(() => {
-    if (!narrow) setDrawerOpen(false);
-  }, [narrow]);
   const focusMain = useCallback(() => {
     const viewport = mainViewport.current;
     const target = viewport?.querySelector<HTMLElement>(
@@ -171,16 +153,12 @@ export function AgentWorkbenchShell({
   }, []);
   useEffect(() => {
     if (!conversationFocusRequest) return;
-    if (drawerOpen) {
-      focusMainAfterClose.current = true;
-      setDrawerOpen(false);
-    } else focusMain();
+    focusMain();
   }, [conversationFocusRequest, focusMain]);
   useEffect(() => {
     if (!auxiliaryFocusRequest) return;
-    if (narrow) setDrawerOpen(true);
-    else setCollapsed(false);
-  }, [auxiliaryFocusRequest, narrow]);
+    auxiliaryPanel.current?.focus({ preventScroll: true });
+  }, [auxiliaryFocusRequest]);
   const readingKey = `${projectId}:${moduleId}:${taskKey ?? "current"}`;
   const { showLatest, returnToLatest } = useChatReadingPosition(
     mainViewport,
@@ -190,11 +168,16 @@ export function AgentWorkbenchShell({
   );
   const changeWidth = (value: number) => {
     const next = Math.max(minAux, Math.min(maxAux, value));
-    const nextRatio =
-      next / Math.max(1, Math.min(available, WORKBENCH_MAX_WIDTH) - 48);
+    const nextRatio = next / Math.max(1, available - 48);
     setRatio(nextRatio);
     try {
       localStorage.setItem(WORKBENCH_RATIO_KEY, String(nextRatio));
+    } catch {}
+  };
+  const resetWidth = () => {
+    setRatio(DEFAULT_AUXILIARY_RATIO);
+    try {
+      localStorage.removeItem(WORKBENCH_RATIO_KEY);
     } catch {}
   };
   const resize = (event: PointerEvent<HTMLDivElement>) => {
@@ -240,35 +223,25 @@ export function AgentWorkbenchShell({
   return (
     <section
       ref={root}
-      className={`agent-workbench-shell layout-${layout} module-${moduleId}`}
+      className={`agent-workbench-shell layout-${layout} module-${moduleId} ${narrow ? "is-stacked" : ""}`}
       aria-label={`${title}工作区`}
       data-layout={layout}
-      style={{ "--agent-aux-width": `${renderedWidth}px`, "--module-color": OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ?? "#491060" } as CSSProperties}
+      style={
+        {
+          "--agent-aux-width": `${renderedWidth}px`,
+          ...(narrow && visibleHeight !== null
+            ? { maxHeight: `${visibleHeight}px` }
+            : {}),
+          "--module-color":
+            OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ??
+            "#491060",
+        } as CSSProperties
+      }
     >
       <div
         ref={layoutRoot}
-        className={`agent-workbench-shell__layout ${inlineAux ? "" : "is-single-pane"} ${hasAux && !narrow ? "has-panel-clearance" : ""} ${hasAux && !inlineAux ? "has-floating-toggle" : ""}`}
+        className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}`}
       >
-        {hasAux && (
-          <Button
-            ref={toggle}
-            className={`agent-workbench-shell__panel-toggle ${inlineAux ? "is-in-panel" : ""}`}
-            variant="ghost"
-            size="icon"
-            aria-label={inlineAux ? "收起任务信息" : "打开任务信息"}
-            aria-expanded={inlineAux || drawerOpen}
-            title={inlineAux ? "收起浮窗" : "打开浮窗"}
-            onClick={() =>
-              narrow ? setDrawerOpen(true) : setCollapsed((value) => !value)
-            }
-          >
-            {inlineAux ? (
-              <PanelRightClose size={18} />
-            ) : (
-              <PanelRightOpen size={18} />
-            )}
-          </Button>
-        )}
         <section className="agent-workbench-shell__main" aria-label="主工作区">
           <div
             ref={mainViewport}
@@ -290,7 +263,7 @@ export function AgentWorkbenchShell({
             <div className="agent-workbench-shell__composer">{composer}</div>
           )}
         </section>
-        {inlineAux && (
+        {hasAux && (
           <>
             <div
               className="agent-workbench-shell__resize"
@@ -298,20 +271,17 @@ export function AgentWorkbenchShell({
               aria-label="调整任务信息面板宽度"
               aria-orientation="vertical"
               title="拖动调整宽度；双击或按 Enter 恢复默认宽度"
-              onDoubleClick={() =>
-                changeWidth((Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 3)
-              }
+              onDoubleClick={resetWidth}
               aria-valuemin={minAux}
               aria-valuemax={maxAux}
               aria-valuenow={Math.round(renderedWidth)}
-              tabIndex={0}
+              tabIndex={narrow ? -1 : 0}
+              hidden={narrow}
               onPointerDown={resize}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  changeWidth(
-                    (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 3,
-                  );
+                  resetWidth();
                   return;
                 }
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
@@ -327,62 +297,31 @@ export function AgentWorkbenchShell({
               }}
             />
             <aside
-              className={`agent-workbench-shell__auxiliary ${agentSwitch ? "" : "has-panel-controls"}`}
+              ref={auxiliaryPanel}
+              tabIndex={-1}
+              className={`agent-workbench-shell__auxiliary ${auxiliaryScroll ? "" : "has-native-auxiliary"}`}
               aria-label={isKnowledge ? "知识节点与资料" : "任务辅助区"}
             >
               {agentSwitch}
               <div
-                className="agent-workbench-shell__auxiliary-slot"
-                ref={attachAux}
-              />
+                className={`agent-workbench-shell__auxiliary-content ${auxiliaryScroll ? "" : "has-native-scroll"}`}
+              >
+                {toolbar}
+                {status && (
+                  <span className="agent-workbench-task-status" role="status">
+                    {status}
+                  </span>
+                )}
+                {auxiliary ?? result ?? children ?? (
+                  <p className="workbench-panel-empty">
+                    {resultTitle}将在处理资料后显示。
+                  </p>
+                )}
+              </div>
             </aside>
           </>
         )}
       </div>
-      {hasAux && (
-        <Sheet open={drawerOpen && narrow} onOpenChange={setDrawerOpen}>
-          <SheetContent
-            side="right"
-            className="agent-workbench-drawer"
-            style={{ "--module-color": OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ?? "#491060" } as CSSProperties}
-            aria-describedby={undefined}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              if (focusMainAfterClose.current) {
-                focusMainAfterClose.current = false;
-                focusMain();
-              } else toggle.current?.focus();
-            }}
-          >
-            <SheetHeader>
-              <SheetTitle>
-                {isKnowledge ? "知识节点与资料" : resultTitle}
-              </SheetTitle>
-            </SheetHeader>
-            {agentSwitch}
-            <div
-              className="agent-workbench-shell__auxiliary-slot"
-              ref={attachAux}
-            />
-          </SheetContent>
-        </Sheet>
-      )}
-      {hasAux && !inlineAux && !drawerOpen && (
-        <div hidden aria-hidden="true" ref={attachAux} />
-      )}
-      {hasAux &&
-        createPortal(
-          <>
-            {toolbar}
-            {status && (
-              <span className="agent-workbench-task-status" role="status">
-                {status}
-              </span>
-            )}
-            {auxiliary ?? result ?? children}
-          </>,
-          auxHost,
-        )}
     </section>
   );
 }

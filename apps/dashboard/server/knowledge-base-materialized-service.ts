@@ -16,6 +16,7 @@ import {
   type KnowledgeBaseBuildNode,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { uploadMetadataVersion } from "./knowledge-base-upload-state";
 import { knowledgeBasePresentationKey } from "./knowledge-base-authoritative-message";
 import {
   persistKnowledgeBaseCompletionInTransaction,
@@ -641,6 +642,7 @@ export async function activateInitialKnowledgeBaseWorkingSet(input: {
         errorMessage: null,
         metadata: {
           ...(turn.metadata || {}),
+          ...uploadMetadataVersion(turn.metadata || {}, receivedAt),
           execution: "materialized_bundle",
           dispatchState: "completed",
           contentVersion: 1,
@@ -2218,6 +2220,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
           errorMessage: null,
           metadata: {
             ...(turn.metadata || {}),
+            ...uploadMetadataVersion(turn.metadata || {}, receivedAt),
             execution: "materialized_patch",
             dispatchState: "completed",
             disposition: "no_effective_change",
@@ -2357,6 +2360,7 @@ export async function applyKnowledgeBaseRevisionWorkingSet(input: {
         errorMessage: null,
         metadata: {
           ...(turn.metadata || {}),
+          ...uploadMetadataVersion(turn.metadata || {}, receivedAt),
           execution: "materialized_patch",
           dispatchState: "completed",
           contentVersion: nextVersion,

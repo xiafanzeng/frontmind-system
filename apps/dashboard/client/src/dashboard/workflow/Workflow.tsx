@@ -73,16 +73,20 @@ export function WorkflowSection({
   description,
   children,
   action,
+  divider = "top",
 }: {
   id: string;
   title?: string;
   description?: string;
   children: ReactNode;
   action?: ReactNode;
+  /** The parent owns boundaries between completed and expanded content. */
+  divider?: "top" | "none";
 }) {
   return (
     <section
       className="workflow-section"
+      data-divider={divider}
       data-reading-anchor={id}
       id={`workflow-${id}`}
     >

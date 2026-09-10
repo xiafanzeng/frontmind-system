@@ -982,7 +982,7 @@ describe("service portal migration chain", () => {
     expect(e2eHarness).toContain('postKnowledgeBase("/confirm"');
     expect(e2eHarness).toContain("fakeProvider.rejectProviderCalls = true");
     expect(e2eHarness).toContain("generateKnowledgeBasePackageForUpdate");
-    expect(e2eHarness).toContain('entry.tag === "0062_hard_glorian"');
+    expect(e2eHarness).toContain("column_name = 'enterpriseProjectId'");
     expect(e2eHarness).not.toContain("/v1/tasks");
     expect(e2eHarness).toContain("taskSendBodies).toHaveLength(0)");
   });

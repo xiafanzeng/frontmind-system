@@ -210,6 +210,10 @@ export const businessExecutionLabels = {
   researching: "采集公开资料",
   normalizing: "整理结果",
   published: "生成知识库",
+  submitting_question: "提交问题",
+  loading_knowledge: "读取知识依据",
+  confirming_result: "确认结果",
+  saving_result: "保存结果",
   analyzing_question: "分析问题",
   searching_knowledge: "查找企业知识",
   organizing_evidence: "整理依据",
@@ -228,8 +232,14 @@ export const businessExecutionLabels = {
   generating_pages: "生成页面",
   checking_pages: "运行检查",
   previewing: "生成预览",
+  revising_site: "修订网站",
+  deploying_site: "部署网站",
+  publishing_site: "发布网站",
+  verifying_site: "验证线上网站",
   creating_monitor: "创建监控问题",
   preparing_collection: "准备采集",
+  awaiting_collection: "等待采集",
+  collection_result: "采集结果",
   collecting: "执行采集",
   organizing_samples: "整理样本",
   reporting: "生成报告",
@@ -238,7 +248,9 @@ export const businessExecutionLabels = {
   loading_run: "加载运行",
   showing_samples: "展示样本和引用",
   checking_assets: "校验素材",
+  creating_publication: "创建发布批次",
   submitting_publication: "提交发布",
+  accepted_publication: "发布已受理",
   awaiting_publication: "等待发布结果",
   showing_publication: "展示发布状态",
 } as const;
@@ -252,6 +264,8 @@ export type PublicBusinessEvidence = {
   status: Extract<GeneralExecutionEntry, { kind: "status" }>["status"];
   timestamp: number;
   rank: number;
+  /** Safe business subject (question/platform or media name), never provider diagnostics. */
+  subject?: string;
   finishedAt?: number;
 };
 /** Deterministic hydration: dedupe within the owning turn before any rendering. */
@@ -294,6 +308,7 @@ export function projectBusinessExecution(
         status: event.status,
         phase: event.phase,
         label: businessExecutionLabels[event.phase],
+        ...(event.subject?.trim() ? { publicSummary: event.subject.trim().slice(0, 300) } : {}),
         ...(event.finishedAt === undefined
           ? {}
           : { finishedAt: event.finishedAt }),

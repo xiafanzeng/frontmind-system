@@ -351,3 +351,27 @@
     animation: typing-dot 1.4s ease-in-out 0.4s infinite;
   }
 }
+
+/* Loaded with the shell, before authentication and lazy publishing modules. */
+.publishing-route-surface {
+  min-height: 100dvh;
+  background: #fff;
+  --background: #fff;
+  --surface-ground: #fff;
+}
+.publishing-route-surface .workspace-surface,
+.publishing-route-surface .publishing-page,
+.publishing-route-surface .publishing-page-loading {
+  background: #fff;
+}
+
+.publishing-route-surface .user-brand-dashboard {
+  --operator-canvas: #fff;
+  background: #fff;
+}
+.publishing-route-surface .dashboard-main,
+.publishing-route-surface .monitoring-module,
+.publishing-route-surface .monitoring-module .publishing-page {
+  --publishing-canvas: #fff;
+  background: #fff;
+}

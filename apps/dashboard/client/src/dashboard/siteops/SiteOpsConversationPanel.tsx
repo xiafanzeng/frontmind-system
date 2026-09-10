@@ -1437,7 +1437,7 @@ export default function SiteOpsConversationPanel({
       item.id === currentVisualGenerationMessage?.id
     );
   });
-  const copyableMessages = siteOpsFinalReplyIds(visibleMessages, ["building", "visual_searching"].includes(observation.interactionState));
+  const copyableMessages = siteOpsFinalReplyIds(visibleMessages, ["building", "visual_searching", "deploying", "verifying"].includes(observation.interactionState));
   const currentSnapshotId = observation.project.currentKnowledgeSnapshotId;
   const managedDomain = observation.domainState?.domain ?? "";
   const deploymentStateFor = (

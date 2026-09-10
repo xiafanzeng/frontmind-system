@@ -439,7 +439,12 @@ function memoryDatabase(
     select() {
       return {
         from(table: unknown) {
-          return queryRows(rowsFor(table, state), options);
+          const query = queryRows(rowsFor(table, state), options);
+          return Object.assign(query, { innerJoin(joined: unknown) {
+            if (table !== conversationTurns || joined !== messages) throw new Error("Unsupported acceptance fixture join");
+            const rows = state.turns.flatMap(turn => state.messages.filter(message => message.turnId === turn.id && message.role === "user").map(message => ({ ...turn, sequence: message.sequence, messageId: message.id })));
+            return queryRows(rows, options);
+          } });
         },
       };
     },

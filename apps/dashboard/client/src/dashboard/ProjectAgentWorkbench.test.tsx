@@ -383,6 +383,8 @@ describe("conversational project workbench", () => {
       screen.getByRole("complementary", { name: "左侧任务" }),
     ).not.toHaveTextContent("任务历史");
     const sidebar = screen.getByRole("complementary", { name: "任务辅助区" });
+    expect(within(sidebar).getByRole("tab", {name:"文件"})).toHaveAttribute("aria-selected","true");
+    fireEvent.click(within(sidebar).getByRole("tab", {name:"任务"}));
     const list = within(sidebar).getByRole("listbox", { name: "任务历史" });
     expect(await screen.findByLabelText("对话输入")).toHaveAttribute(
       "data-task",

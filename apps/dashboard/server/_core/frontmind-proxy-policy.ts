@@ -1,3 +1,4 @@
+import { getEnterpriseProjectScope } from "../enterprise-project-context";
 import type { NextFunction, Response } from "express";
 import { hasExplicitAdminRole } from "../../shared/admin-access";
 
@@ -127,6 +128,11 @@ export function createDeliveryProjectContextMiddleware(
       next();
       return;
     }
+    const enterpriseScope=getEnterpriseProjectScope();
+    if (enterpriseScope?.actorUserId === user.id && !req.headers["x-delivery-project-assignment-id"]) {
+      // resolveEnterpriseProjectScope already verified this engineer's owner assignment.
+      next();return;
+    }
     // Native browser downloads cannot attach a custom header. Their one-time
     // token carries the project assignment and is revalidated by the route.
     if (isDirectDownloadTokenRequest(req)) {
@@ -182,9 +188,13 @@ export function rejectDeliveryMemberKnowledgeBaseProjectScope(
     next();
     return;
   }
+  const scope=getEnterpriseProjectScope();
+  if(scope?.actorUserId === req.frontmindUser.id && (!req.frontmindDeliveryProjectContext || req.frontmindDeliveryProjectContext.customerUserId === scope.ownerUserId)) {
+    next();return;
+  }
   res.status(403).json({
     error: {
-      message: "当前知识库暂不支持工程师项目工作区，请由客户账号操作",
+      message: "请先选择已授权的企业项目，再操作知识库",
       code: "KNOWLEDGE_BASE_PROJECT_SCOPE_UNSUPPORTED",
     },
   });

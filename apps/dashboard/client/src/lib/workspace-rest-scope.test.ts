@@ -69,7 +69,7 @@ describe("business REST scope", () => {
     const pending = reserveKnowledgeBaseStart(startInput);
     await vi.advanceTimersByTimeAsync(0);
     window.history.replaceState(null, "", "/?enterpriseProjectId=project-b");
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     await pending;
     expect(fetcher).toHaveBeenCalledTimes(2);
     for (const [,init] of fetcher.mock.calls) expect(new Headers(init.headers).get("x-enterprise-project-id")).toBe("project-a");

@@ -183,6 +183,8 @@ export type RunAttempt = {
   answer?: string;
   reasoning?: string;
   capturedAt?: string;
+  submittedAt?: string;
+  terminalAt?: string;
   sentiment?: "positive" | "neutral" | "negative" | "unknown";
   brandMentioned?: boolean;
   mentionPosition?: number | null;

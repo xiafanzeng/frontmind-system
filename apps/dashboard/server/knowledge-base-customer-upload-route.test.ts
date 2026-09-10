@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Readable } from "node:stream";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { persistKnowledgeBaseBuildSource } from "./knowledge-base-local-source-store";
 import express from "express";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -350,6 +354,27 @@ describe("knowledge-base customer-upload image preview", () => {
     expect(response.status).toBe(404);
     expect(mocks.verifiedImages).not.toHaveBeenCalled();
     expect(mocks.readStoredPresalesFile).not.toHaveBeenCalled();
+  });
+
+  it("previews this build generation's durable image after its temporary upload capture expires", async () => {
+    const assetRoot = await mkdtemp(path.join(tmpdir(), "frontmind-kb-preview-source-"));
+    const previous = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = assetRoot;
+    try {
+      const bytes = await sharp({ create: { width: 3, height: 2, channels: 3, background: "#72918e" } }).png().toBuffer();
+      const sourceSha256 = configureImage({ bytes, filename: "customer.png", mimeType: "image/png" });
+      await persistKnowledgeBaseBuildSource({ userId: 42, buildId, generation: 3, bytes });
+      mocks.readStoredPresalesFile.mockReset().mockResolvedValue(null);
+      const response = await fetch(await startApp(sourceSha256));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toMatch(/image\/png/);
+      expect((await sharp(Buffer.from(await response.arrayBuffer())).metadata()).width).toBe(3);
+      expect(mocks.readStoredPresalesFile).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+      else process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previous;
+      await rm(assetRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects bytes that no longer match the captured source hash", async () => {

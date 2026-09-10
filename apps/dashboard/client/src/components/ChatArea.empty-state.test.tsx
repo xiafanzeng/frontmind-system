@@ -801,7 +801,7 @@ describe("EmptyConversationHint", () => {
     ).toBeVisible();
     expect(screen.getByText("小册.pdf")).toBeInTheDocument();
     expect(screen.getByText("目录.pdf")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("上传已停止");
+    expect(screen.getByRole("alert")).toHaveTextContent("正在确认服务端停止状态");
   });
 
   it("includes managed recovery in the per-file elapsed time", async () => {

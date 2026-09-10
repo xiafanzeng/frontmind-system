@@ -1304,7 +1304,7 @@ describe("knowledge-base ChatInput actions", () => {
     );
   });
 
-  it("offers continue and discard only for a matching page-memory attachment attempt", async () => {
+  it("offers continue and discard only for the matching retained attachment attempt", async () => {
     mocks.activeConversation.status = "running";
     mocks.activeConversation.knowledgeBase.canReply = false;
     mocks.activeConversation.knowledgeBase.activeTurnId = "turn-upload";
@@ -1353,7 +1353,7 @@ describe("knowledge-base ChatInput actions", () => {
       />,
     );
 
-    expect(screen.getByText("本轮资料仍保留在当前页面")).toBeInTheDocument();
+    expect(screen.getByText("本轮资料已保留，可继续上传")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "继续上传当前资料" }));
     await waitFor(() =>
       expect(

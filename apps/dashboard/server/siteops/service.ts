@@ -1828,7 +1828,15 @@ export function projectSiteOpsExecutionSteps(input: {
         },
       ];
     }
-    if (operationKind === "deploy") return [];
+    if (operationKind === "deploy") {
+      const deploymentEvents = events.filter(event => event.operationId === operation.id && event.stage === "qa_running");
+      const verification = operation.result?.verification as { public?: { https?: boolean; verifiedAt?: string } } | undefined;
+      const verifiedAt = verification?.public?.https === true ? verification.public.verifiedAt : undefined;
+      if (verifiedAt && Number.isFinite(Date.parse(verifiedAt)) && !deploymentEvents.length) deploymentEvents.push({ id: "public-verification", operationId: operation.id, buildId: operation.buildId, stage: "qa_running", startedAt: new Date(verifiedAt) });
+      return [{ id: `${operation.id}:deploy`, operationKind, buildId: operation.buildId, stage: "preparing" as const, label: "部署网站", status: publicExecutionStatus(operation.status), startedAt: (operation.startedAt ?? operation.createdAt).toISOString(), completedAt: operation.completedAt?.toISOString() ?? null },
+        ...deploymentEvents.map(event => ({ id: `${operation.id}:verify:${event.id}`, operationKind, buildId: operation.buildId, stage: "qa_running" as const, label: "验证线上网站", status: publicExecutionStatus(operation.status), startedAt: event.startedAt.toISOString(), completedAt: operation.completedAt?.toISOString() ?? null })),
+        ...(operation.status === "succeeded" && operation.completedAt ? [{ id: `${operation.id}:published`, operationKind, buildId: operation.buildId, stage: "completed" as const, label: "发布网站", status: "succeeded" as const, startedAt: operation.completedAt.toISOString(), completedAt: operation.completedAt.toISOString() }] : [])];
+    }
     const operationEvents = events
       .filter((item) => item.operationId === operation.id)
       .sort(

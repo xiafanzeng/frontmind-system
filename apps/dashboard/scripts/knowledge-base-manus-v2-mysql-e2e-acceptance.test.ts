@@ -47,6 +47,7 @@ import { KNOWLEDGE_BASE_MATERIALIZED_V5_SKILL_CONTENT_HASH } from "../server/kno
 
 const dependencies = vi.hoisted(() => ({
   getDb: vi.fn(),
+  nodeEditFetch: vi.fn(),
   assertServiceCapability: vi.fn(),
   assertKnowledgeBaseWritable: vi.fn(),
   createKnowledgeMonitoringHandoff: vi.fn(),
@@ -54,6 +55,7 @@ const dependencies = vi.hoisted(() => ({
   getDecryptedCredentialForKnowledgeBaseUploadReservation: vi.fn(),
   recordUpstreamResource: vi.fn(),
   upstreamBaseUrl: "",
+  sessionCookie: "",
   userId: 0,
   credentialId: "",
   credentialFingerprint: "",
@@ -61,37 +63,6 @@ const dependencies = vi.hoisted(() => ({
 }));
 
 vi.mock("../server/db", () => ({ getDb: dependencies.getDb }));
-
-vi.mock("../server/_core/express-auth", () => ({
-  requireExpressAuth: (req: any, res: any, next: () => void) => {
-    if (req.header("x-test-auth") !== "user") {
-      res
-        .status(401)
-        .json({ error: { message: "请先登录", code: "UNAUTHORIZED" } });
-      return;
-    }
-    req.frontmindUser = {
-      id: dependencies.userId,
-      username: "frontmind-materialized-mysql-e2e",
-      displayName: SYNTHETIC_COMPANY,
-      role: "user",
-      adminAccessLevel: null,
-      engineerRoleType: null,
-      marketEdition: "domestic",
-      isActive: true,
-    };
-    req.frontmindCredential = {
-      id: dependencies.credentialId,
-      userId: dependencies.userId,
-      version: 1,
-      label: "Synthetic materialized MySQL E2E credential",
-      apiKey: dependencies.apiKey,
-      fingerprint: dependencies.credentialFingerprint,
-      agentProfile: "frontmind-pro",
-    };
-    next();
-  },
-}));
 
 vi.mock("../server/service-entitlement", async (importOriginal) => {
   const actual =
@@ -119,9 +90,49 @@ vi.mock("../server/auth-service", async (importOriginal) => {
     ...actual,
     getCredentialForUpstreamResource:
       dependencies.getCredentialForUpstreamResource,
-    getDecryptedCredentialForKnowledgeBaseUploadReservation:
-      dependencies.getDecryptedCredentialForKnowledgeBaseUploadReservation,
+
     recordUpstreamResource: dependencies.recordUpstreamResource,
+  };
+});
+
+// Only the external provider boundary is simulated; auth, frozen credentials,
+// SQL identity, byte verification and dispatch state remain real implementations.
+vi.mock("../server/credential-agent-client", async () => {
+  const { ManusV2Client } = await import("../server/manus-v2-client");
+  const { default: transport } = await import("axios");
+  return {
+    createCredentialAgentClient: (credential: any, options: any = {}) =>
+      Object.assign(
+        new ManusV2Client({
+          apiKey: credential.apiKey,
+          baseUrl: options.baseUrl ?? "https://fake.manus-v2.frontmind.test",
+        }),
+        {
+          downloadArtifact: async (fileId: string) =>
+            transport.get(
+              `https://download.manus-v2.frontmind.test/${encodeURIComponent(fileId)}/bundle.zip`,
+              { responseType: "stream" },
+            ),
+        },
+      ),
+  };
+});
+
+// Keep the real Low editor, runtime journal and billing; replace only its HTTP transport.
+vi.mock("../server/providers/zhipu-managed-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../server/providers/zhipu-managed-client")
+    >();
+  return {
+    ...actual,
+    ZhipuManagedClient: class extends actual.ZhipuManagedClient {
+      constructor(
+        options: ConstructorParameters<typeof actual.ZhipuManagedClient>[0],
+      ) {
+        super({ ...options, fetchImpl: dependencies.nodeEditFetch });
+      }
+    },
   };
 });
 
@@ -591,7 +602,8 @@ function createFakeManusV2Provider(input: {
               type: "file",
               filename: bundle.filename,
               content_type: "application/zip",
-              url: `${PROVIDER_DOWNLOAD_ORIGIN}/${encodeURIComponent(taskId)}/${encodeURIComponent(bundle.filename)}`,
+              file_id: taskId,
+              url: `zhipu-file:${taskId}`,
             },
           ],
         },
@@ -695,7 +707,10 @@ function createFakeManusV2Provider(input: {
     if (method === "post" && url.pathname === "/v2/task.create") {
       const body = requestBody(config) as any;
       state.taskCreateBodies.push(body);
-      expect(state.taskCreateBodies).toHaveLength(1);
+      const taskId =
+        state.taskCreateBodies.length === 1
+          ? input.taskId
+          : `${input.taskId}-${state.taskCreateBodies.length}`;
       expect(body).toMatchObject({
         interactive_mode: false,
         hide_in_task_list: false,
@@ -703,11 +718,14 @@ function createFakeManusV2Provider(input: {
         locale: "zh-CN",
       });
       expect(body.title).toEqual(expect.any(String));
-      await appendMaterializedEvents(input.taskId, body);
+      await appendMaterializedEvents(taskId, body).catch((error) => {
+        console.error("Synthetic provider fixture failed:", error);
+        throw error;
+      });
       return axiosResponse(config, 200, {
         ok: true,
-        task_id: input.taskId,
-        task_url: `https://manus.im/app/${input.taskId}`,
+        task_id: taskId,
+        task_url: `https://manus.im/app/${taskId}`,
         task_title: body.title,
         request_id: "request-task-create-1",
       });
@@ -721,7 +739,7 @@ function createFakeManusV2Provider(input: {
     if (method === "get" && url.pathname === "/v2/task.listMessages") {
       state.taskListCalls += 1;
       const taskId = String((config.params as any)?.task_id || "");
-      expect(taskId).toBe(input.taskId);
+      expect(taskEvents.has(taskId)).toBe(true);
       return axiosResponse(config, 200, {
         ok: true,
         task_id: taskId,
@@ -750,6 +768,12 @@ function createFakeManusV2Provider(input: {
       `FAKE_MANUS_V2_UNEXPECTED_REQUEST:${method}:${url.pathname}`,
     );
   };
+  const adapter = state.adapter;
+  state.adapter = (config) =>
+    Promise.resolve(adapter(config)).catch((error) => {
+      console.error("Synthetic provider adapter failed:", error);
+      throw error;
+    });
   return state;
 }
 
@@ -841,7 +865,7 @@ mysqlDescribe(
     const getProgress = async () => {
       const response = await fetch(
         `${dashboardBaseUrl}/api/knowledge-base/progress/${encodeURIComponent(publicConversationId)}`,
-        { headers: { "x-test-auth": "user" } },
+        { headers: { cookie: dependencies.sessionCookie } },
       );
       const payload = (await response.json()) as any;
       if (response.status !== 200) {
@@ -865,7 +889,9 @@ mysqlDescribe(
         | "/turn/attachments/resume"
         | "/turn/attachments/cancel"
         | "/turn/dispatch"
-        | "/confirm",
+        | "/confirm"
+        | "/initial-draft/accept"
+        | "/node/select",
       body: Record<string, unknown>,
     ) => {
       const response = await fetch(
@@ -874,7 +900,7 @@ mysqlDescribe(
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-test-auth": "user",
+            cookie: dependencies.sessionCookie,
           },
           body: JSON.stringify(body),
         },
@@ -889,6 +915,7 @@ mysqlDescribe(
     };
 
     const uploadKnowledgeBaseLocalAsset = async (input: {
+      uploadAttemptId?: string;
       conversationId: string;
       turnId: string;
       clientRequestId: string;
@@ -908,7 +935,7 @@ mysqlDescribe(
             "x-frontmind-filename": encodeURIComponent(input.filename),
             "x-frontmind-mime": input.mimeType,
             "x-frontmind-size": String(input.bytes.length),
-            "x-test-auth": "user",
+            cookie: dependencies.sessionCookie,
             ...knowledgeBaseLocalUploadHeaders(
               {
                 conversationId: input.conversationId,
@@ -917,6 +944,7 @@ mysqlDescribe(
                 itemId: input.itemId,
                 expectedResetRevision: input.expectedResetRevision,
                 ordinal: input.ordinal,
+                uploadAttemptId: input.uploadAttemptId,
               },
               1,
             ),
@@ -972,9 +1000,11 @@ mysqlDescribe(
       expect(Number(ledgerRows[0]?.migrationCount || 0)).toBe(
         journal.entries.length,
       );
-      expect(
-        journal.entries.some((entry) => entry.tag === "0062_hard_glorian"),
-      ).toBe(true);
+      // CN uses the consolidated journal; prove the actual required project column.
+      const [projectColumns] = await pool.query<RowDataPacket[]>(
+        "SELECT COLUMN_NAME FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'conversation_turns' AND column_name = 'enterpriseProjectId'",
+      );
+      expect(projectColumns).toHaveLength(1);
       const [engineRows] = await pool.query<RowDataPacket[]>(
         `SELECT TABLE_NAME AS tableName, ENGINE AS engine
            FROM information_schema.tables
@@ -1006,14 +1036,14 @@ mysqlDescribe(
       dependencies.apiKey = upstreamApiKey;
       dependencies.upstreamBaseUrl = PROVIDER_BASE_URL;
 
+      process.env.FRONTMIND_CREDENTIAL_ENCRYPTION_KEY = `base64:${Buffer.alloc(32, 73).toString("base64")}`;
+      const { encryptApiKey } = await import("../server/auth-service");
       await executor.insert(apiCredentials).values({
         id: credentialId,
         userId,
         version: 1,
-        encryptionVersion: 1,
-        encryptedKey: "synthetic-acceptance-placeholder",
-        encryptionIv: "synthetic-acceptance-placeholder",
-        encryptionAuthTag: "synthetic-acceptance-placeholder",
+        ...encryptApiKey(userId, credentialId, upstreamApiKey),
+        provider: "zhipu",
         fingerprint: credentialFingerprint,
         agentProfile: "frontmind-pro",
         status: "active",
@@ -1041,6 +1071,16 @@ mysqlDescribe(
         verifiedAt: new Date(),
       };
       dependencies.getDb.mockResolvedValue(executor);
+      const { createSession } = await import("../server/auth-service");
+      dependencies.sessionCookie = `app_session_id=${(await createSession(userId)).token}`;
+      const { ensureDashboardAccountLink } = await import(
+        "../../../packages/monitoring-db/src/dashboard-account-links"
+      );
+      const link = await ensureDashboardAccountLink(executor as any, userId);
+      await pool.execute(
+        "UPDATE unified_money_wallets SET balance_ten_thousandths = 100000000 WHERE user_id = ?",
+        [link.monitoringUserId],
+      );
       dependencies.assertServiceCapability.mockResolvedValue(undefined);
       dependencies.assertKnowledgeBaseWritable.mockResolvedValue(undefined);
       dependencies.createKnowledgeMonitoringHandoff.mockResolvedValue({
@@ -1082,9 +1122,8 @@ mysqlDescribe(
       const { default: frontmindV2ChatRouter } = await import(
         "../server/frontmind-v2-chat-router"
       );
-      const { requireExpressAuth } = await import(
-        "../server/_core/express-auth"
-      );
+      const { requireExpressAuth, attachOptionalActiveCredential } =
+        await import("../server/_core/express-auth");
       const dashboard = express();
       dashboard.use(express.json({ limit: "5mb" }));
       dashboard.use(
@@ -1095,11 +1134,13 @@ mysqlDescribe(
       dashboard.use(
         "/api/knowledge-base",
         requireExpressAuth,
+        attachOptionalActiveCredential,
         knowledgeBaseRouter,
       );
       dashboard.use(
         "/api/frontmind/v2",
         requireExpressAuth,
+        attachOptionalActiveCredential,
         frontmindV2ChatRouter,
       );
       dashboard.use("/api/dashboard", dashboardRouter);
@@ -1121,6 +1162,18 @@ mysqlDescribe(
       try {
         if (pool && userId) {
           await pool.execute(
+            "DELETE FROM ai_wallet_ledger WHERE command_id IN (SELECT id FROM ai_charge_commands WHERE account_user_id = ?)",
+            [userId],
+          );
+          await pool.execute(
+            "DELETE FROM ai_cost_events WHERE account_user_id = ?",
+            [userId],
+          );
+          await pool.execute(
+            "DELETE FROM ai_charge_commands WHERE account_user_id = ?",
+            [userId],
+          );
+          await pool.execute(
             "DELETE FROM upstream_resources WHERE userId = ?",
             [userId],
           );
@@ -1138,6 +1191,11 @@ mysqlDescribe(
           await pool.execute("DELETE FROM api_credentials WHERE userId = ?", [
             userId,
           ]);
+          await pool.execute("DELETE FROM sessions WHERE userId = ?", [userId]);
+          await pool.execute(
+            "DELETE FROM monitoring_account_links WHERE dashboardUserId = ?",
+            [userId],
+          );
           await pool.execute("DELETE FROM users WHERE id = ?", [userId]);
         }
       } catch (error) {
@@ -1300,31 +1358,94 @@ mysqlDescribe(
         ),
       ).toBe(true);
 
+      // The current workbench accepts the complete initial draft once, then
+      // explicitly selects a node for supplementation. Neither action calls AI.
+      const acceptedInitial = await postKnowledgeBase("/initial-draft/accept", {
+        conversationId: publicConversationId,
+        clientRequestId: `accept-initial-${runId}`,
+        expectedGeneration: 1,
+        expectedResetRevision: 0,
+        expectedRevision: build.revision,
+        expectedStateEpoch: progress.observation.stateEpoch,
+        expectedContentVersion: 1,
+      });
+      expect(acceptedInitial).toMatchObject({
+        accepted: true,
+        unchanged: false,
+        receipt: { nodeCount: MATERIALIZED_LEAF_COUNT },
+      });
+      const acceptedProgress =
+        acceptedInitial.observation.progress ??
+        acceptedInitial.observation.interaction.progress;
+      const selectedNode = await postKnowledgeBase("/node/select", {
+        conversationId: publicConversationId,
+        clientRequestId: `select-node-${runId}`,
+        leafId: "1.1",
+        expectedGeneration: 1,
+        expectedRevision: acceptedProgress.build.revision,
+        expectedStateEpoch: acceptedInitial.observation.stateEpoch,
+      });
+      expect(selectedNode).toMatchObject({
+        accepted: true,
+        execution: "local",
+        disposition: "selected",
+      });
+      progress = { observation: selectedNode.observation };
+      Object.assign(
+        build,
+        (
+          await executor
+            .select()
+            .from(knowledgeBaseBuilds)
+            .where(eq(knowledgeBaseBuilds.id, build.id))
+            .limit(1)
+        )[0],
+      );
+      Object.assign(
+        materializedNodes[0]!,
+        (
+          await executor
+            .select()
+            .from(knowledgeBaseBuildNodes)
+            .where(eq(knowledgeBaseBuildNodes.id, materializedNodes[0]!.id))
+            .limit(1)
+        )[0],
+      );
+      const finalRevision = build.revision + 1;
+
       // Production-incident shape: the browser reserved nine customer files
-      // (plus the three v5 server-owned attachments), staged files 1-3, then
+      // (server attachments are added only during dispatch), staged files 1-3, then
       // lost the response after Dashboard durably committed file 4. Recovery
       // must discover those bytes without dispatching and cancellation must
       // return the exact materialized leaf/Working Set to awaiting input.
       const incidentClientRequestId = `lost-upload-${runId}`;
-      const incidentAttachments = Array.from(
-        { length: INCIDENT_CUSTOMER_ATTACHMENT_COUNT },
-        (_, index) => {
-          const ordinal = index + 1;
-          const bytes = Buffer.from(
-            `synthetic lost-response attachment ${ordinal} ${runId}`,
-            "utf8",
-          );
-          return {
-            itemId: `incident-${runId.slice(0, 24)}-${ordinal}`,
-            ordinal,
-            total: INCIDENT_CUSTOMER_ATTACHMENT_COUNT,
-            filename: `incident-attachment-${ordinal}.jpg`,
-            mimeType: "image/jpeg",
-            lastModified: FIXED_ZIP_DATE.getTime() + ordinal,
-            sizeBytes: bytes.length,
-            bytes,
-          };
-        },
+      const incidentAttachments = await Promise.all(
+        Array.from(
+          { length: INCIDENT_CUSTOMER_ATTACHMENT_COUNT },
+          async (_, index) => {
+            const ordinal = index + 1;
+            const bytes = await sharp({
+              create: {
+                width: 2,
+                height: 2,
+                channels: 4,
+                background: { r: ordinal * 20, g: 40, b: 80, alpha: 1 },
+              },
+            })
+              .png()
+              .toBuffer();
+            return {
+              itemId: `incident-${runId.slice(0, 24)}-${ordinal}`,
+              ordinal,
+              total: INCIDENT_CUSTOMER_ATTACHMENT_COUNT,
+              filename: `incident-attachment-${ordinal}.png`,
+              mimeType: "image/png",
+              lastModified: FIXED_ZIP_DATE.getTime() + ordinal,
+              sizeBytes: bytes.length,
+              bytes,
+            };
+          },
+        ),
       );
       const incidentManifest = incidentAttachments.map(
         ({ bytes: _bytes, ...entry }) => entry,
@@ -1376,7 +1497,7 @@ mysqlDescribe(
       });
       expect(reservedIncidentTurn.metadata).toMatchObject({
         userAttachmentCount: INCIDENT_CUSTOMER_ATTACHMENT_COUNT,
-        expectedAttachmentCount: INCIDENT_CUSTOMER_ATTACHMENT_COUNT + 3,
+        expectedAttachmentCount: INCIDENT_CUSTOMER_ATTACHMENT_COUNT,
         awaitingClientAttachments: true,
         attachmentsFrozen: false,
         clientStagedAttachments: [],
@@ -1607,13 +1728,13 @@ mysqlDescribe(
       fakeProvider.rejectProviderCalls = true;
       const providerCallsBeforeConfirmation = fakeProvider.providerCalls.length;
 
-      for (let index = 0; index < MATERIALIZED_LEAF_COUNT; index += 1) {
+      for (let index = 0; index < 1; index += 1) {
         const leaf = syntheticLeaves[index]!;
         const observation = progress.observation;
         const observationProgress = observation.interaction.progress;
         expect(observation.approvedPresentation).toMatchObject({
           leafId: leaf.leafId,
-          revision: index,
+          revision: invariantBeforeIncident.revision,
           visibleMarkdown: leaf.visibleMarkdown,
         });
         const confirmation = await postKnowledgeBase("/confirm", {
@@ -1631,8 +1752,7 @@ mysqlDescribe(
         expect(confirmation).toMatchObject({
           accepted: true,
           execution: "local",
-          disposition:
-            index === MATERIALIZED_LEAF_COUNT - 1 ? "completed" : "advanced",
+          disposition: "completed",
         });
         expect(fakeProvider.providerCalls).toHaveLength(
           providerCallsBeforeConfirmation,
@@ -1646,11 +1766,11 @@ mysqlDescribe(
       expect(progress.observation).toMatchObject({
         contentState: "completed",
         packageState: "not_started",
-        updateAllowed: true,
         interaction: {
           progress: {
+            updateAllowed: true,
             build: {
-              revision: MATERIALIZED_LEAF_COUNT,
+              revision: finalRevision,
               currentLeafId: null,
               contentVersion: 1,
             },
@@ -1671,7 +1791,7 @@ mysqlDescribe(
       )[0]!;
       expect(completedBuild).toMatchObject({
         status: "ready_to_publish",
-        revision: MATERIALIZED_LEAF_COUNT,
+        revision: finalRevision,
         confirmedCount: MATERIALIZED_LEAF_COUNT,
         currentLeafId: null,
         activeTurnId: null,
@@ -1696,7 +1816,7 @@ mysqlDescribe(
         upstreamTaskId: initialTaskId,
         apiCredentialId: credentialId,
       });
-      expect(localConfirmTurns).toHaveLength(MATERIALIZED_LEAF_COUNT);
+      expect(localConfirmTurns).toHaveLength(1);
       expect(
         localConfirmTurns.every(
           (turn) =>
@@ -1721,7 +1841,7 @@ mysqlDescribe(
         (message) =>
           (message.metadata as any)?.knowledgeBase?.kind === "completion",
       );
-      expect(presentations).toHaveLength(MATERIALIZED_LEAF_COUNT);
+      expect(presentations).toHaveLength(2);
       expect(completions).toHaveLength(1);
       expect(completions[0]).toMatchObject({
         role: "assistant",
@@ -1774,8 +1894,8 @@ mysqlDescribe(
         contentState: "completed",
         packageState: "ready",
         package: {
-          revision: MATERIALIZED_LEAF_COUNT,
-          outputItemId: `dashboard-local:${build.id}:${MATERIALIZED_LEAF_COUNT}`,
+          revision: finalRevision,
+          outputItemId: `dashboard-local:${build.id}:${finalRevision}`,
           downloadPath: `/api/knowledge-base/artifacts/${build.id}/package`,
           mimeType: "application/zip",
         },
@@ -1787,7 +1907,7 @@ mysqlDescribe(
       expect(unauthenticatedPackage.status).toBe(401);
       const packageResponse = await fetch(
         `${dashboardBaseUrl}/api/knowledge-base/artifacts/${build.id}/package`,
-        { headers: { "x-test-auth": "user" } },
+        { headers: { cookie: dependencies.sessionCookie } },
       );
       expect(packageResponse.status).toBe(200);
       const packageBytes = Buffer.from(await packageResponse.arrayBuffer());
@@ -1801,9 +1921,9 @@ mysqlDescribe(
       expect(packageBuild).toMatchObject({
         packageStatus: "ready",
         packageAttemptCount: 1,
-        packageRevision: MATERIALIZED_LEAF_COUNT,
+        packageRevision: finalRevision,
         packageTaskId: `dashboard-materialized:${build.id}:1`,
-        packageOutputItemId: `dashboard-local:${build.id}:${MATERIALIZED_LEAF_COUNT}`,
+        packageOutputItemId: `dashboard-local:${build.id}:${finalRevision}`,
         packageFileId: null,
         packageArchiveSha256: sha256(packageBytes),
         packageSizeBytes: packageBytes.length,
@@ -1813,7 +1933,7 @@ mysqlDescribe(
         expected: {
           buildId: build.id,
           generation: 1,
-          revision: MATERIALIZED_LEAF_COUNT,
+          revision: finalRevision,
           companyName: SYNTHETIC_COMPANY,
         },
         nodes: confirmedNodes,
@@ -1832,7 +1952,7 @@ mysqlDescribe(
           method: "POST",
           headers: {
             "content-type": "application/json",
-            "x-test-auth": "user",
+            cookie: dependencies.sessionCookie,
           },
           body: JSON.stringify({ conversationId: publicConversationId }),
         },
@@ -1856,7 +1976,7 @@ mysqlDescribe(
       )[0]!;
       expect(publishedSnapshot).toMatchObject({
         sourceBuildId: build.id,
-        sourceBuildRevision: MATERIALIZED_LEAF_COUNT,
+        sourceBuildRevision: finalRevision,
         sourceTaskId: `dashboard-materialized:${build.id}:1`,
         sourceArtifactHash: sha256(packageBytes),
         archiveHash: sha256(packageBytes),
@@ -1877,7 +1997,341 @@ mysqlDescribe(
           stopReason: "coverage_complete",
         }),
       });
+    }, 300_000);
 
+    it("completes consecutive supplements with distinct reservations, model tasks and node patch results", async () => {
+      // A separate regression re-enables this synthetic test credential after the
+      // preceding revoke/confirmation scenario, then uses the existing published build.
+      await executor
+        .update(apiCredentials)
+        .set({
+          status: "active",
+          validationStatus: "verified",
+          deletedAt: null,
+        })
+        .where(eq(apiCredentials.id, credentialId));
+      fakeProvider.rejectProviderCalls = false;
+      const createdBefore = fakeProvider.taskCreateBodies.length;
+      const sessions = new Map<string, Array<Record<string, unknown>>>();
+      let editorCommands = 0;
+      dependencies.nodeEditFetch.mockImplementation(
+        async (url: string, init: RequestInit) => {
+          const path = new URL(url).pathname.replace("/api/agent/managed", "");
+          const body =
+            typeof init.body === "string" ? JSON.parse(init.body) : null;
+          expect(new Headers(init.headers).get("authorization")).toBe(
+            `Bearer ${upstreamApiKey}`,
+          );
+          const json = (data: unknown) =>
+            new Response(JSON.stringify(data), {
+              headers: { "content-type": "application/json" },
+            });
+          if (init.method === "POST" && path === "/v1/agents") {
+            expect(body).toMatchObject({
+              model: { id: "glm-5.3", effort: "low" },
+              tools: [],
+              skills: [],
+            });
+            return json({ id: "synthetic_node_editor" });
+          }
+          if (init.method === "POST" && path === "/v1/environments")
+            return json({ id: "synthetic_node_environment" });
+          if (init.method === "POST" && path === "/v1/sessions") {
+            const id = `synthetic_node_session_${sessions.size + 1}`;
+            sessions.set(id, []);
+            return json({ id });
+          }
+          const sessionId = path.split("/")[3]!;
+          const events = sessions.get(sessionId);
+          if (!events)
+            throw new Error(
+              `Unexpected synthetic Low provider request: ${path}`,
+            );
+          if (init.method === "POST" && path.endsWith("/events")) {
+            expect(events).toHaveLength(0);
+            const submitted = body.events[0];
+            expect(submitted.type).toBe("user.message");
+            const prompt = JSON.parse(submitted.content[0].text);
+            expect(Object.keys(prompt).sort()).toEqual([
+              "currentNode",
+              "instruction",
+            ]);
+            const user = {
+              id: `${sessionId}_user`,
+              type: "user.message",
+              processed_at: new Date().toISOString(),
+              content: submitted.content,
+            };
+            events.push(
+              user,
+              {
+                id: `${sessionId}_usage`,
+                type: "span.model_request_end",
+                processed_at: new Date().toISOString(),
+                model_usage: {
+                  input_tokens: 120,
+                  output_tokens: 80,
+                  cache_read_input_tokens: 0,
+                },
+              },
+              {
+                id: `${sessionId}_answer`,
+                type: "agent.message",
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      contentMarkdown: `${prompt.currentNode}\n\n${prompt.instruction}`,
+                    }),
+                  },
+                ],
+              },
+            );
+            events.push({ id: `${sessionId}_idle`, type: "session.status_idle", processed_at: new Date().toISOString() });
+            editorCommands += 1;
+            return json({ data: [user] });
+          }
+          if (path.endsWith("/events"))
+            return json({ data: events, next_page: null });
+          return json({ id: sessionId, status: "idle", usage: { input_tokens: 120, output_tokens: 80, cache_read_input_tokens: 0 } });
+        },
+      );
+      const turns = new Set<string>(),
+        tasks = new Set<string>();
+      for (const [index, leafId] of ["1.1", "1.1", "1.2"].entries()) {
+        let observed = await getProgress();
+        const before =
+          observed.progress ??
+          observed.observation.progress ??
+          observed.observation.interaction.progress;
+        const selected = await postKnowledgeBase("/node/select", {
+          conversationId: publicConversationId,
+          clientRequestId: `supplement-select-${index}-${runId}`,
+          leafId,
+          expectedGeneration: 1,
+          expectedRevision: before.build.revision,
+          expectedStateEpoch: observed.observation.stateEpoch,
+        });
+        observed = { observation: selected.observation };
+        const selectedProgress =
+          observed.observation.progress ??
+          observed.observation.interaction.progress;
+        const clientRequestId = `supplement-${index}-${runId}`;
+        const marker = `新的补充事实 ${index + 1}，目标节点 ${leafId}`;
+        const bytes = await sharp({
+          create: {
+            width: 2,
+            height: 2,
+            channels: 4,
+            background: { r: 60 + index * 30, g: 40, b: 120, alpha: 1 },
+          },
+        })
+          .png()
+          .toBuffer();
+        const manifest = [
+          {
+            itemId: `${clientRequestId}:1`,
+            ordinal: 1,
+            total: 1,
+            filename: `supplement-${index}.png`,
+            mimeType: "image/png",
+            lastModified: FIXED_ZIP_DATE.getTime(),
+            sizeBytes: bytes.length,
+          },
+        ];
+        const request = {
+          conversationId: publicConversationId,
+          clientRequestId,
+          userMessage: marker,
+          attachmentManifest: manifest,
+          expectedGeneration: 1,
+          expectedResetRevision: 0,
+          expectedRevision: selectedProgress.build.revision,
+          expectedLeafId: leafId,
+          expectedPresentationKey:
+            observed.observation.approvedPresentation.presentationKey,
+        };
+        const reserved = await postKnowledgeBase("/turn/reserve", request);
+        const repeated = await postKnowledgeBase("/turn/reserve", request);
+        expect(repeated.reservation.turnId).toBe(reserved.reservation.turnId);
+        expect(turns.has(reserved.reservation.turnId)).toBe(false);
+        turns.add(reserved.reservation.turnId);
+        const coordinate = {
+          conversationId: publicConversationId,
+          clientRequestId,
+          turnId: reserved.reservation.turnId,
+          uploadAttemptId: reserved.reservation.uploadAttemptId,
+          expectedResetRevision: 0,
+        };
+        const receipt = await uploadKnowledgeBaseLocalAsset({
+          ...coordinate,
+          ...manifest[0]!,
+          bytes,
+        });
+        await postKnowledgeBase("/turn/attachments/stage", {
+          ...coordinate,
+          attachmentManifest: manifest,
+          index: 0,
+          attachment: {
+            file_id: receipt.localAssetId,
+            filename: manifest[0]!.filename,
+          },
+        });
+        expect(fakeProvider.taskCreateBodies).toHaveLength(createdBefore);
+        expect(editorCommands).toBe(index);
+        expect(sessions.size).toBe(index);
+        await postKnowledgeBase("/turn/dispatch", {
+          ...coordinate,
+          attachmentManifest: manifest,
+        });
+        const complete = await waitFor({
+          label: `supplement ${index + 1} materialized node`,
+          read: async () => {
+            const payload = await getProgress();
+            const [currentTurn] = await executor
+              .select()
+              .from(conversationTurns)
+              .where(eq(conversationTurns.id, coordinate.turnId));
+            if (
+              currentTurn?.status === "failed" ||
+              currentTurn?.status === "cancelled"
+            ) {
+              throw new Error(
+                `Supplement failed: ${currentTurn.errorCode}: ${currentTurn.errorMessage}`,
+              );
+            }
+            return payload;
+          },
+          accept: (payload) =>
+            payload.observation?.activeTurn === null &&
+            (payload.progress ?? payload.observation?.progress)?.build
+              ?.contentVersion ===
+              selectedProgress.build.contentVersion + 1,
+        });
+        expect(
+          complete.observation.approvedPresentation.visibleMarkdown,
+        ).toContain(marker);
+        expect(complete.observation.approvedPresentation.leafId).toBe(leafId);
+        const [turn] = await executor
+          .select()
+          .from(conversationTurns)
+          .where(eq(conversationTurns.id, coordinate.turnId));
+        expect(turn!.status).toBe("completed");
+        expect(turn!.upstreamTaskId).toBeTruthy();
+        expect(tasks.has(turn!.upstreamTaskId!)).toBe(false);
+        tasks.add(turn!.upstreamTaskId!);
+        expect(fakeProvider.taskCreateBodies).toHaveLength(createdBefore);
+        expect(editorCommands).toBe(index + 1);
+        expect(sessions.size).toBe(index + 1);
+        const replay = await postKnowledgeBase("/turn/dispatch", {
+          ...coordinate,
+          attachmentManifest: manifest,
+        });
+        expect(replay).toBeTruthy();
+        expect(fakeProvider.taskCreateBodies).toHaveLength(createdBefore);
+        expect(editorCommands).toBe(index + 1);
+        expect(sessions.size).toBe(index + 1);
+      }
+      expect(turns.size).toBe(3);
+      expect(tasks.size).toBe(3);
+      expect(fakeProvider.taskSendBodies).toHaveLength(0);
+      const { listCustomerAiUsage } = await import(
+        "../server/customer-ai-usage"
+      );
+      const { runWithEnterpriseProjectScope } = await import(
+        "../server/enterprise-project-context"
+      );
+      const scope = {
+        ownerUserId: userId!,
+        actorUserId: userId!,
+        enterpriseProjectId: randomUUID(),
+        isLegacyDefault: true,
+      };
+      const usage = await runWithEnterpriseProjectScope(scope, () =>
+        listCustomerAiUsage({ id: userId!, role: "user" } as any, { page: 1 }),
+      );
+      const repeatedUsage = await runWithEnterpriseProjectScope(scope, () =>
+        listCustomerAiUsage({ id: userId!, role: "user" } as any, { page: 1 }),
+      );
+      expect(repeatedUsage).toEqual(usage);
+      expect(usage.tasks).toHaveLength(1);
+      console.log("KB_SUPPLEMENT_USAGE", JSON.stringify(usage.tasks));
+      expect(usage.tasks[0]).toMatchObject({
+        businessName: "知识库",
+        generation: 1,
+        inputTokens: "360",
+        outputTokens: "240",
+        usageStatus: "synced",
+      });
+      expect(
+        new Set(usage.tasks[0]!.calls!.map((call) => call.turnId)),
+      ).toEqual(turns);
+      const [costs] = await pool.query<RowDataPacket[]>(
+        "SELECT SUM(charged_ten_thousandths) AS charged FROM ai_cost_events WHERE account_user_id = ?",
+        [userId],
+      );
+      expect(usage.tasks[0]!.chargedTenThousandths).toBe(
+        String(costs[0]!.charged),
+      );
+      expect(BigInt(usage.tasks[0]!.chargedTenThousandths)).toBeGreaterThan(0n);
+      // Confirm both edited nodes locally and require a final readable ZIP after
+      // three supplements; no extra provider task is needed for confirmation.
+      for (const leafId of ["1.1", "1.2"]) {
+        const state = (await getProgress()).observation;
+        const build = state.interaction.progress.build;
+        const selected = await postKnowledgeBase("/node/select", {
+          conversationId: publicConversationId,
+          clientRequestId: `final-select-${leafId}-${runId}`,
+          leafId,
+          expectedGeneration: 1,
+          expectedRevision: build.revision,
+          expectedStateEpoch: state.stateEpoch,
+        });
+        const observation = selected.observation;
+        const current = observation.interaction.progress.build;
+        await postKnowledgeBase("/confirm", {
+          conversationId: publicConversationId,
+          clientRequestId: `final-confirm-${leafId}-${runId}`,
+          expectedGeneration: 1,
+          expectedResetRevision: 0,
+          expectedStateEpoch: observation.stateEpoch,
+          expectedRevision: current.revision,
+          expectedLeafId: leafId,
+          expectedPresentationKey:
+            observation.approvedPresentation.presentationKey,
+          expectedContentVersion: current.contentVersion,
+        });
+      }
+      const [finalBuild] = await executor
+        .select()
+        .from(knowledgeBaseBuilds)
+        .where(eq(knowledgeBaseBuilds.userId, userId!));
+      const { generateKnowledgeBasePackageForUpdate } = await import(
+        "../server/knowledge-base-local-package"
+      );
+      expect(
+        await generateKnowledgeBasePackageForUpdate({
+          id: finalBuild!.id,
+          userId: userId!,
+          generation: 1,
+          revision: finalBuild!.revision,
+          stateEpoch: finalBuild!.stateEpoch,
+          contentVersion: finalBuild!.contentVersion,
+        }),
+      ).toMatchObject({ ready: 1, failed: 0 });
+      const packageResponse = await fetch(
+        `${dashboardBaseUrl}/api/knowledge-base/artifacts/${finalBuild!.id}/package`,
+        { headers: { cookie: dependencies.sessionCookie } },
+      );
+      expect(packageResponse.status).toBe(200);
+      const packageZip = await JSZip.loadAsync(
+        await packageResponse.arrayBuffer(),
+      );
+      expect(
+        Object.keys(packageZip.files).some((name) => name.endsWith(".md")),
+      ).toBe(true);
+      expect(editorCommands).toBe(3);
+      expect(sessions.size).toBe(3);
       acceptancePassed = true;
     }, 300_000);
   },

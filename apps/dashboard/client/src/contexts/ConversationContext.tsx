@@ -163,6 +163,7 @@ export interface LocalMessage {
   generalChat?: {
     schemaVersion: 1;
     kind: "assistant_projection";
+    isFinalAnswer?: boolean;
     turnId: string;
     agentTaskId: string;
     providerEventId: string;
@@ -198,6 +199,9 @@ export interface KnowledgeBaseClientState {
   displaySequence?: number;
   syncState?: KnowledgeBaseSyncState;
   processingPhase?: KnowledgeBaseProcessingPhase | null;
+  runPhase?: KnowledgeBaseObservationDto["runPhase"];
+  uploadStatusVersion?: number;
+  uploadAttemptId?: string;
   contentState?: KnowledgeBaseContentState;
   packageState?: KnowledgeBasePackageState;
   publicationState?: KnowledgeBasePublicationState;
@@ -1155,6 +1159,7 @@ function knowledgeObservationIsStale(
   if (observation.stateEpoch < current.stateEpoch) return true;
   if (observation.stateEpoch > current.stateEpoch) return false;
   const observedActiveTurn = observation.activeTurn;
+  if (observedActiveTurn?.id === current.activeTurnId && (observedActiveTurn.uploadStatusVersion ?? current.uploadStatusVersion ?? 0) < (current.uploadStatusVersion ?? 0)) return true;
   if (
     observedActiveTurn &&
     current.activeTurnId === observedActiveTurn.id &&
@@ -1682,7 +1687,10 @@ export function applyKnowledgeBaseObservation(
         0,
       displaySequence,
       syncState: observation.syncState,
-      processingPhase: observation.processingPhase,
+      processingPhase: observation.processingPhase ?? conversation.knowledgeBase?.processingPhase,
+      runPhase: observation.runPhase ?? conversation.knowledgeBase?.runPhase,
+      uploadStatusVersion: observation.activeTurn?.uploadStatusVersion ?? conversation.knowledgeBase?.uploadStatusVersion,
+      uploadAttemptId: observation.activeTurn?.uploadAttemptId ?? conversation.knowledgeBase?.uploadAttemptId,
       contentState: observation.contentState,
       packageState: observation.packageState,
       publicationState: observation.publicationState,

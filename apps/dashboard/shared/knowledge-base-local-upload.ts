@@ -7,9 +7,11 @@ export const KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS = {
   contentSha256: "X-FrontMind-Content-SHA256",
   ordinal: "X-FrontMind-KB-Ordinal",
   attempt: "X-FrontMind-Upload-Attempt",
+  uploadAttemptId: "X-FrontMind-KB-Upload-Attempt-Id",
 } as const;
 
 export type KnowledgeBaseLocalUploadCoordinate = {
+  uploadAttemptId?: string;
   conversationId: string;
   turnId: string;
   clientRequestId: string;
@@ -29,6 +31,7 @@ export function knowledgeBaseLocalUploadHeaders(
   attempt: number,
 ): Record<string, string> {
   return {
+    ...(coordinate.uploadAttemptId ? { [KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.uploadAttemptId]: coordinate.uploadAttemptId } : {}),
     [KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.conversationId]:
       coordinate.conversationId,
     [KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.turnId]: coordinate.turnId,

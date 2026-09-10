@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   cancelKnowledgeBaseTurnAttachments: vi.fn(),
   createKnowledgeBaseTurnTask: vi.fn(),
+  getKnowledgeBaseUploadStatus: vi.fn(),
   resumeKnowledgeBaseTurnAttachments: vi.fn(),
   uploadKnowledgeBaseLocalAsset: vi.fn(),
   sha256UploadFile: vi.fn(),
@@ -26,9 +27,15 @@ vi.mock("@/lib/attachment-files", () => ({
   sha256UploadFile: mocks.sha256UploadFile,
 }));
 
-vi.mock("@/lib/frontmind-api", () => ({
+vi.mock("@/lib/frontmind-api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/frontmind-api")>(),
   cancelKnowledgeBaseTurnAttachments: mocks.cancelKnowledgeBaseTurnAttachments,
   createKnowledgeBaseTurnTask: mocks.createKnowledgeBaseTurnTask,
+  getKnowledgeBaseUploadStatus: async (...args: unknown[]) => {
+    const resumed = await mocks.getKnowledgeBaseUploadStatus(...args);
+    return { buildId: "build-revise", conversationId: "conversation-revise", turnId: "turn-revise", clientRequestId: "request-revise", resetRevision: 7, generation: 2, stateEpoch: 11, uploadStatusVersion: 1, uploadAttemptId: "attempt-1", runPhase: "uploading", controlState: resumed.controlState ?? "active", totalFiles: resumed.attachmentManifest.length, totalBytes: resumed.attachmentManifest.reduce((sum: number, item: {sizeBytes: number}) => sum + item.sizeBytes, 0), confirmedFiles: resumed.stagedCustomerAttachmentCount, confirmedBytes: 0,
+      files: resumed.attachmentManifest.map((item: {itemId: string}) => ({ ...item, status: resumed.missingCustomerAttachments.some((missing: {itemId: string}) => missing.itemId === item.itemId) ? "missing" : resumed.retainedItemIds?.includes(item.itemId) ? "retained" : "confirmed" })), readyToDispatch: resumed.readyToDispatch, allowedActions: resumed.controlState === "stopped" ? ["resume"] : resumed.readyToDispatch ? ["dispatch"] : ["upload", "stop"], knowledgeObservation: resumed.knowledgeObservation };
+  },
   resumeKnowledgeBaseTurnAttachments: mocks.resumeKnowledgeBaseTurnAttachments,
   uploadKnowledgeBaseLocalAsset: mocks.uploadKnowledgeBaseLocalAsset,
   stageKnowledgeBaseTurnAttachment: vi.fn(),
@@ -90,8 +97,8 @@ function fileForManifest(item: ReturnType<typeof manifestItem>) {
 
 describe("KnowledgeBaseManagedUploadRecovery", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resumeKnowledgeBaseTurnAttachments.mockResolvedValue(partialResume());
+    vi.resetAllMocks();
+    mocks.getKnowledgeBaseUploadStatus.mockResolvedValue(partialResume());
     mocks.uploadKnowledgeBaseLocalAsset.mockResolvedValue({
       fileId: "asset-local",
     });
@@ -100,6 +107,25 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
   });
 
   afterEach(cleanup);
+
+  it("does not dispatch a fully retained but explicitly stopped batch on refresh", async () => {
+    mocks.getKnowledgeBaseUploadStatus.mockResolvedValue({ ...partialResume(), stagedCustomerAttachmentCount: 9, retainedCustomerAttachmentCount: 9, missingCustomerAttachments: [], readyToDispatch: true, controlState: "stopped" });
+    renderRecovery();
+    expect(await screen.findByRole("button", { name: "继续上传" })).toBeInTheDocument();
+    expect(mocks.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
+  });
+
+  it("preserves a stop committed while retained attachments were being confirmed", async () => {
+    const retained = { ...partialResume(), stagedCustomerAttachmentCount: 0, retainedCustomerAttachmentCount: 9, missingCustomerAttachments: [], retainedItemIds: attachmentManifest.map(item => item.itemId) };
+    const confirmed = { ...partialResume(), stagedCustomerAttachmentCount: 9, retainedCustomerAttachmentCount: 9, missingCustomerAttachments: [], readyToDispatch: true };
+    mocks.getKnowledgeBaseUploadStatus.mockResolvedValueOnce(retained).mockResolvedValue({ ...confirmed, controlState: "stopped" });
+    mocks.resumeKnowledgeBaseTurnAttachments.mockResolvedValue(confirmed);
+    renderRecovery();
+    expect(await screen.findByRole("button", { name: "继续上传" })).toBeInTheDocument();
+    expect(mocks.resumeKnowledgeBaseTurnAttachments).toHaveBeenCalledOnce();
+    expect(mocks.createKnowledgeBaseTurnTask).not.toHaveBeenCalled();
+    expect(mocks.onRecovered).not.toHaveBeenCalled();
+  });
 
   it("shows the production-like 4/9 retained state without dispatching", async () => {
     renderRecovery();
@@ -122,7 +148,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
       activeTurn: null,
       interaction: { interactionState: "awaiting_input", canReply: true },
     };
-    mocks.resumeKnowledgeBaseTurnAttachments.mockRejectedValue(
+    mocks.getKnowledgeBaseUploadStatus.mockRejectedValue(
       Object.assign(new Error("本轮已由另一页面处理"), {
         knowledgeObservation,
       }),
@@ -143,7 +169,8 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
       missingCustomerAttachments: [],
       readyToDispatch: true,
     };
-    mocks.resumeKnowledgeBaseTurnAttachments
+    mocks.getKnowledgeBaseUploadStatus
+      .mockResolvedValueOnce(partialResume())
       .mockResolvedValueOnce(partialResume())
       .mockResolvedValueOnce(ready);
 
@@ -179,6 +206,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
       clientRequestId: coordinate.clientRequestId,
       expectedResetRevision: coordinate.expectedResetRevision,
       attachmentReservation: {
+        uploadAttemptId: "attempt-1",
         turnId: coordinate.turnId,
         attachmentManifest,
       },
@@ -193,7 +221,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
         total: 1,
       },
     ];
-    mocks.resumeKnowledgeBaseTurnAttachments.mockResolvedValue({
+    mocks.getKnowledgeBaseUploadStatus.mockResolvedValue({
       stagedCustomerAttachmentCount: 0,
       retainedCustomerAttachmentCount: 0,
       missingCustomerAttachments: digestManifest,
@@ -223,7 +251,7 @@ describe("KnowledgeBaseManagedUploadRecovery", () => {
       duplicate,
       { ...duplicate, itemId: "request-revise:2", ordinal: 2, total: 2 },
     ];
-    mocks.resumeKnowledgeBaseTurnAttachments.mockResolvedValue({
+    mocks.getKnowledgeBaseUploadStatus.mockResolvedValue({
       stagedCustomerAttachmentCount: 1,
       retainedCustomerAttachmentCount: 1,
       missingCustomerAttachments: [duplicateManifest[1]],

@@ -184,3 +184,17 @@ export async function loadGeneralExecutions(
     .where(inArray(agentEvents.taskId, ids));
   return new Map(ids.map((id) => [id, projectGeneralExecution(id, rows)]));
 }
+
+/** Public lifecycle evidence, scoped to a durable turn, establishes the returned
+ * answer. A stopped/failed turn never promotes its last progress message. */
+export function generalFinalAnswerEventIds(rows: readonly { id: string; turnId: string; type: string; rank: number; activity: unknown; hasContent: boolean }[]) {
+  const turns = new Map<string, { candidate?: string; state?: string }>();
+  for (const row of [...rows].sort((a, b) => a.rank - b.rank)) {
+    const turn = turns.get(row.turnId) ?? {};
+    if (row.type === "assistant_message" && row.hasContent) turn.candidate = row.id;
+    const activity = generalExecutionActivity(row.activity);
+    if (activity?.kind === "status") turn.state = activity.status;
+    turns.set(row.turnId, turn);
+  }
+  return new Set([...turns.values()].flatMap(turn => turn.candidate && ["ended", "waiting"].includes(turn.state ?? "") ? [turn.candidate] : []));
+}

@@ -1,4 +1,5 @@
 import KnowledgeNodeLocalActions from "./KnowledgeNodeLocalActions";
+import KnowledgePublicExecution from "./KnowledgePublicExecution";
 import KnowledgeBillingResume from "./KnowledgeBillingResume";
 import {
   AlertTriangle,
@@ -287,7 +288,12 @@ export default function KnowledgeBaseProgressPanel({
         </div>
       </header>
 
-      {(buildStopped || buildExecuting || resultResetRequired) && (
+      {buildExecuting && (
+        <div className="mx-5 mt-4 sm:mx-6">
+          <KnowledgePublicExecution operationState={progress.operationState} />
+        </div>
+      )}
+      {(buildStopped || resultResetRequired) && (
         <div
           className={`mx-5 mt-4 flex items-start gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 sm:mx-6 ${
             buildStopped || resultResetRequired
@@ -302,20 +308,12 @@ export default function KnowledgeBaseProgressPanel({
                 ? taskWasNotCreated
                   ? "知识库任务未创建"
                   : "本轮结果需要重置"
-                : buildStopped
-                  ? "本轮已停止"
-                  : progress.operationState === "normalizing"
-                    ? "正在处理已返回内容"
-                    : "FrontMind 正在处理当前操作"}
+                : "本轮已停止"}
             </strong>
             <span>
               {resultResetRequired
                 ? resetMessage
-                : buildStopped
-                  ? stoppedMessage
-                  : hasDisplayableContent || contentAvailabilityIsLegacyUnknown
-                    ? "请稍候，已完成内容不受影响。"
-                    : "请稍候，任务状态会自动更新。"}
+                : stoppedMessage}
             </span>
           </div>
         </div>

@@ -49,7 +49,7 @@
   line-height: 1.75;
 }
 .user-brand-dashboard.operator-mode {
-  --dashboard-nav-width: 256px;
+  --dashboard-nav-width: 208px;
   --dashboard-muted: #667085;
   --bg: #f6f7f9;
   --paper: #fff;
@@ -64,7 +64,7 @@
   background: var(--operator-canvas);
 }
 .user-brand-dashboard.operator-mode.operator-collapsed {
-  --dashboard-nav-width: 64px;
+  --dashboard-nav-width: 56px;
 }
 .user-brand-dashboard.operator-mode .app-shell {
   height: 100dvh;
@@ -904,7 +904,7 @@
       visibility 0.18s ease;
   }
   .user-brand-dashboard.operator-mode .operator-sidebar[data-collapsed="true"] {
-    width: 72px;
+    width: 56px;
   }
   .user-brand-dashboard.operator-mode .nav-open .operator-sidebar {
     transform: translateX(0);

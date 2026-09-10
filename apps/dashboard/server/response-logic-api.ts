@@ -1,3 +1,5 @@
+import { projectGeneralExecution } from "./frontmind-general-execution";
+import { generalExecutionActivity, orderExecutionTimeline, projectBusinessExecution } from "../shared/frontmind-general-execution";
 import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { sendAiBillingError } from "./ai-billing-http";
@@ -81,6 +83,20 @@ import {
 } from "./manus-v2-client";
 
 const router = Router();
+
+export function responseLogicPublicExecution(taskId: string, events: readonly ManusV2MessageEvent[]) {
+  let turn = 0;
+  const rows = orderManusV2EventsByProviderRank(events, "oldest_first").map((event, rank) => {
+    if (event.type === "user_message") turn++;
+    const activity = generalExecutionActivity(event.executionActivity);
+    return { taskId, providerEventId: `${turn}:${event.id}`, providerTimestampMs: event.timestamp, normalizedPayload: { kind: "provider_event", providerOriginalRank: rank, executionTurn: { id: `${taskId}:${turn}`, userSequence: turn }, executionActivity: activity?.kind === "tool_result" && activity.callId ? { ...activity, callId: `${turn}:${activity.callId}` } : activity } };
+  });
+  const execution = projectGeneralExecution(taskId, rows);
+  const submitted = orderManusV2EventsByProviderRank(events, "oldest_first").flatMap((event, rank) => event.type === "user_message" ? [{ id: `${taskId}:submitted:${event.id}`, turnId: rows[rank]!.normalizedPayload.executionTurn.id, userSequence: rows[rank]!.normalizedPayload.executionTurn.userSequence, timestamp: event.timestamp < 1e12 ? event.timestamp * 1000 : event.timestamp, rank, phase: "preparing_requirements" as const, status: "ended" as const }] : []);
+  const stages = projectBusinessExecution(taskId, submitted);
+  return { ...execution, coverage: "partial" as const, timeline: orderExecutionTimeline([...execution.timeline, ...stages.timeline]) };
+}
+
 
 export const RESPONSE_LOGIC_STRUCTURED_OUTPUT_SCHEMA = {
   type: "object",
@@ -1223,6 +1239,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
     });
     const events = await client.listAllMessages({ taskId, order: "desc" });
     const roundEvents = currentResponseLogicRoundEvents(events);
+    const execution = responseLogicPublicExecution(taskId, events);
     const status = latestManusV2TaskState(roundEvents ?? []);
     if (status === null || status === "running" || status === "waiting") {
       res.status(202).json(
@@ -1231,6 +1248,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
           taskId,
           operationRevision: parsedQuery.data.operationRevision,
           model: credential.agentProfile,
+          execution,
         }),
       );
       return;
@@ -1282,6 +1300,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
             taskId,
             operationRevision: parsedQuery.data.operationRevision,
             model: credential.agentProfile,
+            execution,
           }),
         );
         return;
@@ -1305,6 +1324,7 @@ router.get("/tasks/:taskId/status", async (req, res) => {
         taskId,
         operationRevision: parsedQuery.data.operationRevision,
         model: credential.agentProfile,
+        execution,
         resultId: result.resultId,
         source: result.source,
         structuredDraft: result.structuredDraft,

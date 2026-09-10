@@ -19,3 +19,13 @@ describe("final answers", () => {
     ] }, true).size).toBe(0);
   });
 });
+
+describe("authoritative final answer regressions", () => {
+  it("does not copy knowledge presentation even when it is the last assistant", () => {
+    expect(finalReplyIds([m("summary", "assistant", { knowledgeBase: { kind: "presentation", turnId: "turn" } })]).size).toBe(0);
+  });
+  it("prefers the server final answer marker to a later public summary", () => {
+    const base = { turnId: "turn", kind: "assistant_projection" };
+    expect([...finalReplyIds([m("answer", "assistant", { generalChat: { ...base, isFinalAnswer: true } }), m("summary", "assistant", { generalChat: { ...base, isFinalAnswer: false } })])]).toEqual(["answer"]);
+  });
+});

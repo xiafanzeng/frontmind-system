@@ -1,3 +1,4 @@
+import { generalFinalAnswerEventIds } from "./frontmind-general-execution";
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { loadGeneralExecutions } from "./frontmind-general-execution";
 import { orderGeneralChatMessages } from "../shared/general-chat-message-order";
@@ -1093,6 +1094,7 @@ export async function persistAssistantProjection(input: {
   upstreamOutputId: string;
   text: string;
   rank?: number;
+  isFinalAnswer?: boolean;
   localized: Array<{
     artifactId: string;
     filename: string;
@@ -1133,6 +1135,7 @@ export async function persistAssistantProjection(input: {
     generalChat: {
       schemaVersion: 1,
       kind: "assistant_projection",
+      ...(input.isFinalAnswer === undefined ? {} : { isFinalAnswer: input.isFinalAnswer }),
       turnId: input.turn.id,
       agentTaskId: input.task.id,
       providerEventId: input.event.id,
@@ -1774,6 +1777,8 @@ async function applyProviderProjectionSnapshot(input: {
       assignments: input.eventTurnState.assignments,
       invalidatedTurnIds: input.eventTurnState.invalidatedTurnIds,
     });
+    const finalAnswerEvents = generalFinalAnswerEventIds(input.stagedEvents.flatMap(staged => staged.projectionTurn ? [{ id: staged.event.id, turnId: staged.projectionTurn.id, type: staged.event.type, rank: Number(staged.normalizedPayload.providerOriginalRank), activity: staged.normalizedPayload.executionActivity, hasContent: Boolean(staged.canonicalText || staged.localized.length) }] : []));
+    const turnsWithLifecycle = new Set(input.stagedEvents.filter(staged => staged.projectionTurn && generalExecutionActivity(staged.normalizedPayload.executionActivity)?.kind === "status").map(staged => staged.projectionTurn!.id));
     for (const staged of input.stagedEvents) {
       const persistedEventId = persistedEventIds.get(staged.event.id);
       if (
@@ -1792,6 +1797,7 @@ async function applyProviderProjectionSnapshot(input: {
         upstreamOutputId: persistedEventId,
         text: staged.canonicalText,
         rank: Number(staged.normalizedPayload.providerOriginalRank),
+        isFinalAnswer: turnsWithLifecycle.has(staged.projectionTurn.id) ? finalAnswerEvents.has(staged.event.id) : undefined,
         localized: staged.localized,
       });
     }
@@ -3512,6 +3518,7 @@ async function reservePersistedGeneralChatTurn(input: {
   modelProfile: GeneralAgentModelProfile | null;
   continuation: boolean;
   purpose?: "enterprise_qa" | "content_production";
+  knowledgePrepared?: boolean;
   contentProduction?: ContentProductionInput;
   contentProductionAction?: ContentProductionAction;
   availableContentActions?: ContentProductionAction["kind"][];
@@ -3751,6 +3758,13 @@ async function reservePersistedGeneralChatTurn(input: {
     persistedConversationId,
     turnId,
   });
+  if (input.purpose) {
+    const phases = [input.contentProductionAction ? "confirming_result" : input.purpose === "enterprise_qa" ? "submitting_question" : "preparing_requirements", ...(input.knowledgePrepared ? ["loading_knowledge"] : [])];
+    for (const [rank, phase] of phases.entries()) await input.executor.insert(agentEvents).values({
+      id: randomUUID(), taskId: input.localTaskId, providerEventId: `business:${turnId}:${phase}`, eventType: "business_execution", providerTimestampMs: now.getTime(),
+      normalizedPayload: { kind: "business_event", businessPhase: phase, providerOriginalRank: -2 + rank, executionTurn: { id: turnId, userSequence: userMessage.sequence, userMessageId: input.clientRequestId }, executionActivity: { kind: "status", status: "ended" } },
+    });
+  }
   await input.executor
     .update(conversations)
     .set({
@@ -3974,6 +3988,7 @@ async function reserveCreate(input: {
         model: execution.upstreamModel,
         modelProfile: input.value.modelProfile,
         purpose: input.value.purpose,
+        knowledgePrepared: Boolean(purposeContext?.knowledgeBase),
         contentProduction: input.value.contentProduction,
         continuation: false,
       });
@@ -4638,13 +4653,15 @@ router.post("/assets", async (req, res) => {
       : null;
     const assertKnowledgeCoordinate = async (
       authoritativeContentSha256?: string,
+      onVerified?: (tx: any) => Promise<any>,
     ) => {
       if (!knowledgeCoordinate) return;
       try {
-        await assertKnowledgeBaseLocalUploadCoordinate({
+        return await assertKnowledgeBaseLocalUploadCoordinate({
           userId: ownerUserId,
           projectAssignmentId:
             req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
+          uploadAttemptId: knowledgeCoordinate.uploadAttemptId,
           conversationId: knowledgeCoordinate.conversationId,
           turnId: knowledgeCoordinate.turnId,
           clientRequestId: knowledgeCoordinate.clientRequestId,
@@ -4656,7 +4673,7 @@ router.post("/assets", async (req, res) => {
           sizeBytes: declaredBytes!,
           contentSha256: knowledgeCoordinate.contentSha256,
           authoritativeContentSha256,
-        });
+        }, undefined, onVerified);
       } catch (error) {
         throw knowledgeBaseUploadReservationError(error);
       }
@@ -4712,7 +4729,8 @@ router.post("/assets", async (req, res) => {
       uploadAttempt,
       ...(knowledgeCoordinate
         ? {
-            conversationId: knowledgeCoordinate.conversationId,
+            uploadAttemptId: knowledgeCoordinate.uploadAttemptId,
+          conversationId: knowledgeCoordinate.conversationId,
             turnId: knowledgeCoordinate.turnId,
             itemId: knowledgeCoordinate.itemId,
             ordinal: knowledgeCoordinate.ordinal,
@@ -4724,7 +4742,7 @@ router.post("/assets", async (req, res) => {
         : {}),
     });
     const persistUpload = async () => {
-      const db = await requireDb();
+      let db = await requireDb();
       const deterministicIdentity =
         knowledgeIdentity ?? siteOpsComposerIdentity;
       const id = deterministicIdentity?.localAssetId || localAssetId();
@@ -4769,7 +4787,8 @@ router.post("/assets", async (req, res) => {
               durationMs: Date.now() - startedAt,
               ...(knowledgeCoordinate
                 ? {
-                    conversationId: knowledgeCoordinate.conversationId,
+                    uploadAttemptId: knowledgeCoordinate.uploadAttemptId,
+          conversationId: knowledgeCoordinate.conversationId,
                     turnId: knowledgeCoordinate.turnId,
                     itemId: knowledgeCoordinate.itemId,
                     ordinal: knowledgeCoordinate.ordinal,
@@ -4820,10 +4839,10 @@ router.post("/assets", async (req, res) => {
                 authoritativeContentSha256: staged.sha256,
               })
             : null;
-        const finalizeUpload = async () => {
+        const finalizeUpload = async (knowledgeVerified = false) => {
           // Reset/dispatch can advance while the body is in flight. Re-prove
           // the reservation immediately before the short durable commit.
-          await assertKnowledgeCoordinate(staged.sha256);
+          if (!knowledgeVerified) await assertKnowledgeCoordinate(staged.sha256);
           await assertSiteOpsComposerCoordinate(
             staged.sha256,
             siteOpsComposerEpoch ?? undefined,
@@ -5012,6 +5031,7 @@ router.post("/assets", async (req, res) => {
                 id,
                 scope: "managed_user" as const,
                 accountUserId: ownerUserId,
+                enterpriseProjectId: currentEnterpriseProjectId(),
                 presalesProjectId: null,
                 filename,
                 mimeType,
@@ -5057,9 +5077,15 @@ router.post("/assets", async (req, res) => {
             },
           };
         };
-        return deterministicIdentity
-          ? withStoredPresalesFileMutationLock(id, finalizeUpload)
+        const commitUnderTurnLock = () => knowledgeCoordinate
+          ? assertKnowledgeCoordinate(staged.sha256, async (tx) => {
+              const previousDb=db; db=tx;
+              try { return await finalizeUpload(true); } finally { db=previousDb; }
+            })
           : finalizeUpload();
+        return deterministicIdentity
+          ? withStoredPresalesFileMutationLock(id, commitUnderTurnLock)
+          : commitUnderTurnLock();
       } catch (error) {
         await staged.discard().catch(() => undefined);
         temporaryDiscarded = true;
@@ -5082,7 +5108,8 @@ router.post("/assets", async (req, res) => {
       replayed: completed.payload.replayed,
       ...(knowledgeCoordinate
         ? {
-            conversationId: knowledgeCoordinate.conversationId,
+            uploadAttemptId: knowledgeCoordinate.uploadAttemptId,
+          conversationId: knowledgeCoordinate.conversationId,
             turnId: knowledgeCoordinate.turnId,
             itemId: knowledgeCoordinate.itemId,
             ordinal: knowledgeCoordinate.ordinal,
@@ -5104,7 +5131,8 @@ router.post("/assets", async (req, res) => {
       assetCommitted,
       ...(knowledgeCoordinate
         ? {
-            conversationId: knowledgeCoordinate.conversationId,
+            uploadAttemptId: knowledgeCoordinate.uploadAttemptId,
+          conversationId: knowledgeCoordinate.conversationId,
             turnId: knowledgeCoordinate.turnId,
             itemId: knowledgeCoordinate.itemId,
             ordinal: knowledgeCoordinate.ordinal,

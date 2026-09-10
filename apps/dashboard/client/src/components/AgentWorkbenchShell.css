@@ -9,45 +9,20 @@
   color: #000;
   background: #fff;
 }
-/* Panel controls share the outcome surface; the main canvas has no title bar. */
+/* A persistent outcome card and the conversation own separate scroll areas. */
 .agent-workbench-task-status {
   font-size: 12px;
   color: #595959;
   margin-bottom: 8px;
 }
-.agent-workbench-shell__panel-toggle {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 3;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: #fff;
-  color: #595959;
-}
-.agent-workbench-shell__panel-toggle.is-in-panel {
-  top: 32px;
-  right: 28px;
-}
-.agent-workbench-shell__auxiliary.has-panel-controls .workbench-panel-tabs {
-  padding-right: 40px;
-}
-.agent-workbench-shell__layout.has-floating-toggle
-  .agent-workbench-shell__main {
-  /* The toggle floats above the surface and must not reserve a header row. */
-  padding-top: 0;
-}
 .agent-workbench-shell__layout {
   position: relative;
   display: grid;
   width: 100%;
-  /* The workbench belongs to the whole dashboard-main surface.  The
-     conversation is centred in this complete area; the auxiliary panel is
-     positioned independently against the right edge below. */
   max-width: none;
   margin-inline: 0;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 28.5714%);
+  grid-template-rows: minmax(0, 1fr);
   padding: 16px;
   flex: 1;
   min-height: 0;
@@ -67,14 +42,37 @@
   background: #fff;
 }
 .agent-workbench-shell__auxiliary {
-  position: absolute;
-  inset: 16px 16px 16px auto;
-  width: var(--agent-aux-width, 33.333%);
-  border: 1px solid #c8cbd3;
+  align-self: start;
+  max-height: 100%;
+  min-height: 96px;
+  width: 100%;
+  border: 1px solid #e2e4e8;
   border-radius: 20px;
   box-shadow:
-    0 8px 28px rgb(24 24 27 / 12%),
-    0 2px 8px rgb(24 24 27 / 8%);
+    0 6px 20px rgb(24 24 27 / 5%),
+    0 1px 4px rgb(24 24 27 / 4%);
+  overflow-wrap: anywhere;
+}
+.agent-workbench-shell__auxiliary.has-native-auxiliary {
+  height: 100%;
+}
+.agent-workbench-shell__auxiliary:has(.knowledge-node-workspace__empty) {
+  height: auto;
+}
+.agent-workbench-shell__auxiliary:has(.knowledge-node-workspace__empty)
+  :is(.knowledge-workbench-auxiliary, .knowledge-node-workspace) {
+  height: auto;
+}
+.agent-workbench-shell__auxiliary .knowledge-node-workspace__empty {
+  min-height: 0;
+  padding: 24px 12px;
+  flex: 0 0 auto;
+}
+.agent-workbench-shell__auxiliary .knowledge-node-workspace__header {
+  flex-wrap: wrap;
+}
+.agent-workbench-shell__auxiliary .knowledge-node-workspace__header > div {
+  flex: 1 0 96px;
 }
 .agent-workbench-shell__main-content {
   flex: 1;
@@ -104,14 +102,6 @@
 .agent-workbench-shell__composer {
   flex-shrink: 0;
 }
-.agent-workbench-shell__auxiliary-slot {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
 .agent-workbench-shell__auxiliary-content {
   display: flex;
   flex-direction: column;
@@ -133,8 +123,7 @@
   flex: 1;
 }
 .agent-workbench-shell__resize {
-  position: absolute;
-  inset: 16px calc(16px + var(--agent-aux-width, 33.333%)) 16px auto;
+  position: relative;
   width: 16px;
   z-index: 2;
   background: transparent;
@@ -169,7 +158,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 16px 56px 16px 16px;
+  padding: 16px;
   border-bottom: 1px solid #eaecf0;
   flex-shrink: 0;
 }
@@ -207,23 +196,6 @@
 .agent-workbench-subagents button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-.agent-workbench-drawer {
-  width: min(100vw, 600px);
-  max-width: 100vw !important;
-  height: 100dvh;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding-bottom: env(safe-area-inset-bottom);
-  background: #fff;
-}
-.agent-workbench-drawer [data-slot="sheet-header"] {
-  padding-right: 48px;
-}
-.agent-workbench-drawer .agent-workbench-shell__auxiliary-content {
-  flex: 1;
-  min-height: 0;
 }
 .business-workspace-inspector {
   font-size: 13px;
@@ -319,16 +291,11 @@
   overflow: hidden;
 }
 @media (max-width: 1023px) {
+  .user-brand-dashboard.operator-mode .agent-workbench-shell {
+    padding-top: max(48px, env(safe-area-inset-top));
+  }
   .agent-workbench-shell__main-content.is-scrollable {
     padding: 16px;
-  }
-  .agent-workbench-shell__layout.has-floating-toggle
-    .agent-workbench-shell__main {
-    padding-top: 0;
-  }
-  .agent-workbench-shell__panel-toggle {
-    width: 44px;
-    height: 44px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -633,6 +600,33 @@
   cursor: pointer;
 }
 @media (max-width: 767px) {
+  .agent-workbench-shell__layout.has-outcomes {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: clamp(96px, 30%, 260px) minmax(0, 1fr);
+    row-gap: 12px;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  }
+  .agent-workbench-shell__auxiliary {
+    grid-column: 1;
+    grid-row: 1;
+    height: 100%;
+    max-height: 260px;
+    border-radius: 20px;
+  }
+  .agent-workbench-shell__auxiliary:has(.knowledge-node-workspace__empty) {
+    height: 100%;
+  }
+  .agent-workbench-shell__auxiliary:has(.knowledge-node-workspace__empty)
+    .agent-workbench-shell__auxiliary-content {
+    overflow-y: auto;
+  }
+  .agent-workbench-shell__layout.has-outcomes .agent-workbench-shell__main {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .agent-workbench-shell__resize {
+    display: none;
+  }
   .general-agent-welcome {
     padding-top: 28px;
   }
@@ -799,20 +793,6 @@
   max-width: 960px;
   margin-inline: auto;
 }
-/* All workspaces share the complete dashboard-main centre. Constrain the
-   entire main surface (including separate composers), with equal clearance
-   on both sides so a right-floating result never covers an editor or form.
-   A collapsed desktop panel keeps exactly the same clearance, preventing
-   text reflow and scroll movement. Responsive drawers never reserve space. */
-.agent-workbench-shell__layout.has-panel-clearance
-  .agent-workbench-shell__main {
-  width: 100%;
-  max-width: calc(
-    100% - var(--agent-aux-width, 33.333%) -
-      var(--agent-aux-width, 33.333%) - 32px
-  );
-  margin-inline: auto;
-}
 .agent-workbench-shell__auxiliary {
   font-size: 13px;
   line-height: 20px;
@@ -831,9 +811,6 @@
 .agent-workbench-shell .workbench-history-search,
 .agent-workbench-shell .knowledge-composer .bg-card\/90 {
   border-color: #d0d5dd;
-}
-.agent-workbench-drawer {
-  border-radius: 20px 0 0 20px;
 }
 
 .agent-workbench-shell

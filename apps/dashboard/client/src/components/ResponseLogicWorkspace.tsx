@@ -1,3 +1,5 @@
+import { BusinessExecutionActivity } from "./BusinessExecutionActivity";
+import type { GeneralExecutionDto } from "@shared/frontmind-general-execution";
 import { useSearch } from "wouter";
 import {
   requestWorkspaceNavigation,
@@ -2781,6 +2783,7 @@ export function RealResponseLogicDialogue({
     taskId: string;
     operationRevision: number;
   } | null>(null);
+  const [processEvidence, setProcessEvidence] = useState<{ taskId: string; revision: number; execution: GeneralExecutionDto } | null>(null);
   const [lastCompletedObservation, setLastCompletedObservation] =
     useState<ResponseLogicTaskStatusEnvelope | null>(null);
   const [unsavedResultId, setUnsavedResultId] = useState<string | null>(null);
@@ -3144,6 +3147,7 @@ export function RealResponseLogicDialogue({
         });
         if (blockingFailure?.resetRequired) return;
         consecutiveFailures = 0;
+        if (observation.execution) setProcessEvidence({ taskId, revision: operationRevision, execution: observation.execution });
         if (observation.status !== "completed") {
           updateStatus(conversation.id, "running", {
             taskId,
@@ -3378,6 +3382,7 @@ export function RealResponseLogicDialogue({
 
   const dialogueActions = (
     <>
+      {processEvidence && processEvidence.taskId === reloadTaskId && processEvidence.revision === reloadOperationRevision && <BusinessExecutionActivity execution={processEvidence.execution} />}
       {scopedStartFailure && (
         <div
           className="mx-4 mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
@@ -3440,6 +3445,7 @@ export function RealResponseLogicDialogue({
                 taskId: reloadTaskId,
                 operationRevision: reloadOperationRevision,
               }));
+            if (observation.execution) setProcessEvidence({ taskId: reloadTaskId, revision: reloadOperationRevision, execution: observation.execution });
             if (observation.status !== "completed") {
               toast.info("应答逻辑仍在生成并校验，请稍后重试");
               return;

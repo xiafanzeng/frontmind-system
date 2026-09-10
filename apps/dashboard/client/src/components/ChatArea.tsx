@@ -130,12 +130,13 @@ export const KNOWLEDGE_BASE_FOUNDATION_COPY =
 export function runningAssistantStatusText(
   syncKnowledgeBaseSnapshot: boolean,
   processingPhase?: string | null,
+  runPhase?: string | null,
 ) {
   if (syncKnowledgeBaseSnapshot && processingPhase === "uploading") {
     return "正在上传资料，完成后自动开始调研与整理";
   }
   return syncKnowledgeBaseSnapshot
-    ? KNOWLEDGE_COLLECTION_STATUS_COPY
+    ? runPhase === "researching" ? KNOWLEDGE_COLLECTION_STATUS_COPY : runPhase === "normalizing" ? "正在整理、校验并生成知识库" : "正在读取当前知识库状态"
     : "FrontMind AI 正在处理...";
 }
 
@@ -145,12 +146,13 @@ export function isKnowledgeBaseTaskVisiblyRunning(input: {
   interactionState?: string | null;
   noticeSeverity?: string | null;
   processingPhase?: string | null;
+  runPhase?: string | null;
 }) {
   const taskIsRunning =
     input.status === "running" || input.status === "pending";
   if (!taskIsRunning) return false;
   if (!input.syncKnowledgeBaseSnapshot) return true;
-  if (input.processingPhase === "uploading") return false;
+  if (!input.runPhase || !["researching", "normalizing"].includes(input.runPhase)) return false;
   return (
     input.interactionState !== "failed" && input.noticeSeverity !== "error"
   );
@@ -440,6 +442,7 @@ export type KnowledgeBaseStarterLifecycle = {
   fileItemIds?: readonly string[];
   /** Durable start coordinate created before the first browser upload. */
   reservation?: {
+    uploadAttemptId?: string;
     conversationId: string;
     turnId: string;
     clientRequestId: string;
@@ -565,7 +568,8 @@ export async function uploadKnowledgeBaseStarterFiles(
       let currentFileId = recoveryFileId;
       let currentUploadHandle = existingUploadHandle;
       const attempt = (lifecycle.fileAttempts.get(itemId) ?? 0) + 1;
-      let transferredBytes = lifecycle.transferredBytes.get(itemId) ?? 0;
+      let transferredBytes = 0;
+      let transferCompleted = false;
       lifecycle.onFileUpdate(itemId, file, {
         stage:
           existingUploadHandle || recoveryFileId
@@ -606,6 +610,7 @@ export async function uploadKnowledgeBaseStarterFiles(
                   clientRequestId: lifecycle.reservation.clientRequestId,
                   expectedResetRevision:
                     lifecycle.reservation.expectedResetRevision,
+                  uploadAttemptId: lifecycle.reservation.uploadAttemptId,
                 },
               }
             : {}),
@@ -645,12 +650,9 @@ export async function uploadKnowledgeBaseStarterFiles(
             });
           },
           onStage: (event) => {
-            if (lifecycle.signal.aborted) return;
+            if (lifecycle.signal.aborted || transferCompleted) return;
             if (typeof event.loadedBytes === "number") {
-              transferredBytes = Math.max(
-                transferredBytes,
-                Math.min(file.size, Math.max(0, event.loadedBytes)),
-              );
+              transferredBytes = Math.min(file.size, Math.max(0, event.loadedBytes));
             }
             const traceId = safeKnowledgeBaseTraceId(event.traceId);
             lifecycle.onFileUpdate(itemId, file, {
@@ -672,7 +674,7 @@ export async function uploadKnowledgeBaseStarterFiles(
                   ? event.totalBytes
                   : file.size,
               ...(traceId ? { traceId } : {}),
-              attempt,
+              attempt: attempt + (event.attempt ?? 1) - 1,
             });
           },
         };
@@ -734,6 +736,7 @@ export async function uploadKnowledgeBaseStarterFiles(
         if (lifecycle.signal.aborted) {
           throw new DOMException("上传已停止", "AbortError");
         }
+        transferCompleted = true;
         receipt = {
           fileId: uploaded.fileId,
           filename: uploaded.filename,
@@ -748,7 +751,7 @@ export async function uploadKnowledgeBaseStarterFiles(
         receipts.set(itemId, receipt);
         if (!lifecycle.signal.aborted) {
           lifecycle.onFileUpdate(itemId, file, {
-            stage: "uploaded",
+            stage: "server_processing",
             fileId: receipt.fileId,
             loadedBytes: file.size,
             dashboardReceivedBytes: file.size,
@@ -832,6 +835,8 @@ export async function uploadKnowledgeBaseStarterFiles(
         throw new DOMException("上传已停止", "AbortError");
       }
     }
+
+    lifecycle.onFileUpdate(itemId, file, { stage: "uploaded", fileId: receipt.fileId, loadedBytes: file.size, dashboardReceivedBytes: file.size, totalBytes: file.size, receipt });
 
     uploadedAttachments.push({
       file_id: receipt.fileId,
@@ -1277,6 +1282,7 @@ export default function ChatArea({
     interactionState: activeConversation?.knowledgeBase?.interactionState,
     noticeSeverity: activeConversation?.knowledgeBase?.notice?.severity,
     processingPhase: activeConversation?.knowledgeBase?.processingPhase,
+    runPhase: activeConversation?.knowledgeBase?.runPhase,
   });
   const knowledgeBaseDisplayFailed =
     syncKnowledgeBaseSnapshot &&
@@ -1347,73 +1353,24 @@ export default function ChatArea({
             itemIds,
             lifecycle.signal,
           );
-        const reserved = await reserveKnowledgeBaseStart(
-          {
-            conversationId,
-            clientRequestId,
-            expectedResetRevision,
-            companyName,
-            companyWebsite,
-            operatorNotes,
-            attachmentManifest,
+        const result = await starterBatch.submit({
+          kind: "start", conversationId, clientRequestId, expectedResetRevision, companyName, companyWebsite, operatorNotes,
+          manifest: attachmentManifest,
+          files: files.map((file, index) => ({ file, itemId: itemIds[index]!, ordinal: index + 1 })),
+          onReservation: reserved => lifecycle.onReservation?.({ conversationId, turnId: reserved.reservation.turnId, clientRequestId, expectedResetRevision, uploadAttemptId: reserved.reservation.uploadAttemptId }),
+          onObservation: observation => commitKnowledgeBaseObservation(conversationId, observation),
+          onPhase: phase => {
+            lifecycle.onBatchPhase(phase === "dispatching" ? "starting" : "uploading");
+            if (phase === "dispatching") dispatchAttempted = true;
           },
-          lifecycle.signal,
-        );
-        const reservation = {
-          conversationId,
-          turnId: reserved.reservation.turnId,
-          clientRequestId,
-          expectedResetRevision,
-        };
-        lifecycle.onReservation?.(reservation);
-        const { messageAttachments } = await uploadKnowledgeBaseStarterFiles(
-          files,
-          {
-            ...lifecycle,
-            reservation,
-            attachmentManifest,
-          },
-          responseStartedAt,
-        );
+          onFile: (itemId, file, event) => lifecycle.onFileUpdate(itemId, file, event),
+        });
+        const reserved = result;
+        const messageAttachments: Attachment[] = files.map((file, index) => ({ id: `att-${responseStartedAt}-${index + 1}`, type: "file", name: file.name, fileId: result.receipts.get(itemIds[index]!)?.fileId, file, expiresAt: result.receipts.get(itemIds[index]!)?.expiresAt, expired: false }));
         preparedMessageAttachments = messageAttachments;
-        lifecycle.onBatchPhase("starting");
-
-        // Only the final dispatch can have an unknown Provider-task outcome.
-        // Reserve, local upload and stage failures must keep the browser-owned
-        // batch open and must never project the conversation as running.
-        const response = await fetchKnowledgeBaseStartRequest(
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            credentials: "include",
-            body: JSON.stringify({
-              conversationId,
-              clientRequestId,
-              turnId: reservation.turnId,
-              expectedResetRevision,
-              attachmentManifest,
-            }),
-          },
-          {
-            signal: lifecycle.signal,
-            endpoint: "/api/knowledge-base/turn/dispatch",
-            onRequestStarted: () => {
-              dispatchAttempted = true;
-            },
-          },
-        );
-
-        if (!response.ok) {
-          throw await readKnowledgeBaseStartRequestError(response);
-        }
-
-        const data = (await response.json()) as OneClickTaskStartResponse;
+        const data = { task: result.response, startedAt: responseStartedAt };
         operation.assertActive();
-        const observation = data.observation
-          ? knowledgeBaseObservationFromPayload(data)
-          : undefined;
+        const observation = result.response.knowledgeObservation;
         // `/start/reserve` already supplied the durable acknowledgement. The
         // dispatch endpoint need not echo the legacy reservationCreated flag
         // or a provider task id; its 2xx only releases the existing turn.
@@ -1444,7 +1401,6 @@ export default function ChatArea({
             data.task?.id
               ? {
                   taskId: data.task.id,
-                  taskUrl: data.task.taskUrl,
                   previousResponseId: data.task.id,
                   startedAt: taskStartedAt,
                 }
@@ -1543,11 +1499,13 @@ export default function ChatArea({
   }, [activeConversation, retryingKnowledgeBase]);
 
   const messages = useMemo(() => {
-    const rows = activeConversation
+    const storedRows = activeConversation
       ? messageProjection
         ? activeConversation.messages.map(messageProjection)
         : activeConversation.messages
       : [];
+    const preDispatch = syncKnowledgeBaseSnapshot && ["reserved", "uploading", "staging"].includes(activeConversation?.knowledgeBase?.runPhase ?? "");
+    const rows = preDispatch ? storedRows.filter(message => message.knowledgeBase?.turnId !== activeConversation?.knowledgeBase?.activeTurnId && message.knowledgeBase?.clientRequestId !== activeConversation?.knowledgeBase?.activeClientRequestId) : storedRows;
     if (purpose === "content_production")
       return rows.map((message) =>
         message.role === "assistant"
@@ -1569,7 +1527,7 @@ export default function ChatArea({
     return activeConversation?.executionKind === "general_chat_v2" && !purpose
       ? projectFrontMindIdentityMessages(rows)
       : rows;
-  }, [activeConversation, messageProjection, purpose]);
+  }, [activeConversation, messageProjection, purpose, syncKnowledgeBaseSnapshot]);
   const inlineSlots = useMemo(() => conversationInlineSlots(messages, inlineBlocks), [messages, inlineBlocks]);
   const renderInlineBlocks = (blocks: ConversationInlineBlock[] | undefined) => blocks?.map((block) => (
     <div key={block.id} data-reading-anchor={`business-${block.id}`} data-business-block={block.id}>{block.content}</div>
@@ -1976,6 +1934,7 @@ export default function ChatArea({
                 text={runningAssistantStatusText(
                   syncKnowledgeBaseSnapshot,
                   activeConversation?.knowledgeBase?.processingPhase,
+                  activeConversation?.knowledgeBase?.runPhase,
                 )}
               />
             )}
@@ -2264,6 +2223,12 @@ function knowledgeBaseStarterRecoveryCopy(
     return "无法直接重试；请移除该文件后继续，或取消本批次重新选择。";
   }
   return null;
+}
+
+export function formatKnowledgeBaseUploadBytes(bytes: number) {
+  if (bytes < 1_000) return `${Math.max(0, Math.round(bytes))} B`;
+  if (bytes < 1_000_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 export function EmptyConversationHint({
@@ -2666,6 +2631,7 @@ export function EmptyConversationHint({
           loadedBytes: 0,
           totalBytes: file.size,
         };
+        if (previous.stage === "uploaded" && update.stage !== "uploaded") return current;
         const now = Date.now();
         const isActive = [
           "creating_intent",
@@ -2682,9 +2648,7 @@ export function EmptyConversationHint({
         const isTerminal = ["uploaded", "failed", "cancelled"].includes(
           update.stage,
         );
-        if (typeof update.loadedBytes === "number" && update.loadedBytes > previous.loadedBytes) {
-          uploadBatch.write("lastProgressAt", now);
-        }
+        if (typeof update.loadedBytes === "number") uploadBatch.noteTransfer(itemId, update.loadedBytes, update.attempt ?? previous.attempt ?? 1);
         const startedAt =
           previous.startedAt ?? (isActive || isTerminal ? now : undefined);
         const next = new Map(current);
@@ -2694,7 +2658,7 @@ export function EmptyConversationHint({
           ...(update.clearFileRecord ? { fileId: undefined } : {}),
           loadedBytes:
             typeof update.loadedBytes === "number"
-              ? Math.max(previous.loadedBytes, 0, update.loadedBytes)
+              ? Math.max(0, update.loadedBytes)
               : previous.loadedBytes,
           dashboardReceivedBytes:
             typeof update.dashboardReceivedBytes === "number"
@@ -2732,13 +2696,13 @@ export function EmptyConversationHint({
       const state = fileStates.get(itemId);
       // Browser transfer and even a provider PUT success are not a confirmed
       // attachment until the managed upload returns its final receipt.
-      if (uploadedReceipts.has(itemId)) {
+      if (uploadedReceipts.has(itemId) && state?.stage === "uploaded") {
         confirmedCount += 1;
         confirmedBytes += file.size;
       }
       transferredBytes += Math.min(
         file.size,
-        Math.max(0, state?.loadedBytes ?? 0),
+        uploadedReceipts.has(itemId) ? file.size : Math.max(0, state?.loadedBytes ?? 0),
       );
       dashboardReceivedBytes += Math.min(
         file.size,
@@ -2757,7 +2721,7 @@ export function EmptyConversationHint({
       percent:
         confirmedCount === files.length && files.length > 0
           ? 100
-          : Math.min(99, rawPercent),
+          : Math.min(100, rawPercent),
     };
   }, [fileItems, fileStates, files.length, uploadedReceipts]);
 
@@ -2835,12 +2799,14 @@ export function EmptyConversationHint({
       return next;
     });
 
-    const controller = new AbortController();
+    const { controller, operation } = uploadBatch.beginAttempt();
     abortControllerRef.current = controller;
-    uploadBatch.controller = controller;
-    const operation = captureWorkspaceRestOperation(controller.signal, undefined, { detached: true });
     setIsStarting(true);
     try {
+      if (["stopped", "stopping", "unknown"].includes(uploadBatch.read("stopState", "active"))) {
+        const resumed = await uploadBatch.resume();
+        if (resumed) setStartReservation(current => current ? { ...current, uploadAttemptId: resumed.uploadAttemptId ?? undefined } : current);
+      }
       const payload = {
         companyName: normalizedCompanyName,
         companyWebsite: companyWebsite.trim(),
@@ -2896,15 +2862,14 @@ export function EmptyConversationHint({
       setBatchPhase("failed");
       setBatchError(
         uploadWasCancelled(error, controller.signal)
-          ? "上传已停止。已完成的文件会保留，继续时只处理未完成资料。"
+          ? uploadBatch.read<string>("stopState", "active") === "stopped" ? "上传已停止。已完成的文件会保留，继续时只处理未完成资料。" : "已暂停本地传输，正在确认服务端停止状态。"
           : uploadErrorMessage(error),
       );
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
-      uploadBatch.endHeartbeat();
-      if (uploadBatch.controller === controller) uploadBatch.controller = null;
+      uploadBatch.finishAttempt(controller);
       setIsStarting(false);
     }
   }, [
@@ -2926,7 +2891,10 @@ export function EmptyConversationHint({
     uploadHandles,
   ]);
 
-  const stopUpload = useCallback(() => uploadBatch.stop(), [uploadBatch]);
+  const stopUpload = useCallback(() => { void uploadBatch.stop(); }, [uploadBatch]);
+  const [checking] = useKnowledgeBaseUploadField(uploadBatch, "checking", false);
+  const [checkMessage] = useKnowledgeBaseUploadField<string | null>(uploadBatch, "checkMessage", null);
+  const [stopState] = useKnowledgeBaseUploadField(uploadBatch, "stopState", "active");
   const lastProgressAt = uploadBatch.read<number>("lastProgressAt", Date.now());
   const stalled = isStarting && batchPhase === "uploading" && elapsedAt - lastProgressAt >= 30_000;
 
@@ -3130,7 +3098,7 @@ export function EmptyConversationHint({
                           {file.name}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {(file.size / 1024 / 1024).toFixed(2)} MB
+                          {formatKnowledgeBaseUploadBytes(file.size)}
                         </div>
                         {batchStartedAt !== null &&
                           (() => {
@@ -3217,9 +3185,10 @@ export function EmptyConversationHint({
                     </span>
                   </div>
                   <p className="text-xs leading-5 text-muted-foreground">
-                    {knowledgeBaseStarterBatchCopy(batchPhase)}
+                    {uploadSummary.percent === 100 && uploadSummary.uploadedCount < files.length ? "传输完成，等待确认" : knowledgeBaseStarterBatchCopy(batchPhase)}
                   </p>
                   <p className="text-xs leading-5 text-muted-foreground">上传完成后将自动开始调研与整理，整个过程可能需要 30 分钟左右。可以切换到其他页面，上传会在后台继续。</p>
+                  <p className="text-xs tabular-nums text-muted-foreground">已上传 {formatKnowledgeBaseUploadBytes(uploadSummary.transferredBytes)} / {formatKnowledgeBaseUploadBytes(uploadSummary.totalBytes)} · 已完成 {uploadSummary.uploadedCount}/{files.length} 个文件</p>
                   <Progress
                     aria-label="总体上传进度"
                     value={uploadSummary.percent}
@@ -3232,7 +3201,8 @@ export function EmptyConversationHint({
                       )}
                     </span>
                   </div>
-                  {stalled && <p role="status" className="text-xs text-amber-700">当前连接没有进展，正在检查连接；已上传资料会保留。</p>}
+                  {(checking || checkMessage || stalled) && <p role="status" className="text-xs text-amber-700">{checking ? "正在检查连接…" : checkMessage || "当前传输暂时没有进展，已上传资料会保留。"}</p>}
+                  {(stalled || stopState === "unknown") && !checking && <Button type="button" variant="outline" onClick={() => void uploadBatch.checkStatus().catch(() => undefined)}>检查并继续</Button>}
                   {batchError && (
                     <div
                       role="alert"
@@ -3318,7 +3288,7 @@ function KnowledgeStarterSurface({ inline, open, onOpenChange, children }: {
 }) {
   const description = "系统会采集官网与公开资料，并结合上传内容构建可审阅的知识库初稿。";
   if (inline) return open ? (
-    <WorkflowSection id="knowledge-materials" title="填写资料与补充说明" description={description}>
+    <WorkflowSection id="knowledge-materials" divider="none" title="填写资料与补充说明" description={description}>
       {children}
     </WorkflowSection>
   ) : null;

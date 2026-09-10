@@ -100,9 +100,7 @@ function ScopedWorkbench({
   );
   const [summary, setSummary] = useState<BusinessWorkspaceSummary | null>(null);
   const creating = useRef(false);
-  const [panel, setPanel] = useState<"tasks" | "outputs">(
-    agentId === "general" ? "tasks" : "outputs",
-  );
+  const [panel, setPanel] = useState<"tasks" | "outputs">("outputs");
   const outputFiles =
     workspace.activeConversation?.messages.flatMap((message) =>
       message.role === "assistant"

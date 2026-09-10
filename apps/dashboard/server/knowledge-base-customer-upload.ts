@@ -14,6 +14,7 @@ import { getDb } from "./db";
 import { KnowledgeBasePackageBindingError } from "./knowledge-base-package-validation";
 import type { KnowledgeBaseOfficialLogoProvenance } from "./knowledge-base-progress";
 import { readStoredPresalesFile } from "./presales-file-store";
+import { KnowledgeBaseLocalSourceError, readKnowledgeBaseLocalSource } from "./knowledge-base-local-source-store";
 import { knowledgeBasePublicResource } from "./knowledge-base-public-resource";
 import {
   KnowledgeBaseUploadEvidenceError,
@@ -49,7 +50,45 @@ function record(value: unknown): Record<string, unknown> | null {
 type KnowledgeBaseCustomerUploadTurn = Pick<
   ConversationTurn,
   "id" | "expectedLeafId" | "attachmentFileIds" | "metadata" | "status"
->;
+> & Partial<Pick<ConversationTurn, "userId" | "buildId" | "buildGeneration" | "operationType" | "upstreamTaskId">>;
+
+type CustomerUploadSourceScope = { userId: number; buildId: string; generation: number };
+
+function customerUploadSourceKeys(scope: CustomerUploadSourceScope, sourceSha256: string) {
+  if (!Number.isSafeInteger(scope.userId) || scope.userId < 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(scope.buildId) || !Number.isSafeInteger(scope.generation) || scope.generation < 1 || !/^[a-f0-9]{64}$/u.test(sourceSha256)) return [];
+  return ["build-sources", "permanent-originals"].map(directory => `knowledge-base/${directory}/${scope.userId}/${scope.buildId.toLowerCase()}/g${scope.generation}/${sourceSha256}.bin`);
+}
+
+/** Low node edits keep images local. Their committed patch and source proofs
+ * are the attachment binding; no provider attachment request exists. */
+function knowledgeBaseCustomerUploadBoundAttachments(turn: KnowledgeBaseCustomerUploadTurn): unknown[] | null {
+  const metadata = record(turn.metadata) || {};
+  const recovery = record(metadata.recovery);
+  const local = record(metadata.applicationNodeEdit);
+  if (local || recovery?.nodeEditMode === "low_v1") {
+    const manifest = Array.isArray(recovery?.attachmentManifest) ? recovery.attachmentManifest : [];
+    const attachments = Array.isArray(recovery?.attachments) ? recovery.attachments : [];
+    const proofs = Array.isArray(recovery?.attachmentSourceProofs) ? recovery.attachmentSourceProofs : [];
+    if (turn.operationType !== "revise" || metadata.execution !== "materialized_patch" || metadata.dispatchState !== "completed" ||
+        typeof metadata.workingSetId !== "string" || !metadata.workingSetId || !Number.isSafeInteger(metadata.contentVersion) ||
+        Number(metadata.contentVersion) < Number(local?.baseContentVersion) ||
+        local?.schemaVersion !== 1 || local.mode !== "low_v1" || recovery?.nodeEditMode !== "low_v1" ||
+        (local.providerTaskId !== null && (typeof local.providerTaskId !== "string" || !local.providerTaskId)) || local.providerTaskId !== turn.upstreamTaskId ||
+        !/^[a-f0-9]{64}$/u.test(String(local.patchSha256 ?? "")) || typeof local.baseWorkingSetId !== "string" || !local.baseWorkingSetId ||
+        !Number.isSafeInteger(local.baseContentVersion) || Number(local.baseContentVersion) < 1 ||
+        attachments.length !== manifest.length || proofs.length < attachments.length) return null;
+    for (let index = 0; index < attachments.length; index += 1) {
+      const proof = record(proofs[index]), attachment = record(attachments[index]), source = record(manifest[index]);
+      if (!proof || proof.index !== index || proof.fileId !== attachment?.file_id ||
+          proof.fileId !== turn.attachmentFileIds?.[index] || proof.contentSha256 !== source?.sha256 ||
+          proof.sizeBytes !== source?.sizeBytes || proof.mimeType !== source?.mimeType ||
+          !customerUploadSourceKeys({ userId: turn.userId!, buildId: turn.buildId ?? "", generation: turn.buildGeneration! }, String(proof.contentSha256 ?? "")).includes(String(proof.localStorageKey ?? ""))) return null;
+    }
+    return attachments;
+  }
+  const request = record(record(metadata.preparedDispatch)?.requestBody);
+  return Array.isArray(request?.attachments) ? request.attachments : null;
+}
 
 function knowledgeBaseCustomerUploadHasFinalBinding(
   turn: KnowledgeBaseCustomerUploadTurn,
@@ -388,11 +427,7 @@ export function knowledgeBaseCustomerUploadImagesFromTurn(
   const attachments = Array.isArray(recovery?.attachments)
     ? recovery!.attachments
     : [];
-  const prepared = record(metadata.preparedDispatch);
-  const requestBody = record(prepared?.requestBody);
-  const dispatchedAttachments = Array.isArray(requestBody?.attachments)
-    ? requestBody!.attachments
-    : [];
+  const dispatchedAttachments = knowledgeBaseCustomerUploadBoundAttachments(turn) ?? [];
   const expectedCount = Number(metadata.userAttachmentCount ?? 0);
   const leafId = String(turn.expectedLeafId || "").trim();
   if (
@@ -502,11 +537,7 @@ function assertKnowledgeBaseCustomerUploadLedgerComplete(
   const attachments = Array.isArray(recovery?.attachments)
     ? recovery!.attachments
     : null;
-  const prepared = record(metadata.preparedDispatch);
-  const requestBody = record(prepared?.requestBody);
-  const dispatchedAttachments = Array.isArray(requestBody?.attachments)
-    ? requestBody!.attachments
-    : null;
+  const dispatchedAttachments = knowledgeBaseCustomerUploadBoundAttachments(turn);
   const expectedCount = Number(metadata.userAttachmentCount ?? 0);
   const ledgerClaimed =
     recovery?.capturedClientAttachments === true ||
@@ -590,6 +621,29 @@ function assertKnowledgeBaseCustomerUploadLedgerComplete(
   }
 }
 
+/** Read a proven upload from its immutable build scope before the temporary capture. */
+export async function readVerifiedKnowledgeBaseCustomerUploadImageBytes(input: {
+  image: Pick<KnowledgeBaseCustomerUploadImage, "fileId" | "filename" | "mimeType" | "sizeBytes" | "sourceSha256">;
+  sourceScope?: CustomerUploadSourceScope;
+}) {
+  if (input.sourceScope) {
+    const keys = customerUploadSourceKeys(input.sourceScope, input.image.sourceSha256);
+    if (!keys.length) throw new KnowledgeBasePackageBindingError("客户上传图片的所属构建无效");
+    for (const storageKey of keys) {
+      try {
+        return await readKnowledgeBaseLocalSource({ storageKey, contentSha256: input.image.sourceSha256, sizeBytes: input.image.sizeBytes });
+      } catch (error) {
+        if (!(error instanceof KnowledgeBaseLocalSourceError) || error.code !== "NOT_FOUND") throw new KnowledgeBasePackageBindingError("客户上传图片的持久原始字节完整性不一致");
+      }
+    }
+  }
+  const stored = await readStoredPresalesFile(input.image.fileId);
+  if (!stored || stored.filename !== input.image.filename || stored.sizeBytes !== input.image.sizeBytes || stored.sha256?.toLowerCase() !== input.image.sourceSha256) throw new KnowledgeBasePackageBindingError("客户上传图片的受管原始字节缺失或完整性不一致");
+  const bytes = await readStoredCustomerUploadBytes(stored);
+  if (createHash("sha256").update(bytes).digest("hex") !== input.image.sourceSha256) throw new KnowledgeBasePackageBindingError("客户上传图片的原始哈希不一致");
+  return bytes;
+}
+
 /** Prove that the same bytes captured during the one upload still exist. */
 export async function verifiedKnowledgeBaseCustomerUploadImagesFromTurn(
   turn: Parameters<typeof knowledgeBaseCustomerUploadImagesFromTurn>[0],
@@ -598,6 +652,10 @@ export async function verifiedKnowledgeBaseCustomerUploadImagesFromTurn(
   const candidates = knowledgeBaseCustomerUploadImagesFromTurn(turn);
   const verified = await Promise.all(
     candidates.map(async (candidate) => {
+      if (record(turn.metadata)?.applicationNodeEdit) {
+        await readVerifiedKnowledgeBaseCustomerUploadImageBytes({ image: candidate, sourceScope: { userId: turn.userId!, buildId: turn.buildId!, generation: turn.buildGeneration! } });
+        return candidate;
+      }
       const stored = await readStoredPresalesFile(candidate.fileId);
       return stored &&
         stored.filename === candidate.filename &&
@@ -799,6 +857,8 @@ export async function verifiedKnowledgeBaseCustomerUploadsForBuild(input: {
   const turns = await db
     .select({
       id: conversationTurns.id,
+      userId: conversationTurns.userId,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
       expectedLeafId: conversationTurns.expectedLeafId,
       attachmentFileIds: conversationTurns.attachmentFileIds,
       metadata: conversationTurns.metadata,
@@ -845,24 +905,12 @@ export async function verifiedKnowledgeBaseCustomerUploadBytesForBuild(input: {
         "客户上传图片缺少受管文件标识",
       );
     }
-    const stored = await readStoredPresalesFile(fileId);
-    if (
-      !stored ||
-      stored.sha256?.toLowerCase() !== upload.sourceSha256 ||
-      !upload.filenames.includes(stored.filename)
-    ) {
-      throw new KnowledgeBasePackageBindingError(
-        "客户上传图片的受管原始字节缺失或完整性不一致",
-      );
-    }
-    const bytes = await readStoredCustomerUploadBytes(stored);
-    if (
-      createHash("sha256").update(bytes).digest("hex") !== upload.sourceSha256
-    ) {
-      throw new KnowledgeBasePackageBindingError(
-        "客户上传图片的原始哈希不一致",
-      );
-    }
+    const filename = upload.filenames[0]!;
+    const mimeType = upload.mimeTypes[0] || "application/octet-stream";
+    const bytes = await readVerifiedKnowledgeBaseCustomerUploadImageBytes({
+      image: { fileId, filename, mimeType, sizeBytes: upload.sizeBytes[0]!, sourceSha256: upload.sourceSha256 },
+      sourceScope: input,
+    });
     aggregateBytes += bytes.length;
     if (aggregateBytes > MAX_KNOWLEDGE_BASE_CUSTOMER_UPLOAD_BYTES) {
       throw new KnowledgeBasePackageBindingError(
@@ -872,11 +920,8 @@ export async function verifiedKnowledgeBaseCustomerUploadBytesForBuild(input: {
     results.push({
       ...upload,
       fileId,
-      filename: stored.filename,
-      mimeType:
-        (stored.mimeType.startsWith("image/") ? stored.mimeType : "") ||
-        upload.mimeTypes.find((candidate) => candidate.startsWith("image/")) ||
-        "application/octet-stream",
+      filename,
+      mimeType,
       sizeBytes: bytes.length,
       bytes,
     });
@@ -895,6 +940,8 @@ export async function verifiedKnowledgeBaseOfficialLogoUploadForBuild(input: {
   const turns = await db
     .select({
       id: conversationTurns.id,
+      userId: conversationTurns.userId,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
       expectedLeafId: conversationTurns.expectedLeafId,
       attachmentFileIds: conversationTurns.attachmentFileIds,
       metadata: conversationTurns.metadata,
@@ -1176,10 +1223,15 @@ export async function declaredKnowledgeBaseCustomerUploadsForBuild(input: {
   const turns = await db
     .select({
       id: conversationTurns.id,
+      userId: conversationTurns.userId,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
       expectedLeafId: conversationTurns.expectedLeafId,
       attachmentFileIds: conversationTurns.attachmentFileIds,
       metadata: conversationTurns.metadata,
       status: conversationTurns.status,
+      operationType: conversationTurns.operationType,
+      buildId: conversationTurns.buildId,
+      buildGeneration: conversationTurns.buildGeneration,
     })
     .from(conversationTurns)
     .where(
@@ -1347,6 +1399,7 @@ export async function assertKnowledgeBaseCustomerUploadVisualBindings(input: {
   assets: readonly KnowledgeAsset[];
   expectedUploads: readonly KnowledgeBaseExpectedCustomerUpload[];
   readPackagedAssetBytes: (key: string) => Promise<Buffer>;
+  sourceScope?: CustomerUploadSourceScope & { packageArchiveSha256: string };
 }) {
   const assetsBySourceHash = new Map(
     input.assets
@@ -1364,13 +1417,13 @@ export async function assertKnowledgeBaseCustomerUploadVisualBindings(input: {
         "最终 ZIP 缺少客户上传图片的字节绑定",
       );
     }
-    const stored = await readStoredPresalesFile(fileId);
-    if (!stored || stored.sha256?.toLowerCase() !== expected.sourceSha256) {
-      throw new KnowledgeBasePackageBindingError(
-        "客户上传图片的原始字节已不可验证",
-      );
-    }
-    const sourceBytes = await readStoredCustomerUploadBytes(stored);
+    const sourceBytes = input.sourceScope
+      ? await persistedKnowledgeBaseCustomerUploadBytesForBuild({ ...input.sourceScope, sourceSha256: expected.sourceSha256 })
+      : await (async () => {
+          const stored = await readStoredPresalesFile(fileId);
+          if (!stored || stored.sha256?.toLowerCase() !== expected.sourceSha256) throw new KnowledgeBasePackageBindingError("客户上传图片的原始字节已不可验证");
+          return readStoredCustomerUploadBytes(stored);
+        })();
     if (
       createHash("sha256").update(sourceBytes).digest("hex") !==
       expected.sourceSha256

@@ -108,3 +108,10 @@ export function captureWorkspaceRestOperation(
     },
   };
 }
+
+/** Add an attempt's cancellation without recapturing a later page's identity. */
+export function forkWorkspaceRestOperation(operation: WorkspaceRestOperation, signal: AbortSignal) {
+  const combined = AbortSignal.any([operation.signal, signal]);
+  inheritedScopes.set(combined, { headers: operation.headers(), signal: combined });
+  return captureWorkspaceRestOperation(combined, undefined, { detached: true });
+}

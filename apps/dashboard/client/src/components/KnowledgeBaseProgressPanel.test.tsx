@@ -304,7 +304,7 @@ describe("KnowledgeBaseProgressPanel", () => {
       />,
     );
 
-    expect(screen.getByText("正在处理已返回内容")).toBeTruthy();
+    expect(screen.getByRole("status", { name: "知识任务执行状态" })).toHaveTextContent("正在校验并整理返回内容");
     expect(screen.queryByText("本轮已停止")).toBeNull();
     expect(screen.queryByText(/Provider/i)).toBeNull();
   });

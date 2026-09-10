@@ -18,6 +18,7 @@ vi.mock("./db", () => ({ getDb: dependencies.getDb }));
 
 import {
   assertCapturedKnowledgeBaseCustomerImage,
+  declaredKnowledgeBaseCustomerUploadImagesFromTurn,
   assertKnowledgeBaseCustomerUploadVisualBindings,
   knowledgeBaseExpectedCustomerUploadsFromTurns,
   knowledgeBaseCustomerUploadImagesFromTurn,
@@ -26,7 +27,12 @@ import {
   persistedKnowledgeBaseCustomerUploadBytesForBuild,
   verifiedKnowledgeBasePackageUploadEvidenceForBuild,
   verifiedKnowledgeBaseOfficialLogoUploadForBuild,
+  verifiedKnowledgeBaseCustomerUploadImagesFromTurn,
+  verifiedKnowledgeBaseCustomerUploadBytesForBuild,
+  readVerifiedKnowledgeBaseCustomerUploadImageBytes,
 } from "./knowledge-base-customer-upload";
+
+import { persistKnowledgeBaseBuildSource } from "./knowledge-base-local-source-store";
 
 function capturedImageTurn(overrides: Record<string, unknown> = {}) {
   const sha256 = "a".repeat(64);
@@ -73,6 +79,66 @@ function capturedImageTurn(overrides: Record<string, unknown> = {}) {
 }
 
 describe("knowledge-base customer upload provenance", () => {
+  it("retains completed Low-edit images for the next supplement without a provider attachment request", () => {
+    const turn = { ...capturedImageTurn({ preparedDispatch: undefined }), userId: 7, buildId: "10000000-0000-4000-8000-000000000099", buildGeneration: 1, operationType: "revise" as const, upstreamTaskId: "low-session" };
+    Object.assign(turn.metadata.recovery, {
+      nodeEditMode: "low_v1",
+      attachmentSourceProofs: [{ index: 0, fileId: "file-customer-image", contentSha256: "a".repeat(64), sizeBytes: 1234, mimeType: "image/jpeg", localStorageKey: `knowledge-base/build-sources/7/${turn.buildId}/g1/${"a".repeat(64)}.bin` }],
+    });
+    Object.assign(turn.metadata, { execution: "materialized_patch", dispatchState: "completed", workingSetId: "working-set-2", contentVersion: 2, applicationNodeEdit: { schemaVersion: 1, mode: "low_v1", providerTaskId: "low-session", patchSha256: "b".repeat(64), baseWorkingSetId: "working-set-1", baseContentVersion: 1 } });
+    expect(declaredKnowledgeBaseCustomerUploadImagesFromTurn(turn)).toEqual([expect.objectContaining({ fileId: "file-customer-image", leafId: "1.2", sourceSha256: "a".repeat(64) })]);
+    const damaged = structuredClone(turn);
+    (damaged.metadata.recovery as any).attachmentSourceProofs[0].contentSha256 = "c".repeat(64);
+    expect(() => declaredKnowledgeBaseCustomerUploadImagesFromTurn(damaged)).toThrow("账本缺失或不完整");
+    for (const changed of [
+      { upstreamTaskId: "other-session" },
+      { buildGeneration: 2 },
+      { userId: 8 },
+      { metadata: { ...turn.metadata, execution: "unverified" } },
+    ]) expect(() => declaredKnowledgeBaseCustomerUploadImagesFromTurn({ ...turn, ...changed })).toThrow("账本缺失或不完整");
+  });
+
+  it("reads completed Low-edit images from this generation's durable sources after capture expiry and seals their final ZIP evidence", async () => {
+    const assetRoot = await mkdtemp(path.join(tmpdir(), "frontmind-kb-low-upload-"));
+    const previousAssetRoot = process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+    process.env.FRONTMIND_DASHBOARD_ASSET_DIR = assetRoot;
+    const bytes = Buffer.from("durable-low-node-customer-image");
+    const scope = { userId: 7, buildId: "10000000-0000-4000-8000-000000000099", generation: 1 };
+    try {
+      const retained = await persistKnowledgeBaseBuildSource({ ...scope, bytes });
+      const turn = { ...capturedImageTurn({ preparedDispatch: undefined }), userId: scope.userId, buildId: scope.buildId, buildGeneration: scope.generation, operationType: "revise" as const, upstreamTaskId: "low-session" };
+      Object.assign(turn.metadata, { execution: "materialized_patch", dispatchState: "completed", workingSetId: "working-set-2", contentVersion: 2, applicationNodeEdit: { schemaVersion: 1, mode: "low_v1", providerTaskId: "low-session", patchSha256: "b".repeat(64), baseWorkingSetId: "working-set-1", baseContentVersion: 1 } });
+      Object.assign(turn.metadata.recovery, { nodeEditMode: "low_v1", attachmentSourceProofs: [{ index: 0, fileId: "file-customer-image", contentSha256: retained.contentSha256, sizeBytes: bytes.length, mimeType: "image/jpeg", localStorageKey: retained.storageKey }] });
+      Object.assign(turn.metadata.recovery.attachmentManifest[0], { sha256: retained.contentSha256, sizeBytes: bytes.length });
+      dependencies.readStoredPresalesFile.mockReset().mockResolvedValue(null);
+      dependencies.getDb.mockResolvedValue({ select: () => ({ from: () => ({ where: () => ({ orderBy: async () => [turn] }) }) }) });
+      const images = await verifiedKnowledgeBaseCustomerUploadImagesFromTurn(turn);
+      expect(images).toHaveLength(1);
+      await expect(readVerifiedKnowledgeBaseCustomerUploadImageBytes({ image: images[0], sourceScope: scope })).resolves.toEqual(bytes);
+      const finalInputs = await verifiedKnowledgeBaseCustomerUploadBytesForBuild(scope);
+      expect(finalInputs).toEqual([expect.objectContaining({ bytes, sourceSha256: retained.contentSha256, sizeBytes: bytes.length })]);
+      const packageArchiveSha256 = "c".repeat(64);
+      const evidence = await verifiedKnowledgeBasePackageUploadEvidenceForBuild({ ...scope, packageArchiveSha256 });
+      await expect(assertKnowledgeBaseCustomerUploadVisualBindings({
+        assets: [{ key: "customer.jpg", path: "assets/customer.jpg", size: bytes.length, mimeType: "image/jpeg", sha256: retained.contentSha256, sourceKind: "user_upload", sourceUploadSha256: retained.contentSha256, sourceUploadMimeType: "image/jpeg" }],
+        expectedUploads: evidence.expectedCustomerUploads,
+        readPackagedAssetBytes: async () => bytes,
+        sourceScope: { ...scope, packageArchiveSha256 },
+      })).resolves.toBeUndefined();
+      expect(dependencies.readStoredPresalesFile).not.toHaveBeenCalled();
+      await expect(readVerifiedKnowledgeBaseCustomerUploadImageBytes({ image: images[0], sourceScope: { ...scope, generation: 2 } })).rejects.toThrow("缺失或完整性不一致");
+      await writeFile(path.join(assetRoot, retained.storageKey), Buffer.alloc(bytes.length, 0));
+      dependencies.readStoredPresalesFile.mockClear();
+      await expect(verifiedKnowledgeBaseCustomerUploadImagesFromTurn(turn)).rejects.toThrow("持久原始字节完整性不一致");
+      expect(dependencies.readStoredPresalesFile).not.toHaveBeenCalled();
+      await expect(persistedKnowledgeBaseCustomerUploadBytesForBuild({ ...scope, packageArchiveSha256, sourceSha256: retained.contentSha256 })).resolves.toEqual(bytes);
+    } finally {
+      if (previousAssetRoot === undefined) delete process.env.FRONTMIND_DASHBOARD_ASSET_DIR;
+      else process.env.FRONTMIND_DASHBOARD_ASSET_DIR = previousAssetRoot;
+      await rm(assetRoot, { recursive: true, force: true });
+    }
+  });
+
   it("seals final upload evidence so source expiry cannot break publish, download or display", async () => {
     const assetRoot = await mkdtemp(
       path.join(tmpdir(), "frontmind-kb-upload-evidence-"),

@@ -1399,7 +1399,7 @@ export function UserBrandDashboardContent({
               activeEntry={
                 agentRoute ? "agent" : accountRoute ? "account" : "project"
               }
-              collapsed={compactViewport ? !mobileNavOpen : sidebarCollapsed}
+              collapsed={compactViewport ? !mobileNavOpen : mobileNavOpen ? false : sidebarCollapsed}
               onCollapse={
                 compactViewport
                   ? () => setMobileNavOpen((value) => !value)

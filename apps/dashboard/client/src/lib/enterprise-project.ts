@@ -54,6 +54,14 @@ export function rememberedEnterpriseProject(
   return undefined;
 }
 
+/** Select a remembered project only after it appears in an authorized catalog. */
+export function rememberedAccessibleEnterpriseProject(projects: readonly { id: string; ownerUserId: number }[]): string | undefined {
+  try {
+    const remembered = JSON.parse(sessionStorage.getItem(PROJECT_KEY) || "null");
+    return projects.find(project => project.id === remembered?.id && project.ownerUserId === remembered?.ownerUserId)?.id;
+  } catch { return undefined; }
+}
+
 export function enterpriseProjectHeaders(
   headers: Record<string, string> = {},
 ): Record<string, string> {

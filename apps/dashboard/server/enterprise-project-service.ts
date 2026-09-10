@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { enterpriseProjects, enterpriseProjectDashboardContents, userAdminAssignments, userDashboardContents, users } from "../drizzle/schema";
+import { deliveryProjectAssignments, enterpriseProjects, enterpriseProjectDashboardContents, userAdminAssignments, userDashboardContents, users } from "../drizzle/schema";
 import { createDefaultDashboardPayload, dashboardPayloadSchema } from "../shared/dashboard";
 import { AuthServiceError, type AuthenticatedUser } from "./auth-service";
 import { getDb } from "./db";
@@ -36,6 +36,10 @@ export async function assertEnterpriseAccountAccess(actor: AuthenticatedUser, ow
   if (actor.role === "admin" && actor.adminAccessLevel === "delivery_admin") {
     const [assignment] = await db.select({ id: userAdminAssignments.id }).from(userAdminAssignments).where(and(eq(userAdminAssignments.userId, ownerUserId), eq(userAdminAssignments.adminId, actor.id))).limit(1);
     if (assignment) return;
+  }
+  if (actor.role === "delivery_member" && actor.engineerRoleType) {
+    const [assignment] = await db.select({id:deliveryProjectAssignments.id}).from(deliveryProjectAssignments).where(and(eq(deliveryProjectAssignments.customerUserId,ownerUserId),eq(deliveryProjectAssignments.engineerUserId,actor.id),eq(deliveryProjectAssignments.roleType,actor.engineerRoleType))).limit(1);
+    if(assignment) return;
   }
   throw new AuthServiceError("NOT_FOUND", "企业项目不存在或无权访问");
 }

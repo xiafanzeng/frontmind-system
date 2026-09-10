@@ -1,7 +1,8 @@
+import { uploadMetadataVersion, projectKnowledgeBaseUploadStatus } from "./knowledge-base-upload-state";
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
-import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { knowledgeBaseSessionStorageId, enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseResetStateTable, enterpriseResetStateOwnerPredicate } from "./enterprise-project-state-tables";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseProjectIdForOwner } from "./enterprise-project-scope";
@@ -198,6 +199,9 @@ type KnowledgeBaseTurnMetadata = Record<string, unknown> & {
   expectedAttachmentCount?: number;
   userAttachmentCount?: number;
   awaitingClientAttachments?: boolean;
+  uploadAttemptId?: string;
+  uploadStatusVersion?: number;
+  uploadControl?: {state: "active" | "stopped"; resumed?: boolean; changedAt: number};
   /** Reset epoch captured before a new start reservation is allowed to exist. */
   sourceResetRevision?: number;
   /** Safe tombstone for a browser upload rejected before any upstream POST. */
@@ -654,6 +658,8 @@ export interface KnowledgeBaseTurnIdentity {
 }
 
 export interface KnowledgeBaseTurnRecord {
+  uploadAttemptId?: string | null;
+  uploadStatusVersion?: number;
   id: string;
   userId: number;
   conversationId: string;
@@ -2218,7 +2224,7 @@ export function knowledgeBaseConversationStorageId(
     "conversationId",
     191,
   );
-  const persistedId = `${enterpriseConversationStoragePrefix(userId)}${publicId}`;
+  const persistedId = knowledgeBaseSessionStorageId(userId, publicId);
   if (persistedId.length > 191) {
     throw new KnowledgeBaseTurnReservationError(
       "INVALID_REQUEST",
@@ -2402,6 +2408,8 @@ function turnRecord(row: ConversationTurn): KnowledgeBaseTurnRecord {
     attachmentFileIds: [...(row.attachmentFileIds ?? [])],
     attachmentsFrozen: metadata.attachmentsFrozen === true,
     awaitingClientAttachments: metadata.awaitingClientAttachments === true,
+    uploadAttemptId: metadata.uploadAttemptId ?? null,
+    uploadStatusVersion: Number(metadata.uploadStatusVersion ?? 0),
     ...(Number.isSafeInteger(metadata.sourceResetRevision) &&
     Number(metadata.sourceResetRevision) >= 0
       ? { sourceResetRevision: Number(metadata.sourceResetRevision) }
@@ -3615,6 +3623,10 @@ export async function reserveKnowledgeBaseTurnInTransaction(
     ...(deferredClientAttachments
       ? {
           awaitingClientAttachments: true,
+          uploadAttemptId: randomUUID(),
+          uploadStatusVersion: 1,
+          uploadBusinessActivityAt: now.getTime(),
+          uploadControl: {state: "active", changedAt: now.getTime()},
           clientAttachmentManifestHash: clientAttachmentManifestHash!,
           clientStagedAttachments: [],
         }
@@ -4599,6 +4611,7 @@ function normalizeDeferredUserAttachments(
 }
 
 type StageKnowledgeBaseDeferredTurnAttachmentInput = {
+  uploadAttemptId?: string;
   userId: number;
   buildId: string;
   turnId: string;
@@ -4630,6 +4643,7 @@ type StageKnowledgeBaseDeferredTurnAttachmentInput = {
 };
 
 type ClaimKnowledgeBaseDeferredTurnDispatchInput = {
+  uploadAttemptId?: string;
   userId: number;
   buildId: string;
   turnId: string;
@@ -4640,6 +4654,16 @@ type ClaimKnowledgeBaseDeferredTurnDispatchInput = {
   now?: Date;
   leaseMs?: number;
 };
+
+function assertKnowledgeBaseUploadAttempt(metadata: KnowledgeBaseTurnMetadata, uploadAttemptId?: string) {
+  if (metadata.uploadControl?.state === "stopped" || (metadata.browserUpload as any)?.status === "cancelled") {
+    throw new KnowledgeBaseTurnReservationError("CONFLICT", "上传已停止，请明确继续后再上传资料");
+  }
+  if ((uploadAttemptId && metadata.uploadAttemptId && uploadAttemptId !== metadata.uploadAttemptId) ||
+      (metadata.uploadControl?.resumed && uploadAttemptId !== metadata.uploadAttemptId)) {
+    throw new KnowledgeBaseTurnReservationError("CONFLICT", "上传尝试已失效，请读取当前批次后继续");
+  }
+}
 
 async function assertDeferredResetRevisionInTransaction(input: {
   tx: any;
@@ -4694,6 +4718,7 @@ function assertDeferredResetRevisionCoordinate(input: {
 }
 
 export type KnowledgeBaseLocalUploadCoordinateAssertion = {
+  uploadAttemptId?: string;
   userId: number;
   projectAssignmentId: string | null;
   conversationId: string;
@@ -4733,6 +4758,7 @@ export async function inspectKnowledgeBaseDeferredAttachmentReservation(
     turnId: string;
     clientRequestId: string;
     expectedResetRevision: number;
+    uploadAttemptId?: string;
   },
   executor?: any,
 ): Promise<KnowledgeBaseDeferredAttachmentReservationSnapshot> {
@@ -4755,6 +4781,7 @@ export async function inspectKnowledgeBaseDeferredAttachmentReservation(
       turnId,
     });
     const metadata = metadataOf(turn);
+    assertKnowledgeBaseUploadAttempt(metadata,input.uploadAttemptId);
     await assertDeferredResetRevisionInTransaction({
       tx,
       turn,
@@ -4818,32 +4845,103 @@ export async function inspectKnowledgeBaseDeferredAttachmentReservation(
   });
 }
 
-/** Browser connectivity is metadata only; stopping never deletes retained bytes. */
-export async function recordKnowledgeBaseUploadHeartbeat(input: {
+export type KnowledgeBaseUploadStatusInput = {
   userId: number; conversationId: string; turnId: string; clientRequestId: string;
-  expectedResetRevision: number; status: "active" | "cancelled"; uploadedBytes: number; now?: Date;
-}, executor?: any) {
-  assertInteger(input.userId, "userId", 1);
-  assertInteger(input.expectedResetRevision, "expectedResetRevision", 0);
-  assertInteger(input.uploadedBytes, "uploadedBytes", 0);
-  const db = executor ?? await requireDb();
-  return db.transaction(async (tx: any) => {
-    const { turn, build } = await lockedOwnedTurnAndBuild(tx, input);
-    const metadata = metadataOf(turn);
-    await assertDeferredResetRevisionInTransaction({ tx, turn, metadata, expectedResetRevision: input.expectedResetRevision });
-    if (turn.conversationId !== knowledgeBaseConversationStorageId(input.userId, input.conversationId) ||
-        build.conversationId !== input.conversationId || turn.clientRequestId !== input.clientRequestId ||
-        turn.status !== "queued" || turn.upstreamTaskId || metadata.awaitingClientAttachments !== true ||
-        storedKnowledgeBaseCreateAttemptState(metadata) !== "not_sent") {
-      throw new KnowledgeBaseTurnReservationError("CONFLICT", "当前上传已结束或失效，请重新进入知识库");
+  expectedResetRevision: number; uploadAttemptId?: string; projectAssignmentId?: string | null;
+};
+export type KnowledgeBaseUploadStatusReadInput = Omit<KnowledgeBaseUploadStatusInput, "turnId"> & {turnId?: string};
+type ReadUploadObservation = (tx: any) => Promise<import("../shared/knowledge-base-progress").KnowledgeBaseObservationDto | null>;
+async function lockedKnowledgeBaseUpload(tx: any, input: KnowledgeBaseUploadStatusInput) {
+  const pair = await lockedOwnedTurnAndBuild(tx, input, {allowInactiveTurn: true});
+  const {turn,build}=pair, metadata=metadataOf(turn);
+  if (turn.conversationId !== knowledgeBaseConversationStorageId(input.userId,input.conversationId) || build.conversationId !== input.conversationId || turn.clientRequestId !== input.clientRequestId) {
+    throw new KnowledgeBaseTurnReservationError("RESERVATION_NOT_FOUND", "当前项目中没有此上传批次");
+  }
+  await assertDeferredResetRevisionInTransaction({tx,turn,metadata,expectedResetRevision:input.expectedResetRevision});
+  return {...pair,metadata};
+}
+/** Pure read: no recovery, staging, cancellation, or task creation is allowed here. */
+export async function getKnowledgeBaseUploadStatus(input: KnowledgeBaseUploadStatusReadInput, executor?: any, readObservation?: ReadUploadObservation) {
+  const db=executor ?? await requireDb();
+  return db.transaction(async(tx:any)=>{
+    let turnId = input.turnId;
+    if (!turnId) {
+      const existing = (await tx.select({id:conversationTurns.id}).from(conversationTurns).where(and(
+        enterpriseOwnerPredicate(conversationTurns,input.userId),
+        eq(conversationTurns.conversationId,knowledgeBaseConversationStorageId(input.userId,input.conversationId)),
+        eq(conversationTurns.clientRequestId,input.clientRequestId),
+      )).limit(1))[0];
+      if (!existing) throw new KnowledgeBaseTurnReservationError("RESERVATION_NOT_FOUND","当前请求尚无可读取的上传预约");
+      turnId = existing.id;
     }
-    const now = input.now ?? new Date();
-    const previous = metadata.browserUpload as { uploadedBytes?: number; lastProgressAt?: number } | undefined;
-    const uploadedBytes = Math.max(previous?.uploadedBytes ?? 0, input.uploadedBytes);
-    const browserUpload = { status: input.status, uploadedBytes, lastHeartbeatAt: now.getTime(),
-      lastProgressAt: uploadedBytes > (previous?.uploadedBytes ?? 0) ? now.getTime() : previous?.lastProgressAt ?? now.getTime() };
-    await tx.update(conversationTurns).set({ metadata: { ...metadata, browserUpload }, updatedAt: now }).where(eq(conversationTurns.id, turn.id));
-    return { recorded: true, status: input.status };
+    const coordinate = {...input,turnId:turnId!};
+    const {turn,build}=await lockedKnowledgeBaseUpload(tx,coordinate);
+    const status=projectKnowledgeBaseUploadStatus(turn,build);
+    for (const file of status.files) {
+      if(file.status !== "missing") continue;
+      const id=knowledgeBaseLocalAssetIdentity({userId:input.userId,projectAssignmentId:input.projectAssignmentId ?? null,coordinate:{conversationId:input.conversationId,turnId:coordinate.turnId,clientRequestId:input.clientRequestId,expectedResetRevision:input.expectedResetRevision,itemId:file.itemId,ordinal:file.ordinal},sizeBytes:file.sizeBytes}).localAssetId;
+      const asset=(await tx.select().from(localAssets).where(and(eq(localAssets.id,id),enterpriseAccountOwnerPredicate(localAssets,input.userId))).limit(1))[0];
+      if (asset && asset.sizeBytes === file.sizeBytes && asset.contentSha256 && (!asset.retainUntil || asset.retainUntil.getTime() > Date.now())) {
+        file.status="retained";file.resourceId=asset.id;delete file.missingReason;
+      }
+    }
+    if (readObservation) status.knowledgeObservation = await readObservation(tx);
+    return status;
+  },{isolationLevel:"repeatable read"});
+}
+/** A proved project failure is durable without deleting already confirmed materials. */
+export async function failKnowledgeBaseUpload(input: KnowledgeBaseUploadStatusInput & {code:string;message:string},executor?:any) {
+  const db=executor ?? await requireDb();
+  return db.transaction(async(tx:any)=>{
+    const {turn,build,metadata}=await lockedKnowledgeBaseUpload(tx,input);
+    if(metadata.awaitingClientAttachments !== true || turn.upstreamTaskId || turn.status !== "queued") return;
+    const now=new Date();
+    const nextMetadata={...metadata,...uploadMetadataVersion(metadata,now),uploadError:{code:input.code,message:input.message}};
+    await tx.update(conversationTurns).set({status:"failed",errorCode:input.code,errorMessage:input.message,metadata:nextMetadata,completedAt:now,updatedAt:now}).where(eq(conversationTurns.id,turn.id));
+    await tx.update(knowledgeBaseBuilds).set({status:"failed",protocolErrorCode:input.code,protocolError:input.message,stateEpoch:build.stateEpoch+1,updatedAt:now}).where(eq(knowledgeBaseBuilds.id,build.id));
+  });
+}
+
+/** Stop/resume and dispatch serialize on the build/turn lock; only resume rotates authority. */
+export async function controlKnowledgeBaseUpload(input: KnowledgeBaseUploadStatusInput & {action:"stop"|"resume";now?:Date}, executor?: any, readObservation?: ReadUploadObservation) {
+  const db=executor ?? await requireDb();
+  return db.transaction(async(tx:any)=>{
+    const {turn,build,metadata}=await lockedKnowledgeBaseUpload(tx,input);
+    const status=projectKnowledgeBaseUploadStatus(turn,build);
+    const observed = async (value: typeof status) => {
+      if (readObservation) value.knowledgeObservation = await readObservation(tx);
+      return value;
+    };
+    if (!status.allowedActions.includes(input.action)) return observed(status);
+    if(input.uploadAttemptId && metadata.uploadAttemptId && input.uploadAttemptId !== metadata.uploadAttemptId) {
+      // A lost resume response may replay its old attempt; it must never rotate the new one.
+      if(input.action === "resume" && status.controlState === "active") return observed(status);
+      throw new KnowledgeBaseTurnReservationError("CONFLICT","上传尝试已变化，请读取当前批次");
+    }
+    const now=input.now ?? new Date(), stopped=input.action === "stop";
+    const nextMetadata: KnowledgeBaseTurnMetadata={...metadata,...uploadMetadataVersion(metadata,now),
+      uploadAttemptId:stopped?metadata.uploadAttemptId:randomUUID(),
+      uploadControl:{state:stopped?"stopped":"active",resumed:!stopped || metadata.uploadControl?.resumed,changedAt:now.getTime()},
+      browserUpload:{...(metadata.browserUpload as object ?? {}),status:stopped?"cancelled":"active",uploadedBytes:status.confirmedBytes,lastHeartbeatAt:now.getTime(),lastProgressAt:now.getTime()}};
+    await tx.update(conversationTurns).set({metadata:nextMetadata,updatedAt:now}).where(eq(conversationTurns.id,turn.id));
+    return observed(projectKnowledgeBaseUploadStatus({...turn,metadata:nextMetadata,updatedAt:now},build,now.getTime()));
+  },{isolationLevel:"repeatable read"});
+}
+/** Connectivity cannot authorize dispatch, confirm a file, or undo a stop. */
+export async function recordKnowledgeBaseUploadHeartbeat(input: KnowledgeBaseUploadStatusInput & {
+  status:"active"|"cancelled";uploadedBytes:number;now?:Date;
+}, executor?:any) {
+  assertInteger(input.uploadedBytes,"uploadedBytes",0);
+  const db=executor ?? await requireDb();
+  return db.transaction(async(tx:any)=>{
+    const {turn,build,metadata}=await lockedKnowledgeBaseUpload(tx,input);
+    if(turn.status !== "queued" || turn.upstreamTaskId || metadata.awaitingClientAttachments !== true || storedKnowledgeBaseCreateAttemptState(metadata) !== "not_sent" || build.activeTurnId !== turn.id) throw new KnowledgeBaseTurnReservationError("CONFLICT","当前上传已结束或失效，请重新进入知识库");
+    assertKnowledgeBaseUploadAttempt(metadata,input.uploadAttemptId);
+    const now=input.now ?? new Date(), previous=metadata.browserUpload as any;
+    const browserUpload={status:"active",uploadedBytes:input.uploadedBytes,lastHeartbeatAt:now.getTime(),lastProgressAt:input.uploadedBytes !== previous?.uploadedBytes?now.getTime():previous?.lastProgressAt ?? now.getTime()};
+    const nextMetadata={...metadata,browserUpload};
+    await tx.update(conversationTurns).set({metadata:nextMetadata}).where(eq(conversationTurns.id,turn.id));
+    return {recorded:true,status:input.status};
   });
 }
 
@@ -4856,6 +4954,7 @@ export async function recordKnowledgeBaseUploadHeartbeat(input: {
 export async function assertKnowledgeBaseLocalUploadCoordinate(
   input: KnowledgeBaseLocalUploadCoordinateAssertion,
   executor?: any,
+  onVerified?: (tx: any) => Promise<any>,
 ) {
   assertInteger(input.userId, "userId", 1);
   assertInteger(input.expectedResetRevision, "expectedResetRevision", 0);
@@ -4909,6 +5008,7 @@ export async function assertKnowledgeBaseLocalUploadCoordinate(
       turnId,
     });
     const metadata = metadataOf(turn);
+  assertKnowledgeBaseUploadAttempt(metadata, input.uploadAttemptId);
     await assertDeferredResetRevisionInTransaction({
       tx,
       turn,
@@ -5007,6 +5107,11 @@ export async function assertKnowledgeBaseLocalUploadCoordinate(
         "The reserved manifest item is already staged",
       );
     }
+    if (onVerified) {
+      const result = await onVerified(tx);
+      if (result?.payload?.replayed === false) await tx.update(conversationTurns).set({metadata:{...metadata,...uploadMetadataVersion(metadata,new Date())}}).where(eq(conversationTurns.id,turn.id));
+      return result;
+    }
     return { buildId: build.id, turnId: turn.id };
   });
 }
@@ -5096,6 +5201,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
     );
   }
   const metadata = metadataOf(turn);
+  assertKnowledgeBaseUploadAttempt(metadata, input.uploadAttemptId);
   await assertDeferredResetRevisionInTransaction({
     tx,
     turn,
@@ -5422,6 +5528,7 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
   }
   const nextMetadata: KnowledgeBaseTurnMetadata = {
     ...metadata,
+    ...uploadMetadataVersion(metadata, now),
     clientStagedAttachments: staged,
     recovery,
   };
@@ -5482,6 +5589,7 @@ async function claimKnowledgeBaseDeferredTurnDispatchInTransaction(
     );
   }
   const metadata = metadataOf(turn);
+  assertKnowledgeBaseUploadAttempt(metadata, input.uploadAttemptId);
   await assertDeferredResetRevisionInTransaction({
     tx,
     turn,
@@ -5584,6 +5692,7 @@ async function claimKnowledgeBaseDeferredTurnDispatchInTransaction(
   const leaseExpiresAt = new Date(now.getTime() + leaseMs);
   const nextMetadata: KnowledgeBaseTurnMetadata = {
     ...metadata,
+    ...uploadMetadataVersion(metadata, now),
     awaitingClientAttachments: false,
     leaseOwnerHash: leaseOwnerHash(leaseToken),
     recovery,
@@ -7683,6 +7792,7 @@ export async function prepareKnowledgeBaseTurnDispatch(
     };
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...uploadMetadataVersion(metadata, now),
       preparedDispatch,
       createAttemptState:
         knowledgeBaseCreateAttemptState(turn, metadata) === "not_sent"
@@ -7743,6 +7853,7 @@ export async function markKnowledgeBaseTurnDispatching(
     const leaseExpiresAt = new Date(now.getTime() + leaseMs);
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...uploadMetadataVersion(metadata, now),
       dispatchingAt: now.toISOString(),
       createAttemptState: "sending",
       createAttemptUpdatedAt: now.toISOString(),
@@ -7884,6 +7995,7 @@ export async function settleKnowledgeBaseManusV2ExplicitRejection(
       ...(providerStatus !== null
         ? { providerRejectionStatus: providerStatus }
         : {}),
+      ...uploadMetadataVersion(metadata, now),
       createAttemptState: "rejected",
       createAttemptUpdatedAt: now.toISOString(),
       providerAttemptState: "rejected",
@@ -8027,6 +8139,7 @@ export async function beginKnowledgeBaseManusV2Dispatch(
     const leaseExpiresAt = new Date(now.getTime() + leaseMs);
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...uploadMetadataVersion(metadata, now),
       dispatchingAt: now.toISOString(),
       createAttemptState: "sending",
       createAttemptUpdatedAt: now.toISOString(),
@@ -8167,6 +8280,7 @@ export async function bindKnowledgeBaseManusV2Submission(
     });
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...uploadMetadataVersion(metadata, now),
       createAttemptState: "acknowledged",
       createAttemptUpdatedAt: now.toISOString(),
       providerAttemptState: "output_pending",
@@ -8278,6 +8392,7 @@ export async function markKnowledgeBaseManusV2OutcomeUnknown(
     const leaseExpiresAt = new Date(now.getTime() + recoveryDelayMs);
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...uploadMetadataVersion(metadata, now),
       createAttemptState: "unknown",
       createAttemptUpdatedAt: now.toISOString(),
       providerAttemptState: "outcome_unknown",
@@ -9291,6 +9406,7 @@ export async function rejectUnacknowledgedKnowledgeBaseManualLogoTurn(
       .digest("hex");
     const nextMetadata: KnowledgeBaseTurnMetadata = {
       ...metadataWithoutLease,
+      ...uploadMetadataVersion(metadata, now),
       createAttemptState: "rejected",
       createAttemptUpdatedAt: now.toISOString(),
       unacknowledgedManualLogoCancellation: true,
@@ -9824,7 +9940,7 @@ export async function observeKnowledgeBaseMaterializedResultDiagnostic(
     const updated = await tx
       .update(conversationTurns)
       .set({
-        metadata: { ...metadata, materializedResultDiagnostics: next },
+        metadata: { ...metadata, ...(ledger.resultProcessingStage !== next.resultProcessingStage || ledger.firstTypedFailureCode !== next.firstTypedFailureCode ? uploadMetadataVersion(metadata, now) : {}), materializedResultDiagnostics: next },
         updatedAt: now,
       })
       .where(
@@ -10073,6 +10189,7 @@ export async function observeKnowledgeBaseMaterializedCompletionCandidate(
     ledger.nextRetryAt = completionPollAt(now, nextDeadline).toISOString();
     const updatedMetadata: KnowledgeBaseTurnMetadata = {
       ...metadata,
+      ...(metadata.materializedCompletion?.candidateArchiveSha256 !== ledger.candidateArchiveSha256 ? uploadMetadataVersion(metadata, now) : {}),
       materializedCompletion: ledger,
       dispatchState: "recovering",
       failureClass: "recoverable_same_turn",
@@ -10402,6 +10519,7 @@ async function settleLockedKnowledgeBaseMaterializedResultForApprovedReset(input
     : null;
   const failedMetadata: KnowledgeBaseTurnMetadata = {
     ...metadata,
+    ...uploadMetadataVersion(metadata, now),
     providerAttemptState: providerAttention
       ? "output_pending"
       : "result_rejected",
@@ -11303,6 +11421,7 @@ async function settleLockedMaterializedCreateOutcomeUnknownForReset(input: {
   }
   const nextMetadata: KnowledgeBaseTurnMetadata = {
     ...metadata,
+    ...uploadMetadataVersion(metadata, now),
     createAttemptState: "unknown",
     providerAttemptState: "outcome_unknown",
     dispatchState: "failed",
@@ -11544,7 +11663,8 @@ export async function claimKnowledgeBaseTurnForRecovery(
         ...metadata,
         // A durable exact task id permits read-only result settlement. This
         // branch cannot manufacture an acknowledgement for an unbound create.
-        createAttemptState: "acknowledged",
+        ...uploadMetadataVersion(metadata, now),
+      createAttemptState: "acknowledged",
         providerAttemptState: "output_pending",
         dispatchState: "recovering",
       };

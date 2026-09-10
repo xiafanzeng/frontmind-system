@@ -25,6 +25,7 @@ import {
   declaredKnowledgeBaseCustomerUploadImagesFromTurn,
   knowledgeBaseCustomerUploadInternalIdentity,
   persistedKnowledgeBaseCustomerUploadBytesForBuild,
+  readVerifiedKnowledgeBaseCustomerUploadImageBytes,
   type KnowledgeBaseCustomerUploadImage,
   verifiedKnowledgeBaseCustomerUploadImagesFromTurn,
   verifiedKnowledgeBasePackageUploadEvidenceForBuild,
@@ -35,7 +36,6 @@ import {
   readKnowledgeBuildArtifact,
   type KnowledgeBuildArtifactKind,
 } from "./knowledge-build-artifact-store";
-import { readStoredPresalesFile } from "./presales-file-store";
 import {
   knowledgeBaseArchiveReadContractVersions,
   knowledgeBaseArchiveRequiresV4UploadEvidence,
@@ -486,6 +486,7 @@ async function serveBuildArtifact(
                     await assertKnowledgeBaseCustomerUploadVisualBindings({
                       assets: parsed.assets,
                       expectedUploads: expectedCustomerUploads,
+                      sourceScope: { userId, buildId: build.id, generation: build.generation, packageArchiveSha256: build.packageArchiveSha256! },
                       readPackagedAssetBytes: readStoredKnowledgeAssetBytes,
                     });
                   }
@@ -514,6 +515,10 @@ async function serveBuildArtifact(
 }
 
 function sendCustomerUploadPreviewError(res: Response, error: unknown) {
+  if (error instanceof KnowledgeBasePackageBindingError) {
+    res.status(409).json({ error: { code: "CUSTOMER_UPLOAD_INTEGRITY_MISMATCH", message: "补充图片完整性校验未通过" } });
+    return;
+  }
   if (error instanceof CustomerUploadPreviewError) {
     res.status(error.status).json({
       error: { code: error.code, message: error.message },
@@ -683,44 +688,6 @@ async function renderSafeCustomerUploadPreview(input: {
   }
 }
 
-async function readCustomerUploadBytes(
-  stored: NonNullable<Awaited<ReturnType<typeof readStoredPresalesFile>>>,
-) {
-  if (
-    !Number.isSafeInteger(stored.sizeBytes) ||
-    stored.sizeBytes < 1 ||
-    stored.sizeBytes > MAX_CUSTOMER_UPLOAD_SOURCE_BYTES
-  ) {
-    throw new CustomerUploadPreviewError(
-      413,
-      "CUSTOMER_UPLOAD_TOO_LARGE",
-      "该补充图片超过安全预览大小限制",
-    );
-  }
-  const chunks: Buffer[] = [];
-  let bytesRead = 0;
-  for await (const chunk of stored.createReadStream()) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytesRead += bytes.length;
-    if (bytesRead > MAX_CUSTOMER_UPLOAD_SOURCE_BYTES) {
-      throw new CustomerUploadPreviewError(
-        413,
-        "CUSTOMER_UPLOAD_TOO_LARGE",
-        "该补充图片超过安全预览大小限制",
-      );
-    }
-    chunks.push(bytes);
-  }
-  if (bytesRead !== stored.sizeBytes) {
-    throw new CustomerUploadPreviewError(
-      409,
-      "CUSTOMER_UPLOAD_INTEGRITY_MISMATCH",
-      "补充图片完整性校验未通过",
-    );
-  }
-  return Buffer.concat(chunks, bytesRead);
-}
-
 function usesPersistedCustomerUploadEvidence(build: ArtifactBuild) {
   return (
     build.skillVersion === "4" &&
@@ -742,22 +709,7 @@ async function renderCustomerUploadImageForBuild(input: {
         packageArchiveSha256: input.build.packageArchiveSha256!,
         sourceSha256: input.image.sourceSha256,
       })
-    : await (async () => {
-        const stored = await readStoredPresalesFile(input.image.fileId);
-        if (
-          !stored ||
-          stored.filename !== input.image.filename ||
-          stored.sizeBytes !== input.image.sizeBytes ||
-          stored.sha256?.toLowerCase() !== input.image.sourceSha256
-        ) {
-          throw new CustomerUploadPreviewError(
-            409,
-            "CUSTOMER_UPLOAD_INTEGRITY_MISMATCH",
-            "补充图片完整性校验未通过",
-          );
-        }
-        return readCustomerUploadBytes(stored);
-      })();
+    : await readVerifiedKnowledgeBaseCustomerUploadImageBytes({ image: input.image, sourceScope: { userId: input.userId, buildId: input.build.id, generation: input.build.generation } });
   if (
     createHash("sha256").update(sourceBytes).digest("hex") !==
     input.image.sourceSha256

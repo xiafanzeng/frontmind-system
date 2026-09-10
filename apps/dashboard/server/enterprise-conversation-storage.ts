@@ -8,3 +8,13 @@ export function enterpriseConversationStoragePrefix(userId: number, projectAssig
   }
   return projectAssignmentId ? `p${projectAssignmentId}:` : `u${userId}:`;
 }
+
+/** One storage identity for every knowledge-base operation; request scope is verified upstream. */
+export function knowledgeBaseSessionStorageId(userId: number, publicConversationId: string) {
+  const publicId = String(publicConversationId || "").trim();
+  if (!Number.isSafeInteger(userId) || userId < 1 || !publicId || publicId.length > 191) throw new Error("INVALID_KNOWLEDGE_BASE_SESSION_ID");
+  // KB has always used the project namespace or account namespace, including delivery sessions.
+  const id = `${enterpriseConversationStoragePrefix(userId)}${publicId}`;
+  if (id.length > 191) throw new Error("INVALID_KNOWLEDGE_BASE_SESSION_ID");
+  return id;
+}

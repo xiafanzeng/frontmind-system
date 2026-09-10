@@ -2278,6 +2278,7 @@ export async function bindKnowledgeBaseFinalPackage(input: {
       await assertKnowledgeBaseCustomerUploadVisualBindings({
         assets: parsed.assets,
         expectedUploads: expectedCustomerUploads,
+        sourceScope: { userId: input.userId, buildId: build.id, generation: build.generation, packageArchiveSha256: createHash("sha256").update(authoritativeArchiveBuffer).digest("hex") },
         readPackagedAssetBytes: readStoredKnowledgeAssetBytes,
       });
       await observeValidatedV4PackageShadow({
@@ -2775,6 +2776,7 @@ export async function bindKnowledgeBaseReadyPackage(input: {
       await assertKnowledgeBaseCustomerUploadVisualBindings({
         assets: parsed.assets,
         expectedUploads: expectedCustomerUploads,
+        sourceScope: { userId: input.userId, buildId: build.id, generation: build.generation, packageArchiveSha256: createHash("sha256").update(authoritativeArchiveBuffer).digest("hex") },
         readPackagedAssetBytes: readStoredKnowledgeAssetBytes,
       });
       await observeValidatedV4PackageShadow({

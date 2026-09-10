@@ -313,7 +313,7 @@ export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
         />
       )}
       {flow.entry === "generate" && (
-        <WorkflowSection id="keyword-generation">
+        <WorkflowSection id="keyword-generation" divider="none">
           <BrandQuestionUniverseGenerationControl
             knowledgePublished={props.knowledgePublished}
           />
@@ -330,7 +330,7 @@ export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
         </WorkflowSection>
       )}
       {flow.entry === "pick" && (
-        <WorkflowSection id="keyword-picker" title="这次想围绕哪个问题展开？">
+        <WorkflowSection divider="none" id="keyword-picker" title="这次想围绕哪个问题展开？">
           {props.loading ? (
             <WorkflowFeedback>正在读取词库…</WorkflowFeedback>
           ) : props.error ? (

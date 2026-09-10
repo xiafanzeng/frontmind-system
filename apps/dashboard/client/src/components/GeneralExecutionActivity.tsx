@@ -192,7 +192,7 @@ function TurnActivity({
         if (item.phase && Object.hasOwn(businessExecutionLabels, item.phase)) {
           detail = (
             <ActivityLine live={isLive(item)}>
-              {businessExecutionLabels[item.phase]} · {activityTitle(item)}
+              {businessExecutionLabels[item.phase]}{item.kind === "status" && item.publicSummary ? ` · ${item.publicSummary}` : ""} · {activityTitle(item)}
             </ActivityLine>
           );
         } else if (

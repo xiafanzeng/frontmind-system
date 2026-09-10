@@ -287,11 +287,11 @@ describe("unified knowledge node workspace", () => {
     fireEvent.change(editor, { target: { value: "跨尺寸保留的节点草稿" } });
     vi.stubGlobal("innerWidth", 768);
     fireEvent(window, new Event("resize"));
-    fireEvent.click(await screen.findByRole("button", { name: "打开任务信息" }));
+    expect(screen.getByRole("complementary")).toBeVisible();
     expect(
       await screen.findByRole("textbox", { name: "编辑企业简介正文" }),
     ).toBe(editor);
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
     vi.stubGlobal("innerWidth", 1440);
     fireEvent(window, new Event("resize"));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

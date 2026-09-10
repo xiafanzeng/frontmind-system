@@ -46,7 +46,7 @@ export function siteOpsPublicExecution(steps: readonly SiteOpsExecutionStep[]) {
           userSequence: turnSequence.get(turnId),
           rank,
           timestamp: stamp(step.startedAt),
-          phase: phases[step.stage],
+          phase: step.operationKind === "deploy" ? (step.stage === "qa_running" ? "verifying_site" : step.stage === "completed" ? "publishing_site" : "deploying_site") : step.operationKind === "build_revision" && step.stage === "preparing" ? "revising_site" : phases[step.stage],
           status: statuses[step.status],
           ...(step.completedAt ? { finishedAt: stamp(step.completedAt) } : {}),
         };
@@ -112,43 +112,34 @@ export function monitoringPublicExecution(run: MonitorRun) {
       turnId: run.id,
       rank: 3,
       timestamp: stamp(run.completedAt),
-      phase: "organizing_samples",
+      phase: "collection_result",
       status,
     });
+  for (const [index, attempt] of run.attempts.entries()) {
+    const subject = [attempt.platformName, attempt.question].filter(Boolean).join(" · ");
+    if (attempt.submittedAt) entries.push({ id: `${run.id}:${attempt.id}:submitted`, turnId: run.id, rank: 1 + index / Math.max(1, run.attempts.length), timestamp: stamp(attempt.submittedAt), phase: "collecting", subject,
+      status: ["submission_unknown", "review_required"].includes(attempt.status) ? "waiting" : attempt.status === "failed" ? "error" : attempt.terminalAt ? "ended" : "running" });
+    if (attempt.terminalAt || attempt.resultUpdatedAt) entries.push({ id: `${run.id}:${attempt.id}:result:${attempt.revision ?? 0}`, turnId: run.id, rank: 2 + index / Math.max(1, run.attempts.length), timestamp: stamp(attempt.resultUpdatedAt ?? attempt.terminalAt), phase: attempt.answer ? "showing_samples" : "collection_result", subject,
+      status: attempt.status === "completed" ? "ended" : attempt.status === "stopped" ? "cancelled" : "error" });
+  }
   return projectBusinessExecution(run.id, entries);
 }
 export function publishingPublicExecution(batch: PublicationBatch) {
-  const entries: PublicBusinessEvidence[] = [
-    {
-      id: `${batch.id}:submitted`,
-      turnId: batch.id,
-      timestamp: stamp(batch.createdAt),
-      rank: 0,
-      phase: "submitting_publication",
-      status: "ended",
-    },
-  ];
-  const latest = [...batch.items].sort(
-    (a, b) => stamp(b.updatedAt) - stamp(a.updatedAt),
-  )[0];
-  if (latest)
-    entries.push({
-      id: `${batch.id}:result`,
-      turnId: batch.id,
-      timestamp: stamp(latest.updatedAt),
-      rank: 1,
-      phase: ["queued", "processing"].includes(batch.status)
-        ? "awaiting_publication"
-        : "showing_publication",
-      status:
-        batch.status === "failed"
-          ? "error"
-          : batch.status === "action_required"
-            ? "waiting"
-            : ["success", "partial_success"].includes(batch.status)
-              ? "ended"
-              : "waiting",
-    });
+  const entries: PublicBusinessEvidence[] = [{ id: `${batch.id}:created`, turnId: batch.id, timestamp: stamp(batch.createdAt), rank: 0, phase: "creating_publication", status: "ended" }];
+  for (const [index, item] of batch.items.entries()) {
+    const subject = item.media?.name;
+    const rank = 1 + index * 100;
+    for (const attempt of item.submissionAttempts ?? []) {
+      entries.push({ id: `${batch.id}:${item.id}:attempt:${attempt.id}`, turnId: batch.id, timestamp: stamp(attempt.startedAt), rank: rank + attempt.number, phase: "submitting_publication", subject,
+        status: attempt.result === "succeeded" ? "ended" : attempt.result === "submission_unknown" ? "waiting" : attempt.result ? "error" : "running",
+        ...(attempt.completedAt ? { finishedAt: stamp(attempt.completedAt) } : {}) });
+    }
+    if (item.submittedAt) entries.push({ id: `${batch.id}:${item.id}:accepted`, turnId: batch.id, timestamp: stamp(item.submittedAt), rank: rank + 90, phase: "accepted_publication", subject, status: "ended" });
+    // Unknown outcomes and local failures are current recorded states, never proof of acceptance.
+    if (item.updatedAt) entries.push({ id: `${batch.id}:${item.id}:result`, turnId: batch.id, timestamp: stamp(item.completedAt ?? item.updatedAt), rank: rank + 91,
+      phase: ["queued", "submitting", "processing", "submission_unknown"].includes(item.status) ? "awaiting_publication" : "showing_publication", subject,
+      status: ["failed", "auth_blocked"].includes(item.status) || batch.status === "failed" ? "error" : item.status === "success" ? "ended" : "waiting" });
+  }
   return projectBusinessExecution(batch.id, entries);
 }
 

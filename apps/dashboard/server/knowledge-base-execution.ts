@@ -238,7 +238,8 @@ export async function loadKnowledgeBaseExecution(input: {
       .find((entry) => entry.turnId === item.turnId);
     if (next) {
       item.status = "ended";
-      item.finishedAt = next.timestamp;
+      // MySQL historical timestamps have second precision; never show negative duration.
+      item.finishedAt = Math.max(item.timestamp, next.timestamp);
     }
   }
   return {

@@ -1302,14 +1302,12 @@ function RealBuildFlow({
   const publicExecution = (
     <KnowledgePublicExecution
       phase={executionState?.processingPhase}
+      runPhase={executionState?.runPhase}
       operationState={displayedProgress?.operationState}
     />
   );
-  const publicExecutionRunning = [
-    "creating",
-    "waiting_output",
-    "normalizing",
-  ].includes(displayedProgress?.operationState ?? "");
+  const publicExecutionRunning = ["dispatching", "researching", "normalizing"].includes(executionState?.runPhase ?? "");
+  const hasExecutionTimeline = Boolean(displayedConversation?.execution?.timeline?.length);
   const collaboration = (
     <>
       {!workbench && (
@@ -1382,7 +1380,7 @@ function RealBuildFlow({
               fixedAgentProfile="frontmind-pro"
               syncKnowledgeBaseSnapshot
               inlineBlocks={
-                workbench && executionAssistant
+                workbench && executionAssistant && !hasExecutionTimeline
                   ? [
                       {
                         id: `knowledge-process:${executionTurnId}`,
@@ -1397,7 +1395,7 @@ function RealBuildFlow({
                   : undefined
               }
               conversationFooter={
-                workbench && !executionAssistant && publicExecutionRunning
+                workbench && !executionAssistant && publicExecutionRunning && !hasExecutionTimeline
                   ? publicExecution
                   : undefined
               }

@@ -394,7 +394,7 @@
   }
 }
 .user-brand-dashboard.operator-mode .operator-sidebar[data-collapsed="true"] {
-  width: 64px;
+  width: 56px;
 }
 .workbench-task-panel .workbench-task-navigation .workbench-history-search {
   background: #fff;

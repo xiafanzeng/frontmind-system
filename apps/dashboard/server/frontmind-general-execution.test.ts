@@ -307,3 +307,11 @@ describe("Public summary privacy boundary", () => {
     expect(JSON.stringify(dto)).not.toMatch(/private|secret|not a summary|thinkingText/);
   });
 });
+
+describe("server final answer evidence", () => {
+  it("requires a settled lifecycle in the same turn and rejects failure commentary", async () => {
+    const { generalFinalAnswerEventIds } = await import("./frontmind-general-execution");
+    const rows = [{ id: "a", turnId: "one", type: "assistant_message", rank: 1, activity: null, hasContent: true }, { id: "done", turnId: "one", type: "status_update", rank: 2, activity: { kind: "status", status: "ended" }, hasContent: false }, { id: "b", turnId: "two", type: "assistant_message", rank: 3, activity: null, hasContent: true }, { id: "failed", turnId: "two", type: "status_update", rank: 4, activity: { kind: "status", status: "error" }, hasContent: false }];
+    expect([...generalFinalAnswerEventIds(rows)]).toEqual(["a"]);
+  });
+});

@@ -65,6 +65,9 @@
   padding: 24px 0;
   border-top: 1px solid #eaecf0;
 }
+.workflow-section[data-divider="none"] {
+  border-top: 0;
+}
 .workflow-section-heading {
   display: flex;
   align-items: center;

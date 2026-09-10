@@ -163,6 +163,7 @@ describe("workbench task scopes", () => {
     expect(screen.queryByRole("button", { name: "历史" })).toBeNull();
     expect(within(sidebar).queryByRole("button", { name: "旧任务" })).toBeNull();
     expect(within(sidebar).queryByRole("button", { name: "当前智能体" })).toBeNull();
+    fireEvent.click(within(sidebar).getByRole("tab", {name:"任务"}));
     const history = within(sidebar).getByRole("listbox", { name: "任务历史" });
     expect(within(history).getAllByRole("option")).toHaveLength(1);
     expect(history).toHaveTextContent("general");

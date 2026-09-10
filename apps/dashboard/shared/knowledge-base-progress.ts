@@ -342,6 +342,8 @@ export interface KnowledgeBaseInteractionDto {
  * client may use for diagnostics, never for state mutation.
  */
 export interface KnowledgeBaseActiveTurnDto {
+  uploadAttemptId?: string | null;
+  uploadStatusVersion?: number;
   browserUpload?: import("./knowledge-base-upload-status").KnowledgeBaseBrowserUpload;
   id: string;
   clientRequestId: string;
@@ -479,6 +481,7 @@ export interface KnowledgeBaseNoticeDto {
  * recovery endpoints. Consumers commit this object as one state transition.
  */
 export interface KnowledgeBaseObservationDto {
+  runPhase?: import("./knowledge-base-upload-state").KnowledgeBaseRunPhase;
   execution?: GeneralExecutionDto;
   stateEpoch: number;
   generation: number;

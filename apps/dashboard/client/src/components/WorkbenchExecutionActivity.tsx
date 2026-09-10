@@ -5,11 +5,12 @@ import {
 } from "@shared/frontmind-general-execution";
 import type { WorkbenchTaskState } from "@shared/workbench-task";
 const labels: Record<string, BusinessExecutionPhase> = {
-  已加入优化问题: "generating_result",
-  已保存问题修改: "generating_result",
-  已移除优化问题: "generating_result",
+  已加入优化问题: "saving_result",
+  已保存问题修改: "saving_result",
+  已移除优化问题: "saving_result",
   生成品牌全域词库: "identifying_questions",
   已提交词库生成: "identifying_questions",
+  已确认词库选题: "confirming_result",
   从优化问题创建监控项目: "creating_monitor",
   已创建监控项目: "creating_monitor",
   保存监控配置: "creating_monitor",
@@ -21,7 +22,7 @@ const labels: Record<string, BusinessExecutionPhase> = {
   已选择稿件: "preparing_assets",
   已选择投放草稿: "preparing_assets",
   发布标题已保存: "checking_assets",
-  发布请求已受理: "submitting_publication",
+  发布请求已受理: "creating_publication",
 };
 export function workbenchPublicExecution(
   runId: string,

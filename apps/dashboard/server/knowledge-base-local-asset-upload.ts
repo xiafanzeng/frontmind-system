@@ -44,7 +44,7 @@ export function parseKnowledgeBaseLocalUploadCoordinate(
     KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS,
   ).filter((name) => name !== KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.attempt);
   const requiredNames = coordinateNames.filter(
-    (name) => name !== KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.contentSha256,
+    (name) => name !== KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.contentSha256 && name !== KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.uploadAttemptId,
   );
   const anyPresent = coordinateNames.filter(
     (name) => scalarHeader(headers, name) !== undefined,
@@ -83,6 +83,8 @@ export function parseKnowledgeBaseLocalUploadCoordinate(
     headers,
     KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.contentSha256,
   )?.toLowerCase();
+  const uploadAttemptId = scalarHeader(headers, KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.uploadAttemptId);
+  if (uploadAttemptId !== undefined && !/^[a-zA-Z0-9_-]{1,128}$/u.test(uploadAttemptId)) throw new KnowledgeBaseLocalAssetCoordinateError();
   const ordinal = Number(
     scalarHeader(headers, KNOWLEDGE_BASE_LOCAL_UPLOAD_HEADERS.ordinal),
   );
@@ -107,6 +109,7 @@ export function parseKnowledgeBaseLocalUploadCoordinate(
   }
 
   return {
+    ...(uploadAttemptId ? { uploadAttemptId } : {}),
     conversationId,
     turnId,
     clientRequestId,

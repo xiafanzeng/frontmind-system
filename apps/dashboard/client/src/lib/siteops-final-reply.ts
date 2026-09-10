@@ -31,6 +31,7 @@ export function siteOpsFinalReplyIds(
       card?.kind === "build_progress" ||
       ongoing.has(
         String(
+          card?.payload.operationStatus ??
           card?.payload.status ??
             card?.payload.stage ??
             card?.payload.phase ??

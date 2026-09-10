@@ -339,6 +339,9 @@ export type PublicationItem = {
   priceTenThousandths: string;
   resultUrl?: string;
   resultMessage?: string;
+  submittedAt?: string;
+  completedAt?: string;
+  submissionAttempts?: Array<{ id: string; number: number; startedAt: string; completedAt?: string; result?: "succeeded" | "business_rejected" | "auth_blocked" | "submission_unknown" }>;
   updatedAt: string;
 };
 

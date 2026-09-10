@@ -1,3 +1,4 @@
+import { useKnowledgeBaseUploadBatch, useKnowledgeBaseUploadField, type KnowledgeBaseUploadResult } from "@/lib/knowledge-base-upload-manager";
 import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import type {
   ContentProductionInput,
@@ -284,6 +285,9 @@ export function responseLogicStartFailureMessage(
 export interface UploadProgress {
   /** Current durable attachment phase after bytes reach object storage. */
   phase?: "uploading" | "verifying";
+  totalBytes?: number;
+  uploadedBytes?: number;
+  confirmedFiles?: number;
   /** Index of the file currently being uploaded (0-based) */
   currentFileIndex: number;
   /** Total number of files to upload */
@@ -413,7 +417,9 @@ export function useSendMessage() {
     flushConversation,
   } = useConversation();
 
-  const sendInFlightRef = useRef(false);
+  const supplementScope = `supplement:${activeConversation?.id ?? "new"}`;
+  const supplementBatch = useKnowledgeBaseUploadBatch(`${supplementScope}:${activeConversation?.knowledgeBase?.activeTurnResetRevision ?? 0}`, `${supplementScope}:`);
+  const sendInFlightRef = supplementBatch.ref("sendInFlight", false);
   const activeConvRef = useRef(activeConversation);
   activeConvRef.current = activeConversation;
   const stateRef = useRef(state);
@@ -425,21 +431,17 @@ export function useSendMessage() {
 
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
-    null,
-  );
+  const [uploadProgress, setUploadProgress] = useKnowledgeBaseUploadField<UploadProgress | null>(supplementBatch, "uploadProgress", null);
   const [knowledgeBaseAttachmentAttempt, setKnowledgeBaseAttachmentAttempt] =
-    useState<KnowledgeBaseAttachmentAttempt | null>(null);
+    useKnowledgeBaseUploadField<KnowledgeBaseAttachmentAttempt | null>(supplementBatch, "attachmentAttempt", null);
   const knowledgeBaseAttachmentAttemptRef =
-    useRef<KnowledgeBaseAttachmentAttempt | null>(null);
+    supplementBatch.ref<KnowledgeBaseAttachmentAttempt | null>("attachmentAttemptRef", null);
   const resumeKnowledgeBaseAttachmentAttemptRef =
-    useRef<KnowledgeBaseAttachmentAttempt | null>(null);
+    supplementBatch.ref<KnowledgeBaseAttachmentAttempt | null>("resumeAttemptRef", null);
   // A PUT may succeed before stage returns. Keep that exact receipt so a
   // continuation replays stage with the same file id instead of uploading the
-  // browser bytes again. This map is page-memory only.
-  const uploadedKnowledgeBaseReceiptsRef = useRef(
-    new Map<string, UploadRetentionReceipt>(),
-  );
+  // browser bytes again. The project manager retains receipts across pages.
+  const uploadedKnowledgeBaseReceiptsRef = supplementBatch.ref("receipts", new Map<string, UploadRetentionReceipt>());
 
   const replaceKnowledgeBaseAttachmentAttempt = useCallback(
     (attempt: KnowledgeBaseAttachmentAttempt | null) => {
@@ -447,7 +449,7 @@ export function useSendMessage() {
       setKnowledgeBaseAttachmentAttempt(attempt);
       if (!attempt) uploadedKnowledgeBaseReceiptsRef.current.clear();
     },
-    [],
+    [supplementBatch],
   );
 
   const updateKnowledgeBaseAttachmentAttempt = useCallback(
@@ -566,14 +568,7 @@ export function useSendMessage() {
     updateKnowledgeBaseAttachmentAttempt,
   ]);
 
-  useEffect(
-    () => () => {
-      knowledgeBaseAttachmentAttemptRef.current = null;
-      resumeKnowledgeBaseAttachmentAttemptRef.current = null;
-      uploadedKnowledgeBaseReceiptsRef.current.clear();
-    },
-    [],
-  );
+
 
   /**
    * Send a message with optional per-message model override.
@@ -607,7 +602,8 @@ export function useSendMessage() {
         return false;
       }
 
-      const workspaceOperation = captureWorkspaceRestOperation();
+      const managedAttempt = options?.syncKnowledgeBaseSnapshot && files.length ? supplementBatch.beginAttempt() : null;
+      const workspaceOperation = managedAttempt?.operation ?? captureWorkspaceRestOperation();
       // Bind the destination before the version check can yield. In particular,
       // a content confirmation must never follow a later task selection.
       const requestedConversation = activeConvRef.current;
@@ -951,9 +947,12 @@ export function useSendMessage() {
           });
         }
 
+        let managedUploadResult: KnowledgeBaseUploadResult | undefined;
+        let managedDispatchError: unknown;
         let knowledgeBaseAttachmentReservation:
           | {
               turnId: string;
+              uploadAttemptId?: string;
               sourceResetRevision: number;
               attachmentManifest: KnowledgeBaseAttachmentManifestItem[];
             }
@@ -963,79 +962,38 @@ export function useSendMessage() {
           knowledgeBaseAttachmentManifest
         ) {
           try {
-            const reserved = resumedKnowledgeBaseAttachmentAttempt?.turnId
-              ? {
-                  reservation: {
-                    turnId: resumedKnowledgeBaseAttachmentAttempt.turnId,
-                    sourceResetRevision:
-                      resumedKnowledgeBaseAttachmentAttempt.resetRevision,
-                  },
-                }
-              : await reserveKnowledgeBaseTurnWithAttachments(
-                  [
-                    {
-                      role: "user",
-                      // Freeze the pre-upload prompt. Later input_file additions
-                      // belong only to the local pending bubble and dispatch log.
-                      content: [...contentItems],
-                    },
-                  ],
-                  {
-                    conversationId: convId,
-                    clientRequestId: knowledgeBaseClientRequestId!,
-                    expectedResetRevision:
-                      options!.knowledgeBaseExpectedResetRevision!,
-                    expectedGeneration:
-                      options!.knowledgeBaseExpectedGeneration!,
-                    expectedRevision: options!.knowledgeBaseExpectedRevision!,
-                    expectedLeafId: options!.knowledgeBaseExpectedLeafId!,
-                    expectedPresentationKey:
-                      options?.knowledgeBaseExpectedPresentationKey,
-                    attachmentManifest: knowledgeBaseAttachmentManifest,
-                  },
-                  workspaceOperation.signal,
-                );
-            workspaceOperation.assertActive();
-            knowledgeBaseAttachmentReservation = {
-              turnId: reserved.reservation.turnId,
-              sourceResetRevision: reserved.reservation.sourceResetRevision,
-              attachmentManifest: knowledgeBaseAttachmentManifest,
-            };
-            updateKnowledgeBaseAttachmentAttempt((current) => ({
-              ...current,
-              turnId: reserved.reservation.turnId,
-              phase: "uploading",
-            }));
-            if (
-              "knowledgeObservation" in reserved &&
-              reserved.knowledgeObservation
-            ) {
-              commitKnowledgeBaseObservation(
-                convId,
-                reserved.knowledgeObservation,
-              );
-            }
-          } catch (reservationError: any) {
-            if (workspaceOperation.signal.aborted) return false;
-            if (reservationError?.knowledgeObservation) {
-              commitKnowledgeBaseObservation(
-                convId,
-                reservationError.knowledgeObservation,
-              );
-            }
-            updateKnowledgeBaseAttachmentAttempt((current) => ({
-              ...current,
-              phase: "failed_retryable",
-              lastError: sanitizeBrandText(
-                reservationError?.message || "本轮附件预约失败",
-              ),
-            }));
-            toast.error("本轮附件预约失败", {
-              description: sanitizeBrandText(
-                `${reservationError?.message || "请同步知识库状态后重试。"} 可继续使用当前资料重试同一预约。`,
-              ),
+            managedUploadResult = await supplementBatch.submit({
+              kind: "revise", conversationId: convId, clientRequestId: knowledgeBaseClientRequestId!, expectedResetRevision: options!.knowledgeBaseExpectedResetRevision!,
+              turnId: resumedKnowledgeBaseAttachmentAttempt?.turnId,
+              expectedGeneration: options!.knowledgeBaseExpectedGeneration!, expectedRevision: options!.knowledgeBaseExpectedRevision!, expectedLeafId: options!.knowledgeBaseExpectedLeafId!, expectedPresentationKey: options?.knowledgeBaseExpectedPresentationKey,
+              input: [{ role: "user", content: [...contentItems] }], manifest: knowledgeBaseAttachmentManifest,
+              files: preparedUploads.files.map(({ file }, index) => ({ file, itemId: knowledgeBaseAttachmentManifest![index]!.itemId!, ordinal: index + 1 })),
+              onReservation: ({ reservation }) => {
+                knowledgeBaseAttachmentReservation = { turnId: reservation.turnId, uploadAttemptId: reservation.uploadAttemptId, sourceResetRevision: reservation.sourceResetRevision, attachmentManifest: knowledgeBaseAttachmentManifest! };
+                updateKnowledgeBaseAttachmentAttempt(current => ({ ...current, turnId: reservation.turnId, phase: "uploading" }));
+              },
+              onObservation: observation => commitKnowledgeBaseObservation(convId!, observation),
+              onPhase: phase => updateKnowledgeBaseAttachmentAttempt(current => ({ ...current, phase: phase === "reserved" ? "reserving" : phase })),
+              onFile: (itemId, file, event) => {
+                const index = knowledgeBaseAttachmentManifest!.findIndex(item => item.itemId === itemId);
+                const percent = Math.round((event.loadedBytes ?? 0) / Math.max(1, file.size) * 100);
+                const progress = supplementBatch.progress();
+                setUploadProgress({ currentFileIndex: index, totalFiles: preparedUploads.files.length, currentFileName: file.name, currentFilePercent: percent, overallPercent: progress.percent, totalBytes: progress.totalBytes, uploadedBytes: progress.uploadedBytes, confirmedFiles: progress.confirmedFiles, phase: percent === 100 && event.stage !== "uploaded" ? "verifying" : "uploading", conversationId: convId });
+                updateKnowledgeBaseAttachmentAttempt(current => ({ ...current, activeOrdinal: index + 1, progressPercent: percent,
+                  files: event.receipt ? current.files.map(item => item.itemId === itemId ? { ...item, stagedReceipt: event.receipt } : item) : current.files,
+                }));
+              },
             });
-            return false;
+          } catch (error: any) {
+            if (workspaceOperation.signal.aborted) return false;
+            if (knowledgeBaseAttachmentAttemptRef.current?.phase === "dispatching") {
+              managedDispatchError = error;
+            } else {
+              if (error?.knowledgeObservation) commitKnowledgeBaseObservation(convId, error.knowledgeObservation);
+              updateKnowledgeBaseAttachmentAttempt(current => ({ ...current, phase: "failed_retryable", lastError: sanitizeBrandText(error?.message || "资料提交失败") }));
+              toast.error("本轮资料提交失败", { description: sanitizeBrandText(`${error?.message || "请同步知识库状态后重试。"} 已保存的资料会保留，可继续同一批次。`) });
+              return false;
+            }
           }
         }
 
@@ -1066,6 +1024,18 @@ export function useSendMessage() {
           const knowledgeBaseFilename = options?.syncKnowledgeBaseSnapshot
             ? normalizedKnowledgeBaseUploadFilename(file.name)
             : undefined;
+
+          if (reservingKnowledgeBaseAttachmentTurn) {
+            // The project-owned engine already uploaded, confirmed and dispatched.
+            // This page only projects its receipts into the conversation.
+            const itemId = knowledgeBaseAttachmentManifest?.[i]?.itemId;
+            const receipt = itemId ? managedUploadResult?.receipts.get(itemId) ?? attemptFile?.stagedReceipt : undefined;
+            if (receipt?.fileId) {
+              contentItems.push({ type: "input_file", file_id: receipt.fileId, filename: knowledgeBaseFilename || file.name, mime_type: file.type || "application/octet-stream" });
+              attachments.push({ id: `att-${knowledgeBaseClientRequestId}-${i + 1}`, type: "file", name: file.name, fileId: receipt.fileId, expiresAt: receipt.expiresAt, expired: false });
+            }
+            continue;
+          }
 
           if (knowledgeBaseAttachmentReservation) {
             updateKnowledgeBaseAttachmentAttempt((current) => ({
@@ -1127,6 +1097,8 @@ export function useSendMessage() {
 
             workspaceOperation.assertActive();
             const uploadProgressHandler = (percent: number) => {
+              if (workspaceOperation.signal.aborted) return;
+              if (knowledgeBaseAttachmentReservation) supplementBatch.noteTransfer(attemptFile?.itemId ?? String(i), file.size * percent / 100);
               setUploadProgress({
                 currentFileIndex: i,
                 totalFiles,
@@ -1196,6 +1168,7 @@ export function useSendMessage() {
                               clientRequestId: knowledgeBaseClientRequestId!,
                               expectedResetRevision:
                                 knowledgeBaseAttachmentReservation.sourceResetRevision,
+                              uploadAttemptId: knowledgeBaseAttachmentReservation.uploadAttemptId,
                             },
                           }
                         : {}),
@@ -1259,6 +1232,7 @@ export function useSendMessage() {
                 signal: workspaceOperation.signal,
                 conversationId: convId,
                 turnId: knowledgeBaseAttachmentReservation.turnId,
+                uploadAttemptId: knowledgeBaseAttachmentReservation.uploadAttemptId,
                 clientRequestId: knowledgeBaseClientRequestId!,
                 expectedResetRevision:
                   knowledgeBaseAttachmentReservation.sourceResetRevision,
@@ -1589,7 +1563,8 @@ export function useSendMessage() {
           // the same durable clientRequestId and exact request body.
           let response: TaskResponse;
           if (isKnowledgeBaseSubmission) {
-            response = await createKnowledgeBaseTurnTask(input, {
+            if (managedDispatchError) throw managedDispatchError;
+            const dispatch = () => createKnowledgeBaseTurnTask(input, {
               conversationId: convId,
               clientRequestId: knowledgeBaseClientRequestId!,
               expectedGeneration: options?.knowledgeBaseExpectedGeneration,
@@ -1612,6 +1587,7 @@ export function useSendMessage() {
                   ? { attachmentManifest: knowledgeBaseAttachmentManifest }
                   : {}),
             }, workspaceOperation.signal);
+            response = managedUploadResult?.response ?? await dispatch();
 
             // Version freshness is non-authoritative. Run its bounded,
             // fail-open check only after the durable turn POST is acknowledged
@@ -2090,11 +2066,13 @@ export function useSendMessage() {
         if (workspaceOperation.signal.aborted) return false;
         throw error;
       } finally {
+        if (managedAttempt) supplementBatch.finishAttempt(managedAttempt.controller);
         setUploadProgress(null);
         sendInFlightRef.current = false;
       }
     },
     [
+      supplementBatch,
       addMessage,
       settleGeneralChatDispatch,
       updateStatus,
@@ -2112,6 +2090,11 @@ export function useSendMessage() {
     ],
   );
 
+  const stopKnowledgeBaseAttachmentAttempt = useCallback(async () => {
+    const status = await supplementBatch.stop();
+    updateKnowledgeBaseAttachmentAttempt(current => ({ ...current, phase: "failed_retryable", lastError: status?.controlState === "stopped" ? "上传已停止，已保存的资料会保留。" : "停止结果待确认，已暂停本地传输。请检查后继续。" }));
+  }, [supplementBatch, updateKnowledgeBaseAttachmentAttempt]);
+
   const continueKnowledgeBaseAttachmentAttempt = useCallback(async () => {
     const attempt = knowledgeBaseAttachmentAttemptRef.current;
     if (!attempt || attempt.phase !== "failed_retryable") return false;
@@ -2119,6 +2102,9 @@ export function useSendMessage() {
       | FrozenKnowledgeBaseAttemptEnvelope
       | undefined;
     if (!envelope?.options?.syncKnowledgeBaseSnapshot) return false;
+    if (["stopped", "stopping", "unknown"].includes(supplementBatch.read("stopState", "active"))) {
+      try { await supplementBatch.resume(); } catch (error) { toast.error(error instanceof Error ? error.message : "暂时无法继续上传"); return false; }
+    }
     updateKnowledgeBaseAttachmentAttempt((current) => ({
       ...current,
       phase: "reserving",
@@ -2132,7 +2118,7 @@ export function useSendMessage() {
         .map(({ file }) => file),
       envelope.options,
     );
-  }, [sendMessage, updateKnowledgeBaseAttachmentAttempt]);
+  }, [sendMessage, supplementBatch, updateKnowledgeBaseAttachmentAttempt]);
 
   // Retry last message
   const retryLastMessage = useCallback(async () => {
@@ -2188,6 +2174,7 @@ export function useSendMessage() {
     retryCount,
     retryLastMessage,
     uploadProgress,
+    stopKnowledgeBaseAttachmentAttempt,
     knowledgeBaseAttachmentAttempt,
     continueKnowledgeBaseAttachmentAttempt,
     discardKnowledgeBaseAttachmentAttempt,

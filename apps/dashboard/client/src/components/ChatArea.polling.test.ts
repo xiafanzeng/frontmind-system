@@ -64,7 +64,7 @@ describe("knowledge-base starter", () => {
   });
 
   it("shows an explicit Dashboard-owned collection status while awaiting approved content", () => {
-    expect(runningAssistantStatusText(true)).toBe(
+    expect(runningAssistantStatusText(true, undefined, "researching")).toBe(
       "FrontMind 正在按业务分支进行资料采集。此阶段无需逐项确认，完成后将直接生成可核验知识库。",
     );
     expect(runningAssistantStatusText(false)).toBe("FrontMind AI 正在处理...");
@@ -202,5 +202,15 @@ describe("knowledge-base notice recovery", () => {
     expect(knowledgeBaseNoticeRecoveryMode(notice)).toBe("logo_repair");
     await expect(recoverKnowledgeBaseNotice({ ...input, notice }, { retry })).rejects.toThrow("专用入口");
     expect(retry).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("authoritative knowledge run phase", () => {
+  it("does not show research while uploading or when phase is missing", () => {
+    expect(runningAssistantStatusText(true)).toBe("正在读取当前知识库状态");
+    for (const runPhase of ["reserved", "uploading", "staging", "dispatching", undefined]) {
+      expect(isKnowledgeBaseTaskVisiblyRunning({ status: "running", syncKnowledgeBaseSnapshot: true, runPhase } as Parameters<typeof isKnowledgeBaseTaskVisiblyRunning>[0])).toBe(false);
+    }
   });
 });

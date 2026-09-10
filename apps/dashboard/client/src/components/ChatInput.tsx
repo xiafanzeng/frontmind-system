@@ -1,3 +1,4 @@
+import { formatKnowledgeBaseUploadBytes } from "@/lib/knowledge-base-upload-manager";
 import { GENERAL_TASK_SUGGESTIONS } from "./GeneralAgentWelcome";
 import type { ContentProductionInput } from "@shared/content-production";
 /**
@@ -301,6 +302,7 @@ export default function ChatInput({
   const {
     sendMessage,
     uploadProgress: rawUploadProgress,
+    stopKnowledgeBaseAttachmentAttempt,
     knowledgeBaseAttachmentAttempt,
     continueKnowledgeBaseAttachmentAttempt,
     discardKnowledgeBaseAttachmentAttempt,
@@ -1025,7 +1027,7 @@ export default function ChatInput({
         {knowledgeBaseAttachmentResumeRequired &&
           matchingKnowledgeBaseAttachmentAttempt && (
             <div className="mb-3 rounded-xl border border-amber-300/70 bg-amber-50/80 p-3 text-sm text-amber-950">
-              <p className="font-medium">本轮资料仍保留在当前页面</p>
+              <p className="font-medium">本轮资料已保留，可继续上传</p>
               <p className="mt-1 text-xs leading-5 text-amber-900/80">
                 {matchingKnowledgeBaseAttachmentAttempt.lastError ||
                   "上传或暂存暂时中断。继续时会复用同一请求、同一附件清单和已完成的暂存结果。"}
@@ -1135,6 +1137,8 @@ export default function ChatInput({
                   {uploadProgress.overallPercent}%
                 </span>
               </div>
+              {syncKnowledgeBaseSnapshot && stopKnowledgeBaseAttachmentAttempt && <Button type="button" variant="ghost" size="sm" onClick={() => void stopKnowledgeBaseAttachmentAttempt()}>停止上传</Button>}
+              {uploadProgress.totalBytes !== undefined && <p className="mb-1.5 text-xs tabular-nums text-muted-foreground">已上传 {formatKnowledgeBaseUploadBytes(uploadProgress.uploadedBytes ?? 0)} / {formatKnowledgeBaseUploadBytes(uploadProgress.totalBytes)} · 已完成 {uploadProgress.confirmedFiles ?? 0}/{uploadProgress.totalFiles} 个文件</p>}
               <Progress
                 value={uploadProgress.overallPercent}
                 className="h-1.5"

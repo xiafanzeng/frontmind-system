@@ -7,6 +7,9 @@ import {
 import type { KnowledgeBaseProgressDto } from "@shared/knowledge-base-progress";
 import ChatInput from "./ChatInput";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { finalReplyIds } from "@/lib/final-reply";
+import MessageActions from "./MessageActions";
+import { toast } from "sonner";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
 
 export function knowledgeNodeConversationMessages(
@@ -98,9 +101,11 @@ export default function KnowledgeNodeConversation({
     ["creating", "waiting_output", "normalizing"].includes(
       knowledge?.operationState ?? "",
     ) && knowledge?.leafId === leafId;
+  const copyableIds = finalReplyIds(messages, activeConversation.execution, running);
   const execution = (
     <KnowledgePublicExecution
       phase={knowledge?.processingPhase}
+      runPhase={knowledge?.runPhase}
       operationState={knowledge?.operationState}
     />
   );
@@ -116,9 +121,14 @@ export default function KnowledgeNodeConversation({
       {messages.map((message) => (
         <Fragment key={message.id}>
           {message.id === assistant?.id && execution}
-          <div className={`knowledge-node-conversation__${message.role}`}>
-            <MarkdownRenderer content={message.content} />
-          </div>
+          <MessageActions message={message} allowCopy={copyableIds.has(message.id)}>
+            <div className={`knowledge-node-conversation__${message.role}`}>
+              <MarkdownRenderer content={message.content} allowCopy={copyableIds.has(message.id)} />
+              {copyableIds.has(message.id) && <button type="button" aria-label="复制完整回答" onClick={() => {
+                void navigator.clipboard.writeText(message.content).then(() => toast.success("已复制"), () => toast.error("复制失败，请重试"));
+              }}>复制回答</button>}
+            </div>
+          </MessageActions>
         </Fragment>
       ))}
       {!assistant && running && execution}

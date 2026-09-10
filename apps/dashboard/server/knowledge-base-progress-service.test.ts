@@ -291,7 +291,7 @@ describe("knowledge-base materialized business projection", () => {
     ).toBe("normalizing");
   });
 
-  it.each(["unknown", "rejected"])(
+  it.each(["rejected"])(
     "opens approved reset for a %s create result without exposing a stopped state",
     (createAttemptState) => {
       expect(
@@ -309,6 +309,10 @@ describe("knowledge-base materialized business projection", () => {
       });
     },
   );
+
+  it("keeps an active unknown create result pending for the same request", () => {
+    expect(knowledgeBaseMaterializedBusinessProjection({ progress, activeTurn: { upstreamTaskId: null, metadata: { createAttemptState: "unknown" } } as any })).toMatchObject({ operationState: "creating", resetAllowed: false, taskCreationState: "outcome_unknown" });
+  });
 
   it("separates retained customer files from generated system attachments after pre-create settlement", () => {
     expect(

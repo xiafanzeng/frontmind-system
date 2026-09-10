@@ -545,7 +545,7 @@ describe("createKnowledgeBaseTurnTask", () => {
       },
     );
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(created).resolves.toMatchObject({ id: "accepted-turn" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].body).toBe(
@@ -597,7 +597,7 @@ describe("createKnowledgeBaseTurnTask", () => {
       },
     );
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(created).resolves.toMatchObject({ id: "legacy-turn" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].body).toBe(
@@ -638,7 +638,7 @@ describe("createKnowledgeBaseTurnTask", () => {
         expectedRevision: 5,
         expectedLeafId: "1.6",
       });
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(created).resolves.toMatchObject({
         id: `accepted-${status}`,
@@ -694,7 +694,7 @@ describe("createKnowledgeBaseTurnTask", () => {
       expectedLeafId: "1.1",
       submissionKind: "logo",
     });
-    await vi.advanceTimersByTimeAsync(500 + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000 + 3_000);
 
     await expect(created).resolves.toMatchObject({
       id: "frontmind-logo-task",
@@ -770,7 +770,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("stops replaying a turn request after four transient responses", async () => {
+  it("stops replaying a turn request after two automatic retries", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
@@ -792,10 +792,10 @@ describe("createKnowledgeBaseTurnTask", () => {
       status: 503,
       code: "TEMPORARILY_UNAVAILABLE",
     });
-    await vi.advanceTimersByTimeAsync(500 + 1_000 + 2_000);
+    await vi.advanceTimersByTimeAsync(1_000 + 3_000);
 
     await rejection;
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(new Set(fetchMock.mock.calls.map((call) => call[1].body))).toEqual(
       new Set([fetchMock.mock.calls[0][1].body]),
     );
@@ -1129,7 +1129,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     };
 
     const reservation = reserveKnowledgeBaseStart(input);
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(reservation).resolves.toMatchObject({
       reservation: { turnId: "turn-start-replay" },
     });
@@ -1241,7 +1241,7 @@ describe("createKnowledgeBaseTurnTask", () => {
         });
 
       const staged = stageKnowledgeBaseTurnAttachment(input);
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(1_000);
       await expect(staged).resolves.toMatchObject({
         reservation: { stagedAttachmentCount: 1 },
       });
@@ -1275,7 +1275,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     };
 
     const staged = stageKnowledgeBaseTurnAttachment(input);
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(staged).resolves.toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][1].body).toBe(
@@ -1283,7 +1283,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     );
   });
 
-  it("stops attachment staging after four transient attempts", async () => {
+  it("stops attachment staging after two automatic retries", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
@@ -1310,7 +1310,7 @@ describe("createKnowledgeBaseTurnTask", () => {
     });
     await vi.runAllTimersAsync();
     await rejection;
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("fences a confirmation to the visible revision and leaf", async () => {
@@ -2066,6 +2066,10 @@ describe("materialized knowledge-base local asset ingress", () => {
     const file = new File(["pptx-body"], "资料.pptx", {
       type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      buildId: "build-1", conversationId: "conversation-1", turnId: "turn-1", clientRequestId: "request-1", resetRevision: 4, generation: 2, stateEpoch: 1, uploadStatusVersion: 1, uploadAttemptId: "attempt-1", runPhase: "uploading", controlState: "active", totalFiles: 2, totalBytes: file.size, confirmedFiles: 0, confirmedBytes: 0,
+      readyToDispatch: false, allowedActions: ["upload", "stop"], files: [{ itemId: "item-2", ordinal: 2, filename: file.name, sizeBytes: file.size, mimeType: file.type, lastModified: file.lastModified, status: "missing" }],
+    }))));
     await expect(
       uploadKnowledgeBaseLocalAsset(
         file,
@@ -2155,11 +2159,9 @@ describe("materialized knowledge-base local asset ingress", () => {
       ok: true,
       status: 200,
       json: async () => ({
-        stagedCustomerAttachmentCount: 1,
-        retainedCustomerAttachmentCount: 1,
-        missingCustomerAttachments: [],
-        readyToDispatch: true,
-        attachmentManifest,
+        buildId: "build-1", conversationId: "conversation-1", turnId: "turn-1", clientRequestId: "request-1", resetRevision: 4, generation: 2, stateEpoch: 1, uploadStatusVersion: 1, uploadAttemptId: "attempt-1", runPhase: "staging", controlState: "active", totalFiles: 1, totalBytes: 5, confirmedFiles: 1, confirmedBytes: 5,
+        readyToDispatch: true, allowedActions: ["dispatch"],
+        files: attachmentManifest.map(item => ({ ...item, status: "confirmed", resourceId: "asset-retained" })),
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -2193,9 +2195,8 @@ describe("materialized knowledge-base local asset ingress", () => {
     });
     expect(bodySendCount).toBe(1);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/knowledge-base/turn/attachments/resume",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/knowledge-base/turn/upload-status?");
+    expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
   });
 
   it("reconciles an already-staged revise ordinal after both prior recovery responses were lost", async () => {
@@ -2238,11 +2239,9 @@ describe("materialized knowledge-base local asset ingress", () => {
       ok: true,
       status: 200,
       json: async () => ({
-        stagedCustomerAttachmentCount: 1,
-        retainedCustomerAttachmentCount: 1,
-        missingCustomerAttachments: [],
-        readyToDispatch: true,
-        attachmentManifest,
+        buildId: "build-1", conversationId: "conversation-1", turnId: "turn-1", clientRequestId: "request-1", resetRevision: 4, generation: 2, stateEpoch: 1, uploadStatusVersion: 1, uploadAttemptId: "attempt-1", runPhase: "staging", controlState: "active", totalFiles: 1, totalBytes: 5, confirmedFiles: 1, confirmedBytes: 5,
+        readyToDispatch: true, allowedActions: ["dispatch"],
+        files: attachmentManifest.map(item => ({ ...item, status: "confirmed", resourceId: "asset-retained" })),
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -2275,9 +2274,8 @@ describe("materialized knowledge-base local asset ingress", () => {
     });
     expect(bodySendCount).toBe(1);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "/api/knowledge-base/turn/attachments/resume",
-    );
+    expect(fetchMock.mock.calls[0][0]).toContain("/api/knowledge-base/turn/upload-status?");
+    expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
   });
 });
 

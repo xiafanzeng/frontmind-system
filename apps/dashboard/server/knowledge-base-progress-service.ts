@@ -1,7 +1,8 @@
+import { knowledgeBaseRunPhase, knowledgeBaseHasNormalizingResult } from "../shared/knowledge-base-upload-state";
 import { loadKnowledgeBaseExecution } from "./knowledge-base-execution";
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchStart, knowledgeWorkbenchStage } from "./knowledge-workbench-stage";
-import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
+import { knowledgeBaseSessionStorageId, enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -305,7 +306,7 @@ export function knowledgeBaseObservationConversationStorageId(
   userId: number,
   publicConversationId: string,
 ) {
-  return `${enterpriseConversationStoragePrefix(userId)}${normalizeConversationId(publicConversationId)}`;
+  return knowledgeBaseSessionStorageId(userId, normalizeConversationId(publicConversationId));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1835,16 +1836,6 @@ function buildDto(
   };
 }
 
-const KNOWLEDGE_BASE_RESULT_PROCESSING_STAGES = new Set([
-  "download",
-  "archive_safety",
-  "manifest_parse",
-  "component_projection",
-  "canonical_validation",
-  "activation",
-  "presentation",
-]);
-
 const KNOWLEDGE_BASE_FAILURE_STAGES = new Set([
   "local_upload",
   "provider_file_registration",
@@ -1936,30 +1927,15 @@ export function knowledgeBaseMaterializedBusinessProjection(input: {
   const providerAttemptState = metadata.providerAttemptState;
   const resetRequired =
     progress.operationState === "reset_required" ||
-    createAttemptState === "unknown" ||
     createAttemptState === "rejected" ||
     providerAttemptState === "result_rejected";
-  const completion = isRecord(metadata.materializedCompletion)
-    ? metadata.materializedCompletion
-    : null;
-  const hasCanonicalCandidate = Boolean(
-    typeof completion?.storageKey === "string" &&
-      completion.storageKey &&
-      typeof completion.candidateArchiveSha256 === "string" &&
-      /^[a-f0-9]{64}$/u.test(completion.candidateArchiveSha256),
-  );
-  const resultProcessingStage =
-    typeof metadata.resultProcessingStage === "string" &&
-    KNOWLEDGE_BASE_RESULT_PROCESSING_STAGES.has(metadata.resultProcessingStage)
-      ? metadata.resultProcessingStage
-      : null;
   const acknowledged =
     createAttemptState === "acknowledged" ||
     Boolean(activeTurn?.upstreamTaskId);
   const operationState = resetRequired
     ? ("reset_required" as const)
     : activeTurn
-      ? hasCanonicalCandidate || resultProcessingStage
+      ? knowledgeBaseHasNormalizingResult(metadata)
         ? ("normalizing" as const)
         : acknowledged
           ? ("waiting_output" as const)
@@ -3041,6 +3017,8 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     activeTurnRow.buildGeneration
   ) {
     activeTurn = {
+      uploadAttemptId: typeof activeTurnMetadata.uploadAttemptId === "string" ? activeTurnMetadata.uploadAttemptId : null,
+      uploadStatusVersion: Number(activeTurnMetadata.uploadStatusVersion ?? 0),
       id: activeTurnRow.id,
       clientRequestId: activeTurnRow.clientRequestId,
       operationKey: activeTurnRow.operationKey,
@@ -3440,10 +3418,10 @@ function projectKnowledgeBaseObservationSnapshot(input: {
       code: "KNOWLEDGE_BASE_CREATE_OUTCOME_UNKNOWN",
       severity: "warning",
       message:
-        "上游任务创建结果无法安全确认。系统不会重复创建任务；请携带追踪编号联系支持核验。",
+        "启动结果待确认，正在核对本轮请求。系统不会重复创建任务。",
       retryable: false,
-      failureClass: "terminal_nonregenerable",
-      recoveryAction: "contact_support",
+      failureClass: "recoverable_same_turn",
+      recoveryAction: "reconcile",
       canRegenerate: false,
       traceId: safeActiveTraceId,
       attachmentCount: Number.isSafeInteger(activeAttachmentCount)
@@ -3635,8 +3613,11 @@ function projectKnowledgeBaseObservationSnapshot(input: {
     ...(businessProgress.settledAt !== undefined
       ? { settledAt: businessProgress.settledAt }
       : {}),
+    runPhase: knowledgeBaseRunPhase({buildStatus: build.status, operationState: businessProgress.operationState, turnStatus: activeTurnRow?.status, upstreamTaskId: activeTurnRow?.upstreamTaskId, metadata: activeTurnMetadata}),
     processingPhase:
-      businessProgress.operationState === "normalizing"
+      activeTurnMetadata.uploadControl && (activeTurnMetadata.uploadControl as {state?:string}).state === "stopped"
+        ? null
+        : businessProgress.operationState === "normalizing"
         ? "accepting"
         : businessProgress.operationState === "reset_required"
           ? null
@@ -3694,7 +3675,8 @@ function projectKnowledgeBaseObservationSnapshot(input: {
 export async function getKnowledgeBaseObservationProjection(input: {
   userId: number;
   conversationId: string;
-}): Promise<KnowledgeBaseObservationProjection | null> {
+}, executor?: any): Promise<KnowledgeBaseObservationProjection | null> {
+  if (executor) return readKnowledgeBaseObservationProjection(executor, input);
   const db = await requireDb();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {

@@ -112,6 +112,7 @@ const inlineImageSchema = z.object({
 const generalChatMessageSchema = z.object({
   schemaVersion: z.literal(1),
   kind: z.literal("assistant_projection"),
+  isFinalAnswer: z.boolean().optional(),
   turnId: z.string().uuid(),
   agentTaskId: z.string().uuid(),
   providerEventId: z.string().min(1).max(512),
@@ -1626,6 +1627,7 @@ async function authoritativeKnowledgeBaseMetadataForMessages(
       expectedRevision: conversationTurns.expectedRevision,
       expectedLeafId: conversationTurns.expectedLeafId,
       attachmentFileIds: conversationTurns.attachmentFileIds,
+      upstreamTaskId: conversationTurns.upstreamTaskId,
       metadata: conversationTurns.metadata,
       status: conversationTurns.status,
     })

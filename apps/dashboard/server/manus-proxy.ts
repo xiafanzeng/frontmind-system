@@ -2885,7 +2885,7 @@ router.get("/v1/managed-uploads", async (req: Request, res: Response) => {
     // frozen active/retired credential before issuing a fresh capability.
     const pinnedCredential =
       await getDecryptedCredentialForKnowledgeBaseUploadReservation({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
         conversationId,
@@ -2901,7 +2901,7 @@ router.get("/v1/managed-uploads", async (req: Request, res: Response) => {
       );
     }
     const uploads = await listManagedUploadIntentsByResumeScope({
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       conversationId,
@@ -2948,7 +2948,7 @@ router.post("/v1/managed-uploads", async (req: Request, res: Response) => {
     if (resumeScope) {
       const reservationCredential =
         await getDecryptedCredentialForKnowledgeBaseUploadReservation({
-          userId: req.frontmindUser.id,
+          userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
           projectAssignmentId:
             req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
           conversationId: resumeScope.conversationId,
@@ -3001,7 +3001,7 @@ router.post("/v1/managed-uploads", async (req: Request, res: Response) => {
           ? body.mimeType
           : "application/octet-stream"),
       sizeBytes: frozenRequest?.sizeBytes ?? Number(body.sizeBytes),
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       credentialId: pinnedCredential.id,
@@ -3096,7 +3096,7 @@ router.put("/proxy-upload", async (req: Request, res: Response, next) => {
     await receiveManagedUploadIntentBody({
       intentId,
       ticket,
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       contentLength,
@@ -3106,7 +3106,7 @@ router.put("/proxy-upload", async (req: Request, res: Response, next) => {
     // boundary. Provider processing may continue from the sealed local copy.
     const status = await processManagedUploadIntent({
       intentId,
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       traceId,
@@ -3147,7 +3147,7 @@ router.post(
       const status = await recoverManagedUploadIntent({
         intentId,
         ticket,
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
         traceId,
@@ -3188,7 +3188,7 @@ router.delete("/v1/managed-uploads", async (req: Request, res: Response) => {
       const scheduled = await scheduleManagedUploadIntentCleanup({
         intentId,
         ticket,
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
       });
@@ -3197,7 +3197,7 @@ router.delete("/v1/managed-uploads", async (req: Request, res: Response) => {
     await deleteManagedUploadIntent({
       intentId,
       ticket,
-      userId: req.frontmindUser.id,
+      userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
       projectAssignmentId:
         req.frontmindDeliveryProjectContext?.projectAssignmentId ?? null,
     });
@@ -3247,7 +3247,7 @@ router.delete(
     try {
       const { baseUrl } = getFrontMindCredentials(req);
       const result = await discardUnboundUpstreamFile({
-        userId: req.frontmindUser.id,
+        userId: enterpriseWorkspaceUserId(req.frontmindUser.id),
         fileId,
         projectAssignmentId:
           req.frontmindDeliveryProjectContext?.projectAssignmentId,

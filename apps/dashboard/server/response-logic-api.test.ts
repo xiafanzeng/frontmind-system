@@ -1119,3 +1119,11 @@ describe("response logic enterprise route identity", () => {
     expect(res.status).toHaveBeenCalledWith(422);
   });
 });
+
+it("projects only observed response-logic events with stable turn ownership", async () => {
+  const { responseLogicPublicExecution } = await import("./response-logic-api");
+  const execution = responseLogicPublicExecution("task", [{ id: "u", type: "user_message", timestamp: 1, providerOriginalRank: 0 }, { id: "tool", type: "tool_use", timestamp: 2, providerOriginalRank: 1, arguments: "private", executionActivity: { kind: "tool_use", label: "检索文本", toolKind: "builtin" } }, { id: "done", type: "tool_result", timestamp: 3, providerOriginalRank: 2, executionActivity: { kind: "tool_result", callId: "tool", isError: false } }]);
+  expect(execution.timeline[0]).toMatchObject({ phase: "preparing_requirements", turnId: "task:1" });
+  expect(execution.timeline.find(item => item.kind === "tool")).toMatchObject({ status: "completed", turnId: "task:1" });
+  expect(JSON.stringify(execution)).not.toContain("private");
+});

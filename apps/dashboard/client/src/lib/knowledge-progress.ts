@@ -196,6 +196,7 @@ function normalizeObservation(payload: any): KnowledgeBaseObservationDto {
   )
     ? source.syncState
     : undefined;
+  const runPhase = ["reserved", "uploading", "staging", "dispatching", "researching", "normalizing", "published", "failed", "cancelled", "reset_required"].includes(source.runPhase) ? source.runPhase : undefined;
   const processingPhase = [
     "uploading",
     "restoring_files",
@@ -327,6 +328,7 @@ function normalizeObservation(payload: any): KnowledgeBaseObservationDto {
     ...(hasDisplaySequence ? { displaySequence } : {}),
     ...(syncState ? { syncState } : {}),
     ...(processingPhase !== undefined ? { processingPhase } : {}),
+    ...(runPhase !== undefined ? { runPhase } : {}),
     ...(contentState ? { contentState } : {}),
     ...(packageState ? { packageState } : {}),
     ...(packageAttemptCount !== undefined ? { packageAttemptCount } : {}),

@@ -79,6 +79,8 @@ import {
   reserveKnowledgeBaseTurn,
   recordKnowledgeNodeEditPatch,
   recordKnowledgeBaseUploadHeartbeat,
+  getKnowledgeBaseUploadStatus,
+  controlKnowledgeBaseUpload,
   stageAndClaimKnowledgeBaseDeferredTurnAttachment,
   stageKnowledgeBaseDeferredTurnAttachment,
   sanitizeKnowledgeBaseRecoveryMetadata,
@@ -980,9 +982,12 @@ describe("Manus v2 canonical task writer fence", () => {
     await expect(observe()).resolves.toMatchObject({
       skipNormalization: false,
     });
+    const normalizingVersion=Number((harness.store.turns[0]!.metadata as any).uploadStatusVersion);
+    expect(normalizingVersion).toBeGreaterThan(0);
     await expect(observe(true)).resolves.toMatchObject({
       skipNormalization: false,
     });
+    expect((harness.store.turns[0]!.metadata as any).uploadStatusVersion).toBe(normalizingVersion+1);
     await expect(observe()).resolves.toMatchObject({
       skipNormalization: true,
       diagnostic: {
@@ -993,6 +998,7 @@ describe("Manus v2 canonical task writer fence", () => {
         deterministicFailure: true,
       },
     });
+    expect((harness.store.turns[0]!.metadata as any).uploadStatusVersion).toBe(normalizingVersion+1);
     const interruptedArchiveSha = "b".repeat(64);
     await expect(
       observeKnowledgeBaseMaterializedResultDiagnostic(
@@ -6119,14 +6125,80 @@ describe("knowledge-base attachment-first turn reservation", () => {
     const input = { userId: 1, conversationId: build.conversationId, turnId: reserved.turn.id,
       clientRequestId: reserved.turn.clientRequestId, expectedResetRevision: 0, uploadedBytes: 1024 };
     await recordKnowledgeBaseUploadHeartbeat({ ...input, status: "active", now: new Date(100_000) }, executor);
-    await recordKnowledgeBaseUploadHeartbeat({ ...input, status: "cancelled", now: new Date(115_000) }, executor);
+    await controlKnowledgeBaseUpload({ ...input, action: "stop", now: new Date(115_000) }, executor);
     expect(store.turns[0]!.metadata).toMatchObject({ awaitingClientAttachments: true,
-      browserUpload: { status: "cancelled", uploadedBytes: 1024, lastHeartbeatAt: 115_000, lastProgressAt: 100_000 } });
+      browserUpload: { status: "cancelled", uploadedBytes: 0, lastHeartbeatAt: 115_000, lastProgressAt: 115_000 } });
     expect(store.turns[0]!.upstreamTaskId).toBeNull();
     store.resetRevision = 1;
     await expect(recordKnowledgeBaseUploadHeartbeat({ ...input, status: "active" }, executor))
       .rejects.toMatchObject({ code: "KNOWLEDGE_BASE_RESET_REVISION_CHANGED" });
     expect((store.turns[0]!.metadata as any).browserUpload.status).toBe("cancelled");
+  });
+
+  it("does not let a late active heartbeat undo an upload stop", async () => {
+    const { executor, store } = createTurnServiceExecutor({
+      build: { ...build }, conversation: { ...conversation },
+      turnSelections: [[[], []], [(s) => s.turns], [(s) => s.turns], [(s) => s.turns]],
+    });
+    const reserved = await reserveKnowledgeBaseTurn(reserveInput(), executor);
+    const input = { userId: 1, conversationId: build.conversationId, turnId: reserved.turn.id,
+      clientRequestId: reserved.turn.clientRequestId, expectedResetRevision: 0, uploadedBytes: 1024 };
+    await controlKnowledgeBaseUpload({ ...input, action: "stop" }, executor);
+    await recordKnowledgeBaseUploadHeartbeat({ ...input, status: "active" }, executor).catch(() => undefined);
+    expect((store.turns[0]!.metadata as any).browserUpload.status).toBe("cancelled");
+  });
+
+  it("reads upload state without mutation, preserves stopped state and fences the previous attempt after resume", async () => {
+    const { executor, store } = createTurnServiceExecutor({
+      build: { ...build }, conversation: { ...conversation },
+      turnSelections: [[[], []], ...Array.from({length:12},()=>[(s: TurnServiceStore)=>s.turns])],
+    });
+    const reserved = await reserveKnowledgeBaseTurn(reserveInput(), executor);
+    const input={userId:1,conversationId:build.conversationId,turnId:reserved.turn.id,clientRequestId:reserved.turn.clientRequestId,expectedResetRevision:0,uploadAttemptId:reserved.turn.uploadAttemptId!};
+    const before=JSON.stringify(store.turns);
+    const initial=await getKnowledgeBaseUploadStatus(input,executor);
+    expect(JSON.stringify(store.turns)).toBe(before);
+    expect(initial).toMatchObject({totalFiles:2,confirmedFiles:0,runPhase:"reserved",readyToDispatch:false});
+    const stopped=await controlKnowledgeBaseUpload({...input,action:"stop"},executor);
+    expect(stopped).toMatchObject({controlState:"stopped",runPhase:"cancelled",allowedActions:["resume"]});
+    const stoppedRows=JSON.stringify(store.turns);
+    expect((await getKnowledgeBaseUploadStatus(input,executor)).controlState).toBe("stopped");
+    expect(JSON.stringify(store.turns)).toBe(stoppedRows);
+    const resumed=await controlKnowledgeBaseUpload({...input,action:"resume"},executor);
+    expect(resumed.uploadAttemptId).not.toBe(initial.uploadAttemptId);
+    expect(resumed.uploadStatusVersion).toBe(initial.uploadStatusVersion+2);
+    await expect(recordKnowledgeBaseUploadHeartbeat({...input,status:"active",uploadedBytes:500},executor)).rejects.toMatchObject({code:"CONFLICT"});
+    await recordKnowledgeBaseUploadHeartbeat({...input,uploadAttemptId:resumed.uploadAttemptId!,status:"active",uploadedBytes:500},executor);
+    expect((await getKnowledgeBaseUploadStatus(input,executor)).uploadStatusVersion).toBe(resumed.uploadStatusVersion);
+  });
+
+  it("finds a lost reservation response by request identity without writing or changing the batch", async () => {
+    const {executor,store}=createTurnServiceExecutor({build:{...build},conversation:{...conversation},turnSelections:[[[],[]],[(s)=>s.turns,(s)=>s.turns],[(s)=>s.turns,(s)=>s.turns]]});
+    const reserved=await reserveKnowledgeBaseTurn(reserveInput(),executor);
+    const input={userId:1,conversationId:build.conversationId,clientRequestId:reserved.turn.clientRequestId,expectedResetRevision:0};
+    const before=JSON.stringify(store);
+    const status=await getKnowledgeBaseUploadStatus(input,executor);
+    expect(status.reservation).toMatchObject({state:"awaiting_attachments",turnId:reserved.turn.id,clientRequestId:reserved.turn.clientRequestId,generation:reserved.turn.buildGeneration,revision:reserved.turn.expectedRevision,leafId:reserved.turn.expectedLeafId,sourceResetRevision:0,uploadAttemptId:reserved.turn.uploadAttemptId,requiresUpload:true});
+    expect(JSON.stringify(store)).toBe(before);
+    store.resetRevision=1;
+    await expect(getKnowledgeBaseUploadStatus(input,executor)).rejects.toMatchObject({code:"KNOWLEDGE_BASE_RESET_REVISION_CHANGED"});
+  });
+
+  it("returns upload and observation from the same transaction, including a committed stop", async () => {
+    const {executor,store}=createTurnServiceExecutor({build:{...build},conversation:{...conversation},turnSelections:[[[],[]],[(s)=>s.turns],[(s)=>s.turns]]});
+    const reserved=await reserveKnowledgeBaseTurn(reserveInput(),executor);
+    const input={userId:1,conversationId:build.conversationId,turnId:reserved.turn.id,clientRequestId:reserved.turn.clientRequestId,expectedResetRevision:0};
+    const transactions:any[]=[];
+    const realTransaction=executor.transaction;
+    executor.transaction=async(run:any)=>realTransaction(async tx=>{transactions.push(tx);return run(tx);});
+    const observe=vi.fn(async(tx:any)=>{expect(tx).toBe(transactions.at(-1));return {runPhase:(store.turns[0]!.metadata as any).uploadControl?.state === "stopped" ? "cancelled":"reserved"} as any;});
+    const stopped=await controlKnowledgeBaseUpload({...input,action:"stop"},executor,observe);
+    expect(stopped).toMatchObject({runPhase:"cancelled",knowledgeObservation:{runPhase:"cancelled"}});
+    const before=JSON.stringify(store);
+    expect(await getKnowledgeBaseUploadStatus(input,executor,observe)).toMatchObject({runPhase:"cancelled",knowledgeObservation:{runPhase:"cancelled"}});
+    expect(JSON.stringify(store)).toBe(before);
+    expect(transactions).toHaveLength(2);
+    expect(observe).toHaveBeenCalledTimes(2);
   });
 
   it("reads only the frozen customer manifest for an active deferred reservation", async () => {

@@ -58,6 +58,7 @@ type RetainedKnowledgeBaseLocalAsset = {
 };
 
 type ResumeInput = {
+  uploadAttemptId?: string;
   userId: number;
   projectAssignmentId: string | null;
   conversationId: string;
@@ -310,6 +311,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
       clientRequestId: input.clientRequestId,
       itemId: item.itemId,
       expectedResetRevision: input.expectedResetRevision,
+      uploadAttemptId: input.uploadAttemptId,
       ...(item.sha256 ? { contentSha256: item.sha256 } : {}),
       ordinal: item.ordinal,
     };
@@ -374,6 +376,7 @@ export async function resumeKnowledgeBaseDeferredTurnAttachments(
       clientRequestId: input.clientRequestId,
       clientAttachmentManifest: attachmentManifest,
       expectedResetRevision: input.expectedResetRevision,
+      uploadAttemptId: input.uploadAttemptId,
       index,
       attachment: {
         file_id: retained.localAssetId,

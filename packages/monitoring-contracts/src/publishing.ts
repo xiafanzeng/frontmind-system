@@ -595,6 +595,7 @@ export const publisherPublicationItemOutputSchema = z.object({
   publishedUrl: z.string().url().nullable(),
   failureReason: z.string().nullable(),
   actionRequiredReason: z.string().nullable(),
+  submissionAttempts: z.array(z.object({ id: idSchema, number: z.number().int().positive(), startedAt: z.coerce.date(), completedAt: z.coerce.date().nullable(), result: z.enum(["succeeded", "business_rejected", "auth_blocked", "submission_unknown"]).nullable() })).optional(),
   submittedAt: z.coerce.date().nullable(),
   completedAt: z.coerce.date().nullable(),
 });

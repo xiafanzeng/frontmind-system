@@ -162,30 +162,6 @@
   background: #b8b0bd;
 }
 
-/* Business editors and forms keep their existing two-column layout so the
-   inspector cannot cover their controls. Only the general conversation uses
-   the independent floating panel. */
-.agent-workbench-shell:not(.module-general) .agent-workbench-shell__layout {
-  max-width: 1584px;
-  margin-inline: auto;
-  grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 33.333%);
-}
-.agent-workbench-shell:not(.module-general)
-  .agent-workbench-shell__layout.is-single-pane {
-  max-width: none;
-  margin-inline: 0;
-  grid-template-columns: minmax(0, 1fr);
-}
-.agent-workbench-shell:not(.module-general) .agent-workbench-shell__auxiliary {
-  position: relative;
-  inset: auto;
-  width: auto;
-}
-.agent-workbench-shell:not(.module-general) .agent-workbench-shell__resize {
-  position: relative;
-  inset: auto;
-  width: auto;
-}
 .agent-workbench-subagents {
   display: flex;
   flex-wrap: wrap;
@@ -820,12 +796,12 @@
   max-width: 960px;
   margin-inline: auto;
 }
-/* Both the native chat and the scrolling preview stay centred in the complete
-   main area. Symmetric clearance keeps the right floating panel off the chat.
+/* All workspaces share the complete dashboard-main centre. Constrain the
+   entire main surface (including separate composers), with equal clearance
+   on both sides so a right-floating result never covers an editor or form.
    A collapsed panel or responsive drawer does not reserve any space. */
-.agent-workbench-shell.module-general
-  .agent-workbench-shell__layout:not(.is-single-pane)
-  .agent-workbench-shell__main-content {
+.agent-workbench-shell__layout:not(.is-single-pane)
+  .agent-workbench-shell__main {
   width: 100%;
   max-width: calc(
     100% - var(--agent-aux-width, 33.333%) -
@@ -869,6 +845,9 @@
   width: 100%;
   max-width: none;
   padding: 16px 32px 32px;
+}
+.agent-workbench-shell.module-general .knowledge-composer {
+  border-top: 0;
 }
 .agent-workbench-shell .knowledge-composer > div {
   max-width: 960px !important;
@@ -944,10 +923,5 @@
 .agent-workbench-shell__main-content.is-scrollable,
 .agent-workbench-shell [data-testid="chat-messages-viewport"] {
   scrollbar-width: thin;
-  scrollbar-gutter: stable;
-}
-
-.agent-workbench-shell.module-general .agent-workbench-shell__main-content.is-scrollable,
-.agent-workbench-shell.module-general [data-testid="chat-messages-viewport"] {
   scrollbar-gutter: stable both-edges;
 }

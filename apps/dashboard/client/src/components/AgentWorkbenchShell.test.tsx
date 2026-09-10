@@ -20,7 +20,7 @@ import {
 } from "@/dashboard/agent-workbench";
 import type { OperatorView } from "@/dashboard/operator-navigation";
 
-let workspaceWidth = 1184;
+let workspaceWidth = 1664;
 const props = {
   projectId: "a",
   moduleId: "brand",
@@ -35,8 +35,8 @@ function viewport(width: number, container = width - 256) {
   fireEvent(window, new Event("resize"));
 }
 beforeEach(() => {
-  workspaceWidth = 1184;
-  vi.stubGlobal("innerWidth", 1440);
+  workspaceWidth = 1664;
+  vi.stubGlobal("innerWidth", 1920);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
     () => workspaceWidth,
   );
@@ -69,41 +69,57 @@ describe("AgentWorkbenchShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
     expect(screen.getByRole("complementary")).toHaveTextContent("辅助摘要");
   });
-  it("uses the same 2:1 geometry at the 948px boundary for every layout", () => {
-    expect(workbenchPaneGeometry(948)).toEqual({
+  it("bounds floating panels to preserve a readable centered main surface", () => {
+    expect(workbenchPaneGeometry(1280)).toEqual({
       minAux: 300,
-      maxAux: 300,
-      width: 300,
+      maxAux: 308,
+      width: 308,
     });
-    expect(workbenchPaneGeometry(1248).width).toBe(400);
+    expect(workbenchPaneGeometry(1664).width).toBe(384);
     expect(workbenchPaneGeometry(2400).width).toBe(512);
-    expect(workbenchPaneGeometry(948, 0.5).width).toBe(300);
-    viewport(1200, 948);
-    render(<AgentWorkbenchShell {...props} layout="knowledge" />);
-    expect(screen.getByRole("separator")).toHaveAttribute(
-      "aria-valuenow",
-      "300",
-    );
-    act(() => viewport(1200, 947));
-    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+    expect(workbenchPaneGeometry(2400, 0.9).width).toBe(868);
+    expect(workbenchPaneGeometry(1280, 0.1).width).toBe(300);
   });
+  it.each([
+    ["brand", "knowledge"],
+    ["general", "workflow"],
+    ["publishing", "workflow"],
+  ] as const)(
+    "switches %s to a drawer below 1280px of available workspace",
+    (moduleId, layout) => {
+      viewport(1536, 1280);
+      render(
+        <AgentWorkbenchShell {...props} moduleId={moduleId} layout={layout} />,
+      );
+      expect(screen.getByRole("separator")).toHaveAttribute(
+        "aria-valuenow",
+        "308",
+      );
+      act(() => viewport(1536, 1279));
+      expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "打开任务信息" }),
+      ).toBeVisible();
+    },
+  );
   it("restores a proportional preference when changing the available width", () => {
     vi.mocked(localStorage.getItem).mockImplementation((key) =>
-      key === WORKBENCH_RATIO_KEY ? "0.4" : null,
+      key === WORKBENCH_RATIO_KEY ? "0.24" : null,
     );
-    viewport(1600, 1248);
+    viewport(1696, 1440);
     render(<AgentWorkbenchShell {...props} />);
     expect(screen.getByRole("separator")).toHaveAttribute(
       "aria-valuenow",
-      "480",
+      "334",
     );
-    act(() => viewport(1800, 1548));
+    act(() => viewport(2096, 1840));
     expect(screen.getByRole("separator")).toHaveAttribute(
       "aria-valuenow",
-      "600",
+      "369",
     );
   });
-  it("keeps the dialogue left and contextual subagent controls right without remounting the main composer", () => {
+  it("keeps contextual subagent controls in the floating panel without remounting the main composer", () => {
     function Workbench() {
       const [view, setView] = useState<OperatorView>("publishing");
       const module = createWorkbenchModules(() => null, setView, view).find(
@@ -147,29 +163,46 @@ describe("AgentWorkbenchShell", () => {
       screen.getByRole("textbox"),
     );
   });
-  it("keeps a native general conversation usable across a floating panel, drawer and collapse", async () => {
-    viewport(1920);
-    render(<AgentWorkbenchShell {...props} moduleId="general" scrollMain={false} />);
-    const draft = screen.getByRole("textbox", { name: "任务草稿" });
-    fireEvent.change(draft, { target: { value: "保留通用智能体草稿" } });
-    expect(screen.getByRole("complementary")).toBeVisible();
-    act(() => viewport(2560));
-    fireEvent.keyDown(screen.getByRole("separator"), { key: "End" });
-    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "820");
-    act(() => viewport(1440));
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
-    expect(screen.getByRole("dialog")).toHaveTextContent("辅助摘要");
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    act(() => viewport(1536));
-    expect(screen.getByRole("complementary")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
-    act(() => viewport(390, 390));
-    expect(screen.getByRole("textbox", { name: "任务草稿" })).toBe(draft);
-    expect(draft).toHaveValue("保留通用智能体草稿");
-  });
+  it.each([
+    ["general", "workflow"],
+    ["brand", "knowledge"],
+    ["publishing", "workflow"],
+  ] as const)(
+    "keeps the native %s conversation usable across a floating panel, drawer and collapse",
+    async (moduleId, layout) => {
+      viewport(1920);
+      render(
+        <AgentWorkbenchShell
+          {...props}
+          moduleId={moduleId}
+          layout={layout}
+          scrollMain={false}
+        />,
+      );
+      const draft = screen.getByRole("textbox", { name: "任务草稿" });
+      fireEvent.change(draft, { target: { value: "保留未发送的草稿" } });
+      expect(screen.getByRole("complementary")).toBeVisible();
+      act(() => viewport(2560));
+      fireEvent.keyDown(screen.getByRole("separator"), { key: "End" });
+      expect(screen.getByRole("separator")).toHaveAttribute(
+        "aria-valuenow",
+        "820",
+      );
+      act(() => viewport(1440));
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+      expect(screen.getByRole("dialog")).toHaveTextContent("辅助摘要");
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      act(() => viewport(1536));
+      expect(screen.getByRole("complementary")).toBeVisible();
+      fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      act(() => viewport(390, 390));
+      expect(screen.getByRole("textbox", { name: "任务草稿" })).toBe(draft);
+      expect(draft).toHaveValue("保留未发送的草稿");
+    },
+  );
   it("keeps backward-compatible conversation props in main, never in the auxiliary pane", () => {
     render(
       <AgentWorkbenchShell
@@ -195,32 +228,44 @@ describe("AgentWorkbenchShell", () => {
     const separator = screen.getByRole("separator");
     expect(separator).toHaveAttribute("aria-valuenow", "512");
     fireEvent.keyDown(separator, { key: "End" });
-    expect(separator).toHaveAttribute("aria-valuenow", "936");
+    expect(separator).toHaveAttribute("aria-valuenow", "668");
   });
-  it("bounds mouse and keyboard resizing to preserve 600px for main", () => {
+  it("bounds mouse and keyboard resizing while reserving equal space around the main surface", () => {
+    viewport(2560);
     const { container } = render(<AgentWorkbenchShell {...props} />);
     const separator = screen.getByRole("separator");
-    expect(separator).toHaveAttribute("aria-valuenow", "379");
+    expect(separator).toHaveAttribute("aria-valuenow", "512");
     fireEvent.keyDown(separator, { key: "ArrowLeft" });
-    expect(separator).toHaveAttribute("aria-valuenow", "403");
+    expect(separator).toHaveAttribute("aria-valuenow", "536");
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    expect(separator).toHaveAttribute("aria-valuenow", "512");
     fireEvent.keyDown(separator, { key: "Home" });
     expect(separator).toHaveAttribute("aria-valuenow", "300");
-    act(() => viewport(1440, 1000));
     vi.spyOn(
       container.querySelector(".agent-workbench-shell__layout")!,
       "getBoundingClientRect",
-    ).mockReturnValue({ left: 256, right: 1256, width: 1000 } as DOMRect);
+    ).mockReturnValue({ left: 256, right: 2560, width: 2304 } as DOMRect);
     fireEvent.pointerDown(separator, { button: 0 });
     fireEvent.pointerMove(window, { clientX: 300 });
+    expect(separator).toHaveAttribute("aria-valuenow", "820");
+    fireEvent.pointerMove(window, { clientX: 2550 });
+    expect(separator).toHaveAttribute("aria-valuenow", "300");
+    fireEvent.pointerMove(window, { clientX: 1844 });
     fireEvent.pointerUp(window);
-    expect(separator).toHaveAttribute("aria-valuenow", "352");
-    expect(localStorage.setItem).toHaveBeenCalled();
+    expect(separator).toHaveAttribute("aria-valuenow", "700");
+    expect(localStorage.setItem).toHaveBeenLastCalledWith(
+      WORKBENCH_RATIO_KEY,
+      String(700 / 1536),
+    );
+    fireEvent.pointerMove(window, { clientX: 300 });
+    expect(separator).toHaveAttribute("aria-valuenow", "700");
     fireEvent.keyDown(separator, { key: "Enter" });
-    expect(separator).toHaveAttribute("aria-valuenow", "317");
+    expect(separator).toHaveAttribute("aria-valuenow", "512");
   });
   it.each([
     [1024, 768],
-    [1440, 850],
+    [1440, 1184],
+    [1023, 1280],
   ])(
     "prioritizes main when viewport %i or container %i cannot fit both panes",
     async (width, available) => {
@@ -271,7 +316,7 @@ describe("AgentWorkbenchShell", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
-    act(() => viewport(1440));
+    act(() => viewport(1920));
     expect(screen.getByRole("textbox", { name: "知识节点正文" })).toBe(editor);
     expect(editor).toHaveValue("不能丢失的节点修改");
   });

@@ -51,12 +51,17 @@ export type AgentWorkbenchShellProps = {
   auxiliaryFocusRequest?: object | null;
 };
 export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v4.auxiliary-ratio";
-export const WORKBENCH_MIN_WIDTH = 948;
+export const WORKBENCH_MIN_WIDTH = 1280;
 export const WORKBENCH_MAX_WIDTH = 1584;
 
 export function workbenchPaneGeometry(available: number, ratio = 1 / 3) {
   const content = Math.max(0, Math.min(available, WORKBENCH_MAX_WIDTH) - 48);
-  const maxAux = Math.max(300, content - 600);
+  // Keep 600px for the centred main surface, with equal panel clearance on
+  // both sides. The reference width sizes the panel; it never caps the shell.
+  const maxAux = Math.max(
+    300,
+    Math.min((available - 664) / 2, available < 2000 ? content / 4 : Infinity),
+  );
   return {
     minAux: 300,
     maxAux,
@@ -111,27 +116,12 @@ export function AgentWorkbenchShell({
   const stopDrag = useRef<() => void>(() => undefined);
   const focusMainAfterClose = useRef(false);
   const paneGeometry = workbenchPaneGeometry(available, ratio);
-  // Reserve a 600px centred chat container plus symmetric panel clearance.
-  // Medium desktops also cap the panel at a quarter of the reference width.
-  const generalAuxCap =
-    moduleId === "general"
-      ? Math.max(
-          300,
-          Math.min(
-            (available - 664) / 2,
-            available < 2000
-              ? (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 4
-              : Number.POSITIVE_INFINITY,
-          ),
-        )
-      : Number.POSITIVE_INFINITY;
   const minAux = paneGeometry.minAux;
-  const maxAux = Math.min(paneGeometry.maxAux, generalAuxCap);
-  const renderedWidth = Math.min(paneGeometry.width, maxAux);
+  const maxAux = paneGeometry.maxAux;
+  const renderedWidth = paneGeometry.width;
   const narrow =
     viewportWidth < 1024 ||
-    (available > 0 &&
-      available < (moduleId === "general" ? 1280 : WORKBENCH_MIN_WIDTH));
+    (available > 0 && available < WORKBENCH_MIN_WIDTH);
   const inlineAux = hasAux && !narrow && !collapsed;
   const [auxHost] = useState(() => {
     const node = document.createElement("div");
@@ -307,7 +297,7 @@ export function AgentWorkbenchShell({
               role="separator"
               aria-label="调整任务信息面板宽度"
               aria-orientation="vertical"
-              title="拖动调整宽度；双击或按 Enter 恢复 2:1"
+              title="拖动调整宽度；双击或按 Enter 恢复默认宽度"
               onDoubleClick={() =>
                 changeWidth((Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 3)
               }

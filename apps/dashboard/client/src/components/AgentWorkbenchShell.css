@@ -821,6 +821,21 @@
   max-width: 960px;
   margin-inline: auto;
 }
+/* Centre the general conversation in the complete dashboard-main area while
+   reserving enough clear space for the floating task/file panel. At 1920px
+   the panel is capped by the shell's geometry and this keeps the composer
+   clear of it; at 2560px the normal 960px reading measure is restored. */
+.agent-workbench-shell.module-general
+  .agent-workbench-shell__main-content.is-scrollable
+  > * {
+  max-width: min(
+    960px,
+    calc(
+      100% - var(--agent-aux-width, 33.333%) -
+        var(--agent-aux-width, 33.333%) - 48px
+    )
+  );
+}
 .agent-workbench-shell__auxiliary {
   font-size: 13px;
   line-height: 20px;

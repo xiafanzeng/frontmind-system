@@ -755,7 +755,7 @@ describe("UserBrandDashboard formal workspace", () => {
     });
   });
 
-  it("opens the selected enterprise project with all seven modules in one group and no plan chrome", async () => {
+  it("keeps project modules grouped and the general agent independent without plan chrome", async () => {
     render(<UserBrandDashboard />);
     expect(await screen.findByTestId("knowledge-agent")).toBeInTheDocument();
     const modules = screen.getByRole("navigation", { name: "项目模块" });
@@ -774,7 +774,10 @@ describe("UserBrandDashboard formal workspace", () => {
       Array.from(modules.querySelectorAll(".operator-module-entry")),
     ).toEqual([...moduleEntries, general]);
     const moduleGroup = modules.querySelector("#operator-brand-modules")!;
-    expect(Array.from(moduleGroup.children)).toEqual([...moduleEntries, general]);
+    expect(Array.from(moduleGroup.children)).toEqual(moduleEntries);
+    expect(moduleGroup).not.toContainElement(general);
+    fireEvent.click(within(modules).getByRole("button", { name: "AI 智能品牌优化" }));
+    expect(general).toBeVisible();
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();

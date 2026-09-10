@@ -191,7 +191,7 @@ describe("operator workspace navigation", () => {
     view.unmount();
   });
 
-  it("keeps all seven modules in the same collapsible group and task navigation in the workbench panel", () => {
+  it("keeps the general agent separate and visible when brand modules are collapsed", () => {
     const props = sidebarProps();
     render(
       <OperatorSidebar
@@ -205,8 +205,11 @@ describe("operator workspace navigation", () => {
       toggle.getAttribute("aria-controls")!,
     )!;
     const entries = within(group).getAllByRole("button");
-    expect(entries).toHaveLength(7);
-    expect(entries.at(-1)).toHaveAccessibleName("通用智能体");
+    expect(entries).toHaveLength(6);
+    const general = screen.getByRole("button", { name: "通用智能体" });
+    expect(group).not.toContainElement(general);
+    expect(general.parentElement).toHaveClass("operator-general-nav");
+    expect(group.nextElementSibling).toBe(general.parentElement);
     for (const entry of entries) {
       expect(entry.parentElement).toBe(group);
       expect(entry).toHaveClass("operator-nav-entry", "operator-module-entry");
@@ -224,14 +227,65 @@ describe("operator workspace navigation", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(within(group).queryAllByRole("button")).toHaveLength(0);
-    expect(screen.queryByRole("button", { name: "通用智能体" })).toBeNull();
+    expect(general).toBeVisible();
+    fireEvent.click(general);
     fireEvent.click(toggle);
-    expect(within(group).getAllByRole("button")).toHaveLength(7);
-    fireEvent.click(within(group).getByRole("button", { name: "通用智能体" }));
+    expect(within(group).getAllByRole("button")).toHaveLength(6);
     expect(props.onNavigate).toHaveBeenCalledTimes(1);
     expect(props.onNavigate).toHaveBeenCalledWith("/agent");
     expect(props.onSelectProject).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { label: "collapsed desktop rail", collapsed: true, mobile: false },
+    { label: "phone drawer", collapsed: false, mobile: true },
+  ])(
+    "keeps the independent agent usable in the $label",
+    ({ collapsed, mobile }) => {
+      const media = vi
+        .spyOn(window, "matchMedia")
+        .mockImplementation((query) => ({
+          matches: mobile,
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        }));
+      const props = sidebarProps();
+      const close = vi.fn();
+      const rendered = render(
+        <OperatorSidebar
+          {...props}
+          collapsed={collapsed}
+          mobileOpen={mobile}
+          onCloseMobile={close}
+        />,
+      );
+      try {
+        fireEvent.click(
+          screen.getByRole("button", { name: "AI 智能品牌优化" }),
+        );
+        const general = screen.getByRole("button", { name: "通用智能体" });
+        expect(general).toBeVisible();
+        expect(general).toHaveAttribute("title", "通用智能体");
+        if (mobile)
+          expect(
+            screen.getByRole("dialog", { name: "工作区导航" }),
+          ).toContainElement(general);
+        act(() => general.focus());
+        expect(general).toHaveFocus();
+        fireEvent.click(general);
+        expect(props.onNavigate).toHaveBeenCalledWith("/agent");
+        expect(close).toHaveBeenCalledTimes(1);
+      } finally {
+        rendered.unmount();
+        media.mockRestore();
+      }
+    },
+  );
 
   it("keeps the project capsule at the bottom with its list closed by default", () => {
     const props = sidebarProps();

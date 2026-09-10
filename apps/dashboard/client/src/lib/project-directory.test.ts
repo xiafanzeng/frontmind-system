@@ -160,6 +160,34 @@ describe("owner project directory management", () => {
     expect(window.location.search).toContain("view=knowledge");
   });
 
+  it("finishes deleting the last project without waiting for the follow-up directory read", async () => {
+    const refresh = deferred<{ projects: DirectoryProject[] }>();
+    directory.queryClient.setQueryData(directory.queryKey, { projects: [a] });
+    api.list.mockReturnValue(refresh.promise);
+    await directory.delete(a);
+    expect(directory.getPending()).toBe(false);
+    expect(directory.latest()?.projects).toEqual([]);
+    expect(window.location.search).not.toContain("enterpriseProjectId");
+    refresh.resolve({ projects: [a] });
+    await settle();
+    expect(directory.latest()?.projects).toEqual([]);
+  });
+
+  it("releases the deletion dialog on a server rejection even while the directory read is slow", async () => {
+    const refresh = deferred<{ projects: DirectoryProject[] }>();
+    const conflict = Object.assign(new Error("项目还有正在运行的任务"), {
+      data: { code: "CONFLICT" },
+    });
+    api.remove.mockRejectedValue(conflict);
+    api.list.mockReturnValue(refresh.promise);
+    await expect(directory.delete(a)).rejects.toBe(conflict);
+    expect(directory.getPending()).toBe(false);
+    expect(directory.latest()?.projects).toEqual([a, b]);
+    expect(window.location.search).toContain("enterpriseProjectId=a");
+    refresh.resolve({ projects: [a, b] });
+    await settle();
+  });
+
   it("locks management across the owner scope and treats successful replays as side-effect free", async () => {
     const response = deferred<unknown>();
     api.remove.mockReturnValue(response.promise);
@@ -192,6 +220,7 @@ describe("owner project directory management", () => {
     api.remove.mockRejectedValue(conflict);
     api.list.mockResolvedValue({ projects: [{ ...a, revision: 4 }, b] });
     await expect(directory.delete(a)).rejects.toBe(conflict);
+    await settle();
     expect(directory.latest()?.projects[0].revision).toBe(4);
     expect(api.remove).toHaveBeenCalledTimes(1);
     expect(api.remove).toHaveBeenCalledWith({

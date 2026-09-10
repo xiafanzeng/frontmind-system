@@ -110,13 +110,23 @@ export function AgentWorkbenchShell({
   const toggle = useRef<HTMLButtonElement>(null);
   const stopDrag = useRef<() => void>(() => undefined);
   const focusMainAfterClose = useRef(false);
-  const {
-    minAux,
-    maxAux,
-    width: renderedWidth,
-  } = workbenchPaneGeometry(available, ratio);
+  const paneGeometry = workbenchPaneGeometry(available, ratio);
+  // On medium desktops the general composer needs a little more clear space
+  // than a one-third panel leaves.  Keep the panel draggable, but cap its
+  // range until the dashboard has enough room for the full 512px treatment.
+  const generalAuxCap =
+    moduleId === "general" && available < 2000
+      ? Math.max(
+          300,
+          (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 4,
+        )
+      : Number.POSITIVE_INFINITY;
+  const minAux = paneGeometry.minAux;
+  const maxAux = Math.min(paneGeometry.maxAux, generalAuxCap);
+  const renderedWidth = Math.min(paneGeometry.width, maxAux);
   const narrow =
-    viewportWidth < 1024 || (available > 0 && available < WORKBENCH_MIN_WIDTH);
+    viewportWidth < 1024 ||
+    (available > 0 && available < WORKBENCH_MIN_WIDTH);
   const inlineAux = hasAux && !narrow && !collapsed;
   const [auxHost] = useState(() => {
     const node = document.createElement("div");
@@ -235,7 +245,7 @@ export function AgentWorkbenchShell({
   return (
     <section
       ref={root}
-      className={`agent-workbench-shell layout-${layout}`}
+      className={`agent-workbench-shell layout-${layout} module-${moduleId}`}
       aria-label={`${title}工作区`}
       data-layout={layout}
       style={{ "--agent-aux-width": `${renderedWidth}px`, "--module-color": OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ?? "#491060" } as CSSProperties}

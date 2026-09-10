@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { enterpriseProjects, users } from "../drizzle/schema";
+import { enterpriseProjects, monitoringAccountLinks, users } from "../drizzle/schema";
 import { AuthServiceError, type AuthenticatedUser } from "./auth-service";
 import { getDb } from "./db";
 import { assertEnterpriseAccountAccess } from "./enterprise-project-service";
@@ -44,38 +44,64 @@ export async function deleteEnterpriseProject(
     // provider outcomes. A transport session alone is not an active task.
     const [blockers] = await tx.execute(sql`
       SELECT 'AI 智能体' AS kind FROM ai_charge_commands
-        WHERE enterprise_project_id = ${project.id} AND state NOT IN ('settled', 'rejected')
+        WHERE account_user_id = ${project.ownerUserId}
+          AND enterprise_project_id = ${project.id} AND state NOT IN ('settled', 'rejected')
       UNION ALL SELECT 'AI 智能体' FROM agent_operations
-        WHERE enterpriseProjectId = ${project.id}
+        WHERE account_user_id = ${project.ownerUserId} AND enterpriseProjectId = ${project.id}
           AND operation_type <> 'dashboard.provider.transport'
           AND status IN ('queued', 'running', 'result_pending', 'attention_required')
       UNION ALL SELECT '知识库或内容制作' FROM conversation_turns
-        WHERE enterpriseProjectId = ${project.id} AND status IN ('queued', 'running')
+        WHERE userId = ${project.ownerUserId}
+          AND enterpriseProjectId = ${project.id} AND status IN ('queued', 'running')
       UNION ALL SELECT '建站或内容制作' FROM site_operations so
         INNER JOIN site_projects sp ON sp.id = so.project_id
-        WHERE sp.enterpriseProjectId = ${project.id}
+        WHERE sp.user_id = ${project.ownerUserId} AND sp.enterpriseProjectId = ${project.id}
           AND so.status IN ('queued', 'running', 'outcome_unknown', 'attention_required')
-      UNION ALL SELECT '问题监控' FROM runs r INNER JOIN projects p ON p.id = r.project_id
-        WHERE p.enterprise_project_id = ${project.id}
-          AND r.status IN ('queued', 'waiting_quota', 'running', 'review_required')
-      UNION ALL SELECT '问题监控' FROM attempts a INNER JOIN runs r ON r.id = a.run_id
-        INNER JOIN projects p ON p.id = r.project_id
-        WHERE p.enterprise_project_id = ${project.id}
-          AND a.status IN ('queued', 'submitting', 'submission_unknown', 'accepted', 'processing', 'review_required')
-      UNION ALL SELECT '媒体发布' FROM publisher_items
-        WHERE enterprise_project_id = ${project.id}
-          AND (status NOT IN ('success', 'failed') OR funds_status IN ('reserved', 'frozen'))
       LIMIT 1
     `) as unknown as [Array<{ kind: string }>];
     if (blockers[0]) throw new AuthServiceError("CONFLICT", `项目还有正在运行或待核算的${blockers[0].kind}任务，请结束后再删除`);
 
-    // Keep schedule occurrences and all historical versions for provenance;
-    // paused monitors plus the createRun admission fence prevent future sends.
-    await tx.execute(sql`
-      UPDATE monitors m INNER JOIN projects p ON p.id = m.project_id
-      SET m.status = 'paused', m.next_run_at = NULL
-      WHERE p.enterprise_project_id = ${project.id} AND m.deleted_at IS NULL
-    `);
+    // Monitoring indexes begin with their account owner. An empty project must
+    // not scan every customer's runs, orders or schedules just to prove absence.
+    // Read an existing link only: deleting a project never provisions an account.
+    const [link] = await tx.select({ ownerId: monitoringAccountLinks.monitoringUserId })
+      .from(monitoringAccountLinks).where(eq(monitoringAccountLinks.dashboardUserId, project.ownerUserId)).limit(1);
+    if (link) {
+      const [monitoringProjects] = await tx.execute(sql`
+        SELECT id FROM projects
+        WHERE owner_id = ${link.ownerId} AND enterprise_project_id = ${project.id}
+      `) as unknown as [Array<{ id: string }>];
+      if (monitoringProjects.length) {
+        const projectIds = sql.join(monitoringProjects.map(row => sql`${row.id}`), sql`, `);
+        const [monitoringBlockers] = await tx.execute(sql`
+          SELECT '问题监控' AS kind FROM runs
+            WHERE owner_id = ${link.ownerId} AND project_id IN (${projectIds})
+              AND status IN ('queued', 'waiting_quota', 'running', 'review_required')
+          UNION ALL SELECT '问题监控' FROM runs r INNER JOIN attempts a ON a.run_id = r.id
+            WHERE r.owner_id = ${link.ownerId} AND r.project_id IN (${projectIds})
+              AND a.status IN ('queued', 'submitting', 'submission_unknown', 'accepted', 'processing', 'review_required')
+          LIMIT 1
+        `) as unknown as [Array<{ kind: string }>];
+        if (monitoringBlockers[0]) throw new AuthServiceError("CONFLICT", "项目还有正在运行或待核算的问题监控任务，请结束后再删除");
+      }
+      const [publisherBlockers] = await tx.execute(sql`
+        SELECT id FROM publisher_items
+        WHERE owner_id = ${link.ownerId} AND enterprise_project_id = ${project.id}
+          AND (status NOT IN ('success', 'failed') OR funds_status IN ('reserved', 'frozen'))
+        LIMIT 1
+      `) as unknown as [Array<{ id: string }>];
+      if (publisherBlockers[0]) throw new AuthServiceError("CONFLICT", "项目还有正在运行或待核算的媒体发布任务，请结束后再删除");
+
+      // Keep schedule occurrences and historical versions; target only the
+      // discovered project IDs so unrelated schedule rows are never locked.
+      if (monitoringProjects.length) {
+        const projectIds = sql.join(monitoringProjects.map(row => sql`${row.id}`), sql`, `);
+        await tx.execute(sql`
+          UPDATE monitors SET status = 'paused', next_run_at = NULL
+          WHERE owner_id = ${link.ownerId} AND project_id IN (${projectIds}) AND deleted_at IS NULL
+        `);
+      }
+    }
     // MySQL TIMESTAMP precision is seconds. Return the persisted value so a
     // lost-response retry is byte-for-byte equivalent to the first response.
     const deletedAt = new Date(Math.floor(Date.now() / 1000) * 1000);

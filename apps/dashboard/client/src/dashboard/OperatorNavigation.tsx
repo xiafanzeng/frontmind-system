@@ -441,6 +441,8 @@ export function OperatorSidebar({
                 </button>
               );
             })}
+          </div>
+          <div className="operator-general-nav">
             <button
               type="button"
               className={`operator-nav-entry operator-module-entry operator-general-entry ${activeEntry === "agent" ? "active" : ""}`}

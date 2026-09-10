@@ -189,19 +189,22 @@ export class ProjectDirectory {
       } catch (error) {
         if (!this.alive) throw error;
         const code = (error as { data?: { code?: string } })?.data?.code;
+        // A server rejection is already conclusive. Show it immediately rather
+        // than keeping the dialog busy while a separate directory read waits.
+        if (code) {
+          this.scheduleRefresh();
+          throw error;
+        }
         const fresh = await this.refresh().catch(() => undefined);
         // An absent transport response is not a server rejection. Resolve it only
         // from an authoritative directory refresh; explicit failures remain failures.
         if (
-          code ||
           !fresh ||
           fresh.projects.some((project) => project.id === captured.id)
         ) {
-          if (!code)
-            throw new Error(
-              "删除结果尚未确认，已尝试同步项目目录。请重新读取，或使用本次确认的项目版本重试。",
-            );
-          throw error;
+          throw new Error(
+            "删除结果尚未确认，已尝试同步项目目录。请重新读取，或使用本次确认的项目版本重试。",
+          );
         }
       }
       if (!this.alive || this.completed.has(operationId)) return;

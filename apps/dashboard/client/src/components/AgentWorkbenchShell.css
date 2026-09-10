@@ -41,9 +41,12 @@
   position: relative;
   display: grid;
   width: 100%;
-  max-width: 1584px;
-  margin-inline: auto;
-  grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 33.333%);
+  /* The workbench belongs to the whole dashboard-main surface.  The
+     conversation is centred in this complete area; the auxiliary panel is
+     positioned independently against the right edge below. */
+  max-width: none;
+  margin-inline: 0;
+  grid-template-columns: minmax(0, 1fr);
   padding: 16px;
   flex: 1;
   min-height: 0;
@@ -63,6 +66,9 @@
   background: #fff;
 }
 .agent-workbench-shell__auxiliary {
+  position: absolute;
+  inset: 16px 16px 16px auto;
+  width: var(--agent-aux-width, 33.333%);
   border: 1px solid #eaecf0;
   border-radius: 20px;
   box-shadow: 0 3px 16px rgb(24 24 27 / 4%);
@@ -124,7 +130,9 @@
   flex: 1;
 }
 .agent-workbench-shell__resize {
-  position: relative;
+  position: absolute;
+  inset: 16px calc(16px + var(--agent-aux-width, 33.333%)) 16px auto;
+  width: 16px;
   z-index: 2;
   background: transparent;
   cursor: col-resize;
@@ -152,6 +160,32 @@
   transform: translateY(-50%);
   border-radius: 3px;
   background: #b8b0bd;
+}
+
+/* Knowledge workspaces contain native editors and rely on the two-column
+   flow to keep the editor and node inspector side by side.  The general
+   agent uses the floating treatment above; retain the original grid for this
+   dedicated editing surface. */
+.agent-workbench-shell.layout-knowledge .agent-workbench-shell__layout {
+  max-width: 1584px;
+  margin-inline: auto;
+  grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 33.333%);
+}
+.agent-workbench-shell.layout-knowledge
+  .agent-workbench-shell__layout.is-single-pane {
+  max-width: none;
+  margin-inline: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.agent-workbench-shell.layout-knowledge .agent-workbench-shell__auxiliary {
+  position: relative;
+  inset: auto;
+  width: auto;
+}
+.agent-workbench-shell.layout-knowledge .agent-workbench-shell__resize {
+  position: relative;
+  inset: auto;
+  width: auto;
 }
 .agent-workbench-subagents {
   display: flex;

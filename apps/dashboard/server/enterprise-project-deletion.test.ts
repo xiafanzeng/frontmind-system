@@ -78,6 +78,23 @@ describe.skipIf(!acceptanceUrl)("enterprise deletion MySQL acceptance", () => {
     await expect(remove(owner, { ...request, expectedRevision: results[0].revision })).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
+  it("deletes the last project of an empty account without provisioning a monitoring account or replacement project", async () => {
+    const username = `empty-${randomUUID().slice(0, 16)}`;
+    await db.insert(schema.users).values({ username, role: "user" });
+    const [row] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.username, username));
+    const actor = { id: row!.id, username, displayName: "无项目验收", role: "user" as const };
+    expect(await service.listEnterpriseProjects(actor)).toEqual({ projects: [] });
+    expect(await service.listEnterpriseProjects(actor)).toEqual({ projects: [] });
+    const project = await service.createEnterpriseProject(actor, { name: "唯一企业项目", clientRequestId: randomUUID() });
+    await remove(actor, intent(project));
+    expect(await service.listEnterpriseProjects(actor)).toEqual({ projects: [] });
+    expect(await service.listEnterpriseProjects(actor)).toEqual({ projects: [] });
+    expect(await db.select().from(schema.monitoringAccountLinks).where(eq(schema.monitoringAccountLinks.dashboardUserId, actor.id))).toHaveLength(0);
+    const retained = await db.select().from(schema.enterpriseProjects).where(eq(schema.enterpriseProjects.ownerUserId, actor.id));
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.archivedAt).toBeInstanceOf(Date);
+  });
+
   it("enforces owner, administrator assignment and optimistic revision", async () => {
     const project = await create();
     await expect(remove(stranger, intent(project))).rejects.toMatchObject({ code: "NOT_FOUND" });

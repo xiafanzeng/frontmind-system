@@ -299,7 +299,8 @@ describe("admin customer workspace", () => {
   it("uses the same operator workspace with one balance and no plan mutations", () => {
     const source = readFileSync(resolve(process.cwd(), "client/src/pages/AdminWorkspace.tsx"), "utf8");
     expect(source).toContain("<AdminAccountBalance userId={selectedUser.id}");
-    expect(source).toContain("/?operatorOwnerId=${selectedUser.id}");
+    expect(source).toContain("/?operatorOwnerId=${userId}&enterpriseProjectId=");
+    expect(source).toContain("<CustomerProjectChooser key={selectedUser.id}");
     expect(source).not.toMatch(/updateService|servicePlan|豪华版|进阶版|套餐|CustomerDashboardMirror/);
   });
 });

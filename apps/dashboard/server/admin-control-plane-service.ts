@@ -1,3 +1,6 @@
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { workRecordModule, workRecordResourceRef } from "./workspace-work-record-contract";
+import { workspaceOperationAuditId, workspaceRequestDigest, type ServerOperationId } from "./workspace-operation-identity";
 import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNull, lt, or } from "drizzle-orm";
@@ -137,12 +140,13 @@ export async function writeWorkspaceAuditEvent(
     reason?: string | null;
     metadata?: Record<string, unknown>;
     now?: Date;
+    serverOperationId?: ServerOperationId;
   },
   executor?: any,
 ) {
   const db = executor ?? (await requireDb());
   const event = {
-    id: randomUUID(),
+    id: input.serverOperationId ? workspaceOperationAuditId(input.action, input.serverOperationId) : randomUUID(),
     actorUserId: input.actor.id,
     actorUsername: input.actor.username.slice(0, 64),
     actorAccessLevel: getEffectiveAdminAccessLevel(input.actor),
@@ -154,6 +158,21 @@ export async function writeWorkspaceAuditEvent(
     metadata: sanitizeAuditMetadata(input.metadata),
     createdAt: input.now ?? new Date(),
   };
+  const projectScope = getEnterpriseProjectScope();
+  const recordModule = workRecordModule(input.action, event.metadata);
+  if (projectScope && projectScope.ownerUserId === input.workspaceUserId && recordModule) {
+    const monitoringRef = recordModule === "monitoring" && typeof event.metadata.batchKey === "string"
+      ? `/monitoring-system?${new URLSearchParams({ enterpriseProjectId: projectScope.enterpriseProjectId, monitoringBatchKey: event.metadata.batchKey, monitoringBatchRevision: String(event.metadata.revision || 1) })}`
+      : undefined;
+    event.metadata = sanitizeAuditMetadata({
+      ...event.metadata,
+      schemaVersion: 1, enterpriseProjectId: projectScope.enterpriseProjectId, module: recordModule,
+      operationId: event.metadata.operationId || event.id,
+      requestDigest: event.metadata.requestDigest || workspaceRequestDigest({ event: event.id, action: input.action }),
+      resourceRef: workRecordResourceRef(recordModule, projectScope.enterpriseProjectId, event.metadata.resourceRef || monitoringRef),
+      resultSummary: event.metadata.resultSummary || { revision: event.metadata.revision, recordCount: event.metadata.recordCount },
+    });
+  }
   await db.insert(workspaceAuditEvents).values(event);
   return event;
 }

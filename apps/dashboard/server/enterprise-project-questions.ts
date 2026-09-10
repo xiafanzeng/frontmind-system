@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseProjectOperationId } from "./enterprise-project-service";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
@@ -45,6 +46,7 @@ export async function selectEnterpriseQuestion(input: {
 }) {
   const { db, enterpriseProjectId } = await context(input.userId);
   return db.transaction(async tx => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     // Lock project question writes through the owner to cover the missing-row case.
     await tx.select({ id: users.id }).from(users).where(eq(users.id, input.userId)).limit(1).for("update");
     const now = new Date();
@@ -78,10 +80,11 @@ export async function selectEnterpriseQuestion(input: {
 export async function confirmEnterpriseQuestionIntent(input: { userId: number; questionId: string; expectedRevision: number; expectedIntentRevision: number }) {
   const { db } = await context(input.userId);
   return db.transaction(async tx => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     const [row] = await tx.select().from(questions).where(and(eq(questions.id, input.questionId), workspaceQuestionOwnerPredicate(input.userId))).limit(1).for("update");
     if (!row || row.status !== "selected" || row.revision !== input.expectedRevision || row.intentRevision !== input.expectedIntentRevision) throw new AuthServiceError("CONFLICT", "问题已更新，请刷新后重试");
     if (!row.intent?.trim()) throw new AuthServiceError("CONFLICT", "请先补充问题意图");
-    const changes = { intentConfirmedRevision: row.intentRevision, intentConfirmedAt: new Date(), intentConfirmedByUserId: input.userId, revision: row.revision + 1 };
+    const changes = { intentConfirmedRevision: row.intentRevision, intentConfirmedAt: new Date(), intentConfirmedByUserId: getEnterpriseProjectScope()?.actorUserId ?? input.userId, revision: row.revision + 1 };
     await tx.update(questions).set(changes).where(and(eq(questions.id, row.id), workspaceQuestionOwnerPredicate(input.userId)));
     return projectQuestionDto({ ...row, ...changes });
   });

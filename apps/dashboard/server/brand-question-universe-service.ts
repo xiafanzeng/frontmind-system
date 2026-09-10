@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { currentEnterpriseProjectId, enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
@@ -996,6 +997,7 @@ async function reserveOperation(input: {
   const title = `FrontMind brand question universe ${operationId}`;
 
   const reservation = await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, enterpriseWorkspaceUserId(input.actor.id), input.actor);
     const lockedUser = (
       await tx
         .select({ id: users.id })

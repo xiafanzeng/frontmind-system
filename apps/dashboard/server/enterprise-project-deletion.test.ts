@@ -38,7 +38,7 @@ describe.skipIf(!acceptanceUrl)("enterprise deletion MySQL acceptance", () => {
   let walletOwner: string;
   beforeAll(async () => {
     const url = new URL(acceptanceUrl!);
-    if (!["127.0.0.1", "localhost"].includes(url.hostname) || url.pathname !== "/fm_project_deletion_acceptance_operator")
+    if (!["127.0.0.1", "localhost"].includes(url.hostname) || !["/fm_project_deletion_acceptance_operator", "/frontmind_workspace_acceptance"].includes(url.pathname))
       throw new Error("Dedicated local enterprise deletion acceptance schema required");
     process.env.DATABASE_URL = acceptanceUrl;
     process.env.NODE_ENV = "test";
@@ -54,6 +54,9 @@ describe.skipIf(!acceptanceUrl)("enterprise deletion MySQL acceptance", () => {
     };
     owner = await createActor(); stranger = await createActor(); delivery = await createActor();
     walletOwner = randomUUID();
+    const monitoringTables = await import("../../../packages/monitoring-db/src/schema");
+    await db.insert(monitoringTables.users).values({ id: walletOwner, username: `deletion-${randomUUID()}`, passwordHash: "local-acceptance-only", passwordChangedAt: new Date() });
+    await db.insert(monitoringTables.moneyWallets).values({ userId: walletOwner });
     await db.insert(schema.monitoringAccountLinks).values({ dashboardUserId: owner.id, monitoringUserId: walletOwner });
   });
   afterAll(async () => { if (db) await (await import("./db")).closeDbForOneShotMaintenance(); });
@@ -129,13 +132,27 @@ describe.skipIf(!acceptanceUrl)("enterprise deletion MySQL acceptance", () => {
   it("requires active monitoring and provider-unknown media orders to finish", async () => {
     const project = await create();
     const tables = await import("../../../packages/monitoring-db/src/schema");
-    const projectId = randomUUID(), runId = randomUUID();
+    const projectId = randomUUID(), runId = randomUUID(), brandId = randomUUID(), monitorId = randomUUID(), versionId = randomUUID();
     await db.insert(tables.projects).values({ id: projectId, enterpriseProjectId: project.id, ownerId: walletOwner, name: "运行监控", timezone: "Asia/Shanghai" });
-    await db.insert(tables.runs).values({ id: runId, ownerId: walletOwner, projectId, projectBrandVersionId: randomUUID(), monitorId: randomUUID(), monitorVersionId: randomUUID(), trigger: "manual", idempotencyKey: randomUUID(), expectedAttempts: 1, status: "running" });
+    await db.insert(tables.projectBrandVersions).values({ id: brandId, projectId, version: 1, mainBrand: "验收", aliases: [], competitors: [], createdBy: walletOwner });
+    await db.insert(tables.monitors).values({ id: monitorId, ownerId: walletOwner, projectId, name: "验收" });
+    await db.insert(tables.monitorVersions).values({ id: versionId, monitorId, projectBrandVersionId: brandId, version: 1, name: "验收", brandAliases: [], competitors: [], repetitions: 1, expectedAttempts: 1, configurationHash: "a".repeat(64), createdBy: walletOwner });
+    await db.insert(tables.runs).values({ id: runId, ownerId: walletOwner, projectId, projectBrandVersionId: brandId, monitorId, monitorVersionId: versionId, trigger: "manual", idempotencyKey: randomUUID(), expectedAttempts: 1, status: "running" });
     await expect(remove(owner, intent(project))).rejects.toThrow("问题监控");
     await db.update(tables.runs).set({ status: "completed" }).where(eq(tables.runs.id, runId));
-    const itemId = randomUUID();
-    await db.insert(tables.publisherItems).values({ id: itemId, enterpriseProjectId: project.id, ownerId: walletOwner, batchId: randomUUID(), mediaResourceId: randomUUID(), externalResourceId: randomUUID(), mediaNameSnapshot: "测试媒体", mediaMetadataSnapshot: {}, submissionTitle: "测试文章", articleContentHash: "a".repeat(64), catalogRevision: "test", preflightBlockers: [], preflightWarnings: [], submissionKey: randomUUID(), status: "submission_unknown", fundsStatus: "frozen" });
+    const itemId = randomUUID(), batchId = randomUUID(), mediaResourceId = randomUUID();
+    const { PublishingRepository } = await import("../../../packages/monitoring-db/src/publisher-repository");
+    const { runWithMonitoringEnterpriseScope } = await import("../../../packages/monitoring-db/src/enterprise-scope");
+    await runWithMonitoringEnterpriseScope({ enterpriseProjectId: project.id, ownerId: walletOwner }, async () => {
+      const publishing = new PublishingRepository(db as never);
+      const article = await publishing.createPublisherArticle(walletOwner, "测试文章");
+      const saved = await publishing.savePublisherArticle(walletOwner, { articleId: article.id, expectedRevision: article.revision, workingName: article.workingName, editorJson: {}, canonicalHtml: "<p>测试文章</p>", plainText: "测试文章" });
+      const version = await publishing.freezePublisherArticle(walletOwner, { articleId: article.id, expectedRevision: saved.revision, idempotencyKey: randomUUID() });
+      const draft = await publishing.savePublisherDraft(walletOwner, { articleVersionId: version.id, expectedRevision: 0, items: [] });
+      await db.insert(tables.publisherBatches).values({ id: batchId, ownerId: walletOwner, draftId: draft.id, articleVersionId: version.id, mode: "mock", quotedTotalTenThousandths: 10n, quoteFingerprint: "a".repeat(64), preflightRevision: "test", preflightSnapshot: {}, idempotencyKey: randomUUID() });
+    });
+    await db.insert(tables.publisherMediaResources).values({ id: mediaResourceId, externalResourceId: randomUUID(), catalogRevision: "test", name: "测试媒体", priceTenThousandths: 10n, rawPayload: {}, payloadHash: "a".repeat(64), logoCandidateHash: "a".repeat(64), lastSeenAt: new Date() });
+    await db.insert(tables.publisherItems).values({ id: itemId, enterpriseProjectId: project.id, ownerId: walletOwner, batchId, mediaResourceId, externalResourceId: randomUUID(), mediaNameSnapshot: "测试媒体", mediaMetadataSnapshot: {}, submissionTitle: "测试文章", articleContentHash: "a".repeat(64), catalogRevision: "test", preflightBlockers: [], preflightWarnings: [], submissionKey: randomUUID(), status: "submission_unknown", fundsStatus: "frozen" });
     await expect(remove(owner, intent(project))).rejects.toThrow("媒体发布");
     await db.update(tables.publisherItems).set({ status: "failed" }).where(eq(tables.publisherItems.id, itemId));
     await expect(remove(owner, intent(project))).rejects.toThrow("待核算");
@@ -147,11 +164,12 @@ describe.skipIf(!acceptanceUrl)("enterprise deletion MySQL acceptance", () => {
 
   it("keeps knowledge and SiteOps tasks accessible until their outcomes are terminal", async () => {
     const project = await create();
-    const turnId = randomUUID(), siteId = randomUUID(), operationId = randomUUID();
-    await db.insert(schema.conversationTurns).values({ id: turnId, enterpriseProjectId: project.id, conversationId: randomUUID(), userId: owner.id, clientRequestId: randomUUID(), status: "running" });
+    const turnId = randomUUID(), siteId = randomUUID(), operationId = randomUUID(), conversationId = randomUUID(), siteConversationId = randomUUID();
+    await db.insert(schema.conversations).values([{ id: conversationId, enterpriseProjectId: project.id, userId: owner.id, title: "知识库验收" }, { id: siteConversationId, enterpriseProjectId: project.id, userId: owner.id, title: "建站验收" }]);
+    await db.insert(schema.conversationTurns).values({ id: turnId, enterpriseProjectId: project.id, conversationId, userId: owner.id, clientRequestId: randomUUID(), status: "running" });
     await expect(remove(owner, intent(project))).rejects.toThrow("知识库或内容制作");
     await db.update(schema.conversationTurns).set({ status: "completed" }).where(eq(schema.conversationTurns.id, turnId));
-    await db.insert(schema.siteProjects).values({ id: siteId, enterpriseProjectId: project.id, userId: owner.id, conversationId: randomUUID() });
+    await db.insert(schema.siteProjects).values({ id: siteId, enterpriseProjectId: project.id, userId: owner.id, conversationId: siteConversationId });
     await db.insert(schema.siteOperations).values({ id: operationId, projectId: siteId, userId: owner.id, kind: "deploy", status: "outcome_unknown", clientRequestId: randomUUID(), inputHash: "a".repeat(64), input: {} });
     await expect(remove(owner, intent(project))).rejects.toThrow("建站或内容制作");
     await db.update(schema.siteOperations).set({ status: "succeeded" }).where(eq(schema.siteOperations.id, operationId));

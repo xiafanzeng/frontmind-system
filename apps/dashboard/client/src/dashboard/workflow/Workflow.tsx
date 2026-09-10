@@ -1,11 +1,15 @@
 import { useId, type ReactNode } from "react";
 import "./workflow.css";
+import { OperatorActionList } from "../OperatorActionList";
+import { useWorkbenchModule, type WorkbenchModuleId } from "../agent-workbench";
 
 export type WorkflowChoice = {
   id: string;
   label: string;
   description?: string;
   disabled?: boolean;
+  disabledReason?: string;
+  badge?: string;
 };
 export type WorkflowAnchor =
   | { kind: "initial" }
@@ -20,7 +24,13 @@ export function WorkflowQuestion({
   selected,
   onSelect,
   children,
+  variant = "followup",
+  module,
+  pendingId,
 }: {
+  variant?: "entry" | "followup";
+  module?: WorkbenchModuleId;
+  pendingId?: string;
   question: string;
   description?: string;
   choices?: WorkflowChoice[];
@@ -29,11 +39,14 @@ export function WorkflowQuestion({
   children?: ReactNode;
 }) {
   const id = useId();
+  const workbenchModule = useWorkbenchModule();
   return (
-    <section className="workflow-question" aria-labelledby={id}>
+    <section className={`workflow-question workflow-question--${variant}`} aria-labelledby={id}>
       <h2 id={id}>{question}</h2>
       {description && <p>{description}</p>}
-      {choices && (
+      {choices && variant === "entry" ? (
+        <OperatorActionList module={module ?? workbenchModule?.id ?? "brand"} items={choices.map(({ label, ...item }) => ({ ...item, title: label }))} selectedId={selected ?? undefined} pendingId={pendingId} onSelect={(value) => onSelect?.(value)} />
+      ) : choices && (
         <div className="workflow-choices" role="group" aria-label={question}>
           {choices.map((choice) => (
             <button

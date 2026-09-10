@@ -283,6 +283,7 @@ export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
     <div className="keywords-workflow">
       {flow.entry === "start" ? (
         <WorkflowQuestion
+          variant="entry" module="brand"
           question={
             props.tables.length
               ? "你想从现有词库挑选问题，还是基于当前知识库生成新的词库？"

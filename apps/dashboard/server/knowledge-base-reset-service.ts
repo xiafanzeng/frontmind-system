@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
 import { runWithStoredEnterpriseProjectScope } from "./enterprise-project-recovery";
 import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
@@ -320,6 +321,7 @@ export async function resetKnowledgeBase(input: {
   }> = [];
   let resetConversationIds: string[] = [];
   const result = await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, userId, input.actor);
     const now = new Date();
     // Serialize reset with every new start/upload path before reading or
     // deleting knowledge-base state. A delayed browser request holding the old

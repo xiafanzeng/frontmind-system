@@ -11,6 +11,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/_core/hooks/useAuth";
 import ManagerAssignmentEditor from "@/components/ManagerAssignmentEditor";
 import PortalShell, { PortalCard } from "@/components/PortalShell";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,32 @@ import {
 
 export { ADMIN_WORKSPACE_TAB_IDS };
 export type { WorkspaceTab };
+
+function CustomerProjectChooser({ userId }: { userId: number }) {
+  const projects = trpc.enterpriseProjects.list.useQuery({ ownerUserId: userId }, { retry: false, refetchOnWindowFocus: true });
+  const create = trpc.enterpriseProjects.create.useMutation();
+  const [selected, setSelected] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const selectedProject = projects.data?.projects.find((project) => project.id === selected);
+  const open = (id: string) => window.location.assign(`/?operatorOwnerId=${userId}&enterpriseProjectId=${encodeURIComponent(id)}`);
+  return <section className="mt-6 space-y-3 border-t border-[#eee8f2] pt-4" aria-label="企业项目选择">
+    <label className="block text-sm font-semibold" htmlFor="admin-enterprise-project">企业项目</label>
+    {projects.isLoading ? <p role="status">正在读取企业项目…</p> : projects.error ? <p role="alert">{projects.error.message}</p> : <>
+      <select id="admin-enterprise-project" className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm" value={selectedProject?.id ?? ""} onChange={(event) => setSelected(event.target.value)}>
+        <option value="">{projects.data?.projects.length ? "请选择要维护的企业项目" : "该客户尚无企业项目"}</option>
+        {projects.data?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+      </select>
+      <Button type="button" size="sm" variant="operatorOutline" disabled={!selectedProject} onClick={() => selectedProject && open(selectedProject.id)}>进入客户工作区<PanelRightOpen className="h-4 w-4" /></Button>
+      {!projects.data?.projects.length && <form className="flex gap-2" onSubmit={async (event) => { event.preventDefault(); if (!name.trim() || create.isPending) return; setError(""); try { const project = await create.mutateAsync({ ownerUserId: userId, name: name.trim(), clientRequestId: crypto.randomUUID() }); open(project.id); } catch (error) { setError(error instanceof Error ? error.message : "项目创建失败"); } }}>
+        <Input aria-label="企业项目名称" value={name} maxLength={120} onChange={(event) => setName(event.target.value)} placeholder="输入企业项目名称" disabled={create.isPending} />
+        <Button type="submit" disabled={!name.trim() || create.isPending}>创建项目</Button>
+      </form>}
+      {error && <p role="alert">{error}</p>}
+      <p className="text-sm text-slate-500">选择项目后进入业务模块查看、编辑或上传内容。</p>
+    </>}
+  </section>;
+}
 
 export default function AdminWorkspace({
   initialUserId = null,
@@ -240,17 +267,7 @@ export default function AdminWorkspace({
 
               <AdminAccountBalance userId={selectedUser.id} />
 
-              <div className="mt-6 flex flex-wrap gap-2 border-t border-[#eee8f2] pt-4">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="operatorOutline"
-                  onClick={() => { window.location.assign(`/?operatorOwnerId=${selectedUser.id}`); }}
-                >
-                  进入客户工作区
-                  <PanelRightOpen className="h-4 w-4" />
-                </Button>
-              </div>
+              <CustomerProjectChooser key={selectedUser.id} userId={selectedUser.id} />
             </PortalCard>
 
 

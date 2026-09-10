@@ -35,6 +35,7 @@ import CustomerDashboardMirror, {
   type CustomerDashboardMirrorSection,
 } from "@/components/CustomerDashboardMirror";
 import { trpc } from "@/lib/trpc";
+import { captureWorkspaceRestOperation, type WorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import {
   createDefaultDashboardPayload,
   createDashboardModuleTemplateMetadata,
@@ -70,6 +71,11 @@ export type DashboardWorkspaceSnapshot = {
 type DashboardSkeletonEditorProps = {
   userId: number;
   customerMode?: boolean;
+  canImportMonitoring?: boolean;
+  writeMode?: "workspace" | "admin";
+  enterpriseProjectId?: string;
+  customerLabel?: string;
+  projectLabel?: string;
   projectAssignmentId?: string;
   allowedSections?: readonly CustomerDashboardMirrorSection[];
   renderSectionWorkspace?: (
@@ -138,6 +144,10 @@ type MonitoringImportBatchOption = {
 };
 
 type MonitoringImportPreview = {
+  newBatchCount?: number;
+  updatedBatchCount?: number;
+  unchangedBatchCount?: number;
+  unchanged?: boolean;
   mode?: string;
   sourceName?: string;
   fileHash?: string;
@@ -352,7 +362,8 @@ async function downloadMonitoringCurrentTemplate(
   userId: number,
   projectAssignmentId?: string,
 ) {
-  const response = await fetch(`/api/dashboard/monitoring-template/${userId}`, {
+  const rest = captureWorkspaceRestOperation(undefined, { projectAssignmentId });
+  const response = await rest.fetch(`/api/dashboard/monitoring-template/${userId}`, {
     credentials: "include",
     headers: projectAssignmentId
       ? { "X-Delivery-Project-Assignment-Id": projectAssignmentId }
@@ -571,6 +582,11 @@ function preflightCredentialUsable(input: {
 export default function DashboardSkeletonEditor({
   userId,
   customerMode = false,
+  canImportMonitoring = !customerMode,
+  writeMode,
+  enterpriseProjectId,
+  customerLabel,
+  projectLabel,
   projectAssignmentId,
   allowedSections,
   renderSectionWorkspace,
@@ -595,6 +611,7 @@ export default function DashboardSkeletonEditor({
   authoritativeQuestionsError = null,
   onWorkspaceChanged,
 }: DashboardSkeletonEditorProps) {
+  const useWorkspaceApi = writeMode ? writeMode === "workspace" : customerMode;
   const editablePayload = () => {
     if (workspace?.payload) return clonePayload(workspace.payload);
     if (customerMode && workspace?.revision === 0) {
@@ -620,7 +637,7 @@ export default function DashboardSkeletonEditor({
     { userId },
     {
       enabled:
-        !customerMode &&
+        !useWorkspaceApi &&
         !projectAssignmentId &&
         Boolean(workspace?.enterpriseIdentityBoundAt),
       retry: false,
@@ -629,11 +646,11 @@ export default function DashboardSkeletonEditor({
   const customerResponseLogicQuery = trpc.workspace.responseLogic.useQuery(
     undefined,
     {
-      enabled: customerMode && Boolean(workspace?.enterpriseIdentityBoundAt),
+      enabled: useWorkspaceApi && Boolean(workspace?.enterpriseIdentityBoundAt),
       retry: false,
     },
   );
-  const responseLogicQuery = customerMode
+  const responseLogicQuery = useWorkspaceApi
     ? customerResponseLogicQuery
     : adminResponseLogicQuery;
   const currentResponseLogicRecords =
@@ -648,6 +665,7 @@ export default function DashboardSkeletonEditor({
     setPendingDashboardModuleImport(null);
   }, [
     userId,
+    enterpriseProjectId,
     workspace?.payload,
     workspace?.revision,
     workspace?.enterpriseName,
@@ -699,7 +717,7 @@ export default function DashboardSkeletonEditor({
         expectedRevision: revision,
         reason: publishReason.trim() || undefined,
       };
-      const updated = customerMode
+      const updated = useWorkspaceApi
         ? await customerUpdateMutation.mutateAsync(input)
         : await updateMutation.mutateAsync({ ...input, userId });
       setDraft(clonePayload(updated.payload));
@@ -732,6 +750,7 @@ export default function DashboardSkeletonEditor({
     targetBatchKey,
     expectedFileHash,
     preflightToken,
+    operation = captureWorkspaceRestOperation(undefined, { enterpriseProjectId, projectAssignmentId }),
   }: {
     module: DashboardImportModule;
     file: File;
@@ -740,6 +759,7 @@ export default function DashboardSkeletonEditor({
     targetBatchKey?: string;
     expectedFileHash?: string;
     preflightToken?: string;
+    operation?: WorkspaceRestOperation;
   }) => {
     const headers: Record<string, string> = {
       "Content-Type": "application/octet-stream",
@@ -766,7 +786,7 @@ export default function DashboardSkeletonEditor({
     if (preflightToken) {
       headers["X-Import-Preflight-Token"] = preflightToken;
     }
-    const response = await fetch(`/api/dashboard/import/${userId}`, {
+    const response = await operation.fetch(`/api/dashboard/import/${userId}`, {
       method: "PUT",
       credentials: "include",
       headers,
@@ -851,6 +871,7 @@ export default function DashboardSkeletonEditor({
   };
 
   const publishMonitoringImport = async () => {
+    const operation = captureWorkspaceRestOperation(undefined, { enterpriseProjectId, projectAssignmentId });
     if (!pendingMonitoringImport) return;
     const { file, preview, targetBatchKey } = pendingMonitoringImport;
     if (preview.targetBatchRequired && !targetBatchKey) {
@@ -883,8 +904,11 @@ export default function DashboardSkeletonEditor({
         setPendingMonitoringImport((current) =>
           current ? { ...current, preview: publishPreview } : current,
         );
+        toast.info("预检已更新，请核对差异后再次确认提交。");
+        return;
       }
-      await requestModuleImport({
+      const result = await requestModuleImport({
+        operation,
         module: "monitoring",
         file,
         targetBatchKey,
@@ -894,7 +918,7 @@ export default function DashboardSkeletonEditor({
       setPendingMonitoringImport(null);
       setDirty(false);
       await onWorkspaceChanged?.();
-      toast.success("问题监控数据已发布", {
+      toast.success(result?.unchanged || result?.noChange ? "数据一致，无需更新" : "问题监控数据已发布", {
         description: monitoringImportPublishedDescription(publishPreview),
       });
     } catch (error) {
@@ -1114,6 +1138,7 @@ export default function DashboardSkeletonEditor({
 
   return (
     <div className={dashboardLayout === "workspace" ? "h-full" : "space-y-5"}>
+      {(customerLabel || projectLabel) && <div className="border-b border-slate-200 bg-white px-5 py-3 text-sm" role="status">客户：{customerLabel || userId} · 企业项目：{projectLabel || enterpriseProjectId}</div>}
       <CustomerDashboardMirror
         payload={draft}
         layout={dashboardLayout}
@@ -1177,6 +1202,7 @@ export default function DashboardSkeletonEditor({
             );
           }
           return dashboardModulesForSection(section).map((module) => {
+            if (module === "monitoring" && !canImportMonitoring) return null;
             const card = importCards.find((item) => item.module === module);
             if (!card) return null;
             return (
@@ -1205,6 +1231,7 @@ export default function DashboardSkeletonEditor({
           <DialogHeader className="text-left">
             <DialogTitle>模块文件预检与差异确认</DialogTitle>
             <DialogDescription>
+              {customerLabel && <>客户：{customerLabel} · 企业项目：{projectLabel || enterpriseProjectId}。 </>}
               预检只读取并校验文件，不会修改数据库。确认后将以同一文件哈希发布对应模块。
             </DialogDescription>
           </DialogHeader>
@@ -1349,12 +1376,15 @@ export default function DashboardSkeletonEditor({
           <DialogHeader className="text-left">
             <DialogTitle>问题监控文件预检</DialogTitle>
             <DialogDescription>
+              {customerLabel && <>客户：{customerLabel} · 企业项目：{projectLabel || enterpriseProjectId}。 </>}
               核对问题、模型、日期和答案关联后再发布；预检本身不会修改用户看板。
             </DialogDescription>
           </DialogHeader>
 
           {pendingMonitoringImport && (
             <div className="space-y-5">
+              <p>文件：{pendingMonitoringImport.file.name} · 新增批次 {pendingMonitoringImport.preview.newBatchCount ?? "—"} · 修订批次 {pendingMonitoringImport.preview.updatedBatchCount ?? "—"} · 未变化 {pendingMonitoringImport.preview.unchangedBatchCount ?? "—"}</p>
+              {pendingMonitoringImport.preview.unchanged && <p role="status">数据一致，无需更新</p>}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <MonitoringPreviewMetric
                   label="导入方式"
@@ -1437,6 +1467,7 @@ export default function DashboardSkeletonEditor({
                   </span>
                   <select
                     aria-label="目标监控批次"
+                    disabled={Boolean(importingKey)}
                     className="h-11 w-full rounded-xl border border-[#dcd2e3] bg-white px-3 text-sm text-[#221a33] outline-none focus:border-[#7c4b9c] focus:ring-2 focus:ring-[#7c4b9c]/15"
                     value={pendingMonitoringImport.targetBatchKey}
                     onChange={(event) =>
@@ -1506,6 +1537,7 @@ export default function DashboardSkeletonEditor({
                     importingKey === "monitoring" ||
                     (pendingMonitoringImport.preview.targetBatchRequired &&
                       !pendingMonitoringImport.targetBatchKey) ||
+                    pendingMonitoringImport.preview.unchanged ||
                     monitoringPreviewHasErrors(pendingMonitoringImport.preview)
                   }
                   onClick={() => void publishMonitoringImport()}

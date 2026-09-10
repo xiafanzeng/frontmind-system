@@ -1,3 +1,4 @@
+import { assertCustomerProjectBusinessWrite, lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
 import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
@@ -77,6 +78,7 @@ export async function applyQuestionMaintenance(input: {
       "Database is not configured",
     );
   const userId = enterpriseWorkspaceUserId(input.actor.id);
+  await assertCustomerProjectBusinessWrite(input.actor, userId);
   const operationId = questionMaintenanceOperationId(
     userId,
     value.clientRequestId,
@@ -85,6 +87,7 @@ export async function applyQuestionMaintenance(input: {
     .update(JSON.stringify(value))
     .digest("hex");
   return db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, userId, input.actor);
     const owner = (
       await tx
         .select({ id: users.id })
@@ -231,9 +234,9 @@ export async function applyQuestionMaintenance(input: {
           status: "selected",
           selectionApprovalStatus: "approved",
           selectionRequestedAt: now,
-          selectionRequestedByUserId: userId,
+          selectionRequestedByUserId: input.actor.id,
           selectionApprovedAt: now,
-          selectionApprovedByUserId: userId,
+          selectionApprovedByUserId: input.actor.id,
           locked: true,
           sourceTaskId: null,
           knowledgeSnapshotId: question.knowledgeSnapshotId,
@@ -241,7 +244,7 @@ export async function applyQuestionMaintenance(input: {
           revision: 1,
           selectedAt: now,
           archivedAt: null,
-          createdByUserId: userId,
+          createdByUserId: input.actor.id,
           createdAt: now,
           updatedAt: now,
         });

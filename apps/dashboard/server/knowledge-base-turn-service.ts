@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { enterpriseAccountOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
@@ -3963,6 +3964,7 @@ export async function reserveKnowledgeBaseTurnInTransaction(
   input: ReserveKnowledgeBaseTurnInput,
   tx: any,
 ): Promise<KnowledgeBaseTurnReservation> {
+  await lockCustomerProjectBusinessWrite(tx, input.userId);
   assertInteger(input.userId, "userId", 1);
   const buildId = normalizeRequiredId(input.buildId, "buildId", 36);
   const clientRequestId = normalizeRequiredId(
@@ -5186,7 +5188,9 @@ export async function reserveKnowledgeBaseStartBuild(
   const db = executor ?? (await requireDb());
 
   return db.transaction(async (tx: any) => {
-    // Global mutation lock order is credential -> current owner slot ->
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
+    // Enterprise admission precedes the original business lock order:
+    // credential -> current owner slot ->
     // knowledge reset state -> start attachment ownership -> active reset
     // tombstone -> retained reset tombstone -> build -> turn. Locking every
     // requested upload here closes the discard/start race across processes

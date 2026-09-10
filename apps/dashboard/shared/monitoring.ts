@@ -40,6 +40,7 @@ export const monitoringCitationImportSchema = z
 export const replaceMonitoringBatchSchema = z
   .object({
     userId: z.number().int().positive(),
+    expectedRevision: z.number().int().nonnegative().optional(),
     batchKey: identifierSchema,
     sourceName: z.string().trim().min(1).max(512),
     collectedAt: boundedDateSchema,

@@ -1,3 +1,5 @@
+import { listWorkspaceWorkRecords, workRecordsListSchema } from "./workspace-work-record-service";
+import { assertCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
 import {
   assertDashboardUpdateCapability,
@@ -206,6 +208,12 @@ export function toSiteOpsServiceError(error: unknown): never {
 }
 
 export const workspaceRouter = router({
+  workRecords: router({
+    list: protectedProcedure.input(workRecordsListSchema).query(async ({ ctx, input }) => {
+      try { return await listWorkspaceWorkRecords(ctx.user, input); }
+      catch (error) { throw toTrpcError(error); }
+    }),
+  }),
   brandQuestionUniverse: router({
     observe: protectedProcedure.query(async ({ ctx }) => {
       try {
@@ -419,7 +427,9 @@ export const workspaceRouter = router({
           portal,
         });
         assertDashboardEnterpriseIdentity(existing, payload);
+        await assertCustomerProjectBusinessWrite(ctx.user, enterpriseWorkspaceUserId(ctx.user.id));
         const updated = await updateDashboardWorkspace({
+          businessSubmission: true,
           userId: enterpriseWorkspaceUserId(ctx.user.id),
           actorUserId: ctx.user.id,
           payload,

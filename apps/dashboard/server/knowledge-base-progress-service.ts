@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchStart, knowledgeWorkbenchStage } from "./knowledge-workbench-stage";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
@@ -2029,6 +2030,7 @@ export async function createKnowledgeBaseBuild(input: {
     );
   }
   const build = await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     const retentionTombstone = (
       await tx
         .select({ id: knowledgeBaseConversationRetentionTombstones.id })

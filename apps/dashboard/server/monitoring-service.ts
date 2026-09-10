@@ -1,6 +1,9 @@
 import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { serverOperationId } from "./workspace-operation-identity";
+import { assertCustomerProjectBusinessWrite, lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import {
   and,
   asc,
@@ -10,9 +13,11 @@ import {
   gt,
   gte,
   inArray,
+  isNull,
   like,
   lte,
   or,
+  sql,
 } from "drizzle-orm";
 
 import {
@@ -600,7 +605,7 @@ export async function resolveMonitoringReadQuotaPeriodIds(
   userId: number,
 ): Promise<string[] | undefined> {
   const portal = await getServicePortal(userId);
-  if (portal.mode === "operator") return undefined;
+  if (getEnterpriseProjectScope() || portal.mode === "operator") return undefined;
   const compatibilityMode = portal.entitlementRollout.mode === "compatibility";
   const needsHistoricalPeriods =
     portal.capabilities.monitoring.allowed &&
@@ -678,6 +683,9 @@ export function buildMonitoringBatchRows(input: {
           "INVALID_CREDENTIAL",
           `引用记录 ${citation.sourceRecordId} 与关联样本的问题不一致`,
         );
+      }
+      if (monitoringModelKey(sample.platform) !== monitoringModelKey(citation.model)) {
+        throw new AuthServiceError("INVALID_CREDENTIAL", `引用记录 ${citation.sourceRecordId} 与关联回答的平台不一致`);
       }
       linkedCitationCounts.set(
         citation.sampleSourceRecordId,
@@ -796,13 +804,13 @@ type MonitoringBatchTransactionHook = (
   result?: MonitoringBatchWriteResult,
 ) => Promise<void>;
 
-async function monitoringCurrentTemplateBatchesFromExecutor(input: {
+export async function monitoringCurrentTemplateBatchesFromExecutor(input: {
   executor: any;
   userId: number;
-  quotaPeriodIds: string[];
+  quotaPeriodIds?: string[];
   lockBatches?: boolean;
 }): Promise<MonitoringCurrentTemplateBatch[]> {
-  if (input.quotaPeriodIds.length === 0) return [];
+  if (input.quotaPeriodIds?.length === 0) return [];
   let batchQuery = input.executor
     .select({
       id: monitoringBatches.id,
@@ -816,22 +824,15 @@ async function monitoringCurrentTemplateBatchesFromExecutor(input: {
     .where(
       and(
         enterpriseOwnerPredicate(monitoringBatches, input.userId),
-        inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds),
+        ...(input.quotaPeriodIds ? [inArray(monitoringBatches.quotaPeriodId, input.quotaPeriodIds)] : []),
       ),
     )
     .orderBy(
       desc(monitoringBatches.collectedAt),
       desc(monitoringBatches.updatedAt),
-    )
-    .limit(101);
+    );
   if (input.lockBatches) batchQuery = batchQuery.for("update");
   const batchRows = (await batchQuery) as MonitoringTemplateBatchRow[];
-  if (batchRows.length > 100) {
-    throw new AuthServiceError(
-      "CONFLICT",
-      "当前服务监控批次超过 100 个，不能生成单份当前内容模板。",
-    );
-  }
   if (batchRows.length === 0) return [];
   const batchIds = batchRows.map((batch) => batch.id);
   const [rawSampleRows, rawCitationRows] = await Promise.all([
@@ -953,19 +954,19 @@ export async function getMonitoringCurrentTemplateBatches(input: {
   actor: AuthenticatedUser;
   userId: number;
 }) {
-  if (input.actor.role !== "admin") {
+  if (input.actor.role !== "admin" || (!getEnterpriseProjectScope() && input.actor.adminAccessLevel !== "system_admin")) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "Administrator permission is required",
     );
   }
-  await assertWorkspaceAccess(input.actor, input.userId);
+  await assertCustomerProjectBusinessWrite(input.actor, input.userId, { requireProject: false });
   const portal = await assertServiceCapability(input.userId, "monitoring");
   const db = await requireDb();
   return monitoringCurrentTemplateBatchesFromExecutor({
     executor: db,
     userId: input.userId,
-    quotaPeriodIds: portal.quotaPeriods.map((period) => period.periodId),
+    quotaPeriodIds: getEnterpriseProjectScope() ? undefined : portal.quotaPeriods.map((period) => period.periodId),
   });
 }
 
@@ -990,15 +991,15 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
   beforeWrite?: MonitoringTemplateTransactionHook;
   afterWrite?: MonitoringTemplateTransactionHook;
 }) {
-  if (input.actor.role !== "admin") {
+  if (input.actor.role !== "admin" || (!getEnterpriseProjectScope() && input.actor.adminAccessLevel !== "system_admin")) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "Administrator permission is required",
     );
   }
-  await assertWorkspaceAccess(input.actor, input.userId);
+  await assertCustomerProjectBusinessWrite(input.actor, input.userId, { requireProject: false });
   const portal = await assertServiceCapability(input.userId, "monitoring");
-  const quotaPeriodIds = portal.quotaPeriods.map((period) => period.periodId);
+  const quotaPeriodIds = getEnterpriseProjectScope() ? undefined : portal.quotaPeriods.map((period) => period.periodId);
   const questionIds = new Set(
     input.batches.flatMap((batch) => [
       ...batch.samples.map((sample) => sample.questionId),
@@ -1033,6 +1034,7 @@ export async function replaceMonitoringCurrentTemplateBatches(input: {
     if (!targetUsers[0]) {
       throw new AuthServiceError("NOT_FOUND", "User not found");
     }
+    await lockCustomerProjectBusinessWrite(tx, input.userId, input.actor);
     await input.beforeWrite?.(tx);
     const current = await monitoringCurrentTemplateBatchesFromExecutor({
       executor: tx,
@@ -1232,13 +1234,13 @@ export async function replaceMonitoringBatch(input: {
   afterWrite?: MonitoringBatchTransactionHook;
   transaction?: any;
 }) {
-  if (input.actor.role !== "admin") {
+  if (input.actor.role !== "admin" || (!getEnterpriseProjectScope() && input.actor.adminAccessLevel !== "system_admin")) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "Administrator permission is required",
     );
   }
-  await assertWorkspaceAccess(input.actor, input.value.userId);
+  await assertCustomerProjectBusinessWrite(input.actor, input.value.userId, { requireProject: false });
   const portal = await assertServiceCapability(
     input.value.userId,
     "monitoring",
@@ -1252,10 +1254,9 @@ export async function replaceMonitoringBatch(input: {
       .filter((id): id is string => Boolean(id))
       .some((id) => referencedQuestionIds.has(id)),
   );
-  const { contractId, quotaPeriodId } = resolveMonitoringBatchQuotaScope({
-    portal,
-    referencedQuestions,
-  });
+  const { contractId, quotaPeriodId } = getEnterpriseProjectScope()
+    ? { contractId: null, quotaPeriodId: null }
+    : resolveMonitoringBatchQuotaScope({ portal, referencedQuestions });
   const questions = [
     ...new Map(
       portal.purchasedQuestions.flatMap((question) =>
@@ -1280,6 +1281,7 @@ export async function replaceMonitoringBatch(input: {
     if (!targetUsers[0]) {
       throw new AuthServiceError("NOT_FOUND", "User not found");
     }
+    await lockCustomerProjectBusinessWrite(tx, input.value.userId, input.actor);
     await input.beforeWrite?.(tx);
 
     const existingRows = await tx
@@ -1296,13 +1298,16 @@ export async function replaceMonitoringBatch(input: {
       .where(
         and(
           enterpriseOwnerPredicate(monitoringBatches, input.value.userId),
-          eq(monitoringBatches.quotaPeriodId, quotaPeriodId),
+          ...(getEnterpriseProjectScope() ? [] : [quotaPeriodId === null ? isNull(monitoringBatches.quotaPeriodId) : eq(monitoringBatches.quotaPeriodId, quotaPeriodId)]),
           eq(monitoringBatches.batchKey, input.value.batchKey),
         ),
       )
       .limit(1)
       .for("update");
     const existing = existingRows[0];
+    if (getEnterpriseProjectScope() && !input.forceReplace && existing && input.value.expectedRevision !== existing.revision) {
+      throw new AuthServiceError("CONFLICT", "修订已有监控批次需要明确当前批次 revision；请重新读取该批次。");
+    }
     if (
       existing &&
       !input.forceReplace &&
@@ -1320,7 +1325,7 @@ export async function replaceMonitoringBatch(input: {
       await input.afterWrite?.(tx, result);
       return;
     }
-    const batchId = existing?.id ?? randomUUID();
+    const batchId = existing?.id ?? (getEnterpriseProjectScope() ? serverOperationId({ namespace: "monitoring-project-batch:v1", userId: input.value.userId, projectId: getEnterpriseProjectScope()!.enterpriseProjectId, batchKey: input.value.batchKey }) : randomUUID());
     const rows = buildMonitoringBatchRows({
       userId: input.value.userId,
       batchId,
@@ -1426,19 +1431,19 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
       "只有未绑定答案的问题级引用可以合并到目标监控批次",
     );
   }
-  if (input.actor.role !== "admin") {
+  if (input.actor.role !== "admin" || (!getEnterpriseProjectScope() && input.actor.adminAccessLevel !== "system_admin")) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "Administrator permission is required",
     );
   }
-  await assertWorkspaceAccess(input.actor, input.targetUserId);
+  await assertCustomerProjectBusinessWrite(input.actor, input.targetUserId, { requireProject: false });
   const portal = await assertServiceCapability(
     input.targetUserId,
     "monitoring",
   );
-  const quotaPeriodIds = portal.quotaPeriods.map((period) => period.periodId);
-  if (quotaPeriodIds.length === 0) {
+  const quotaPeriodIds = getEnterpriseProjectScope() ? undefined : portal.quotaPeriods.map((period) => period.periodId);
+  if (quotaPeriodIds?.length === 0) {
     throw new AuthServiceError(
       "INVALID_CREDENTIAL",
       "当前服务周期没有可写入的监控批次",
@@ -1455,6 +1460,7 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
     if (!targetUsers[0]) {
       throw new AuthServiceError("NOT_FOUND", "User not found");
     }
+    await lockCustomerProjectBusinessWrite(tx, input.targetUserId, input.actor);
     await input.beforeWrite?.(tx);
     const batchRows = await tx
       .select({
@@ -1471,7 +1477,7 @@ export async function mergeQuestionOnlyCitationsIntoMonitoringBatch(input: {
         and(
           enterpriseOwnerPredicate(monitoringBatches, input.targetUserId),
           eq(monitoringBatches.batchKey, input.targetBatchKey),
-          inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds),
+          ...(quotaPeriodIds ? [inArray(monitoringBatches.quotaPeriodId, quotaPeriodIds)] : []),
         ),
       )
       .orderBy(desc(monitoringBatches.updatedAt))
@@ -1693,6 +1699,7 @@ export async function listMonitoringSamples(input: {
     return {
       items: [],
       total: 0,
+      totals: { sampleCount: 0, citationCount: 0, rankedSampleCount: 0, top3SampleCount: 0, averageRank: null as number | null },
       page: filters.page,
       pageSize: filters.pageSize,
     };
@@ -1778,7 +1785,7 @@ export async function listMonitoringSamples(input: {
   const where = and(...conditions);
   const [totalRows, rows] = await Promise.all([
     db
-      .select({ value: count() })
+      .select({ value: count(), citationCount: sql<number>`coalesce(sum(${monitoringSamples.citationCount}), 0)`, rankedSampleCount: sql<number>`sum(case when ${monitoringSamples.monitorRank} > 0 then 1 else 0 end)`, top3SampleCount: sql<number>`sum(case when ${monitoringSamples.monitorRank} between 1 and 3 then 1 else 0 end)`, averageRank: sql<number | null>`avg(case when ${monitoringSamples.monitorRank} > 0 then ${monitoringSamples.monitorRank} else null end)` })
       .from(monitoringSamples)
       .innerJoin(
         monitoringBatches,
@@ -1832,6 +1839,7 @@ export async function listMonitoringSamples(input: {
       modelLabel: row.platform,
     })),
     total: Number(totalRows[0]?.value ?? 0),
+    totals: { sampleCount: Number(totalRows[0]?.value ?? 0), citationCount: Number(totalRows[0]?.citationCount ?? 0), rankedSampleCount: Number(totalRows[0]?.rankedSampleCount ?? 0), top3SampleCount: Number(totalRows[0]?.top3SampleCount ?? 0), averageRank: totalRows[0]?.averageRank == null ? null : Number(totalRows[0].averageRank) },
     page: filters.page,
     pageSize: filters.pageSize,
   };
@@ -2386,8 +2394,7 @@ export async function getMonitoringFilterOptions(
     .orderBy(
       desc(monitoringBatches.collectedAt),
       desc(monitoringBatches.updatedAt),
-    )
-    .limit(100);
+    );
   const publicBatches = batches.map(
     ({ id: _id, updatedAt: _updatedAt, ...batch }) => ({
       ...batch,

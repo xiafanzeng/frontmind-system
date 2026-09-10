@@ -13,6 +13,8 @@ import {
   type DashboardAdminImportModule,
 } from "../shared/dashboard";
 import { getDb } from "./db";
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { canonicalOperationValue, serverOperationId, workspaceRequestDigest } from "./workspace-operation-identity";
 
 const DEFAULT_TTL_SECONDS = 5 * 60;
 const MIN_SECRET_LENGTH = 32;
@@ -43,6 +45,10 @@ const preflightTokenPayloadSchema = z
   .strict();
 
 type PreflightTokenPayload = z.infer<typeof preflightTokenPayloadSchema>;
+const projectModulePreflightSchema = preflightTokenPayloadSchema.omit({ version: true }).extend({
+  version: z.literal(2), kind: z.literal("dashboard-module"), enterpriseProjectId: z.string().uuid(),
+}).strict();
+type ProjectModulePreflightPayload = z.infer<typeof projectModulePreflightSchema>;
 
 export type DashboardImportPreflightBinding = {
   actorId: number;
@@ -147,7 +153,7 @@ function signature(encodedPayload: string, secret: string) {
     .digest("base64url");
 }
 
-function signedToken(payload: PreflightTokenPayload, secret: string) {
+function signedToken(payload: PreflightTokenPayload | ProjectMonitoringPreflightPayload | ProjectModulePreflightPayload, secret: string) {
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString(
     "base64url",
   );
@@ -181,9 +187,7 @@ function parseSignedToken(token: string, secret: string) {
     );
   }
   try {
-    return preflightTokenPayloadSchema.parse(
-      JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8")),
-    );
+    return JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
   } catch {
     throw new DashboardImportPreflightError(
       "DASHBOARD_IMPORT_PREFLIGHT_INVALID",
@@ -301,6 +305,15 @@ export async function issueDashboardImportPreflight(input: {
   const configuredTtl = input.ttlSeconds ?? ttlSeconds();
   const expiresAt = new Date(now.getTime() + configuredTtl * 1_000);
   const nonce = randomUUID();
+  const projectScope = getEnterpriseProjectScope();
+  if (projectScope) {
+    if (projectScope.ownerUserId !== binding.workspaceUserId || projectScope.actorUserId !== binding.actorId) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_BINDING_MISMATCH", "预检客户或项目与当前工作区不一致。");
+    const payload = projectModulePreflightSchema.parse({
+      version: 2, kind: "dashboard-module", enterpriseProjectId: projectScope.enterpriseProjectId,
+      nonce, ...binding, issuedAt: Math.floor(now.getTime() / 1000), expiresAt: Math.floor(expiresAt.getTime() / 1000),
+    });
+    return { preflightToken: signedToken(payload, input.secret ?? dashboardImportPreflightSecret()), preflightExpiresAt: new Date(payload.expiresAt * 1000).toISOString() };
+  }
   const payload = preflightTokenPayloadSchema.parse({
     version: 1,
     nonce,
@@ -332,10 +345,27 @@ export async function consumeDashboardImportPreflight(input: {
   store?: DashboardImportPreflightStore;
 }) {
   const now = input.now ?? new Date();
-  const payload = parseSignedToken(
-    input.token || "",
-    input.secret ?? dashboardImportPreflightSecret(),
-  );
+  const rawPayload = parseSignedToken(input.token || "", input.secret ?? dashboardImportPreflightSecret());
+  const projectScope = getEnterpriseProjectScope();
+  if (projectScope) {
+    const parsed = projectModulePreflightSchema.safeParse(rawPayload);
+    if (!parsed.success) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_INVALID", "项目写入需要新版项目绑定预检凭证，请重新预检。");
+    const payload = parsed.data;
+    if (payload.enterpriseProjectId !== projectScope.enterpriseProjectId || projectScope.ownerUserId !== payload.workspaceUserId || projectScope.actorUserId !== payload.actorId || !sameBinding(payload, normalizedBinding(input.binding))) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_BINDING_MISMATCH", "预检凭证与当前客户、项目、模块、版本或文件不一致。");
+    if (payload.expiresAt * 1000 <= now.getTime()) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_EXPIRED", "预检凭证已过期，请重新预检文件。");
+    if (!input.store) throw new Error("Project import preflight consumption requires the business transaction store");
+    const consumed = { ...normalizedBinding(payload), nonce: payload.nonce, expiresAt: new Date(payload.expiresAt * 1000), consumedAt: now };
+    try { await input.store.issue(consumed); }
+    catch (error) {
+      const sqlError = error as { code?: string; cause?: { code?: string } };
+      if (sqlError.code === "ER_DUP_ENTRY" || sqlError.cause?.code === "ER_DUP_ENTRY") throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_REPLAYED", "该预检已经使用，请重新读取业务结果。");
+      throw error;
+    }
+    return consumed;
+  }
+  const parsed = preflightTokenPayloadSchema.safeParse(rawPayload);
+  if (!parsed.success) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_INVALID", "预检凭证版本无效，请重新预检。");
+  const payload = parsed.data;
   if (payload.expiresAt * 1_000 <= now.getTime()) {
     throw new DashboardImportPreflightError(
       "DASHBOARD_IMPORT_PREFLIGHT_EXPIRED",
@@ -407,4 +437,76 @@ export function startDashboardImportPreflightCleanupScheduler() {
     clearTimeout(initial);
     clearInterval(interval);
   };
+}
+
+
+const projectMonitoringPreflightSchema = z.object({
+  version: z.literal(2),
+  actorId: z.number().int().positive(),
+  workspaceUserId: z.number().int().positive(),
+  enterpriseProjectId: z.string().uuid(),
+  module: z.literal("monitoring"),
+  operationKind: z.enum(["import", "replace", "merge-citations"]),
+  revision: z.number().int().nonnegative(),
+  fileHash: z.string().regex(/^[a-f0-9]{64}$/),
+  // The canonical mapping is represented by a digest to keep arbitrarily large
+  // imports out of tokens; the service recomputes it from parsed rows at commit.
+  targetScope: z.string().regex(/^[a-f0-9]{64}$/),
+  targetBatchKey: z.string().min(1).max(191).optional(),
+  targetBatchRevisionDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  operationId: z.string().uuid(),
+  requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  nonce: z.string().uuid(),
+  issuedAt: z.number().int().positive(),
+  expiresAt: z.number().int().positive(),
+}).strict();
+export type ProjectMonitoringPreflightPayload = z.infer<typeof projectMonitoringPreflightSchema>;
+export type ProjectMonitoringPreflightBinding = Omit<ProjectMonitoringPreflightPayload, "version" | "nonce" | "issuedAt" | "expiresAt" | "operationId" | "requestDigest">;
+
+export function projectMonitoringOperationIdentity(binding: ProjectMonitoringPreflightBinding) {
+  const identity = { actorId: binding.actorId, workspaceUserId: binding.workspaceUserId, enterpriseProjectId: binding.enterpriseProjectId, module: binding.module, operationKind: binding.operationKind, revision: binding.revision, fileHash: binding.fileHash, targetScope: binding.targetScope, targetBatchKey: binding.targetBatchKey };
+  const canonical = { namespace: "project-monitoring-import:v2", ...identity };
+  return { operationId: serverOperationId(canonical), requestDigest: workspaceRequestDigest(canonical) };
+}
+
+/** Project previews never write a nonce or any business/audit row. */
+export function issueProjectMonitoringPreflight(input: {
+  binding: ProjectMonitoringPreflightBinding; now?: Date; ttlSeconds?: number; secret?: string;
+}) {
+  const now = input.now ?? new Date();
+  const payload = projectMonitoringPreflightSchema.parse({
+    version: 2, ...input.binding, ...projectMonitoringOperationIdentity(input.binding),
+    nonce: randomUUID(), issuedAt: Math.floor(now.getTime() / 1000),
+    expiresAt: Math.floor(now.getTime() / 1000) + (input.ttlSeconds ?? ttlSeconds()),
+  });
+  return { preflightToken: signedToken(payload, input.secret ?? dashboardImportPreflightSecret()), preflightExpiresAt: new Date(payload.expiresAt * 1000).toISOString() };
+}
+
+/** Verify signature and immutable request binding first; expiry is checked only
+ * after looking up a committed success under the customer/project locks. */
+export function verifyProjectMonitoringPreflight(input: {
+  token?: string;
+  binding: Pick<ProjectMonitoringPreflightBinding, "actorId" | "workspaceUserId" | "enterpriseProjectId" | "module" | "revision" | "fileHash" | "targetBatchKey">;
+  secret?: string;
+}) {
+  const parsed = projectMonitoringPreflightSchema.safeParse(parseSignedToken(input.token ?? "", input.secret ?? dashboardImportPreflightSecret()));
+  if (!parsed.success) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_INVALID", "项目上传需要新版预检凭证，请重新预检文件。");
+  const payload = parsed.data;
+  for (const [key, value] of Object.entries(input.binding)) {
+    if (canonicalOperationValue(payload[key as keyof typeof payload]) !== canonicalOperationValue(value)) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_BINDING_MISMATCH", "预检凭证与当前客户、项目、版本、文件或目标批次不匹配，请重新预检。");
+  }
+  if ((payload.targetBatchKey ?? undefined) !== (input.binding.targetBatchKey ?? undefined)) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_BINDING_MISMATCH", "目标批次已改变，请重新预检。");
+  const identity = projectMonitoringOperationIdentity(payload);
+  if (identity.operationId !== payload.operationId || identity.requestDigest !== payload.requestDigest) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_INVALID", "预检操作身份无效。");
+  return payload;
+}
+
+export async function consumeProjectMonitoringPreflight(tx: any, payload: ProjectMonitoringPreflightPayload, now = new Date()) {
+  if (payload.expiresAt * 1000 <= now.getTime()) throw new DashboardImportPreflightError("DASHBOARD_IMPORT_PREFLIGHT_EXPIRED", "预检凭证已过期，请重新预检文件。");
+  // Insert directly as consumed. This executor MUST be the business transaction.
+  await dashboardImportPreflightStoreForExecutor(tx).issue({
+    actorId: payload.actorId, workspaceUserId: payload.workspaceUserId, module: payload.module,
+    revision: payload.revision, fileHash: payload.fileHash, targetBatchKey: payload.targetBatchKey,
+    nonce: payload.nonce, expiresAt: new Date(payload.expiresAt * 1000), consumedAt: now,
+  });
 }

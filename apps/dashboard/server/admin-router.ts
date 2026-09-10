@@ -1,3 +1,4 @@
+import { assertCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { aiUsageReportInput, aiUsageTaskEventsInput } from "../shared/ai-usage-report";
 import { readAiUsageReport, exportAiUsageReport, readAiUsageTaskEvents } from "./ai-usage-report";
 import { getMonitoringRuntime } from "./monitoring-module";
@@ -665,7 +666,7 @@ export const adminRouter = router({
           }),
         )
         .mutation(async ({ ctx, input }) => {
-          requireSystemAdmin(ctx.user);
+          await assertCustomerProjectBusinessWrite(ctx.user, input.userId);
           try {
             await getManagedCredentialStatus(ctx.user, input.userId);
             await assertServiceCapability(input.userId, "contentAssets");
@@ -771,7 +772,7 @@ export const adminRouter = router({
           ),
       )
       .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
+        await assertCustomerProjectBusinessWrite(ctx.user, input.userId);
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           await assertServiceCapability(input.userId, "questionSelection");
@@ -816,7 +817,7 @@ export const adminRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
+        await assertCustomerProjectBusinessWrite(ctx.user, input.userId);
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           await assertServiceCapability(input.userId, "questionSelection");
@@ -1016,7 +1017,7 @@ export const adminRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        requireSystemAdmin(ctx.user);
+        await assertCustomerProjectBusinessWrite(ctx.user, input.userId);
         try {
           await getManagedCredentialStatus(ctx.user, input.userId);
           const existing = await getDashboardWorkspace(input.userId);
@@ -1027,12 +1028,14 @@ export const adminRouter = router({
           });
           assertDashboardEnterpriseIdentity(existing, input.payload);
           const dashboard = await updateDashboardWorkspace({
+            businessSubmission: true,
             userId: input.userId,
             actorUserId: ctx.user.id,
             payload: {
               ...input.payload,
-              monitoringAnswers: [],
-              citations: [],
+              contentAssets: existing.payload.contentAssets,
+              monitoringAnswers: existing.payload.monitoringAnswers,
+              citations: existing.payload.citations,
             },
             sourceName: existing.sourceName || "管理员结构化编辑",
             reason: input.reason,
@@ -1288,23 +1291,20 @@ export const adminRouter = router({
       replaceBatch: adminProcedure
         .input(replaceMonitoringBatchSchema)
         .mutation(async ({ ctx, input }) => {
-          requireSystemAdmin(ctx.user);
           try {
             const batch = await replaceMonitoringBatch({
               actor: ctx.user,
               value: input,
-            });
-            await writeWorkspaceAuditEvent({
-              actor: ctx.user,
-              action: "workspace.monitoring_batch.replaced",
-              targetType: "monitoring_batch",
-              targetId: batch.batchId,
-              workspaceUserId: input.userId,
-              metadata: {
-                batchKey: batch.batchKey,
-                revision: batch.revision,
-                sampleCount: batch.sampleCount,
-                citationCount: batch.citationCount,
+              afterWrite: async (tx, result) => {
+                if (!result || result.idempotent) return;
+                await writeWorkspaceAuditEvent({
+                  actor: ctx.user,
+                  action: "workspace.monitoring_batch.replaced",
+                  targetType: "monitoring_batch",
+                  targetId: result.batchId,
+                  workspaceUserId: input.userId,
+                  metadata: { batchKey: result.batchKey, revision: result.revision, sampleCount: result.sampleCount, citationCount: result.citationCount },
+                }, tx);
               },
             });
             return batch;

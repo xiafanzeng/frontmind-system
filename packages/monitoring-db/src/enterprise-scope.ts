@@ -4,6 +4,8 @@ import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 export type MonitoringEnterpriseScope = {
   enterpriseProjectId: string | null;
   ownerId: string;
+  /** Dashboard admission callback; absent for the independent worker. */
+  beforeBusinessWrite?: (tx: any) => Promise<void>;
 };
 const scope = new AsyncLocalStorage<MonitoringEnterpriseScope>();
 export function runWithMonitoringEnterpriseScope<T>(
@@ -54,3 +56,5 @@ export function monitoringChildOwnerPredicate(
     sql`EXISTS (SELECT 1 FROM projects ep WHERE ep.id = ${table.projectId} AND ep.owner_id = ${ownerId} AND ${projectCondition})`,
   )!;
 }
+
+export function monitoringEnterpriseBusinessWriteGuard() { return scope.getStore()?.beforeBusinessWrite; }

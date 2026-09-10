@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { knowledgeWorkbenchEditingAllowed } from "./knowledge-workbench-stage";
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
@@ -424,6 +425,7 @@ export async function saveKnowledgeNodeContent(
   const inputHash = hash(JSON.stringify(input));
   const db = await requireDb();
   const result = await db.transaction(async (tx: any) => {
+    await lockCustomerProjectBusinessWrite(tx, userId);
     // Reset -> build -> turn matches reset/start ownership. Selection and
     // reservation commit together; no separate browser select can race here.
     const state = (

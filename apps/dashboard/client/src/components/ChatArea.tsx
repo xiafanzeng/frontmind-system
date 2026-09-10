@@ -3127,6 +3127,7 @@ export function EmptyConversationHint({
           <WorkflowCompleted id="knowledge-materials-entry" summary="准备企业资料，构建知识库初稿" onRevise={isStarting || isDiscarding || batchLocked ? undefined : () => setDialogOpen(false)} />
         ) : (
           <WorkflowQuestion
+            variant="entry" module="brand"
             question="先用哪些资料了解你的企业？"
             description="提供企业官网、宣传册或补充说明，构建后可以逐项审阅知识内容。"
             choices={[{ id: "materials", label: "构建企业知识库", description: "填写官网与说明，上传企业资料" }]}

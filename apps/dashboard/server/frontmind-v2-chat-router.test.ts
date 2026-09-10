@@ -1,3 +1,4 @@
+import { enterpriseProjects, users } from "../drizzle/schema";
 import { runWithEnterpriseProjectScope, type EnterpriseProjectScope } from "./enterprise-project-context";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -195,16 +196,24 @@ describe("General Agent runtime HTTP authorization", () => {
         },
       ],
     };
+    let selectedTable: unknown;
+    const rows = () => selectedTable === users
+      ? [{ id: 7, isActive: true, role: "user" }]
+      : selectedTable === enterpriseProjects
+        ? [{ id: "11111111-1111-4111-8111-111111111111", archivedAt: null }]
+        : snapshot ? [snapshot] : [];
     const chain: any = {
       select: () => chain,
-      from: () => chain,
+      from: (table: unknown) => { selectedTable = table; return chain; },
       innerJoin: () => chain,
       where: () => chain,
       orderBy: () => chain,
-      limit: async () => (snapshot ? [snapshot] : []),
+      limit: () => chain,
+      for: async () => rows(),
+      then: (resolve: any, reject: any) => Promise.resolve(rows()).then(resolve, reject),
       transaction: async (fn: any) => fn(chain),
     };
-    runtimeMocks.getDb.mockResolvedValue(chain);
+    runtimeMocks.getDb.mockResolvedValue({ select: () => chain, transaction: async (fn: any) => fn({ select: () => chain }) });
     const url = await start(7, "delivery_admin", "user", true, { enterpriseProjectId: "11111111-1111-4111-8111-111111111111", ownerUserId: 7, actorUserId: 7, isLegacyDefault: false });
     const response = await fetch(`${url}?purpose=enterprise_qa`);
     expect(response.status).toBe(200);

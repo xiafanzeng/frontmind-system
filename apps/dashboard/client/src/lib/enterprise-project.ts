@@ -1,5 +1,8 @@
 import { navigate } from "wouter/use-browser-location";
-import { requestWorkspaceNavigation } from "./workspace-navigation-guard";
+import {
+  performApprovedWorkspaceNavigation,
+  requestWorkspaceNavigation,
+} from "./workspace-navigation-guard";
 
 /** WorkspaceQueryProvider replaces transports and caches when this scope changes. */
 const PROJECT_KEY = "frontmind.enterpriseProject";
@@ -69,6 +72,55 @@ export function enterpriseProjectHeaders(
 export function clearEnterpriseProject() {
   sessionStorage.removeItem(PROJECT_KEY);
   sessionStorage.removeItem("frontmind.pending-build-draft");
+}
+
+/** Only remove state whose persisted identity matches the deleted project. */
+export function clearDeletedEnterpriseProject(ownerUserId: number, id: string) {
+  try {
+    const remembered = JSON.parse(
+      sessionStorage.getItem(PROJECT_KEY) || "null",
+    );
+    if (remembered?.ownerUserId === ownerUserId && remembered.id === id)
+      sessionStorage.removeItem(PROJECT_KEY);
+    // Project IDs are globally unique. Do not erase another project's draft or
+    // the legacy unscoped account draft, whose owner cannot be established.
+    sessionStorage.removeItem(`frontmind.pending-build-draft:${id}`);
+  } catch {
+    /* Storage availability must not turn a confirmed deletion into failure. */
+  }
+}
+
+export function navigateAfterEnterpriseProjectDeletion(
+  viewerUserId: number,
+  ownerUserId: number,
+  deletedId: string,
+  projects: ReadonlyArray<{ id: string; isLegacyDefault?: boolean }>,
+) {
+  const query = new URLSearchParams(window.location.search);
+  const liveOwner = Number(query.get("operatorOwnerId")) || viewerUserId;
+  if (
+    liveOwner !== ownerUserId ||
+    !isEnterpriseWorkspacePath(window.location.pathname) ||
+    enterpriseWorkspaceScope(
+      window.location.pathname,
+      window.location.search,
+    ) !== deletedId
+  )
+    return;
+  const remaining = projects.filter((project) => project.id !== deletedId);
+  const next =
+    remaining.find((project) => project.isLegacyDefault) || remaining[0];
+  const target = projectSwitchPath();
+  performApprovedWorkspaceNavigation(() => {
+    if (next) {
+      rememberEnterpriseProject(ownerUserId, next.id);
+      navigate(projectWorkspaceUrl(target, next.id), { replace: true });
+    } else {
+      const empty = new URL(target, window.location.origin);
+      empty.searchParams.delete("enterpriseProjectId");
+      navigate(`${empty.pathname}${empty.search}`, { replace: true });
+    }
+  });
 }
 
 export function projectWorkspaceUrl(

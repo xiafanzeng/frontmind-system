@@ -1,3 +1,5 @@
+import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
 import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { getEnterpriseProjectScope } from "./enterprise-project-scope";
@@ -3839,6 +3841,7 @@ export async function updateWorkspaceQuestionBySystemAdmin(input: {
   }
   const db = await requireServiceDb();
   return db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     const targetUsers = await tx
       .select({ id: users.id })
       .from(users)
@@ -3854,11 +3857,11 @@ export async function updateWorkspaceQuestionBySystemAdmin(input: {
     }
     const rows = await tx
       .select()
-      .from(workspaceQuestions)
+      .from(workspaceQuestionTable())
       .where(
         and(
-          eq(workspaceQuestions.id, input.questionId),
-          eq(workspaceQuestions.userId, input.userId),
+          eq(workspaceQuestionTable().id, input.questionId),
+          workspaceQuestionOwnerPredicate(input.userId),
         ),
       )
       .limit(1)
@@ -3926,12 +3929,12 @@ export async function updateWorkspaceQuestionBySystemAdmin(input: {
       updatedAt,
     };
     await tx
-      .update(workspaceQuestions)
+      .update(workspaceQuestionTable())
       .set(values)
       .where(
         and(
-          eq(workspaceQuestions.id, current.id),
-          eq(workspaceQuestions.revision, current.revision),
+          eq(workspaceQuestionTable().id, current.id),
+          eq(workspaceQuestionTable().revision, current.revision),
         ),
       );
     return toPublicWorkspaceQuestion({
@@ -3985,6 +3988,7 @@ export async function updateWorkspaceQuestionsByAdminBatch(input: {
   }
   const db = await requireServiceDb();
   return db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     const targetUsers = await tx
       .select({ id: users.id })
       .from(users)
@@ -4001,11 +4005,11 @@ export async function updateWorkspaceQuestionsByAdminBatch(input: {
     await input.beforeWrite?.(tx);
     const rows = await tx
       .select()
-      .from(workspaceQuestions)
+      .from(workspaceQuestionTable())
       .where(
         and(
-          eq(workspaceQuestions.userId, input.userId),
-          inArray(workspaceQuestions.id, questionIds),
+          workspaceQuestionOwnerPredicate(input.userId),
+          inArray(workspaceQuestionTable().id, questionIds),
         ),
       )
       .for("update");
@@ -4072,13 +4076,13 @@ export async function updateWorkspaceQuestionsByAdminBatch(input: {
         updatedAt,
       };
       await tx
-        .update(workspaceQuestions)
+        .update(workspaceQuestionTable())
         .set(values)
         .where(
           and(
-            eq(workspaceQuestions.id, current.id),
-            eq(workspaceQuestions.userId, input.userId),
-            eq(workspaceQuestions.revision, current.revision),
+            eq(workspaceQuestionTable().id, current.id),
+            workspaceQuestionOwnerPredicate(input.userId),
+            eq(workspaceQuestionTable().revision, current.revision),
           ),
         );
       updatedQuestions.push(
@@ -5081,6 +5085,7 @@ export async function approveWorkspaceQuestionSelection(
     afterWrite?: WorkspaceQuestionTransactionHook;
   },
 ): Promise<ServicePortalQuestion> {
+  if (getEnterpriseProjectScope()) return selectEnterpriseQuestion(input);
   const now = input.now ?? new Date();
   const execute = async (tx: any) => {
     const targetUsers = await tx

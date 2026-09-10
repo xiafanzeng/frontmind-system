@@ -278,11 +278,11 @@ export class PublishingRepository {
       throw new RepositoryError("INVALID_STATE", "Invalid article name");
     }
     const id = randomUUID();
-    await this.db.insert(publisherArticles).values({
-      id,
-      ownerId,
-      workingName: normalized,
-      enterpriseProjectId,
+    await this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, enterpriseProjectId, ownerId);
+      await tx.insert(publisherArticles).values({
+        id, ownerId, workingName: normalized, enterpriseProjectId,
+      });
     });
     return this.getPublisherArticle(ownerId, id);
   }
@@ -316,6 +316,7 @@ export class PublishingRepository {
       );
     }
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const [owner] = await tx
         .select({ id: users.id })
         .from(users)
@@ -500,6 +501,7 @@ export class PublishingRepository {
       );
     }
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       await lockOwnedArticle(tx, ownerId, articleId);
       const [existing] = await tx
         .select()
@@ -547,6 +549,7 @@ export class PublishingRepository {
     assetIds: readonly string[],
   ) {
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const [version] = await tx
         .select()
         .from(publisherArticleVersions)
@@ -799,6 +802,7 @@ export class PublishingRepository {
     },
   ) {
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const article = await lockOwnedArticle(tx, ownerId, input.articleId);
       if (article.revision !== input.expectedRevision) {
         throw new RepositoryError("CONFLICT", "Article revision has changed");
@@ -845,6 +849,7 @@ export class PublishingRepository {
       ? `enterprise:${projectId}:${sha256(input.idempotencyKey)}`
       : input.idempotencyKey;
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const [replay] = await tx
         .select()
         .from(publisherArticleVersions)
@@ -2698,6 +2703,7 @@ export class PublishingRepository {
     },
   ) {
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       // The existing audit receipt and draft commit together. Serialize creates
       // for this owner so a lost response or a double click can only make one
       // draft, without changing the draft schema or bypassing project scope.
@@ -2999,6 +3005,7 @@ export class PublishingRepository {
     input: PublisherRefreshDraftMediaInput,
   ) {
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const [draft] = await tx
         .select()
         .from(publisherDrafts)
@@ -3118,6 +3125,7 @@ export class PublishingRepository {
     input: PublisherSaveDraftTitlesInput,
   ) {
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const [draft] = await tx
         .select()
         .from(publisherDrafts)
@@ -3220,6 +3228,7 @@ export class PublishingRepository {
     const { now, requiredMode } = publisherExecutionOptions(options);
     await this.ensureMediaPublishingWallet(ownerId);
     return this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, monitoringEnterpriseProjectIdForOwner(ownerId), ownerId);
       const preflightRevision = randomUUID();
       const expiresAt = new Date(now.getTime() + PREFLIGHT_WINDOW_MS);
       const preflight = await computePreflight(

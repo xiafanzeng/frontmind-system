@@ -62,6 +62,7 @@ export function PublishingQuestion({
     );
   return (
     <WorkflowQuestion
+          variant="entry" module="publishing"
       question={title}
       description={description}
       selected={value}

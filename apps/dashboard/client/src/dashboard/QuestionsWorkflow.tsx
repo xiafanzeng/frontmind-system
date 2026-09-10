@@ -550,6 +550,7 @@ export function QuestionsWorkflow({
       )}
       {flow.entry === "start" && (
         <WorkflowQuestion
+          variant="entry" module="intent"
           question="这次想优化什么问题？"
           description="你可以自己输入，也可以从品牌全域词库中选择。"
           choices={[

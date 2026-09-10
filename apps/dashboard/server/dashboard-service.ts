@@ -1,3 +1,5 @@
+import { getEnterpriseProjectScope } from "./enterprise-project-context";
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseProjectUrl, enterpriseProjectPredicate } from "./enterprise-project-scope";
 import { readEnterpriseDashboard, enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
@@ -198,7 +200,7 @@ export async function canManageWorkspaceUser(
   actor: AuthenticatedUser,
   targetUserId: number,
 ) {
-  if (actor.role !== "admin") return false;
+  if (actor.role !== "admin" || !["system_admin", "delivery_admin"].includes(actor.adminAccessLevel ?? "")) return false;
   if (isSystemAdmin(actor)) return true;
   const db = await requireDb();
   const rows = await db
@@ -218,6 +220,9 @@ export async function assertWorkspaceAccess(
   actor: AuthenticatedUser,
   targetUserId: number,
 ) {
+  const scope = getEnterpriseProjectScope();
+  if (scope && (scope.ownerUserId !== targetUserId || scope.actorUserId !== actor.id))
+    throw new AuthServiceError("NOT_FOUND", "客户与企业项目不匹配");
   if (actor.id === targetUserId && actor.role === "user") {
     await getTargetUser(targetUserId);
     return;
@@ -525,11 +530,13 @@ export async function updateDashboardWorkspace(input: {
   }>;
   beforeWrite?: DashboardWorkspaceWriteHook;
   afterWrite?: DashboardWorkspaceWriteHook;
+  businessSubmission?: boolean;
 }) {
   const db = await requireDb();
   const incomingPayload = dashboardPayloadSchema.parse(input.payload);
   assertDashboardReportAssetScope(incomingPayload, input.userId);
   await db.transaction(async (tx) => {
+    if (input.businessSubmission) await lockCustomerProjectBusinessWrite(tx, input.userId);
     const now = new Date();
     const targetRows = await tx
       .select({ id: users.id })
@@ -813,6 +820,7 @@ export async function rollbackDashboardContentRevision(input: {
   const db = await requireDb();
   let nextRevision = 0;
   await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId, input.actor);
     // Every dashboard writer locks the same customer row, so publish and
     // rollback share one optimistic revision boundary.
     const targetUsers = await tx
@@ -1121,6 +1129,7 @@ export function knowledgeSnapshotFormalCharacterCount(
 
 export async function createKnowledgeSnapshot(input: {
   snapshotId?: string;
+  businessSubmission?: boolean;
   userId: number;
   actorUserId: number;
   sourceFileName: string;
@@ -1152,6 +1161,7 @@ export async function createKnowledgeSnapshot(input: {
         .limit(1)
     : [];
   await db.transaction(async (tx) => {
+    if (input.businessSubmission) await lockCustomerProjectBusinessWrite(tx, input.userId);
     if (importProjectBindings[0]?.projectId) {
       await lockActiveWebsiteProjectLifecycle(
         tx,

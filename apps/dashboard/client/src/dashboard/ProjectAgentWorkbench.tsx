@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { WorkspaceWorkRecords } from "./WorkspaceWorkRecords";
 import { FileText } from "lucide-react";
 import { operatorViewPath } from "./operator-navigation";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
@@ -284,6 +285,7 @@ function ScopedWorkbench({
       />
       <details className="workbench-business-records">
         <summary>{businessPanel.history}</summary>
+        <WorkspaceWorkRecords key={`${projectId}:${agentId}`} projectId={projectId} module={agentId as Exclude<import("./operator-navigation").OperatorView, "knowledge-display">} />
         {taskNavigation}
       </details>
     </div>

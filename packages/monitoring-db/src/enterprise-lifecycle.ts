@@ -1,3 +1,4 @@
+import { monitoringEnterpriseBusinessWriteGuard } from "./enterprise-scope.js";
 import { sql } from "drizzle-orm";
 import { RepositoryError } from "./repository-error.js";
 
@@ -8,6 +9,7 @@ export async function assertMonitoringEnterpriseProjectActive(
   ownerId: string,
 ) {
   if (!enterpriseProjectId) return;
+  await monitoringEnterpriseBusinessWriteGuard()?.(tx);
   const [rows] = await tx.execute(sql`
     SELECT ep.id, ep.archivedAt FROM enterprise_projects ep
     INNER JOIN monitoring_account_links al ON al.dashboardUserId = ep.ownerUserId

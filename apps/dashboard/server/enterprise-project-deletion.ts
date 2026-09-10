@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { enterpriseProjects } from "../drizzle/schema";
+import { enterpriseProjects, users } from "../drizzle/schema";
 import { AuthServiceError, type AuthenticatedUser } from "./auth-service";
 import { getDb } from "./db";
 import { assertEnterpriseAccountAccess } from "./enterprise-project-service";
@@ -22,7 +22,14 @@ export async function deleteEnterpriseProject(
     .where(eq(enterpriseProjects.id, input.enterpriseProjectId)).limit(1);
   if (!owned) throw new AuthServiceError("NOT_FOUND", "企业项目不存在或无权访问");
   await assertEnterpriseAccountAccess(actor, owned.ownerUserId);
+  // The admission fence waits on the project row while another transaction
+  // may be committing its final business row.  Under MySQL's default
+  // REPEATABLE READ, the subsequent UNION can retain a read view from before
+  // that wait and miss the just-committed blocker.  READ COMMITTED makes the
+  // post-lock blocker scan observe the state that won the project-row lock.
   return db.transaction(async tx => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, owned.ownerUserId)).limit(1).for("update");
+    await assertEnterpriseAccountAccess(actor, owned.ownerUserId, tx);
     const [project] = await tx.select().from(enterpriseProjects)
       .where(and(eq(enterpriseProjects.id, owned.id), eq(enterpriseProjects.ownerUserId, owned.ownerUserId)))
       .limit(1).for("update");
@@ -76,5 +83,5 @@ export async function deleteEnterpriseProject(
     await tx.update(enterpriseProjects).set({ archivedAt: deletedAt, revision })
       .where(eq(enterpriseProjects.id, project.id));
     return { enterpriseProjectId: project.id, revision, deletedAt };
-  });
+  }, { isolationLevel: "read committed" });
 }

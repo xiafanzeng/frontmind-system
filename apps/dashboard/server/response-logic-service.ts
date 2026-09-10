@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { workspaceQuestionTable, workspaceQuestionOwnerPredicate } from "./enterprise-project-questions";
 import { enterpriseOwnerPredicate, enterpriseProjectIdForOwner } from "./enterprise-project-scope";
 import { randomUUID } from "node:crypto";
@@ -503,6 +504,7 @@ export async function saveResponseLogicEntry(input: {
   const now = new Date();
 
   await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     await lockResponseLogicQuestionForWrite({
       executor: tx,
       userId: input.userId,
@@ -640,6 +642,7 @@ export async function saveResponseLogicEntriesBatch(input: {
   const db = await requireDb();
   const now = new Date();
   return db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     await input.beforeWrite?.(tx);
 
     await lockResponseLogicQuestionsForBatch({
@@ -798,6 +801,7 @@ export async function recordResponseLogicTaskStart(input: {
   const db = await requireDb();
   const now = new Date();
   await db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     if (
       !(await credentialMayServeAccount(
         tx,

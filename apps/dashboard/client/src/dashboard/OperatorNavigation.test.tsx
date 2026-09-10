@@ -42,6 +42,24 @@ const sidebarProps = () => ({
   onRenameProject: vi.fn().mockResolvedValue(undefined),
   onDeleteProject: vi.fn().mockResolvedValue(undefined),
 });
+function mouseClick(element: HTMLElement) {
+  fireEvent(
+    element,
+    new MouseEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+    }),
+  );
+  fireEvent.mouseDown(element, { button: 0 });
+  fireEvent.pointerUp(element, {
+    button: 0,
+    pointerType: "mouse",
+    pointerId: 1,
+  });
+  fireEvent.mouseUp(element, { button: 0 });
+  fireEvent.click(element, { button: 0 });
+}
 async function chooseProjectAction(name: string) {
   if (name === "新建企业项目") {
     fireEvent.click(screen.getByRole("button", { name }));
@@ -49,11 +67,8 @@ async function chooseProjectAction(name: string) {
     const overview = screen.getByRole("button", { name: "项目总览" });
     if (overview.getAttribute("aria-expanded") !== "true")
       fireEvent.click(overview);
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "管理项目：企业甲" }),
-      { key: "Enter" },
-    );
-    fireEvent.click(
+    mouseClick(screen.getByRole("button", { name: "管理项目：企业甲" }));
+    mouseClick(
       await screen.findByRole("menuitem", { name: name.replace("当前", "") }),
     );
   }
@@ -186,7 +201,9 @@ describe("operator workspace navigation", () => {
       />,
     );
     const toggle = screen.getByRole("button", { name: "AI 智能品牌优化" });
-    const group = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+    const group = document.getElementById(
+      toggle.getAttribute("aria-controls")!,
+    )!;
     const entries = within(group).getAllByRole("button");
     expect(entries).toHaveLength(7);
     expect(entries.at(-1)).toHaveAccessibleName("通用智能体");
@@ -196,9 +213,10 @@ describe("operator workspace navigation", () => {
     }
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "品牌建设" })).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "通用智能体" }),
-    ).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "通用智能体" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
     expect(screen.queryByText("旧的左侧任务列表")).toBeNull();
     expect(screen.getByRole("button", { name: "品牌建设" })).toHaveStyle({
       "--module-accent": "#16794f",
@@ -358,7 +376,7 @@ describe("operator workspace navigation", () => {
       expect(screen.getByRole("button", { name: "取消" })).toHaveFocus(),
     );
     expect(screen.queryByText(/恢复/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    mouseClick(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(props.onDeleteProject).not.toHaveBeenCalled();
     expect(
@@ -368,6 +386,35 @@ describe("operator workspace navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除项目" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(props.onDeleteProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains unsaved project drafts in the deletion confirmation", async () => {
+    const removeDraft = registerWorkspaceDraft({
+      isDirty: () => true,
+      label: "内容制作草稿",
+    });
+    try {
+      render(<OperatorSidebar {...sidebarProps()} />);
+      await chooseProjectAction("删除当前项目");
+      expect(screen.getByText(/当前项目有未提交草稿/)).toBeVisible();
+    } finally {
+      removeDraft();
+    }
+  });
+
+  it("keeps the active menu inside the project capsule and closes on Escape or a real outside click", async () => {
+    render(<OperatorSidebar {...sidebarProps()} />);
+    mouseClick(screen.getByRole("button", { name: "项目总览" }));
+    const trigger = screen.getByRole("button", { name: "管理项目：企业甲" });
+    mouseClick(trigger);
+    fireEvent.keyDown(await screen.findByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(trigger).toHaveFocus();
+    mouseClick(document.body);
+    expect(screen.getByRole("button", { name: "项目总览" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 
   it("keeps a pending deletion open and preserves the project on failure", async () => {
@@ -425,7 +472,7 @@ describe("operator workspace navigation", () => {
       screen.queryByRole("button", { name: "企业甲" }),
     ).not.toBeInTheDocument();
     await chooseProjectAction("新建企业项目");
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    mouseClick(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     act(() => window.dispatchEvent(new Event("operator-create-project")));
     expect(

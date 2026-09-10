@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "../customer-project-write-access";
 import { enterpriseSiteProfileTable, enterpriseSiteProfileOwnerPredicate } from "../enterprise-project-state-tables";
 import { enterpriseOwnerPredicate } from "../enterprise-project-scope";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -724,6 +725,7 @@ export async function bindAliyunCustomerAccountFromOAuth(rawInput: {
   const db = await requireDb();
   const now = new Date();
   return db.transaction(async (tx) => {
+    await lockCustomerProjectBusinessWrite(tx, input.userId);
     const [
       projects,
       credentials,

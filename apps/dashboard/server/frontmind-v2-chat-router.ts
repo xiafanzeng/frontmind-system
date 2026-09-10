@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { loadGeneralExecutions } from "./frontmind-general-execution";
 import { generalExecutionActivity } from "../shared/frontmind-general-execution";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
@@ -3463,6 +3464,7 @@ async function reservePersistedGeneralChatTurn(input: {
   availableContentActions?: ContentProductionAction["kind"][];
   contentRunnerRevision?: number | null;
 }) {
+  await lockCustomerProjectBusinessWrite(input.executor, input.userId);
   const persistedConversationId = persistedConversationResourceId(
     input.userId,
     input.conversationId,
@@ -3832,6 +3834,7 @@ async function reserveCreate(input: {
   const title = `FrontMind chat ${localTaskId}`;
   try {
     await db.transaction(async (tx) => {
+      await lockCustomerProjectBusinessWrite(tx, input.userId);
       let purposeContext: FrozenGeneralAgentPurpose | null = null;
       if (input.value.purpose) {
         const useKnowledge =

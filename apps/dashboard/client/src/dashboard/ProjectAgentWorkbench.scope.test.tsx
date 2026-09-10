@@ -20,6 +20,7 @@ import {
 const api = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
+    workspace: { workRecords: { list: { useQuery: () => ({ data: { records: [], nextCursor: null } }) } } },
     conversation: {
       workbenchBind: { useMutation: () => ({ mutateAsync: api.mutate }) },
       workbenchSaveState: { useMutation: () => ({ mutateAsync: api.mutate }) },

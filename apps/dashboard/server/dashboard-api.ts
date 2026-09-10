@@ -1,5 +1,7 @@
+import { assertCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { enterpriseOwnerPredicate } from "./enterprise-project-scope";
-import { enterpriseWorkspaceUserId } from "./enterprise-project-context";
+import { enterpriseWorkspaceUserId, getEnterpriseProjectScope } from "./enterprise-project-context";
+import { previewProjectMonitoringImport, commitProjectMonitoringImport, recoverProjectMonitoringImport, type ProjectMonitoringImportPlan } from "./project-monitoring-import-service";
 import { enterpriseDashboardTable, enterpriseDashboardOwnerPredicate } from "./enterprise-project-service";
 import type { DecryptedCredential } from "./auth-service";
 import { createCredentialAgentClient } from "./credential-agent-client";
@@ -201,11 +203,6 @@ const router = express.Router();
 const MAX_ARCHIVE_ENTRIES = 2_000;
 const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
 
-function assertNotDeliveryAdministratorExecution(actor: AuthenticatedUser) {
-  if (actor.role === "admin" && actor.adminAccessLevel === "delivery_admin") {
-    throw new Error("交付管理员只负责流程调度，不能执行上传或发布操作");
-  }
-}
 
 function deliveryProjectAssignmentId(req: express.Request) {
   return String(req.header("x-delivery-project-assignment-id") || "").trim();
@@ -231,7 +228,11 @@ async function assertRoleScopedWorkspaceExecution(input: {
       expectedRoleType: input.expectedRoleType,
     });
   }
-  assertNotDeliveryAdministratorExecution(actor);
+  await assertCustomerProjectBusinessWrite(actor, input.targetUserId, {
+    // Preserve the old system-admin account import route. Missing scope must
+    // never turn /me into the administrator's own workspace.
+    requireProject: actor.role === "admin" && !(actor.adminAccessLevel === "system_admin" && Number(input.req.params.userId) === input.targetUserId),
+  });
   if (
     actor.role === "user" &&
     (input.allowCustomerSelf === false || actor.id !== input.targetUserId)
@@ -4421,7 +4422,7 @@ export function parseMonitoringCurrentTemplate(input: {
         monitoringTemplateComparableBatch(currentByKey.get(batch.batchKey)!),
       ),
   ).length;
-  if (changedBatchCount === 0) {
+  if (changedBatchCount === 0 && !getEnterpriseProjectScope()) {
     throw new Error("问题监控当前内容模板与正式数据一致，无需发布");
   }
   return { template, changedBatchCount };
@@ -5833,6 +5834,7 @@ export async function importDashboardPayload(input: {
     citations: [],
   };
   const dashboard = await dependencies.updateWorkspace({
+    businessSubmission: true,
     userId: input.targetUserId,
     actorUserId: input.actor.id,
     payload: storedPayload,
@@ -7219,6 +7221,7 @@ router.post("/knowledge/publish", async (req: FrontMindRequest, res) => {
     });
     storedArchive = { userId: targetUserId, snapshotId };
     const snapshot = await createKnowledgeSnapshot({
+      businessSubmission: true,
       snapshotId,
       userId: targetUserId,
       actorUserId: actor.id,
@@ -7316,7 +7319,9 @@ router.put(
       return;
     }
     try {
-      assertNotDeliveryAdministratorExecution(actor);
+      if (actor.role !== "delivery_member") await assertCustomerProjectBusinessWrite(actor, targetUserId, {
+        requireProject: actor.role === "admin" && !(actor.adminAccessLevel === "system_admin" && req.params.userId !== "me"),
+      });
       if (actor.role !== "delivery_member") {
         await assertWorkspaceAccess(actor, targetUserId);
       }
@@ -7352,6 +7357,18 @@ router.put(
             targetUserId,
             importModule,
           });
+        }
+        if (getEnterpriseProjectScope() && importModule === "full") throw new Error("企业项目请按具体业务模块预检和提交；整合文件不能绕过监控导入及版本检查。");
+        const projectMonitoring = importModule === "monitoring" && Boolean(getEnterpriseProjectScope());
+        const projectMonitoringTarget = String(req.header("x-monitoring-target-batch-key") || "").trim() || undefined;
+        const projectMonitoringRequest = {
+          actor, userId: targetUserId, revision: expectedRevision ?? -1, fileHash,
+          targetBatchKey: projectMonitoringTarget, token: req.header("x-import-preflight-token"),
+        };
+        if (projectMonitoring && !importPreview) {
+          assertDashboardImportPublishHash({ module: "monitoring", fileHash, expectedFileHash: req.header("x-monitoring-file-hash") || req.header("x-import-file-hash") });
+          const recovered = await recoverProjectMonitoringImport(projectMonitoringRequest);
+          if (recovered) { res.json(recovered); return; }
         }
         const existing = await getDashboardWorkspace(targetUserId);
         assertDashboardImportRevision({
@@ -7657,6 +7674,18 @@ router.put(
             fileHash,
             templateRevision: existing.revision,
           });
+          if (projectMonitoring) {
+            const plan: ProjectMonitoringImportPlan = {
+              operationKind: "replace", completeTemplate: true,
+              batches: template.batches.map(batch => ({ ...batch, userId: targetUserId })),
+              expectedBatchRevisions: Object.fromEntries(template.batches.map(batch => [batch.batchKey, batch.revision])),
+            };
+            if (importPreview) {
+              const credential = await previewProjectMonitoringImport({ ...projectMonitoringRequest, plan });
+              res.json({ kind: "monitoring-preview", preview: { ...preview, ...credential, workspaceUserId: targetUserId, enterpriseProjectId: getEnterpriseProjectScope()!.enterpriseProjectId } });
+            } else res.json(await commitProjectMonitoringImport({ ...projectMonitoringRequest, plan }));
+            return;
+          }
           if (importPreview) {
             const credential = await issueDashboardImportPreflight({
               binding: {
@@ -7778,6 +7807,7 @@ router.put(
             return;
           }
           const dashboard = await updateDashboardWorkspace({
+            businessSubmission: true,
             userId: targetUserId,
             actorUserId: actor.id,
             payload,
@@ -7835,7 +7865,7 @@ router.put(
           if (importModule !== "monitoring" || !importPreview) throw error;
           const available = await getMonitoringFilterOptions(
             targetUserId,
-            servicePortal.quotaPeriods.map((period) => period.periodId),
+            getEnterpriseProjectScope() ? undefined : servicePortal.quotaPeriods.map((period) => period.periodId),
           );
           res.json({
             kind: "monitoring-preview",
@@ -7879,7 +7909,7 @@ router.put(
             if (importPreview) {
               const available = await getMonitoringFilterOptions(
                 targetUserId,
-                servicePortal.quotaPeriods.map((period) => period.periodId),
+                getEnterpriseProjectScope() ? undefined : servicePortal.quotaPeriods.map((period) => period.periodId),
               );
               res.json({
                 kind: "monitoring-preview",
@@ -7913,7 +7943,7 @@ router.put(
           }
           const available = await getMonitoringFilterOptions(
             targetUserId,
-            servicePortal.quotaPeriods.map((period) => period.periodId),
+            getEnterpriseProjectScope() ? undefined : servicePortal.quotaPeriods.map((period) => period.periodId),
           );
           const preview = buildMonitoringImportPreview({
             payload,
@@ -7923,6 +7953,27 @@ router.put(
             templateRevision: existing.revision,
             availableBatches: available.batches,
           });
+          if (projectMonitoring) {
+            const targetBatchKey = targetBatchKeyHeader || (importPreview && preview.targetBatchRequired ? preview.suggestedBatchKey : undefined);
+            if (preview.targetBatchRequired && !targetBatchKey) {
+              if (importPreview) { res.json({ kind: "monitoring-preview", preview }); return; }
+              throw new MonitoringTargetBatchRequiredError();
+            }
+            const target = targetBatchKey ? available.batches.find(batch => batch.batchKey === targetBatchKey) : undefined;
+            if (targetBatchKey && !target) throw new MonitoringTargetBatchRequiredError();
+            const plan: ProjectMonitoringImportPlan = {
+              operationKind: preview.targetBatchRequired ? "merge-citations" : targetBatchKey ? "replace" : "import",
+              batches: [{ ...monitoringBatch, ...(targetBatchKey && !preview.targetBatchRequired ? { batchKey: targetBatchKey } : {}) }],
+              targetBatchKey,
+              ...(target ? { expectedBatchRevisions: { [target.batchKey]: target.revision } } : {}),
+            };
+            const request = { ...projectMonitoringRequest, targetBatchKey };
+            if (importPreview) {
+              const credential = await previewProjectMonitoringImport({ ...request, plan });
+              res.json({ kind: "monitoring-preview", preview: { ...preview, ...credential, preflightTargetBatchKey: targetBatchKey, workspaceUserId: targetUserId, enterpriseProjectId: getEnterpriseProjectScope()!.enterpriseProjectId } });
+            } else res.json(await commitProjectMonitoringImport({ ...request, plan }));
+            return;
+          }
           if (importPreview) {
             let boundTargetBatchKey = targetBatchKeyHeader;
             if (boundTargetBatchKey) {
@@ -8203,6 +8254,7 @@ router.put(
           storedArchive = true;
         }
         const snapshot = await createKnowledgeSnapshot({
+          businessSubmission: true,
           snapshotId,
           userId: targetUserId,
           actorUserId: actor.id,

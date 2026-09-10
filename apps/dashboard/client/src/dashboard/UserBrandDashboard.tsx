@@ -4,7 +4,6 @@ import {
   EnterpriseProgressReport,
 } from "./EnterpriseMonitoringWorkspace";
 import { Link, useLocation, useSearch } from "wouter";
-import { navigate as navigateBrowser } from "wouter/use-browser-location";
 import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import {
   Activity,
@@ -58,6 +57,7 @@ import HistoricalResultsReadOnly from "./HistoricalResultsReadOnly";
 import KnowledgeFrontendSettings from "./knowledge-frontend/KnowledgeFrontendSettings";
 import ConnectedSiteOpsConversationPanel from "./siteops/ConnectedSiteOpsConversationPanel";
 import { trpc } from "@/lib/trpc";
+import { useProjectDirectory } from "@/contexts/WorkspaceQueryProvider";
 import { ConversationPurposeProvider } from "@/contexts/ConversationContext";
 import {
   KEYWORD_CATEGORY_OPTIONS,
@@ -611,14 +611,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
     requestedOwner > 0
       ? requestedOwner
       : user?.id;
-  const projectsQuery = trpc.enterpriseProjects.list.useQuery(
-    { ownerUserId: workspaceOwnerId },
-    { retry: false, enabled: Boolean(user) },
-  );
-  const createProject = trpc.enterpriseProjects.create.useMutation();
-  const renameProject = trpc.enterpriseProjects.rename.useMutation();
-  const deleteProject = trpc.enterpriseProjects.delete.useMutation();
-  const projectUtils = trpc.useUtils();
+  const { directory, projectsQuery, managing: projectManagementPending } = useProjectDirectory();
   const projects = projectsQuery.data?.projects || [];
   const accountLevel = location === "/agent" || location === "/account";
   const selectedProjectId =
@@ -653,84 +646,9 @@ function PersistentUserBrandDashboard({ initialSection }) {
       );
     }
   }, [user?.id, projectsQuery.data, search, location, activeProject?.id]);
-  const onCreateProject = async (name) => {
-    const result = await createProject.mutateAsync({
-      name,
-      clientRequestId: crypto.randomUUID(),
-      ownerUserId: workspaceOwnerId,
-    });
-    const project = result.project || result;
-    projectUtils.enterpriseProjects.list.setData(
-      { ownerUserId: workspaceOwnerId },
-      (current) =>
-        current
-          ? {
-              ...current,
-              projects: [
-                ...current.projects.filter((item) => item.id !== project.id),
-                project,
-              ],
-            }
-          : { projects: [project] },
-    );
-    void projectUtils.enterpriseProjects.list.invalidate({
-      ownerUserId: workspaceOwnerId,
-    });
-    switchEnterpriseProject(workspaceOwnerId, project.id);
-  };
-  const onRenameProject = async (name, target) => {
-    const project = projects.find((item) => item.id === target?.id);
-    if (!project || project.revision !== target.revision)
-      throw new Error("项目已更新，请重新打开项目管理。");
-    await renameProject.mutateAsync({
-      enterpriseProjectId: target.id,
-      name,
-      expectedRevision: target.revision,
-    });
-    await projectsQuery.refetch();
-  };
-  const onDeleteProject = async (target) => {
-    const project = projects.find((item) => item.id === target?.id);
-    if (!project || project.revision !== target.revision)
-      throw new Error("项目已更新，请重新打开项目管理。");
-    const deletedId = target.id;
-    const originUrl = window.location.href;
-    const remaining = projects.filter((project) => project.id !== deletedId);
-    await deleteProject.mutateAsync({
-      enterpriseProjectId: deletedId,
-      expectedRevision: target.revision,
-    });
-    // Remove the confirmed deletion immediately; a failed refresh must not reselect it.
-    projectUtils.enterpriseProjects.list.setData(
-      { ownerUserId: workspaceOwnerId },
-      (current) =>
-        current
-          ? {
-              ...current,
-              projects: current.projects.filter(
-                (project) => project.id !== deletedId,
-              ),
-            }
-          : current,
-    );
-    if (rememberedEnterpriseProject(workspaceOwnerId) === deletedId)
-      sessionStorage.removeItem("frontmind.enterpriseProject");
-    void projectUtils.enterpriseProjects.list.invalidate({
-      ownerUserId: workspaceOwnerId,
-    });
-    // A completed request must not override navigation made while it was pending.
-    if (window.location.href !== originUrl || deletedId !== activeProject?.id)
-      return;
-    const next =
-      remaining.find((project) => project.isLegacyDefault) || remaining[0];
-    if (next) switchEnterpriseProject(workspaceOwnerId, next.id);
-    else {
-      const query = new URLSearchParams({ view: "knowledge" });
-      if (user?.role === "admin")
-        query.set("operatorOwnerId", String(workspaceOwnerId));
-      navigateBrowser(`/?${query}`, { replace: true });
-    }
-  };
+  const onCreateProject = (name) => directory.create(name);
+  const onRenameProject = (name, target) => directory.rename(name, target);
+  const onDeleteProject = (target) => directory.delete(target);
   const [editingSection, setEditingSection] = useState(null);
   const queryOptions = {
     enabled: Boolean(activeProject) && !accountLevel,
@@ -742,14 +660,20 @@ function PersistentUserBrandDashboard({ initialSection }) {
   };
   const portal = trpc.workspace.portal.useQuery(undefined, queryOptions);
   const dashboard = trpc.workspace.dashboard.useQuery(undefined, queryOptions);
+  const workspaceUtils = trpc.useUtils();
   const refresh = async () => {
-    await Promise.all([portal.refetch(), dashboard.refetch()]);
+    await Promise.all([portal.refetch(), dashboard.refetch(), workspaceUtils.workspace.monitoring.invalidate(), workspaceUtils.workspace.workRecords.invalidate()]);
   };
   if (editingSection && user)
     return (
       <DashboardSkeletonEditor
         customerMode
-        userId={user.id}
+        userId={workspaceOwnerId}
+        writeMode="workspace"
+        canImportMonitoring={user.role === "admin"}
+        enterpriseProjectId={activeProject?.id}
+        customerLabel={user.role === "admin" ? `客户 ${workspaceOwnerId}` : undefined}
+        projectLabel={activeProject?.name}
         initialSection={editingSection}
         workspace={dashboard.data}
         loading={dashboard.isLoading}
@@ -773,6 +697,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
       operatorProjects={projects}
       operatorAccountLabel={user?.displayName || user?.username}
       operatorProject={activeProject}
+      operatorProjectManagementPending={projectManagementPending}
       operatorProjectsLoading={projectsQuery.isLoading}
       operatorProjectsError={
         projectsQuery.error?.message ||
@@ -782,6 +707,7 @@ function PersistentUserBrandDashboard({ initialSection }) {
           ? "该企业项目不存在或无权访问，请在左侧选择可用项目。"
           : undefined)
       }
+      onRefreshProjects={() => projectsQuery.refetch()}
       onCreateProject={onCreateProject}
       onRenameProject={onRenameProject}
       onDeleteProject={onDeleteProject}
@@ -808,8 +734,10 @@ export function UserBrandDashboardContent({
   operatorProjects,
   operatorAccountLabel,
   operatorProject,
+  operatorProjectManagementPending,
   operatorProjectsLoading,
   operatorProjectsError,
+  onRefreshProjects,
   onCreateProject,
   onRenameProject,
   onDeleteProject,
@@ -1149,6 +1077,7 @@ export function UserBrandDashboardContent({
           <EnterpriseMonitoringWorkspace
             enterpriseProjectId={operatorProject.id}
             questions={servicePortal.purchasedQuestions}
+            onImportData={administratorOwnerId && onEditDashboard ? () => onEditDashboard("monitoring") : undefined}
           />
         ) : (
           <MonitoringModule />
@@ -1460,6 +1389,7 @@ export function UserBrandDashboardContent({
             <OperatorSidebar
               projects={operatorProjects}
               activeProject={operatorProject}
+              projectManagementPending={operatorProjectManagementPending}
               projectsLoading={operatorProjectsLoading}
               projectsError={operatorProjectsError}
               view={currentView}
@@ -1481,6 +1411,7 @@ export function UserBrandDashboardContent({
                 onSelectProject(id);
                 setMobileNavOpen(false);
               }}
+              onRefreshProjects={onRefreshProjects}
               onCreateProject={onCreateProject}
               onRenameProject={onRenameProject}
               onDeleteProject={onDeleteProject}

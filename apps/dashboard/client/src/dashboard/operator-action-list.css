@@ -1,0 +1,136 @@
+.operator-action-list {
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  font-family: var(--fm-font-ui, sans-serif);
+}
+.operator-action-list .operator-action-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  min-width: 0;
+  min-height: 96px;
+  padding: 20px;
+  border: 1px solid #e2e5e9;
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+  color: #20252b;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 140ms,
+    border-color 140ms;
+}
+.operator-action-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  background: transparent;
+  border-radius: 3px;
+}
+.operator-action-number {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #f3f5f6;
+  color: #525a65;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+}
+.operator-action-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.operator-action-list .operator-action-title {
+  display: block;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+  color: #20252b;
+}
+.operator-action-list .operator-action-description {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 24px;
+  font-weight: 400;
+  color: #626b76;
+}
+.operator-action-arrow {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #dce1e5;
+  border-radius: 50%;
+  color: #606a74;
+}
+.operator-action-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid #e2e5e9;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.operator-action-row:not(:disabled):hover,
+.operator-action-row[aria-pressed="true"] {
+  border-color: var(--module-color);
+  background-color: color-mix(in srgb, var(--module-color) 5%, white);
+}
+.operator-action-row:not(:disabled):hover::before,
+.operator-action-row[aria-pressed="true"]::before {
+  background: var(--module-color);
+}
+.operator-action-row:not(:disabled):hover .operator-action-number,
+.operator-action-row[aria-pressed="true"] .operator-action-number {
+  color: var(--module-color);
+  background: color-mix(in srgb, var(--module-color) 10%, white);
+}
+.operator-action-row:not(:disabled):hover .operator-action-arrow,
+.operator-action-row[aria-pressed="true"] .operator-action-arrow {
+  color: var(--module-color);
+  border-color: var(--module-color);
+}
+.operator-action-row:focus-visible {
+  outline: 2px solid var(--module-color);
+  outline-offset: 3px;
+}
+.operator-action-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+@container (max-width: 560px) {
+  .operator-action-list .operator-action-row {
+    grid-template-columns: 36px minmax(0, 1fr) 32px;
+    padding: 16px;
+    gap: 12px;
+  }
+  .operator-action-number {
+    width: 36px;
+    height: 36px;
+  }
+  .operator-action-arrow {
+    width: 32px;
+    height: 32px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operator-action-list .operator-action-row {
+    transition: none;
+  }
+}

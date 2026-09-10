@@ -49,7 +49,10 @@ import {
   Wallet,
   Wrench,
 } from "lucide-react";
-import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
+import {
+  getUnsavedWorkspaceDrafts,
+  requestWorkspaceNavigation,
+} from "@/lib/workspace-navigation-guard";
 import { projectWorkspaceUrl } from "@/lib/enterprise-project";
 import {
   OPERATOR_MODULES,
@@ -71,6 +74,7 @@ type ProjectDialogState = {
   kind: ProjectDialog;
   project?: EnterpriseProjectView;
   activeProjectId?: string;
+  discardsDrafts?: boolean;
 };
 
 export function OperatorSidebar({
@@ -81,6 +85,7 @@ export function OperatorSidebar({
   onCollapse,
   onNavigate,
   onSelectProject,
+  onRefreshProjects,
   onCreateProject,
   onRenameProject,
   onDeleteProject,
@@ -89,12 +94,14 @@ export function OperatorSidebar({
   accountName,
   view,
   onSelectView,
+  projectManagementPending = false,
   projectsLoading = false,
   projectsError,
   taskNavigation,
   taskNavigationRef,
 }: {
   projects: EnterpriseProjectView[];
+  projectManagementPending?: boolean;
   projectsLoading?: boolean;
   projectsError?: string;
   taskNavigation?: ReactNode;
@@ -110,6 +117,7 @@ export function OperatorSidebar({
   view?: OperatorView;
   onSelectView?: (view: OperatorView) => void;
   onSelectProject: (id: string) => void;
+  onRefreshProjects?: () => unknown;
   onCreateProject: (name: string) => Promise<void>;
   onRenameProject: (
     name: string,
@@ -118,6 +126,15 @@ export function OperatorSidebar({
   onDeleteProject?: (project: EnterpriseProjectView) => Promise<void>;
 }) {
   const sidebarRef = useRef<HTMLElement>(null);
+  const projectMenuContent = useRef<HTMLDivElement>(null);
+  const projectDialogOpen = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [modulesExpanded, setModulesExpanded] = useState(true);
   const [isMobile, setIsMobile] = useState(
     () =>
@@ -232,8 +249,10 @@ export function OperatorSidebar({
     if (!expanded) return;
     const closeOutside = (event: globalThis.MouseEvent) => {
       const target = event.target;
+      if (projectDialogOpen.current) return;
       if (
         target instanceof Node &&
+        !projectMenuContent.current?.contains(target) &&
         !sidebarRef.current
           ?.querySelector(".operator-project-capsule")
           ?.contains(target)
@@ -252,23 +271,30 @@ export function OperatorSidebar({
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  projectDialogOpen.current = Boolean(dialog);
+  const busy = saving || projectManagementPending;
   const open = useCallback(
     (
       kind: ProjectDialog,
       project = activeProject,
       trigger: HTMLElement | null = projectMenuTrigger.current,
     ) => {
-      if (submitting.current) return;
+      if (submitting.current || projectManagementPending) return;
       returnFocus.current = trigger;
       setDialog({
         kind,
         project: project ? { ...project } : undefined,
         activeProjectId: activeProject?.id,
+        discardsDrafts:
+          kind === "delete" &&
+          activeEntry === "project" &&
+          project?.id === activeProject?.id &&
+          getUnsavedWorkspaceDrafts().length > 0,
       });
       setName(kind === "rename" ? project?.name || "" : "");
       setError("");
     },
-    [activeProject],
+    [activeProject, activeEntry, projectManagementPending],
   );
   useEffect(() => {
     const listener = () =>
@@ -288,6 +314,7 @@ export function OperatorSidebar({
     if (
       !dialog ||
       submitting.current ||
+      projectManagementPending ||
       (dialog.kind !== "delete" && !name.trim())
     )
       return;
@@ -312,8 +339,9 @@ export function OperatorSidebar({
       else if (dialog.kind === "rename")
         await onRenameProject(name.trim(), dialog.project!);
       else await onCreateProject(name.trim());
-      setDialog(null);
+      if (mounted.current) setDialog(null);
     } catch (cause) {
+      if (!mounted.current) return;
       setError(
         cause instanceof Error
           ? cause.message
@@ -323,7 +351,7 @@ export function OperatorSidebar({
       );
     } finally {
       submitting.current = false;
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   };
   const closeAutoFocus = (event: Event) => {
@@ -462,7 +490,7 @@ export function OperatorSidebar({
                 className="operator-project-menu-trigger"
                 aria-label="新建企业项目"
                 title="新建企业项目"
-                disabled={saving}
+                disabled={busy}
                 onClick={() => open("create")}
               >
                 <Plus size={18} />
@@ -491,12 +519,24 @@ export function OperatorSidebar({
                     placeholder="搜索项目"
                   />
                 </label>
+                {projectsError && onRefreshProjects && (
+                  <p className="operator-project-hint" role="status">
+                    项目目录同步失败。
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onRefreshProjects()}
+                    >
+                      重新读取
+                    </button>
+                  </p>
+                )}
                 {visibleProjects.map((project) => (
                   <ProjectRow
                     key={project.id}
                     project={project}
                     selected={project.id === activeProject?.id}
-                    saving={saving}
+                    saving={busy}
                     canDelete={Boolean(onDeleteProject)}
                     onSelect={() =>
                       requestWorkspaceNavigation(() => {
@@ -508,6 +548,7 @@ export function OperatorSidebar({
                     }
                     onAction={(kind, trigger) => open(kind, project, trigger)}
                     dialogOpen={Boolean(dialog)}
+                    menuContentRef={projectMenuContent}
                   />
                 ))}
                 {!projects.length &&
@@ -649,7 +690,7 @@ export function OperatorSidebar({
                 项目名称
                 <input
                   autoFocus
-                  disabled={saving}
+                  disabled={busy}
                   value={name}
                   maxLength={120}
                   onChange={(event) => setName(event.target.value)}
@@ -657,16 +698,30 @@ export function OperatorSidebar({
                 />
               </label>
             )}
-            {error && (
-              <p role="alert" className="operator-form-error">
-                {error}
+            {dialog?.discardsDrafts && (
+              <p className="operator-project-hint">
+                当前项目有未提交草稿。删除成功后将离开此项目，未提交内容不会保存。
               </p>
+            )}
+            {error && (
+              <div role="alert" className="operator-form-error">
+                <p>{error}</p>
+                {onRefreshProjects && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onRefreshProjects()}
+                  >
+                    重新读取项目目录
+                  </button>
+                )}
+              </div>
             )}
             <div className="operator-dialog-actions">
               <button
                 type="button"
                 className="operator-secondary-button"
-                disabled={saving}
+                disabled={busy}
                 onClick={() => setDialog(null)}
               >
                 取消
@@ -709,6 +764,7 @@ function ProjectRow({
   onSelect,
   onAction,
   dialogOpen,
+  menuContentRef,
 }: {
   project: EnterpriseProjectView;
   selected: boolean;
@@ -720,6 +776,7 @@ function ProjectRow({
     trigger: HTMLButtonElement | null,
   ) => void;
   dialogOpen: boolean;
+  menuContentRef: Ref<HTMLDivElement>;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   return (
@@ -759,6 +816,7 @@ function ProjectRow({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
+          ref={menuContentRef}
           className="operator-project-menu"
           align="start"
           side="right"

@@ -1528,6 +1528,20 @@ export class MonitoringRepository {
     });
   }
 
+  private async lockProjectAdmission(tx: Transaction, ownerId: string, projectId: string) {
+    const [project] = await tx.select({ enterpriseProjectId: projects.enterpriseProjectId })
+      .from(projects).where(and(eq(projects.id, projectId), monitoringProjectOwnerPredicate(projects, ownerId))).limit(1);
+    if (!project) throw new RepositoryError("NOT_FOUND", "Project not found");
+    await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
+  }
+
+  private async lockMonitorAdmission(tx: Transaction, ownerId: string, monitorId: string) {
+    const [monitor] = await tx.select({ projectId: monitors.projectId }).from(monitors)
+      .where(and(eq(monitors.id, monitorId), monitoringChildOwnerPredicate(monitors, ownerId))).limit(1);
+    if (!monitor) throw new RepositoryError("NOT_FOUND", "Monitor not found");
+    await this.lockProjectAdmission(tx, ownerId, monitor.projectId);
+  }
+
   async createProject(
     ownerId: string,
     input: ProjectCreateInput,
@@ -1536,6 +1550,7 @@ export class MonitoringRepository {
     const projectId = randomUUID();
     const brandVersionId = randomUUID();
     await this.db.transaction(async (tx) => {
+      await assertMonitoringEnterpriseProjectActive(tx, currentMonitoringEnterpriseProjectId(), ownerId);
       await tx.insert(projects).values({
         enterpriseProjectId: currentMonitoringEnterpriseProjectId(),
         id: projectId,
@@ -1675,6 +1690,7 @@ export class MonitoringRepository {
   ) {
     const now = new Date();
     await this.db.transaction(async (tx) => {
+      await this.lockProjectAdmission(tx, ownerId, projectId);
       const [project] = await tx
         .select()
         .from(projects)
@@ -1775,6 +1791,7 @@ export class MonitoringRepository {
   ) {
     const versionId = randomUUID();
     await this.db.transaction(async (tx) => {
+      await this.lockProjectAdmission(tx, ownerId, input.projectId);
       const [project] = await tx
         .select()
         .from(projects)
@@ -2957,6 +2974,7 @@ export class MonitoringRepository {
     transaction?: Transaction,
   ) {
     const execute = async (tx: Transaction) => {
+      await this.lockProjectAdmission(tx, ownerId, projectId);
       const [project] = await tx
         .select()
         .from(projects)
@@ -2971,7 +2989,6 @@ export class MonitoringRepository {
         .limit(1);
       if (!project?.currentBrandVersionId)
         throw new RepositoryError("NOT_FOUND", "Project not found");
-      await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
       await validatePlatforms(tx, configuration);
 
       const monitorId = randomUUID();
@@ -3042,6 +3059,7 @@ export class MonitoringRepository {
     transaction?: Transaction,
   ) {
     const execute = async (tx: Transaction) => {
+      await this.lockMonitorAdmission(tx, ownerId, monitorId);
       const [monitor] = await tx
         .select()
         .from(monitors)
@@ -3068,7 +3086,6 @@ export class MonitoringRepository {
         .limit(1);
       if (!project?.currentBrandVersionId)
         throw new RepositoryError("NOT_FOUND", "Project not found");
-      await assertMonitoringEnterpriseProjectActive(tx, project.enterpriseProjectId, ownerId);
       await validatePlatforms(tx, configuration);
       const [latest] = await tx
         .select({ version: monitorVersions.version })
@@ -3145,7 +3162,9 @@ export class MonitoringRepository {
     audit: RequestAudit,
   ) {
     return this.db.transaction(async (tx) => {
-      // The wallet is the stable per-owner serialization point available before
+      await this.lockProjectAdmission(tx, ownerId, projectId);
+      // Enterprise admission precedes all wallet/monitor locks. The wallet is
+      // the stable per-owner serialization point available before
       // a new monitor has an id. Taking this lock before the replay lookup makes
       // concurrent double submits observe the first committed run instead of
       // creating a second monitor that only fails later on the run unique key.
@@ -3200,6 +3219,7 @@ export class MonitoringRepository {
     audit: RequestAudit,
   ) {
     return this.db.transaction(async (tx) => {
+      await this.lockMonitorAdmission(tx, ownerId, monitorId);
       const [lockedMonitor] = await tx
         .select({ id: monitors.id })
         .from(monitors)
@@ -3489,6 +3509,7 @@ export class MonitoringRepository {
   ) {
     const now = new Date();
     await this.db.transaction(async (tx) => {
+      await this.lockMonitorAdmission(tx, ownerId, monitorId);
       const [monitor] = await tx
         .select()
         .from(monitors)

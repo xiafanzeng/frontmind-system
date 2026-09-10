@@ -31,7 +31,7 @@ export function activateWorkspaceRestScope(key: string, projectId?: string): () 
 export type WorkspaceRestOperation = ReturnType<typeof captureWorkspaceRestOperation>;
 
 /** Capture once before an await; pass signal to nested operations so retries inherit this identity. */
-export function captureWorkspaceRestOperation(externalSignal?: AbortSignal | null) {
+export function captureWorkspaceRestOperation(externalSignal?: AbortSignal | null, explicitScope?: { enterpriseProjectId?: string; projectAssignmentId?: string }) {
   const inherited = externalSignal ? inheritedScopes.get(externalSignal) : undefined;
   const currentHeaders = deliveryProjectHeaders();
   if (activeScope) {
@@ -39,6 +39,11 @@ export function captureWorkspaceRestOperation(externalSignal?: AbortSignal | nul
     Object.assign(currentHeaders, activeScope.headers);
   }
   const frozenHeaders = { ...(inherited?.headers ?? currentHeaders) };
+  for (const [name, value] of [["x-enterprise-project-id", explicitScope?.enterpriseProjectId], ["x-delivery-project-assignment-id", explicitScope?.projectAssignmentId]]) {
+    if (!value) continue;
+    if (frozenHeaders[name!] && frozenHeaders[name!] !== value) throw new Error("请求与当前企业项目范围不一致，请重新进入工作区。");
+    frozenHeaders[name!] = value;
+  }
   const lifetimeSignal = inherited?.signal ?? activeScope?.controller.signal;
   const signals = [...new Set([lifetimeSignal, externalSignal].filter((signal): signal is AbortSignal => Boolean(signal)))];
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0] ?? new AbortController().signal;

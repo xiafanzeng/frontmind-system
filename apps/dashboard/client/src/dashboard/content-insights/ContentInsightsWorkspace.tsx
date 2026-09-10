@@ -296,6 +296,7 @@ export default function ContentInsightsWorkspace() {
           />
         ) : (
           <WorkflowQuestion
+            variant="entry" module="extensions"
             question="这次想查看或调整什么？"
             description="分析使用示例数据，部件配置用于预览；正式统计和发布尚未接入。"
             selected={entry}

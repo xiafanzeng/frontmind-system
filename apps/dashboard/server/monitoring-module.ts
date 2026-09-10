@@ -1,3 +1,4 @@
+import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { createHmac } from "node:crypto";
 import type { Request, RequestHandler } from "express";
 import {
@@ -78,7 +79,7 @@ export const monitoringModule: RequestHandler = async (request, response, next) 
     if (!actor) { getMonitoringRuntime().app(request, response, next); return; }
     const projectScope = projectId ? await resolveEnterpriseProjectScope(actor, projectId) : null;
     const link = await ensureDashboardAccountLink(getMonitoringRuntime().repository.db, projectScope?.ownerUserId ?? actor.id);
-    const dispatch = () => runWithMonitoringEnterpriseScope({ enterpriseProjectId: projectScope?.enterpriseProjectId ?? null, ownerId: link.monitoringUserId }, () => getMonitoringRuntime().app(request, response, next));
+    const dispatch = () => runWithMonitoringEnterpriseScope({ enterpriseProjectId: projectScope?.enterpriseProjectId ?? null, ownerId: link.monitoringUserId, ...(projectScope ? { beforeBusinessWrite: (tx: any) => lockCustomerProjectBusinessWrite(tx, projectScope.ownerUserId, actor) } : {}) }, () => getMonitoringRuntime().app(request, response, next));
     if (projectScope) runWithEnterpriseProjectScope(projectScope, dispatch); else dispatch();
   } catch (error) {
     if (error instanceof AuthServiceError && error.code === "NOT_FOUND") { response.status(404).json({error:"企业项目不存在或无权访问"}); return; }

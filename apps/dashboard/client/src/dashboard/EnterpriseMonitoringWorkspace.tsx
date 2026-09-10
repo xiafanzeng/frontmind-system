@@ -5,6 +5,7 @@ import {
   readFlowBoolean,
 } from "./useBusinessFlowState";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useSearch } from "wouter";
 import { Search, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import {
@@ -27,7 +28,22 @@ const MonitoringRunPanel = lazy(() =>
   })),
 );
 
-export function EnterpriseMonitoringWorkspace({
+const MonitoringDataWorkspace = lazy(() => import("./MonitoringDataWorkspace"));
+export function EnterpriseMonitoringWorkspace({ enterpriseProjectId, questions, onImportData }: { enterpriseProjectId: string; questions: PurchasedServiceQuestion[]; onImportData?: () => void }) {
+  const search = useSearch();
+  const [dataOpen, setDataOpen] = useState(() => new URLSearchParams(search).get("monitoringData") === "1");
+  useEffect(() => setDataOpen(new URLSearchParams(search).get("monitoringData") === "1"), [search]);
+  return <div>
+    <nav className="workflow-choices" aria-label="监控视图" style={{ marginBottom: 24 }}>
+      <button type="button" aria-pressed={!dataOpen} onClick={() => setDataOpen(false)}>自动监控项目与运行</button>
+      <button type="button" aria-pressed={dataOpen} onClick={() => setDataOpen(true)}>监控数据</button>
+      {onImportData && <button type="button" onClick={onImportData}>上传监控数据</button>}
+    </nav>
+    {dataOpen ? <Suspense fallback={<p role="status">正在读取监控数据…</p>}><MonitoringDataWorkspace key={enterpriseProjectId} enterpriseProjectId={enterpriseProjectId} /></Suspense> : <AutomatedMonitoringWorkspace enterpriseProjectId={enterpriseProjectId} questions={questions} />}
+  </div>;
+}
+
+function AutomatedMonitoringWorkspace({
   enterpriseProjectId,
   questions,
 }: {
@@ -241,6 +257,7 @@ export function EnterpriseMonitoringWorkspace({
       )}
       {!selectedProjectId && !deepLink && !open && !showExisting ? (
         <WorkflowQuestion
+          variant="entry" module="progress"
           question="这次想监控什么？"
           description="从已保存的问题建立监控，或继续已有的监控任务。"
           choices={[
@@ -502,7 +519,7 @@ export function EnterpriseProgressReport({
       ? "runs"
       : "",
     (value) =>
-      ["", "runs", "trends", "imports"].includes(String(value))
+      ["", "runs", "trends", "imports", "data"].includes(String(value))
         ? String(value)
         : undefined,
   );
@@ -551,7 +568,7 @@ export function EnterpriseProgressReport({
       {
         label: "分析范围",
         value:
-          reportMode === "trends"
+          reportMode === "data" ? "监控数据当前筛选范围" : reportMode === "trends"
             ? "所选监控最近 100 次运行；趋势按筛选时间范围查询"
             : reportMode === "imports"
               ? "历史导入报告"
@@ -614,8 +631,10 @@ export function EnterpriseProgressReport({
     >
       {!reportMode ? (
         <WorkflowQuestion
+          variant="entry" module="progress"
           question="这次想了解哪一类监控结果？"
           choices={[
+            { id: "data", label: "分析监控数据", description: "查看导入批次的回答、引用与可计算指标" },
             {
               id: "runs",
               label: "查看单次运行",
@@ -638,7 +657,7 @@ export function EnterpriseProgressReport({
         <WorkflowCompleted
           id="report-analysis-mode"
           summary={
-            reportMode === "runs"
+            reportMode === "data" ? "分析监控数据" : reportMode === "runs"
               ? "查看单次运行"
               : reportMode === "trends"
                 ? "分析监控趋势"
@@ -647,6 +666,7 @@ export function EnterpriseProgressReport({
           onRevise={() => setReportMode("")}
         />
       )}
+      {reportMode === "data" && <Suspense fallback={<p role="status">正在读取监控数据…</p>}><MonitoringDataWorkspace enterpriseProjectId={enterpriseProjectId} /></Suspense>}
       <div hidden={reportMode !== "runs"}>
         <p className="business-flow-description">
           当前企业项目最近 200

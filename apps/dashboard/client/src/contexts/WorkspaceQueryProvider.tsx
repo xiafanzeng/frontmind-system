@@ -1,22 +1,41 @@
 import {
   QueryClient,
   QueryClientProvider,
-  type QueryKey,
+  useQuery,
 } from "@tanstack/react-query";
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { useLocation, useSearch } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { createDashboardTransport } from "@/lib/dashboard-transport";
 import { enterpriseWorkspaceScope } from "@/lib/enterprise-project";
+import { ProjectDirectory } from "@/lib/project-directory";
 import { activateWorkspaceRestScope } from "@/lib/workspace-rest-scope";
 
-type DirectoryCache = {
-  identity: string;
-  ownerUserId: number;
-  snapshot?: { queryKey: QueryKey; data: unknown; updatedAt: number };
-};
+const DirectoryContext = createContext<ProjectDirectory | null>(null);
+export function useProjectDirectory() {
+  const directory = useContext(DirectoryContext);
+  if (!directory) throw new Error("项目目录必须在客户工作区中读取。");
+  const projectsQuery = useQuery(
+    directory.queryOptions(),
+    directory.queryClient,
+  );
+  const managing = useSyncExternalStore(
+    directory.subscribe,
+    directory.getPending,
+    directory.getPending,
+  );
+  return { directory, projectsQuery, managing };
+}
 
-/** Auth stays mounted above this boundary; project caches and in-flight requests never cross it. */
+/** Auth stays above this boundary; only the directory survives same-owner project changes. */
 export function WorkspaceQueryProvider({
   userId,
   children,
@@ -27,28 +46,61 @@ export function WorkspaceQueryProvider({
   const [pathname] = useLocation();
   const search = useSearch();
   const projectId = enterpriseWorkspaceScope(pathname, search);
-  const owner = new URLSearchParams(search).get("operatorOwnerId") || "self";
-  const scopeKey = `${userId}:${owner}:${projectId || "account"}`;
-  const requestedOwner = Number(owner);
+  const requestedOwner = Number(
+    new URLSearchParams(search).get("operatorOwnerId"),
+  );
   const ownerUserId =
     Number.isSafeInteger(requestedOwner) && requestedOwner > 0
       ? requestedOwner
       : userId;
   const identity = `${userId}:${ownerUserId}`;
-  const directory = useRef<DirectoryCache>({ identity, ownerUserId });
-  // Only the account-owned directory may survive project changes. A different
-  // viewer or owner receives a new object; old subscriptions cannot update it.
-  if (directory.current.identity !== identity)
-    directory.current = { identity, ownerUserId };
   return (
-    <WorkspaceQueryScope
-      key={scopeKey}
-      scopeKey={scopeKey}
-      projectId={projectId}
-      directory={directory.current}
+    <OwnerDirectoryScope
+      key={identity}
+      viewerUserId={userId}
+      ownerUserId={ownerUserId}
     >
+      <WorkspaceQueryScope
+        key={projectId || "account"}
+        scopeKey={`${identity}:${projectId || "account"}`}
+        projectId={projectId}
+      >
+        {children}
+      </WorkspaceQueryScope>
+    </OwnerDirectoryScope>
+  );
+}
+
+function OwnerDirectoryScope({
+  viewerUserId,
+  ownerUserId,
+  children,
+}: {
+  viewerUserId: number;
+  ownerUserId: number;
+  children: ReactNode;
+}) {
+  const directory = useMemo(
+    () => new ProjectDirectory(viewerUserId, ownerUserId),
+    [viewerUserId, ownerUserId],
+  );
+  const generation = useRef(0);
+  useLayoutEffect(() => {
+    const current = ++generation.current;
+    directory.activate();
+    directory.queryClient.mount();
+    return () => {
+      directory.deactivate();
+      directory.queryClient.unmount();
+      queueMicrotask(() => {
+        if (generation.current === current) directory.retire();
+      });
+    };
+  }, [directory]);
+  return (
+    <DirectoryContext.Provider value={directory}>
       {children}
-    </WorkspaceQueryScope>
+    </DirectoryContext.Provider>
   );
 }
 
@@ -56,12 +108,10 @@ function WorkspaceQueryScope({
   scopeKey,
   projectId,
   children,
-  directory,
 }: {
   scopeKey: string;
   projectId?: string;
   children: ReactNode;
-  directory: DirectoryCache;
 }) {
   const state = useMemo(() => {
     const controller = new AbortController();
@@ -71,10 +121,6 @@ function WorkspaceQueryScope({
         mutations: { retry: false },
       },
     });
-    if (directory.snapshot) {
-      const { queryKey, data, updatedAt } = directory.snapshot;
-      queryClient.setQueryData(queryKey, data, { updatedAt });
-    }
     return {
       controller,
       queryClient,
@@ -83,36 +129,7 @@ function WorkspaceQueryScope({
         controller.signal,
       ),
     };
-  }, [projectId, directory]);
-  useLayoutEffect(
-    () =>
-      state.queryClient.getQueryCache().subscribe((event) => {
-        if (event.type !== "updated") return;
-        const query = event.query;
-        const [path, options] = query.queryKey;
-        if (
-          !Array.isArray(path) ||
-          path.join(".") !== "enterpriseProjects.list"
-        )
-          return;
-        if (
-          (options as { input?: { ownerUserId?: number } } | undefined)?.input
-            ?.ownerUserId !== directory.ownerUserId
-        )
-          return;
-        if (
-          query.state.status === "success" &&
-          query.state.data !== undefined
-        ) {
-          directory.snapshot = {
-            queryKey: query.queryKey,
-            data: query.state.data,
-            updatedAt: query.state.dataUpdatedAt,
-          };
-        }
-      }),
-    [state, directory],
-  );
+  }, [projectId]);
   const generation = useRef(0);
   useLayoutEffect(
     () => activateWorkspaceRestScope(scopeKey, projectId),
@@ -121,7 +138,7 @@ function WorkspaceQueryScope({
   useLayoutEffect(() => {
     const current = ++generation.current;
     return () => {
-      // React StrictMode replays effects without retiring this mounted workspace.
+      // StrictMode replays effects without retiring the mounted workspace.
       queueMicrotask(() => {
         if (generation.current !== current) return;
         state.controller.abort();

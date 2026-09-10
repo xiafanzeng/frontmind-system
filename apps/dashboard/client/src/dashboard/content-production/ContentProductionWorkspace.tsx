@@ -4,7 +4,9 @@ import {
 } from "@/dashboard/workflow/Workflow";
 import { BusinessWorkspaceInspector } from "@/dashboard/BusinessWorkspaceContext";
 import { WorkbenchTaskToolbar } from "../WorkbenchTaskToolbar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { OPERATOR_MODULES } from "../operator-navigation";
+const contentTheme = { "--module-color": OPERATOR_MODULES.find((item) => item.id === "content")!.color } as CSSProperties;
 import {
   Check,
   ChevronDown,
@@ -701,6 +703,7 @@ function ContentProductionInner({
             />
           ) : (
             <WorkflowQuestion
+              variant="entry" module="content"
               question="本次要完成什么？"
               selected={mode ?? undefined}
               choices={CONTENT_MODES.map((item) => ({
@@ -1095,6 +1098,7 @@ function ContentProductionInner({
         </>
       ) : workbench ? (
         <WorkflowQuestion
+          variant="entry" module="content"
           question="本次要完成什么？"
           description="选择交付目标，再补充企业材料。"
           choices={CONTENT_MODES.map((item) => ({
@@ -1110,40 +1114,20 @@ function ContentProductionInner({
           }}
         />
       ) : (
-        <div className="cp-empty">
-          <FileText size={36} />
-          <h2>本次要完成什么？</h2>
-          <p className="cp-entry-description">
-            <span className="cp-entry-description-full">
-              新建或更新品牌资料包，制作品牌文章，或围绕具体问题开展研究与写作。
-            </span>
-            <span className="cp-entry-description-short">
-              整理资料，制作文章。
-            </span>
-          </p>
-          <div className="cp-entry-grid">
-            {CONTENT_MODES.map((item) => (
-              <button
-                key={item.value}
-                disabled={!hydrated}
-                onClick={() => {
-                  resetCreate();
-                  setMode(item.value);
-                  setShowCreate(true);
-                }}
-              >
-                <strong>{item.title}</strong>
-                <span>{item.description}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        <WorkflowQuestion
+          variant="entry" module="content"
+          question="本次要完成什么？"
+          description="选择交付目标，再补充企业材料。"
+          choices={CONTENT_MODES.map((item) => ({ id: item.value, label: item.title, description: item.description, disabled: !hydrated, disabledReason: "正在恢复工作区" }))}
+          onSelect={(value) => { resetCreate(); setMode(value as ContentProductionMode); setShowCreate(true); }}
+        />
       )}
     </div>
   );
   return (
     <section
       className={`cp-workspace ${workbench ? "cp-workspace--agent" : ""}`}
+      style={contentTheme}
       aria-label="内容制作"
     >
       {!workbench && (
@@ -1369,6 +1353,7 @@ function ContentProductionInner({
       >
         <DialogContent
           className="cp-modal"
+          style={contentTheme}
           overlayClassName="cp-modal-overlay"
           showCloseButton={false}
         >

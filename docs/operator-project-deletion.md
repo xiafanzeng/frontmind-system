@@ -1,6 +1,6 @@
 # 企业项目删除
 
-`enterpriseProject.delete({ enterpriseProjectId, expectedRevision })` 使用已有
+`enterpriseProjects.delete({ enterpriseProjectId, expectedRevision })` 使用已有
 `enterprise_projects.archivedAt`，不新增迁移。返回
 `{ enterpriseProjectId, revision, deletedAt }`。界面永久移除项目，没有恢复入口。
 项目内容、配置版本、监控结果、媒体订单、供应商事实和账户账本都保留。
@@ -32,3 +32,31 @@
 `server/enterprise-project-deletion.test.ts`。覆盖权限、revision、重复删除、
 受理并发、各类运行任务、监控暂停和过期请求。独立财务验收
 `server/ai-billing-mysql.test.ts` 验证归档后拒绝新授权，同时允许既有任务延迟费用结算。
+
+
+## 客户目录与前端删除确认
+
+项目目录由登录查看者与目标客户共同确定的 `ProjectDirectory` 维护，拥有独立
+QueryClient、请求取消信号及项目管理锁。同客户切换业务项目时目录和管理请求
+保留，业务 QueryClient 仍按项目退出、取消和清理；切换客户或账号后旧目录退役。
+不再将目录响应复制到各项目快照中。窗口重新聚焦时刷新当前客户目录。
+
+删除确认捕获项目 ID 和原 revision，先取消在途目录查询，再提交带目标项目
+header 的管理请求。成功后登记删除标记、移除目录数据，后续响应过滤该项目。
+只清除匹配的项目选择及项目草稿；不清除其他客户、项目或未确定归属的账号草稿。
+
+响应到达后读取实时 URL：仍处于被删项目时，使用最新目录进入剩余项目，保留
+当前业务模块；没有剩余项目则进入该模块的无项目状态。已经进入其他项目、
+其他客户、通用智能体或账号页时保留当前位置。删除确认已解释未提交草稿的
+处理，成功离开使用已批准导航，不再弹第二次草稿确认。
+
+项目管理 Portal 通过当前菜单的 DOM 引用纳入胶囊内部点击判断，删除与重命名
+均使用完整鼠标事件覆盖。提交期间锁定重复操作及确认框关闭，失败保留确认内容。
+revision 冲突只刷新目录，不使用新 revision 自动重试。网络结果不明确时先读取
+目录确认；仍不明确则显示同步提示，可重新读取或以原项目、原 revision 重试。
+成功重放不重复刷新和导航。成功重命名后的同步失败保留真实成功结果。
+
+前端覆盖位于 `project-directory.test.ts`、`WorkspaceQueryProvider.test.tsx`、
+`OperatorNavigation.test.tsx` 及现有正式工作区测试，包括迟到响应、项目切换、
+客户/查看者退役、模块切换、最后一个项目、原 revision 重试、草稿导航和焦点回归。
+这些前端测试不代替上文的真实数据库锁与归档受理验收。

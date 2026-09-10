@@ -64,6 +64,7 @@ vi.mock("sonner", () => ({
     success: mocks.toastSuccess,
     error: mocks.toastError,
     warning: mocks.toastWarning,
+    info: vi.fn(),
   },
 }));
 
@@ -525,7 +526,7 @@ describe("DashboardSkeletonEditor", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/dashboard/monitoring-template/42",
-      { credentials: "include" },
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
     );
     await waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
     expect(createObjectUrl).toHaveBeenCalledOnce();
@@ -1051,7 +1052,7 @@ describe("DashboardSkeletonEditor", () => {
       >;
       expect(fetchMock.mock.calls[0]![0]).toBe("/api/dashboard/import/42");
       expect(fetchMock.mock.calls[0]![1].credentials).toBe("include");
-      expect(previewHeaders["X-Delivery-Project-Assignment-Id"]).toBe(
+      expect(previewHeaders["x-delivery-project-assignment-id"]).toBe(
         projectAssignmentId,
       );
       expect(previewHeaders["X-Delivery-Ticket-Id"]).toBeUndefined();
@@ -1066,7 +1067,7 @@ describe("DashboardSkeletonEditor", () => {
         string,
         string
       >;
-      expect(publishHeaders["X-Delivery-Project-Assignment-Id"]).toBe(
+      expect(publishHeaders["x-delivery-project-assignment-id"]).toBe(
         projectAssignmentId,
       );
       expect(publishHeaders["X-Delivery-Ticket-Id"]).toBeUndefined();
@@ -1599,6 +1600,8 @@ describe("DashboardSkeletonEditor", () => {
     fireEvent.change(select, { target: { value: "batch-b" } });
     fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const reboundHeaders = fetchMock.mock.calls[1]![1].headers as Record<
       string,

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   updateWorkspaceQuestionBySystemAdmin: vi.fn(),
   approveWorkspaceQuestionSelection: vi.fn(),
   assertServiceCapability: vi.fn(),
+  assertCustomerProjectBusinessWrite: vi.fn(),
   writeWorkspaceAuditEvent: vi.fn(),
 }));
 
@@ -47,7 +48,22 @@ vi.mock("./admin-control-plane-service", async (importOriginal) => {
   };
 });
 
+// This DTO boundary suite has no database fixture. Project admission is
+// covered by customer-project-write-access.test.ts; keep it mocked here so
+// the assertions exercise the administrator projection and role boundary.
+vi.mock("./customer-project-write-access", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("./customer-project-write-access")
+  >();
+  return {
+    ...actual,
+    assertCustomerProjectBusinessWrite:
+      mocks.assertCustomerProjectBusinessWrite,
+  };
+});
+
 import { adminRouter } from "./admin-router";
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
 
 const question = servicePortalQuestionSchema.parse({
   id: "question-1",
@@ -240,6 +256,13 @@ function context(
 }
 
 describe("administrator workspace DTO boundary", () => {
+  const projectScope = (actorUserId: number) => ({
+    enterpriseProjectId: "project-internal",
+    ownerUserId: 7,
+    actorUserId,
+    isLegacyDefault: false,
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getManagedCredentialStatus.mockResolvedValue({ configured: true });
@@ -258,6 +281,7 @@ describe("administrator workspace DTO boundary", () => {
       },
     );
     mocks.assertServiceCapability.mockResolvedValue(undefined);
+    mocks.assertCustomerProjectBusinessWrite.mockResolvedValue(undefined);
     mocks.writeWorkspaceAuditEvent.mockResolvedValue(undefined);
   });
 
@@ -299,39 +323,51 @@ describe("administrator workspace DTO boundary", () => {
     });
   });
 
-  it("keeps delivery-admin question access read-only", async () => {
+  it("allows an assigned delivery-admin to write within the selected project", async () => {
     const deliveryCaller = adminRouter.createCaller(context("delivery_admin"));
     const portfolio = await deliveryCaller.workspace.questionPortfolio({
       userId: 7,
     });
     await expect(
-      deliveryCaller.workspace.updateQuestion({
-        userId: 7,
-        questionId: question.id,
-        expectedRevision: question.revision,
-        question: question.question,
-      }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      runWithEnterpriseProjectScope(projectScope(42), () =>
+        deliveryCaller.workspace.updateQuestion({
+          userId: 7,
+          questionId: question.id,
+          expectedRevision: question.revision,
+          question: question.question,
+        }),
+      ),
+    ).resolves.toMatchObject({ question: { id: question.id } });
     await expect(
-      deliveryCaller.workspace.confirmQuestionSelection({
-        userId: 7,
-        questionId: question.id,
-        expectedRevision: question.revision,
-      }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      runWithEnterpriseProjectScope(projectScope(42), () =>
+        deliveryCaller.workspace.confirmQuestionSelection({
+          userId: 7,
+          questionId: question.id,
+          expectedRevision: question.revision,
+        }),
+      ),
+    ).resolves.toMatchObject({ question: { id: question.id } });
 
     const systemCaller = adminRouter.createCaller(context("system_admin"));
-    const updated = await systemCaller.workspace.updateQuestion({
-      userId: 7,
-      questionId: question.id,
-      expectedRevision: question.revision,
-      question: question.question,
-    });
-    const confirmed = await systemCaller.workspace.confirmQuestionSelection({
-      userId: 7,
-      questionId: question.id,
-      expectedRevision: question.revision,
-    });
+    const updated = await runWithEnterpriseProjectScope(
+      projectScope(1),
+      () =>
+        systemCaller.workspace.updateQuestion({
+          userId: 7,
+          questionId: question.id,
+          expectedRevision: question.revision,
+          question: question.question,
+        }),
+    );
+    const confirmed = await runWithEnterpriseProjectScope(
+      projectScope(1),
+      () =>
+        systemCaller.workspace.confirmQuestionSelection({
+          userId: 7,
+          questionId: question.id,
+          expectedRevision: question.revision,
+        }),
+    );
 
     expect(portfolio.questions[0]).not.toHaveProperty("contractId");
     expect(portfolio.questions[0]).not.toHaveProperty("quotaPeriodId");
@@ -348,12 +384,16 @@ describe("administrator workspace DTO boundary", () => {
   it("keeps internal question linkage for system-admin operations", async () => {
     const caller = adminRouter.createCaller(context("system_admin"));
     const portfolio = await caller.workspace.questionPortfolio({ userId: 7 });
-    const updated = await caller.workspace.updateQuestion({
-      userId: 7,
-      questionId: question.id,
-      expectedRevision: question.revision,
-      question: question.question,
-    });
+    const updated = await runWithEnterpriseProjectScope(
+      projectScope(1),
+      () =>
+        caller.workspace.updateQuestion({
+          userId: 7,
+          questionId: question.id,
+          expectedRevision: question.revision,
+          question: question.question,
+        }),
+    );
 
     expect(portfolio.questions[0]).toMatchObject({
       contractId: "contract-internal",

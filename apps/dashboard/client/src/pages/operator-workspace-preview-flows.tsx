@@ -244,6 +244,7 @@ export function PreviewBusinessFlow({
   const opening = PREVIEW_OPENINGS[agent];
   const header = opening && (
     <WorkflowQuestion
+      variant="entry"
       question={opening.question}
       choices={opening.choices}
       selected={flow.branch}

@@ -105,6 +105,7 @@ export function mergeCustomerDashboardPayload(input: {
   return {
     ...submitted,
     // Monitoring observations are authored by their existing server pipelines.
+    contentAssets: existing.contentAssets,
     monitoringAnswers: existing.monitoringAnswers,
     citations: existing.citations,
     optimizationReport: mergeCustomerReport(

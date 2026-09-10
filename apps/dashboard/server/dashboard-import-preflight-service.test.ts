@@ -257,3 +257,26 @@ describe("dashboard import preflight credentials", () => {
     );
   });
 });
+
+// A project must never be replaceable by changing only the transport header.
+import { runWithEnterpriseProjectScope } from "./enterprise-project-context";
+describe("project-bound dashboard module preflights", () => {
+  const scope = { enterpriseProjectId: "aa2a6f24-2e89-465c-a41c-fae7212e7993", actorUserId: 7, ownerUserId: 42, isLegacyDefault: false };
+  it("signs without issuing a database row, and consumes inside the provided business transaction", async () => {
+    const memory = memoryStore();
+    await runWithEnterpriseProjectScope(scope, async () => {
+      const credential = await issued({store:memory.store});
+      expect(memory.rows.size).toBe(0);
+      const consumed = await consumeDashboardImportPreflight({token:credential.preflightToken,binding:binding(),secret:SECRET,now:NOW,store:memory.store});
+      expect(consumed.consumedAt).toEqual(NOW);expect(memory.rows.size).toBe(1);
+    });
+  });
+  it("rejects a v1 account token in a project and rejects switching a v2 token to another project", async () => {
+    const memory = memoryStore();
+    const accountCredential=await issued({store:memory.store});
+    await expect(runWithEnterpriseProjectScope(scope,()=>consumeDashboardImportPreflight({token:accountCredential.preflightToken,binding:binding(),secret:SECRET,now:NOW,store:memory.store}))).rejects.toMatchObject({code:"DASHBOARD_IMPORT_PREFLIGHT_INVALID"});
+    const projectCredential=await runWithEnterpriseProjectScope(scope,()=>issued({store:memory.store}));
+    await expect(runWithEnterpriseProjectScope({...scope,enterpriseProjectId:"ffd56f9b-3ac9-4ea3-a572-e70a7a820048"},()=>consumeDashboardImportPreflight({token:projectCredential.preflightToken,binding:binding(),secret:SECRET,now:NOW,store:memory.store}))).rejects.toMatchObject({code:"DASHBOARD_IMPORT_PREFLIGHT_BINDING_MISMATCH"});
+    await expect(consumeDashboardImportPreflight({token:projectCredential.preflightToken,binding:binding(),secret:SECRET,now:NOW,store:memory.store})).rejects.toMatchObject({code:"DASHBOARD_IMPORT_PREFLIGHT_INVALID"});
+  });
+});

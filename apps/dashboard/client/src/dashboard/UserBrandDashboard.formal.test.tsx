@@ -58,6 +58,17 @@ vi.mock("@/components/EmbeddedKnowledgeBasePanel", async () => {
       ),
   };
 });
+vi.mock("@/contexts/WorkspaceQueryProvider", () => ({
+  useProjectDirectory: () => ({
+    projectsQuery: projectMocks.list(),
+    managing: false,
+    directory: {
+      create: (name: string) => projectMocks.create({ name, ownerUserId: 7 }),
+      rename: vi.fn(),
+      delete: (target: { id: string; revision: number }) => projectMocks.delete({ enterpriseProjectId: target.id, expectedRevision: target.revision }),
+    },
+  }),
+}));
 vi.mock("@/lib/enterprise-project", async (original) => ({
   ...(await original<typeof import("@/lib/enterprise-project")>()),
   switchEnterpriseProject: projectMocks.select,
@@ -105,6 +116,8 @@ const {
   trpcUtils: {
     enterpriseProjects: { list: { setData: vi.fn(), invalidate: vi.fn() } },
     workspace: {
+      monitoring: { invalidate: vi.fn() },
+      workRecords: { invalidate: vi.fn() },
       brandQuestionUniverse: { observe: { invalidate: vi.fn() } },
       dashboard: { invalidate: vi.fn(), fetch: vi.fn() },
       questionPortfolio: { invalidate: vi.fn() },
@@ -339,6 +352,7 @@ vi.mock("@/lib/trpc", () => ({
       },
     },
     workspace: {
+      workRecords: { list: { useQuery: () => ({ data: { records: [], nextCursor: null } }) } },
       portal: {
         useQuery: portalUseQuery,
       },
@@ -931,12 +945,8 @@ describe("UserBrandDashboard formal workspace", () => {
         expect.objectContaining({ name: "新品牌", ownerUserId: 7 }),
       ),
     );
-    expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
-    expect(projectMocks.list().data.projects).toEqual([
-      expect.objectContaining({ id: projectMocks.id, name: "新品牌" }),
-    ]);
   });
-  it("removes a confirmed deletion from cache before leaving the last project", async () => {
+  it("submits the captured project identity and revision to the owner directory", async () => {
     projectMocks.delete.mockResolvedValue({
       enterpriseProjectId: projectMocks.id,
       revision: 2,
@@ -958,17 +968,7 @@ describe("UserBrandDashboard formal workspace", () => {
         expectedRevision: 1,
       }),
     );
-    await waitFor(() =>
-      expect(trpcUtils.enterpriseProjects.list.setData).toHaveBeenCalled(),
-    );
-    const update =
-      trpcUtils.enterpriseProjects.list.setData.mock.calls.at(-1)![1];
-    expect(
-      update({ projects: [{ id: projectMocks.id }, { id: "remaining" }] }),
-    ).toEqual({ projects: [{ id: "remaining" }] });
-    expect(
-      new URLSearchParams(window.location.search).has("enterpriseProjectId"),
-    ).toBe(false);
+
   });
   it("does not override a new destination after deletion completes", async () => {
     let finish!: (value: unknown) => void;

@@ -23,6 +23,7 @@ import {
 } from "@/dashboard/agent-workbench";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
 import "./AgentWorkbenchShell.css";
+import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
 export type { WorkbenchAction } from "@/dashboard/agent-workbench";
 export type AgentWorkbenchShellProps = {
   projectId: string;
@@ -237,7 +238,7 @@ export function AgentWorkbenchShell({
       className={`agent-workbench-shell layout-${layout}`}
       aria-label={`${title}工作区`}
       data-layout={layout}
-      style={{ "--agent-aux-width": `${renderedWidth}px` } as CSSProperties}
+      style={{ "--agent-aux-width": `${renderedWidth}px`, "--module-color": OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ?? "#491060" } as CSSProperties}
     >
       <div
         ref={layoutRoot}
@@ -338,6 +339,7 @@ export function AgentWorkbenchShell({
           <SheetContent
             side="right"
             className="agent-workbench-drawer"
+            style={{ "--module-color": OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ?? "#491060" } as CSSProperties}
             aria-describedby={undefined}
             onCloseAutoFocus={(event) => {
               event.preventDefault();

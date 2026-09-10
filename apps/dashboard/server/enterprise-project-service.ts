@@ -27,8 +27,8 @@ async function database() {
   return db;
 }
 
-export async function assertEnterpriseAccountAccess(actor: AuthenticatedUser, ownerUserId: number) {
-  const db = await database();
+export async function assertEnterpriseAccountAccess(actor: AuthenticatedUser, ownerUserId: number, executor?: any) {
+  const db = executor ?? await database();
   const [owner] = await db.select({ id: users.id, isActive: users.isActive }).from(users).where(eq(users.id, ownerUserId)).limit(1);
   if (!owner?.isActive) throw new AuthServiceError("NOT_FOUND", "企业项目不存在或无权访问");
   if (actor.id === ownerUserId) return;
@@ -92,6 +92,7 @@ export async function createEnterpriseProject(actor: AuthenticatedUser, input: {
   const name = input.name.trim();
   return db.transaction(async tx => {
     await tx.select({ id: users.id }).from(users).where(eq(users.id, ownerUserId)).limit(1).for("update");
+    await assertEnterpriseAccountAccess(actor, ownerUserId, tx);
     const [existing] = await tx.select().from(enterpriseProjects).where(eq(enterpriseProjects.id, id)).limit(1);
     if (existing) {
       if (existing.archivedAt) throw new AuthServiceError("CONFLICT", "该请求对应的企业项目已删除，请重新新建项目");
@@ -109,6 +110,8 @@ export async function renameEnterpriseProject(actor: AuthenticatedUser, input: {
   const scope = await resolveEnterpriseProjectScope(actor, input.enterpriseProjectId);
   const db = await database();
   return db.transaction(async tx => {
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, scope.ownerUserId)).limit(1).for("update");
+    await assertEnterpriseAccountAccess(actor, scope.ownerUserId, tx);
     const [project] = await tx.select().from(enterpriseProjects).where(and(eq(enterpriseProjects.id, scope.enterpriseProjectId), eq(enterpriseProjects.ownerUserId, scope.ownerUserId))).limit(1).for("update");
     if (!project || project.archivedAt || project.revision !== input.expectedRevision) throw new AuthServiceError("CONFLICT", "项目已更新或删除，请刷新后重试");
     await tx.update(enterpriseProjects).set({ name: input.name.trim(), revision: project.revision + 1 }).where(eq(enterpriseProjects.id, project.id));

@@ -542,7 +542,7 @@ export const dashboardMonitoringCurrentTemplateSchema =
     .extend({
       module: z.literal("monitoring"),
       workspaceUserId: z.number().int().positive(),
-      batches: z.array(dashboardMonitoringTemplateBatchSchema).max(100),
+      batches: z.array(dashboardMonitoringTemplateBatchSchema).max(10_000),
     })
     .superRefine((template, context) => {
       const batchKeys = new Set<string>();

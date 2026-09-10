@@ -614,7 +614,8 @@ function SettingsWorkspace({
     />
   ) : (
     <WorkflowQuestion
-      question="这次想怎样完善网站？"
+      variant="entry" module="extensions"
+            question="这次想怎样完善网站？"
       selected={entry}
       choices={[
         {

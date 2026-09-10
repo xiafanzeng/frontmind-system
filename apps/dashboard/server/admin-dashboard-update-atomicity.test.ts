@@ -1,12 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const dependencies = vi.hoisted(() => ({
+  assertCustomerProjectBusinessWrite: vi.fn(),
   getManagedCredentialStatus: vi.fn(),
   getDashboardWorkspace: vi.fn(),
   updateDashboardWorkspace: vi.fn(),
   assertServiceCapability: vi.fn(),
   getServicePortal: vi.fn(),
   writeWorkspaceAuditEvent: vi.fn(),
+}));
+
+vi.mock("./customer-project-write-access", () => ({
+  assertCustomerProjectBusinessWrite: dependencies.assertCustomerProjectBusinessWrite,
 }));
 
 vi.mock("./dashboard-service", async () => {
@@ -45,7 +50,7 @@ vi.mock("./admin-control-plane-service", async () => {
 import type { TrpcContext } from "./_core/context";
 import { adminRouter } from "./admin-router";
 import type { AuthenticatedUser } from "./auth-service";
-import { createDefaultDashboardPayload } from "../shared/dashboard";
+import { createDefaultDashboardPayload, dashboardPayloadSchema } from "../shared/dashboard";
 
 let existingPayload = createDefaultDashboardPayload("正式企业");
 
@@ -76,6 +81,7 @@ function context(): TrpcContext {
 beforeEach(() => {
   vi.clearAllMocks();
   existingPayload = createDefaultDashboardPayload("正式企业");
+  dependencies.assertCustomerProjectBusinessWrite.mockResolvedValue(undefined);
   dependencies.getManagedCredentialStatus.mockResolvedValue({});
   dependencies.assertServiceCapability.mockResolvedValue({});
   dependencies.getServicePortal.mockResolvedValue({
@@ -132,6 +138,7 @@ describe("admin dashboard structured publication", () => {
       reason: "正式内容更新",
     });
 
+    expect(dependencies.assertCustomerProjectBusinessWrite).toHaveBeenCalledWith(ACTOR, 42);
     expect(result.revision).toBe(4);
     expect(dependencies.updateDashboardWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -158,4 +165,17 @@ describe("admin dashboard structured publication", () => {
       { transaction: "dashboard-write" },
     );
   });
+  it("preserves native monitoring and article results during whole-dashboard edits", async () => {
+    const payload = dashboardPayloadSchema.parse({
+      ...createDefaultDashboardPayload("正式企业"),
+      contentAssets: [{ id: "forged-article", name: "伪造文章", articles: [] }],
+      monitoringAnswers: [{ id: "forged-answer", questionId: "q", platform: "模型", content: "未采集的回答" }],
+      citations: [{ id: "forged-citation", title: "未采集的引用", url: "https://example.invalid" }],
+    });
+    const result = await adminRouter.createCaller(context()).workspace.updateDashboard({ userId: 42, expectedRevision: 3, payload });
+    expect(result.payload.contentAssets).toEqual(existingPayload.contentAssets);
+    expect(result.payload.monitoringAnswers).toEqual(existingPayload.monitoringAnswers);
+    expect(result.payload.citations).toEqual(existingPayload.citations);
+  });
+
 });

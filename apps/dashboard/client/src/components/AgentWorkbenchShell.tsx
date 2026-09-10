@@ -111,14 +111,18 @@ export function AgentWorkbenchShell({
   const stopDrag = useRef<() => void>(() => undefined);
   const focusMainAfterClose = useRef(false);
   const paneGeometry = workbenchPaneGeometry(available, ratio);
-  // On medium desktops the general composer needs a little more clear space
-  // than a one-third panel leaves.  Keep the panel draggable, but cap its
-  // range until the dashboard has enough room for the full 512px treatment.
+  // Reserve a 600px centred chat container plus symmetric panel clearance.
+  // Medium desktops also cap the panel at a quarter of the reference width.
   const generalAuxCap =
-    moduleId === "general" && available < 2000
+    moduleId === "general"
       ? Math.max(
           300,
-          (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 4,
+          Math.min(
+            (available - 664) / 2,
+            available < 2000
+              ? (Math.min(available, WORKBENCH_MAX_WIDTH) - 48) / 4
+              : Number.POSITIVE_INFINITY,
+          ),
         )
       : Number.POSITIVE_INFINITY;
   const minAux = paneGeometry.minAux;
@@ -126,7 +130,8 @@ export function AgentWorkbenchShell({
   const renderedWidth = Math.min(paneGeometry.width, maxAux);
   const narrow =
     viewportWidth < 1024 ||
-    (available > 0 && available < WORKBENCH_MIN_WIDTH);
+    (available > 0 &&
+      available < (moduleId === "general" ? 1280 : WORKBENCH_MIN_WIDTH));
   const inlineAux = hasAux && !narrow && !collapsed;
   const [auxHost] = useState(() => {
     const node = document.createElement("div");

@@ -821,20 +821,18 @@
   max-width: 960px;
   margin-inline: auto;
 }
-/* Centre the general conversation in the complete dashboard-main area while
-   reserving enough clear space for the floating task/file panel. At 1920px
-   the panel is capped by the shell's geometry and this keeps the composer
-   clear of it; at 2560px the normal 960px reading measure is restored. */
+/* Both the native chat and the scrolling preview stay centred in the complete
+   main area. Symmetric clearance keeps the right floating panel off the chat.
+   A collapsed panel or responsive drawer does not reserve any space. */
 .agent-workbench-shell.module-general
-  .agent-workbench-shell__main-content.is-scrollable
-  > * {
-  max-width: min(
-    960px,
-    calc(
-      100% - var(--agent-aux-width, 33.333%) -
-        var(--agent-aux-width, 33.333%) - 48px
-    )
+  .agent-workbench-shell__layout:not(.is-single-pane)
+  .agent-workbench-shell__main-content {
+  width: 100%;
+  max-width: calc(
+    100% - var(--agent-aux-width, 33.333%) -
+      var(--agent-aux-width, 33.333%) - 32px
   );
+  margin-inline: auto;
 }
 .agent-workbench-shell__auxiliary {
   font-size: 13px;
@@ -948,4 +946,9 @@
 .agent-workbench-shell [data-testid="chat-messages-viewport"] {
   scrollbar-width: thin;
   scrollbar-gutter: stable;
+}
+
+.agent-workbench-shell.module-general .agent-workbench-shell__main-content.is-scrollable,
+.agent-workbench-shell.module-general [data-testid="chat-messages-viewport"] {
+  scrollbar-gutter: stable both-edges;
 }

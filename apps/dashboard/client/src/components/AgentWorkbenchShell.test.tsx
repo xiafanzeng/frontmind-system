@@ -147,6 +147,29 @@ describe("AgentWorkbenchShell", () => {
       screen.getByRole("textbox"),
     );
   });
+  it("keeps a native general conversation usable across a floating panel, drawer and collapse", async () => {
+    viewport(1920);
+    render(<AgentWorkbenchShell {...props} moduleId="general" scrollMain={false} />);
+    const draft = screen.getByRole("textbox", { name: "任务草稿" });
+    fireEvent.change(draft, { target: { value: "保留通用智能体草稿" } });
+    expect(screen.getByRole("complementary")).toBeVisible();
+    act(() => viewport(2560));
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "End" });
+    expect(screen.getByRole("separator")).toHaveAttribute("aria-valuenow", "820");
+    act(() => viewport(1440));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开任务信息" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("辅助摘要");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    act(() => viewport(1536));
+    expect(screen.getByRole("complementary")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "收起任务信息" }));
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    act(() => viewport(390, 390));
+    expect(screen.getByRole("textbox", { name: "任务草稿" })).toBe(draft);
+    expect(draft).toHaveValue("保留通用智能体草稿");
+  });
   it("keeps backward-compatible conversation props in main, never in the auxiliary pane", () => {
     render(
       <AgentWorkbenchShell

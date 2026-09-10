@@ -39,6 +39,7 @@
   position: relative;
   min-height: calc(100vh - 82px);
   padding: 24px clamp(20px, 2vw, 32px) 104px;
+  background: #fff;
   color: var(--publishing-ink);
   font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   box-sizing: border-box;

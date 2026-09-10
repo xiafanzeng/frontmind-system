@@ -23,9 +23,12 @@ export default function KnowledgeWorkspaceStatus({ progress }: { progress: Knowl
     : progress.packageState === "retrying" ? `正在重试生成 ZIP 并更新知识库（第 ${Math.max(1, progress.packageAttemptCount ?? 0)} 次）。`
     : progress.build.status === "published" ? KNOWLEDGE_UPDATE_COMPLETE_COPY
     : (progress.updateAllowed ?? progress.packageAllowed) || progress.build.status === "ready_to_publish" ? KNOWLEDGE_DRAFT_READY_COPY
-    : running ? progress.operationState === "normalizing" ? "正在处理已返回内容" : "正在处理当前任务"
+    // Routine execution belongs in the conversation's public execution
+    // timeline. Keeping it out of this strip avoids a redundant status row.
+    : running ? null
     : progress.build.status === "failed" ? "本轮已停止。可以重新读取状态，或确认重置后开始全新任务。"
-    : current ? `请处理当前节点：${current.title}` : "正在建立知识结构";
+    : current ? `请处理当前节点：${current.title}` : null;
+  if (!message && !progress.billingPause) return null;
   return <div className="knowledge-workspace-status" aria-live="polite">
     {progress.billingPause && <KnowledgeBillingResume key={progress.billingPause.turnId} buildId={progress.build.id} turnId={progress.billingPause.turnId} reason={progress.billingPause.reason} />}
     {message && <p role={reset || progress.build.status === "failed" ? "status" : undefined}>{message}</p>}

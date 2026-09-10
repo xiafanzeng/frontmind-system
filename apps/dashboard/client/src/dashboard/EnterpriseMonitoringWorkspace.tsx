@@ -33,22 +33,19 @@ export function EnterpriseMonitoringWorkspace({ enterpriseProjectId, questions, 
   const search = useSearch();
   const [dataOpen, setDataOpen] = useState(() => new URLSearchParams(search).get("monitoringData") === "1");
   useEffect(() => setDataOpen(new URLSearchParams(search).get("monitoringData") === "1"), [search]);
-  return <div>
-    <nav className="workflow-choices" aria-label="监控视图" style={{ marginBottom: 24 }}>
-      <button type="button" aria-pressed={!dataOpen} onClick={() => setDataOpen(false)}>自动监控项目与运行</button>
-      <button type="button" aria-pressed={dataOpen} onClick={() => setDataOpen(true)}>监控数据</button>
-      {onImportData && <button type="button" onClick={onImportData}>上传监控数据</button>}
-    </nav>
-    {dataOpen ? <Suspense fallback={<p role="status">正在读取监控数据…</p>}><MonitoringDataWorkspace key={enterpriseProjectId} enterpriseProjectId={enterpriseProjectId} /></Suspense> : <AutomatedMonitoringWorkspace enterpriseProjectId={enterpriseProjectId} questions={questions} />}
+  return <div className="enterprise-monitoring-workspace">
+    {dataOpen ? <Suspense fallback={<p role="status">正在读取监控数据…</p>}><MonitoringDataWorkspace key={enterpriseProjectId} enterpriseProjectId={enterpriseProjectId} /></Suspense> : <AutomatedMonitoringWorkspace enterpriseProjectId={enterpriseProjectId} questions={questions} onImportData={onImportData} />}
   </div>;
 }
 
 function AutomatedMonitoringWorkspace({
   enterpriseProjectId,
   questions,
+  onImportData,
 }: {
   enterpriseProjectId: string;
   questions: PurchasedServiceQuestion[];
+  onImportData?: () => void;
 }) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const outcome = useOutcomeSync();
@@ -259,10 +256,10 @@ function AutomatedMonitoringWorkspace({
         <WorkflowQuestion
           variant="entry" module="progress"
           question="这次想监控什么？"
-          description="从已保存的问题建立监控，或继续已有的监控任务。"
+          description="从优化问题建立监控，或查看已有监控的运行与结果。"
           choices={[
-            { id: "create", label: "从优化问题新建" },
-            { id: "existing", label: "继续已有监控" },
+            { id: "create", label: "新建问题监控" },
+            { id: "existing", label: "查看已有监控" },
           ]}
           onSelect={(choice) => {
             setError("");
@@ -352,6 +349,15 @@ function AutomatedMonitoringWorkspace({
               >
                 从优化问题新建
               </button>
+              {onImportData && (
+                <button
+                  type="button"
+                  className="workflow-text-action"
+                  onClick={onImportData}
+                >
+                  上传监控数据
+                </button>
+              )}
             </div>
           )}
         </section>

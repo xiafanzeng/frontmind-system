@@ -3,6 +3,7 @@ import { deliveryProjectHeaders } from "./delivery-project";
 type RestScope = { key: string; generation: number; headers: Record<string, string>; controller: AbortController };
 type OperationScope = { headers: Record<string, string>; signal: AbortSignal };
 let activeScope: RestScope | undefined;
+let projectScope: RestScope | undefined;
 const inheritedScopes = new WeakMap<AbortSignal, OperationScope>();
 const scopeHeaderNames = ["x-enterprise-project-id", "x-delivery-project-assignment-id"];
 
@@ -11,6 +12,10 @@ export function activateWorkspaceRestScope(key: string, projectId?: string): () 
   let scope = activeScope;
   if (!scope || scope.key !== key || scope.controller.signal.aborted) {
     scope?.controller.abort();
+    if (!projectScope || projectScope.key !== key || projectScope.controller.signal.aborted) {
+      projectScope?.controller.abort();
+      projectScope = { key, generation: 0, headers: {}, controller: new AbortController() };
+    }
     const headers: Record<string, string> = {};
     if (projectId) headers["x-enterprise-project-id"] = projectId;
     scope = { key, generation: 0, headers, controller: new AbortController() };
@@ -31,7 +36,11 @@ export function activateWorkspaceRestScope(key: string, projectId?: string): () 
 export type WorkspaceRestOperation = ReturnType<typeof captureWorkspaceRestOperation>;
 
 /** Capture once before an await; pass signal to nested operations so retries inherit this identity. */
-export function captureWorkspaceRestOperation(externalSignal?: AbortSignal | null, explicitScope?: { enterpriseProjectId?: string; projectAssignmentId?: string }) {
+export function captureWorkspaceRestOperation(
+  externalSignal?: AbortSignal | null,
+  explicitScope?: { enterpriseProjectId?: string; projectAssignmentId?: string },
+  options: { detached?: boolean } = {},
+) {
   const inherited = externalSignal ? inheritedScopes.get(externalSignal) : undefined;
   const currentHeaders = deliveryProjectHeaders();
   if (activeScope) {
@@ -44,7 +53,13 @@ export function captureWorkspaceRestOperation(externalSignal?: AbortSignal | nul
     if (frozenHeaders[name!] && frozenHeaders[name!] !== value) throw new Error("请求与当前企业项目范围不一致，请重新进入工作区。");
     frozenHeaders[name!] = value;
   }
-  const lifetimeSignal = inherited?.signal ?? activeScope?.controller.signal;
+  // Detached operations (currently the knowledge-base uploader) outlive
+  // route components. They still inherit the project headers, but never the
+  // mounted page's abort signal. Account/project changes pass a new explicit
+  // scope and cancel the manager-owned signal separately.
+  const lifetimeSignal = inherited?.signal ?? (options.detached
+    ? projectScope?.controller.signal
+    : activeScope?.controller.signal);
   const signals = [...new Set([lifetimeSignal, externalSignal].filter((signal): signal is AbortSignal => Boolean(signal)))];
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0] ?? new AbortController().signal;
   inheritedScopes.set(signal, { headers: frozenHeaders, signal });

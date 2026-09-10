@@ -20,6 +20,10 @@
   border-top: 1px solid #e9e9ec;
   border-bottom: 1px solid #e9e9ec;
 }
+/* WorkflowCompleted already draws the boundary above an expanded step. */
+.workflow-completed + .business-inline-step {
+  border-top: 0;
+}
 .business-inline-step > p {
   color: #65656f;
   font-size: 14px;

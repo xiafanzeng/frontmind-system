@@ -105,14 +105,14 @@ it("shows only saved project source questions and replaces them when selecting a
   const summary = within(
     screen.getByRole("complementary", { name: "业务摘要" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
   fireEvent.click(screen.getByRole("checkbox"));
   expect(summary.getByText("尚未选择已保存项目")).toBeInTheDocument();
   expect(
     summary.getByText("已保存来源问题").nextElementSibling,
   ).not.toHaveTextContent("1 个");
   fireEvent.click(screen.getByRole("button", { name: "收起新建监控" }));
-  fireEvent.click(screen.getByRole("button", { name: "继续已有监控" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看已有监控" }));
   fireEvent.click(
     screen.getByRole("button", { name: /企业监控.*2 个来源问题/ }),
   );
@@ -240,7 +240,7 @@ it("creates a project and expands its configuration without changing routes", as
       />
     </BusinessWorkspaceProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
   fireEvent.change(screen.getByLabelText("监控项目名称"), {
     target: { value: "品牌问题监控" },
   });
@@ -328,7 +328,7 @@ it("retains a created monitor when its task receipt fails and retries only the a
       />
     </BusinessWorkspaceProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
   fireEvent.change(screen.getByLabelText("监控项目名称"), {
     target: { value: "已创建项目" },
   });

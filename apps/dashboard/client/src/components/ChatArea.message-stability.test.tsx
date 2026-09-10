@@ -62,6 +62,21 @@ describe("ordinary-chat elapsed presentation", () => {
       document.querySelector(".chat-message-content")?.textContent,
     ).not.toMatch(/\d{2}:\d{2}/);
   });
+
+  it("does not expose copy on an intermediate process message", () => {
+    render(
+      <MessageBubble
+        message={{
+          id: "assistant-process",
+          role: "assistant",
+          content: "我先确认一下当前环境能否访问公开网络。",
+          timestamp: 1,
+          stepGroups: [{ id: "thinking", title: "思考过程", steps: [] }],
+        }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+  });
 });
 
 describe("workbench message presentation", () => {

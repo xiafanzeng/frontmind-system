@@ -124,7 +124,13 @@ import { WorkflowCompleted, WorkflowQuestion, WorkflowSection } from "@/dashboar
 export const KNOWLEDGE_BASE_FOUNDATION_COPY =
   "企业知识库是品牌事实与产品信息的统一底稿，也是构建 AI 专用友好官网、生成内容与准确回答客户问题的基础。";
 
-export function runningAssistantStatusText(syncKnowledgeBaseSnapshot: boolean) {
+export function runningAssistantStatusText(
+  syncKnowledgeBaseSnapshot: boolean,
+  processingPhase?: string | null,
+) {
+  if (syncKnowledgeBaseSnapshot && processingPhase === "uploading") {
+    return "正在上传资料，完成后自动开始调研与整理";
+  }
   return syncKnowledgeBaseSnapshot
     ? KNOWLEDGE_COLLECTION_STATUS_COPY
     : "FrontMind AI 正在处理...";
@@ -135,11 +141,13 @@ export function isKnowledgeBaseTaskVisiblyRunning(input: {
   syncKnowledgeBaseSnapshot: boolean;
   interactionState?: string | null;
   noticeSeverity?: string | null;
+  processingPhase?: string | null;
 }) {
   const taskIsRunning =
     input.status === "running" || input.status === "pending";
   if (!taskIsRunning) return false;
   if (!input.syncKnowledgeBaseSnapshot) return true;
+  if (input.processingPhase === "uploading") return false;
   return (
     input.interactionState !== "failed" && input.noticeSeverity !== "error"
   );
@@ -617,7 +625,7 @@ export async function uploadKnowledgeBaseStarterFiles(
   responseStartedAt: number,
   uploadImplementation: KnowledgeBaseStarterUploadImplementation = uploadKnowledgeBaseLocalAsset,
 ) {
-  const operation = captureWorkspaceRestOperation(incomingLifecycle.signal);
+  const operation = captureWorkspaceRestOperation(incomingLifecycle.signal, undefined, { detached: true });
   const lifecycle = { ...incomingLifecycle, signal: operation.signal };
   operation.assertActive();
   const receipts = new Map(lifecycle.uploadedReceipts);
@@ -995,7 +1003,7 @@ export async function fetchKnowledgeBaseStartRequest(
     onRequestStarted?: () => void;
   },
 ) {
-  const operation = captureWorkspaceRestOperation(options.signal);
+  const operation = captureWorkspaceRestOperation(options.signal, undefined, { detached: true });
   const signal = operation.signal;
   if (signal.aborted) {
     throw new DOMException("上传已停止", "AbortError");
@@ -1351,6 +1359,7 @@ export default function ChatArea({
     syncKnowledgeBaseSnapshot,
     interactionState: activeConversation?.knowledgeBase?.interactionState,
     noticeSeverity: activeConversation?.knowledgeBase?.notice?.severity,
+    processingPhase: activeConversation?.knowledgeBase?.processingPhase,
   });
   const knowledgeBaseDisplayFailed =
     syncKnowledgeBaseSnapshot &&
@@ -1395,7 +1404,7 @@ export default function ChatArea({
       }: DeepReportStartInput,
       incomingLifecycle: KnowledgeBaseStarterLifecycle,
     ): Promise<KnowledgeBaseStarterStartOutcome> => {
-      const operation = captureWorkspaceRestOperation(incomingLifecycle.signal);
+      const operation = captureWorkspaceRestOperation(incomingLifecycle.signal, undefined, { detached: true });
       const lifecycle = { ...incomingLifecycle, signal: operation.signal };
       operation.assertActive();
       if (!activeConversation) {
@@ -1604,146 +1613,12 @@ export default function ChatArea({
   );
 
   const retryCurrentKnowledgeBaseTurn = useCallback(async () => {
-    const conversation = activeConversation;
-    const knowledgeBase = conversation?.knowledgeBase;
-    const recoveryMode = knowledgeBase?.notice
-      ? knowledgeBaseNoticeRecoveryMode(knowledgeBase.notice)
-      : "none";
-    if (
-      !conversation ||
-      !knowledgeBase?.notice ||
-      recoveryMode === "none" ||
-      knowledgeBase.revision === null ||
-      retryingKnowledgeBase
-    ) {
-      return;
-    }
-    setRetryingKnowledgeBase(true);
-    const nextClientRequestId = () =>
-      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `kb-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const explicitRecoveryToken = knowledgeBase.notice.recoveryToken;
-    if (recoveryMode === "explicit_recovery" && explicitRecoveryToken) {
-      explicitRecoveryRequestRef.current = knowledgeBaseExplicitRecoveryRequest(
-        explicitRecoveryRequestRef.current,
-        explicitRecoveryToken,
-        nextClientRequestId,
-      );
-    }
-    const clientRequestId =
-      recoveryMode === "explicit_recovery"
-        ? explicitRecoveryRequestRef.current!.clientRequestId
-        : nextClientRequestId();
-    try {
-      const observation = await recoverKnowledgeBaseNotice({
-        conversationId: conversation.id,
-        notice: knowledgeBase.notice,
-        clientRequestId,
-        expectedGeneration: knowledgeBase.generation,
-        expectedStateEpoch: knowledgeBase.stateEpoch,
-        expectedRevision: knowledgeBase.revision,
-        expectedLeafId: knowledgeBase.leafId,
-        expectedPresentationKey: knowledgeBase.presentationKey,
-      });
-      commitKnowledgeBaseObservation(conversation.id, observation);
-      wakeKnowledgeBaseConversation(conversation.id);
-      if (
-        recoveryMode === "explicit_recovery" &&
-        observation.notice?.recoveryToken !== explicitRecoveryToken
-      ) {
-        explicitRecoveryRequestRef.current = null;
-      }
-      if (recoveryMode === "reconcile") {
-        if (knowledgeBaseReconcileResultRequiresConfirmation(observation)) {
-          toast.info("状态已更新，需要你确认后继续", {
-            description:
-              observation.notice?.message || "已安全停在确认点，不会自动重发。",
-          });
-          return;
-        }
-        if (knowledgeBaseReconcileResultIsStopped(observation)) {
-          toast.warning("本轮已停止，不会自动重发", {
-            description: observation.notice?.message || "已完成内容不受影响。",
-          });
-          return;
-        }
-        const packageRebind =
-          knowledgeBase.notice.code ===
-          KNOWLEDGE_BASE_PACKAGE_REBIND_NOTICE_CODE;
-        if (packageRebind && !knowledgeBasePackageRebindResolved(observation)) {
-          toast.warning("知识库成品仍在等待重新绑定", {
-            description:
-              observation.notice?.message ||
-              "原任务的完整 ZIP 或访问凭证尚未就绪，系统会继续恢复。",
-          });
-          return;
-        }
-        if (packageRebind) {
-          toast.success("知识库成品已重新绑定", {
-            description: "已复用原权威任务完成校验，没有创建新的模型任务。",
-          });
-        } else if (knowledgeBaseSameTurnRecoveryAccepted(observation)) {
-          toast.success("已继续当前操作", {
-            description: "系统已接受同一轮次，并继续等待模型返回结果。",
-          });
-        } else if (
-          knowledgeBaseReconcileResultChangedCoordinate(observation, {
-            generation: knowledgeBase.generation,
-            stateEpoch: knowledgeBase.stateEpoch,
-          })
-        ) {
-          toast.info("状态已更新", {
-            description: observation.notice?.message || "已同步当前权威状态。",
-          });
-        } else {
-          toast.warning("当前操作尚未恢复", {
-            description:
-              observation.notice?.message || "请刷新当前状态后再次尝试。",
-          });
-        }
-      } else {
-        toast.success("已重新发起当前节点", {
-          description: "本次使用新的幂等操作，不会复用上一条失败任务。",
-        });
-      }
-    } catch (error) {
-      const status = Number((error as { status?: unknown })?.status || 0);
-      const changedObservation = (
-        error as { knowledgeObservation?: KnowledgeBaseObservationDto }
-      )?.knowledgeObservation;
-      if (changedObservation) {
-        commitKnowledgeBaseObservation(conversation.id, changedObservation);
-      }
-      if (!status || status === 408 || status === 429 || status >= 500) {
-        wakeKnowledgeBaseConversation(conversation.id);
-        toast.warning("正在恢复重试结果", {
-          description:
-            "网络结果暂时未知，系统会恢复同一操作，不会重复创建任务。",
-        });
-      } else {
-        if (recoveryMode === "explicit_recovery") {
-          explicitRecoveryRequestRef.current = null;
-        }
-        toast.error(
-          recoveryMode === "reconcile"
-            ? "重新绑定知识库成品失败"
-            : "重试当前节点失败",
-          {
-            description:
-              error instanceof Error ? error.message : "请刷新权威状态后再试",
-          },
-        );
-      }
-    } finally {
-      setRetryingKnowledgeBase(false);
-    }
-  }, [
-    activeConversation,
-    commitKnowledgeBaseObservation,
-    retryingKnowledgeBase,
-    wakeKnowledgeBaseConversation,
-  ]);
+    const notice = activeConversation?.knowledgeBase?.notice;
+    if (!notice || retryingKnowledgeBase) return;
+    // Same-turn recovery and provider rebinds are retired. All failed or
+    // stale knowledge-base runs go through the explicit approved reset flow.
+    requestKnowledgeBaseReset();
+  }, [activeConversation, retryingKnowledgeBase]);
 
   const messages = useMemo(() => {
     const rows = activeConversation
@@ -2169,7 +2044,10 @@ export default function ChatArea({
               return !hasStepsOrContent;
             })() && (
               <TypingIndicator
-                text={runningAssistantStatusText(syncKnowledgeBaseSnapshot)}
+                text={runningAssistantStatusText(
+                  syncKnowledgeBaseSnapshot,
+                  activeConversation?.knowledgeBase?.processingPhase,
+                )}
               />
             )}
 
@@ -2371,7 +2249,7 @@ function formatKnowledgeBaseStarterElapsed(milliseconds: number) {
 function knowledgeBaseStarterStageCopy(state: KnowledgeBaseStarterFileState) {
   switch (state.stage) {
     case "creating_intent":
-      return "正在创建 Dashboard 本地上传记录";
+      return "正在准备资料上传";
     case "uploading_to_dashboard": {
       const percent = state.totalBytes
         ? Math.min(
@@ -2379,20 +2257,20 @@ function knowledgeBaseStarterStageCopy(state: KnowledgeBaseStarterFileState) {
             Math.round((state.loadedBytes / state.totalBytes) * 100),
           )
         : 0;
-      return `正在上传到 Dashboard ${percent}%`;
+      return `正在上传资料 ${percent}%`;
     }
     case "sealed":
-      return "Dashboard 已完整接收，正在准备云端上传";
+      return "资料已收到，正在继续处理";
     case "creating_cloud_record":
-      return "正在创建云端文件记录";
+      return "正在登记资料";
     case "uploading_to_cloud":
-      return "Dashboard 正在从本地副本上传云端";
+      return "正在同步资料";
     case "waiting_cloud_ready":
-      return "文件已接收，正在等待云端就绪";
+      return "资料已收到，正在准备";
     case "creating_record":
-      return "正在准备 Dashboard 接收";
+      return "正在准备资料接收";
     case "recovering":
-      return "正在确认云端上传状态";
+      return "正在确认资料状态";
     case "uploading": {
       const percent = state.totalBytes
         ? Math.min(
@@ -2403,9 +2281,9 @@ function knowledgeBaseStarterStageCopy(state: KnowledgeBaseStarterFileState) {
       return `正在上传 ${percent}%`;
     }
     case "server_processing":
-      return "文件已接收，正在等待云端就绪";
+      return "资料已收到，正在准备";
     case "uploaded":
-      return "Dashboard 已确认，等待其余文件";
+      return "资料已确认，等待其余文件";
     case "failed":
       return state.error || "上传失败";
     case "cancelled":
@@ -2522,20 +2400,6 @@ export function EmptyConversationHint({
   const abortControllerRef = useRef<AbortController | null>(null);
   const clientRequestIdRef = useRef<string | null>(null);
   const batchLocked = batchStartedAt !== null;
-
-  useEffect(
-    () => () => {
-      // Reset-revision remounts and page exits revoke the entire starter
-      // lifecycle. No upload/stage/dispatch from the previous epoch may keep
-      // running after its UI and conversation have been discarded.
-      abortControllerRef.current?.abort(
-        Object.assign(new DOMException("页面生命周期已结束", "AbortError"), {
-          frontmindAbortSource: "PAGE_OR_RESET_LIFECYCLE",
-        }),
-      );
-    },
-    [],
-  );
 
   const addFiles = useCallback((fileList: FileList | File[]) => {
     const incoming = Array.from(fileList).filter((file) => {
@@ -3036,7 +2900,7 @@ export function EmptyConversationHint({
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const operation = captureWorkspaceRestOperation(controller.signal);
+    const operation = captureWorkspaceRestOperation(controller.signal, undefined, { detached: true });
     setIsStarting(true);
     try {
       const payload = {
@@ -3421,31 +3285,6 @@ export function EmptyConversationHint({
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     <span>
                       已完成 {uploadSummary.uploadedCount}/{files.length} 个文件
-                    </span>
-                    <span>
-                      已从浏览器传出
-                      {formatKnowledgeBaseStarterBytes(
-                        uploadSummary.transferredBytes,
-                      )}
-                      /
-                      {formatKnowledgeBaseStarterBytes(
-                        uploadSummary.totalBytes,
-                      )}
-                    </span>
-                    <span>
-                      Dashboard 已完整确认
-                      {formatKnowledgeBaseStarterBytes(
-                        uploadSummary.confirmedBytes,
-                      )}
-                      /
-                      {formatKnowledgeBaseStarterBytes(
-                        uploadSummary.totalBytes,
-                      )}
-                    </span>
-                    <span>
-                      {batchPhase === "completed"
-                        ? "Dashboard 派发已接收，等待上游任务创建"
-                        : "上游任务尚未创建"}
                     </span>
                     <span>
                       已用时{" "}
@@ -4226,6 +4065,14 @@ export function MessageBubble({
           })),
         }))
       : message.stepGroups;
+  // Intermediate reasoning/tool summaries are process evidence, not a final
+  // answer. Keep the copy affordance exclusively on the returned reply.
+  const isIntermediateProcessMessage = Boolean(
+    !isUser &&
+      (message.isStepsPlaceholder ||
+        (message.intermediateSteps && message.intermediateSteps.length > 0) ||
+        (message.stepGroups && message.stepGroups.length > 0)),
+  );
 
   // Copy handler - uses sanitizedContent for assistant messages
   const handleCopyMessage = () => {
@@ -4482,7 +4329,7 @@ export function MessageBubble({
             )}
 
             {/* Keep the reply action beside the content, without time metadata. */}
-            {!isUser && displayContent?.trim() && (
+            {!isUser && displayContent?.trim() && !isIntermediateProcessMessage && (
               <div
                 className={cn(
                   "chat-message-actions flex items-center justify-start",

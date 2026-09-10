@@ -92,4 +92,16 @@ describe("business REST scope", () => {
     activate();
     expect(captureWorkspaceRestOperation().headers()).not.toHaveProperty("x-enterprise-project-id");
   });
+
+  it("keeps a detached upload alive when the page scope is disposed", async () => {
+    activate("project-a");
+    const pageOperation = captureWorkspaceRestOperation();
+    const detached = captureWorkspaceRestOperation(undefined, undefined, { detached: true });
+    pageOperation.assertActive();
+    dispose?.();
+    await Promise.resolve();
+    expect(pageOperation.signal.aborted).toBe(true);
+    expect(detached.signal.aborted).toBe(false);
+    detached.assertActive();
+  });
 });

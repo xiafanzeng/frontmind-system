@@ -813,7 +813,7 @@ describe("UserBrandDashboard formal workspace", () => {
       .closest("aside");
     fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
     expect(screen.queryByTestId("embedded-monitoring-business")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "从优化问题新建" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
     expect(
       screen.getByRole("heading", { name: "选择本次要监控的问题" }),
     ).toBeInTheDocument();

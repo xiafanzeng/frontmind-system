@@ -115,7 +115,8 @@
 }
 .knowledge-workspace-status {
   padding: 10px 20px;
-  border-bottom: 1px solid var(--knowledge-border);
+  /* The adjacent workflow surface owns its separator; avoid a double rule. */
+  border-bottom: 0;
   font-size: 14px;
   line-height: 22px;
   background: #fafbfc;

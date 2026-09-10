@@ -162,27 +162,26 @@
   background: #b8b0bd;
 }
 
-/* Knowledge workspaces contain native editors and rely on the two-column
-   flow to keep the editor and node inspector side by side.  The general
-   agent uses the floating treatment above; retain the original grid for this
-   dedicated editing surface. */
-.agent-workbench-shell.layout-knowledge .agent-workbench-shell__layout {
+/* Business editors and forms keep their existing two-column layout so the
+   inspector cannot cover their controls. Only the general conversation uses
+   the independent floating panel. */
+.agent-workbench-shell:not(.module-general) .agent-workbench-shell__layout {
   max-width: 1584px;
   margin-inline: auto;
   grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 33.333%);
 }
-.agent-workbench-shell.layout-knowledge
+.agent-workbench-shell:not(.module-general)
   .agent-workbench-shell__layout.is-single-pane {
   max-width: none;
   margin-inline: 0;
   grid-template-columns: minmax(0, 1fr);
 }
-.agent-workbench-shell.layout-knowledge .agent-workbench-shell__auxiliary {
+.agent-workbench-shell:not(.module-general) .agent-workbench-shell__auxiliary {
   position: relative;
   inset: auto;
   width: auto;
 }
-.agent-workbench-shell.layout-knowledge .agent-workbench-shell__resize {
+.agent-workbench-shell:not(.module-general) .agent-workbench-shell__resize {
   position: relative;
   inset: auto;
   width: auto;

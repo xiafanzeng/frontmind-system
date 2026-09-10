@@ -759,7 +759,7 @@
 .user-brand-dashboard.operator-mode
   [data-testid="chat-messages-viewport"]
   button[title="复制内容"] {
-  font-size: 12px !important;
+  font-size: 11px !important;
   line-height: 18px;
 }
 .operator-portal[data-slot="dropdown-menu-content"],

@@ -4494,7 +4494,7 @@ export function MessageBubble({
                     type="button"
                     onClick={handleCopyMessage}
                     className={cn(
-                      "inline-flex min-h-7 items-center gap-1 rounded-md bg-transparent px-0 py-1 text-[12px] font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
+                      "inline-flex min-h-7 items-center gap-1 rounded-md bg-transparent px-0 py-1 text-[11px] font-medium transition-all duration-200 hover:bg-transparent active:scale-95",
                       copied
                         ? "text-emerald-600 dark:text-emerald-400"
                         : "text-muted-foreground hover:text-primary",

@@ -1,4 +1,8 @@
 import type { GeneralExecutionDto } from "@shared/frontmind-general-execution";
+import {
+  generalChatMessageIdentity,
+  orderGeneralChatMessages,
+} from "@shared/general-chat-message-order";
 import React, {
   createContext,
   useCallback,
@@ -162,6 +166,9 @@ export interface LocalMessage {
     turnId: string;
     agentTaskId: string;
     providerEventId: string;
+    userMessageId?: string;
+    userSequence?: number;
+    rank?: number;
     serverOwned: true;
   };
   /** Browser-owned retry identity until Dashboard returns a task DTO. */
@@ -283,6 +290,12 @@ export function repairConversationMessageIds(
       attachmentIndex + message.attachments.length,
     );
     attachmentIndex += message.attachments.length;
+    if (
+      nextAttachments.every(
+        (attachment, index) => attachment === message.attachments![index],
+      )
+    )
+      return message;
     return { ...message, attachments: nextAttachments };
   });
 }
@@ -468,7 +481,11 @@ type Action =
     }
   | {
       type: "UPDATE_ASSISTANT_MESSAGES";
-      payload: { conversationId: string; messages: LocalMessage[] };
+      payload: {
+        conversationId: string;
+        messages: LocalMessage[];
+        projectionScope?: GeneralChatProjectionScope;
+      };
     }
   | {
       type: "SETTLE_GENERAL_CHAT_DISPATCH";
@@ -504,9 +521,142 @@ type Action =
 
 function generalChatProjectionIdentity(message: LocalMessage) {
   if (message.generalChat?.serverOwned) {
-    return `${message.generalChat.turnId}\0${message.generalChat.providerEventId}`;
+    return generalChatMessageIdentity(message)!;
   }
   return message.upstreamOutputId || message.id || "";
+}
+
+/** Only a declared complete range may withdraw absent server-owned rows. */
+export type GeneralChatProjectionScope =
+  | { kind: "task"; agentTaskId: string }
+  | { kind: "turns"; agentTaskId: string; turnIds: readonly string[] }
+  | { kind: "conversation" };
+
+function generalChatMessageInScope(
+  message: LocalMessage,
+  scope: GeneralChatProjectionScope | undefined,
+) {
+  const metadata = message.generalChat;
+  if (!metadata?.serverOwned || !scope) return false;
+  return (
+    scope.kind === "conversation" ||
+    (metadata.agentTaskId === scope.agentTaskId &&
+      (scope.kind === "task" || scope.turnIds.includes(metadata.turnId)))
+  );
+}
+
+/** Reconcile provider event identities across the entire conversation, not its tail. */
+export function reconcileGeneralChatMessages(
+  local: readonly LocalMessage[],
+  incoming: readonly LocalMessage[],
+  scope?: GeneralChatProjectionScope,
+): LocalMessage[] {
+  const seenLocalEvents = new Set<string>();
+  const merged = local.filter((message) => {
+    if (!message.generalChat?.serverOwned) return true;
+    const identity = generalChatProjectionIdentity(message);
+    if (seenLocalEvents.has(identity)) return false;
+    seenLocalEvents.add(identity);
+    return true;
+  });
+  const identities = new Map(
+    merged.map((message, index) => [
+      generalChatProjectionIdentity(message),
+      index,
+    ]),
+  );
+  const ids = new Map(merged.map((message, index) => [message.id, index]));
+  const legacyOutputs = new Map(
+    merged.flatMap((message, index) =>
+      !message.generalChat && message.upstreamOutputId
+        ? [[message.upstreamOutputId, index] as const]
+        : [],
+    ),
+  );
+  const acceptedIdentities = new Set<string>();
+  for (const message of incoming) {
+    if (
+      message.generalChat?.serverOwned &&
+      scope &&
+      !generalChatMessageInScope(message, scope)
+    )
+      continue;
+    const identity = generalChatProjectionIdentity(message);
+    acceptedIdentities.add(identity);
+    const idIndex = ids.get(message.id);
+    const legacyIndex = message.upstreamOutputId
+      ? legacyOutputs.get(message.upstreamOutputId)
+      : undefined;
+    const index =
+      identities.get(identity) ??
+      (idIndex !== undefined && !merged[idIndex]!.generalChat
+        ? idIndex
+        : undefined) ??
+      (legacyIndex !== undefined && !merged[legacyIndex]!.generalChat
+        ? legacyIndex
+        : undefined);
+    if (index === undefined) {
+      identities.set(identity, merged.length);
+      ids.set(message.id, merged.length);
+      merged.push(message);
+      continue;
+    }
+    const existing = merged[index]!;
+    if (message.generalChat?.serverOwned) {
+      const stabilized: LocalMessage = existing.generalChat?.serverOwned
+        ? {
+            ...message,
+            id: existing.id,
+            timestamp: existing.timestamp,
+            serverSequence: message.serverSequence ?? existing.serverSequence,
+            generalChat: { ...existing.generalChat, ...message.generalChat },
+          }
+        : message;
+      merged[index] = generalChatProjectionSemanticallyEqual(
+        existing,
+        stabilized,
+      )
+        ? existing
+        : stabilized;
+    } else if (message.role === "user") {
+      // A snapshot can acknowledge the local user row while an upload preview
+      // and durable retry marker still belong to that exact message identity.
+      merged[index] = {
+        ...existing,
+        ...message,
+        ...(existing.generalChatDispatch
+          ? { generalChatDispatch: existing.generalChatDispatch }
+          : {}),
+        attachments:
+          message.attachments?.map((attachment) => {
+            const browser = existing.attachments?.find(
+              (candidate) =>
+                Boolean(attachment.fileId) &&
+                candidate.fileId === attachment.fileId,
+            );
+            return browser
+              ? {
+                  ...attachment,
+                  file: attachment.file ?? browser.file,
+                  blobUrl: attachment.blobUrl ?? browser.blobUrl,
+                  base64: attachment.base64 ?? browser.base64,
+                }
+              : attachment;
+          }) ?? existing.attachments,
+      };
+    }
+    identities.set(identity, index);
+    ids.set(merged[index]!.id, index);
+  }
+  return repairConversationMessageIds(
+    orderGeneralChatMessages(
+      merged.filter(
+        (message) =>
+          !generalChatMessageInScope(message, scope) ||
+          acceptedIdentities.has(generalChatProjectionIdentity(message)),
+      ),
+    ),
+  );
 }
 
 function generalChatProjectionSemanticallyEqual(
@@ -660,6 +810,20 @@ function conversationReducer(
           return c;
         }
 
+        if (c.executionKind === "general_chat_v2") {
+          const deletedIds = new Set(c.deletedMessageIds ?? []);
+          const nextMessages = reconcileGeneralChatMessages(
+            c.messages,
+            action.payload.messages.filter(
+              (message) => !deletedIds.has(message.id),
+            ),
+            action.payload.projectionScope,
+          );
+          if (sameMessageReferences(c.messages, nextMessages)) return c;
+          changed = true;
+          return { ...c, messages: nextMessages, updatedAt: Date.now() };
+        }
+
         // Find the index of the last user message.
         // All assistant messages after it belong to the current turn and will be
         // REPLACED by the incoming (authoritative) set from parseOutputMessages.
@@ -694,34 +858,6 @@ function conversationReducer(
           return true;
         });
 
-        if (c.executionKind === "general_chat_v2") {
-          const currentTurnMessages = messages.slice(lastUserIdx + 1);
-          const currentByIdentity = new Map(
-            currentTurnMessages
-              .map(
-                (message) =>
-                  [generalChatProjectionIdentity(message), message] as const,
-              )
-              .filter((entry): entry is readonly [string, LocalMessage] =>
-                Boolean(entry[0]),
-              ),
-          );
-          newMessages = newMessages.map((incoming) => {
-            const identity = generalChatProjectionIdentity(incoming);
-            const existing = identity
-              ? currentByIdentity.get(identity)
-              : undefined;
-            if (!existing) return incoming;
-            const stabilized = {
-              ...incoming,
-              id: existing.id,
-              timestamp: existing.timestamp,
-            };
-            return generalChatProjectionSemanticallyEqual(existing, stabilized)
-              ? existing
-              : stabilized;
-          });
-        }
         const incomingIds = new Set(newMessages.map((message) => message.id));
         const preservedTerminalNotices = terminalNotices.filter(
           (message) => !incomingIds.has(message.id),
@@ -1787,35 +1923,45 @@ export function mergeDirtyConversationHydration(
     ...(remote.deletedMessageIds ?? []),
     ...(local.deletedMessageIds ?? []),
   ]);
-  const messages = [...local.messages];
-  const idToIndex = new Map(
-    messages.map((message, index) => [message.id, index]),
-  );
-  const outputToIndex = new Map(
-    messages.flatMap((message, index) =>
-      message.upstreamOutputId
-        ? ([[message.upstreamOutputId, index]] as const)
-        : [],
-    ),
-  );
+  const generalChat =
+    local.executionKind === "general_chat_v2" ||
+    remote.executionKind === "general_chat_v2";
+  let messages: LocalMessage[];
+  if (generalChat) {
+    messages = reconcileGeneralChatMessages(local.messages, remote.messages, {
+      kind: "conversation",
+    });
+  } else {
+    messages = [...local.messages];
+    const idToIndex = new Map(
+      messages.map((message, index) => [message.id, index]),
+    );
+    const outputToIndex = new Map(
+      messages.flatMap((message, index) =>
+        message.upstreamOutputId
+          ? ([[message.upstreamOutputId, index]] as const)
+          : [],
+      ),
+    );
 
-  for (const remoteMessage of remote.messages) {
-    const existingIndex =
-      idToIndex.get(remoteMessage.id) ??
-      (remoteMessage.upstreamOutputId
-        ? outputToIndex.get(remoteMessage.upstreamOutputId)
-        : undefined);
-    if (existingIndex === undefined) {
-      idToIndex.set(remoteMessage.id, messages.length);
-      if (remoteMessage.upstreamOutputId) {
-        outputToIndex.set(remoteMessage.upstreamOutputId, messages.length);
-      }
-      messages.push(remoteMessage);
-    } else if (isServerOwnedGeneralChatMessage(remoteMessage)) {
-      messages[existingIndex] = remoteMessage;
-      idToIndex.set(remoteMessage.id, existingIndex);
-      if (remoteMessage.upstreamOutputId) {
-        outputToIndex.set(remoteMessage.upstreamOutputId, existingIndex);
+    for (const remoteMessage of remote.messages) {
+      const existingIndex =
+        idToIndex.get(remoteMessage.id) ??
+        (remoteMessage.upstreamOutputId
+          ? outputToIndex.get(remoteMessage.upstreamOutputId)
+          : undefined);
+      if (existingIndex === undefined) {
+        idToIndex.set(remoteMessage.id, messages.length);
+        if (remoteMessage.upstreamOutputId) {
+          outputToIndex.set(remoteMessage.upstreamOutputId, messages.length);
+        }
+        messages.push(remoteMessage);
+      } else if (isServerOwnedGeneralChatMessage(remoteMessage)) {
+        messages[existingIndex] = remoteMessage;
+        idToIndex.set(remoteMessage.id, existingIndex);
+        if (remoteMessage.upstreamOutputId) {
+          outputToIndex.set(remoteMessage.upstreamOutputId, existingIndex);
+        }
       }
     }
   }
@@ -1882,7 +2028,12 @@ function normalizeConversation(conversation: Conversation): Conversation {
     // A crash can leave both the optimistic request and the canonical
     // server-owned turn in the first cloud snapshot. Collapse that pair before
     // it ever reaches the reducer; otherwise it survives until another save.
-    messages: mergeServerOwnedKnowledgeBaseMessages([], normalizedMessages),
+    messages:
+      conversation.executionKind === "general_chat_v2"
+        ? reconcileGeneralChatMessages([], normalizedMessages, {
+            kind: "conversation",
+          })
+        : mergeServerOwnedKnowledgeBaseMessages([], normalizedMessages),
     createdAt,
     updatedAt: toTimestamp(conversation.updatedAt, createdAt),
     startedAt:
@@ -2313,6 +2464,7 @@ interface ConversationContextType {
   updateAssistantMessages: (
     conversationId: string,
     messages: LocalMessage[],
+    projectionScope?: GeneralChatProjectionScope,
   ) => void;
   registerKnowledgeBaseConversation: (conversationId: string) => void;
   wakeKnowledgeBaseConversation: (conversationId: string) => void;
@@ -2707,6 +2859,12 @@ export function ConversationProvider({
             }
           }
         };
+        const conversationsAtRead = new Map(
+          stateRef.current.conversations.map((conversation) => [
+            conversation.id,
+            conversation,
+          ]),
+        );
         const result = await readConversations();
         if (accountIdRef.current !== expectedUserId) {
           return;
@@ -2735,6 +2893,56 @@ export function ConversationProvider({
             const local = stateRef.current.conversations.find(
               (candidate) => candidate.id === remote.id,
             );
+            const generalChat =
+              local?.executionKind === "general_chat_v2" ||
+              remote.executionKind === "general_chat_v2";
+            if (generalChat && local) {
+              const readStart = conversationsAtRead.get(remote.id);
+              const projectionsChanged =
+                readStart &&
+                !sameMessageReferences(
+                  readStart.messages.filter(isServerOwnedGeneralChatMessage),
+                  local.messages.filter(isServerOwnedGeneralChatMessage),
+                );
+              const observationChanged =
+                projectionsChanged ||
+                (readStart &&
+                  (local.execution !== readStart.execution ||
+                    local.status !== readStart.status ||
+                    local.completedAt !== readStart.completedAt));
+              // A GET begun before an accepted poll cannot withdraw or rewind it.
+              const dispatchChanged =
+                readStart &&
+                (local.taskId !== readStart.taskId ||
+                  local.startedAt !== readStart.startedAt ||
+                  local.messages.findLast((message) => message.role === "user")
+                    ?.id !==
+                    readStart.messages.findLast(
+                      (message) => message.role === "user",
+                    )?.id);
+              const snapshot = observationChanged
+                ? {
+                    ...remote,
+                    execution: local.execution ?? remote.execution,
+                    messages: [
+                      ...remote.messages.filter(
+                        (message) => !isServerOwnedGeneralChatMessage(message),
+                      ),
+                      ...local.messages.filter(isServerOwnedGeneralChatMessage),
+                    ],
+                  }
+                : remote;
+              const merged = mergeDirtyConversationHydration(local, snapshot);
+              return syncQueueRef.current!.isDirty(remote.id) ||
+                observationChanged ||
+                dispatchChanged
+                ? merged
+                : {
+                    ...snapshot,
+                    messages: merged.messages,
+                    deletedMessageIds: merged.deletedMessageIds,
+                  };
+            }
             const merged = mergeKnowledgeBaseHydration(local, remote);
             return local && syncQueueRef.current!.isDirty(remote.id)
               ? mergeDirtyConversationHydration(local, merged)
@@ -3218,7 +3426,11 @@ export function ConversationProvider({
   );
 
   const updateAssistantMessages = useCallback(
-    (conversationId: string, messages: LocalMessage[]) => {
+    (
+      conversationId: string,
+      messages: LocalMessage[],
+      projectionScope?: GeneralChatProjectionScope,
+    ) => {
       const conversation = stateRef.current.conversations.find(
         (candidate) => candidate.id === conversationId,
       );
@@ -3228,7 +3440,7 @@ export function ConversationProvider({
       commit(
         {
           type: "UPDATE_ASSISTANT_MESSAGES",
-          payload: { conversationId, messages },
+          payload: { conversationId, messages, projectionScope },
         },
         serverOwnedGeneralChatProjection ? [] : [conversationId],
       );

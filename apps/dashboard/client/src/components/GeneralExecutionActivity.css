@@ -7,6 +7,23 @@
   line-height: 1.6;
 }
 
+.workbench-reading-column > .general-chat-user-turn {
+  margin-block-end: 0;
+}
+.general-chat-user-divider {
+  width: 100%;
+  height: 0;
+  margin: 16px 0 0;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+}
+.general-chat-user-turn > .general-execution[data-placement="after"] {
+  margin-top: 24px;
+}
+.workbench-reading-column > .general-chat-user-turn + [data-reading-anchor] {
+  margin-block-start: 24px;
+}
+
 .general-execution[data-placement="after"] {
   margin-top: 1.5rem;
 }

@@ -5,6 +5,7 @@ import {
 } from "@/contexts/ConversationContext";
 import type { OutputMessage } from "@/lib/frontmind-api";
 import { extractKnowledgeBaseProtocolObjects } from "@shared/knowledge-base-output";
+import { orderGeneralChatMessages } from "@shared/general-chat-message-order";
 
 export interface KnowledgeBasePresentationTarget {
   revision: number;
@@ -284,6 +285,7 @@ export function projectTaskOutputMessages({
   modelName,
   knowledgeBase,
   knowledgeBasePresentation,
+  generalChat = false,
 }: {
   output: OutputMessage[] | undefined;
   baselineOutputLength: number;
@@ -292,8 +294,23 @@ export function projectTaskOutputMessages({
   modelName?: string;
   knowledgeBase: boolean;
   knowledgeBasePresentation?: KnowledgeBasePresentationTarget;
+  /** Dashboard v2 output is the complete server-owned task projection. */
+  generalChat?: boolean;
 }): LocalMessage[] {
   if (!output?.length) return [];
+
+  if (generalChat && !knowledgeBase) {
+    // Canonical event identities and user anchors replace cumulative-length
+    // guesses. Parse rows independently so older turns never inherit the
+    // current turn's transient elapsed time or processing steps.
+    return orderGeneralChatMessages(
+      output.flatMap((item) =>
+        item.general_chat?.serverOwned
+          ? parseOutputMessages([item], undefined, modelName)
+          : [],
+      ),
+    );
+  }
 
   const slicedOutput = sliceNewOutput(
     output,

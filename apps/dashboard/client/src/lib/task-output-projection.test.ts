@@ -27,6 +27,48 @@ function presentation(revision: number, leafId: string | null) {
 }
 
 describe("task output projection", () => {
+  it("keeps the full v2 projection when historical counts or IDs would discard it", () => {
+    const output = [2, 1].map(
+      (turn): OutputMessage => ({
+        ...assistantOutput(`provider-${turn}`, `轮次 ${turn}`),
+        message_id: `message-${turn}`,
+        sent_at_ms: 1000,
+        server_sequence: 100 + turn,
+        general_chat: {
+          schemaVersion: 1,
+          kind: "assistant_projection",
+          serverOwned: true,
+          agentTaskId: "task",
+          turnId: `turn-${turn}`,
+          providerEventId: `event-${turn}`,
+          userMessageId: `user-${turn}`,
+          userSequence: turn,
+          rank: 0,
+        },
+      }),
+    );
+    const result = projectTaskOutputMessages({
+      output: [...output, assistantOutput("raw", "未授权原始消息")],
+      baselineOutputLength: 99,
+      historicalOutputIds: ["provider-1", "provider-2"],
+      responseStartedAt: 9999,
+      knowledgeBase: false,
+      generalChat: true,
+    });
+    expect(result.map((message) => message.id)).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(
+      result.every((message) => message.responseStartedAt === undefined),
+    ).toBe(true);
+    expect(result[0]!.generalChat).toMatchObject({
+      userMessageId: "user-1",
+      userSequence: 1,
+      rank: 0,
+    });
+  });
+
   it("renders a validated output_message after the first confirmation advances revision 0 to 1", () => {
     const text = [
       "1.1 已确认。",

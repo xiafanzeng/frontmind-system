@@ -153,17 +153,29 @@ async function checkAndUpdateOrdinaryTask(
       responseStartedAt: conversation.startedAt || conversation.createdAt,
       modelName: taskData.model,
       knowledgeBase: false,
+      generalChat: conversation.executionKind === "general_chat_v2",
     });
-    if (messages.length && normalizedStatus === "completed") {
+    if (
+      conversation.executionKind !== "general_chat_v2" &&
+      messages.length &&
+      normalizedStatus === "completed"
+    ) {
       messages[messages.length - 1].elapsedTime =
         (Date.now() - (conversation.startedAt || conversation.createdAt)) /
         1000;
     }
-    // An empty authoritative projection is meaningful: the server may have
-    // temporarily hidden this turn while its Provider binding is ambiguous.
-    // Replacing with [] removes only this turn's projected assistants; the
-    // reducer keeps the deterministic terminal notice separately.
-    updateAssistantMessages(conversation.id, messages);
+    // Empty task output is an explicit withdrawal of this task's server-owned
+    // rows. Other tasks, local users and terminal notices remain untouched.
+    if (conversation.executionKind === "general_chat_v2") {
+      if (Array.isArray(taskData.output)) {
+        updateAssistantMessages(conversation.id, messages, {
+          kind: "task",
+          agentTaskId: taskData.id,
+        });
+      }
+    } else {
+      updateAssistantMessages(conversation.id, messages);
+    }
 
     if (normalizedStatus === "completed") {
       const completedAt = Date.now();
@@ -404,6 +416,18 @@ export function useResumePolling() {
               nextDueRef.current.set(conversationId, 0);
               continue;
             }
+            if (Array.isArray(task.output))
+              functions.updateAssistantMessages(
+                conversation.id,
+                projectTaskOutputMessages({
+                  output: task.output ?? [],
+                  baselineOutputLength: 0,
+                  modelName: task.model,
+                  knowledgeBase: false,
+                  generalChat: true,
+                }),
+                { kind: "task", agentTaskId: task.id },
+              );
             functions.updateStatus(conversation.id, conversation.status, {
               execution:
                 task.execution?.coverage === "complete"

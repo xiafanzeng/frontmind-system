@@ -1030,11 +1030,13 @@
 .user-brand-dashboard.operator-mode .knowledge-frontend {
   --kf-blue: #491060;
   --kf-line: #eaecf0;
-  background: #f6f7f9;
   color: #20232b;
   font-family: var(--fm-font-ui);
   font-size: 16px;
   line-height: 1.75;
+}
+.user-brand-dashboard.operator-mode .knowledge-frontend:not(.kf-conversation-flow) {
+  background: #f6f7f9;
 }
 .user-brand-dashboard.operator-mode .kf-topbar {
   background: #f2edf6;

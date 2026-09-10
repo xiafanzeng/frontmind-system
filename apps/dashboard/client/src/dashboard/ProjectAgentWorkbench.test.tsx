@@ -417,7 +417,9 @@ describe("conversational project workbench", () => {
     expect(
       within(list).getByRole("button", { name: /^品牌调研/ }),
     ).toHaveFocus();
-    fireEvent.click(within(sidebar).getByRole("button", { name: "旧任务" }));
+    expect(within(sidebar).queryByRole("button", { name: "旧任务" })).toBeNull();
+    expect(within(sidebar).queryByRole("button", { name: "当前智能体" })).toBeNull();
+    expect(within(list).getAllByRole("option")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: /^旧通用任务/ }));
     expect(screen.getByLabelText("对话输入")).toHaveAttribute(
       "data-task",
@@ -427,6 +429,8 @@ describe("conversational project workbench", () => {
       within(sidebar).getByRole("textbox", { name: "搜索任务" }),
       { target: { value: "旧通用" } },
     );
+    expect(within(list).getAllByRole("option")).toHaveLength(1);
+    expect(list).toHaveTextContent("旧通用任务");
     fireEvent.click(within(sidebar).getByRole("button", { name: /^新任务$/ }));
     expect(
       within(sidebar).getByRole("textbox", { name: "搜索任务" }),

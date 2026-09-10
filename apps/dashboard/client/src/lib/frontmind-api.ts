@@ -380,6 +380,9 @@ export interface OutputMessage {
     turnId: string;
     agentTaskId: string;
     providerEventId: string;
+    userMessageId?: string;
+    userSequence?: number;
+    rank?: number;
     serverOwned: true;
   };
   type?: string;

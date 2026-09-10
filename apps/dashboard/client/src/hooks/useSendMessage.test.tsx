@@ -463,6 +463,14 @@ describe("useSendMessage", () => {
       output: [
         {
           id: "high-output",
+          general_chat: {
+            schemaVersion: 1,
+            kind: "assistant_projection",
+            serverOwned: true,
+            agentTaskId: "high-task",
+            turnId: "turn-high",
+            providerEventId: "high-output",
+          },
           type: "message",
           role: "assistant",
           content: [{ type: "output_text", text: "结果" }],
@@ -485,9 +493,46 @@ describe("useSendMessage", () => {
     ).toBe("frontmind-pro");
     expect(mocks.parseOutputMessages).toHaveBeenCalledWith(
       expect.any(Array),
-      expect.any(Number),
+      undefined,
       "frontmind-base",
     );
+  });
+
+  it("reconciles all anchored v2 turns on continuation despite a stale output count", async () => {
+    const outputs = [1, 2].map((turn) => ({
+      id: `event-${turn}`,
+      message_id: `message-${turn}`,
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: `第 ${turn} 轮` }],
+      general_chat: {
+        schemaVersion: 1, kind: "assistant_projection", serverOwned: true,
+        agentTaskId: "existing-task", turnId: `turn-${turn}`, providerEventId: `event-${turn}`,
+        userMessageId: `user-${turn}`, userSequence: turn, rank: 0,
+      },
+    }));
+    mocks.useConversation.mockReturnValue(mockConversationContext({
+      activeConversation: {
+        id: "existing-conversation", title: "历史对话", executionKind: "general_chat_v2",
+        taskId: "existing-task", previousResponseId: "existing-task", lastKnownOutputLength: 99,
+        messages: [{ id: "user-1", role: "user", content: "之前的请求", timestamp: 1 }],
+        status: "completed", createdAt: 1, updatedAt: 1,
+      },
+    }));
+    mocks.parseOutputMessages.mockImplementation((output) => output.map((item: any) => ({
+      id: item.message_id, role: "assistant", content: item.content[0].text,
+      timestamp: 2, generalChat: item.general_chat,
+    })));
+    mocks.createTask.mockResolvedValueOnce({ id: "existing-task", status: "running", output: outputs });
+    const { result } = renderHook(() => useSendMessage());
+    await act(async () => { await result.current.sendMessage("分析附件", []); });
+    expect(mocks.updateAssistantMessages).toHaveBeenCalledWith(
+      "existing-conversation",
+      [expect.objectContaining({ id: "message-1" }), expect.objectContaining({ id: "message-2" })],
+      { kind: "task", agentTaskId: "existing-task" },
+    );
+    expect(mocks.createTask.mock.calls[0]![1].previousResponseId).toBe("existing-task");
+    expect(mocks.retrieveTask).not.toHaveBeenCalled();
   });
 
   it("keeps immediate partial output and emits one deterministic terminal notice", async () => {
@@ -497,6 +542,14 @@ describe("useSendMessage", () => {
       output: [
         {
           id: "partial-output",
+          general_chat: {
+            schemaVersion: 1,
+            kind: "assistant_projection",
+            serverOwned: true,
+            agentTaskId: "partial-task",
+            turnId: "turn-partial",
+            providerEventId: "partial-output",
+          },
           type: "message",
           role: "assistant",
           content: [{ type: "output_text", text: "已生成的部分结果" }],

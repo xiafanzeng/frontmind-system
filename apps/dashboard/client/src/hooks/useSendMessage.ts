@@ -56,9 +56,7 @@ import {
 } from "@/lib/attachment-files";
 import { requireCurrentFrontMindBuild } from "@/lib/build-version";
 import {
-  collectAssistantOutputIds,
   projectTaskOutputMessages,
-  sliceNewOutput,
 } from "@/lib/task-output-projection";
 import { toast } from "sonner";
 import { knowledgeBaseObservationAcknowledgesClientRequest } from "@/lib/knowledge-base-coordinator";
@@ -705,7 +703,6 @@ export function useSendMessage() {
         }
 
         const baselineOutputLength = conv?.lastKnownOutputLength || 0;
-        const historicalOutputIds = collectAssistantOutputIds(conv?.messages);
         const isMultiTurn = !!conv?.previousResponseId;
 
         if (isMultiTurn) {
@@ -1752,42 +1749,27 @@ export function useSendMessage() {
             });
           }
 
-          // Ordinary tasks may render running output. Knowledge-base text is
-          // shown only after the server validates the exact revision/leaf pair.
-          if (response.output && response.output.length > 0) {
-            const newOutput = sliceNewOutput(
-              response.output,
-              baselineOutputLength,
-              historicalOutputIds,
-            );
-
-            console.log(
-              `[SendMessage] Initial response: total output=${response.output.length}, ` +
-                `baseline=${baselineOutputLength}, new=${newOutput.length}, status=${response.status}`,
-            );
-
-            try {
-              const assistantMsgs = projectTaskOutputMessages({
-                output: response.output,
-                baselineOutputLength,
-                historicalOutputIds,
-                responseStartedAt,
-                modelName: response.model,
-                knowledgeBase: false,
-              });
-              if (assistantMsgs.length > 0) {
-                updateAssistantMessages(convId, assistantMsgs);
-              }
-            } catch (parseErr) {
-              console.error(
-                "[SendMessage] Error parsing initial output:",
-                parseErr,
-              );
-            }
-          } else if (isMultiTurn && effectiveStatus === "completed") {
-            updateStatus(convId, "completed", {
-              lastKnownOutputLength: baselineOutputLength,
+          // The v2 DTO contains the whole task projection, including earlier
+          // turns and explicit withdrawals. Never slice it by a browser count.
+          try {
+            const assistantMsgs = projectTaskOutputMessages({
+              output: response.output ?? [],
+              baselineOutputLength: 0,
+              modelName: response.model,
+              knowledgeBase: false,
+              generalChat: true,
             });
+            if (Array.isArray(response.output)) {
+              updateAssistantMessages(convId, assistantMsgs, {
+                kind: "task",
+                agentTaskId: response.id,
+              });
+            }
+          } catch (parseErr) {
+            console.error(
+              "[SendMessage] Error parsing initial output:",
+              parseErr,
+            );
           }
 
           // A running ordinary task is now handed off through persisted
@@ -1796,7 +1778,6 @@ export function useSendMessage() {
 
           if (effectiveStatus === "completed") {
             const completedAt = Date.now();
-            const elapsedSec = (completedAt - responseStartedAt) / 1000;
 
             const totalOutputLength = response.output?.length || 0;
 
@@ -1805,28 +1786,6 @@ export function useSendMessage() {
               startedAt: responseStartedAt,
               lastKnownOutputLength: totalOutputLength,
             });
-
-            if (response.output && response.output.length > 0) {
-              try {
-                const finalMsgs = projectTaskOutputMessages({
-                  output: response.output,
-                  baselineOutputLength,
-                  historicalOutputIds,
-                  responseStartedAt,
-                  modelName: response.model,
-                  knowledgeBase: false,
-                });
-                if (finalMsgs.length > 0) {
-                  finalMsgs[finalMsgs.length - 1].elapsedTime = elapsedSec;
-                  updateAssistantMessages(convId, finalMsgs);
-                }
-              } catch (parseErr) {
-                console.error(
-                  "[SendMessage] Error parsing completed output:",
-                  parseErr,
-                );
-              }
-            }
 
             toast.success("任务已完成", {
               description: "结果已同步到当前内容流程。",

@@ -158,14 +158,6 @@ function ScopedWorkbench({
     [task, agentId],
   );
   const source = task.state?.source;
-  const legacyTasks =
-    agentId === "general"
-      ? task.tasks.filter((item) => !item.workbenchAgentId)
-      : [];
-  const historyTasks =
-    agentId === "general"
-      ? task.tasks.filter((item) => Boolean(item.workbenchAgentId))
-      : task.tasks;
   const body = native ? (
     <Suspense fallback={<div role="status">正在恢复任务…</div>}>
       <Home
@@ -242,8 +234,7 @@ function ScopedWorkbench({
   );
   const taskNavigation = (
     <WorkbenchTaskToolbar
-      tasks={historyTasks}
-      legacyTasks={legacyTasks}
+      tasks={task.tasks}
       currentId={task.taskId}
       disabled={!task.hydrated}
       loading={workspace.loading}

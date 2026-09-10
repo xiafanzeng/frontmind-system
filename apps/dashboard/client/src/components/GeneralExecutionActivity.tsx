@@ -165,13 +165,11 @@ function TurnActivity({
     <>
       {items.map((item) => {
         const summary =
-          item.id === summaryId ? (
+          item.id === summaryId && (active || calls.length > 0) ? (
             <ActivityLine key="commands" live={Boolean(active)}>
               {active
                 ? `${active.kind === "status" && active.status === "retrying" ? "正在重试…" : active.kind === "status" && active.status === "rescheduling" ? "正在恢复执行…" : active.kind === "status" && active.status === "thinking" && !calls.length ? "正在分析任务…" : "正在执行…"}${calls.length ? ` · ${callSummary(calls, true)}` : ""}`
-                : calls.length
-                  ? callSummary(calls, false)
-                  : "开始执行"}
+                : callSummary(calls, false)}
             </ActivityLine>
           ) : null;
         let detail: React.ReactNode = null;
@@ -197,8 +195,8 @@ function TurnActivity({
             </ActivityLine>
           );
         }
-        // Preserve the observed start row; empty analysis labels and terminal
-        // completion markers add no detail.
+        // Completed tool-free turns have no activity summary. Empty analysis
+        // labels and terminal completion markers add no detail.
         // Only real call records contribute to the count; a lone result cannot
         // manufacture an earlier invocation.
         return summary || detail ? (
@@ -229,7 +227,7 @@ export function GeneralExecutionActivity({
         thinkingText(item) ||
         isLive(item) ||
         item.kind === "tool" ||
-        ["running", "error", "cancelled"].includes(item.status) ||
+        ["error", "cancelled"].includes(item.status) ||
         (item.status === "waiting" && item.isCurrent !== false),
     )
   )

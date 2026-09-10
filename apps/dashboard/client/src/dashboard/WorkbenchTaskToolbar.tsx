@@ -21,7 +21,6 @@ export function WorkbenchTaskToolbar({
   onSelect,
   onDelete,
   disabled = false,
-  legacyTasks = [],
   presentation = "toolbar",
   loading = false,
   error,
@@ -36,7 +35,6 @@ export function WorkbenchTaskToolbar({
   onSelect: (id: string) => void;
   onDelete?: (id: string) => void;
   disabled?: boolean;
-  legacyTasks?: WorkbenchHistoryItem[];
   presentation?: "toolbar" | "sidebar" | "panel";
   showNew?: boolean;
   labels?: { newAction?: string; history?: string; noun?: string };
@@ -49,9 +47,8 @@ export function WorkbenchTaskToolbar({
   const historyLabel = labels?.history ?? "任务历史";
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [legacy, setLegacy] = useState(false);
   const list = useRef<HTMLDivElement>(null);
-  const shown = (legacy ? legacyTasks : tasks).filter((task) =>
+  const shown = tasks.filter((task) =>
     task.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
   const newTaskButton = (
@@ -63,7 +60,6 @@ export function WorkbenchTaskToolbar({
         requestWorkspaceNavigation(() => {
           onNew();
           setQuery("");
-          setLegacy(false);
           onNavigate?.();
         })
       }
@@ -76,11 +72,6 @@ export function WorkbenchTaskToolbar({
     <>
       <div className="workbench-conversation__history-heading">
         <span>{historyLabel}</span>
-        {legacyTasks.length > 0 && (
-          <button type="button" onClick={() => setLegacy((value) => !value)}>
-            {legacy ? "当前智能体" : "旧任务"}
-          </button>
-        )}
       </div>
       <label className="workbench-history-search">
         <Search size={15} />

@@ -14,6 +14,7 @@ import {
   currentKnowledgeBaseReplySnapshot,
   mergeKnowledgeBaseHydration,
   mergeDirtyConversationHydration,
+  reconcileGeneralChatMessages,
   mergeServerOwnedKnowledgeBaseMessages,
   parseOutputMessages,
   prepareConversationForCloud,
@@ -22,6 +23,7 @@ import {
   sanitizeKnowledgeBaseOutputMessages,
   useConversation,
   type Conversation,
+  type LocalMessage,
 } from "./ConversationContext";
 
 function ParentCapture({
@@ -313,6 +315,179 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <ConversationProvider>{children}</ConversationProvider>;
 }
 
+function anchoredAssistant(
+  turn: number,
+  taskId = "task-1",
+  eventId = "event",
+): LocalMessage {
+  return {
+    id: `${taskId}:turn-${turn}:${eventId}`,
+    role: "assistant",
+    content: `轮次 ${turn}`,
+    timestamp: 1000 - turn,
+    serverSequence: 100 + turn,
+    generalChat: {
+      schemaVersion: 1,
+      kind: "assistant_projection",
+      serverOwned: true,
+      agentTaskId: taskId,
+      turnId: `turn-${turn}`,
+      providerEventId: eventId,
+      userMessageId: `user-${turn}`,
+      userSequence: turn,
+      rank: 0,
+    },
+  };
+}
+
+describe("general-chat projection reconciliation", () => {
+  const users: LocalMessage[] = [1, 2, 3].map((turn) => ({
+    id: `user-${turn}`,
+    role: "user",
+    content: `请求 ${turn}`,
+    timestamp: turn,
+    serverSequence: turn,
+  }));
+  const taskScope = { kind: "task", agentTaskId: "task-1" } as const;
+
+  it("returns a late welcome to its original user instead of appending it after a PDF request", () => {
+    const welcome = anchoredAssistant(1);
+    const pending = {
+      ...users[2]!,
+      attachments: [
+        {
+          id: "pdf",
+          name: "资料.pdf",
+          type: "file" as const,
+          fileId: "asset_pdf",
+        },
+      ],
+    };
+    const local = [users[0]!, welcome, users[1]!, pending];
+    const result = reconcileGeneralChatMessages(
+      local,
+      [anchoredAssistant(2), { ...welcome, timestamp: 9999 }],
+      taskScope,
+    );
+    expect(result.map((message) => message.id)).toEqual([
+      "user-1",
+      welcome.id,
+      "user-2",
+      anchoredAssistant(2).id,
+      "user-3",
+    ]);
+    expect(result[1]).toBe(welcome);
+    expect(result[4]).toBe(pending);
+    expect(result[4]!.attachments).toBe(pending.attachments);
+  });
+
+  it("scopes same event IDs to their task and turn and withdraws only the declared range", () => {
+    const first = anchoredAssistant(1);
+    const second = anchoredAssistant(2);
+    const otherTask = anchoredAssistant(1, "task-2");
+    const local = [users[0]!, first, otherTask, users[1]!, second, users[2]!];
+    expect(reconcileGeneralChatMessages(local, [])).toEqual(local);
+    const partial = reconcileGeneralChatMessages(local, [], {
+      kind: "turns",
+      agentTaskId: "task-1",
+      turnIds: ["turn-2"],
+    });
+    expect(partial).toContain(first);
+    expect(partial).toContain(otherTask);
+    expect(partial).not.toContain(second);
+    const empty = reconcileGeneralChatMessages(local, [], taskScope);
+    expect(empty).toEqual([users[0], otherTask, users[1], users[2]]);
+  });
+
+  it("replaces same-length content and preserves unchanged event references across repeated snapshots", () => {
+    const first = anchoredAssistant(1);
+    const second = anchoredAssistant(2);
+    const local = [users[0]!, first, users[1]!, second];
+    const result = reconcileGeneralChatMessages(
+      local,
+      [
+        { ...second, id: "unstable-id", timestamp: 99999 },
+        { ...first, content: "修订后的第一轮", timestamp: 99999 },
+      ],
+      taskScope,
+    );
+    expect(result[1]).toMatchObject({
+      id: first.id,
+      timestamp: first.timestamp,
+      content: "修订后的第一轮",
+    });
+    expect(result[3]).toBe(second);
+    const repeated = reconcileGeneralChatMessages(
+      result,
+      [result[3]!, result[1]!],
+      taskScope,
+    );
+    expect(repeated.every((message, index) => message === result[index])).toBe(
+      true,
+    );
+  });
+
+  it("collapses an already duplicated canonical event without collapsing a same-ID event from another task", () => {
+    const first = anchoredAssistant(1);
+    const duplicate = { ...first, id: "legacy-disambiguated-copy" };
+    const otherTask = anchoredAssistant(1, "task-2");
+    const repaired = reconcileGeneralChatMessages([users[0]!, first, users[1]!, duplicate], [first], taskScope);
+    expect(repaired).toEqual([users[0], first, users[1]]);
+    const legacy = { id: "raw", role: "assistant" as const, content: "旧投影", timestamp: 2, upstreamOutputId: "reused-event" };
+    const upgraded = reconcileGeneralChatMessages([users[0]!, legacy], [
+      { ...first, upstreamOutputId: "reused-event" },
+      { ...otherTask, upstreamOutputId: "reused-event" },
+    ], { kind: "conversation" });
+    expect(upgraded.filter((message) => message.generalChat).map((message) => message.generalChat!.agentTaskId))
+      .toEqual(["task-1", "task-2"]);
+  });
+
+  it("hydrates all historical anchors while retaining an unsent user and its local attachment bytes", () => {
+    const first = anchoredAssistant(1);
+    const pending: LocalMessage = {
+      ...users[2]!,
+      serverSequence: undefined,
+      attachments: [
+        {
+          id: "local-pdf",
+          type: "file",
+          name: "资料.pdf",
+          fileId: "asset_pdf",
+          blobUrl: "blob:pdf",
+        },
+      ],
+      generalChatDispatch: {
+        schemaVersion: 1,
+        kind: "pending_user",
+        clientRequestId: "user-3",
+        providerPrompt: "资料",
+        localAssetIds: ["asset_pdf"],
+        localTaskId: "task-1",
+        modelProfile: null,
+      },
+    };
+    const local: Conversation = {
+      ...conversation("hydration"),
+      executionKind: "general_chat_v2",
+      messages: [pending, first],
+    };
+    const remote: Conversation = {
+      ...local,
+      messages: [users[0]!, users[1]!, { ...first }, anchoredAssistant(2)],
+    };
+    const result = mergeDirtyConversationHydration(local, remote);
+    expect(result.messages.map((message) => message.id)).toEqual([
+      "user-1",
+      first.id,
+      "user-2",
+      anchoredAssistant(2).id,
+      "user-3",
+    ]);
+    expect(result.messages.at(-1)).toBe(pending);
+    expect(result.messages[1]).toBe(first);
+  });
+});
+
 describe("knowledge-base reply snapshots", () => {
   it("returns all reply coordinates from one rendered presentation", () => {
     const value: Conversation = {
@@ -543,8 +718,102 @@ describe("knowledge-base reply snapshots", () => {
 
 let workspaceFixture = 0;
 describe("ConversationProvider cloud hydration", () => {
+  it.each(["execution", "terminal"] as const)(
+    "preserves a newer %s observation when an earlier list read returns unchanged messages",
+    async (mode) => {
+      const seed: Conversation = {
+        ...conversation(`read-${mode}-race`),
+        executionKind: "general_chat_v2",
+        taskId: "task-1",
+        status: "running",
+        startedAt: 1,
+        messages: [{ id: "user-1", role: "user", content: "读取 PDF", timestamp: 1, serverSequence: 0 }],
+        execution: { schemaVersion: 1, taskId: "task-1", coverage: "complete", timeline: [] },
+      };
+      mocks.listRefetch.mockResolvedValueOnce({ data: [seed] });
+      const { result } = renderHook(() => useConversation(), { wrapper });
+      await waitFor(() => expect(result.current.hydrated).toBe(true));
+      let resolveRead!: (value: { data: Conversation[] }) => void;
+      mocks.listRefetch.mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+      let pendingRead!: Promise<void>;
+      act(() => { pendingRead = result.current.refreshConversations(); });
+      await waitFor(() => expect(resolveRead).toBeTypeOf("function"));
+      const execution: NonNullable<Conversation["execution"]> = {
+        ...seed.execution!,
+        timeline: [{ id: "observed-phase", turnId: "turn-1", userSequence: 0, timestamp: 100, rank: 1, kind: "status", status: mode === "terminal" ? "ended" : "running" }],
+      };
+      act(() => result.current.updateStatus(seed.id, mode === "terminal" ? "completed" : "running", {
+        execution,
+        ...(mode === "terminal" ? { completedAt: 100 } : {}),
+      }));
+      await act(async () => { resolveRead({ data: [seed] }); await pendingRead; });
+      const current = result.current.state.conversations.find((item) => item.id === seed.id)!;
+      expect(current.execution).toEqual(execution);
+      expect(current.status).toBe(mode === "terminal" ? "completed" : "running");
+      if (mode === "terminal") expect(current.completedAt).toBe(100);
+    },
+  );
+
+  it("does not let an earlier cloud read rewind or resurrect a newer task projection", async () => {
+    const first = anchoredAssistant(1);
+    const seed: Conversation = {
+      ...conversation("read-poll-race"),
+      executionKind: "general_chat_v2",
+      taskId: "task-1",
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: "开始",
+          timestamp: 1,
+          serverSequence: 1,
+        },
+        first,
+      ],
+    };
+    mocks.listRefetch.mockResolvedValueOnce({ data: [seed] });
+    const { result } = renderHook(() => useConversation(), { wrapper });
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    for (const next of [
+      [{ ...first, content: "轮询修订" }],
+      [],
+    ] as LocalMessage[][]) {
+      let resolveRead!: (value: { data: Conversation[] }) => void;
+      mocks.listRefetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRead = resolve;
+          }),
+      );
+      let pendingRead!: Promise<void>;
+      act(() => {
+        pendingRead = result.current.refreshConversations();
+      });
+      await waitFor(() => expect(resolveRead).toBeTypeOf("function"));
+      act(() => {
+        result.current.updateAssistantMessages(seed.id, next, {
+          kind: "task",
+          agentTaskId: "task-1",
+        });
+      });
+      await act(async () => {
+        resolveRead({ data: [seed] });
+        await pendingRead;
+      });
+      expect(
+        result.current.state.conversations[0]!.messages.filter(
+          (message) => message.generalChat,
+        ).map((message) => message.content),
+      ).toEqual(next.map((message) => message.content));
+    }
+  });
+
   beforeEach(() => {
-    window.history.replaceState(null, "", `/?enterpriseProjectId=fixture-${++workspaceFixture}`);
+    window.history.replaceState(
+      null,
+      "",
+      `/?enterpriseProjectId=fixture-${++workspaceFixture}`,
+    );
     vi.clearAllMocks();
     mocks.auth.user = { id: 1 };
     mocks.auth.loading = false;
@@ -942,17 +1211,45 @@ describe("ConversationProvider cloud hydration", () => {
     const projectA = window.location.href;
     const file = new File(["draft"], "draft.txt", { type: "text/plain" });
     const revoke = vi.fn();
-    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revoke,
+    });
     let rejectOld!: (error: Error) => void;
-    mocks.syncSnapshot.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+    mocks.syncSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOld = reject;
+        }),
+    );
     const first = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(first.result.current.hydrated).toBe(true));
-    act(() => first.result.current.addMessage("account-1", { id: "draft-message", role: "user", content: "尚未保存的消息", timestamp: Date.now(), attachments: [{ id: "draft-file", type: "file", name: "draft.txt", file, blobUrl: "blob:scope-draft" }] }));
+    act(() =>
+      first.result.current.addMessage("account-1", {
+        id: "draft-message",
+        role: "user",
+        content: "尚未保存的消息",
+        timestamp: Date.now(),
+        attachments: [
+          {
+            id: "draft-file",
+            type: "file",
+            name: "draft.txt",
+            file,
+            blobUrl: "blob:scope-draft",
+          },
+        ],
+      }),
+    );
     await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalledTimes(1));
     first.unmount();
     expect(revoke).not.toHaveBeenCalledWith("blob:scope-draft");
 
-    window.history.replaceState(null, "", "/?enterpriseProjectId=isolated-project-b");
+    window.history.replaceState(
+      null,
+      "",
+      "/?enterpriseProjectId=isolated-project-b",
+    );
     const second = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(second.result.current.hydrated).toBe(true));
     expect(second.result.current.state.conversations[0].messages).toEqual([]);
@@ -966,10 +1263,15 @@ describe("ConversationProvider cloud hydration", () => {
     await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
     const message = restored.result.current.state.conversations[0].messages[0];
     expect(message.content).toBe("尚未保存的消息");
-    expect(message.attachments?.[0]).toMatchObject({ file, blobUrl: "blob:scope-draft" });
+    expect(message.attachments?.[0]).toMatchObject({
+      file,
+      blobUrl: "blob:scope-draft",
+    });
     expect(restored.result.current.syncError).toBeNull();
     await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2));
-    expect(mocks.syncSnapshot.mock.calls[1][0].conversation.messages[0].content).toBe("尚未保存的消息");
+    expect(
+      mocks.syncSnapshot.mock.calls[1][0].conversation.messages[0].content,
+    ).toBe("尚未保存的消息");
     restored.unmount();
     expect(revoke).toHaveBeenCalledWith("blob:scope-draft");
   });
@@ -982,7 +1284,9 @@ describe("ConversationProvider cloud hydration", () => {
     mocks.auth.user = { id: 2 };
     const other = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(other.result.current.hydrated).toBe(true));
-    expect(other.result.current.state.conversations.map(row => row.id)).toEqual(["account-1"]);
+    expect(
+      other.result.current.state.conversations.map((row) => row.id),
+    ).toEqual(["account-1"]);
     expect(mocks.deleteConversation).not.toHaveBeenCalled();
     other.unmount();
     mocks.auth.user = { id: 1 };
@@ -999,9 +1303,11 @@ describe("ConversationProvider cloud hydration", () => {
     act(() => first.result.current.deleteConversation("account-1"));
     first.unmount();
     mocks.listRefetch.mockResolvedValue({ data: [] });
-    mocks.deleteConversation.mockRejectedValueOnce(Object.assign(new Error("会话不存在"), {
-      data: { code: "NOT_FOUND" },
-    }));
+    mocks.deleteConversation.mockRejectedValueOnce(
+      Object.assign(new Error("会话不存在"), {
+        data: { code: "NOT_FOUND" },
+      }),
+    );
     const restored = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
     expect(mocks.deleteConversation).toHaveBeenCalledTimes(1);
@@ -1015,26 +1321,38 @@ describe("ConversationProvider cloud hydration", () => {
     const file = new File(["draft"], "draft.txt", { type: "text/plain" });
     const first = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(first.result.current.hydrated).toBe(true));
-    act(() => first.result.current.addMessage("account-1", {
-      id: "unsaved-message",
-      role: "user",
-      content: "恢复失败仍需保留",
-      timestamp: Date.now(),
-      attachments: [{ id: "unsaved-file", type: "file", name: "draft.txt", file }],
-    }));
+    act(() =>
+      first.result.current.addMessage("account-1", {
+        id: "unsaved-message",
+        role: "user",
+        content: "恢复失败仍需保留",
+        timestamp: Date.now(),
+        attachments: [
+          { id: "unsaved-file", type: "file", name: "draft.txt", file },
+        ],
+      }),
+    );
     first.unmount();
-    mocks.syncSnapshot.mockRejectedValueOnce(Object.assign(new Error("保存被拒绝"), {
-      data: { code: "FORBIDDEN" },
-    }));
+    mocks.syncSnapshot.mockRejectedValueOnce(
+      Object.assign(new Error("保存被拒绝"), {
+        data: { code: "FORBIDDEN" },
+      }),
+    );
     const restored = renderHook(() => useConversation(), { wrapper });
-    await waitFor(() => expect(restored.result.current.syncError).toContain("消息和附件已保留"));
-    expect(restored.result.current.activeConversation?.messages[0]).toMatchObject({
+    await waitFor(() =>
+      expect(restored.result.current.syncError).toContain("消息和附件已保留"),
+    );
+    expect(
+      restored.result.current.activeConversation?.messages[0],
+    ).toMatchObject({
       id: "unsaved-message",
       content: "恢复失败仍需保留",
       attachments: [{ file }],
     });
     await act(async () => {
-      expect(await restored.result.current.flushConversation("account-1")).toBe(true);
+      expect(await restored.result.current.flushConversation("account-1")).toBe(
+        true,
+      );
     });
     expect(restored.result.current.syncError).toBeNull();
     expect(mocks.syncSnapshot).toHaveBeenCalledTimes(2);
@@ -1043,26 +1361,32 @@ describe("ConversationProvider cloud hydration", () => {
   it("does not turn a server-owned knowledge-base observation into an unsaved snapshot on navigation", async () => {
     const first = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(first.result.current.hydrated).toBe(true));
-    act(() => first.result.current.commitKnowledgeBaseObservation("account-1", {
-      generation: 1,
-      stateEpoch: 1,
-      authoritativeTaskId: "knowledge-task",
-      activeTurn: null,
-      completedTurn: null,
-      approvedPresentation: null,
-      progress: null,
-      notice: null,
-      interaction: {
-        interactionState: "executing",
-        canReply: false,
-        canPublish: false,
-        lockReason: "任务仍在执行",
+    act(() =>
+      first.result.current.commitKnowledgeBaseObservation("account-1", {
+        generation: 1,
+        stateEpoch: 1,
+        authoritativeTaskId: "knowledge-task",
+        activeTurn: null,
+        completedTurn: null,
+        approvedPresentation: null,
         progress: null,
-      },
-    } as any));
-    expect(first.result.current.activeConversation?.taskId).toBe("knowledge-task");
+        notice: null,
+        interaction: {
+          interactionState: "executing",
+          canReply: false,
+          canPublish: false,
+          lockReason: "任务仍在执行",
+          progress: null,
+        },
+      } as any),
+    );
+    expect(first.result.current.activeConversation?.taskId).toBe(
+      "knowledge-task",
+    );
     await act(async () => {
-      expect(await first.result.current.flushConversation("account-1")).toBe(true);
+      expect(await first.result.current.flushConversation("account-1")).toBe(
+        true,
+      );
     });
     expect(mocks.syncSnapshot).not.toHaveBeenCalled();
     first.unmount();
@@ -1077,17 +1401,30 @@ describe("ConversationProvider cloud hydration", () => {
     const first = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(first.result.current.hydrated).toBe(true));
     let id!: string;
-    act(() => { id = first.result.current.createConversation({ title: "内容草稿", purpose: "content_production" }); });
+    act(() => {
+      id = first.result.current.createConversation({
+        title: "内容草稿",
+        purpose: "content_production",
+      });
+    });
     first.unmount();
     window.history.replaceState(null, "", "/agent");
     const account = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(account.result.current.hydrated).toBe(true));
-    expect(account.result.current.state.conversations.some(row => row.id === id)).toBe(false);
+    expect(
+      account.result.current.state.conversations.some((row) => row.id === id),
+    ).toBe(false);
     account.unmount();
     window.history.replaceState(null, "", projectA);
     const restored = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(restored.result.current.hydrated).toBe(true));
-    expect(restored.result.current.state.conversations.find(row => row.id === id)).toMatchObject({ title: "内容草稿", purpose: "content_production", messages: [] });
+    expect(
+      restored.result.current.state.conversations.find((row) => row.id === id),
+    ).toMatchObject({
+      title: "内容草稿",
+      purpose: "content_production",
+      messages: [],
+    });
     expect(restored.result.current.activeConversation?.id).toBe(id);
     expect(mocks.syncSnapshot).not.toHaveBeenCalled();
     await act(async () => { await restored.result.current.refreshConversations(); });
@@ -1191,7 +1528,11 @@ describe("ConversationProvider cloud hydration", () => {
       data: [generalOne, generalTwo, knowledgeBase],
     });
     let parentApi!: ReturnType<typeof useConversation>;
-    const wrapperWithCapture = ({ children }: { children: React.ReactNode }) => (
+    const wrapperWithCapture = ({
+      children,
+    }: {
+      children: React.ReactNode;
+    }) => (
       <ConversationProvider>
         <ParentCapture onReady={(value) => (parentApi = value)}>
           <ConversationPurposeProvider purpose="general">
@@ -1257,7 +1598,12 @@ describe("ConversationProvider cloud hydration", () => {
     const source = {
       ...conversation("account-1"),
       messages: [
-        { id: "stale-message", role: "assistant" as const, content: "旧消息", timestamp: 1 },
+        {
+          id: "stale-message",
+          role: "assistant" as const,
+          content: "旧消息",
+          timestamp: 1,
+        },
       ],
     };
     mocks.listRefetch.mockResolvedValue({ data: [source] });
@@ -1278,7 +1624,9 @@ describe("ConversationProvider cloud hydration", () => {
     expect(current.deletedMessageIds).toContain("stale-message");
     expect(restored.result.current.syncError).toBeNull();
     await waitFor(() => expect(mocks.syncSnapshot).toHaveBeenCalled());
-    expect(mocks.syncSnapshot.mock.calls.at(-1)?.[0].conversation).toMatchObject({
+    expect(
+      mocks.syncSnapshot.mock.calls.at(-1)?.[0].conversation,
+    ).toMatchObject({
       messages: [],
       deletedMessageIds: ["stale-message"],
     });
@@ -1308,7 +1656,9 @@ describe("ConversationProvider cloud hydration", () => {
   });
 
   it("recovers a transient initial read without showing a sync failure", async () => {
-    mocks.listRefetch.mockResolvedValueOnce({ error: new TypeError("Failed to fetch") });
+    mocks.listRefetch.mockResolvedValueOnce({
+      error: new TypeError("Failed to fetch"),
+    });
     const { result } = renderHook(() => useConversation(), { wrapper });
     expect(result.current.loading).toBe(true);
     expect(result.current.syncError).toBeNull();
@@ -1319,9 +1669,11 @@ describe("ConversationProvider cloud hydration", () => {
   });
 
   it("does not retry access failures or continue a read retry after leaving the workspace", async () => {
-    mocks.listRefetch.mockResolvedValueOnce({ error: Object.assign(new Error("forbidden"), {
-      data: { code: "FORBIDDEN" },
-    }) });
+    mocks.listRefetch.mockResolvedValueOnce({
+      error: Object.assign(new Error("forbidden"), {
+        data: { code: "FORBIDDEN" },
+      }),
+    });
     const denied = renderHook(() => useConversation(), { wrapper });
     await waitFor(() => expect(denied.result.current.loading).toBe(false));
     expect(denied.result.current.syncError).toContain("消息和附件已保留");
@@ -1799,6 +2151,7 @@ describe("ConversationProvider cloud hydration", () => {
         },
         {
           id: "settled-user",
+          serverSequence: 1,
           role: "user",
           content: "已确认的普通消息",
           timestamp: 90,
@@ -1891,7 +2244,11 @@ describe("ConversationProvider cloud hydration", () => {
     mocks.syncSnapshot.mockClear();
 
     act(() => {
-      result.current.updateAssistantMessages("projection-recovery", []);
+      result.current.updateAssistantMessages("projection-recovery", [], {
+        kind: "turns",
+        agentTaskId: "task-1",
+        turnIds: ["turn-1"],
+      });
     });
     expect(
       result.current.state.conversations
@@ -1911,7 +2268,7 @@ describe("ConversationProvider cloud hydration", () => {
       result.current.state.conversations
         .find((item) => item.id === "projection-recovery")
         ?.messages.map((message) => message.id),
-    ).toEqual(["user-1", "projection-1", terminalId]);
+    ).toEqual(["user-1", terminalId, "projection-1"]);
     expect(mocks.syncSnapshot).not.toHaveBeenCalled();
   });
 

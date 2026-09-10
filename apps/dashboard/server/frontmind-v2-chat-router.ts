@@ -1,5 +1,6 @@
 import { lockCustomerProjectBusinessWrite } from "./customer-project-write-access";
 import { loadGeneralExecutions } from "./frontmind-general-execution";
+import { orderGeneralChatMessages } from "../shared/general-chat-message-order";
 import { generalExecutionActivity } from "../shared/frontmind-general-execution";
 import { enterpriseConversationStoragePrefix } from "./enterprise-conversation-storage";
 import { aiBillingHttpFailure, sendAiBillingError } from "./ai-billing-http";
@@ -1083,7 +1084,7 @@ function logGeneralChatAssistantProjection(input: {
   });
 }
 
-async function persistAssistantProjection(input: {
+export async function persistAssistantProjection(input: {
   executor: any;
   operation: AgentOperation;
   task: AgentTask;
@@ -1091,6 +1092,7 @@ async function persistAssistantProjection(input: {
   turn: GeneralChatProjectionTurn;
   upstreamOutputId: string;
   text: string;
+  rank?: number;
   localized: Array<{
     artifactId: string;
     filename: string;
@@ -1134,6 +1136,13 @@ async function persistAssistantProjection(input: {
       turnId: input.turn.id,
       agentTaskId: input.task.id,
       providerEventId: input.event.id,
+      ...(typeof input.turn.metadata.userMessageId === "string"
+        ? { userMessageId: input.turn.metadata.userMessageId }
+        : {}),
+      userSequence: input.turn.messageSequence,
+      ...(Number.isSafeInteger(input.rank ?? input.event.providerOriginalRank)
+        ? { rank: input.rank ?? input.event.providerOriginalRank }
+        : {}),
       serverOwned: true,
     },
   };
@@ -1782,6 +1791,7 @@ async function applyProviderProjectionSnapshot(input: {
         turn: staged.projectionTurn,
         upstreamOutputId: persistedEventId,
         text: staged.canonicalText,
+        rank: Number(staged.normalizedPayload.providerOriginalRank),
         localized: staged.localized,
       });
     }
@@ -2166,19 +2176,30 @@ async function persistProviderEvents(input: {
   return { ...eventTurnState, applied, claimReason: projectionClaim.reason };
 }
 
-async function cachedOutput(taskId: string) {
-  const db = await requireDb();
-  const turnIds = (
-    await db
-      .select({ id: conversationTurns.id })
+export async function cachedOutput(taskId: string, executor?: Awaited<ReturnType<typeof requireDb>>) {
+  const db = executor ?? await requireDb();
+  const turns = await db
+      .select({
+        id: conversationTurns.id,
+        userMessageId: messages.id,
+        userSequence: messages.sequence,
+        metadata: conversationTurns.metadata,
+        conversationId: conversationTurns.conversationId,
+      })
       .from(conversationTurns)
+      .leftJoin(messages, and(
+        eq(messages.turnId, conversationTurns.id),
+        eq(messages.conversationId, conversationTurns.conversationId),
+        eq(messages.role, "user"),
+      ))
       .where(
         and(
           eq(conversationTurns.operationType, GENERAL_CHAT_TURN_TYPE),
           eq(conversationTurns.upstreamTaskId, taskId),
         ),
-      )
-  ).map(({ id }) => id);
+      );
+  const turnIds = turns.map(({ id }) => id);
+  const turnsById = new Map(turns.map((turn) => [turn.id, turn]));
   const [rows, projectedMessages] = await Promise.all([
     db
       .select()
@@ -2204,6 +2225,7 @@ async function cachedOutput(taskId: string) {
           .orderBy(messages.sequence)
       : Promise.resolve([]),
   ]);
+  const eventsById = new Map(rows.map((row) => [row.id, row]));
   const visibleEventProjections = new Map<
     string,
     {
@@ -2211,7 +2233,14 @@ async function cachedOutput(taskId: string) {
       messageId: string;
       sentAtMs: number;
       sequence: number;
-      generalChat: Record<string, unknown>;
+      generalChat: {
+        agentTaskId: string;
+        turnId: string;
+        providerEventId: string;
+        userMessageId?: string;
+        userSequence?: number;
+        rank?: number;
+      } & Record<string, unknown>;
     }
   >();
   for (const { content, metadata, sequence, sentAt } of projectedMessages) {
@@ -2225,9 +2254,20 @@ async function cachedOutput(taskId: string) {
       generalChat?.serverOwned === true &&
       generalChat.kind === "assistant_projection" &&
       generalChat.agentTaskId === taskId &&
+      typeof generalChat.turnId === "string" &&
       typeof generalChat.providerEventId === "string" &&
       typeof metadata?.upstreamOutputId === "string"
     ) {
+      const turn = turnsById.get(generalChat.turnId);
+      const prefix = turn?.conversationId.slice(0, turn.conversationId.indexOf(":") + 1);
+      const userMessageId = turn && typeof turn.metadata?.userMessageId === "string"
+        ? turn.metadata.userMessageId
+        : prefix && turn?.userMessageId?.startsWith(prefix)
+          ? turn.userMessageId.slice(prefix.length)
+          : turn?.userMessageId;
+      const event = eventsById.get(metadata.upstreamOutputId);
+      const rank = event?.normalizedPayload?.providerOriginalRank;
+      const { userMessageId: _oldUser, userSequence: _oldSequence, rank: _oldRank, ...identity } = generalChat;
       visibleEventProjections.set(metadata.upstreamOutputId, {
         content,
         messageId: generalChatAssistantPublicMessageId({
@@ -2236,21 +2276,34 @@ async function cachedOutput(taskId: string) {
         }),
         sentAtMs: sentAt.getTime(),
         sequence,
-        generalChat,
+        generalChat: {
+          ...identity,
+          agentTaskId: taskId,
+          turnId: generalChat.turnId,
+          providerEventId: generalChat.providerEventId,
+          ...(userMessageId ? { userMessageId } : {}),
+          ...(turn?.userSequence != null ? { userSequence: turn.userSequence } : {}),
+          ...(Number.isSafeInteger(rank) && Number(rank) >= 0 ? { rank: Number(rank) } : {}),
+        },
       });
     }
   }
-  // Provider timestamps can collide. Durable conversation sequence is
-  // assigned while walking Provider rank, so it is the authoritative DTO
-  // order and remains stable when the same projection ID is restored.
-  const visibleRows = rows
+  // A previously deleted/reinserted historical projection may have a late
+  // storage sequence. Turn ownership restores its place without rewriting data.
+  const visibleRows = orderGeneralChatMessages(rows
     .filter((row) => visibleEventProjections.has(row.id))
-    .sort(
-      (left, right) =>
-        visibleEventProjections.get(left.id)!.sequence -
-          visibleEventProjections.get(right.id)!.sequence ||
-        left.id.localeCompare(right.id),
-    );
+    // Preserve the existing history position when a legacy turn has no user
+    // anchor; provider timestamps alone must not reshuffle those rows.
+    .sort((left, right) =>
+      visibleEventProjections.get(left.id)!.sequence -
+      visibleEventProjections.get(right.id)!.sequence,
+    )
+    .map((row) => ({
+      ...row,
+      role: "assistant",
+      serverSequence: visibleEventProjections.get(row.id)!.sequence,
+      generalChat: visibleEventProjections.get(row.id)!.generalChat,
+    })));
   return visibleRows.flatMap((row) => {
     const payload = row.normalizedPayload ?? {};
     if (payload.kind !== "provider_event") {

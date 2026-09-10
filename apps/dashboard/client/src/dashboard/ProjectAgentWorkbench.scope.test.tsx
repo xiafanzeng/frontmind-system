@@ -139,7 +139,7 @@ describe("workbench task scopes", () => {
       ).getByLabelText("编辑器任务"),
     ).toBeInTheDocument();
   });
-  it("keeps unclassified conversations in the general legacy history entry", () => {
+  it("includes unclassified conversations directly in the unified general history", () => {
     function GeneralWithSidebar() {
       const [target, setTarget] = useState<HTMLDivElement | null>(null);
       return (
@@ -161,7 +161,8 @@ describe("workbench task scopes", () => {
     );
     const sidebar = screen.getByRole("complementary", { name: "任务辅助区" });
     expect(screen.queryByRole("button", { name: "历史" })).toBeNull();
-    fireEvent.click(within(sidebar).getByRole("button", { name: "旧任务" }));
+    expect(within(sidebar).queryByRole("button", { name: "旧任务" })).toBeNull();
+    expect(within(sidebar).queryByRole("button", { name: "当前智能体" })).toBeNull();
     const history = within(sidebar).getByRole("listbox", { name: "任务历史" });
     expect(within(history).getAllByRole("option")).toHaveLength(1);
     expect(history).toHaveTextContent("general");

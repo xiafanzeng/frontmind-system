@@ -1,4 +1,5 @@
 import { loadGeneralExecutions } from "./frontmind-general-execution";
+import { orderGeneralChatMessages } from "../shared/general-chat-message-order";
 import {
   bindWorkbenchTask,
   saveWorkbenchTask,
@@ -114,6 +115,9 @@ const generalChatMessageSchema = z.object({
   turnId: z.string().uuid(),
   agentTaskId: z.string().uuid(),
   providerEventId: z.string().min(1).max(512),
+  userMessageId: z.string().min(1).max(128).optional(),
+  userSequence: z.number().int().nonnegative().optional(),
+  rank: z.number().int().nonnegative().optional(),
   serverOwned: z.literal(true),
 });
 
@@ -1746,6 +1750,7 @@ async function authoritativeGeneralChatMetadataForMessages(
   executor: any,
   userId: number,
   messageRows: Array<typeof messages.$inferSelect>,
+  projectAssignmentId: string | null = null,
 ) {
   const candidates = messageRows.flatMap((message) => {
     const generalChat = parsedGeneralChatMessageMetadata(message.metadata);
@@ -1811,6 +1816,7 @@ async function authoritativeGeneralChatMetadataForMessages(
     .select({
       taskId: agentEvents.taskId,
       providerEventId: agentEvents.providerEventId,
+      normalizedPayload: agentEvents.normalizedPayload,
     })
     .from(agentEvents)
     .where(
@@ -1834,6 +1840,15 @@ async function authoritativeGeneralChatMetadataForMessages(
       (row: { taskId: string; providerEventId: string }) =>
         `${row.taskId}\u0000${row.providerEventId}`,
     ),
+  );
+  const eventsByKey = new Map<string, { normalizedPayload?: unknown }>(
+    eventRows.map((row: { taskId: string; providerEventId: string; normalizedPayload?: unknown }) =>
+      [`${row.taskId}\u0000${row.providerEventId}`, row],
+    ),
+  );
+  const usersByTurn = new Map(
+    messageRows.filter((row) => row.role === "user" && row.turnId)
+      .map((row) => [row.turnId!, row]),
   );
 
   for (const { message, generalChat } of candidates) {
@@ -1885,7 +1900,24 @@ async function authoritativeGeneralChatMetadataForMessages(
         `${generalChat.agentTaskId}\u0000${generalChat.providerEventId}`,
       )
     ) {
-      verified.set(message.id, generalChat);
+      const anchor = usersByTurn.get(message.turnId!);
+      const payload = plainRecord(eventsByKey.get(
+        `${generalChat.agentTaskId}\u0000${generalChat.providerEventId}`,
+      )?.normalizedPayload);
+      const rank = payload?.providerOriginalRank;
+      // Repair read order from durable turn ownership, including rows created
+      // before anchor fields existed. Browser echoes are never authority here.
+      const { userMessageId: _oldUser, userSequence: _oldSequence, rank: _oldRank, ...identity } = generalChat;
+      verified.set(message.id, {
+        ...identity,
+        ...(anchor ? {
+          userMessageId: publicId(userId, anchor.id, projectAssignmentId),
+          userSequence: anchor.sequence,
+        } : typeof turnMetadata?.userMessageId === "string" ? {
+          userMessageId: turnMetadata.userMessageId,
+        } : {}),
+        ...(Number.isSafeInteger(rank) && Number(rank) >= 0 ? { rank: Number(rank) } : {}),
+      });
     }
   }
   return verified;
@@ -2027,6 +2059,7 @@ export async function loadPersistedMessages(
       executor,
       userId,
       messageRows,
+      projectAssignmentId,
     );
   const retentionByFileId = await attachmentRetentionByFileId(
     executor,
@@ -2044,7 +2077,7 @@ export async function loadPersistedMessages(
     projectAssignmentId,
   );
 
-  return messageRows
+  return orderGeneralChatMessages(messageRows
     .filter(
       (message: typeof messages.$inferSelect) =>
         !isWorkbenchStorageMessage(message),
@@ -2115,7 +2148,39 @@ export async function loadPersistedMessages(
         ...(generalChat ? { generalChat } : {}),
         ...(generalChatDispatch ? { generalChatDispatch } : {}),
       };
-    });
+    }));
+}
+
+/** Read while holding the conversation lock; hidden projections still own rows
+ * and sequence slots even though they are absent from a browser snapshot. */
+export async function loadSnapshotMessageRetention(
+  executor: any,
+  userId: number,
+  conversationId: string,
+  projectAssignmentId: string | null,
+) {
+  const rows: Array<typeof messages.$inferSelect> = await executor
+    .select()
+    .from(messages)
+    .where(and(
+      projectAssignmentId ? undefined : eq(messages.userId, userId),
+      eq(messages.conversationId, conversationId),
+    ));
+  const knowledge = await authoritativeKnowledgeBaseMetadataForMessages(
+    executor, userId, rows, projectAssignmentId,
+  );
+  const general = await authoritativeGeneralChatMetadataForMessages(
+    executor, userId, rows, projectAssignmentId,
+  );
+  return {
+    preservedServerOwnedMessageIds: rows.filter((row) =>
+      general.has(row.id) ||
+      persistedKnowledgeBaseMetadata(row, knowledge.verified)?.serverOwned === true,
+    ).map((row) => row.id),
+    persistedSequenceByPublicMessageId: new Map(rows
+      .filter((row) => Number.isSafeInteger(row.sequence) && row.sequence >= 0)
+      .map((row) => [publicId(userId, row.id, projectAssignmentId), row.sequence])),
+  };
 }
 
 type SnapshotMessage = ConversationSnapshot["messages"][number];
@@ -2892,18 +2957,15 @@ export async function persistSnapshot(
         previousResponseId: snapshot.previousResponseId,
         authority: generalChatTurnAuthority,
       });
-    for (const message of persistedMessages) {
-      if (
-        Number.isSafeInteger(message.serverSequence) &&
-        Number(message.serverSequence) >= 0
-      ) {
-        const sequence = Number(message.serverSequence);
-        persistedSequenceByPublicMessageId.set(message.id, sequence);
-      }
-    }
-    preservedServerOwnedMessageIds = persistedMessages
-      .filter(isServerOwnedMessage)
-      .map((message) => storageId(userId, message.id, projectAssignmentId));
+    const retained = await loadSnapshotMessageRetention(
+      executor, userId, persistedConversationId, projectAssignmentId,
+    );
+    for (const [id, sequence] of retained.persistedSequenceByPublicMessageId)
+      persistedSequenceByPublicMessageId.set(id, sequence);
+    preservedServerOwnedMessageIds = retained.preservedServerOwnedMessageIds;
+    const protectedPublicIds = new Set(preservedServerOwnedMessageIds.map(
+      (id) => publicId(userId, id, projectAssignmentId),
+    ));
     const deletedMessageIds =
       protectUnsettledGeneralChatBoundUserMessageTombstones(
         sanitizeKnowledgeBaseDeletionTombstones(
@@ -2915,7 +2977,7 @@ export async function persistSnapshot(
           ],
         ),
         generalChatTurnAuthority,
-      );
+      ).filter((id) => !protectedPublicIds.has(id));
     const taskPointers = await resolveTaskPointersForSnapshot(
       executor,
       userId,
@@ -3353,7 +3415,7 @@ export async function listSnapshots(
       projectAssignmentId,
     );
   const authoritativeGeneralChat =
-    await authoritativeGeneralChatMetadataForMessages(db, userId, messageRows);
+    await authoritativeGeneralChatMetadataForMessages(db, userId, messageRows, projectAssignmentId);
   const retentionByFileId = await attachmentRetentionByFileId(
     db,
     userId,
@@ -3501,7 +3563,7 @@ export async function listSnapshots(
         ? { executionKind: "general_chat_v2" as const }
         : {}),
     title: row.title,
-    messages: (messagesByConversation.get(row.id) ?? [])
+    messages: orderGeneralChatMessages((messagesByConversation.get(row.id) ?? [])
       .filter((message) => !isWorkbenchStorageMessage(message))
       .map((message) => {
         const metadata = (message.metadata ?? {}) as MessageMetadata;
@@ -3569,7 +3631,7 @@ export async function listSnapshots(
           ...(generalChat ? { generalChat } : {}),
           ...(generalChatDispatch ? { generalChatDispatch } : {}),
         };
-      }),
+      })),
     ...(row.upstreamTaskId ? { taskId: row.upstreamTaskId } : {}),
     ...(row.previousResponseId
       ? { previousResponseId: row.previousResponseId }

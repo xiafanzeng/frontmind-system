@@ -1827,12 +1827,14 @@ export default function ChatArea({
         : "本轮需要重置，请重置后重新上传资料。"
       : activeConversation.knowledgeBase?.notice?.message;
 
-  const welcome =
+  const generalConversation =
     operatorWorkspace &&
     standardWelcomeVariant === "simple" &&
     !syncKnowledgeBaseSnapshot &&
     !responseLogicContext &&
-    !purpose &&
+    !purpose;
+  const welcome =
+    generalConversation &&
     messages.length === 0 &&
     inlineSlots.initial.length === 0 &&
     status === "idle";
@@ -1954,7 +1956,11 @@ export default function ChatArea({
           {renderInlineBlocks(inlineSlots.initial)}
           <AnimatePresence initial={false}>
             {messages.map((msg) => (
-              <div key={msg.id} data-reading-anchor={msg.id}>
+              <div
+                key={msg.id}
+                data-reading-anchor={msg.id}
+                className={generalConversation && msg.role === "user" ? "general-chat-user-turn" : undefined}
+              >
                 {renderInlineBlocks(inlineSlots.before.get(msg.id))}
                 <GeneralExecutionActivity
                   items={executionSlots.before.get(msg.id)}
@@ -1987,6 +1993,9 @@ export default function ChatArea({
                         }
                   }
                 />
+                {generalConversation && msg.role === "user" && (
+                  <hr className="general-chat-user-divider" aria-hidden="true" />
+                )}
                 <GeneralExecutionActivity
                   items={executionSlots.after.get(msg.id)}
                   placement="after"

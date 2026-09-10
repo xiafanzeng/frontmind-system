@@ -189,29 +189,23 @@ describe("compact execution activity", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
-  it("preserves the same start row and height contract when a simple reply finishes without tools", () => {
+  it("removes the completed tool-free activity row and its empty container", () => {
     const view = render(
       <GeneralExecutionActivity
         placement="after"
         items={[phase("start", "running", { animate: true, isCurrent: true })]}
       />,
     );
-    const row = screen
-      .getByText("正在执行…")
-      .closest(".general-execution__line");
+    expect(screen.getByText("正在执行…")).toBeInTheDocument();
     view.rerender(
       <GeneralExecutionActivity
         placement="after"
         items={[phase("start", "running"), phase("end", "ended")]}
       />,
     );
-    expect(
-      screen.getByText("开始执行").closest(".general-execution__line"),
-    ).toBe(row);
+    expect(screen.queryByText("开始执行")).toBeNull();
     expect(screen.queryByText("本轮已结束")).toBeNull();
-    expect(
-      view.container.querySelectorAll(".general-execution__line"),
-    ).toHaveLength(1);
+    expect(view.container).toBeEmptyDOMElement();
   });
 });
 

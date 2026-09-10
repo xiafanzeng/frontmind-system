@@ -150,8 +150,39 @@ describe("useResumePolling ordinary-task boundary", () => {
     expect(mocks.updateStatus).toHaveBeenCalledWith("ordinary", "completed", {
       execution,
     });
-    expect(mocks.updateAssistantMessages).not.toHaveBeenCalled();
+    expect(mocks.updateAssistantMessages).toHaveBeenCalledWith("ordinary", [], {
+      kind: "task",
+      agentTaskId: "task-1",
+    });
     expect(toast.success).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("declares complete task scope for v2 polling and treats missing output as no projection update", async () => {
+    mocks.hydrated = true;
+    mocks.activeConversationId = "ordinary";
+    mocks.conversations[0] = {
+      ...mocks.conversations[0],
+      executionKind: "general_chat_v2",
+    };
+    mocks.retrieveTask
+      .mockResolvedValueOnce({ id: "task-1", status: "running" })
+      .mockResolvedValue({ id: "task-1", status: "running", output: [] });
+    const view = renderHook(() => useResumePolling());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mocks.updateAssistantMessages).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(mocks.projectTaskOutputMessages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ generalChat: true, output: [] }),
+    );
+    expect(mocks.updateAssistantMessages).toHaveBeenCalledWith("ordinary", [], {
+      kind: "task",
+      agentTaskId: "task-1",
+    });
     view.unmount();
   });
 

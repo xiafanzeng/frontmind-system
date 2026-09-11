@@ -111,12 +111,15 @@ describe("workbench task scopes", () => {
       "general,logic,qa,media-a,articles-a",
     );
     expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
-    fireEvent.click(screen.getByText("选媒工作记录", { selector: "summary" }));
-    const history = screen.getByRole("listbox", { name: "选媒工作记录" });
-    expect(within(history).getAllByRole("option")).toHaveLength(1);
-    expect(history).toHaveTextContent("media-a");
-    expect(history).not.toHaveTextContent("articles-a");
-    expect(history).not.toHaveTextContent("general");
+    // Resource workspaces no longer mount the auxiliary work-records panel;
+    // per-module records live in the business pages themselves.
+    expect(screen.queryByText("选媒工作记录")).toBeNull();
+    expect(
+      screen.queryByRole("listbox", { name: "选媒工作记录" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("complementary", { name: "任务辅助区" }),
+    ).toBeNull();
   });
   it("keeps QA source and main dialogue on the same native task", async () => {
     render(

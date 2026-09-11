@@ -31,6 +31,7 @@ import {
 } from "./BusinessWorkspaceContext";
 import { WorkbenchTaskToolbar } from "./WorkbenchTaskToolbar";
 import { businessPanelPolicy } from "./workbench-panel-policy";
+import { workbenchPresentationForAgent } from "./workbench-presentation";
 const Home = lazy(() => import("@/pages/Home"));
 function taskUrl(projectId: string, agentId: string, conversationId: string) {
   const path = operatorViewPath(agentId);
@@ -111,6 +112,8 @@ function ScopedWorkbench({
         : [],
     ) ?? [];
   const native = agentId === "general" || purpose === "enterprise_qa";
+  const resourcePresentation =
+    !native && workbenchPresentationForAgent(agentId) === "resource";
   const label =
     purpose === "enterprise_qa"
       ? "企业问答"
@@ -199,6 +202,11 @@ function ScopedWorkbench({
         {task.state?.records.filter(record => record.targetTask).map(record => <p key={record.id} data-reading-anchor={record.id}>
           <a href={taskUrl(projectId, record.targetTask!.agentId, record.targetTask!.conversationId)}>打开接续任务</a>
         </p>)}
+        {resourcePresentation && summary && (
+          <div className="workbench-resource-summary">
+            <BusinessWorkspaceInspector summary={summary} />
+          </div>
+        )}
         <ConversationContextProvider value={originalWorkspace}>
           {children}
         </ConversationContextProvider>
@@ -348,7 +356,7 @@ function ScopedWorkbench({
         title={label}
         taskTitle={task.task?.title ?? "新任务"}
         taskKey={task.taskId ?? "new"}
-        layout="workflow"
+        layout={resourcePresentation ? "workspace" : "workflow"}
         resultTitle={
           projectResource
             ? "项目词库"
@@ -365,7 +373,7 @@ function ScopedWorkbench({
               ? workbenchStatus(workspace.activeConversation.status)
               : undefined
         }
-        auxiliary={panelContents}
+        auxiliary={resourcePresentation ? undefined : panelContents}
       />
     </>
   );

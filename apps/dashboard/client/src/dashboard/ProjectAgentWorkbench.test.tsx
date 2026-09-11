@@ -182,11 +182,14 @@ describe("conversational project workbench", () => {
       const view = render(page());
       const expected = saved ? "current-keywords" : "local-1";
       expect(screen.getByLabelText("词库绑定")).toHaveTextContent(expected);
-      const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+      const main = screen.getByRole("region", { name: "主工作区" });
       expect(
-        within(aside).getByRole("heading", { name: "项目词库" }),
+        within(main).getByRole("heading", { name: "项目词库" }),
       ).toBeInTheDocument();
-      expect(aside).toHaveTextContent("版本 7 · 160 条问题");
+      expect(main).toHaveTextContent("版本 7 · 160 条问题");
+      expect(
+        screen.queryByRole("complementary", { name: "任务辅助区" }),
+      ).toBeNull();
       expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
       expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
       expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
@@ -245,9 +248,9 @@ describe("conversational project workbench", () => {
       </Workspace>,
     );
     expect(
-      within(
-        screen.getByRole("complementary", { name: "任务辅助区" }),
-      ).getByText("已保存的优化问题"),
+      within(screen.getByRole("region", { name: "主工作区" })).getByText(
+        "已保存的优化问题",
+      ),
     ).toBeInTheDocument();
   });
   it("starts real business content in the main pane without a placeholder chat", () => {
@@ -276,7 +279,7 @@ describe("conversational project workbench", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     fireEvent.click(
       within(
-        screen.getByRole("navigation", { name: "切换子 Agent" }),
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
       ).getByRole("button", { name: "稿件" }),
     );
     expect(open).toHaveBeenCalledWith("articles");

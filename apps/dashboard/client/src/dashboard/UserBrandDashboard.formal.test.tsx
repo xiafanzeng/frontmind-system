@@ -878,7 +878,7 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: /进度监控/ }));
     fireEvent.click(
       within(
-        screen.getByRole("complementary", { name: "任务辅助区" }),
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
       ).getByRole("button", { name: "进度报告" }),
     );
     expect(screen.getByText(/尚无监控运行记录/)).toBeInTheDocument();
@@ -1111,10 +1111,9 @@ describe("UserBrandDashboard formal workspace", () => {
     expect(
       screen.queryByRole("heading", { name: "候选问题目录" }),
     ).not.toBeInTheDocument();
+    // Resource workspaces browse without the auxiliary task panel.
     expect(
-      screen
-        .getByRole("complementary", { name: "任务辅助区" })
-        .querySelector("table"),
+      screen.queryByRole("complementary", { name: "任务辅助区" }),
     ).toBeNull();
     expect(screen.queryByText(/香港中文大学/)).toBeNull();
   });

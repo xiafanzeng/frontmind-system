@@ -91,7 +91,7 @@ const selectModule = (name: string) =>
   );
 const selectAgent = (name: string) =>
   fireEvent.click(
-    within(screen.getByRole("navigation", { name: "切换子 Agent" })).getByRole(
+    within(screen.getByRole("navigation", { name: "切换业务子页面" })).getByRole(
       "button",
       { name },
     ),
@@ -122,7 +122,7 @@ describe("operator workspace layout acceptance", () => {
         selectAgent(agent.label);
         expect(
           within(
-            screen.getByRole("navigation", { name: "切换子 Agent" }),
+            screen.getByRole("navigation", { name: "切换业务子页面" }),
           ).getByRole("button", { name: agent.label }),
         ).toHaveAttribute("aria-pressed", "true");
         if (agent.id !== "knowledge") {
@@ -340,7 +340,7 @@ describe("operator workspace layout acceptance", () => {
     ).toBeInTheDocument();
     expect(
       within(
-        screen.getByRole("navigation", { name: "切换子 Agent" }),
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
       ).getByRole("button", { name: "优化问题" }),
     ).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(

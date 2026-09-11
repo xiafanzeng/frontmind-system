@@ -188,13 +188,7 @@ function AutomatedMonitoringWorkspace({
         await task.saveState(
           {
             step: "monitoring-project-creating",
-            resources: [
-              ...selected.map((id) => ({ kind: "question" as const, id })),
-              ...customQuestions.map((question) => ({
-                kind: "question" as const,
-                id: question,
-              })),
-            ],
+            resources: selected.map((id) => ({ kind: "question" as const, id })),
             record: {
               id: requestId,
               label: "创建监控项目",

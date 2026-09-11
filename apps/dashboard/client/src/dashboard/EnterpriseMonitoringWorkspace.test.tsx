@@ -122,7 +122,7 @@ it("shows only saved project source questions and replaces them when selecting a
   expect(
     summary.getByText("已保存来源问题").nextElementSibling,
   ).toHaveTextContent("2 个");
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(
     screen.getByRole("button", { name: /另一监控.*1 个来源问题/ }),
   );
@@ -148,7 +148,7 @@ it("projects only the active report mode while preserving the chosen run for a r
   fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
   fireEvent.click(screen.getAllByRole("button", { name: "展开分析" })[0]);
   expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(screen.getByRole("button", { name: /分析监控趋势/ }));
   fireEvent.click(
     screen.getByRole("button", { name: /另一监控.*展开趋势分析/ }),
@@ -158,14 +158,14 @@ it("projects only the active report mode while preserving the chosen run for a r
   ).toHaveTextContent("另一监控");
   expect(summary.queryByText("选中运行")).toBeNull();
   expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(screen.getByRole("button", { name: /查看导入报告/ }));
   expect(summary.getByText("历史导入报告")).toBeInTheDocument();
   expect(summary.queryByText("趋势监控项目")).toBeNull();
   expect(summary.queryByText("选中运行")).toBeNull();
   expect(summary.queryByText("监控数据更新时间")).toBeNull();
   expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
   expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
   expect(await screen.findByText("读取真实运行 run-0")).toBeInTheDocument();
@@ -289,7 +289,7 @@ it("expands trend and imported report branches with their real data ranges", asy
   expect(await screen.findByLabelText("内联监控模块")).toHaveTextContent(
     "project-1:趋势分析",
   );
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(screen.getByRole("button", { name: /查看导入报告/ }));
   expect(
     screen.getByRole("region", { name: "历史导入报告" }),

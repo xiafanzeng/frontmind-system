@@ -129,7 +129,7 @@ export function WorkflowCompleted({
           className="workflow-text-action"
           onClick={onRevise}
         >
-          返回修改
+          返回选项列表
         </button>
       )}
     </div>

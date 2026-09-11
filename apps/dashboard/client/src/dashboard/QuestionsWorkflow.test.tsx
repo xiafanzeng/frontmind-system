@@ -197,17 +197,17 @@ describe("QuestionsWorkflow real business steps", () => {
     await screen.findByRole("heading", { name: "这个问题已加入优化清单。" });
     expect(screen.getByText("已确认的新版问题")).toBeInTheDocument();
     expect(screen.queryByText("旧缓存的问题")).not.toBeInTheDocument();
-    expect(owner.summary.current?.outputs).toEqual([
+    await waitFor(() => expect(owner.summary.current?.outputs).toEqual([
       expect.objectContaining({ title: "已确认的新版问题", version: 5 }),
-    ]);
+    ]));
     mocks.questions = [
       { ...question(), question: "随后更新的问题", revision: 6 },
     ];
     view.rerender(ui(owner));
     expect(screen.getByText("随后更新的问题")).toBeInTheDocument();
-    expect(owner.summary.current?.outputs).toEqual([
+    await waitFor(() => expect(owner.summary.current?.outputs).toEqual([
       expect.objectContaining({ title: "随后更新的问题", version: 6 }),
-    ]);
+    ]));
   });
   it("returns to edit without creating and restores its own draft before saving the returned entity", async () => {
     const owner = taskValue();
@@ -412,7 +412,7 @@ describe("QuestionsWorkflow real business steps", () => {
     const owner = taskValue();
     render(ui(owner));
     fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
-    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
     expect(
       screen.getByRole("heading", { name: "这次想优化什么问题？" }),
     ).toBeInTheDocument();

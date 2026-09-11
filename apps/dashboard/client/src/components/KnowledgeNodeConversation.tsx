@@ -11,6 +11,10 @@ import { finalReplyIds } from "@/lib/final-reply";
 import MessageActions from "./MessageActions";
 import { toast } from "sonner";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
+import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
+import { ExecutionDivider } from "./ExecutionDuration";
+import { conversationExecutionTimings } from "@/lib/execution-duration";
+import { generalExecutionSlots } from "@/lib/general-execution-display";
 
 export function knowledgeNodeConversationMessages(
   messages: LocalMessage[],
@@ -102,6 +106,10 @@ export default function KnowledgeNodeConversation({
       knowledge?.operationState ?? "",
     ) && knowledge?.leafId === leafId;
   const copyableIds = finalReplyIds(messages, activeConversation.execution, running);
+  const displayedExecution = activeConversation.execution ?? progress.execution;
+  const executionTimings = conversationExecutionTimings({ ...activeConversation, execution: displayedExecution }, messages);
+  const executionSlots = generalExecutionSlots(messages, displayedExecution, running);
+  const hasTimeline = Boolean(displayedExecution?.timeline.length);
   const execution = (
     <KnowledgePublicExecution
       phase={knowledge?.processingPhase}
@@ -120,7 +128,8 @@ export default function KnowledgeNodeConversation({
       </p>
       {messages.map((message) => (
         <Fragment key={message.id}>
-          {message.id === assistant?.id && execution}
+          <GeneralExecutionActivity items={executionSlots.before.get(message.id)} />
+          {!hasTimeline && message.id === assistant?.id && execution}
           <MessageActions message={message} allowCopy={copyableIds.has(message.id)}>
             <div className={`knowledge-node-conversation__${message.role}`}>
               <MarkdownRenderer content={message.content} allowCopy={copyableIds.has(message.id)} />
@@ -129,9 +138,11 @@ export default function KnowledgeNodeConversation({
               }}>复制回答</button>}
             </div>
           </MessageActions>
+          {message.role === "user" && <ExecutionDivider timing={executionTimings.get(message.id)} />}
+          <GeneralExecutionActivity items={executionSlots.after.get(message.id)} placement="after" />
         </Fragment>
       ))}
-      {!assistant && running && execution}
+      {!hasTimeline && !assistant && running && execution}
       {notice && (
         <p role={notice.severity === "error" ? "alert" : "status"}>
           {notice.message}

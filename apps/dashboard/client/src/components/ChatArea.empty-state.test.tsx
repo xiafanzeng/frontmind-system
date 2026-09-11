@@ -92,7 +92,7 @@ describe("EmptyConversationHint", () => {
     const notes = screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容");
     fireEvent.change(notes, { target: { value: "重点整理产品的适用范围" } });
     addStarterFiles([sizedFile("企业宣传册.pdf", 1024)]);
-    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
     fireEvent.click(screen.getByRole("button", { name: /构建企业知识库/ }));
     expect(screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容")).toHaveValue("重点整理产品的适用范围");
     expect(screen.getByText("企业宣传册.pdf")).toBeInTheDocument();

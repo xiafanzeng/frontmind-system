@@ -172,7 +172,7 @@ it("opens import in the main step, returns to the real article list, and restore
   expect(
     await screen.findByRole("heading", { name: "请上传需要整理的稿件" }),
   ).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   fireEvent.click(screen.getByRole("button", { name: /继续编辑已有稿件/ }));
   expect(
     await screen.findByRole("button", { name: /已有品牌稿件/ }),
@@ -220,7 +220,7 @@ it("keeps real titles, preflight, fee acknowledgement and accepted batch in one 
     }),
   );
   expect(gateway.submitDraft).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
   const titlesAgain = await screen.findByRole("button", {
     name: /进入发布预检/,
   });

@@ -2333,6 +2333,7 @@ export function mergeKnowledgeBaseHydration(
   );
   const remoteWithProtectedHistory = {
     ...remote,
+    execution: remote.execution ?? (remote.knowledgeBase?.generation === local.knowledgeBase?.generation ? local.execution : undefined),
     messages: protectedRemoteMessages,
     deletedMessageIds: remote.deletedMessageIds?.filter(
       (messageId) => !protectedRemoteMessageIds.has(messageId),
@@ -2391,6 +2392,7 @@ export function mergeKnowledgeBaseHydration(
     startedAt: local.startedAt,
     completedAt: local.completedAt,
     knowledgeBase: localState,
+    execution: local.execution ?? remote.execution,
     deletedMessageIds: local.deletedMessageIds?.filter(
       (messageId) => !protectedLocalMessageIds.has(messageId),
     ),

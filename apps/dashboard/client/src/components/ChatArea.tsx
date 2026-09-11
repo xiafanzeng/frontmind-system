@@ -14,6 +14,8 @@ import {
   contentProductionArtifactUrl,
 } from "@shared/content-production-public";
 import { GeneralExecutionActivity } from "./GeneralExecutionActivity";
+import { ExecutionDivider } from "./ExecutionDuration";
+import { conversationExecutionTimings } from "@/lib/execution-duration";
 import { generalExecutionSlots } from "@/lib/general-execution-display";
 import { projectFrontMindIdentityMessages } from "@shared/frontmind-general-identity";
 import type { ContentProductionInput } from "@shared/content-production";
@@ -1532,16 +1534,21 @@ export default function ChatArea({
   const renderInlineBlocks = (blocks: ConversationInlineBlock[] | undefined) => blocks?.map((block) => (
     <div key={block.id} data-reading-anchor={`business-${block.id}`} data-business-block={block.id}>{block.content}</div>
   ));
+  const displayedExecution = activeConversation?.execution ??
+    (syncKnowledgeBaseSnapshot ? knowledgeBaseProgress?.execution : undefined);
   const executionSlots = useMemo(
     () =>
       generalExecutionSlots(
         messages,
-        activeConversation?.execution,
+        displayedExecution,
         activeConversation?.status === "running" ||
           activeConversation?.status === "pending",
       ),
-    [messages, activeConversation, purpose],
+    [messages, activeConversation, displayedExecution],
   );
+  const executionTimings = useMemo(() => activeConversation
+    ? conversationExecutionTimings({ ...activeConversation, execution: displayedExecution }, messages)
+    : new Map(), [activeConversation, displayedExecution, messages]);
   const copyableReplyIds = useMemo(() => finalReplyIds(messages, activeConversation?.execution, status === "running" || status === "pending"), [messages, activeConversation?.execution, status]);
   const finalAssistantMessageId = useMemo(
     () =>
@@ -1721,7 +1728,7 @@ export default function ChatArea({
               <div
                 key={msg.id}
                 data-reading-anchor={msg.id}
-                className={generalConversation && msg.role === "user" ? "general-chat-user-turn" : undefined}
+                className={msg.role === "user" ? "general-chat-user-turn" : undefined}
               >
                 {renderInlineBlocks(inlineSlots.before.get(msg.id))}
                 <GeneralExecutionActivity
@@ -1756,8 +1763,8 @@ export default function ChatArea({
                         }
                   }
                 />
-                {generalConversation && msg.role === "user" && (
-                  <hr className="general-chat-user-divider" aria-hidden="true" />
+                {msg.role === "user" && (
+                  <ExecutionDivider timing={executionTimings.get(msg.id)} />
                 )}
                 <GeneralExecutionActivity
                   items={executionSlots.after.get(msg.id)}

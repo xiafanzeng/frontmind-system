@@ -1279,7 +1279,7 @@ describe("SiteOpsConversationPanel", () => {
     expect(
       screen.getByRole("button", { name: "复制消息" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("执行过程")).toBeInTheDocument();
+    expect(screen.getByText("用时 1分钟 5秒")).toBeInTheDocument();
     expect(screen.getByText("运行检查 · 已完成")).toBeInTheDocument();
     expect(document.querySelector(".siteops-message-footer time")).toBeNull();
     expect(document.querySelector(".siteops-execution-timeline")).toBeNull();

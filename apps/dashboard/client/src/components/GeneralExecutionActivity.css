@@ -17,6 +17,25 @@
   border: 0;
   border-top: 1px solid #e5e7eb;
 }
+.execution-divider {
+  margin-top: 24px;
+}
+.execution-duration {
+  color: #737373;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.execution-divider .general-chat-user-divider {
+  margin-top: 8px;
+}
+.business-execution-disclosure > summary {
+  margin-bottom: 16px;
+  padding-block: 8px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #737373;
+  cursor: pointer;
+}
 .general-chat-user-turn > .general-execution[data-placement="after"] {
   margin-top: 24px;
 }

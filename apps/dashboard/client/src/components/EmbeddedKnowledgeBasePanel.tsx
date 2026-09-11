@@ -56,6 +56,7 @@ import type {
 const KnowledgeActionsContext = createContext<{
   workflow: React.ReactNode;
   download: React.ReactNode;
+  titleRef?: React.RefObject<HTMLHeadingElement | null>;
 }>({ workflow: null, download: null });
 const KNOWLEDGE_BASE_NEW_BUILD_EVENT = "frontmind:new-knowledge-base-build";
 export const KNOWLEDGE_BASE_RECOVERY_UI_TIMEOUT_MS = 15_000;
@@ -328,7 +329,11 @@ export default function EmbeddedKnowledgeBasePanel({
         </header>
       )}
       <KnowledgeActionsContext.Provider
-        value={{ workflow: knowledgeActions, download: knowledgeDownload }}
+        value={{
+          workflow: knowledgeActions,
+          download: knowledgeDownload,
+          titleRef: workspaceTitleRef,
+        }}
       >
         {!unified && page === "display" ? (
           <div className="min-h-0 flex-1 overflow-auto">
@@ -450,6 +455,7 @@ function KnowledgeResetButton({
         ref={resetButtonRef}
         type="button"
         variant="outline"
+        className="knowledge-workspace-reset"
         disabled={disabled || !status.canReset || resetMutation.isPending}
         title={
           !status.canReset ? status.unavailableReason || undefined : undefined
@@ -1307,7 +1313,7 @@ function RealBuildFlow({
     />
   );
   const publicExecutionRunning = ["dispatching", "researching", "normalizing"].includes(executionState?.runPhase ?? "");
-  const hasExecutionTimeline = Boolean(displayedConversation?.execution?.timeline?.length);
+  const hasExecutionTimeline = Boolean((displayedConversation?.execution ?? displayedProgress?.execution)?.timeline.length);
   const collaboration = (
     <>
       {!workbench && (
@@ -1317,9 +1323,12 @@ function RealBuildFlow({
       )}
       <KnowledgeWorkspaceStatus progress={displayedProgress} />
       {workbench && (
-        <div className="knowledge-flow-actions">
+        <header className="knowledge-flow-actions">
+          <h2 ref={knowledgeActions.titleRef} tabIndex={-1}>
+            智能知识库
+          </h2>
           {knowledgeActions.workflow}
-        </div>
+        </header>
       )}
       {workbench && (
         <KnowledgeWorkbenchActions

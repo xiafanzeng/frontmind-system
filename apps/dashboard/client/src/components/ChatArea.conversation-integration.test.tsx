@@ -424,6 +424,38 @@ describe("ChatArea + ConversationProvider knowledge-base start", () => {
     },
   );
 
+  it("keeps the running stage and its elapsed divider when navigation hydrates a snapshot without execution", async () => {
+    const startedAt = Date.now() - 257000;
+    const conversation = {
+      id: "knowledge-conversation", title: "企业知识库构建", status: "running", createdAt: startedAt, updatedAt: startedAt, startedAt,
+      messages: [{ id: "request", role: "user", content: "开始构建企业知识库", timestamp: startedAt, serverSequence: 1,
+        knowledgeBase: { kind: "pending_user", serverOwned: true, turnId: "turn", generation: 1 } }],
+      knowledgeBase: { initialized: true, generation: 1, stateEpoch: 5, revision: 0, operationState: "creating", runPhase: "dispatching", activeTurnId: "turn", activeClientRequestId: "request", canReply: false },
+      execution: { schemaVersion: 1, taskId: "build", coverage: "partial", timeline: [
+        { id: "upload", turnId: "turn", userSequence: 1, rank: 0, timestamp: startedAt, kind: "status", phase: "uploading", status: "ended" },
+        { id: "stage", turnId: "turn", userSequence: 1, rank: 1, timestamp: startedAt + 1000, kind: "status", phase: "staging", status: "running" },
+      ] },
+    };
+    mocks.listRefetch.mockResolvedValue({ data: [conversation] });
+    let api!: ReturnType<typeof useConversation>;
+    function NavigationHarness() {
+      api = useConversation();
+      const [visible, setVisible] = React.useState(true);
+      return <><button onClick={() => setVisible(value => !value)}>切换模块</button>{visible && <ChatArea operatorWorkspace syncKnowledgeBaseSnapshot />}</>;
+    }
+    const view = render(<ConversationProvider><NavigationHarness /></ConversationProvider>);
+    await screen.findByText("校验资料 · 进行中");
+    expect(screen.getByText("上传资料 · 已完成")).toBeInTheDocument();
+    expect(view.container.querySelector(".execution-divider")).toHaveTextContent(/用时 4分钟/);
+    fireEvent.click(screen.getByRole("button", { name: "切换模块" }));
+    mocks.listRefetch.mockResolvedValue({ data: [{ ...conversation, execution: undefined }] });
+    await act(async () => { await api.refreshConversations(); });
+    fireEvent.click(screen.getByRole("button", { name: "切换模块" }));
+    expect(screen.getByText("校验资料 · 进行中")).toBeInTheDocument();
+    expect(view.container.querySelector(".execution-divider")).toHaveTextContent(/用时 4分钟/);
+    expect(screen.queryByText("资料已确认，正在确认启动结果")).toBeNull();
+  });
+
   it("reserves a materialized build, stores N/N local assets, then dispatches once", async () => {
     renderIntegratedChat();
     await waitFor(() =>

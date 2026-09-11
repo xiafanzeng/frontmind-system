@@ -1584,6 +1584,21 @@ describe("ConversationProvider cloud hydration", () => {
     });
   });
 
+  it("retains accepted execution evidence during same-generation navigation hydration without reviving a reset generation", () => {
+    const local: Conversation = {
+      ...conversation("execution-hydration"),
+      status: "running",
+      knowledgeBase: { initialized: true, generation: 1, stateEpoch: 5, revision: 0 } as Conversation["knowledgeBase"],
+      execution: { schemaVersion: 1, taskId: "build", coverage: "partial", timeline: [
+        { id: "stage", turnId: "turn", userSequence: 1, rank: 0, timestamp: 1000, kind: "status", status: "running", phase: "staging" },
+      ] },
+    };
+    const remote = { ...local, execution: undefined };
+    expect(mergeKnowledgeBaseHydration(local, remote).execution).toBe(local.execution);
+    expect(mergeKnowledgeBaseHydration(local, { ...remote, knowledgeBase: { ...local.knowledgeBase!, stateEpoch: 6 } }).execution).toBe(local.execution);
+    expect(mergeKnowledgeBaseHydration(local, { ...remote, knowledgeBase: { ...local.knowledgeBase!, generation: 2, stateEpoch: 6 } }).execution).toBeUndefined();
+  });
+
   it("hydrates conversations from the database", async () => {
     const { result } = renderHook(() => useConversation(), { wrapper });
 

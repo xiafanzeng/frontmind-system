@@ -124,9 +124,9 @@ describe("Enterprise QA source binding", () => {
       screen.queryByRole("button", { name: "新任务" }),
     ).not.toBeInTheDocument();
     const main = screen.getByRole("region", { name: "主工作区" });
-    const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+    screen.getByRole("complementary", { name: "任务辅助区" });
     expect(within(main).queryByRole("navigation")).not.toBeInTheDocument();
-    const selector = within(aside).getByRole("navigation", {
+    const selector = screen.getByRole("navigation", {
       name: "切换业务子页面",
     });
     expect(

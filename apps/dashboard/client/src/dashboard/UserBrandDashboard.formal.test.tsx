@@ -767,17 +767,16 @@ describe("UserBrandDashboard formal workspace", () => {
       "媒体发布",
       "AI专用官网",
     ].map((name) => within(modules).getByRole("button", { name }));
-    const general = within(modules).getByRole("button", {
-      name: "通用智能体",
-    });
+    // The general agent entry is retired; only the six groups remain.
     expect(
       Array.from(modules.querySelectorAll(".operator-module-entry")),
-    ).toEqual([...moduleEntries, general]);
+    ).toEqual(moduleEntries);
     const moduleGroup = modules.querySelector("#operator-brand-modules")!;
     expect(Array.from(moduleGroup.children)).toEqual(moduleEntries);
-    expect(moduleGroup).not.toContainElement(general);
+    expect(
+      within(modules).queryByRole("button", { name: "通用智能体" }),
+    ).toBeNull();
     fireEvent.click(within(modules).getByRole("button", { name: "AI 智能品牌优化" }));
-    expect(general).toBeVisible();
     expect(screen.getByRole("img", { name: "FrontMind" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "服务首页" })).toBeNull();
     expect(screen.queryByText("豪华版")).toBeNull();
@@ -828,39 +827,19 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.getByRole("button", { name: "项目总览" }).closest("aside"),
     ).toBe(sidebar);
   });
-  it("opens project overview after general agent without navigating to brand or losing the remembered project", async () => {
+  it("redirects the retired /agent route home without losing the remembered project", async () => {
     render(<UserBrandDashboard />);
-    fireEvent.click(screen.getByRole("button", { name: "通用智能体" }));
-    expect(
-      await screen.findByTestId("customer-general-agent"),
-    ).toBeInTheDocument();
-    expect(window.location.pathname).toBe("/agent");
-    expect(window.location.search).toBe("");
-    const rememberedProject = sessionStorage.getItem(
-      "frontmind.enterpriseProject",
-    );
-    expect(JSON.parse(rememberedProject!)).toEqual({
-      ownerUserId: 7,
-      id: projectMocks.id,
-    });
-    const overview = screen.getByRole("button", { name: "项目总览" });
-    fireEvent.click(overview);
-    expect(overview).toHaveAttribute("aria-expanded", "true");
+    window.history.replaceState({}, "", "/agent");
+    fireEvent.click(screen.getByRole("button", { name: "项目总览" }));
     expect(screen.getByRole("button", { name: "企业项目A" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByTestId("customer-general-agent")).toBeInTheDocument();
-    expect(screen.queryByTestId("knowledge-agent")).toBeNull();
-    expect(window.location.pathname).toBe("/agent");
-    expect(window.location.search).toBe("");
-    expect(sessionStorage.getItem("frontmind.enterpriseProject")).toBe(
-      rememberedProject,
-    );
+    expect(JSON.parse(sessionStorage.getItem("frontmind.enterpriseProject")!)).toEqual({
+      ownerUserId: 7,
+      id: projectMocks.id,
+    });
     expect(projectMocks.select).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "企业项目A" }));
-    expect(projectMocks.select).toHaveBeenCalledWith(7, projectMocks.id);
-    expect(overview).toHaveAttribute("aria-expanded", "false");
   });
   it("opens enterprise QA under project tools while preserving project navigation", async () => {
     render(<UserBrandDashboard />);
@@ -1019,6 +998,7 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: /AI专用官网/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "网站管理" })[0]!);
 
+    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
     fireEvent.click(screen.getByRole("button", { name: /^建站与部署/ }));
     expect(screen.getByTestId("connected-siteops-panel")).toHaveTextContent(
       "OAuth-only SiteOps 已连接",
@@ -1042,6 +1022,7 @@ describe("UserBrandDashboard formal workspace", () => {
       screen.queryByRole("button", { name: "编辑内容资产" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("提交内容需求")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
     fireEvent.click(screen.getByRole("button", { name: /^查看已发布内容/ }));
     expect(screen.getByText("首个企业资产")).toBeInTheDocument();
     expect(screen.getByText("管理员发布的文章")).toBeInTheDocument();
@@ -1096,6 +1077,7 @@ describe("UserBrandDashboard formal workspace", () => {
             !node.className.includes("agent-workbench-topbar__heading"),
         ),
     ).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "挑选与生成" }));
     fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
     const main = screen.getByRole("region", { name: "主工作区" });
     expect(
@@ -1151,7 +1133,7 @@ describe("UserBrandDashboard formal workspace", () => {
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
+    // The generation control renders directly (no workflow entry click).
     expect(
       screen.getByRole("heading", { name: "先发布企业知识库" }),
     ).toBeInTheDocument();
@@ -1191,6 +1173,7 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "挑选与生成" }));
     fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
     fireEvent.click(screen.getByRole("button", { name: /如何选择新企业？/ }));
     fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
@@ -1235,6 +1218,7 @@ describe("UserBrandDashboard formal workspace", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "品牌全域词库" }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "挑选与生成" }));
     fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
     fireEvent.click(screen.getByRole("button", { name: /如何选择新企业？/ }));
     fireEvent.click(screen.getByRole("button", { name: "确认选题" }));
@@ -1407,7 +1391,7 @@ describe("UserBrandDashboard formal workspace", () => {
     render(<UserBrandDashboard />);
     fireEvent.click(screen.getByRole("button", { name: /意图优化/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
+    // The saved-question list is the default landing.
     expect(
       screen.getByRole("button", {
         name: /企业官网怎样成为 AI 可引用的权威信源？/,

@@ -528,7 +528,7 @@ function OperatorWorkspacePreviewContent() {
           <OperatorSidebar
             projects={data.projects}
             activeProject={activeProject}
-            activeEntry={general ? "agent" : "project"}
+            activeEntry="project"
             view={view}
             onSelectView={openView}
             collapsed={collapsed && !mobileOpen}
@@ -536,9 +536,7 @@ function OperatorWorkspacePreviewContent() {
             onCollapse={() => setCollapsed((value) => !value)}
             mobileOpen={mobileOpen}
             onCloseMobile={() => setMobileOpen(false)}
-            onNavigate={(path) => {
-              if (path === "/agent") openAgent("general");
-            }}
+            onNavigate={() => undefined}
             onSelectProject={(id) => {
               setData((current) => ({ ...current, activeProject: id }));
               setKnowledge(structuredClone(previewKnowledgeProgress));

@@ -107,7 +107,7 @@ export function OperatorSidebar({
   taskNavigation?: ReactNode;
   taskNavigationRef?: Ref<HTMLDivElement>;
   activeProject?: EnterpriseProjectView;
-  activeEntry: "project" | "agent" | "account";
+  activeEntry: "project" | "account";
   collapsed: boolean;
   onCollapse: () => void;
   onNavigate: (path: string) => void;
@@ -441,25 +441,6 @@ export function OperatorSidebar({
                 </button>
               );
             })}
-          </div>
-          <div className="operator-general-nav">
-            <button
-              type="button"
-              className={`operator-nav-entry operator-module-entry operator-general-entry ${activeEntry === "agent" ? "active" : ""}`}
-              style={{ "--module-accent": "#491060" } as CSSProperties}
-              title="通用智能体"
-              aria-label="通用智能体"
-              aria-current={activeEntry === "agent" ? "page" : undefined}
-              onClick={() =>
-                requestWorkspaceNavigation(() => {
-                  onNavigate("/agent");
-                  onCloseMobile?.();
-                })
-              }
-            >
-              <Bot size={20} />
-              <span>通用智能体</span>
-            </button>
           </div>
         </nav>
         <div className="operator-sidebar-bottom">

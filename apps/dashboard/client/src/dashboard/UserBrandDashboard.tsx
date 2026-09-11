@@ -119,7 +119,7 @@ const MonitoringModule = lazy(() => import("@/monitoring/Workspace"));
 const ContentInsightsWorkspace = lazy(
   () => import("./content-insights/ContentInsightsWorkspace"),
 );
-const GeneralAgentHome = lazy(() => import("@/pages/Home"));
+
 const EnterpriseQaWorkspace = lazy(() => import("./EnterpriseQaWorkspace"));
 const ContentProductionWorkspace = lazy(
   () => import("./content-production/ContentProductionWorkspace"),
@@ -804,7 +804,7 @@ export function UserBrandDashboardContent({
   const moduleRoute = previewMode ? null : dashboardModuleRoute(location);
   const insightsRoute =
     new URLSearchParams(search).get("view") === "content-insights";
-  const agentRoute = location === "/agent";
+
   const accountRoute = location === "/account";
   const enterpriseQaRoute = location === "/enterprise-qa";
   const contentProductionRoute = location === "/content-production";
@@ -823,8 +823,6 @@ export function UserBrandDashboardContent({
     moduleRoute ||
     (enterpriseQaRoute
       ? { section: "enterprise-qa", sub: null }
-      : agentRoute
-        ? { section: "general-agent", sub: null }
         : contentProductionRoute
           ? { section: "content-production", sub: null }
           : accountRoute
@@ -883,10 +881,6 @@ export function UserBrandDashboardContent({
   };
   const navigate = (section, sub = null) => {
     if (operatorMode) {
-      if (section === "general-agent") {
-        navigatePath("/agent");
-        return;
-      }
       if (section === "account") {
         navigatePath("/account");
         return;
@@ -904,17 +898,9 @@ export function UserBrandDashboardContent({
       navigatePath(operatorViewPath(operatorViewFromRoute({ section, sub })));
       return;
     }
-    if (
-      section === "general-agent" ||
-      section === "content-production" ||
-      section === "enterprise-qa"
-    ) {
+    if (section === "content-production" || section === "enterprise-qa") {
       setLocation(
-        section === "general-agent"
-          ? "/agent"
-          : section === "enterprise-qa"
-            ? "/enterprise-qa"
-            : "/content-production",
+        section === "enterprise-qa" ? "/enterprise-qa" : "/content-production",
       );
       setMobileNavOpen(false);
       return;
@@ -934,7 +920,6 @@ export function UserBrandDashboardContent({
     } else if (
       moduleRoute ||
       insightsRoute ||
-      agentRoute ||
       enterpriseQaRoute ||
       contentProductionRoute
     ) {
@@ -1006,7 +991,6 @@ export function UserBrandDashboardContent({
   const immersiveAgentWorkspace =
     knowledgeBuildWorkspace ||
     brandTrackingWorkspace ||
-    agentRoute ||
     enterpriseQaRoute ||
     contentProductionRoute;
   const routeTitle =
@@ -1051,7 +1035,7 @@ export function UserBrandDashboardContent({
         <MonitoringModule />
       </Suspense>
     )
-  ) : operatorMode && !agentRoute && !operatorProject ? (
+  ) : operatorMode && !operatorProject ? (
     operatorProjectsLoading ? (
       <div className="operator-empty-project" role="status">
         正在读取企业项目…
@@ -1087,19 +1071,6 @@ export function UserBrandDashboardContent({
         )}
       </Suspense>
     </div>
-  ) : agentRoute ? (
-    <Suspense fallback={<div role="status">正在打开通用智能体…</div>}>
-      <ConversationPurposeProvider purpose="general">
-        <GeneralAgentHome
-          embedded
-          hidePortalNavigation
-          showKnowledgeBaseStarter={false}
-          showAccountMenu={false}
-          showSettings={false}
-          standardWelcomeVariant="simple"
-        />
-      </ConversationPurposeProvider>
-    </Suspense>
   ) : enterpriseQaRoute ? (
     <Suspense fallback={<div role="status">正在打开企业问答…</div>}>
       <EnterpriseQaWorkspace
@@ -1358,7 +1329,7 @@ export function UserBrandDashboardContent({
     (module) => module.id === activeModuleId,
   );
   const projectWorkbench =
-    operatorMode && !accountRoute && (operatorProject || agentRoute);
+    operatorMode && !accountRoute && operatorProject;
   return (
     <OperatorThemeProvider enabled={operatorMode}>
       <div
@@ -1398,7 +1369,7 @@ export function UserBrandDashboardContent({
               view={currentView}
               onSelectView={(view) => navigatePath(operatorViewPath(view))}
               activeEntry={
-                agentRoute ? "agent" : accountRoute ? "account" : "project"
+                accountRoute ? "account" : "project"
               }
               collapsed={compactViewport ? !mobileNavOpen : mobileNavOpen ? false : sidebarCollapsed}
               onCollapse={
@@ -1468,7 +1439,7 @@ export function UserBrandDashboardContent({
                 value={operatorProject?.name ?? null}
               >
               <WorkbenchModuleContext.Provider
-                value={agentRoute ? null : currentModule}
+                value={currentModule}
               >
                 {knowledgeBuildWorkspace ||
                 contentProductionRoute ||
@@ -1478,10 +1449,10 @@ export function UserBrandDashboardContent({
                 ) : (
                   <ProjectAgentWorkbench
                     onTaskNavigate={() => setMobileNavOpen(false)}
-                    projectId={agentRoute ? "account" : operatorProject.id}
+                    projectId={operatorProject.id}
                     purpose="general"
                   >
-                    {agentRoute ? null : currentModule.renderResult()}
+                    {currentModule.renderResult()}
                   </ProjectAgentWorkbench>
                 )}
               </WorkbenchModuleContext.Provider>
@@ -1625,19 +1596,6 @@ function Sidebar({
           open={accountOpen}
           onOpenChange={onAccountOpenChange}
         />
-        {!preview && (
-          <button
-            type="button"
-            className={`nav-section-label nav-section-button general-agent-nav ${route.section === "general-agent" ? "active" : ""}`}
-            aria-current={
-              route.section === "general-agent" ? "page" : undefined
-            }
-            onClick={() => onNavigate("general-agent")}
-          >
-            <Bot className="nav-icon" size={16} />
-            <span>通用智能体</span>
-          </button>
-        )}
       </div>
     </aside>
   );

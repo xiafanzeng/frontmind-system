@@ -111,14 +111,14 @@ function ScopedWorkbench({
           }))
         : [],
     ) ?? [];
-  const native = agentId === "general" || purpose === "enterprise_qa";
+  const native = purpose === "enterprise_qa";
   const resourcePresentation =
     !native && workbenchPresentationForAgent(agentId) === "resource";
   const label =
     purpose === "enterprise_qa"
       ? "企业问答"
       : (module?.actions.find((item) => item.id === agentId)?.label ??
-        "通用智能体");
+        "工作台");
   useEffect(() => {
     if (
       workspace.hydrated &&
@@ -171,9 +171,7 @@ function ScopedWorkbench({
         showAccountMenu={false}
         showSettings={false}
         purpose={purpose === "enterprise_qa" ? "enterprise_qa" : undefined}
-        standardWelcomeVariant={
-          purpose === "enterprise_qa" ? "enterprise_qa" : "simple"
-        }
+        standardWelcomeVariant="enterprise_qa"
       />
     </Suspense>
   ) : (

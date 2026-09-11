@@ -12,6 +12,7 @@ import {
   Download,
   Pencil,
   Search,
+  Undo2,
   X,
 } from "lucide-react";
 import type {
@@ -192,6 +193,8 @@ function KnowledgeNodeWorkspaceSession({
   const [localActionPending, setLocalActionPending] = useState(false);
   const [imageDirty, setImageDirty] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [selectPending, setSelectPending] = useState(false);
+  const [selectError, setSelectError] = useState<string | null>(null);
   const [conflicted, setConflicted] = useState(false);
   const [showLatest, setShowLatest] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
@@ -866,6 +869,70 @@ function KnowledgeNodeWorkspaceSession({
       ),
     }))
     .filter((branch) => branch.leaves.length > 0);
+  /** Re-open the local walkthrough on a settled node: the server marks it
+   * needs_verification, points the build cursor back at it and restores a
+   * presentation so confirm / AI revision become available again. */
+  const reverifyCurrentNode = async () => {
+    const build = progress?.build;
+    if (!currentDetails || !build || generation === undefined) return;
+    if (selectPending || mutationPending || dirty || imageDirty) return;
+    const rest = captureWorkspaceRestOperation(lifetime.current.signal);
+    setSelectPending(true);
+    setSelectError(null);
+    try {
+      const response = await rest.fetch("/api/knowledge-base/node/select", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          clientRequestId: crypto.randomUUID(),
+          leafId: currentDetails.node.leafId,
+          expectedGeneration: generation,
+          expectedRevision: build.revision,
+          expectedStateEpoch: progress?.workbench?.stateEpoch ?? 0,
+        }),
+      });
+      const result = await response.json();
+      rest.assertActive();
+      if (!response.ok) {
+        acceptErrorObservation(result);
+        throw new NodeRequestError(
+          result.error?.message ?? "节点选择失败，请刷新后重试。",
+          response.status,
+        );
+      }
+      if (result?.observation)
+        commitKnowledgeBaseObservation(conversationId, result.observation);
+      setDetails(null);
+      setSelectedLeafId(currentDetails.node.leafId);
+      setSavedMessage("已选择该节点重新核验：可确认、跳过预填或让 AI 修改。");
+    } catch (error) {
+      if (!rest.signal.aborted)
+        setSelectError(
+          error instanceof Error
+            ? error.message
+            : "节点选择失败，请刷新后重试。",
+        );
+    } finally {
+      setSelectPending(false);
+    }
+  };
+  const buildAllowsNodeSelection =
+    progress?.workbench?.phase === "editing" &&
+    Boolean(
+      progress?.build &&
+        !progress.build.awaitingResponseSince &&
+        ["confirming", "ready_to_publish", "published"].includes(
+          progress.build.status,
+        ),
+    );
+  const canReverifyNode =
+    Boolean(currentDetails) &&
+    buildAllowsNodeSelection &&
+    (currentDetails?.node.status === "confirmed" ||
+      currentDetails?.node.status === "direct_prefilled") &&
+    progress?.build.currentLeafId !== currentDetails?.node.leafId;
   const actionsDisabled =
     disabled ||
     readonlyPreview ||
@@ -1182,6 +1249,25 @@ function KnowledgeNodeWorkspaceSession({
                   <p className="knowledge-node-workspace__notice">
                     {currentDetails.capabilities.directEdit.reason}
                   </p>
+                )}
+                {canReverifyNode && (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void reverifyCurrentNode()}
+                      disabled={actionsDisabled || selectPending}
+                    >
+                      <Undo2 aria-hidden="true" />
+                      {selectPending ? "正在选择…" : "重新核验"}
+                    </Button>
+                    {selectError && (
+                      <p role="alert" className="knowledge-node-workspace__notice">
+                        {selectError}
+                      </p>
+                    )}
+                  </>
                 )}
                 <KnowledgeNodeLocalActions
                   conversationId={conversationId}

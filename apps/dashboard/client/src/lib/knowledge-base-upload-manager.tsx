@@ -125,50 +125,105 @@ export class KnowledgeBaseUploadBatch {
         this.write("progress", this.progress());
         command.onFile?.(itemId, file, event);
       };
-      for (const item of command.files) {
-        operation.assertActive();
+      // Manifest consistency is a pure data check; validate it up front so the
+      // pipeline below never has to throw mid-prefetch.
+      const manifestByItem = new Map(command.files.map(item => {
         const manifest = command.manifest.find(candidate => candidate.itemId === item.itemId);
         if (!manifest || manifest.ordinal !== item.ordinal || manifest.sizeBytes !== item.file.size) throw new Error("资料与本轮清单不一致，请重新选择原文件");
+        return [item.itemId, manifest] as const;
+      }));
+      // One-ahead prefetch: file N+1's byte transfer overlaps file N's staging
+      // confirmation. Staging itself stays strictly in manifest order, and the
+      // slot promise never rejects, so an abandoned prefetch cannot surface as
+      // an unhandled rejection.
+      type UploadSlot = { item: (typeof command.files)[number]; settled: Promise<void>; receipt?: UploadReceipt; error?: unknown };
+      let nextUploadIndex = 0;
+      let uploadSlot: UploadSlot | null = null;
+      // Closure writes defeat control-flow narrowing; read through a typed accessor.
+      const activeUploadSlot = (): UploadSlot | null => uploadSlot;
+      const uploadOne = (item: (typeof command.files)[number]) => {
+        command.onPhase?.("uploading");
+        let transferAttempt = 1;
+        const manifest = manifestByItem.get(item.itemId)!;
+        return uploadKnowledgeBaseLocalAsset(item.file, percent => {
+          if (operation.signal.aborted || this.staged.has(item.itemId)) return;
+          const loadedBytes = item.file.size * percent / 100;
+          this.noteTransfer(item.itemId, loadedBytes, transferAttempt);
+          emitFile(item.itemId, item.file, { stage: "uploading_to_dashboard", loadedBytes, totalBytes: item.file.size });
+        }, { maxRetries: 2, initialDelay: 1_000, maxDelay: 3_000 }, {
+          signal: operation.signal, captureLocalCopy: true, captureFilename: manifest.filename, batchId: command.clientRequestId, batchOrdinal: item.ordinal, batchTotal: command.manifest.length, itemId: item.itemId,
+          ...(manifest.sha256 ? { contentSha256: manifest.sha256 } : {}),
+          resumeScope: { kind: "knowledge_base", operationType: command.kind === "start" ? "start" : "revise", ...coordinate() },
+          onStage: event => {
+            if (operation.signal.aborted || this.staged.has(item.itemId)) return;
+            transferAttempt = event.attempt ?? transferAttempt;
+            if (event.loadedBytes !== undefined) this.noteTransfer(item.itemId, event.loadedBytes, event.attempt ?? 1);
+            emitFile(item.itemId, item.file, { ...event, stage: event.stage === "uploaded" ? "server_processing" : event.stage, receipt: undefined });
+          },
+        });
+      };
+      const startNextUpload = () => {
+        // One live prefetch at a time: a slot awaiting its consumer stays
+        // put even when an already-receipted file triggers another start.
+        if (uploadSlot) return;
+        while (nextUploadIndex < command.files.length) {
+          const item = command.files[nextUploadIndex++];
+          if (this.receipts.get(item.itemId) || this.staged.has(item.itemId)) continue;
+          const slot: UploadSlot = { item, settled: Promise.resolve() };
+          slot.settled = uploadOne(item).then(receipt => {
+            operation.assertActive();
+            slot.receipt = { ...receipt, filename: manifestByItem.get(item.itemId)!.filename };
+            this.receipts.set(item.itemId, slot.receipt);
+          }).catch(error => {
+            emitFile(item.itemId, item.file, { stage: "failed", error: error instanceof Error ? error.message : "资料上传失败", retryable: (error as {retryable?: boolean}).retryable });
+            slot.error = error;
+          });
+          uploadSlot = slot;
+          return;
+        }
+        uploadSlot = null;
+      };
+      startNextUpload();
+      for (const item of command.files) {
+        operation.assertActive();
         let receipt = this.receipts.get(item.itemId);
         if (this.staged.has(item.itemId) && !receipt) continue;
         if (!receipt) {
-          command.onPhase?.("uploading");
-          let transferAttempt = 1;
-          try {
-            receipt = await uploadKnowledgeBaseLocalAsset(item.file, percent => {
-              if (operation.signal.aborted || this.staged.has(item.itemId)) return;
-              const loadedBytes = item.file.size * percent / 100;
-              this.noteTransfer(item.itemId, loadedBytes, transferAttempt);
-              emitFile(item.itemId, item.file, { stage: "uploading_to_dashboard", loadedBytes, totalBytes: item.file.size });
-            }, { maxRetries: 2, initialDelay: 1_000, maxDelay: 3_000 }, {
-              signal: operation.signal, captureLocalCopy: true, captureFilename: manifest.filename, batchId: command.clientRequestId, batchOrdinal: item.ordinal, batchTotal: command.manifest.length, itemId: item.itemId,
-              ...(manifest.sha256 ? { contentSha256: manifest.sha256 } : {}),
-              resumeScope: { kind: "knowledge_base", operationType: command.kind === "start" ? "start" : "revise", ...coordinate() },
-              onStage: event => {
-                if (operation.signal.aborted || this.staged.has(item.itemId)) return;
-                transferAttempt = event.attempt ?? transferAttempt;
-                if (event.loadedBytes !== undefined) this.noteTransfer(item.itemId, event.loadedBytes, event.attempt ?? 1);
-                emitFile(item.itemId, item.file, { ...event, stage: event.stage === "uploaded" ? "server_processing" : event.stage, receipt: undefined });
-              },
-            });
+          const slot = activeUploadSlot();
+          if (slot?.item === item) {
+            uploadSlot = null;
+            await slot.settled;
             operation.assertActive();
-            receipt = { ...receipt, filename: manifest.filename };
-            this.receipts.set(item.itemId, receipt);
-          } catch (error) {
-            emitFile(item.itemId, item.file, { stage: "failed", error: error instanceof Error ? error.message : "资料上传失败", retryable: (error as {retryable?: boolean}).retryable });
-            throw error;
+            if (slot.error) throw slot.error;
+            receipt = slot.receipt;
+          } else {
+            // No live prefetch for this file (e.g. retry after a resume).
+            command.onPhase?.("uploading");
+            try {
+              receipt = await uploadOne(item);
+              operation.assertActive();
+              receipt = { ...receipt, filename: manifestByItem.get(item.itemId)!.filename };
+              this.receipts.set(item.itemId, receipt);
+            } catch (error) {
+              emitFile(item.itemId, item.file, { stage: "failed", error: error instanceof Error ? error.message : "资料上传失败", retryable: (error as {retryable?: boolean}).retryable });
+              throw error;
+            }
           }
+          if (!receipt) throw new Error("资料上传失败");
         }
         if (!this.staged.has(item.itemId) && !receipt.alreadyStaged) {
           command.onPhase?.("staging");
+          startNextUpload();
           const savedReceipt = receipt;
           await waitForKnowledgeBaseReply({ signal: operation.signal,
             request: signal => stageKnowledgeBaseTurnAttachment({ ...coordinate(), attachmentManifest: command.manifest, index: item.ordinal - 1, attachment: { file_id: savedReceipt.fileId, filename: savedReceipt.filename }, signal }),
             reconcile: async () => {
-              const status = await this.checkStatus();
+              const status = await this.checkStatus("auto");
               return status.files.some(file => file.itemId === item.itemId && file.status === "confirmed") ? { staged: true } : undefined;
             },
           });
+        } else {
+          startNextUpload();
         }
         operation.assertActive();
         this.staged.add(item.itemId);
@@ -183,7 +238,7 @@ export class KnowledgeBaseUploadBatch {
       const input: Message[] = command.input?.length ? command.input.map((message, index) => index === command.input!.length - 1 ? { ...message, content: [...(typeof message.content === "string" ? [{ type: "input_text" as const, text: message.content }] : message.content), ...attachments] } : message) : [];
       const response = await this.dispatch(() => waitForKnowledgeBaseReply({ signal: operation.signal,
         request: signal => createKnowledgeBaseTurnTask(input, { ...base, attachmentReservation: { turnId: coordinate().turnId, uploadAttemptId: coordinate().uploadAttemptId, ...(command.kind === "revise" ? { sourceResetRevision: command.expectedResetRevision } : {}), attachmentManifest: command.manifest } }, signal),
-        reconcile: async () => this.dispatchedResponse(await this.checkStatus()),
+        reconcile: async () => this.dispatchedResponse(await this.checkStatus("auto")),
       }));
       if (response.knowledgeObservation) { this.write("observation", response.knowledgeObservation); command.onObservation?.(response.knowledgeObservation); }
       const result = { ...reserved, receipts: new Map(this.receipts), response };
@@ -225,7 +280,7 @@ export class KnowledgeBaseUploadBatch {
     this.coordinate = { ...coordinate };
     this.write("coordinate", this.coordinate);
   }
-  async checkStatus(): Promise<KnowledgeBaseUploadStatus> {
+  async checkStatus(source: "auto" | "user" = "user"): Promise<KnowledgeBaseUploadStatus> {
     if (this.statusRequest) return this.statusRequest;
     if (!this.coordinate) throw new Error("正在等待本批资料预约确认");
     const coordinate = { ...this.coordinate };
@@ -239,10 +294,12 @@ export class KnowledgeBaseUploadBatch {
       if (dispatchEpoch !== this.dispatchEpoch) throw new Error("状态读取早于当前派发，请重新核对本轮状态");
       status = this.acceptStatus(status);
       this.dispatchNeedsCheck = false;
-      this.write("checkMessage", status.controlState === "stopped" ? "上传已停止，已确认的资料已保留。" : status.error?.message || (status.dispatchRecoveryAction === "confirm_dispatch" ? "启动结果待确认，请继续核对本轮状态。" : status.dispatchRecoveryAction === "observe" ? "任务已受理，正在同步当前阶段。" : status.readyToDispatch ? "资料已保存，可以继续确认并启动。" : "连接检查完成，等待未完成的文件。"));
+      // Background (heartbeat/reconcile) checks refresh state silently: a
+      // still-healthy batch must not flash connection warnings at the user.
+      if (source === "user") this.write("checkMessage", status.controlState === "stopped" ? "上传已停止，已确认的资料已保留。" : status.error?.message || (status.dispatchRecoveryAction === "confirm_dispatch" ? "启动结果待确认，请继续核对本轮状态。" : status.dispatchRecoveryAction === "observe" ? "任务已受理，正在同步当前阶段。" : status.readyToDispatch ? "资料已保存，可以继续确认并启动。" : "连接检查完成，等待未完成的文件。"));
       return status;
     }).catch(error => {
-      if (this.statusRequest === request && dispatchEpoch === this.dispatchEpoch) this.write("checkMessage", error instanceof Error ? error.message : "连接检查未完成，请检查并继续");
+      if (source === "user" && this.statusRequest === request && dispatchEpoch === this.dispatchEpoch) this.write("checkMessage", error instanceof Error ? error.message : "连接检查未完成，请检查并继续");
       throw error;
     }).finally(() => {
       clearTimeout(timeout);
@@ -278,7 +335,7 @@ export class KnowledgeBaseUploadBatch {
     return waitForKnowledgeBaseReply({ signal: this.operation(signal).signal,
       request: requestSignal => resumeKnowledgeBaseTurnAttachments(coordinate, requestSignal),
       reconcile: async () => {
-        const status = await this.checkStatus();
+        const status = await this.checkStatus("auto");
         return status.files.some(file => file.status === "retained") && status.controlState === "active"
           ? undefined : uploadStatusToAttachmentResume(status);
       },
@@ -392,9 +449,11 @@ export class KnowledgeBaseUploadBatch {
         if ([404, 409, 410].includes(response.status)) this.endHeartbeat();
       }).catch(() => undefined);
       const progressAt = Math.max(this.read<number>("lastProgressAt", () => Date.now()), this.read<number>("lastBusinessProgressAt", 0));
-      if (Date.now() - progressAt >= 30_000 && this.lastCheckProgressAt !== progressAt) {
+      // Server-side staging can legitimately run past half a minute without
+      // byte progress; only a genuinely quiet batch triggers the silent check.
+      if (Date.now() - progressAt >= 90_000 && this.lastCheckProgressAt !== progressAt) {
         this.lastCheckProgressAt = progressAt;
-        void this.checkStatus().catch(() => undefined);
+        void this.checkStatus("auto").catch(() => undefined);
       }
 
     };

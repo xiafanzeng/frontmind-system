@@ -87,12 +87,13 @@ beforeEach(() => {
 describe("persisted monitoring results", () => {
   it("shows whole-scope totals, missing rank, and current revision without claiming old body history", () => {
     render(<MonitoringDataWorkspace enterpriseProjectId="project" />);
-    expect(screen.getByText("有效回答 101")).toBeInTheDocument();
-    expect(screen.getByText("平均排名 4.5")).toBeInTheDocument();
+    const totals = screen.getByText("有效回答").closest("div")!;
+    expect(totals).toHaveTextContent("101");
+    expect(screen.getByText("平均排名").closest("div")).toHaveTextContent("4.5");
     expect(screen.getByText(/工作记录对应 R1，批次已更新/)).toBeInTheDocument();
     expect(screen.getByText(/排名：暂无数据/)).toBeInTheDocument();
     expect(screen.getByText("完整回答内容")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看本回答引用" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
     expect(mocks.citations).toHaveBeenLastCalledWith(
       expect.objectContaining({
         sampleId: "sample",

@@ -168,6 +168,8 @@
   min-width: 0;
   flex: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .operator-nav-entry svg {
   flex-shrink: 0;

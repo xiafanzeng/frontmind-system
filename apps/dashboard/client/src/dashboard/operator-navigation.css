@@ -4,6 +4,9 @@
   gap: 4px;
   min-height: 0;
   overflow-y: auto;
+  /* overflow-y:auto computes overflow-x to auto; nowrap labels would grow a
+     horizontal scrollbar. Clip instead and ellipsize the entries. */
+  overflow-x: hidden;
   padding: 2px 0;
 }
 .operator-module-group-label {
@@ -14,6 +17,8 @@
   font-weight: 600;
   line-height: 24px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .operator-module-entry {
   min-height: 48px !important;
@@ -245,6 +250,7 @@
   max-height: none;
   min-height: 88px;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 .operator-sidebar[data-collapsed="true"] .operator-task-navigation-slot {

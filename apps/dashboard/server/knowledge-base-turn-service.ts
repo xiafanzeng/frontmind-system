@@ -4638,6 +4638,12 @@ type StageKnowledgeBaseDeferredTurnAttachmentInput = {
    * row and deferred turn coordinate are locked by the staging transaction.
    */
   managedUploadBytes?: Buffer;
+  /**
+   * Retained-source copy already materialized before the staging transaction
+   * (content-addressed and idempotent). Its storage key is injected into the
+   * ledger without re-reading or re-writing bytes under the row locks.
+   */
+  preparedRetainedSource?: { storageKey: string };
   projectAssignmentId?: string | null;
   now?: Date;
 };
@@ -5412,30 +5418,39 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
       "Customer files must be staged once in manifest order",
     );
   }
-  const originalBytes = managedUploadProof && turn.operationType === "start" && input.managedUploadBytes === undefined && managedUploadProof.localStorageKey
-    ? await readKnowledgeBaseLocalSource({ storageKey: managedUploadProof.localStorageKey, contentSha256: managedUploadProof.contentSha256, sizeBytes: managedUploadProof.sizeBytes })
-    : input.managedUploadBytes;
-  if (managedUploadProof && originalBytes !== undefined) {
-    const retained = await persistKnowledgeBaseBuildSource({
-      userId: input.userId,
-      buildId: build.id,
-      generation: build.generation,
-      bytes: originalBytes,
-      permanentOriginal: turn.operationType === "start",
-    });
-    if (
-      retained.contentSha256 !== managedUploadProof.contentSha256 ||
-      retained.sizeBytes !== managedUploadProof.sizeBytes
-    ) {
-      throw new KnowledgeBaseTurnReservationError(
-        "CONFLICT",
-        "Dashboard knowledge-base retained source does not match its upload proof",
-      );
-    }
+  if (managedUploadProof && input.preparedRetainedSource) {
+    // The permanent copy was materialized before this transaction took the
+    // turn/build locks; under the lock only the ledger update remains.
     managedUploadProof = {
       ...managedUploadProof,
-      localStorageKey: retained.storageKey,
+      localStorageKey: input.preparedRetainedSource.storageKey,
     };
+  } else {
+    const originalBytes = managedUploadProof && turn.operationType === "start" && input.managedUploadBytes === undefined && managedUploadProof.localStorageKey
+      ? await readKnowledgeBaseLocalSource({ storageKey: managedUploadProof.localStorageKey, contentSha256: managedUploadProof.contentSha256, sizeBytes: managedUploadProof.sizeBytes })
+      : input.managedUploadBytes;
+    if (managedUploadProof && originalBytes !== undefined) {
+      const retained = await persistKnowledgeBaseBuildSource({
+        userId: input.userId,
+        buildId: build.id,
+        generation: build.generation,
+        bytes: originalBytes,
+        permanentOriginal: turn.operationType === "start",
+      });
+      if (
+        retained.contentSha256 !== managedUploadProof.contentSha256 ||
+        retained.sizeBytes !== managedUploadProof.sizeBytes
+      ) {
+        throw new KnowledgeBaseTurnReservationError(
+          "CONFLICT",
+          "Dashboard knowledge-base retained source does not match its upload proof",
+        );
+      }
+      managedUploadProof = {
+        ...managedUploadProof,
+        localStorageKey: retained.storageKey,
+      };
+    }
   }
   if (managedUploadProof && !managedUploadProof.localStorageKey) {
     throw new KnowledgeBaseTurnReservationError(
@@ -5548,14 +5563,90 @@ async function stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
   });
 }
 
+/**
+ * Materialize the retained build source before the staging transaction takes
+ * the turn/build row locks. The copy is content-addressed and idempotent, so
+ * a later conflict can only leave an orphan that no other build can collide
+ * with; hashes stay server-verified end to end.
+ */
+async function prepareKnowledgeBaseDeferredStageRetainedSource(
+  input: StageKnowledgeBaseDeferredTurnAttachmentInput,
+  db: any,
+): Promise<{ storageKey: string } | undefined> {
+  if (!input.managedUploadProof) return undefined;
+  // Test/custom executors may only implement the transaction surface; those
+  // fall back to the legacy in-transaction retention path.
+  if (typeof db?.select !== "function") return undefined;
+  const turnRow = (
+    await db
+      .select({
+        operationType: conversationTurns.operationType,
+        buildId: conversationTurns.buildId,
+        buildGeneration: conversationTurns.buildGeneration,
+      })
+      .from(conversationTurns)
+      .where(
+        and(
+          eq(conversationTurns.id, normalizeRequiredId(input.turnId, "turnId", 36)),
+          enterpriseOwnerPredicate(conversationTurns, input.userId),
+        ),
+      )
+      .limit(1)
+  )[0] as
+    | {
+        operationType: string;
+        buildId: string | null;
+        buildGeneration: number | null;
+      }
+    | undefined;
+  // Missing rows fall through: the locked path raises the canonical error.
+  if (!turnRow?.buildId || !turnRow.buildGeneration) return undefined;
+  const permanentOriginal = turnRow.operationType === "start";
+  const originalBytes =
+    input.managedUploadBytes !== undefined
+      ? input.managedUploadBytes
+      : input.managedUploadProof.localStorageKey && permanentOriginal
+        ? await readKnowledgeBaseLocalSource({
+            storageKey: input.managedUploadProof.localStorageKey,
+            contentSha256: input.managedUploadProof.contentSha256,
+            sizeBytes: input.managedUploadProof.sizeBytes,
+          })
+        : undefined;
+  if (originalBytes === undefined) return undefined;
+  const retained = await persistKnowledgeBaseBuildSource({
+    userId: input.userId,
+    buildId: turnRow.buildId,
+    generation: turnRow.buildGeneration,
+    bytes: originalBytes,
+    permanentOriginal,
+  });
+  if (
+    retained.contentSha256 !== input.managedUploadProof.contentSha256 ||
+    retained.sizeBytes !== input.managedUploadProof.sizeBytes
+  ) {
+    throw new KnowledgeBaseTurnReservationError(
+      "CONFLICT",
+      "Dashboard knowledge-base retained source does not match its upload proof",
+    );
+  }
+  return { storageKey: retained.storageKey };
+}
+
 /** Append one successfully uploaded customer file to the reservation ledger. */
 export async function stageKnowledgeBaseDeferredTurnAttachment(
   input: StageKnowledgeBaseDeferredTurnAttachmentInput,
   executor?: any,
 ) {
   const db = executor ?? (await requireDb());
+  // Full-file disk IO runs before the REPEATABLE READ transaction so the
+  // turn row lock is only held for the ledger update; heartbeats and the next
+  // file's coordinate assertions no longer queue behind whole-file copies.
+  const prepared = await prepareKnowledgeBaseDeferredStageRetainedSource(input, db);
   return db.transaction((tx: any) =>
-    stageKnowledgeBaseDeferredTurnAttachmentInTransaction(input, tx),
+    stageKnowledgeBaseDeferredTurnAttachmentInTransaction(
+      prepared ? { ...input, preparedRetainedSource: prepared } : input,
+      tx,
+    ),
   );
 }
 

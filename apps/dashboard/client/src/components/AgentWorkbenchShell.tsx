@@ -7,9 +7,12 @@ import {
   type ReactNode,
   type PointerEvent,
 } from "react";
-import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
+import {
+  useChatReadingPosition,
+} from "@/hooks/useChatReadingPosition";
 import {
   useWorkbenchModule,
+  useWorkbenchProjectName,
   type WorkbenchAction,
 } from "@/dashboard/agent-workbench";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
@@ -40,6 +43,10 @@ export type AgentWorkbenchShellProps = {
   showResult?: boolean;
   conversationFocusRequest?: object | null;
   auxiliaryFocusRequest?: object | null;
+  /** Right-aligned controls in the thin top bar. */
+  topbarActions?: ReactNode;
+  /** Focus target for the screen-reader workbench heading in the top bar. */
+  titleRef?: React.RefObject<HTMLHeadingElement | null>;
 };
 export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v5.auxiliary-ratio";
 export const WORKBENCH_MIN_WIDTH = 768;
@@ -88,8 +95,11 @@ export function AgentWorkbenchShell({
   showResult = true,
   conversationFocusRequest,
   auxiliaryFocusRequest,
+  topbarActions,
+  titleRef,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
+  const projectName = useWorkbenchProjectName();
   const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
   const isKnowledge = layout === "knowledge";
   const hasAux = layout !== "single";
@@ -238,6 +248,27 @@ export function AgentWorkbenchShell({
         } as CSSProperties
       }
     >
+      <header className="agent-workbench-topbar">
+        <div className="agent-workbench-topbar__caption">
+          <span>AI智能品牌优化</span>
+          <span aria-hidden="true" className="agent-workbench-topbar__sep">/</span>
+          <span className="agent-workbench-topbar__module">{module?.label ?? title}</span>
+          {projectName ? (
+            <>
+              <span aria-hidden="true" className="agent-workbench-topbar__sep">/</span>
+              <strong className="agent-workbench-topbar__project" title={projectName}>
+                {projectName}
+              </strong>
+            </>
+          ) : null}
+        </div>
+        <h2 ref={titleRef} tabIndex={-1} className="agent-workbench-topbar__heading">
+          {title}
+        </h2>
+        {topbarActions ? (
+          <div className="agent-workbench-topbar__actions">{topbarActions}</div>
+        ) : null}
+      </header>
       <div
         ref={layoutRoot}
         className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}`}

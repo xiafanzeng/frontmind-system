@@ -537,3 +537,80 @@
 .business-monitor-project-list strong, .business-report-entries strong { font-size: 14px; font-weight: 600; }
 .business-monitor-project-list span, .business-report-entries span { color: #7d8590; font-size: 12px; }
 .business-report-flow > [hidden], .monitoring-reference-page > [hidden] { display: none; }
+
+/* Monitoring report surfaces share the website frontend's card language:
+   toned metric cards, status badges, and inline run progress bars. */
+.monitoring-metric-cards > .monitoring-metric-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid #efeaf3;
+  border-top: 3px solid transparent;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(33, 19, 58, 0.05);
+}
+.monitoring-metric-card span {
+  color: #6f6f7a;
+  font-size: 13px;
+  line-height: 18px;
+}
+.monitoring-metric-card strong {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.monitoring-metric-card.is-purple { border-top-color: #7a4bb5; }
+.monitoring-metric-card.is-purple strong { color: #5b2a86; }
+.monitoring-metric-card.is-blue { border-top-color: #2f6fed; }
+.monitoring-metric-card.is-blue strong { color: #245bd0; }
+.monitoring-metric-card.is-green { border-top-color: #1d9a6c; }
+.monitoring-metric-card.is-green strong { color: #147a53; }
+.monitoring-metric-card.is-red { border-top-color: #d92d20; }
+.monitoring-metric-card.is-red strong { color: #b42318; }
+
+.monitoring-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #f4f1f7;
+  color: #565661;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.monitoring-status-badge.is-blue { background: #e7effd; color: #245bd0; }
+.monitoring-status-badge.is-green { background: #e8f6ef; color: #147a53; }
+.monitoring-status-badge.is-red { background: #fdecec; color: #b42318; }
+.monitoring-status-badge.is-amber { background: #fdf3e3; color: #b47413; }
+.monitoring-status-badge.is-muted { background: #f4f1f7; color: #6f6f7a; }
+
+.monitoring-run-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 140px;
+}
+.monitoring-run-progress__track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: #efeaf3;
+  overflow: hidden;
+}
+.monitoring-run-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7a4bb5, #5b2a86);
+}
+.monitoring-run-progress__label {
+  color: #565661;
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

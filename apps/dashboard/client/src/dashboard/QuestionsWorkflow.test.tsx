@@ -242,12 +242,12 @@ describe("QuestionsWorkflow real business steps", () => {
         version: "4",
       }),
     ]);
-    expect(owner.summary.current?.outputs).toEqual([
+    await waitFor(() => expect(owner.summary.current?.outputs).toEqual([
       expect.objectContaining({
         id: "question-saved",
         title: "服务端确认的问题",
       }),
-    ]);
+    ]));
     fireEvent.click(screen.getByRole("button", { name: "进入应答逻辑" }));
     expect(onResponse).toHaveBeenCalledWith("question-saved");
   });

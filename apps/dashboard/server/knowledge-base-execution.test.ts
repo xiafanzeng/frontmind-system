@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocks.getDb }));
-import { persistKnowledgeBaseExecution, persistKnowledgeBaseStage } from "./knowledge-base-execution";
+import { loadKnowledgeBaseExecution, persistKnowledgeBaseExecution, persistKnowledgeBaseStage } from "./knowledge-base-execution";
 import { projectGeneralExecution } from "./frontmind-general-execution";
 function database(rows: unknown[][]) {
   const writes: any[] = [];
   const db: any = { transaction: (action: any) => action(db), select: () => {
     const value = rows.shift() ?? [];
     const chain: any = { then: (resolve: any) => Promise.resolve(value).then(resolve) };
-    for (const method of ["from", "where", "limit", "for", "innerJoin"]) chain[method] = () => chain;
+    for (const method of ["from", "where", "limit", "for", "innerJoin", "orderBy"]) chain[method] = () => chain;
     return chain;
   }, insert: () => ({ values: (value: any) => { writes.push(value); return { onDuplicateKeyUpdate: vi.fn().mockResolvedValue(undefined) }; } }) };
   return { db, writes };
@@ -36,5 +36,28 @@ describe("knowledge execution persistence", () => {
     const { db, writes } = database([[{ id: "build", mode: "reset_retired" }]]); mocks.getDb.mockResolvedValue(db);
     await persistKnowledgeBaseStage({ ...scope, phase: "researching", rank: 0 });
     expect(writes).toHaveLength(0);
+  });
+
+  it.each(["running", "normalizing", "failed", "cancelled"])("keeps research open through provider activity until the business advances to %s", async (state) => {
+    const started = 1_789_000_000_000;
+    const event = (id: string, rank: number, phase?: string) => ({
+      taskId: "build", providerEventId: id, providerTimestampMs: started + rank * 100,
+      normalizedPayload: {
+        kind: phase ? "business_event" : "provider_event", businessPhase: phase,
+        providerOriginalRank: rank, executionTurn: { id: "turn", userSequence: 0 },
+        executionActivity: { kind: "status", status: "running" },
+      },
+    });
+    const terminal = state === "failed" || state === "cancelled";
+    const { db } = database([
+      [{ id: "build", generation: 2 }],
+      [{ id: "turn", sequence: 0, messageId: "user", status: terminal ? state : "running", createdAt: new Date(started), completedAt: terminal ? new Date(started + 500) : null, metadata: {} }],
+      [event("research", 0, "researching"), event("native-busy", 1), ...(state === "normalizing" ? [event("normalize", 3, "normalizing")] : [])],
+    ]);
+    const result = await loadKnowledgeBaseExecution({ ...scope, executor: db });
+    const research = result!.timeline.find((entry) => entry.phase === "researching")!;
+    expect(research).toMatchObject({ status: state === "running" ? "running" : state === "normalizing" ? "ended" : state === "failed" ? "error" : "cancelled" });
+    if (state === "running") expect(research.finishedAt).toBeUndefined();
+    else expect(research.finishedAt).toBe(started + (state === "normalizing" ? 300 : 500));
   });
 });

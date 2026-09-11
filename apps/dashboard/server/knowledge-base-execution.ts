@@ -235,9 +235,17 @@ export async function loadKnowledgeBaseExecution(input: {
       continue;
     const next = ordered
       .slice(index + 1)
-      .find((entry) => entry.turnId === item.turnId);
+      .find((entry) =>
+        entry.turnId === item.turnId &&
+        entry.kind === "status" &&
+        (entry.phase || entry.id === `kb:${item.turnId}:finished`),
+      );
     if (next) {
-      item.status = "ended";
+      // Provider activity happens inside the business stage. A busy/thinking
+      // event or tool result cannot prove that research or normalization ended.
+      item.status = next.kind === "status" &&
+        (next.status === "error" || next.status === "cancelled")
+        ? next.status : "ended";
       // MySQL historical timestamps have second precision; never show negative duration.
       item.finishedAt = Math.max(item.timestamp, next.timestamp);
     }

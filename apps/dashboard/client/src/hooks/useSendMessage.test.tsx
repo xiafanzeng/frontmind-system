@@ -10,12 +10,28 @@ import {
 } from "@shared/frontmind-general-chat-terminal";
 import {
   useSendMessage,
+  rememberKnowledgeBaseResetRevision,
   classifyFailure,
   outputForKnowledgePresentation,
   readResponseLogicTaskStartFailure,
   responseLogicStartFailureMessage,
   sliceNewOutput,
 } from "../hooks/useSendMessage";
+
+describe("knowledge-base upload batch identity", () => {
+  it("keeps one batch across reservation and released active-turn hydration", () => {
+    const revisions = new Map<string, number>();
+    expect(rememberKnowledgeBaseResetRevision("conversation-1", 1, revisions)).toBe(1);
+    expect(rememberKnowledgeBaseResetRevision("conversation-1", 1, revisions)).toBe(1);
+    expect(rememberKnowledgeBaseResetRevision("conversation-1", undefined, revisions)).toBe(1);
+  });
+
+  it("advances only for a newer reset and ignores stale hydration", () => {
+    const revisions = new Map<string, number>([["conversation-1", 1]]);
+    expect(rememberKnowledgeBaseResetRevision("conversation-1", 0, revisions)).toBe(1);
+    expect(rememberKnowledgeBaseResetRevision("conversation-1", 2, revisions)).toBe(2);
+  });
+});
 
 const mocks = vi.hoisted(() => ({
   createTask: vi.fn(),
@@ -2096,6 +2112,57 @@ describe("useSendMessage", () => {
     expect(mocks.stageKnowledgeBaseTurnAttachment).toHaveBeenCalledOnce();
     expect(mocks.createKnowledgeBaseTurnTask).toHaveBeenCalledOnce();
     expect(mocks.reserveKnowledgeBaseTurnWithAttachments).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a reserved supplement alive while active-turn hydration changes", async () => {
+    const file = new File(["facts"], "facts.pdf", { type: "application/pdf" });
+    mockPreparedFiles([file]);
+    let context = mockConversationContext({
+      activeConversation: { id: "test-conv-id", messages: [], knowledgeBase: { activeTurnResetRevision: undefined } },
+    });
+    mocks.useConversation.mockImplementation(() => context);
+    let finishUpload!: (result: unknown) => void;
+    mocks.uploadFile.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve; }));
+    const hook = renderHook(({ resetRevision }: { resetRevision?: number }) => useSendMessage(resetRevision), { initialProps: { resetRevision: 1 } });
+    let submitted!: Promise<boolean>;
+    await act(async () => {
+      submitted = hook.result.current.sendMessage("请结合附件修订", [file], {
+        syncKnowledgeBaseSnapshot: true,
+        knowledgeBaseExpectedResetRevision: 1,
+        knowledgeBaseExpectedGeneration: 3,
+        knowledgeBaseExpectedRevision: 7,
+        knowledgeBaseExpectedLeafId: "2.1",
+      });
+    });
+    await waitFor(() => expect(finishUpload).toBeDefined());
+    const signal = mocks.uploadFile.mock.calls[0]![3].signal as AbortSignal;
+    context = mockConversationContext({
+      activeConversation: { id: "test-conv-id", messages: [], knowledgeBase: { activeTurnResetRevision: 1 } },
+    });
+    hook.rerender({ resetRevision: 1 });
+    expect(signal.aborted).toBe(false);
+    await act(async () => {
+      finishUpload({ fileId: "retained-facts", filename: "facts.pdf", uploadedAt: 1_000, expiresAt: 2_593_000_000 });
+      expect(await submitted).toBe(true);
+    });
+    expect(mocks.stageKnowledgeBaseTurnAttachment).toHaveBeenCalledOnce();
+    expect(mocks.createKnowledgeBaseTurnTask).toHaveBeenCalledOnce();
+    context = mockConversationContext({
+      activeConversation: { id: "test-conv-id", messages: [], knowledgeBase: { activeTurnResetRevision: undefined } },
+    });
+    hook.rerender({ resetRevision: 1 });
+    expect(signal.aborted).toBe(false);
+    await act(async () => {
+      expect(await hook.result.current.sendMessage("再次修订", [file], {
+        syncKnowledgeBaseSnapshot: true,
+        knowledgeBaseExpectedResetRevision: 1,
+        knowledgeBaseExpectedGeneration: 3,
+        knowledgeBaseExpectedRevision: 7,
+        knowledgeBaseExpectedLeafId: "2.1",
+      })).toBe(true);
+    });
+    expect(mocks.reserveKnowledgeBaseTurnWithAttachments).toHaveBeenCalledTimes(2);
+    expect(mocks.createKnowledgeBaseTurnTask).toHaveBeenCalledTimes(2);
   });
 
   it("reserves, uploads, stages and dispatches one knowledge attachment in order", async () => {

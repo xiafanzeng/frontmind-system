@@ -204,6 +204,16 @@ describe("customer task billing", () => {
     expect(query.sql).toContain("CONCAT('knowledge-node-edit:',ct.id)");
     expect(query.sql).not.toContain("ct.enterpriseProjectId IS NULL");
     expect(query.sql).toContain("FROM ai_cost_events");
+    expect(query.sql).toContain(
+      "o.operation_type='dashboard.provider.transport'",
+    );
+    expect(query.sql).toContain("LIKE 'managed-upload:%'");
+    expect(query.sql).toContain(
+      "REGEXP '^[0-9A-Fa-f-]{36}:attachment:[0-9]+:generation:[0-9]+$'",
+    );
+    expect(query.sql).not.toContain(
+      "o.operation_type <> 'dashboard.provider.transport'",
+    );
     expect(query.sql).not.toMatch(
       /session_snapshot|cost_nanos|encrypted|fingerprint/,
     );
@@ -211,8 +221,12 @@ describe("customer task billing", () => {
       query.params.filter((value: unknown) => value === "project-a"),
     ).toHaveLength(3);
     expect(statements[1].sql).toContain("ct.metadata AS knowledgeTurnMetadata");
-    expect(statements[1].sql).toContain("ct.buildId=b.id AND ct.buildGeneration=g.generation");
-    expect(statements[1].sql).toContain("ct.userId=? AND ct.enterpriseProjectId=?");
+    expect(statements[1].sql).toContain(
+      "ct.buildId=b.id AND ct.buildGeneration=g.generation",
+    );
+    expect(statements[1].sql).toContain(
+      "ct.userId=? AND ct.enterpriseProjectId=?",
+    );
     expect(transaction).toHaveBeenCalledWith(expect.any(Function), {
       isolationLevel: "repeatable read",
     });
@@ -285,4 +299,116 @@ it("keeps a new unknown turn pending when earlier turns already have charges", (
     chargedTenThousandths: "12",
     currentTurnInvocationState: "unknown",
   });
+});
+
+it("does not flag a published local confirmation as an unknown model call", () => {
+  const [task] = projectCustomerAiUsage([
+    {
+      ...base,
+      authoritative: true,
+      status: "completed",
+      knowledgeBuildStatus: "published",
+      knowledgeTurnStatus: "completed",
+      knowledgeTurnOperationType: "local_confirm",
+      knowledgeTurnMetadata: { providerRequestCount: 0 },
+      currentTurnInvocationState: "unknown",
+      invocationState: "called",
+      eventCount: 2,
+      inputTokens: "100",
+      outputTokens: "20",
+    } as any,
+  ]);
+  expect(task).toMatchObject({
+    currentTurnInvocationState: "not_sent",
+    usageStatus: "synced",
+  });
+});
+
+it("keeps an unknown published revise visible for investigation", () => {
+  const [task] = projectCustomerAiUsage([
+    {
+      ...base,
+      authoritative: true,
+      status: "completed",
+      knowledgeBuildStatus: "published",
+      knowledgeTurnStatus: "completed",
+      knowledgeTurnOperationType: "revise",
+      currentTurnInvocationState: "unknown",
+      invocationState: "called",
+      eventCount: 2,
+    } as any,
+  ]);
+  expect(task?.usageStatus).toBe("partial");
+  expect(task?.currentTurnInvocationState).toBe("unknown");
+});
+
+it("uses completed initial-turn state instead of the preceding normalization stage", () => {
+  const [task] = projectCustomerAiUsage([
+    {
+      ...base,
+      authoritative: true,
+      status: "confirming",
+      phase: "normalizing",
+      knowledgeBuildStatus: "confirming",
+      knowledgeTurnStatus: "completed",
+      knowledgeTurnTaskId: "session-initial",
+      called: 1,
+      currentTurnInvocationState: "called",
+      taskId: "initial-task",
+      turnId: "initial-turn",
+      eventCount: 1,
+      inputTokens: "108558",
+      chargedTenThousandths: "47281",
+    },
+  ] as any);
+  expect(task).toMatchObject({
+    status: "已完成",
+    phase: "生成知识库",
+    inputTokens: "108558",
+    chargedTenThousandths: "47281",
+    usageStatus: "synced",
+  });
+});
+
+it("keeps acknowledged file preparation distinct from an unknown model dispatch", () => {
+  const rows = [
+    {
+      ...base,
+      authoritative: true,
+      status: "researching",
+      knowledgeBuildStatus: "researching",
+      knowledgeTurnStatus: "queued",
+      knowledgeTurnMetadata: { preparedDispatch: {} },
+      currentTurnInvocationState: "not_sent",
+    },
+  ];
+  expect(projectCustomerAiUsage(rows as any)[0]).toMatchObject({
+    status: "准备调研",
+    phase: "准备调研",
+    usageStatus: "none",
+  });
+  expect(
+    projectCustomerAiUsage([
+      {
+        ...rows[0],
+        currentTurnInvocationState: "unknown",
+        invocationState: "unknown",
+      },
+    ] as any)[0],
+  ).toMatchObject({
+    status: "等待确认",
+    phase: "启动结果待确认",
+    usageStatus: "syncing",
+  });
+});
+
+
+it.each([undefined, null, false, "", 1])("keeps a local turn pending without explicit zero provider requests (%s)", (providerRequestCount) => {
+  const [task] = projectCustomerAiUsage([{
+    ...base, authoritative: true, status: "completed", knowledgeBuildStatus: "published",
+    knowledgeTurnStatus: "completed", knowledgeTurnOperationType: "local_confirm",
+    knowledgeTurnMetadata: { providerRequestCount }, currentTurnInvocationState: "unknown",
+    invocationState: "called", eventCount: 2,
+  } as any]);
+  expect(task).toMatchObject({ currentTurnInvocationState: "unknown", usageStatus: "partial" });
 });

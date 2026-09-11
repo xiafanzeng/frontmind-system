@@ -636,6 +636,32 @@ describe("knowledge-base ChatInput actions", () => {
     expect(onDirty).toHaveBeenLastCalledWith(true);
   });
 
+  it("keeps the initial build locked without asking for a nonexistent node edit", () => {
+    mocks.activeConversation.status = "running";
+    mocks.activeConversation.knowledgeBase.canReply = false;
+    const initial: KnowledgeBaseProgressDto = {
+      ...progress,
+      build: { ...progress.build, status: "researching", currentLeafId: null },
+      contentAvailability: "none",
+      branches: [],
+      workbench: { generation: 1, stateEpoch: 2, phase: "initial", acceptedAt: null, legacyPublished: false },
+    };
+    const { rerender } = render(
+      <ChatInput syncKnowledgeBaseSnapshot knowledgeBaseProgress={initial} knowledgeEditingBlocked />,
+    );
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "正在构建知识库初稿…");
+    expect(screen.queryByText("请先完成右侧节点编辑。")).not.toBeInTheDocument();
+    mocks.activeConversation.status = "awaiting_input";
+    rerender(
+      <ChatInput syncKnowledgeBaseSnapshot knowledgeBaseProgress={{ ...initial, contentAvailability: "complete" }} knowledgeEditingBlocked />,
+    );
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByText("请先确认知识库初稿，再修改节点。")).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("describes node edits without exposing the frozen effort", () => {
     render(
       <ChatInput fixedAgentProfile="frontmind-pro" syncKnowledgeBaseSnapshot />,

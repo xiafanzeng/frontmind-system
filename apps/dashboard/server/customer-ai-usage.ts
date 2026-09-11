@@ -36,6 +36,7 @@ type UsageRow = {
   eventCount?: unknown;
   unknownEvents?: unknown;
   knowledgeTurnMetadata?: unknown;
+  knowledgeTurnOperationType?: string | null;
   knowledgeTurnStatus?: string | null;
   knowledgeTurnTaskId?: string | null;
   knowledgeBuildStatus?: string;
@@ -48,11 +49,40 @@ const time = (value: UsageRow["startedAt"]) =>
       : new Date(value).getTime();
 const number = (value: unknown) =>
   /^\d+$/.test(String(value ?? "")) ? BigInt(String(value)) : 0n;
+function isLocalNoModelTurn(row: UsageRow) {
+  if (
+    row.currentTurnInvocationState !== "unknown" ||
+    row.knowledgeTurnStatus !== "completed" ||
+    Boolean(row.knowledgeTurnTaskId) ||
+    (row.knowledgeTurnOperationType !== "local_confirm" &&
+      row.knowledgeTurnOperationType !== "local_select")
+  )
+    return false;
+  const metadata =
+    typeof row.knowledgeTurnMetadata === "string"
+      ? (() => {
+          try {
+            return JSON.parse(row.knowledgeTurnMetadata as string);
+          } catch {
+            return null;
+          }
+        })()
+      : row.knowledgeTurnMetadata;
+  return (
+    metadata &&
+    typeof metadata === "object" &&
+    (metadata as { providerRequestCount?: unknown }).providerRequestCount === 0
+  );
+}
 const stateLabels: Record<string, string> = {
   queued: "等待中",
   reserved: "准备中",
   running: "执行中",
   researching: "调研中",
+  uploading: "上传中",
+  staging: "校验中",
+  dispatching: "准备调研",
+  normalizing: "整理中",
   confirming: "整理中",
   ready_to_publish: "准备交付",
   published: "已完成",
@@ -100,7 +130,8 @@ export function projectCustomerAiUsage(
         Number(row.unknownEvents ?? 0) > 0 ||
         Number(row.unsettledEvents ?? 0) > 0 ||
         row.invocationState === "unknown" ||
-        row.currentTurnInvocationState === "unknown" ||
+        (row.currentTurnInvocationState === "unknown" &&
+          !isLocalNoModelTurn(row)) ||
         (row.taskId &&
           invocation(row) !== "not_sent" &&
           !Number(row.eventCount)),
@@ -136,20 +167,25 @@ export function projectCustomerAiUsage(
                 : {},
           })
         : null;
+      // A completed local confirm/select can be settled without a provider
+      // invocation. Keep this explicit whitelist separate from real unknown
+      // dispatches.
+      const localNoModelTurn = isLocalNoModelTurn(business);
+      const currentTurnInvocationState = localNoModelTurn
+        ? "not_sent"
+        : business.currentTurnInvocationState;
       const uploadStopped =
         runPhase === "cancelled" &&
-        business.currentTurnInvocationState === "not_sent";
+        currentTurnInvocationState === "not_sent";
+      const dispatchUnconfirmed =
+        runPhase === "dispatching" &&
+        currentTurnInvocationState === "unknown";
       const status = uploadStopped
         ? "stopped"
-        : runPhase === "dispatching"
+        : dispatchUnconfirmed
           ? "outcome_unknown"
-          : business.status;
-      const phase =
-        runPhase === "normalizing"
-          ? "normalizing"
-          : uploadStopped
-            ? "stopped"
-            : business.phase;
+          : (runPhase ?? business.status);
+      const phase = uploadStopped ? "stopped" : (runPhase ?? business.phase);
       const phaseLabel =
         phase && Object.hasOwn(businessExecutionLabels, phase)
           ? businessExecutionLabels[phase as BusinessExecutionPhase]
@@ -188,7 +224,7 @@ export function projectCustomerAiUsage(
         ),
         phase: uploadStopped
           ? "上传已停止，未产生模型调用"
-          : runPhase === "dispatching"
+          : dispatchUnconfirmed
             ? "启动结果待确认"
             : (phaseLabel ??
               (terminal
@@ -197,8 +233,8 @@ export function projectCustomerAiUsage(
                   ? "上传或准备资料"
                   : (stateLabels[status] ?? "等待确认"))),
         invocationState,
-        ...(business.currentTurnInvocationState
-          ? { currentTurnInvocationState: business.currentTurnInvocationState }
+        ...(currentTurnInvocationState
+          ? { currentTurnInvocationState }
           : {}),
         inputTokens: sum("inputTokens"),
         outputTokens: sum("outputTokens"),
@@ -284,11 +320,28 @@ export async function listCustomerAiUsage(
       SUM(cost_state IN ('pending','pending_identity') OR cost_state IS NULL) AS unsettledEvents
       FROM ai_cost_events WHERE account_user_id=${scope.ownerUserId} AND ${projectFilter("enterprise_project_id")}
       AND scope='managed_user' GROUP BY local_task_id) e ON e.local_task_id=t.id
-    WHERE o.scope='managed_user' AND o.account_user_id=${scope.ownerUserId} AND ${projectFilter("o.enterpriseProjectId")}`);
+    -- Provider transport is also used by real model turns (including initial
+    -- and Low-edit turns), so keep those rows and their charges. Only the
+    -- explicit managed-upload and turn-attachment intents are file transfer
+    -- resources; their durable owner is the KB build/turn below.
+    WHERE o.scope='managed_user' AND o.account_user_id=${scope.ownerUserId}
+      AND NOT (
+        o.operation_type='dashboard.provider.transport' AND
+        (
+          COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.intentId')),'') LIKE 'managed-upload:%'
+          OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.intentId')),'') REGEXP '^[0-9A-Fa-f-]{36}:attachment:[0-9]+:generation:[0-9]+$'
+        )
+        AND ct.id IS NULL AND COALESCE(e.eventCount,0)=0
+        AND COALESCE(JSON_LENGTH(JSON_EXTRACT(t.provider_runtime,'$.dashboardManaged.commands')),0)=0
+        AND COALESCE(JSON_CONTAINS_PATH(t.provider_runtime,'one',
+          '$.dashboardManaged.sessionId','$.dashboardManaged.agentId','$.dashboardManaged.environmentId',
+          '$.dashboardManaged.mutations.agent','$.dashboardManaged.mutations.environment','$.dashboardManaged.mutations.session'),0)=0
+      )
+      AND ${projectFilter("o.enterpriseProjectId")}`);
       // A durable upload/build must remain visible before any model transport exists.
       const [buildRows] =
         await tx.execute(sql`SELECT b.id AS runId,g.generation,'知识库' AS businessName,1 AS authoritative,
-    ct.metadata AS knowledgeTurnMetadata,ct.status AS knowledgeTurnStatus,ct.upstreamTaskId AS knowledgeTurnTaskId,
+    ct.metadata AS knowledgeTurnMetadata,ct.operationType AS knowledgeTurnOperationType,ct.status AS knowledgeTurnStatus,ct.upstreamTaskId AS knowledgeTurnTaskId,
     CASE WHEN g.generation=b.generation THEN b.status ELSE COALESCE(ct.status,'cancelled') END AS knowledgeBuildStatus,
     CASE WHEN g.generation=b.generation THEN b.status ELSE COALESCE(ct.status,'cancelled') END AS status,
     COALESCE((SELECT MIN(h.createdAt) FROM conversation_turns h WHERE h.buildId=b.id AND h.buildGeneration=g.generation),b.createdAt) AS startedAt,

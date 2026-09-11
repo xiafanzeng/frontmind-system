@@ -306,7 +306,7 @@ export default function ChatInput({
     knowledgeBaseAttachmentAttempt,
     continueKnowledgeBaseAttachmentAttempt,
     discardKnowledgeBaseAttachmentAttempt,
-  } = useSendMessage();
+  } = useSendMessage(knowledgeBaseResetRevision);
   const previousDraftKey = useRef(draftKey);
   const latestDraft = useRef<ComposerDraft>({
     text,
@@ -457,6 +457,14 @@ export default function ChatInput({
     syncKnowledgeBaseSnapshot &&
     Boolean(knowledgeBaseProgress?.packageAllowed) &&
     !currentKnowledgeLeaf;
+  const knowledgeBaseInitialDraft =
+    syncKnowledgeBaseSnapshot &&
+    knowledgeBaseProgress?.workbench?.phase === "initial";
+  const knowledgeEditingNotice = knowledgeBaseInitialDraft
+    ? knowledgeBaseProgress?.contentAvailability === "complete"
+      ? "请先确认知识库初稿，再修改节点。"
+      : null
+    : "请先完成右侧节点编辑。";
   const knowledgeLockedPlaceholder = (() => {
     if (knowledgeBaseLogoProvenanceRepairRequired)
       return "请先补全企业主 Logo 来源，再继续";
@@ -467,7 +475,12 @@ export default function ChatInput({
       knowledgeBaseDeferredUploadRecoveryRequired
     )
       return "请先处理本轮资料上传，再继续";
-    if (isRunning) return "正在根据你的补充资料更新当前节点…";
+    if (isRunning)
+      return knowledgeBaseInitialDraft
+        ? "正在构建知识库初稿…"
+        : "正在根据你的补充资料更新当前节点…";
+    if (knowledgeEditingBlocked && knowledgeBaseInitialDraft)
+      return knowledgeEditingNotice ?? "知识库初稿完成后可继续";
     if (knowledgeEditingBlocked)
       return "请先完成当前节点编辑或知识库更新，再继续对话";
     if (knowledgeBaseProgress && !knowledgeBaseProgress.build.currentLeafId)
@@ -827,9 +840,9 @@ export default function ChatInput({
           </Button>
         </div>
       )}
-      {knowledgeEditingBlocked && (
+      {knowledgeEditingBlocked && knowledgeEditingNotice && (
         <p className="mb-2 text-sm text-muted-foreground">
-          请先完成右侧节点编辑。
+          {knowledgeEditingNotice}
         </p>
       )}
       {/* Drag overlay */}

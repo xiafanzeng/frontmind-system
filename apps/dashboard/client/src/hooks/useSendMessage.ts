@@ -400,7 +400,25 @@ function contentItemsForDurableGeneralChatRetry(
   ];
 }
 
-export function useSendMessage() {
+/** Keep the last reset fence while a released turn is temporarily absent. */
+export function rememberKnowledgeBaseResetRevision(
+  conversationId: string | undefined,
+  observedRevision: number | undefined,
+  revisions: Map<string, number>,
+) {
+  const key = conversationId ?? "new";
+  const previous = revisions.get(key);
+  if (
+    Number.isSafeInteger(observedRevision) &&
+    Number(observedRevision) >= 0 &&
+    (previous === undefined || Number(observedRevision) >= previous)
+  ) {
+    revisions.set(key, Number(observedRevision));
+  }
+  return revisions.get(key) ?? 0;
+}
+
+export function useSendMessage(knowledgeBaseResetRevision?: number) {
   const {
     state,
     activeConversation,
@@ -417,8 +435,17 @@ export function useSendMessage() {
     flushConversation,
   } = useConversation();
 
-  const supplementScope = `supplement:${activeConversation?.id ?? "new"}`;
-  const supplementBatch = useKnowledgeBaseUploadBatch(`${supplementScope}:${activeConversation?.knowledgeBase?.activeTurnResetRevision ?? 0}`, `${supplementScope}:`);
+  const resetRevisionByConversationRef = useRef(new Map<string, number>());
+  const supplementConversationId = activeConversation?.id;
+  const supplementResetRevision = rememberKnowledgeBaseResetRevision(
+    supplementConversationId,
+    Number.isSafeInteger(knowledgeBaseResetRevision)
+      ? knowledgeBaseResetRevision
+      : activeConversation?.knowledgeBase?.activeTurnResetRevision,
+    resetRevisionByConversationRef.current,
+  );
+  const supplementScope = `supplement:${supplementConversationId ?? "new"}`;
+  const supplementBatch = useKnowledgeBaseUploadBatch(`${supplementScope}:${supplementResetRevision}`, `${supplementScope}:`);
   const sendInFlightRef = supplementBatch.ref("sendInFlight", false);
   const activeConvRef = useRef(activeConversation);
   activeConvRef.current = activeConversation;

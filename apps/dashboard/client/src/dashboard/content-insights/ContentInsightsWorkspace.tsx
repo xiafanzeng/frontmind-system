@@ -126,9 +126,12 @@ export default function ContentInsightsWorkspace() {
   const parsedRoute = readContentInsightsRoute(search);
   const [entry, setEntry] = useBusinessFlowState(
     "insightsEntry",
-    new URLSearchParams(search).has("contentModule") ? parsedRoute.section : "",
+    new URLSearchParams(search).has("contentModule")
+      ? parsedRoute.section
+      : "analytics",
     readFlowString,
   );
+  const currentEntry = entry || "analytics";
   const [savedModule, setSavedModule] = useBusinessFlowState(
     "insightsModule",
     "",
@@ -287,78 +290,9 @@ export default function ContentInsightsWorkspace() {
           <span className="hl-preview-badge">界面预览</span>
         </header>
       )}
-      {isWorkbench &&
-        (entry ? (
-          <WorkflowCompleted
-            id="insights-entry"
-            summary={`当前工作：${entry === "analytics" ? "分析示例" : entry === "widget" ? "AI 部件配置" : "待接入功能"}`}
-            onRevise={() => setEntry("")}
-          />
-        ) : (
-          <WorkflowQuestion
-            variant="entry" module="extensions"
-            question="这次想查看或调整什么？"
-            description="分析使用示例数据，部件配置用于预览；正式统计和发布尚未接入。"
-            selected={entry}
-            choices={[
-              {
-                id: "analytics",
-                label: "查看分析示例",
-                description: "查看文章、问答与流量的示例图表",
-              },
-              {
-                id: "widget",
-                label: "配置 AI 部件",
-                description: "调整问答部件并在主区预览",
-              },
-              {
-                id: "pending",
-                label: "查看待接入功能",
-                description: "了解采集与留资的现有能力边界",
-              },
-            ]}
-            onSelect={(value) => {
-              setEntry(value);
-              navigate(
-                value === "analytics"
-                  ? "overview"
-                  : value === "widget"
-                    ? "settings"
-                    : "collection",
-              );
-            }}
-          />
-        ))}
       {(!isWorkbench || entry) && (
         <>
-          {isWorkbench ? (
-            <WorkflowQuestion
-              question={
-                entry === "analytics"
-                  ? "想查看哪个分析范围？"
-                  : entry === "widget"
-                    ? "先调整哪部分设置？"
-                    : "想了解哪项功能？"
-              }
-              selected={entry === "widget" ? route.tab : route.module}
-              choices={
-                entry === "widget"
-                  ? [
-                      { id: "basic", label: "基础配置" },
-                      { id: "leads", label: "留资配置" },
-                    ]
-                  : (entry === "analytics"
-                      ? analyticsModules
-                      : widgetModules.filter(([id]) => id !== "settings")
-                    ).map(([id, label]) => ({ id, label }))
-              }
-              onSelect={(value) =>
-                entry === "widget"
-                  ? navigate("settings", value as SettingsTab)
-                  : navigate(value as PreviewModule)
-              }
-            />
-          ) : (
+          {(
             <div className="hl-workspace-nav">
               <div className="hl-group-toggle" aria-label="模块分组">
                 <button
@@ -432,7 +366,7 @@ export default function ContentInsightsWorkspace() {
                 <PendingWorkspace key={route.module} module={route.module} />
               )}
             </div>
-            {isWorkbench && entry === "analytics" && (
+            {isWorkbench && currentEntry === "analytics" && (
               <>
                 {analysisError && <p role="alert">{analysisError}</p>}
                 <HlButton

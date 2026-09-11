@@ -41,9 +41,13 @@ export function LegacyPublicationListRedirect() {
 export default function PublishingWorkbenchPage() {
   const flow = usePublishingFlow();
   const search = useSearch();
-  const records =
-    new URLSearchParams(search.replace(/^\?/u, "")).get("tab") === "records";
-  if (flow) return <PublishingConversation initialRecords={records} />;
+  const params = new URLSearchParams(search.replace(/^\?/u, ""));
+  const records = params.get("tab") === "records";
+  // The overview/records tabs are the browsing default; the guided placement
+  // conversation opens only through an explicit 新建投放 entry.
+  const flowEntryRequested = params.get("flow") === "1";
+  if (flow && flowEntryRequested)
+    return <PublishingConversation initialRecords={records} />;
   return (
     <>
       <nav className="publishing-workbench-tabs" aria-label="发布工作台视图">

@@ -539,6 +539,13 @@ export function QuestionsWorkflow({
   const existing = selectedQuestions.filter((question) =>
     question.question.includes(flow.filters.query),
   );
+  // Saved questions are the browsing default; the entry question opens only
+  // via the explicit 新增问题 action (or when no questions exist yet).
+  const [entryRequested, setEntryRequested] = useState(false);
+  const savedListDefault =
+    flow.entry === "start" &&
+    !entryRequested &&
+    (portfolio.isLoading || existing.length > 0);
   return (
     <div className="questions-workflow">
       {flow.entry === "existing" && (
@@ -548,7 +555,7 @@ export function QuestionsWorkflow({
           onRevise={() => begin("start")}
         />
       )}
-      {flow.entry === "start" && (
+      {flow.entry === "start" && !savedListDefault && (
         <WorkflowQuestion
           variant="entry" module="intent"
           question="这次想优化什么问题？"
@@ -711,7 +718,7 @@ export function QuestionsWorkflow({
           )}
         </>
       )}
-      {flow.entry === "existing" && (
+      {(flow.entry === "existing" || savedListDefault) && (
         <WorkflowSection
           id={`${flow.instanceId}-existing`}
           title="继续处理哪个问题？"
@@ -764,6 +771,15 @@ export function QuestionsWorkflow({
             page={flow.filters.page}
             onChange={(page) => update({ filters: { ...flow.filters, page } })}
           />
+          {savedListDefault && (
+            <button
+              type="button"
+              className="workflow-text-action"
+              onClick={() => setEntryRequested(true)}
+            >
+              新增问题
+            </button>
+          )}
         </WorkflowSection>
       )}
       {flow.entry === "result" && (

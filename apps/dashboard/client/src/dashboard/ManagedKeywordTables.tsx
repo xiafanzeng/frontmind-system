@@ -1,6 +1,11 @@
 import { BusinessExecutionActivity } from "@/components/BusinessExecutionActivity";
 import { useBusinessFlowState, readFlowString } from "./useBusinessFlowState";
-import { KeywordsWorkflow } from "./KeywordsWorkflow";
+import {
+  KeywordsWorkflow,
+  keywordsProjectCatalogSummary,
+  keywordsWorkflowFlowDefaults,
+  keywordsWorkflowFlowParser,
+} from "./KeywordsWorkflow";
 import { Database, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -487,10 +492,19 @@ function KeywordPanel({
 
 export default function ManagedKeywordTables(props: ManagedKeywordTablesProps) {
   const { isWorkbench } = useBusinessWorkspace();
-  return isWorkbench ? (
-    <KeywordsWorkflow {...props} />
-  ) : (
-    <LegacyManagedKeywordTables {...props} />
+  // The keyword library is a project resource: the tables are the default
+  // landing; the guided pick/generate workflow opens only on request.
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+  if (isWorkbench && workflowOpen)
+    return (
+      <KeywordsWorkflow {...props} onExit={() => setWorkflowOpen(false)} />
+    );
+  return (
+    <LegacyManagedKeywordTables
+      {...props}
+      workflowAvailable={isWorkbench}
+      onOpenWorkflow={() => setWorkflowOpen(true)}
+    />
   );
 }
 
@@ -503,7 +517,12 @@ function LegacyManagedKeywordTables({
   generationEnabled = false,
   dashboardRevision,
   knowledgePublished,
-}: ManagedKeywordTablesProps) {
+  workflowAvailable = false,
+  onOpenWorkflow,
+}: ManagedKeywordTablesProps & {
+  workflowAvailable?: boolean;
+  onOpenWorkflow?: () => void;
+}) {
   const { isWorkbench, task } = useBusinessWorkspace();
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [handingOff, setHandingOff] = useState(false);
@@ -693,20 +712,43 @@ function LegacyManagedKeywordTables({
     [visibleTables],
   );
 
-  useBusinessWorkspaceSummary({
-    items: [
-      { label: "词库记录", value: `${totalRows} 条` },
-      { label: "当前筛选", value: `${visibleRows} 条` },
-      { label: "当前词条", value: selectedKeyword?.question || "尚未选择" },
-      {
-        label: "已选来源",
-        value: selectedKeyword
-          ? tables.find((table) => table.id === selectedKeyword.tableId)
-              ?.title || "品牌全域词库"
-          : "—",
-      },
-    ],
-  });
+  const [keywordsFlow, setKeywordsFlow] = useBusinessFlowState(
+    "keywordsWorkflow",
+    keywordsWorkflowFlowDefaults,
+    keywordsWorkflowFlowParser,
+  );
+  // Inside the workbench the project catalog (retained selections and question
+  // handoffs) is the summary; the raw counters stay for the plain page.
+  const catalog =
+    isWorkbench && workflowAvailable
+      ? keywordsProjectCatalogSummary({
+          task,
+          tables,
+          dashboardRevision,
+          flow: keywordsFlow,
+          setFlow: setKeywordsFlow,
+          busy: handingOff,
+          onPickSelection: () => onOpenWorkflow?.(),
+        })
+      : null;
+  useBusinessWorkspaceSummary(
+    catalog
+      ? catalog.summary
+      : {
+          items: [
+            { label: "词库记录", value: `${totalRows} 条` },
+            { label: "当前筛选", value: `${visibleRows} 条` },
+            { label: "当前词条", value: selectedKeyword?.question || "尚未选择" },
+            {
+              label: "已选来源",
+              value: selectedKeyword
+                ? tables.find((table) => table.id === selectedKeyword.tableId)
+                    ?.title || "品牌全域词库"
+                : "—",
+            },
+          ],
+        },
+  );
   return (
     <section
       className={`page-shell brand-deep-page ${isWorkbench ? "keyword-conversation-flow" : ""}`}
@@ -832,6 +874,15 @@ function LegacyManagedKeywordTables({
             <span>
               当前显示 <strong>{formatNumber(visibleRows)}</strong> 条
             </span>
+            {workflowAvailable && onOpenWorkflow && (
+              <button
+                type="button"
+                className="keyword-workflow-entry"
+                onClick={onOpenWorkflow}
+              >
+                挑选与生成
+              </button>
+            )}
           </div>
           {isWorkbench && selectedKeyword && (
             <section

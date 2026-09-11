@@ -365,13 +365,18 @@ function SettingsWorkspace({
   };
   const [entry, setEntry] = useBusinessFlowState<
     "" | "build" | "settings" | "published"
-  >("websiteEntry", "", (value) =>
-    value === "" ||
-    value === "build" ||
-    value === "settings" ||
-    value === "published"
-      ? value
-      : undefined,
+  >(
+    "websiteEntry",
+    // Browsing default: configuration with a live preview; the guided
+    // build/deploy flow opens explicitly.
+    "settings",
+    (value) =>
+      value === "" ||
+      value === "build" ||
+      value === "settings" ||
+      value === "published"
+        ? value
+        : undefined,
   );
   const [draft, setDraft] = useBusinessFlowState(
     "websiteDraft",

@@ -144,6 +144,8 @@ function ui(owner: ReturnType<typeof taskValue>, onResponse = vi.fn()) {
   );
 }
 function direct(text = "输入中的原始问题") {
+  const opener = screen.queryByRole("button", { name: "新增问题" });
+  if (opener) fireEvent.click(opener);
   fireEvent.click(screen.getByRole("button", { name: "自己输入" }));
   fireEvent.change(screen.getByLabelText("目标问题"), {
     target: { value: text },
@@ -254,6 +256,8 @@ describe("QuestionsWorkflow real business steps", () => {
   it("selects within the existing library and submits exact row coordinates after an explicit confirmation", async () => {
     const owner = taskValue();
     render(ui(owner));
+    const opener = screen.queryByRole("button", { name: "新增问题" });
+    if (opener) fireEvent.click(opener);
     fireEvent.click(screen.getByRole("button", { name: "从品牌全域词库获取" }));
     fireEvent.click(screen.getByRole("button", { name: /词库中的真实问题/ }));
     expect(
@@ -290,6 +294,8 @@ describe("QuestionsWorkflow real business steps", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认并保存" }));
     await screen.findByRole("heading", { name: "这个问题已加入优化清单。" });
     fireEvent.click(screen.getByRole("button", { name: "再添加一个" }));
+    const opener = screen.queryByRole("button", { name: "新增问题" });
+    if (opener) fireEvent.click(opener);
     fireEvent.click(screen.getByRole("button", { name: "从品牌全域词库获取" }));
     fireEvent.click(screen.getByRole("button", { name: /词库中的真实问题/ }));
     fireEvent.click(screen.getByRole("button", { name: "确认并保存" }));
@@ -411,12 +417,7 @@ describe("QuestionsWorkflow real business steps", () => {
     });
     const owner = taskValue();
     render(ui(owner));
-    fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
-    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
-    expect(
-      screen.getByRole("heading", { name: "这次想优化什么问题？" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
+    // The saved-question list is the default landing.
     fireEvent.click(screen.getByRole("button", { name: /服务端确认的问题/ }));
     fireEvent.click(screen.getByRole("button", { name: "修改问题" }));
     fireEvent.change(screen.getByLabelText("目标问题"), {
@@ -478,7 +479,6 @@ it("does not apply an old edit after its task binding resumes in another project
       }),
   );
   const view = render(ui(first));
-  fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
   fireEvent.click(screen.getByRole("button", { name: /服务端确认的问题/ }));
   fireEvent.click(screen.getByRole("button", { name: "修改问题" }));
   fireEvent.change(screen.getByLabelText("目标问题"), {
@@ -503,14 +503,13 @@ it("removes an acknowledged deletion locally even if refreshing the portfolio fa
   const owner = taskValue();
   owner.state.resources = [{ kind: "question", id: "question-saved" }];
   render(ui(owner));
-  fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
   fireEvent.click(screen.getByRole("button", { name: /服务端确认的问题/ }));
   fireEvent.click(screen.getByRole("button", { name: "删除问题" }));
   expect(mocks.maintain).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+  // With the only question deleted the landing falls back to the entry.
   await screen.findByRole("heading", { name: "这次想优化什么问题？" });
   expect(owner.summary.current?.outputs).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: "继续处理已有问题" }));
   expect(
     screen.queryByRole("button", { name: /服务端确认的问题/ }),
   ).not.toBeInTheDocument();

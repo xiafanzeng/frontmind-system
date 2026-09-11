@@ -149,18 +149,16 @@ it("restores each website task's entry, form and tab while keeping deployment se
   );
   const { rerender, unmount } = render(workspace("website-a"));
   expect(screen.queryByText("真实建站步骤")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /配置内容展示/ }));
+  // Configuration with preview is the browsing default (no entry question).
   fireEvent.change(screen.getByLabelText("站点名称"), {
     target: { value: "任务甲的配置" },
   });
   fireEvent.click(screen.getByRole("button", { name: "SEO配置" }));
-  expect(saved["website-a"].websiteEntry).toBe("settings");
   expect(saved["website-a"].websiteDraft).toEqual(
     expect.objectContaining({ name: "任务甲的配置" }),
   );
   rerender(workspace("website-b"));
   expect(screen.queryByText("真实建站步骤")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /配置内容展示/ }));
   expect(screen.getByLabelText("站点名称")).toHaveValue("品牌知识中心");
   unmount();
   render(workspace("website-a"));

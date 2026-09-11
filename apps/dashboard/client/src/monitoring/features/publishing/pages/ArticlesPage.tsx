@@ -1,7 +1,7 @@
 import { WorkflowPagination } from "@/dashboard/workflow/Workflow";
 import { ArrowRight, FileCheck2, FileText, Plus, Upload } from "lucide-react";
 import { useCallback, useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 
 import { usePublisherGateway, usePublisherQuery } from "../PublishingContext";
 import {
@@ -29,6 +29,9 @@ import type { ArticleSummary } from "../types";
 export default function PublishingArticlesPage() {
   const gateway = usePublisherGateway();
   const flow = usePublishingFlow();
+  const search = useSearch();
+  const flowEntryRequested =
+    new URLSearchParams(search.replace(/^\?/u, "")).get("flow") === "1";
   const load = useCallback(
     (signal: AbortSignal) => gateway.listArticles(signal),
     [gateway],
@@ -46,7 +49,7 @@ export default function PublishingArticlesPage() {
     note: "选择稿件后可继续编辑正文、管理图片并冻结发布版本。",
   });
 
-  if (flow)
+  if (flow && flowEntryRequested)
     return (
       <ArticlesConversation
         articles={query.data ?? []}

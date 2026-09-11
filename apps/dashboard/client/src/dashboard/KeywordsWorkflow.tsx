@@ -44,7 +44,145 @@ const schema = z.object({
     page: z.number(),
   }),
 });
-export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
+
+export const keywordsWorkflowFlowDefaults: z.infer<typeof schema> = {
+  entry: "start",
+  pending: null,
+  confirmed: null,
+  filters: { query: "", category: "", page: 0 },
+};
+
+export function keywordsWorkflowFlowParser(value: unknown) {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+type KeywordsCatalogTask = ReturnType<typeof useBusinessWorkspace>["task"];
+
+/**
+ * Project-scoped keyword catalog summary shared by the tables landing and the
+ * guided workflow: retained selections and completed question handoffs are
+ * project outputs, not per-task state.
+ */
+export function keywordsProjectCatalogSummary({
+  task,
+  tables,
+  dashboardRevision,
+  flow,
+  setFlow,
+  busy,
+  onPickSelection,
+}: {
+  task: KeywordsCatalogTask;
+  tables: ManagedKeywordTablesProps["tables"];
+  dashboardRevision?: number | null;
+  flow: z.infer<typeof schema>;
+  setFlow: (next: z.infer<typeof schema>) => void;
+  busy: boolean;
+  onPickSelection?: (selection: z.infer<typeof selectionSchema>) => void;
+}): { summary: Parameters<typeof useBusinessWorkspaceSummary>[0]; completedHandoffs: unknown[] } {
+  const revision = dashboardRevision ?? undefined;
+  const rows = keywordPickerRows(tables, revision ?? 0);
+  const confirmed = flow.confirmed;
+  const savedStates =
+    task?.tasks
+      ?.map((item) => item.workbench)
+      .filter((state) => state?.agentId === "keywords") ?? [];
+  const savedSelections = [
+    confirmed,
+    ...savedStates.map((state) => {
+      const parsed = schema.safeParse(state?.values.keywordsWorkflow);
+      return parsed.success ? parsed.data.confirmed : null;
+    }),
+  ].filter((item): item is z.infer<typeof selectionSchema> => Boolean(item));
+  const selectionId = (selection: z.infer<typeof selectionSchema>) =>
+    `keyword:${selection.dashboardRevision}:${selection.tableId}:${selection.rowIndex}`;
+  const projectSelections = savedSelections.filter(
+    (selection, index) =>
+      savedSelections.findIndex(
+        (item) => selectionId(item) === selectionId(selection),
+      ) === index,
+  );
+  const completedHandoffs = [
+    ...new Map(
+      [...savedStates]
+        .reverse()
+        .concat(task?.state?.agentId === "keywords" ? [task.state] : [])
+        .flatMap((state) => state?.records ?? [])
+        .filter(
+          (record) =>
+            record.status === "completed" &&
+            record.targetTask?.agentId === "questions",
+        )
+        .map((record) => [record.targetTask!.conversationId, record]),
+    ).values(),
+  ];
+  const pickSelection = (selection: z.infer<typeof selectionSchema>) =>
+    setFlow({ ...flow, entry: "pick", pending: selection });
+  const summary = {
+    title: "项目词库",
+    scope: "project" as const,
+    items:
+      tables.length && revision != null
+        ? [
+            {
+              label: "当前生效词库",
+              value: `版本 ${revision} · ${rows.length} 条问题`,
+            },
+          ]
+        : [],
+    outputs: [
+      ...projectSelections.map((selection) => ({
+        id: selectionId(selection),
+        title: selection.question,
+        type: "已确认选题引用",
+        version: selection.dashboardRevision,
+        description: keywordCategoryLabel(selection.category) ?? undefined,
+        status:
+          revision === selection.dashboardRevision &&
+          rows.some(
+            (row) =>
+              row.tableId === selection.tableId &&
+              row.rowIndex === selection.rowIndex &&
+              row.question === selection.question &&
+              row.category === selection.category,
+          )
+            ? "已确认选题"
+            : "来源版本已变化 · 需要重新选择",
+        source: "来源：当前项目品牌全域词库",
+        pendingChanges:
+          confirmed && selectionId(selection) === selectionId(confirmed)
+            ? JSON.stringify(flow.pending) !== JSON.stringify(confirmed)
+            : false,
+        onOpen: busy
+          ? undefined
+          : () => {
+              pickSelection(selection);
+              onPickSelection?.(selection);
+            },
+      })),
+      ...completedHandoffs.map((record) => ({
+        id: `keyword-handoff:${record.targetTask!.conversationId}`,
+        title: record.detail || record.label,
+        type: "问题优化交接",
+        status: "已建立优化问题任务",
+        onOpen: () =>
+          requestWorkspaceNavigation(() =>
+            navigate(
+              projectWorkspaceUrl(
+                `/?view=questions&workbenchTask=${encodeURIComponent(record.targetTask!.conversationId)}`,
+              ),
+            ),
+          ),
+      })),
+    ],
+  };
+  return { summary, completedHandoffs };
+}
+
+export function KeywordsWorkflow(
+  props: ManagedKeywordTablesProps & { onExit?: () => void },
+) {
   const { task } = useBusinessWorkspace();
   const utils = trpc.useUtils();
   const [flow, setFlow] = useBusinessFlowState<z.infer<typeof schema>>(
@@ -83,94 +221,16 @@ export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
         row.question === confirmed.question &&
         row.category === confirmed.category,
     );
-  const savedStates =
-    task?.tasks
-      ?.map((item) => item.workbench)
-      .filter((state) => state?.agentId === "keywords") ?? [];
-  const savedSelections = [
-    confirmed,
-    ...savedStates.map((state) => {
-      const parsed = schema.safeParse(state?.values.keywordsWorkflow);
-      return parsed.success ? parsed.data.confirmed : null;
-    }),
-  ].filter((item): item is z.infer<typeof selectionSchema> => Boolean(item));
-  const selectionId = (selection: z.infer<typeof selectionSchema>) =>
-    `keyword:${selection.dashboardRevision}:${selection.tableId}:${selection.rowIndex}`;
-  const projectSelections = savedSelections.filter(
-    (selection, index) =>
-      savedSelections.findIndex(
-        (item) => selectionId(item) === selectionId(selection),
-      ) === index,
-  );
-  const completedHandoffs = [
-    ...new Map(
-      [...savedStates]
-        .reverse()
-        .concat(task?.state?.agentId === "keywords" ? [task.state] : [])
-        .flatMap((state) => state?.records ?? [])
-        .filter(
-          (record) =>
-            record.status === "completed" &&
-            record.targetTask?.agentId === "questions",
-        )
-        .map((record) => [record.targetTask!.conversationId, record]),
-    ).values(),
-  ];
-  useBusinessWorkspaceSummary({
-    title: "项目词库",
-    scope: "project",
-    items:
-      props.tables.length && props.dashboardRevision != null
-        ? [
-            {
-              label: "当前生效词库",
-              value: `版本 ${props.dashboardRevision} · ${rows.length} 条问题`,
-            },
-          ]
-        : [],
-    outputs: [
-      ...projectSelections.map((selection) => ({
-        id: selectionId(selection),
-        title: selection.question,
-        type: "已确认选题引用",
-        version: selection.dashboardRevision,
-        description: keywordCategoryLabel(selection.category) ?? undefined,
-        status:
-          props.dashboardRevision === selection.dashboardRevision &&
-          rows.some(
-            (row) =>
-              row.tableId === selection.tableId &&
-              row.rowIndex === selection.rowIndex &&
-              row.question === selection.question &&
-              row.category === selection.category,
-          )
-            ? "已确认选题"
-            : "来源版本已变化 · 需要重新选择",
-        source: "来源：当前项目品牌全域词库",
-        pendingChanges:
-          confirmed && selectionId(selection) === selectionId(confirmed)
-            ? JSON.stringify(flow.pending) !== JSON.stringify(confirmed)
-            : false,
-        onOpen: busy
-          ? undefined
-          : () => setFlow({ ...flow, entry: "pick", pending: selection }),
-      })),
-      ...completedHandoffs.map((record) => ({
-        id: `keyword-handoff:${record.targetTask!.conversationId}`,
-        title: record.detail || record.label,
-        type: "问题优化交接",
-        status: "已建立优化问题任务",
-        onOpen: () =>
-          requestWorkspaceNavigation(() =>
-            navigate(
-              projectWorkspaceUrl(
-                `/?view=questions&workbenchTask=${encodeURIComponent(record.targetTask!.conversationId)}`,
-              ),
-            ),
-          ),
-      })),
-    ],
+  const catalog = keywordsProjectCatalogSummary({
+    task,
+    tables: props.tables,
+    dashboardRevision: props.dashboardRevision,
+    flow,
+    setFlow,
+    busy,
   });
+  const { completedHandoffs } = catalog;
+  useBusinessWorkspaceSummary(catalog.summary);
   const confirm = async () => {
     if (!flow.pending || !task || inflight.current) return;
     setError("");
@@ -298,7 +358,17 @@ export function KeywordsWorkflow(props: ManagedKeywordTablesProps) {
           onSelect={(entry) =>
             setFlow({ ...flow, entry: entry as "pick" | "generate" })
           }
-        />
+        >
+          {props.onExit && (
+            <button
+              type="button"
+              className="workflow-text-action"
+              onClick={props.onExit}
+            >
+              返回词库目录
+            </button>
+          )}
+        </WorkflowQuestion>
       ) : (
         <WorkflowCompleted
           id="keyword-entry"

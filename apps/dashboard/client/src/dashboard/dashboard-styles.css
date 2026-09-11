@@ -3319,6 +3319,20 @@
 .user-brand-dashboard .keyword-stats-bar strong {
   color: var(--purple-2);
 }
+.user-brand-dashboard .keyword-stats-bar .keyword-workflow-entry {
+  margin-left: auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid #d9cdea;
+  border-radius: 8px;
+  background: #fff;
+  color: #5b2a86;
+  font-size: 13px;
+  cursor: pointer;
+}
+.user-brand-dashboard .keyword-stats-bar .keyword-workflow-entry:hover {
+  background: #f6f1fb;
+}
 .user-brand-dashboard .priority-pill.priority-high {
   background: #fee2e2;
   color: #dc2626;

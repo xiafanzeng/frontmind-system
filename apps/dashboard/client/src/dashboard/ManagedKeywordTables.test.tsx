@@ -363,7 +363,7 @@ it("shows the real publication prerequisite after choosing generation", () => {
       />,
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
+  // The generation control renders directly on the tables landing.
   expect(
     screen.getByRole("heading", { name: "先发布企业知识库" }),
   ).toBeInTheDocument();
@@ -390,6 +390,8 @@ it("opens the existing directory on request even when published knowledge is una
       />,
     ),
   );
+  expect(screen.getByRole("table")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "挑选与生成" }));
   expect(screen.queryByRole("table")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
   expect(
@@ -413,7 +415,6 @@ it("surfaces a real observation error and retries the read without starting a ge
       <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
   expect(screen.getByText("连接暂不可用")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
   await waitFor(() => expect(mocks.refetch).toHaveBeenCalledOnce());
@@ -434,7 +435,6 @@ it("offers a read retry after the initial observation stalls without declaring g
       <ManagedKeywordTables tables={[]} generationEnabled knowledgePublished />,
     ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "生成词库" }));
   expect(
     screen.getByRole("heading", { name: "正在读取词库生成条件" }),
   ).toBeInTheDocument();
@@ -497,7 +497,8 @@ it("confirms a versioned selection before an explicit idempotent handoff", async
       />
     </BusinessWorkspaceProvider>,
   );
-  expect(screen.queryByText("问题 1")).toBeNull();
+  expect(screen.getByRole("table")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "挑选与生成" }));
   fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
   expect(screen.getAllByRole("listitem")).toHaveLength(10);
   fireEvent.click(screen.getByRole("button", { name: /^问题 1\s*产品场景词/ }));

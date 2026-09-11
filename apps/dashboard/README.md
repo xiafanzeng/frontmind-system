@@ -50,15 +50,14 @@ pnpm install
 cp .env.example .env
 ```
 
-以上复制步骤和本页的数据库命令只用于本地开发。生产环境使用签名 OCI 镜像、
-root-only runtime/migrator 配置和受限 digest 部署控制器；不得在服务器检出源码、提交
-`dist` 或手工运行常规 migration。唯一发布入口见
-[权威发布手册](./docs/operations/RELEASE.md)。
+以上复制步骤和本页的数据库命令只用于本地开发。生产环境按 digest 运行不可变 OCI
+镜像（`ghcr.io/xiafanzeng/frontmind-system-dashboard`），不检出源码、不提交 `dist`；
+常规发布入口见仓库根 [docs/operations/RELEASE.md](../../docs/operations/RELEASE.md)
+与 [deploy/README.md](../../deploy/README.md)。生产主机为 `149.88.85.240`；旧主机
+`149.88.85.148` 已退役。
 
-生产 PDF 运行环境从
-[`deploy/1panel-node-pdf/Dockerfile`](./deploy/1panel-node-pdf/Dockerfile)
-独立构建并按 digest 固定，使 Poppler、Ghostscript 与项目声明的精确 pnpm 在容器重建后
-仍然存在；普通 Dashboard 更新不会重建该基础镜像。
+应用的 PDF 处理依赖（Poppler、Ghostscript）已包含在生产镜像内，随应用镜像一起更新，
+没有独立的基础镜像发布链路。
 
 本地 `.env` 至少设置 `DATABASE_URL`、`FRONTMIND_CREDENTIAL_ENCRYPTION_KEY`、`FRONTMIND_PRESALES_SERVICE_TOKEN`、`FRONTMIND_PROVISIONING_SERVICE_TOKEN`、`FRONTMIND_MONITOR_API_KEY`、`FRONTMIND_PUBLIC_URL` 和 `FRONTMIND_DASHBOARD_IMPORT_PREFLIGHT_SECRET`。`FRONTMIND_MONITOR_API_KEY` 必须是监控服务专用凭据，生产环境不会回退使用普通售前 Key；`FRONTMIND_PUBLIC_URL` 必须是可供客户浏览器访问的真实 HTTPS 地址，用于生成开户与工作台链接。凭据密钥、两个服务令牌和预检签名密钥都应使用至少 32 位的独立随机值，并只保存在服务端，且不得互相复用。轮换预检签名密钥会使尚未发布的短时预检凭证失效，但不会影响已发布内容。
 

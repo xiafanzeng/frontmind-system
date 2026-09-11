@@ -14,7 +14,6 @@
     "format": "prettier --write .",
     "test": "pnpm test:partition:verify && pnpm test:node && pnpm test:client",
     "test:release:repository": "node scripts/release-channel.mjs repository-test",
-    "test:registry-retention": "node --test scripts/retention-tests/*.node-test.mjs",
     "test:kb:mysql-acceptance": "FRONTMIND_KB_MYSQL_ACCEPTANCE_REQUIRED=1 vitest run scripts/knowledge-base-mysql-acceptance.test.ts",
     "test:kb:mysql-e2e-acceptance": "FRONTMIND_KB_MANUS_V2_MYSQL_ACCEPTANCE_REQUIRED=1 vitest run --config vitest.node.config.ts scripts/knowledge-base-manus-v2-mysql-e2e-acceptance.test.ts scripts/knowledge-base-upload-scope-mysql.test.ts",
     "test:release:mysql-acceptance": "FRONTMIND_RELEASE_MYSQL_ACCEPTANCE_REQUIRED=1 vitest run scripts/release-db-additive-mysql-acceptance.test.ts",

@@ -2,8 +2,8 @@
 
 The production host `149.88.85.240` runs Dashboard/API, siteops-worker,
 monitoring-worker, Website, private MySQL, backup, and host OpenResty.
-Dashboard is the sole login authority. The original server `149.88.85.148`
-continues running and is outside this deployment.
+Dashboard is the sole login authority. The old server `149.88.85.148` is
+retired and outside this deployment.
 
 Use the checked-in Compose file at
 `/srv/frontmind-system/compose/docker-compose.yml` and root-only environment

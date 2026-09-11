@@ -242,15 +242,6 @@ export async function acceptKnowledgeBaseInitialDraft(
       acceptedAt: now.toISOString(),
     };
     await tx
-      .update(knowledgeBaseBuildNodes)
-      .set({
-        status: "confirmed",
-        confirmedAt: now,
-        transitionReason: "initial_draft_accepted",
-        updatedAt: now,
-      })
-      .where(eq(knowledgeBaseBuildNodes.buildId, build.id));
-    await tx
       .update(conversationTurns)
       .set({
         metadata: {
@@ -264,21 +255,37 @@ export async function acceptKnowledgeBaseInitialDraft(
         updatedAt: now,
       })
       .where(eq(conversationTurns.id, start.id));
-    await tx
-      .update(knowledgeBaseBuilds)
-      .set({
-        status: build.status === "published" ? "published" : "ready_to_publish",
-        currentLeafId: null,
-        currentPresentationKey: null,
-        confirmedCount: nodes.length,
-        directPrefilledCount: 0,
-        needsVerificationCount: 0,
-        contentCompletedAt: now,
-        revision: build.revision + 1,
-        stateEpoch: build.stateEpoch + 1,
-        updatedAt: now,
-      })
-      .where(eq(knowledgeBaseBuilds.id, build.id));
+    // Accepting the initial draft only unlocks the editing phase. Node states
+    // keep driving the per-node walkthrough, so an unfinished build must keep
+    // its revision/currentLeafId/presentation coordinates untouched — the
+    // presentation guard rejects replies whenever presentation.revision !==
+    // build.revision, and stale coordinates would break in-flight confirms.
+    const walkthroughSettled = (status: string) =>
+      status === "confirmed" || status === "direct_prefilled";
+    const walkthroughComplete = nodes.every((node) =>
+      walkthroughSettled(node.status),
+    );
+    if (walkthroughComplete) {
+      await tx
+        .update(knowledgeBaseBuilds)
+        .set({
+          status:
+            build.status === "published" ? "published" : "ready_to_publish",
+          currentLeafId: null,
+          currentPresentationKey: null,
+          confirmedCount: nodes.filter((node) => node.status === "confirmed")
+            .length,
+          directPrefilledCount: nodes.filter(
+            (node) => node.status === "direct_prefilled",
+          ).length,
+          needsVerificationCount: 0,
+          contentCompletedAt: now,
+          revision: build.revision + 1,
+          stateEpoch: build.stateEpoch + 1,
+          updatedAt: now,
+        })
+        .where(eq(knowledgeBaseBuilds.id, build.id));
+    }
     return { accepted: true as const, unchanged: false, receipt };
   });
 }

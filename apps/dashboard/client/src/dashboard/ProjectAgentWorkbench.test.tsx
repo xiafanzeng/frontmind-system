@@ -182,11 +182,14 @@ describe("conversational project workbench", () => {
       const view = render(page());
       const expected = saved ? "current-keywords" : "local-1";
       expect(screen.getByLabelText("词库绑定")).toHaveTextContent(expected);
-      const aside = screen.getByRole("complementary", { name: "任务辅助区" });
+      const main = screen.getByRole("region", { name: "主工作区" });
       expect(
-        within(aside).getByRole("heading", { name: "项目词库" }),
+        within(main).getByRole("heading", { name: "项目词库" }),
       ).toBeInTheDocument();
-      expect(aside).toHaveTextContent("版本 7 · 160 条问题");
+      expect(main).toHaveTextContent("版本 7 · 160 条问题");
+      expect(
+        screen.queryByRole("complementary", { name: "任务辅助区" }),
+      ).toBeNull();
       expect(screen.queryByRole("tab", { name: "任务" })).toBeNull();
       expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
       expect(screen.queryByRole("button", { name: "新任务" })).toBeNull();
@@ -245,9 +248,9 @@ describe("conversational project workbench", () => {
       </Workspace>,
     );
     expect(
-      within(
-        screen.getByRole("complementary", { name: "任务辅助区" }),
-      ).getByText("已保存的优化问题"),
+      within(screen.getByRole("region", { name: "主工作区" })).getByText(
+        "已保存的优化问题",
+      ),
     ).toBeInTheDocument();
   });
   it("starts real business content in the main pane without a placeholder chat", () => {
@@ -276,7 +279,7 @@ describe("conversational project workbench", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     fireEvent.click(
       within(
-        screen.getByRole("navigation", { name: "切换子 Agent" }),
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
       ).getByRole("button", { name: "稿件" }),
     );
     expect(open).toHaveBeenCalledWith("articles");
@@ -322,157 +325,5 @@ describe("conversational project workbench", () => {
     );
     expect(screen.getByRole("textbox", { name: "媒体搜索" })).toBe(input);
     expect(input).toHaveValue("人工智能");
-  });
-  it("opens a local native general task with its task and results panel", async () => {
-    render(
-      <Workspace>
-        <ProjectAgentWorkbench projectId="account" />
-      </Workspace>,
-    );
-    expect(await screen.findByLabelText("对话输入")).toHaveAttribute(
-      "data-task",
-      "local-0",
-    );
-    expect(
-      screen.getByRole("complementary", { name: "任务辅助区" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("separator")).toBeInTheDocument();
-    expect(api.bind).not.toHaveBeenCalled();
-  });
-
-  it("runs visible sidebar search, selection, creation and management against the same general task owner", async () => {
-    const onNavigate = vi.fn();
-    function GeneralWithSidebar() {
-      const [target, setTarget] = useState<HTMLDivElement | null>(null);
-      return (
-        <>
-          <aside aria-label="左侧任务">
-            <div ref={setTarget} />
-          </aside>
-          <ProjectAgentWorkbench
-            projectId="account"
-            taskNavigationTarget={target}
-            onTaskNavigate={onNavigate}
-          />
-        </>
-      );
-    }
-    const seed = (id: string, title: string, workbenchAgentId?: string) =>
-      ({
-        id,
-        title,
-        workbenchAgentId,
-        messages: [],
-        status: "idle",
-        createdAt: 1,
-        updatedAt: id === "general-2" ? 2 : 1,
-      }) as Conversation;
-    render(
-      <Workspace
-        initialConversations={[
-          seed("general-2", "产品规划", "general"),
-          seed("general-1", "品牌调研", "general"),
-          seed("legacy", "旧通用任务"),
-          seed("media", "不应出现的媒体任务", "media"),
-        ]}
-      >
-        <GeneralWithSidebar />
-      </Workspace>,
-    );
-    expect(
-      screen.getByRole("complementary", { name: "左侧任务" }),
-    ).not.toHaveTextContent("任务历史");
-    const sidebar = screen.getByRole("complementary", { name: "任务辅助区" });
-    expect(within(sidebar).getByRole("tab", {name:"文件"})).toHaveAttribute("aria-selected","true");
-    fireEvent.click(within(sidebar).getByRole("tab", {name:"任务"}));
-    const list = within(sidebar).getByRole("listbox", { name: "任务历史" });
-    expect(await screen.findByLabelText("对话输入")).toHaveAttribute(
-      "data-task",
-      "general-2",
-    );
-    expect(
-      within(sidebar).getByRole("button", { name: "新任务" }),
-    ).toBeVisible();
-    expect(screen.queryByRole("button", { name: /^历史$/ })).toBeNull();
-    expect(screen.getAllByRole("button", { name: /^新任务$/ })).toHaveLength(1);
-    expect(screen.queryByText("不应出现的媒体任务")).toBeNull();
-    fireEvent.change(
-      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
-      { target: { value: "品牌" } },
-    );
-    expect(within(list).getAllByRole("option")).toHaveLength(1);
-    fireEvent.click(within(list).getByRole("button", { name: /^品牌调研/ }));
-    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
-      "data-task",
-      "general-1",
-    );
-    expect(
-      new URLSearchParams(window.location.search).get("workbenchTask"),
-    ).toBe("general-1");
-    fireEvent.change(
-      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
-      { target: { value: "" } },
-    );
-    const first = within(list).getByRole("button", { name: /^产品规划/ });
-    first.focus();
-    fireEvent.keyDown(first, { key: "ArrowDown" });
-    expect(
-      within(list).getByRole("button", { name: /^品牌调研/ }),
-    ).toHaveFocus();
-    expect(within(sidebar).queryByRole("button", { name: "旧任务" })).toBeNull();
-    expect(within(sidebar).queryByRole("button", { name: "当前智能体" })).toBeNull();
-    expect(within(list).getAllByRole("option")).toHaveLength(3);
-    fireEvent.click(within(list).getByRole("button", { name: /^旧通用任务/ }));
-    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
-      "data-task",
-      "legacy",
-    );
-    fireEvent.change(
-      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
-      { target: { value: "旧通用" } },
-    );
-    expect(within(list).getAllByRole("option")).toHaveLength(1);
-    expect(list).toHaveTextContent("旧通用任务");
-    fireEvent.click(within(sidebar).getByRole("button", { name: /^新任务$/ }));
-    expect(
-      within(sidebar).getByRole("textbox", { name: "搜索任务" }),
-    ).toHaveValue("");
-    expect(screen.getByLabelText("对话输入")).toHaveAttribute(
-      "data-task",
-      "local-4",
-    );
-    expect(
-      within(list).getByRole("option", { selected: true }),
-    ).toHaveTextContent("新任务");
-    fireEvent.click(
-      within(sidebar).getByRole("button", { name: "删除任务 品牌调研" }),
-    );
-    expect(within(list).queryByText("品牌调研")).toBeNull();
-    expect(onNavigate).toHaveBeenCalledTimes(3);
-    expect(api.bind).not.toHaveBeenCalled();
-  });
-
-  it("shows loading and retry states in the visible task list", () => {
-    const retry = vi.fn();
-    const props = {
-      tasks: [],
-      onNew: vi.fn(),
-      onSelect: vi.fn(),
-      presentation: "sidebar" as const,
-    };
-    const view = render(<WorkbenchTaskToolbar {...props} disabled loading />);
-    expect(screen.getByRole("status")).toHaveTextContent("正在读取任务");
-    expect(screen.getByRole("button", { name: "新任务" })).toBeDisabled();
-    expect(screen.queryByText("暂无任务历史")).toBeNull();
-    view.rerender(
-      <WorkbenchTaskToolbar
-        {...props}
-        error="任务列表暂时无法读取"
-        onRetry={retry}
-      />,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent("任务列表暂时无法读取");
-    fireEvent.click(screen.getByRole("button", { name: "重新读取" }));
-    expect(retry).toHaveBeenCalledOnce();
   });
 });

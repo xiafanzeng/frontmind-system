@@ -74,7 +74,6 @@ export function operatorViewPath(view: string): string {
   return (
     (
       {
-        general: "/agent",
         monitoring: "/monitoring-system",
         content: "/content-production",
         publishing: "/publishing",

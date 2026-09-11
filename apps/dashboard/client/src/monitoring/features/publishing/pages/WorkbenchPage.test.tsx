@@ -115,7 +115,10 @@ import {
 } from "../PublishingFlowContext";
 
 function openConversation(overrides: Record<string, unknown> = {}) {
-  const location = memoryLocation({ path: "/publishing", record: true });
+  const location = memoryLocation({
+    path: "/publishing?flow=1",
+    record: true,
+  });
   const gateway = {
     getDashboard: vi.fn(async () => ({
       resumableDrafts: [

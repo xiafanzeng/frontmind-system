@@ -111,10 +111,10 @@ export default function KnowledgeWorkbenchActions({
           {presentation === "resource"
             ? initial
               ? "初稿待确认"
-              : "已进入节点编辑"
+              : "正在逐节点核验"
             : initial
-              ? "初稿已按知识节点组织。浏览后整体确认，即可继续修改正文和图片。"
-              : "从右侧选择节点，在这里查看与编辑。完成修改后，更新知识库以启用新版本。"}
+              ? "初稿已按知识节点组织。浏览后点击确认进入逐节点核验：可逐个确认、跳过预填或让 AI 修改，全部完成后更新知识库。"
+              : "在对话中确认当前节点，或从右侧选择节点直接编辑与重新核验。全部完成后，更新知识库以启用新版本。"}
         </p>
       </div>
       <div className="knowledge-workbench-stage__actions">

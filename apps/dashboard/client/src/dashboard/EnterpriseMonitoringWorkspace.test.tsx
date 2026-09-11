@@ -105,14 +105,18 @@ it("shows only saved project source questions and replaces them when selecting a
   const summary = within(
     screen.getByRole("complementary", { name: "业务摘要" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
+  // Browsing default: the most recent monitor renders without any entry
+  // question.
+  expect(await screen.findByLabelText("内联监控模块")).toHaveTextContent(
+    "project-1",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "新建监控" }));
   fireEvent.click(screen.getByRole("checkbox"));
-  expect(summary.getByText("尚未选择已保存项目")).toBeInTheDocument();
   expect(
     summary.getByText("已保存来源问题").nextElementSibling,
-  ).not.toHaveTextContent("1 个");
+  ).toHaveTextContent("2 个");
   fireEvent.click(screen.getByRole("button", { name: "收起新建监控" }));
-  fireEvent.click(screen.getByRole("button", { name: "查看已有监控" }));
+  fireEvent.click(screen.getByRole("button", { name: "切换监控" }));
   fireEvent.click(
     screen.getByRole("button", { name: /企业监控.*2 个来源问题/ }),
   );
@@ -122,7 +126,7 @@ it("shows only saved project source questions and replaces them when selecting a
   expect(
     summary.getByText("已保存来源问题").nextElementSibling,
   ).toHaveTextContent("2 个");
-  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
+  fireEvent.click(screen.getByRole("button", { name: "切换监控" }));
   fireEvent.click(
     screen.getByRole("button", { name: /另一监控.*1 个来源问题/ }),
   );
@@ -144,12 +148,11 @@ it("projects only the active report mode while preserving the chosen run for a r
   const summary = within(
     screen.getByRole("complementary", { name: "业务摘要" }),
   );
-  expect(summary.getByText("尚未选择分析方式")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
+  // Run records are the default tab; no entry question is rendered.
+  expect(summary.getByText("当前项目最近 200 次运行")).toBeInTheDocument();
   fireEvent.click(screen.getAllByRole("button", { name: "展开分析" })[0]);
   expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
-  fireEvent.click(screen.getByRole("button", { name: /分析监控趋势/ }));
+  fireEvent.click(screen.getByRole("button", { name: "监控趋势" }));
   fireEvent.click(
     screen.getByRole("button", { name: /另一监控.*展开趋势分析/ }),
   );
@@ -158,15 +161,13 @@ it("projects only the active report mode while preserving the chosen run for a r
   ).toHaveTextContent("另一监控");
   expect(summary.queryByText("选中运行")).toBeNull();
   expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
-  fireEvent.click(screen.getByRole("button", { name: /查看导入报告/ }));
+  fireEvent.click(screen.getByRole("button", { name: "导入报告" }));
   expect(summary.getByText("历史导入报告")).toBeInTheDocument();
   expect(summary.queryByText("趋势监控项目")).toBeNull();
   expect(summary.queryByText("选中运行")).toBeNull();
   expect(summary.queryByText("监控数据更新时间")).toBeNull();
   expect(summary.queryByText("企业监控 · 运行报告")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
-  fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
+  fireEvent.click(screen.getByRole("button", { name: "单次运行" }));
   expect(summary.getByText("企业监控 · 运行报告")).toBeInTheDocument();
   expect(await screen.findByText("读取真实运行 run-0")).toBeInTheDocument();
 });
@@ -203,8 +204,6 @@ it("pages live runs and expands the selected owned run in the main flow", async 
   expect(document.querySelector(".business-report-flow")).not.toHaveClass(
     "page-shell",
   );
-  expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /查看单次运行/ }));
   expect(screen.getAllByRole("row")).toHaveLength(21);
   fireEvent.click(screen.getAllByRole("button", { name: "展开分析" })[0]);
   const expanded = screen.getByRole("region", { name: "选中运行的完整分析" });
@@ -240,7 +239,7 @@ it("creates a project and expands its configuration without changing routes", as
       />
     </BusinessWorkspaceProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建监控" }));
   fireEvent.change(screen.getByLabelText("监控项目名称"), {
     target: { value: "品牌问题监控" },
   });
@@ -279,7 +278,7 @@ it("expands trend and imported report branches with their real data ranges", asy
       historical={<p>导入的历史资料</p>}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: /分析监控趋势/ }));
+  fireEvent.click(screen.getByRole("button", { name: "监控趋势" }));
   expect(
     screen.getByRole("region", { name: "监控趋势分析" }),
   ).toHaveTextContent("最近 100 次运行");
@@ -289,8 +288,7 @@ it("expands trend and imported report branches with their real data ranges", asy
   expect(await screen.findByLabelText("内联监控模块")).toHaveTextContent(
     "project-1:趋势分析",
   );
-  fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
-  fireEvent.click(screen.getByRole("button", { name: /查看导入报告/ }));
+  fireEvent.click(screen.getByRole("button", { name: "导入报告" }));
   expect(
     screen.getByRole("region", { name: "历史导入报告" }),
   ).toHaveTextContent("导入的历史资料");
@@ -328,7 +326,7 @@ it("retains a created monitor when its task receipt fails and retries only the a
       />
     </BusinessWorkspaceProvider>,
   );
-  fireEvent.click(screen.getByRole("button", { name: "新建问题监控" }));
+  fireEvent.click(screen.getByRole("button", { name: "新建监控" }));
   fireEvent.change(screen.getByLabelText("监控项目名称"), {
     target: { value: "已创建项目" },
   });

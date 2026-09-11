@@ -123,13 +123,15 @@ describe("AuthBoundary", () => {
 });
 
 describe("General Agent customer entry", () => {
-  it("opens the original customer dashboard for a customer account", async () => {
+  it("redirects customer accounts away from the retired /agent route", () => {
     authMock.user = { id: 3, role: "user" } as any;
     render(
       <Suspense fallback={<div>loading</div>}>
         <GeneralAgentLanding />
       </Suspense>,
     );
-    expect(await screen.findByText("CUSTOMER_DASHBOARD")).toBeInTheDocument();
+    // Customers no longer get a general agent workspace from /agent.
+    expect(screen.queryByText("CUSTOMER_DASHBOARD")).toBeNull();
+    expect(window.location.pathname).toBe("/");
   });
 });

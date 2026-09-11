@@ -12,9 +12,9 @@ import {
 } from "@/hooks/useChatReadingPosition";
 import {
   useWorkbenchModule,
-  useWorkbenchProjectName,
   type WorkbenchAction,
 } from "@/dashboard/agent-workbench";
+import { WORKBENCH_AUX_WIDTHS } from "@/dashboard/workbench-presentation";
 import { requestWorkspaceNavigation } from "@/lib/workspace-navigation-guard";
 import "./AgentWorkbenchShell.css";
 import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
@@ -26,7 +26,7 @@ export type AgentWorkbenchShellProps = {
   main?: ReactNode;
   auxiliary?: ReactNode;
   composer?: ReactNode;
-  layout?: "single" | "workflow" | "knowledge";
+  layout?: "single" | "workflow" | "knowledge" | "workspace";
   toolbar?: ReactNode;
   taskTitle?: string;
   taskKey?: string;
@@ -99,10 +99,11 @@ export function AgentWorkbenchShell({
   titleRef,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
-  const projectName = useWorkbenchProjectName();
   const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
   const isKnowledge = layout === "knowledge";
-  const hasAux = layout !== "single";
+  const isWorkspace = layout === "workspace";
+  const hasAux = layout !== "single" && !isWorkspace;
+  const fixedAuxWidth = WORKBENCH_AUX_WIDTHS[moduleId];
   const ownsScroll = scrollMain ?? main !== undefined;
   const [ratio, setRatio] = useState(savedRatio);
   const [available, setAvailable] = useState(0);
@@ -116,7 +117,7 @@ export function AgentWorkbenchShell({
   const paneGeometry = workbenchPaneGeometry(available, ratio);
   const minAux = paneGeometry.minAux;
   const maxAux = paneGeometry.maxAux;
-  const renderedWidth = paneGeometry.width;
+  const renderedWidth = fixedAuxWidth ?? paneGeometry.width;
   const narrow = viewportWidth < WORKBENCH_MIN_WIDTH;
   useEffect(() => {
     const measure = () => {
@@ -177,6 +178,7 @@ export function AgentWorkbenchShell({
     { initialPinned: false, enabled: ownsScroll },
   );
   const changeWidth = (value: number) => {
+    if (fixedAuxWidth) return;
     const next = Math.max(minAux, Math.min(maxAux, value));
     const nextRatio = next / Math.max(1, available - 48);
     setRatio(nextRatio);
@@ -210,7 +212,10 @@ export function AgentWorkbenchShell({
   };
   const subagents = actions ?? module?.actions ?? [];
   const agentSwitch = subagents.length > 0 && (
-    <nav className="agent-workbench-subagents" aria-label="切换子 Agent">
+    <nav
+      className="agent-workbench-subagents agent-workbench-subagents--bar"
+      aria-label="切换业务子页面"
+    >
       {subagents.map((action) => (
         <button
           type="button"
@@ -249,18 +254,15 @@ export function AgentWorkbenchShell({
       }
     >
       <header className="agent-workbench-topbar">
-        <div className="agent-workbench-topbar__caption">
-          <span>AI智能品牌优化</span>
-          <span aria-hidden="true" className="agent-workbench-topbar__sep">/</span>
-          <span className="agent-workbench-topbar__module">{module?.label ?? title}</span>
-          {projectName ? (
-            <>
-              <span aria-hidden="true" className="agent-workbench-topbar__sep">/</span>
-              <strong className="agent-workbench-topbar__project" title={projectName}>
-                {projectName}
-              </strong>
-            </>
-          ) : null}
+        <div className="agent-workbench-topbar__inner">
+          {module ? (
+            <span className="agent-workbench-topbar__group" title={module.label}>
+              {module.label}
+            </span>
+          ) : (
+            <span className="agent-workbench-topbar__group">{title}</span>
+          )}
+          {agentSwitch}
         </div>
         <h2 ref={titleRef} tabIndex={-1} className="agent-workbench-topbar__heading">
           {title}
@@ -271,7 +273,7 @@ export function AgentWorkbenchShell({
       </header>
       <div
         ref={layoutRoot}
-        className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}`}
+        className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}${isWorkspace ? " is-workspace" : ""}`}
       >
         <section className="agent-workbench-shell__main" aria-label="主工作区">
           <div
@@ -279,7 +281,11 @@ export function AgentWorkbenchShell({
             tabIndex={-1}
             className={`agent-workbench-shell__main-content ${ownsScroll ? "is-scrollable" : "has-native-scroll"}`}
           >
-            {main ?? conversation}
+            {isWorkspace ? (
+              <div className="agent-workspace-frame">{main ?? conversation}</div>
+            ) : (
+              (main ?? conversation)
+            )}
           </div>
           {ownsScroll && showLatest && (
             <button
@@ -306,8 +312,8 @@ export function AgentWorkbenchShell({
               aria-valuemin={minAux}
               aria-valuemax={maxAux}
               aria-valuenow={Math.round(renderedWidth)}
-              tabIndex={narrow ? -1 : 0}
-              hidden={narrow}
+              tabIndex={narrow || fixedAuxWidth ? -1 : 0}
+              hidden={narrow || Boolean(fixedAuxWidth)}
               onPointerDown={resize}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -333,7 +339,6 @@ export function AgentWorkbenchShell({
               className={`agent-workbench-shell__auxiliary ${auxiliaryScroll ? "" : "has-native-auxiliary"}`}
               aria-label={isKnowledge ? "知识节点与资料" : "任务辅助区"}
             >
-              {agentSwitch}
               <div
                 className={`agent-workbench-shell__auxiliary-content ${auxiliaryScroll ? "" : "has-native-scroll"}`}
               >

@@ -91,7 +91,7 @@ const selectModule = (name: string) =>
   );
 const selectAgent = (name: string) =>
   fireEvent.click(
-    within(screen.getByRole("navigation", { name: "切换子 Agent" })).getByRole(
+    within(screen.getByRole("navigation", { name: "切换业务子页面" })).getByRole(
       "button",
       { name },
     ),
@@ -122,7 +122,7 @@ describe("operator workspace layout acceptance", () => {
         selectAgent(agent.label);
         expect(
           within(
-            screen.getByRole("navigation", { name: "切换子 Agent" }),
+            screen.getByRole("navigation", { name: "切换业务子页面" }),
           ).getByRole("button", { name: agent.label }),
         ).toHaveAttribute("aria-pressed", "true");
         if (agent.id !== "knowledge") {
@@ -148,57 +148,6 @@ describe("operator workspace layout acceptance", () => {
         }
       }
     }
-  });
-  it("keeps the polished general welcome and task/file tabs in the shared workspace", () => {
-    const { container } = render(<OperatorWorkspacePreview />);
-    selectModule("通用智能体");
-    expect(
-      container.querySelector('[data-layout="workflow"]'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "定义 AI 原生时代的企业增长" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("textbox", { name: "继续对话" }),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText("添加预览附件")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "任务" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "成果" })).toBeNull();
-    expect(
-      screen.getByRole("complementary", { name: "任务辅助区" }),
-    ).toContainElement(screen.getByRole("button", { name: "新任务" }));
-    expect(
-      screen.getByRole("navigation", { name: "项目导航预览" }),
-    ).not.toContainElement(screen.getByRole("button", { name: "新任务" }));
-  });
-  it("keeps drafts and conversation history independent between agents and projects", () => {
-    render(<OperatorWorkspacePreview />);
-    selectModule("通用智能体");
-    fireEvent.change(screen.getByRole("textbox", { name: "继续对话" }), {
-      target: { value: "通用任务草稿" },
-    });
-    selectModule("内容制作");
-    selectModule("通用智能体");
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue(
-      "通用任务草稿",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "发送预览消息" }));
-    fireEvent.click(screen.getByRole("button", { name: "新任务" }));
-    expect(screen.queryByText("通用任务草稿")).toBeNull();
-    expect(screen.queryByRole("button", { name: /^历史$/ })).toBeNull();
-    fireEvent.click(
-      within(screen.getByRole("listbox", { name: "任务历史" })).getByRole(
-        "button",
-        { name: /^任务 1/ },
-      ),
-    );
-    expect(screen.getByText("通用任务草稿")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "切换预览项目" }), {
-      target: { value: "design-project-2" },
-    });
-    selectModule("通用智能体");
-    expect(screen.queryByText("通用任务草稿")).toBeNull();
   });
   it("unfolds the media directory, confirms selection and hands off to a separate task", () => {
     render(<OperatorWorkspacePreview />);
@@ -340,7 +289,7 @@ describe("operator workspace layout acceptance", () => {
     ).toBeInTheDocument();
     expect(
       within(
-        screen.getByRole("navigation", { name: "切换子 Agent" }),
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
       ).getByRole("button", { name: "优化问题" }),
     ).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(
@@ -359,20 +308,4 @@ describe("operator workspace layout acceptance", () => {
     ).toBeInTheDocument();
   });
 
-  it("restores a task draft after reloading the local preview without borrowing another agent's draft", () => {
-    const first = render(<OperatorWorkspacePreview />);
-    selectModule("通用智能体");
-    fireEvent.change(screen.getByRole("textbox", { name: "继续对话" }), {
-      target: { value: "刷新后仍保留的任务资料" },
-    });
-    first.unmount();
-    render(<OperatorWorkspacePreview />);
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue(
-      "刷新后仍保留的任务资料",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "新任务" }));
-    expect(screen.getByRole("textbox", { name: "继续对话" })).toHaveValue("");
-    selectModule("内容制作");
-    expect(screen.queryByText("刷新后仍保留的任务资料")).toBeNull();
-  });
 });

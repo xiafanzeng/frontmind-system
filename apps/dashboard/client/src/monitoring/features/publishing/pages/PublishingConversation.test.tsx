@@ -137,8 +137,9 @@ function mount(
   gateway: Partial<PublisherGateway>,
   flow: PublishingFlow,
   node: React.ReactNode,
+  path = "/publishing",
 ) {
-  const location = memoryLocation({ path: "/publishing", record: true });
+  const location = memoryLocation({ path, record: true });
   return {
     ...render(
       <Router hook={location.hook} searchHook={location.searchHook}>
@@ -166,8 +167,22 @@ it("opens import in the main step, returns to the real article list, and restore
       },
     ]),
   };
-  const view = mount(gateway, flow, <ArticlesPage />);
-  expect(screen.queryByText("已有品牌稿件")).not.toBeInTheDocument();
+  // The article table is the default landing; no guided question appears.
+  const view = mount(gateway, flow, <ArticlesPage />, "/publishing/articles");
+  expect(
+    await screen.findByText("已有品牌稿件"),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByRole("heading", { name: "这次要从哪里开始准备稿件？" }),
+  ).not.toBeInTheDocument();
+  view.unmount();
+  const guided = "/publishing/articles?flow=1";
+  mount(
+    gateway,
+    flowValue("articles", selections),
+    <ArticlesPage />,
+    guided,
+  );
   fireEvent.click(screen.getByRole("button", { name: /导入 DOCX/ }));
   expect(
     await screen.findByRole("heading", { name: "请上传需要整理的稿件" }),
@@ -179,7 +194,12 @@ it("opens import in the main step, returns to the real article list, and restore
   ).toBeInTheDocument();
   expect(selections.articleEntry).toBe("existing");
   view.unmount();
-  mount(gateway, flowValue("articles", selections), <ArticlesPage />);
+  mount(
+    gateway,
+    flowValue("articles", selections),
+    <ArticlesPage />,
+    guided,
+  );
   expect(
     await screen.findByRole("button", { name: /已有品牌稿件/ }),
   ).toBeInTheDocument();

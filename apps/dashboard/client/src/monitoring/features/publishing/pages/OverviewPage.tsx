@@ -1,4 +1,4 @@
-import { ArrowRight, Clock3, FileText } from "lucide-react";
+import { ArrowRight, Clock3, FileText, Send } from "lucide-react";
 import { useCallback } from "react";
 import { Link } from "wouter";
 
@@ -45,13 +45,22 @@ export default function PublishingOverviewPage() {
       description="管理稿件、选择媒体并追踪每一笔发布结果。"
       busy={query.loading || query.refreshing}
       actions={
-        <Link
-          className="publishing-button publishing-button-primary"
-          href="/publishing/articles/new/import"
-        >
-          <FileText size={17} />
-          导入新稿件
-        </Link>
+        <>
+          <Link
+            className="publishing-button"
+            href="/publishing?flow=1"
+          >
+            <Send size={17} />
+            新建投放
+          </Link>
+          <Link
+            className="publishing-button publishing-button-primary"
+            href="/publishing/articles/new/import"
+          >
+            <FileText size={17} />
+            导入新稿件
+          </Link>
+        </>
       }
     >
       {query.loading ? <PublishingLoading /> : null}

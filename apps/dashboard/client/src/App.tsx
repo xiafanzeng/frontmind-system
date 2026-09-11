@@ -166,8 +166,9 @@ function UserOnly({ children }: { children: React.ReactNode }) {
 }
 
 export function GeneralAgentLanding() {
+  // The customer-facing general agent is retired; /agent now only routes
+  // delivery roles to their own agent consoles and everyone else home.
   const { user } = useAuth();
-  if (user?.role === "user") return <UserDashboard />;
   return isDeliveryAdminAccount(user) ? (
     <Redirect to="/admin/agent" />
   ) : user?.role === "delivery_member" ? (

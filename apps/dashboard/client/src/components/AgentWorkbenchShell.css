@@ -9,29 +9,36 @@
   color: #000;
   background: #fff;
 }
-/* Codex-style thin context bar: product / module / project on one line. */
+/* V2.3 workspace top bar: business group name + module tabs on one line. */
 .agent-workbench-topbar {
   position: relative;
   display: flex;
   align-items: center;
   gap: 16px;
   flex: 0 0 auto;
-  min-height: 38px;
-  padding: 0 20px;
+  min-height: 64px;
+  padding: 0 32px;
   border-bottom: 1px solid #eceef1;
   background: #fff;
 }
-.agent-workbench-topbar__caption {
+.agent-workbench-topbar__inner {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 22px;
   min-width: 0;
-  font-size: 13px;
-  line-height: 18px;
-  color: #667085;
+  flex: 1;
+  height: 100%;
 }
-.agent-workbench-topbar__caption > span:first-child {
-  color: #98a2b3;
+.agent-workbench-topbar__group {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 22px;
+  border-right: 1px solid #dfe3e8;
+  color: #242833;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 24px;
+  white-space: nowrap;
 }
 .agent-workbench-topbar__module {
   color: #344054;
@@ -98,6 +105,21 @@
 }
 .agent-workbench-shell__layout.is-single-pane {
   grid-template-columns: minmax(0, 1fr);
+}
+/* Resource workspaces browse full-width in a centered, capped canvas. */
+.agent-workbench-shell__layout.is-workspace {
+  display: block;
+  padding: 0;
+}
+.agent-workbench-shell__layout.is-workspace .agent-workbench-shell__main-content.is-scrollable {
+  padding: 0;
+}
+.agent-workspace-frame {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 26px 32px 30px;
+  min-width: 0;
 }
 .agent-workbench-shell__main,
 .agent-workbench-shell__auxiliary {
@@ -219,6 +241,44 @@
   border-bottom: 1px solid #eaecf0;
   flex-shrink: 0;
 }
+/* Business sub navigation now lives in the top bar (V2.3 module tabs). */
+.agent-workbench-subagents--bar {
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border-bottom: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  align-self: center;
+}
+.agent-workbench-subagents--bar::-webkit-scrollbar {
+  display: none;
+}
+.agent-workbench-subagents--bar button {
+  min-height: 34px;
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #737c8a;
+  font-size: 13px;
+  font-weight: 450;
+  white-space: nowrap;
+}
+.agent-workbench-subagents--bar button.is-active {
+  color: var(--subagent-color);
+  background: color-mix(in srgb, var(--subagent-color) 7%, white);
+  font-weight: 600;
+}
+.agent-workbench-subagents--bar button:hover:not(:disabled) {
+  color: var(--subagent-color);
+  background: #f7f7f8;
+}
+.agent-workbench-subagents--bar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .agent-workbench-subagents button {
   display: flex;
   align-items: center;
@@ -298,6 +358,29 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+/* Compact business summary strip shown instead of the auxiliary panel on
+ * resource (browsing) workspaces. */
+.workbench-resource-summary {
+  border: 1px solid #e7ebef;
+  border-radius: 12px;
+  background: #fff;
+  padding: 16px 18px;
+}
+.workbench-resource-summary .business-workspace-inspector h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+.workbench-resource-summary .business-workspace-inspector dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+}
+.workbench-resource-summary .business-workspace-inspector dt {
+  margin: 0;
+}
+.workbench-resource-summary .business-inspector-action {
+  margin-top: 12px;
 }
 .workbench-flow-error {
   display: flex;

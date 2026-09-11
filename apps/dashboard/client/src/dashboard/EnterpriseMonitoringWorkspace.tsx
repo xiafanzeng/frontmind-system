@@ -117,6 +117,16 @@ function AutomatedMonitoringWorkspace({
   const selectedProject = progress.data?.projects.find(
     (project) => project.id === selectedProjectId,
   );
+  // Browsing default: restore the most recent monitor instead of asking an
+  // entry question; the creation guide only appears when none exists.
+  useEffect(() => {
+    if (open || deepLink || !progress.data) return;
+    const projects = progress.data.projects;
+    if (projects.length === 0) return;
+    if (selectedProjectId && projects.some((item) => item.id === selectedProjectId))
+      return;
+    setSelectedProjectId(projects[0].id);
+  }, [open, deepLink, progress.data, selectedProjectId, setSelectedProjectId]);
   useBusinessWorkspaceSummary({
     items: [
       {
@@ -268,20 +278,30 @@ function AutomatedMonitoringWorkspace({
         </div>
       )}
       {!selectedProjectId && !deepLink && !open && !showExisting ? (
-        <WorkflowQuestion
-          variant="entry" module="progress"
-          question="这次想监控什么？"
-          description="从优化问题建立监控，或查看已有监控的运行与结果。"
-          choices={[
-            { id: "create", label: "新建问题监控" },
-            { id: "existing", label: "查看已有监控" },
-          ]}
-          onSelect={(choice) => {
-            setError("");
-            setOpen(choice === "create");
-            setShowExisting(choice === "existing");
-          }}
-        />
+        progress.isLoading ? (
+          <p role="status" className="business-monitor-restore">
+            正在读取监控项目…
+          </p>
+        ) : (progress.data?.projects.length ?? 0) > 0 ? (
+          <p role="status" className="business-monitor-restore">
+            正在恢复最近的监控…
+          </p>
+        ) : (
+          <WorkflowQuestion
+            variant="entry" module="progress"
+            question="这次想监控什么？"
+            description="从优化问题建立监控，或查看已有监控的运行与结果。"
+            choices={[
+              { id: "create", label: "新建问题监控" },
+              { id: "existing", label: "查看已有监控" },
+            ]}
+            onSelect={(choice) => {
+              setError("");
+              setOpen(choice === "create");
+              setShowExisting(choice === "existing");
+            }}
+          />
+        )
       ) : (
         <WorkflowCompleted
           id="monitoring-current-step"
@@ -495,6 +515,35 @@ function AutomatedMonitoringWorkspace({
         </section>
       )}
       {(selectedProjectId || deepLink) && !open && (
+        <>
+        <div className="business-monitor-toolbar">
+          <span>
+            当前监控 ·{" "}
+            {selectedProject?.name ?? progress.data?.projects.find(
+              (project) => project.id === selectedProjectId,
+            )?.name ?? "已恢复的监控任务"}
+          </span>
+          <div className="business-monitor-toolbar__actions">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setShowExisting(true);
+              }}
+            >
+              切换监控
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowExisting(false);
+                setOpen(true);
+              }}
+            >
+              新建监控
+            </button>
+          </div>
+        </div>
         <Suspense
           fallback={
             <div role="status" className="p-8">
@@ -522,6 +571,7 @@ function AutomatedMonitoringWorkspace({
             }}
           />
         </Suspense>
+        </>
       )}
     </div>
   );
@@ -556,7 +606,7 @@ export function EnterpriseProgressReport({
   historical?: React.ReactNode;
 }) {
   const { task, isWorkbench } = useBusinessWorkspace();
-  const [reportMode, setReportMode] = useBusinessFlowState(
+  const [storedReportMode, setReportMode] = useBusinessFlowState(
     "reportMode",
     task?.state?.values.reportRunId ||
       task?.state?.resources?.some(
@@ -569,6 +619,9 @@ export function EnterpriseProgressReport({
         ? String(value)
         : undefined,
   );
+  // Reports are a readable resource: the four source modes are persistent
+  // tabs, defaulting to run records instead of an entry question.
+  const reportMode = storedReportMode || "runs";
   const [trendProjectId, setTrendProjectId] = useBusinessFlowState(
     "reportTrendProjectId",
     "",
@@ -675,43 +728,26 @@ export function EnterpriseProgressReport({
     <section
       className={`${isWorkbench ? "" : "page-shell "}operator-progress-report business-report-flow`}
     >
-      {!reportMode ? (
-        <WorkflowQuestion
-          variant="entry" module="progress"
-          question="这次想了解哪一类监控结果？"
-          choices={[
-            { id: "data", label: "分析监控数据", description: "查看导入批次的回答、引用与可计算指标" },
-            {
-              id: "runs",
-              label: "查看单次运行",
-              description: "指标、回答与引用明细",
-            },
-            {
-              id: "trends",
-              label: "分析监控趋势",
-              description: "按时间范围比较变化",
-            },
-            {
-              id: "imports",
-              label: "查看导入报告",
-              description: "历史资料与导入来源",
-            },
-          ]}
-          onSelect={setReportMode}
-        />
-      ) : (
-        <WorkflowCompleted
-          id="report-analysis-mode"
-          summary={
-            reportMode === "data" ? "分析监控数据" : reportMode === "runs"
-              ? "查看单次运行"
-              : reportMode === "trends"
-                ? "分析监控趋势"
-                : "查看导入报告"
-          }
-          onRevise={() => setReportMode("")}
-        />
-      )}
+      <nav className="report-mode-tabs" aria-label="报告分析方式">
+        {(
+          [
+            { id: "runs", label: "单次运行" },
+            { id: "data", label: "监控数据" },
+            { id: "trends", label: "监控趋势" },
+            { id: "imports", label: "导入报告" },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            aria-current={reportMode === tab.id ? "page" : undefined}
+            className={reportMode === tab.id ? "is-active" : undefined}
+            onClick={() => setReportMode(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
       {reportMode === "data" && <Suspense fallback={<p role="status">正在读取监控数据…</p>}><MonitoringDataWorkspace enterpriseProjectId={enterpriseProjectId} /></Suspense>}
       <div hidden={reportMode !== "runs"}>
         <p className="business-flow-description">

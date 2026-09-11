@@ -150,8 +150,9 @@ it("opens widget controls only after choosing a task and restores task-specific 
     </BusinessWorkspaceProvider>
   );
   const view = render(workspace("task-a"));
-  expect(screen.queryByLabelText("机器人名称")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /配置 AI 部件/ }));
+  // Analytics is the default; the widget form stays hidden (not unmounted).
+  expect(screen.getByLabelText("机器人名称")).not.toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "AI 部件" }));
   fireEvent.change(screen.getByLabelText("机器人名称"), {
     target: { value: "甲任务的品牌助手" },
   });
@@ -168,9 +169,11 @@ it("opens widget controls only after choosing a task and restores task-specific 
   );
   act(() => window.history.replaceState(null, "", "/?view=content-insights"));
   view.rerender(workspace("task-b"));
-  expect(screen.queryByLabelText("机器人名称")).not.toBeInTheDocument();
+  // Browsing default lands on analytics; switch to the widget tab explicitly.
+  fireEvent.click(screen.getByRole("button", { name: "分析" }));
+  expect(screen.getByLabelText("机器人名称")).not.toBeVisible();
   expect((summary as BusinessWorkspaceSummary | null)?.outputs).toEqual([]);
-  fireEvent.click(screen.getByRole("button", { name: /配置 AI 部件/ }));
+  fireEvent.click(screen.getByRole("button", { name: "AI 部件" }));
   expect(screen.getByLabelText("机器人名称")).toHaveValue("Chatbot");
   view.unmount();
   act(() => window.history.replaceState(null, "", "/?view=content-insights"));
@@ -219,7 +222,7 @@ it.each(["analytics", "widget"])(
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: kind === "widget" ? /配置 AI 部件/ : /查看分析示例/,
+        name: kind === "widget" ? "AI 部件" : "分析",
       }),
     );
     if (kind === "widget")

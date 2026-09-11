@@ -212,8 +212,12 @@ describe("AgentWorkbenchShell persistent outcomes", () => {
     }
     render(<Workbench />);
     const draft = screen.getByRole("textbox");
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "切换业务子页面" }),
+      ).getByRole("button", { name: "媒体库" }),
+    );
     const aside = screen.getByRole("complementary");
-    fireEvent.click(within(aside).getByRole("button", { name: "媒体库" }));
     expect(aside).toHaveTextContent("media 摘要");
     expect(screen.getByRole("textbox")).toBe(draft);
   });

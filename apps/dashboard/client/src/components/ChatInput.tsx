@@ -1216,32 +1216,35 @@ export default function ChatInput({
             )}
           >
             <div className="agent-composer-controls flex min-h-[68px] items-end gap-1.5 p-2.5 sm:gap-2 sm:p-3.5">
-              {/* File buttons */}
-              <div className="agent-composer-attachments flex items-center gap-1 pb-0.5">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="w-9 h-9 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary"
-                      aria-label="添加附件"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={
-                        responseLogicInitialPromptLocked ||
-                        inputLocked ||
-                        isSending ||
-                        isUploading ||
-                        knowledgeBaseNotStarted
-                      }
-                    >
-                      <Paperclip className="w-4 h-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {officialLogoRequired ? "上传企业主 Logo" : "上传文件"}
-                  </TooltipContent>
-                </Tooltip>
-              </div>
+              {/* File buttons — enterprise QA answers from published knowledge
+               * only, so the attachment entry stays hidden there (V2.3). */}
+              {purpose !== "enterprise_qa" && (
+                <div className="agent-composer-attachments flex items-center gap-1 pb-0.5">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="w-9 h-9 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary"
+                        aria-label="添加附件"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={
+                          responseLogicInitialPromptLocked ||
+                          inputLocked ||
+                          isSending ||
+                          isUploading ||
+                          knowledgeBaseNotStarted
+                        }
+                      >
+                        <Paperclip className="w-4 h-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {officialLogoRequired ? "上传企业主 Logo" : "上传文件"}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              )}
 
               {/* Textarea */}
               <textarea

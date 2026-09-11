@@ -47,6 +47,11 @@ function fixture() {
     totalNodeCount: 2,
     status: "confirming",
     activeTurnId: null,
+    currentLeafId: "leaf1",
+    currentPresentationKey: "presentation-1",
+    confirmedCount: 0,
+    directPrefilledCount: 0,
+    needsVerificationCount: 0,
     publishedSnapshotId: null,
   };
   const nodes: any[] = [1, 2].map((n) => ({
@@ -186,15 +191,17 @@ function fixture() {
 }
 beforeEach(() => vi.clearAllMocks());
 describe("knowledge workbench initial acceptance", () => {
-  it("confirms one exact full snapshot atomically without publishing", async () => {
+  it("unlocks the editing phase atomically without confirming nodes", async () => {
     const f = fixture();
     const result = await acceptKnowledgeBaseInitialDraft(7, input);
     expect(result.unchanged).toBe(false);
-    expect(f.nodes.map((n) => n.status)).toEqual(["confirmed", "confirmed"]);
+    expect(f.nodes.map((n) => n.status)).toEqual(["pending", "pending"]);
     expect(f.build).toMatchObject({
-      status: "ready_to_publish",
-      revision: 5,
-      stateEpoch: 9,
+      status: "confirming",
+      revision: 4,
+      stateEpoch: 8,
+      currentLeafId: "leaf1",
+      currentPresentationKey: "presentation-1",
       publishedSnapshotId: null,
     });
     expect(
@@ -205,6 +212,26 @@ describe("knowledge workbench initial acceptance", () => {
       knowledgeBaseBuilds,
       conversationTurns,
     ]);
+    expect(await knowledgeWorkbenchEditingAllowed(f.tx, f.build)).toBe(true);
+    expect(knowledgeWorkbenchStage(f.build, f.start).phase).toBe("editing");
+  });
+  it("finishes to ready_to_publish only when every node is already settled", async () => {
+    const f = fixture();
+    f.nodes[0].status = "confirmed";
+    f.nodes[1].status = "direct_prefilled";
+    const result = await acceptKnowledgeBaseInitialDraft(7, input);
+    expect(result.unchanged).toBe(false);
+    expect(f.build).toMatchObject({
+      status: "ready_to_publish",
+      currentLeafId: null,
+      currentPresentationKey: null,
+      confirmedCount: 1,
+      directPrefilledCount: 1,
+      needsVerificationCount: 0,
+      revision: 5,
+      stateEpoch: 9,
+    });
+    expect(f.build.contentCompletedAt).toBeInstanceOf(Date);
     expect(await knowledgeWorkbenchEditingAllowed(f.tx, f.build)).toBe(true);
   });
   it("coalesces concurrent acceptance and never confirms later edits again", async () => {

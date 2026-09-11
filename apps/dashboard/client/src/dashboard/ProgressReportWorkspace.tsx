@@ -284,51 +284,150 @@ function ScreenshotGallery({
   gallery: ScreenshotGalleryState;
   onClose: () => void;
 }) {
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (viewerIndex !== null) setViewerIndex(null);
+      else onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  }, [onClose, viewerIndex]);
 
   if (typeof document === "undefined") return null;
 
   return createPortal(
+    <>
+      <div
+        className="question-screenshot-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+        <section
+          className="question-screenshot-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label={gallery.title}
+        >
+          <header>
+            <div>
+              <ImageIcon size={17} aria-hidden="true" />
+              <h3>{gallery.title}</h3>
+            </div>
+            <button type="button" aria-label="关闭答案截图" onClick={onClose}>
+              <X size={18} aria-hidden="true" />
+            </button>
+          </header>
+          <div className="question-screenshot-grid">
+            {gallery.screenshots.map((screenshot, index) => (
+              <figure key={screenshot.id || `${screenshot.url}-${index}`}>
+                <button
+                  type="button"
+                  className="question-screenshot-thumb"
+                  aria-label={`查看第 ${index + 1} 张截图`}
+                  onClick={() => setViewerIndex(index)}
+                >
+                  <img
+                    src={safeScreenshotUrl(screenshot.url)}
+                    alt={screenshot.alt || `${gallery.title} ${index + 1}`}
+                    loading="lazy"
+                  />
+                </button>
+                <figcaption>
+                  {screenshot.alt?.trim() || `截图 ${index + 1}`}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </section>
+      </div>
+      {viewerIndex !== null && (
+        <ScreenshotViewer
+          title={gallery.title}
+          screenshots={gallery.screenshots}
+          index={viewerIndex}
+          onIndexChange={setViewerIndex}
+          onClose={() => setViewerIndex(null)}
+        />
+      )}
+    </>,
+    document.body,
+  );
+}
+
+function ScreenshotViewer({
+  title,
+  screenshots,
+  index,
+  onIndexChange,
+  onClose,
+}: {
+  title: string;
+  screenshots: readonly AnswerScreenshot[];
+  index: number;
+  onIndexChange: (index: number) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const navigateOnKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft")
+        onIndexChange(Math.max(0, index - 1));
+      else if (event.key === "ArrowRight")
+        onIndexChange(Math.min(screenshots.length - 1, index + 1));
+    };
+    window.addEventListener("keydown", navigateOnKey);
+    return () => window.removeEventListener("keydown", navigateOnKey);
+  }, [index, onIndexChange, screenshots.length]);
+
+  if (typeof document === "undefined") return null;
+  const screenshot = screenshots[index];
+
+  return createPortal(
     <div
-      className="question-screenshot-backdrop"
-      role="presentation"
+      className="question-screenshot-viewer"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${title} 第 ${index + 1} 张截图`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section
-        className="question-screenshot-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={gallery.title}
-      >
-        <header>
-          <div>
-            <ImageIcon size={17} aria-hidden="true" />
-            <h3>{gallery.title}</h3>
-          </div>
-          <button type="button" aria-label="关闭答案截图" onClick={onClose}>
-            <X size={18} aria-hidden="true" />
-          </button>
-        </header>
-        <div className="question-screenshot-grid">
-          {gallery.screenshots.map((screenshot, index) => (
-            <figure key={screenshot.id || `${screenshot.url}-${index}`}>
-              <img
-                src={safeScreenshotUrl(screenshot.url)}
-                alt={screenshot.alt || `${gallery.title} ${index + 1}`}
-                loading="lazy"
-              />
-            </figure>
-          ))}
-        </div>
-      </section>
+      {screenshot && (
+        <img
+          src={safeScreenshotUrl(screenshot.url)}
+          alt={screenshot.alt || `${title} ${index + 1}`}
+        />
+      )}
+      <div className="question-screenshot-viewer__bar">
+        <button
+          type="button"
+          aria-label="上一张截图"
+          disabled={index === 0}
+          onClick={() => onIndexChange(Math.max(0, index - 1))}
+        >
+          ‹
+        </button>
+        <span>
+          {index + 1} / {screenshots.length}
+        </span>
+        <button
+          type="button"
+          aria-label="下一张截图"
+          disabled={index === screenshots.length - 1}
+          onClick={() =>
+            onIndexChange(Math.min(screenshots.length - 1, index + 1))
+          }
+        >
+          ›
+        </button>
+        <button type="button" aria-label="关闭全图查看" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      </div>
     </div>,
     document.body,
   );

@@ -2267,13 +2267,20 @@ export function EmptyConversationHint({
   const uploadBatch = useKnowledgeBaseUploadBatch(`${uploadScopeKey}:${resetRevision}`, `${uploadScopeKey}:`);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useKnowledgeBaseUploadField(uploadBatch, "dialogOpen", false);
+  const [companyNameDraft, setCompanyNameDraft] = useKnowledgeBaseUploadField(uploadBatch, "companyNameDraft", "");
+  const [companyNameTouched, setCompanyNameTouched] = useKnowledgeBaseUploadField(uploadBatch, "companyNameTouched", false);
+  // The server-configured name only seeds the draft; typed edits win.
+  useEffect(() => {
+    if (!companyNameTouched) setCompanyNameDraft(companyName);
+  }, [companyName, companyNameTouched, setCompanyNameDraft]);
+  const effectiveCompanyName = companyNameDraft.trim();
   const [companyWebsite, setCompanyWebsite] = useKnowledgeBaseUploadField(uploadBatch, "companyWebsite", "");
   const [operatorNotes, setOperatorNotes] = useKnowledgeBaseUploadField(uploadBatch, "operatorNotes", "");
   const [fileItems, setFileItems] = useKnowledgeBaseUploadField<
     Array<{ itemId: string; file: File }>
   >(uploadBatch, "fileItems", []);
   const files = useMemo(() => fileItems.map((item) => item.file), [fileItems]);
-  const starterDirty = eligible && !uploadBatch.read<number | null>("batchStartedAt", null) && Boolean(companyWebsite.trim() || operatorNotes.trim() || files.length);
+  const starterDirty = eligible && !uploadBatch.read<number | null>("batchStartedAt", null) && Boolean(effectiveCompanyName !== companyName.trim() || companyWebsite.trim() || operatorNotes.trim() || files.length);
   useWorkspaceDraftGuard({ dirty: inline && starterDirty && !uploadBatch.read("batchStartedAt", null), label: "知识库资料和补充说明" });
   useEffect(() => { if (inline) onDirtyChange?.(starterDirty); }, [inline, starterDirty, onDirtyChange]);
   useEffect(() => () => { if (inline) onDirtyChange?.(false); }, [inline, onDirtyChange]);
@@ -2760,9 +2767,9 @@ export function EmptyConversationHint({
 
   const handleStart = useCallback(async () => {
     if (uploadBatch.disposed || uploadBatch.controller) return;
-    const normalizedCompanyName = companyName.trim();
-    if (!companyConfigured || !normalizedCompanyName) {
-      toast.error("请联系管理员配置当前账号的企业名称");
+    const normalizedCompanyName = effectiveCompanyName;
+    if (!normalizedCompanyName) {
+      toast.error("请先填写本次构建使用的企业名称");
       return;
     }
 
@@ -2881,8 +2888,7 @@ export function EmptyConversationHint({
     }
   }, [
     batchStartedAt,
-    companyName,
-    companyConfigured,
+    effectiveCompanyName,
     companyWebsite,
     fileRecordIds,
     fileItems,
@@ -2903,7 +2909,7 @@ export function EmptyConversationHint({
   const [checkMessage] = useKnowledgeBaseUploadField<string | null>(uploadBatch, "checkMessage", null);
   const [stopState] = useKnowledgeBaseUploadField(uploadBatch, "stopState", "active");
   const lastProgressAt = uploadBatch.read<number>("lastProgressAt", Date.now());
-  const stalled = isStarting && batchPhase === "uploading" && elapsedAt - lastProgressAt >= 30_000;
+  const stalled = isStarting && batchPhase === "uploading" && elapsedAt - lastProgressAt >= 90_000;
 
 
   if (!eligible && batchStartedAt === null && !dialogOpen) return null;
@@ -2979,16 +2985,18 @@ export function EmptyConversationHint({
                 当前企业项目
               </label>
               <Input
-                value={companyName}
-                readOnly
-                placeholder={companyLoading ? "正在读取企业信息…" : "尚未配置"}
-                disabled={
-                  isStarting || isDiscarding || companyLoading || batchLocked
-                }
+                value={companyNameDraft}
+                maxLength={160}
+                onChange={(event) => {
+                  setCompanyNameTouched(true);
+                  setCompanyNameDraft(event.target.value);
+                }}
+                placeholder={companyLoading ? "正在读取企业信息…" : "输入本次构建使用的企业名称"}
+                disabled={isStarting || isDiscarding || batchLocked}
               />
-              {!companyLoading && !companyConfigured && (
+              {!companyLoading && !effectiveCompanyName && (
                 <p className="text-xs leading-5 text-amber-700">
-                  请先配置当前项目的企业名称，再开始构建知识库。
+                  请填写本次知识库构建使用的企业名称。
                 </p>
               )}
             </div>
@@ -3255,9 +3263,7 @@ export function EmptyConversationHint({
               disabled={
                 isStarting ||
                 isDiscarding ||
-                companyLoading ||
-                !companyConfigured ||
-                !companyName.trim() ||
+                !effectiveCompanyName ||
                 Boolean(nonRetryableFailedFile)
               }
               className="gap-2"

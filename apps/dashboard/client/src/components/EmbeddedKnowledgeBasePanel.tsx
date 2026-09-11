@@ -1323,14 +1323,6 @@ function RealBuildFlow({
       )}
       <KnowledgeWorkspaceStatus progress={displayedProgress} />
       {workbench && (
-        <header className="knowledge-flow-actions">
-          <h2 ref={knowledgeActions.titleRef} tabIndex={-1}>
-            智能知识库
-          </h2>
-          {knowledgeActions.workflow}
-        </header>
-      )}
-      {workbench && (
         <KnowledgeWorkbenchActions
           presentation="accept"
           progress={displayedProgress}
@@ -1481,12 +1473,15 @@ function RealBuildFlow({
   const resultKey = displayedProgress
     ? `${projectId}:${displayedProgress.build.id}:${displayedProgress.build.revision}:${displayedProgress.build.currentLeafId ?? ""}:${displayedProgress.build.contentVersion ?? ""}:${displayedProgress.build.updatedAt}`
     : `${projectId}:empty`;
+  const surfacesKnowledgeActions = useContext(KnowledgeActionsContext);
   return (
     <KnowledgeWorkspaceSurfaces
       taskTitle={displayedConversation?.title}
       taskKey={conversationId ?? undefined}
       collaboration={collaboration}
       knowledge={knowledge}
+      topbarActions={surfacesKnowledgeActions?.workflow}
+      focusTitleRef={surfacesKnowledgeActions?.titleRef}
       resourceActions={
         workbench ? (
           <>
@@ -1519,6 +1514,8 @@ function KnowledgeWorkspaceSurfaces({
   collaboration,
   knowledge,
   resourceActions,
+  topbarActions,
+  focusTitleRef,
   collaborationRequest,
   nodeFocusRequest,
   workbench = false,
@@ -1530,6 +1527,8 @@ function KnowledgeWorkspaceSurfaces({
   collaboration: React.ReactNode;
   knowledge: React.ReactNode;
   resourceActions?: React.ReactNode;
+  topbarActions?: React.ReactNode;
+  focusTitleRef?: React.RefObject<HTMLHeadingElement | null>;
   collaborationRequest?: object | null;
   nodeFocusRequest?: object | null;
   workbench?: boolean;
@@ -1570,6 +1569,8 @@ function KnowledgeWorkspaceSurfaces({
         projectId={projectId}
         moduleId="knowledge"
         title="智能知识库"
+        topbarActions={topbarActions}
+        titleRef={focusTitleRef}
         main={
           <div className="knowledge-conversation-column">{collaboration}</div>
         }

@@ -94,6 +94,7 @@ import {
   createWorkbenchModules,
   workbenchModuleForView,
   WorkbenchModuleContext,
+  WorkbenchProjectNameContext,
 } from "./agent-workbench";
 import AdminAccountBalance from "@/components/AdminAccountBalance";
 import {
@@ -1463,6 +1464,9 @@ export function UserBrandDashboardContent({
                 </div>
               )}
             {projectWorkbench ? (
+              <WorkbenchProjectNameContext.Provider
+                value={operatorProject?.name ?? null}
+              >
               <WorkbenchModuleContext.Provider
                 value={agentRoute ? null : currentModule}
               >
@@ -1481,6 +1485,7 @@ export function UserBrandDashboardContent({
                   </ProjectAgentWorkbench>
                 )}
               </WorkbenchModuleContext.Provider>
+              </WorkbenchProjectNameContext.Provider>
             ) : (
               businessContent
             )}

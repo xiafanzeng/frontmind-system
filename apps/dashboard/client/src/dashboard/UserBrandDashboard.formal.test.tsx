@@ -1087,8 +1087,15 @@ describe("UserBrandDashboard formal workspace", () => {
     );
 
     expect(
-      screen.queryByRole("heading", { name: "品牌全域词库" }),
-    ).not.toBeInTheDocument();
+      screen
+        .queryAllByRole("heading", { name: "品牌全域词库" })
+        // The thin top bar keeps only a screen-reader heading; no visible
+        // duplicate title may render in the workspace body.
+        .filter(
+          (node) =>
+            !node.className.includes("agent-workbench-topbar__heading"),
+        ),
+    ).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "从现有词库挑选" }));
     const main = screen.getByRole("region", { name: "主工作区" });
     expect(

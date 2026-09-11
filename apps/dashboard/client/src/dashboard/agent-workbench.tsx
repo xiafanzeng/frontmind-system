@@ -1,6 +1,12 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { OPERATOR_MODULES, type OperatorView } from "./operator-navigation";
 
+/** Feeds the workbench thin top bar; null outside an enterprise project. */
+export const WorkbenchProjectNameContext = createContext<string | null>(null);
+export function useWorkbenchProjectName() {
+  return useContext(WorkbenchProjectNameContext);
+}
+
 export type WorkbenchModuleId = (typeof OPERATOR_MODULES)[number]["id"];
 export type WorkbenchAction = {
   id: string;

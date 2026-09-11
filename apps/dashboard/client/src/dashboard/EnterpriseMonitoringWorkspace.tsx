@@ -4,7 +4,7 @@ import {
   readFlowStringArray,
   readFlowBoolean,
 } from "./useBusinessFlowState";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearch } from "wouter";
 import { Search, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -91,8 +91,21 @@ function AutomatedMonitoringWorkspace({
   const [createMonitorRequest, setCreateMonitorRequest] = useState<string>();
   const [projectSearch, setProjectSearch] = useState("");
   const [questionSearch, setQuestionSearch] = useState("");
+  const [customQuestionsText, setCustomQuestionsText] = useState("");
   const [questionPage, setQuestionPage] = useState(0);
   const [projectPage, setProjectPage] = useState(0);
+  const customQuestions = useMemo(
+    () =>
+      [
+        ...new Set(
+          customQuestionsText
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean),
+        ),
+      ].slice(0, 50),
+    [customQuestionsText],
+  );
   const [error, setError] = useState("");
   const intent = useRef<{ fingerprint: string; id: string } | undefined>(
     undefined,
@@ -155,11 +168,12 @@ function AutomatedMonitoringWorkspace({
   });
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || !selected.length || create.isPending) return;
+    if (!name.trim() || (!selected.length && !customQuestions.length) || create.isPending) return;
     const fingerprint = JSON.stringify([
       enterpriseProjectId,
       name.trim(),
       [...selected].sort(),
+      customQuestions,
     ]);
     if (intent.current?.fingerprint !== fingerprint)
       intent.current = { fingerprint, id: crypto.randomUUID() };
@@ -174,10 +188,16 @@ function AutomatedMonitoringWorkspace({
         await task.saveState(
           {
             step: "monitoring-project-creating",
-            resources: selected.map((id) => ({ kind: "question", id })),
+            resources: [
+              ...selected.map((id) => ({ kind: "question" as const, id })),
+              ...customQuestions.map((question) => ({
+                kind: "question" as const,
+                id: question,
+              })),
+            ],
             record: {
               id: requestId,
-              label: "从优化问题创建监控项目",
+              label: "创建监控项目",
               status: "pending",
             },
           },
@@ -187,6 +207,7 @@ function AutomatedMonitoringWorkspace({
         enterpriseProjectId,
         name: name.trim(),
         questionIds: selected,
+        customQuestions,
         clientRequestId: requestId,
       });
       setSelectedProjectId(result.projectId);
@@ -389,6 +410,21 @@ function AutomatedMonitoringWorkspace({
                 required
               />
             </label>
+            <label className="grid gap-2 text-sm">
+              自定义监控问题
+              <textarea
+                className="min-h-24 rounded-lg border p-3 resize-y"
+                value={customQuestionsText}
+                maxLength={50 * 4000}
+                placeholder={"可直接输入要监控的问题，每行一个，例如：\n台心医美在搜索引擎里的口碑怎么样"}
+                onChange={(event) => setCustomQuestionsText(event.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">
+                {customQuestions.length
+                  ? `将新增 ${customQuestions.length} 个自定义问题${customQuestions.length >= 50 ? "（已达上限 50 条）" : ""}`
+                  : "可选。不选优化问题时，至少输入一行自定义问题。"}
+              </span>
+            </label>
             <label className="business-flow-search">
               <Search size={16} />
               <input
@@ -436,7 +472,7 @@ function AutomatedMonitoringWorkspace({
                 <p className="py-3 text-sm text-muted-foreground">
                   {questionSearch
                     ? "没有符合搜索条件的问题。"
-                    : "先在“意图优化 → 优化问题”中保存要监控的问题。"}
+                    : "可从上方直接输入要监控的问题，或先在“意图优化 → 优化问题”中保存问题后再勾选。"}
                 </p>
               )}
             </fieldset>
@@ -455,8 +491,8 @@ function AutomatedMonitoringWorkspace({
               disabled={
                 create.isPending ||
                 !name.trim() ||
-                !selected.length ||
-                selected.length > 500
+                (!selected.length && !customQuestions.length) ||
+                selected.length + customQuestions.length > 500
               }
             >
               {create.isPending ? "正在创建…" : "继续设置监控"}
@@ -506,6 +542,16 @@ const runStatus: Record<string, string> = {
   partial: "部分完成",
   cancelled: "已取消",
   waiting_quota: "等待充值",
+};
+const runStatusTone: Record<string, string> = {
+  queued: "is-muted",
+  running: "is-blue",
+  completed: "is-green",
+  succeeded: "is-green",
+  failed: "is-red",
+  partial: "is-amber",
+  cancelled: "is-muted",
+  waiting_quota: "is-amber",
 };
 const REPORT_PAGE_SIZE = 20;
 export function EnterpriseProgressReport({
@@ -692,14 +738,14 @@ export function EnterpriseProgressReport({
           </div>
         ) : (
           <>
-            <div className="operator-progress-stats">
-              {[
-                ["监控项目", progress.data?.summary.projectCount],
-                ["运行次数", progress.data?.summary.runCount],
-                ["已完成尝试", progress.data?.summary.completedAttempts],
-                ["失败尝试", progress.data?.summary.failedAttempts],
-              ].map(([label, value]) => (
-                <div key={label}>
+            <div className="operator-progress-stats monitoring-metric-cards">
+              {([
+                ["监控项目", progress.data?.summary.projectCount, "is-purple"],
+                ["运行次数", progress.data?.summary.runCount, "is-blue"],
+                ["已完成尝试", progress.data?.summary.completedAttempts, "is-green"],
+                ["失败尝试", progress.data?.summary.failedAttempts, "is-red"],
+              ] as Array<[string, number | undefined, string]>).map(([label, value, tone]) => (
+                <div key={label} className={`monitoring-metric-card ${tone}`}>
                   <span>{label}</span>
                   <strong>{value ?? 0}</strong>
                 </div>
@@ -746,10 +792,29 @@ export function EnterpriseProgressReport({
                             <td>
                               {new Date(run.createdAt).toLocaleString("zh-CN")}
                             </td>
-                            <td>{runStatus[run.status] || run.status}</td>
                             <td>
-                              {run.completedAttempts + run.failedAttempts} /{" "}
-                              {run.expectedAttempts}
+                              <span className={`monitoring-status-badge ${runStatusTone[run.status] ?? ""}`}>
+                                {runStatus[run.status] || run.status}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="monitoring-run-progress">
+                                <span
+                                  className="monitoring-run-progress__track"
+                                  aria-hidden="true"
+                                >
+                                  <span
+                                    className="monitoring-run-progress__fill"
+                                    style={{
+                                      width: `${run.expectedAttempts ? Math.min(100, Math.round((run.completedAttempts + run.failedAttempts) / run.expectedAttempts * 100)) : 0}%`,
+                                    }}
+                                  />
+                                </span>
+                                <span className="monitoring-run-progress__label">
+                                  {run.completedAttempts + run.failedAttempts} /{" "}
+                                  {run.expectedAttempts}
+                                </span>
+                              </div>
                             </td>
                             <td>
                               <button

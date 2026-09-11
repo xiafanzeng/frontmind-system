@@ -72,7 +72,7 @@ describe("project-owned knowledge uploads", () => {
     expect(dispatch).not.toHaveBeenCalled();
     manager.dispose();
   });
-  it("performs one real status check after thirty seconds without byte progress", async () => {
+  it("performs one silent status check after ninety seconds without byte progress", async () => {
     vi.useFakeTimers();
     const manager = new KnowledgeBaseUploadManager();
     const batch = manager.batch("stall:0");
@@ -81,9 +81,16 @@ describe("project-owned knowledge uploads", () => {
     vi.stubGlobal("fetch", fetch);
     batch.beginAttempt();
     batch.startHeartbeat(coordinate);
+    // Normal server-side staging takes well past thirty seconds; the batch
+    // must stay quiet instead of flashing connection warnings at the user.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetch.mock.calls.filter(([url]) => url.includes("upload-status"))).toHaveLength(0);
+    expect(batch.read("checkMessage", "")).toBe("");
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetch.mock.calls.filter(([url]) => url.includes("upload-status"))).toHaveLength(1);
     expect(batch.read("checking", false)).toBe(false);
+    // Heartbeat-driven checks are silent: state refreshes without a message.
+    expect(batch.read("checkMessage", "")).toBe("");
     await vi.advanceTimersByTimeAsync(15_000);
     expect(fetch.mock.calls.filter(([url]) => url.includes("upload-status"))).toHaveLength(1);
     batch.noteTransfer("file", 9, 1);

@@ -81,6 +81,17 @@ describe.skipIf(!acceptanceUrl)("enterprise project MySQL acceptance", () => {
     const monitorRequest = {enterpriseProjectId:projectA.id,name:'优化问题监控',questionIds:[selected.id],clientRequestId:randomUUID()};
     const monitoring = await createEnterpriseMonitoringProject(actor,monitorRequest);
     expect(await createEnterpriseMonitoringProject(actor,monitorRequest)).toEqual(monitoring);
+    // Free-typed monitoring questions become selected user questions inline;
+    // mixed sources dedupe identical text and survive request replay.
+    const customMonitorRequest = {enterpriseProjectId:projectA.id,name:'自定义监控',questionIds:[selected.id],customQuestions:['甲企业在搜索结果里的口碑如何？','甲企业适合哪些客户？'],clientRequestId:randomUUID()};
+    const customMonitoring = await createEnterpriseMonitoringProject(actor,customMonitorRequest);
+    expect(customMonitoring.questions).toContain('甲企业在搜索结果里的口碑如何？');
+    expect(await createEnterpriseMonitoringProject(actor,customMonitorRequest)).toEqual(customMonitoring);
+    const customOnly = await createEnterpriseMonitoringProject(actor,{enterpriseProjectId:projectA.id,name:'纯自定义监控',questionIds:[],customQuestions:['新问题唯一'],clientRequestId:randomUUID()});
+    expect(customOnly.questions).toEqual(['新问题唯一']);
+    await expect(createEnterpriseMonitoringProject(actor,{enterpriseProjectId:projectA.id,name:'空监控',questionIds:[],customQuestions:[],clientRequestId:randomUUID()})).rejects.toThrow();
+    const customPortal = await runWithEnterpriseProjectScope(scoped, () => questions.listEnterpriseQuestions(101));
+    expect(customPortal.map(row=>row.question)).toContain('甲企业在搜索结果里的口碑如何？');
     const {getMonitoringRuntime} = await import('./monitoring-module');
     const {ensureDashboardAccountLink,monitors,runWithMonitoringEnterpriseScope} = await import('@frontmind/monitoring-db');
     const runtime = getMonitoringRuntime();

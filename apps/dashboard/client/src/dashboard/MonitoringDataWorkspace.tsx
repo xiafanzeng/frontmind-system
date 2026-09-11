@@ -148,9 +148,22 @@ export default function MonitoringDataWorkspace({
   };
   return (
     <section className="monitoring-data-workspace" aria-label="监控数据">
-      <header>
-        <h2>监控数据</h2>
-        <p>查看已保存的回答与引用。表格导入不增加自动采集运行或费用。</p>
+      <header className="monitoring-data-header">
+        <div>
+          <p className="monitoring-data-eyebrow">MONITORING DATA</p>
+          <h2>监控数据</h2>
+          <p className="monitoring-data-lead">
+            查看已保存的回答与引用。表格导入不增加自动采集运行或费用。
+          </p>
+        </div>
+        <button
+          type="button"
+          className="monitoring-data-export"
+          disabled={exporting || samples.isLoading}
+          onClick={() => void exportResults()}
+        >
+          {exporting ? "正在导出…" : "导出当前范围全部结果"}
+        </button>
       </header>
       <div className="monitoring-data-filters">
         <label>
@@ -212,101 +225,134 @@ export default function MonitoringDataWorkspace({
         </label>
       </div>
       {batch && (
-        <p>
+        <p className="monitoring-data-note">
           当前批次版本 R{batch.revision}
           {historicalRevision > 0 && historicalRevision !== batch.revision
             ? `；工作记录对应 R${historicalRevision}，批次已更新，以下展示当前版本。`
             : ""}
         </p>
       )}
-      <div className="monitoring-data-summary">
-        <span>有效回答 {samples.data?.total ?? "—"}</span>
-        <span>可打开引用明细 {citations.data?.total ?? "—"}</span>
-        <span>有排名回答 {samples.data?.totals.rankedSampleCount ?? "—"}</span>
-        <span>
-          平均排名 {samples.data?.totals.averageRank?.toFixed(1) ?? "暂无数据"}
-        </span>
-        <span>前三名回答 {samples.data?.totals.top3SampleCount ?? "—"}</span>
-        <button
-          type="button"
-          disabled={exporting || samples.isLoading}
-          onClick={() => void exportResults()}
-        >
-          {exporting ? "正在导出…" : "导出当前范围全部结果"}
-        </button>
+      <div className="monitoring-data-metrics">
+        <div className="monitoring-data-metric is-blue">
+          <span>有效回答</span>
+          <strong>{samples.data?.total ?? "—"}</strong>
+        </div>
+        <div className="monitoring-data-metric is-purple">
+          <span>可打开引用明细</span>
+          <strong>{citations.data?.total ?? "—"}</strong>
+        </div>
+        <div className="monitoring-data-metric is-green">
+          <span>有排名回答</span>
+          <strong>{samples.data?.totals.rankedSampleCount ?? "—"}</strong>
+        </div>
+        <div className="monitoring-data-metric is-gold">
+          <span>平均排名</span>
+          <strong>{samples.data?.totals.averageRank?.toFixed(1) ?? "暂无"}</strong>
+        </div>
+        <div className="monitoring-data-metric is-blue">
+          <span>前三名回答</span>
+          <strong>{samples.data?.totals.top3SampleCount ?? "—"}</strong>
+        </div>
       </div>
       <p className="monitoring-data-note">
         排名仅显示已提供的数据；未提供的排名、情感和品牌提及指标显示暂无数据。答案声明的引用数量可能与已导入引用明细不同。
       </p>
       {(samples.error || citations.error || options.error || exportError) && (
-        <p role="alert">
+        <div role="alert" className="monitoring-data-alert">
           {samples.error?.message ||
             citations.error?.message ||
             options.error?.message ||
             exportError}
-        </p>
+        </div>
       )}
       {samples.isLoading && <p role="status">正在读取监控数据…</p>}
-      {samples.data?.items.map((sample) => (
-        <article key={sample.id} className="monitoring-data-answer">
-          <div className="monitoring-data-meta">
-            {sample.platform} · {sample.collectedDate} · R{sample.batchRevision}
-          </div>
-          <h3>{sample.question}</h3>
-          <MarkdownRenderer content={sample.content || "暂无回答正文"} />
-          <p>
-            排名：{sample.monitorRank ?? "暂无数据"} · 声明引用：
-            {sample.citationCount}
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedSample(
-                selectedSample === sample.id ? null : sample.id,
-              );
-              setSampleCitationPage(0);
-            }}
+      <div className="monitoring-data-answers">
+        {samples.data?.items.map((sample) => (
+          <article
+            key={sample.id}
+            className={`monitoring-data-answer${selectedSample === sample.id ? " is-open" : ""}`}
           >
-            查看本回答引用
-          </button>
-          {selectedSample === sample.id && (
-            <div>
-              {sampleCitations.isLoading ? (
-                <p>正在读取引用…</p>
-              ) : sampleCitations.error ? (
-                <p role="alert">{sampleCitations.error.message}</p>
-              ) : (
-                <>
-                  <ul>
-                    {sampleCitations.data?.items.map((item) => (
-                      <li key={item.id}>
-                        <a
-                          href={safeHref(item.url)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {item.title || item.url || item.domain}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                  {!sampleCitations.data?.total && (
-                    <p>暂无精确关联引用；问题级引用保留在下方。</p>
+            <header className="monitoring-data-answer__head">
+              <span className="monitoring-data-platform">
+                {sample.platform}
+              </span>
+              <span className="monitoring-data-chip">R{sample.batchRevision}</span>
+              <span className="monitoring-data-chip">{sample.collectedDate}</span>
+              {sample.monitorRank != null && (
+                <span className="monitoring-data-rank">
+                  排名 #{sample.monitorRank}
+                </span>
+              )}
+              <button
+                type="button"
+                className="monitoring-data-answer__toggle"
+                onClick={() => {
+                  setSelectedSample(
+                    selectedSample === sample.id ? null : sample.id,
+                  );
+                  setSampleCitationPage(0);
+                }}
+              >
+                {selectedSample === sample.id ? "收起详情" : "查看详情"}
+              </button>
+            </header>
+            <h3>{sample.question}</h3>
+            <div
+              className={`monitoring-data-answer__body${selectedSample === sample.id ? "" : " is-clamped"}`}
+            >
+              <MarkdownRenderer content={sample.content || "暂无回答正文"} />
+              <p className="monitoring-data-answer__facts">
+                排名：{sample.monitorRank ?? "暂无数据"} · 声明引用：
+                {sample.citationCount}
+              </p>
+              {selectedSample === sample.id && (
+                <details className="monitoring-data-evidence">
+                  <summary>
+                    本回答引用
+                    <span className="monitoring-data-pill">
+                      {sampleCitations.isLoading
+                        ? "…"
+                        : (sampleCitations.data?.total ?? 0)}
+                    </span>
+                  </summary>
+                  {sampleCitations.isLoading ? (
+                    <p>正在读取引用…</p>
+                  ) : sampleCitations.error ? (
+                    <p role="alert">{sampleCitations.error.message}</p>
+                  ) : (
+                    <>
+                      <ul className="monitoring-data-citations">
+                        {sampleCitations.data?.items.map((item) => (
+                          <li key={item.id}>
+                            <a
+                              href={safeHref(item.url)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {item.title || item.url || item.domain}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                      {!sampleCitations.data?.total && (
+                        <p>暂无精确关联引用；问题级引用保留在下方。</p>
+                      )}
+                      <WorkflowPagination
+                        page={sampleCitationPage}
+                        total={sampleCitations.data?.total ?? 0}
+                        pageSize={25}
+                        onChange={setSampleCitationPage}
+                      />
+                    </>
                   )}
-                  <WorkflowPagination
-                    page={sampleCitationPage}
-                    total={sampleCitations.data?.total ?? 0}
-                    pageSize={25}
-                    onChange={setSampleCitationPage}
-                  />
-                </>
+                </details>
               )}
             </div>
-          )}
-        </article>
-      ))}
+          </article>
+        ))}
+      </div>
       {!samples.isLoading && samples.data?.total === 0 && (
-        <p>当前范围暂无回答。</p>
+        <p className="monitoring-data-empty">当前范围暂无回答。</p>
       )}
       <WorkflowPagination
         page={page}
@@ -317,26 +363,39 @@ export default function MonitoringDataWorkspace({
           setSelectedSample(null);
         }}
       />
-      <h3>引用明细</h3>
-      <ul className="monitoring-data-citations">
-        {citations.data?.items.map((item) => (
-          <li key={item.id}>
-            <a href={safeHref(item.url)} target="_blank" rel="noreferrer">
-              {item.title || item.url || item.domain || "未提供链接"}
-            </a>
-            <span>
-              {item.model} · {item.sampleId ? "回答级引用" : "问题级引用"} ·{" "}
-              {item.question}
-            </span>
-          </li>
-        ))}
-      </ul>
-      <WorkflowPagination
-        page={citationPage}
-        total={citations.data?.total ?? 0}
-        pageSize={25}
-        onChange={setCitationPage}
-      />
+      <details className="monitoring-data-evidence monitoring-data-evidence--all">
+        <summary>
+          引用明细
+          <span className="monitoring-data-pill">
+            {citations.data?.total ?? 0}
+          </span>
+        </summary>
+        {citations.isLoading ? (
+          <p role="status">正在读取引用明细…</p>
+        ) : (
+          <>
+            <ul className="monitoring-data-citations">
+              {citations.data?.items.map((item) => (
+                <li key={item.id}>
+                  <a href={safeHref(item.url)} target="_blank" rel="noreferrer">
+                    {item.title || item.url || item.domain || "未提供链接"}
+                  </a>
+                  <span>
+                    {item.model} · {item.sampleId ? "回答级引用" : "问题级引用"} ·{" "}
+                    {item.question}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <WorkflowPagination
+              page={citationPage}
+              total={citations.data?.total ?? 0}
+              pageSize={25}
+              onChange={setCitationPage}
+            />
+          </>
+        )}
+      </details>
     </section>
   );
 }

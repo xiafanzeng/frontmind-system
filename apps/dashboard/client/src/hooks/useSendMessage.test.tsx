@@ -2462,10 +2462,13 @@ describe("useSendMessage", () => {
     expect(mocks.uploadFile.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.stageKnowledgeBaseTurnAttachment.mock.invocationCallOrder[0],
     );
-    expect(
-      mocks.stageKnowledgeBaseTurnAttachment.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.uploadFile.mock.invocationCallOrder[1]);
+    // One-ahead prefetch: the next file's transfer starts while the previous
+    // file's staging confirmation is still in flight.
     expect(mocks.uploadFile.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.stageKnowledgeBaseTurnAttachment.mock.invocationCallOrder[0],
+    );
+    expect(mocks.stageKnowledgeBaseTurnAttachment.mock.invocationCallOrder[0],
+    ).toBeLessThan(
       mocks.stageKnowledgeBaseTurnAttachment.mock.invocationCallOrder[1],
     );
     expect(

@@ -9,6 +9,73 @@
   color: #000;
   background: #fff;
 }
+/* Codex-style thin context bar: product / module / project on one line. */
+.agent-workbench-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 0 20px;
+  border-bottom: 1px solid #eceef1;
+  background: #fff;
+}
+.agent-workbench-topbar__caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: #667085;
+}
+.agent-workbench-topbar__caption > span:first-child {
+  color: #98a2b3;
+}
+.agent-workbench-topbar__module {
+  color: #344054;
+  font-weight: 600;
+}
+.agent-workbench-topbar__project {
+  min-width: 0;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #101828;
+  font-weight: 600;
+}
+.agent-workbench-topbar__sep {
+  color: #d0d5dd;
+}
+.agent-workbench-topbar__heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.agent-workbench-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+}
+.agent-workbench-topbar__actions .knowledge-workspace-actions {
+  margin-left: 0;
+}
+.agent-workbench-topbar__actions button,
+.agent-workbench-topbar__actions a {
+  min-height: 28px;
+  font-size: 12px;
+}
 /* A persistent outcome card and the conversation own separate scroll areas. */
 .agent-workbench-task-status {
   font-size: 12px;

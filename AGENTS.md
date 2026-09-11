@@ -23,9 +23,12 @@ FrontMind System. Read it before changing code.
    proposing or performing a production release.
 6. `docs/operations/RELEASE.md` for the short IPv4 checklist.
 
-When documents disagree, stop and report the discrepancy. In particular, the
-deployment documents currently mention both `149.88.85.240` and `149.88.85.148`;
-never infer the production host from memory or from a branch name.
+The production host is fixed: `149.88.85.240`, reached over SSH through the local
+alias `frontmind-system-qjy` (root). The old server `149.88.85.148` is retired and
+excluded from this deployment. Any reference to `.148`, forced-command deploy
+controllers, `/opt/frontmind-deploy`, or controller version updates
+(`update-release-controllers.sh --apply-version=N`) is archived history under
+`apps/dashboard/docs/history/` and must not be executed.
 
 ## System boundaries
 
@@ -64,9 +67,11 @@ production database.
 - Before a migration, take the documented recoverable backup and use the
   release migrator's observed plan values. After startup, check `/healthz`,
   `/readyz`, the exact build SHA, login, and the changed surface.
-- Inspect the actual workflow files in `.github/workflows/` and the target
-  server controller before claiming that an automated deployment path exists.
-  Documentation may describe a newer or different deployment revision.
+- The only automated pipeline is the root `.github/workflows/publish-images.yml`:
+  on `main` push it builds `ghcr.io/xiafanzeng/frontmind-system-dashboard` and
+  `frontmind-system-worker` images (sha tag + latest). Deployment itself is the
+  documented digest update on the server, typically driven end-to-end by the
+  local `$frontmind-release` skill.
 
 Agents may implement and test requested changes autonomously. Treat production
 deployment, database migration, rollback, branch deletion, worktree removal,

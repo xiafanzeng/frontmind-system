@@ -38,9 +38,10 @@ Summarize the architecture, affected files, tests, and release impact before
 editing. Then implement the requested change and leave a clean, reviewable diff.
 ```
 
-The current canonical checkout is on branch `codex/operator-redesign-v2` at
-`4bb47d5`. Confirm this at handoff time because another task may intentionally
-select a different branch or a fresh `main` worktree.
+The canonical checkout works on task branches cut from `main` (for example
+`codex/align-production-240`). Confirm the exact branch at handoff time because
+another task may intentionally select a different branch or a fresh `main`
+worktree.
 
 ## Local development
 
@@ -71,10 +72,10 @@ verify `/healthz`, `/readyz`, the build SHA, login, and the changed routes.
 Never use server-side source checkout/builds, production `db:push`, or a reset
 of historical migrations.
 
-Before any real release, reconcile the deployment documents and the actual
-server controller. The checked-in documents currently contain a production
-host discrepancy (`149.88.85.240` versus `149.88.85.148`), so an agent must not
-guess which address is active.
+The production host is `149.88.85.240` (SSH alias `frontmind-system-qjy`). The
+old server `149.88.85.148` is retired and deliberately excluded. Releases are
+normally driven end-to-end by the local `$frontmind-release` skill; usage
+examples are in `docs/operations/RELEASE.md`.
 
 ## Workspace hygiene
 

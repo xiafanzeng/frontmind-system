@@ -159,6 +159,12 @@ export function EnterpriseQaSourceNote({
   );
   const source =
     !localTaskId && currentPublication ? currentPublication : taskSource;
+  const hasNewerPublication = Boolean(
+    localTaskId &&
+      source.knowledgeBase &&
+      currentPublication?.knowledgeBase &&
+      currentPublication.knowledgeBase.version > source.knowledgeBase.version,
+  );
 
   return (
     <section className="enterprise-qa-source" aria-label="企业问答知识来源">
@@ -196,6 +202,12 @@ export function EnterpriseQaSourceNote({
         )}
       </dl>
       {localTaskId && <p>后续发布保留本任务原有知识版本。</p>}
+      {hasNewerPublication && (
+        <p className="enterprise-qa-source__newer">
+          已有新版知识库 v{currentPublication?.knowledgeBase?.version}
+          ；新建会话后使用。
+        </p>
+      )}
       {(source.failed ||
         source.refreshFailed ||
         currentPublication?.refreshFailed) && (
@@ -304,7 +316,10 @@ function EnterpriseQaPublishedWorkspace({
           </>
         ) : (
           <>
-            <BookOpen size={26} className="text-[var(--module-accent,#5e6174)]" />
+            <BookOpen
+              size={26}
+              className="text-[var(--module-accent,#5e6174)]"
+            />
             <h2>先发布企业知识库，即可开始问答</h2>
             <p role="status">当前项目尚无可用的已发布知识库。</p>
             <KnowledgeUnlockSteps />

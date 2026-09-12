@@ -87,29 +87,29 @@ describe("AgentWorkbenchShell persistent outcomes", () => {
       expect((width - 48 - geometry.width) / geometry.width).toBeCloseTo(2.5);
     }
   });
-  it.each([390, 767, 768, 769, 1023, 1024, 1025, 1279, 1280, 1281, 1440, 1920])(
-    "keeps the same draft and result mounted through viewport %i",
-    (width) => {
-      const { container } = render(
-        <AgentWorkbenchShell {...props} layout="knowledge" />,
-      );
-      const draft = screen.getByRole("textbox", { name: "任务草稿" });
-      const aside = screen.getByRole("complementary");
-      fireEvent.change(draft, { target: { value: "跨尺寸保留" } });
-      act(() => viewport(width));
-      expect(screen.getByRole("complementary")).toBe(aside);
-      expect(aside).toBeVisible();
-      expect(screen.getByRole("textbox")).toBe(draft);
-      expect(draft).toHaveValue("跨尺寸保留");
-      expect(screen.queryByRole("dialog")).toBeNull();
-      expect(
-        container
-          .querySelector(".agent-workbench-shell")
-          ?.classList.contains("is-stacked"),
-      ).toBe(width < 768);
-      expect(Boolean(screen.queryByRole("separator"))).toBe(width >= 768);
-    },
-  );
+  it.each([
+    390, 767, 768, 769, 899, 900, 1023, 1024, 1025, 1279, 1280, 1281, 1440,
+    1920,
+  ])("keeps the same draft and result mounted through viewport %i", (width) => {
+    const { container } = render(
+      <AgentWorkbenchShell {...props} layout="knowledge" />,
+    );
+    const draft = screen.getByRole("textbox", { name: "任务草稿" });
+    const aside = screen.getByRole("complementary");
+    fireEvent.change(draft, { target: { value: "跨尺寸保留" } });
+    act(() => viewport(width));
+    expect(screen.getByRole("complementary")).toBe(aside);
+    expect(aside).toBeVisible();
+    expect(screen.getByRole("textbox")).toBe(draft);
+    expect(draft).toHaveValue("跨尺寸保留");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      container
+        .querySelector(".agent-workbench-shell")
+        ?.classList.contains("is-stacked"),
+    ).toBe(width < 900);
+    expect(Boolean(screen.queryByRole("separator"))).toBe(width >= 900);
+  });
   it("ignores the prior floating-panel preference and restores the new ratio", () => {
     vi.mocked(localStorage.getItem).mockImplementation((key) =>
       key === "frontmind.workbench.v4.auxiliary-ratio" ? "0.9" : null,

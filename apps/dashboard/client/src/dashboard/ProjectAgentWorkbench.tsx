@@ -201,6 +201,26 @@ function ScopedWorkbench({
           <a href={taskUrl(projectId, record.targetTask!.agentId, record.targetTask!.conversationId)}>打开接续任务</a>
         </p>)}
         <ConversationContextProvider value={originalWorkspace}>
+          {projectResource ? (
+            <header className="workbench-resource-heading">
+              <h1>{summary?.title ?? "项目词库"}</h1>
+              {summary?.items?.length ? (
+                <p>{summary.items.map((item) => `${item.label}：${item.value}`).join(" · ")}</p>
+              ) : null}
+            </header>
+          ) : summary?.outputs?.length ? (
+            <section className="workbench-restored-summary" aria-label="已恢复成果">
+              <h2>已恢复成果</h2>
+              <ul>
+                {summary.outputs.map((output) => (
+                  <li key={output.id}>
+                    <span>{output.title}</span>
+                    {output.version !== undefined ? <small> · 版本 {output.version}</small> : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {children}
         </ConversationContextProvider>
       </div>

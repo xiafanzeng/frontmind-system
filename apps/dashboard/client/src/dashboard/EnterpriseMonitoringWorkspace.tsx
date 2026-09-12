@@ -290,7 +290,7 @@ function AutomatedMonitoringWorkspace({
           <WorkflowQuestion
             variant="entry" module="progress"
             question="这次想监控什么？"
-            description="从优化问题建立监控，或查看已有监控的运行与结果。"
+            description="直接输入问题或带入优化问题，查看已有监控的运行与结果。"
             choices={[
               { id: "create", label: "新建问题监控" },
               { id: "existing", label: "查看已有监控" },
@@ -307,7 +307,7 @@ function AutomatedMonitoringWorkspace({
           id="monitoring-current-step"
           summary={
             open
-              ? "从优化问题建立监控"
+              ? "新建问题监控"
               : showExisting
                 ? "继续已有监控"
                 : `当前监控 · ${progress.data?.projects.find((project) => project.id === selectedProjectId)?.name ?? "已恢复的监控任务"}`
@@ -343,56 +343,62 @@ function AutomatedMonitoringWorkspace({
             </div>
           ) : (
             <div className="business-monitor-project-list">
-              {visibleProjects
-                .slice(currentProjectPage * 10, (currentProjectPage + 1) * 10)
-                .map((project) => (
-                  <button
-                    key={project.id}
-                    aria-pressed={selectedProjectId === project.id}
-                    onClick={() => {
-                      setSelectedProjectId(project.id);
-                      setCreateMonitorRequest(undefined);
-                      setShowExisting(false);
-                    }}
-                  >
-                    <strong>{project.name}</strong>
-                    <span>
-                      {project.sourceQuestions?.length ?? 0} 个来源问题 ·
-                      继续配置与查看运行
-                    </span>
-                  </button>
-                ))}
+              <div className="business-monitor-project-cards">
+                {visibleProjects
+                  .slice(currentProjectPage * 10, (currentProjectPage + 1) * 10)
+                  .map((project) => (
+                    <button
+                      key={project.id}
+                      aria-pressed={selectedProjectId === project.id}
+                      onClick={() => {
+                        setSelectedProjectId(project.id);
+                        setCreateMonitorRequest(undefined);
+                        setShowExisting(false);
+                      }}
+                    >
+                      <strong>{project.name}</strong>
+                      <span>
+                        {project.sourceQuestions?.length ?? 0} 个来源问题 ·
+                        继续配置与查看运行
+                      </span>
+                    </button>
+                  ))}
+              </div>
               {!visibleProjects.length && (
-                <p>
+                <p className="business-monitor-project-empty">
                   {projectSearch
                     ? "没有符合搜索条件的监控项目。"
-                    : "尚无监控项目，可先从优化问题新建。"}
+                    : "尚无监控项目，可直接输入问题或带入优化问题新建。"}
                 </p>
               )}
-              <WorkflowPagination
-                page={currentProjectPage}
-                total={visibleProjects.length}
-                onChange={setProjectPage}
-              />
-              <button
-                type="button"
-                className="workflow-text-action"
-                onClick={() => {
-                  setShowExisting(false);
-                  setOpen(true);
-                }}
-              >
-                从优化问题新建
-              </button>
-              {onImportData && (
+              <div className="business-monitor-project-pagination">
+                <WorkflowPagination
+                  page={currentProjectPage}
+                  total={visibleProjects.length}
+                  onChange={setProjectPage}
+                />
+              </div>
+              <div className="business-monitor-project-actions">
                 <button
                   type="button"
                   className="workflow-text-action"
-                  onClick={onImportData}
+                  onClick={() => {
+                    setShowExisting(false);
+                    setOpen(true);
+                  }}
                 >
-                  上传监控数据
+                  新建问题监控
                 </button>
-              )}
+                {onImportData && (
+                  <button
+                    type="button"
+                    className="workflow-text-action"
+                    onClick={onImportData}
+                  >
+                    上传监控数据
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </section>

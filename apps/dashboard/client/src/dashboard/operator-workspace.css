@@ -573,6 +573,9 @@
   font-size: 14px;
   line-height: 22px;
   font-weight: 500;
+  box-sizing: border-box;
+  white-space: nowrap;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   cursor: pointer;
 }
 .operator-control-primary,
@@ -1327,4 +1330,91 @@
   .operator-module-entry:hover:not(.active) {
   color: #000;
   background: #f2f2f4;
+}
+
+/* V2.3 control polish: keep sub-navigation quiet and aligned with the page
+   canvas.  The active state carries the module accent; the container itself
+   does not compete with the page header. */
+.user-brand-dashboard.operator-mode .operator-sub-tabs {
+  min-height: 52px;
+  padding: 8px 0;
+  gap: 4px;
+  border: 0;
+  border-bottom: 1px solid var(--operator-line, #e7ebef);
+  background: transparent;
+}
+.user-brand-dashboard.operator-mode .operator-sub-tabs > a {
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--operator-muted, #667085);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+.user-brand-dashboard.operator-mode .operator-sub-tabs > a:hover {
+  color: var(--module-accent, #16794f);
+  background: color-mix(in srgb, var(--module-accent, #16794f) 6%, white);
+}
+.user-brand-dashboard.operator-mode .operator-sub-tabs > a[aria-current="page"] {
+  border-color: color-mix(in srgb, var(--module-accent, #16794f) 18%, white);
+  color: var(--module-accent, #16794f);
+  background: color-mix(in srgb, var(--module-accent, #16794f) 8%, white);
+  font-weight: 600;
+}
+.user-brand-dashboard.operator-mode .operator-sub-tabs > a:focus-visible {
+  outline: 2px solid var(--module-accent, #16794f);
+  outline-offset: 1px;
+}
+
+/* Resource tables inherit the brand module accent instead of the legacy
+   purple customer-portal palette.  The customer portal keeps its original
+   palette outside operator-mode. */
+.user-brand-dashboard.operator-mode .keyword-toolbar {
+  background: var(--fm-surface-soft, #f7f8fa);
+  border-color: var(--fm-line, #e7ebef);
+}
+.user-brand-dashboard.operator-mode .keyword-stats-bar {
+  background: color-mix(in srgb, var(--module-accent, #16794f) 6%, white);
+  color: var(--fm-muted, #667085);
+}
+.user-brand-dashboard.operator-mode .keyword-stats-bar strong,
+.user-brand-dashboard.operator-mode .keyword-stats-bar .keyword-workflow-entry {
+  color: var(--module-accent, #16794f);
+}
+.user-brand-dashboard.operator-mode .keyword-stats-bar .keyword-workflow-entry {
+  border-color: color-mix(in srgb, var(--module-accent, #16794f) 24%, white);
+  background: #fff;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+.user-brand-dashboard.operator-mode .keyword-stats-bar .keyword-workflow-entry:hover {
+  border-color: color-mix(in srgb, var(--module-accent, #16794f) 40%, white);
+  background: color-mix(in srgb, var(--module-accent, #16794f) 7%, white);
+}
+.user-brand-dashboard.operator-mode .keyword-table-wrap {
+  border-color: var(--fm-line, #e7ebef);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.user-brand-dashboard.operator-mode .keyword-table th {
+  background: color-mix(in srgb, var(--module-accent, #16794f) 6%, white);
+  color: var(--fm-text, #20232b);
+}
+.user-brand-dashboard.operator-mode .keyword-table td {
+  border-color: var(--fm-line, #e7ebef);
+  color: #475467;
+}
+.user-brand-dashboard.operator-mode .keyword-table tbody tr:hover {
+  background: color-mix(in srgb, var(--module-accent, #16794f) 3%, white);
+}
+.user-brand-dashboard.operator-mode .keyword-filter-chips button {
+  color: var(--module-accent, #16794f);
+}
+.user-brand-dashboard.operator-mode .keyword-filter-chips button.active {
+  border-color: color-mix(in srgb, var(--module-accent, #16794f) 34%, white);
+  background: var(--module-accent, #16794f);
+  color: #fff;
 }

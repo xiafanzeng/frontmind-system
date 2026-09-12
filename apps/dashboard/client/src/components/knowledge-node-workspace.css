@@ -7,8 +7,8 @@
   overflow: hidden;
   color: #20232b;
   background: #fff;
-  border: 1px solid #e7ebef;
-  border-radius: 10px;
+  border: 1px solid #e2e5eb;
+  border-radius: 12px;
   font-size: 1rem;
 }
 .knowledge-node-workspace button {
@@ -47,7 +47,7 @@
 .knowledge-node-workspace button:focus-visible,
 .knowledge-node-workspace input:focus-visible,
 .knowledge-node-workspace textarea:focus-visible {
-  outline: 2px solid #64748b;
+  outline: 2px solid #7545a0;
   outline-offset: 2px;
 }
 .knowledge-node-workspace svg {
@@ -62,7 +62,7 @@
   gap: 12px;
   flex-shrink: 0;
   padding: 18px 20px 14px;
-  border-bottom: 1px solid #e7ebef;
+  border-bottom: 1px solid #e2e5eb;
 }
 .knowledge-node-workspace h2 {
   margin: 0;
@@ -81,7 +81,7 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  background: #fff;
+  background: #fbf9fd;
 }
 .knowledge-node-workspace__search {
   display: flex;
@@ -100,7 +100,7 @@
   overscroll-behavior: contain;
   flex: 1;
   min-height: 0;
-  padding: 4px 12px 18px;
+  padding: 4px 16px 18px;
 }
 .knowledge-node-workspace__tree ul {
   list-style: none;
@@ -109,31 +109,30 @@
 }
 .knowledge-node-workspace__branch-card {
   overflow: hidden;
-  margin-bottom: 0;
-  border: 0;
-  border-bottom: 1px solid #e7ebef;
-  border-radius: 0;
+  margin-bottom: 12px;
+  border: 1px solid #e8e1ee;
+  border-radius: 16px;
   background: #fff;
 }
 .knowledge-node-workspace__branch {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  min-height: 58px;
-  padding: 11px 8px;
+  min-height: 72px;
+  padding: 14px 16px;
   text-align: left;
-  color: #27313b;
+  color: #261d32;
 }
 .knowledge-node-workspace__branch-number {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
-  background: #f4f6f8;
-  color: #697586;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: #f3edf6;
+  color: #5b2a86;
   font-size: 0.75rem;
   font-weight: 700;
 }
@@ -154,28 +153,28 @@
   overflow-wrap: anywhere;
 }
 .knowledge-node-workspace__branch-heading > span {
-  color: #7a8491;
+  color: #716a80;
   font-size: 0.75rem;
   white-space: nowrap;
 }
 .knowledge-node-workspace__branch-progress {
   display: block;
-  height: 4px;
-  margin-top: 6px;
+  height: 6px;
+  margin-top: 8px;
   overflow: hidden;
   border-radius: 9px;
-  background: #edf0f2;
+  background: #eee9f0;
 }
 .knowledge-node-workspace__branch-progress > span {
   display: block;
   height: 100%;
-  background: #7a8794;
+  background: #7b469f;
   border-radius: inherit;
 }
 .knowledge-node-workspace__branch-body {
-  border-top: 0;
-  padding: 2px 0 10px 14px;
-  background: #fff;
+  border-top: 1px solid #eee8f1;
+  padding: 12px;
+  background: #fcfbfd;
 }
 .knowledge-node-workspace__branch-counts {
   display: flex;
@@ -188,8 +187,6 @@
   padding: 3px 7px;
   font-size: 0.75rem;
   line-height: 1.25rem;
-  background: #f4f6f8;
-  color: #596575;
 }
 .knowledge-node-workspace__branch-counts > span[data-status="confirmed"] { background: #edf7f2; color: #256b53; }
 .knowledge-node-workspace__branch-counts > span[data-status="needs_verification"] { background: #fff8e9; color: #8a641e; }
@@ -202,33 +199,38 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 42px;
-  padding: 8px;
+  min-height: 48px;
+  padding: 10px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 11px;
   text-align: left;
   font-size: 0.8125rem;
-  line-height: 1.25rem;
-}
-.knowledge-node-workspace__leaf[data-status] {
-  color: #3f4b58;
-  background: #fff;
-  border-color: transparent;
+  line-height: 1.375rem;
 }
 .knowledge-node-workspace [data-status="confirmed"] {
-  color: #256b53;
+  color: #16624a;
+  background: #edf9f2;
+  border-color: #d5eddf;
 }
 .knowledge-node-workspace [data-status="direct_prefilled"] {
-  color: #2d667d;
+  color: #256584;
+  background: #eff8fd;
+  border-color: #d9ebf5;
 }
 .knowledge-node-workspace [data-status="current"] {
-  color: #4d6278;
+  color: #5b2a86;
+  background: #f3edf8;
+  border-color: #dcd0e9;
 }
 .knowledge-node-workspace [data-status="needs_verification"] {
-  color: #8a641e;
+  color: #896019;
+  background: #fff8e9;
+  border-color: #f3e3bc;
 }
 .knowledge-node-workspace [data-status="pending"] {
   color: #667085;
+  background: #f4f5f7;
+  border-color: #e7e9ee;
 }
 .knowledge-node-workspace__leaf-title {
   min-width: 0;
@@ -242,8 +244,8 @@
   width: 28px;
   height: 28px;
   flex-shrink: 0;
-  background: transparent;
-  border-radius: 6px;
+  background: #ffffffb3;
+  border-radius: 8px;
 }
 .knowledge-node-workspace__leaf[data-status="confirmed"] .knowledge-node-workspace__leaf-icon { color: #256b53; }
 .knowledge-node-workspace__leaf[data-status="direct_prefilled"] .knowledge-node-workspace__leaf-icon { color: #2d667d; }
@@ -251,10 +253,10 @@
 .knowledge-node-workspace__leaf[data-status="needs_verification"] .knowledge-node-workspace__leaf-icon { color: #8a641e; }
 .knowledge-node-workspace__leaf[data-status="pending"] .knowledge-node-workspace__leaf-icon { color: #667085; }
 .knowledge-node-workspace__leaf:hover {
-  background: #f7f8fa;
+  filter: brightness(0.975);
 }
 .knowledge-node-workspace__leaf[aria-current="true"] {
-  box-shadow: inset 3px 0 #64748b;
+  box-shadow: inset 3px 0 #7b469f;
   background: #f1f3f5;
 }
 .knowledge-node-workspace__leaf > svg:last-child {
@@ -291,7 +293,7 @@
   justify-content: space-between;
   gap: 16px;
   padding: 24px 24px 18px;
-  border-bottom: 1px solid #e7ebef;
+  border-bottom: 1px solid #e2e5eb;
 }
 .knowledge-node-workspace__drawer-header > div {
   min-width: 0;
@@ -315,7 +317,7 @@
   align-items: center;
   gap: 12px;
   padding: 12px 24px;
-  border-bottom: 1px solid #e7ebef;
+  border-bottom: 1px solid #e2e5eb;
   font-size: 0.8125rem;
   color: #716a80;
   background: #f8fafb;
@@ -332,7 +334,7 @@
   font-size: 0.875rem;
 }
 .knowledge-node-workspace__node-switch select:focus-visible {
-  outline: 2px solid #64748b;
+  outline: 2px solid #7545a0;
   outline-offset: 2px;
 }
 .knowledge-node-workspace__detail {

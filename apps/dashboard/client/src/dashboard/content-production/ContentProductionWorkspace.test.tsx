@@ -1012,23 +1012,22 @@ it("places native chat and actionable stage confirmation in main, keeping only a
   expect(
     within(auxiliary).getByRole("tab", { name: "交付文件" }),
   ).toBeInTheDocument();
-  fireEvent.click(within(auxiliary).getByRole("tab", { name: "制作任务" }));
+  fireEvent.click(within(auxiliary).getByRole("tab", { name: "任务中心" }));
   expect(within(main).getByTestId("original-chat")).toBeInTheDocument();
-  expect(
-    within(auxiliary).getByRole("listbox", { name: "制作记录" }),
-  ).toBeInTheDocument();
-  fireEvent.click(within(auxiliary).getByRole("button", { name: "新建制作" }));
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "已有任务" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "已有任务" }));
+  expect(screen.getByRole("listbox", { name: "已有任务" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "新建任务" }));
   expect(mocks.create).not.toHaveBeenCalled();
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "新建任务" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "新建任务" }));
+  fireEvent.click(screen.getByRole("button", { name: /新建品牌资料包/ }));
   expect(
-    within(main).getByRole("region", { name: "新建内容任务" }),
-  ).toBeInTheDocument();
-  expect(within(main).queryByText("确定本次内容任务")).toBeNull();
-  fireEvent.click(within(main).getByRole("button", { name: /新建品牌资料包/ }));
-  expect(
-    within(main).queryByRole("heading", { name: "本次要完成什么？" }),
+    screen.queryByRole("heading", { name: "本次要完成什么？" }),
   ).toBeNull();
   expect(
-    within(main).getByText("当前工作：新建品牌资料包"),
+    screen.getByText("当前工作：新建品牌资料包"),
   ).toBeInTheDocument();
 });

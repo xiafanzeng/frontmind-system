@@ -231,7 +231,7 @@ function ContentProductionInner({
   } = useConversation();
   const { sendMessage } = useSendMessage();
   const [showCreate, setShowCreate] = useState(false);
-  const [taskPanel, setTaskPanel] = useState<"outputs" | "tasks">("outputs");
+  const [taskCenterTab, setTaskCenterTab] = useState<"new" | "existing">("new");
   const [mode, setMode] = useState<ContentProductionMode | null>(null);
   const [enterpriseName, setEnterpriseName] = useState("");
   const [knowledgeSource, setKnowledgeSource] = useState<"published" | "files">(
@@ -465,6 +465,7 @@ function ContentProductionInner({
       setFailedStart(null);
       resetCreate();
       setNotice("");
+      setTaskCenterTab("new");
       setShowCreate(true);
     });
   }
@@ -1217,21 +1218,12 @@ function ContentProductionInner({
               : "新任务"
           }
           taskKey={activeConversation?.id ?? "empty"}
-          scrollMain={showCreate || !activeConversation}
+          scrollMain={!activeConversation}
           main={
             <div
               className={`cp-main-flow ${!showCreate && activeConversation ? "has-conversation" : ""}`}
             >
-              {showCreate ? (
-                <section
-                  className="cp-modal cp-inline-create"
-                  aria-label="新建内容任务"
-                >
-                  {createForm}
-                </section>
-              ) : (
-                <>{conversationView}</>
-              )}
+              <>{conversationView}</>
             </div>
           }
           auxiliary={
@@ -1244,45 +1236,20 @@ function ContentProductionInner({
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={taskPanel === "tasks"}
-                  onClick={() => setTaskPanel("tasks")}
+                  aria-selected={false}
+                  onClick={() => { setTaskCenterTab("existing"); setShowCreate(true); }}
                 >
-                  制作任务
+                  任务中心
                 </button>
                 <button
                   type="button"
                   role="tab"
-                  aria-selected={taskPanel === "outputs"}
-                  onClick={() => setTaskPanel("outputs")}
+                  aria-selected={true}
                 >
                   交付文件
                 </button>
               </div>
-              {taskPanel === "tasks" ? (
-                <WorkbenchTaskToolbar
-                  presentation="panel"
-                  labels={{
-                    newAction: "新建制作",
-                    history: "制作记录",
-                    noun: "制作任务",
-                  }}
-                  tasks={state.conversations.map((item) => ({
-                    ...item,
-                    title: contentProductionTaskTitle(item.title),
-                  }))}
-                  currentId={activeConversation?.id}
-                  onNew={openCreate}
-                  onSelect={(id) => {
-                    setFailedStart(null);
-                    setActive(id);
-                    setShowCreate(false);
-                  }}
-                  onDelete={deleteConversation}
-                  disabled={
-                    !hydrated || Boolean(pendingStart) || handoffPending
-                  }
-                />
-              ) : (
+
                 <BusinessWorkspaceInspector
                   summary={{
                     status: statusLabel,
@@ -1333,7 +1300,6 @@ function ContentProductionInner({
                     })),
                   }}
                 />
-              )}
             </div>
           }
           resultKey={activeConversation?.id ?? "empty"}
@@ -1346,18 +1312,34 @@ function ContentProductionInner({
         </div>
       )}
       <Dialog
-        open={!workbench && showCreate}
+        open={showCreate}
         onOpenChange={(open) => {
           if (!open) closeCreate();
         }}
       >
         <DialogContent
-          className="cp-modal"
+          className="cp-modal cp-task-center-dialog"
           style={contentTheme}
           overlayClassName="cp-modal-overlay"
           showCloseButton={false}
         >
-          {createForm}
+          {workbench && <><DialogTitle className="sr-only">内容任务中心</DialogTitle><DialogDescription className="sr-only">新建或恢复内容制作任务</DialogDescription></>}
+          <div className="cp-task-center-tabs" role="tablist" aria-label="内容任务中心">
+            <button type="button" role="tab" aria-selected={taskCenterTab === "new"} onClick={() => setTaskCenterTab("new")}>新建任务</button>
+            <button type="button" role="tab" aria-selected={taskCenterTab === "existing"} onClick={() => setTaskCenterTab("existing")}>已有任务</button>
+          </div>
+          {taskCenterTab === "new" ? createForm : (
+            <WorkbenchTaskToolbar
+              presentation="panel"
+              labels={{ newAction: "新建任务", history: "已有任务", noun: "制作任务" }}
+              tasks={state.conversations.map((item) => ({ ...item, title: contentProductionTaskTitle(item.title) }))}
+              currentId={activeConversation?.id}
+              onNew={() => setTaskCenterTab("new")}
+              onSelect={(id) => { setFailedStart(null); setActive(id); setShowCreate(false); setTaskCenterTab("new"); }}
+              onDelete={deleteConversation}
+              disabled={!hydrated || Boolean(pendingStart) || handoffPending}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </section>

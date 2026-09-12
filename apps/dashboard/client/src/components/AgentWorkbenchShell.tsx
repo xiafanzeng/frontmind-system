@@ -121,7 +121,9 @@ export function AgentWorkbenchShell({
   const narrow = viewportWidth < WORKBENCH_MIN_WIDTH;
   useEffect(() => {
     const measure = () => {
-      setAvailable(root.current?.clientWidth ?? 0);
+      setAvailable(
+        layoutRoot.current?.clientWidth ?? root.current?.clientWidth ?? 0,
+      );
       setViewportWidth(window.innerWidth);
       const viewport = window.visualViewport;
       setVisibleHeight(
@@ -254,26 +256,28 @@ export function AgentWorkbenchShell({
       }
     >
       <header className="agent-workbench-topbar">
-        <div className="agent-workbench-topbar__inner">
-          {module ? (
-            <span className="agent-workbench-topbar__group" title={module.label}>
-              {module.label}
-            </span>
-          ) : (
-            <span className="agent-workbench-topbar__group">{title}</span>
-          )}
-          {agentSwitch}
+        <div className="agent-workbench-topbar__canvas">
+          <div className="agent-workbench-topbar__inner">
+            {module ? (
+              <span className="agent-workbench-topbar__group" title={module.label}>
+                {module.label}
+              </span>
+            ) : (
+              <span className="agent-workbench-topbar__group">{title}</span>
+            )}
+            {agentSwitch}
+          </div>
+          <h2 ref={titleRef} tabIndex={-1} className="agent-workbench-topbar__heading">
+            {title}
+          </h2>
+          {topbarActions ? (
+            <div className="agent-workbench-topbar__actions">{topbarActions}</div>
+          ) : null}
         </div>
-        <h2 ref={titleRef} tabIndex={-1} className="agent-workbench-topbar__heading">
-          {title}
-        </h2>
-        {topbarActions ? (
-          <div className="agent-workbench-topbar__actions">{topbarActions}</div>
-        ) : null}
       </header>
       <div
         ref={layoutRoot}
-        className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}${isWorkspace ? " is-workspace" : ""}`}
+        className={`agent-workbench-shell__layout ${hasAux ? "has-outcomes" : "is-single-pane"}${isWorkspace ? " is-workspace" : ""}${fixedAuxWidth ? " is-fixed-auxiliary" : ""}`}
       >
         <section className="agent-workbench-shell__main" aria-label="主工作区">
           <div

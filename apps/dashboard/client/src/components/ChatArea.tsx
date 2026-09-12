@@ -96,6 +96,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -124,7 +125,7 @@ import {
 } from "@/lib/attachment-files";
 import { isAttachmentExpired } from "@/lib/attachment-expiry";
 import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
-import { WorkflowCompleted, WorkflowQuestion, WorkflowSection } from "@/dashboard/workflow/Workflow";
+import { WorkflowQuestion } from "@/dashboard/workflow/Workflow";
 
 export const KNOWLEDGE_BASE_FOUNDATION_COPY =
   "企业知识库是品牌事实与产品信息的统一底稿，也是构建 AI 专用友好官网、生成内容与准确回答客户问题的基础。";
@@ -2917,9 +2918,7 @@ export function EmptyConversationHint({
   return (
     <>
       {inline ? (
-        dialogOpen ? (
-          <WorkflowCompleted id="knowledge-materials-entry" summary="准备企业资料，构建知识库初稿" onRevise={isStarting || isDiscarding || batchLocked ? undefined : () => setDialogOpen(false)} />
-        ) : (
+        dialogOpen ? null : (
           <WorkflowQuestion
             variant="entry" module="brand"
             question="先用哪些资料了解你的企业？"
@@ -2968,7 +2967,6 @@ export function EmptyConversationHint({
       </motion.div>}
 
       <KnowledgeStarterSurface
-        inline={inline}
         open={dialogOpen}
         onOpenChange={(open) => {
           if (open) {
@@ -2976,7 +2974,10 @@ export function EmptyConversationHint({
             return;
           }
           if (isStarting || isDiscarding) return;
-          void discardBatchAndClose();
+          // Closing the V2.3 dialog is a reversible presentation action. Keep
+          // the current fields, selected files and upload handles; explicit
+          // cancellation below owns discard semantics.
+          setDialogOpen(false);
         }}
       >
           <div className="space-y-5 py-2">
@@ -3293,24 +3294,22 @@ export function EmptyConversationHint({
   );
 }
 
-function KnowledgeStarterSurface({ inline, open, onOpenChange, children }: {
-  inline: boolean;
+function KnowledgeStarterSurface({ open, onOpenChange, children }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) {
   const description = "系统会采集官网与公开资料，并结合上传内容构建可审阅的知识库初稿。";
-  if (inline) return open ? (
-    <WorkflowSection id="knowledge-materials" divider="none" title="填写资料与补充说明" description={description}>
-      {children}
-    </WorkflowSection>
-  ) : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-1rem)] sm:max-w-[560px] max-h-[calc(100dvh-1rem)] overflow-y-auto p-4 sm:p-6">
-        <DialogTitle>构建企业知识库</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-        {children}
+      <DialogContent className="knowledge-starter-dialog w-[calc(100vw-1rem)] sm:max-w-[600px] max-h-[calc(100dvh-2rem)] overflow-hidden p-0">
+        <DialogHeader className="border-b border-border/70 px-5 py-4 sm:px-6">
+          <DialogTitle>构建企业知识库</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[calc(100dvh-11rem)] overflow-y-auto px-5 py-4 sm:px-6">
+          {children}
+        </div>
       </DialogContent>
     </Dialog>
   );

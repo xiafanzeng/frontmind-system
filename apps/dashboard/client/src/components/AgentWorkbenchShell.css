@@ -1076,6 +1076,14 @@
   max-width: 960px;
   margin-inline: auto;
 }
+.agent-workbench-shell.module-content-production
+  .agent-workbench-shell__main-content.is-scrollable
+  > .cp-main-flow:not(.has-conversation) {
+  /* The task picker is a full workbench entry surface, like the monitoring
+     picker. Keep the 960px reading measure for conversations, but do not
+     compress the four task choices into a narrower column. */
+  max-width: 1280px;
+}
 .agent-workbench-shell__main-content.is-scrollable > .agent-workspace-frame {
   max-width: 1280px;
 }

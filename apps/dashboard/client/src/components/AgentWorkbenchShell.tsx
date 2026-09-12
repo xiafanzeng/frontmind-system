@@ -99,6 +99,10 @@ export function AgentWorkbenchShell({
   titleRef,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
+  const themeId = module?.id ?? (moduleId === "content-production" ? "content" : moduleId);
+  const moduleColor = OPERATOR_MODULES.find(
+    (item) => item.id === themeId || item.views.some((view) => view.id === themeId),
+  )?.color;
   const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
   const isKnowledge = layout === "knowledge";
   const isWorkspace = layout === "workspace";
@@ -228,7 +232,7 @@ export function AgentWorkbenchShell({
           title={action.description}
           className={action.active ? "is-active" : undefined}
           style={
-            { "--subagent-color": action.color ?? "#491060" } as CSSProperties
+            { "--subagent-color": action.color ?? moduleColor ?? "var(--module-accent, #667085)" } as CSSProperties
           }
           onClick={() => requestWorkspaceNavigation(action.run)}
         >
@@ -249,9 +253,9 @@ export function AgentWorkbenchShell({
           ...(narrow && visibleHeight !== null
             ? { maxHeight: `${visibleHeight}px` }
             : {}),
-          "--module-color":
-            OPERATOR_MODULES.find((item) => item.id === module?.id)?.color ??
-            "#491060",
+          ...(moduleColor
+            ? { "--module-color": moduleColor, "--module-accent": moduleColor }
+            : {}),
         } as CSSProperties
       }
     >

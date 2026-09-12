@@ -1,3 +1,4 @@
+import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
 import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadRecovery";
 import { finalReplyIds } from "@/lib/final-reply";
 import { useKnowledgeBaseUploadBatch, useKnowledgeBaseUploadField } from "@/lib/knowledge-base-upload-manager";
@@ -3218,7 +3219,7 @@ export function EmptyConversationHint({
                     </span>
                   </div>
                   {(checking || checkMessage || stalled) && <p role="status" className="text-xs text-amber-700">{checking ? "正在读取服务端状态…" : checkMessage || "暂时没有新的服务端进度，已完成文件会保留。"}</p>}
-                  {(stalled || stopState === "unknown") && !checking && <Button type="button" variant="outline" onClick={() => void uploadBatch.checkStatus().catch(() => undefined)}>重新读取状态</Button>}
+                  {(stalled || stopState === "unknown") && !checking && <Button type="button" variant="operatorOutline" onClick={() => void uploadBatch.checkStatus().catch(() => undefined)}>重新读取状态</Button>}
                   {batchError && (
                     <div
                       role="alert"
@@ -3235,7 +3236,7 @@ export function EmptyConversationHint({
           <div className="workflow-actions">
             <Button
               type="button"
-              variant="outline"
+              variant="operatorOutline"
               onClick={() => {
                 if (isStarting) {
                   stopUpload();
@@ -3260,6 +3261,7 @@ export function EmptyConversationHint({
             </Button>
             <Button
               type="button"
+              variant="operator"
               onClick={() => void handleStart()}
               disabled={
                 isStarting ||
@@ -3302,7 +3304,7 @@ function KnowledgeStarterSurface({ open, onOpenChange, children }: {
   const description = "系统会采集官网与公开资料，并结合上传内容构建可审阅的知识库初稿。";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="knowledge-starter-dialog w-[calc(100vw-1rem)] sm:max-w-[600px] max-h-[calc(100dvh-2rem)] overflow-hidden p-0">
+      <DialogContent style={{ "--module-accent": OPERATOR_MODULES[0].color, "--module-color": OPERATOR_MODULES[0].color } as React.CSSProperties} className="knowledge-starter-dialog w-[calc(100vw-1rem)] sm:max-w-[600px] max-h-[calc(100dvh-2rem)] overflow-hidden p-0">
         <DialogHeader className="border-b border-border/70 px-5 py-4 sm:px-6">
           <DialogTitle>构建企业知识库</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

@@ -6,7 +6,7 @@
   --cp-line: #e2e5eb;
   --cp-soft: #f6f7f9;
   --cp-primary: var(--module-color, #8a6100);
-  --cp-primary-hover: color-mix(in srgb, var(--cp-primary) 85%, black);
+  --cp-primary-hover: color-mix(in srgb, var(--cp-primary) 92%, black);
   --cp-primary-soft: color-mix(in srgb, var(--cp-primary) 7%, white);
   --cp-success: #24734e;
   --cp-error: #a33435;
@@ -23,10 +23,9 @@
   padding: 24px;
   background: var(--cp-soft);
 }
-.cp-task-center-dialog { max-width: 800px; max-height: min(82dvh, 780px); overflow-y: auto; }
-.cp-task-center-tabs { display:flex; gap:6px; margin:-4px 0 16px; padding-bottom:10px; border-bottom:1px solid #e7ebef; }
+.cp-task-center-tabs { display:flex; flex:none; gap:6px; margin:0; padding-bottom:10px; border-bottom:1px solid #e7ebef; }
 .cp-task-center-tabs button { border:0; background:transparent; color:#667085; border-radius:8px; padding:7px 12px; font-size:13px; font-weight:500; }
-.cp-task-center-tabs button[aria-selected="true"] { color:var(--module-color,#491060); background:color-mix(in srgb,var(--module-color,#491060) 8%,white); font-weight:600; }
+.cp-task-center-tabs button[aria-selected="true"] { color:var(--cp-primary); background:var(--cp-primary-soft); font-weight:500; }
 
 /* AgentWorkbenchShell owns the split-pane sizing and scrolling in opt-in mode. */
 .cp-workspace.cp-workspace--agent {
@@ -109,12 +108,12 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
-  padding: 9px 16px;
+  min-height: var(--fm-control-height, 40px);
+  padding: 8px 16px;
   border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.6;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
   cursor: pointer;
   transition:
     background 0.15s,
@@ -125,22 +124,30 @@
   color: #fff;
   border: 1px solid var(--cp-primary);
 }
-.cp-primary:hover {
+.cp-primary:hover:not(:disabled) {
   background: var(--cp-primary-hover);
   border-color: var(--cp-primary-hover);
 }
 .cp-secondary {
   background: #fff;
-  border: 1px solid var(--cp-line);
-  color: var(--cp-ink);
+  border: 1px solid #d0d5dd;
+  color: #344054;
 }
-.cp-secondary:hover {
-  background: var(--cp-soft);
+.cp-secondary:hover:not(:disabled) {
+  background: var(--cp-primary-soft);
+  border-color: var(--cp-primary);
 }
 .cp-workspace button:disabled,
 .cp-modal button:disabled {
   opacity: 0.5;
-  cursor: default;
+  cursor: not-allowed;
+}
+.cp-workspace :is(.cp-primary, .cp-secondary):disabled,
+.cp-modal :is(.cp-primary, .cp-secondary):disabled {
+  background: #f2f4f7;
+  border-color: #e7ebef;
+  color: #98a2b3;
+  opacity: 1;
 }
 .cp-workspace :is(button, input, select, textarea, summary):focus-visible,
 .cp-modal :is(button, input, select, textarea, summary):focus-visible {
@@ -615,6 +622,41 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+.cp-modal.cp-task-center-dialog[data-slot="dialog-content"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(800px, calc(100% - 32px));
+  max-width: 800px;
+  max-height: min(82dvh, 780px);
+  overflow: hidden;
+  border-radius: var(--fm-dialog-radius, 18px);
+}
+.cp-task-center-dialog > header {
+  flex: none;
+  margin-bottom: 18px;
+}
+.cp-task-center-dialog .cp-task-create-form {
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.cp-task-center-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 4px 20px 0;
+}
+.cp-task-create-form > .cp-task-center-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.cp-task-create-form > footer {
+  flex: none;
 }
 .cp-modal footer {
   display: flex;

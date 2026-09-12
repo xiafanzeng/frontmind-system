@@ -12,10 +12,12 @@ import {
   type ContentProductionConfirmation as Confirmation,
   type ContentProductionDto,
 } from "@shared/content-production";
+import { getUnsavedWorkspaceDrafts } from "@/lib/workspace-navigation-guard";
 
 const mocks = vi.hoisted(() => ({
   conversation: null as any,
   conversations: [] as any[],
+  hydrated: true,
   create: vi.fn(() => "new-job"),
   select: vi.fn(),
   send: vi.fn(async (_prompt: string, _files?: File[], _options?: any) => true),
@@ -29,7 +31,7 @@ vi.mock("@/contexts/ConversationContext", () => ({
     activeConversation: mocks.conversation,
     createConversation: mocks.create,
     setActive: mocks.select,
-    hydrated: true,
+    hydrated: mocks.hydrated,
   }),
 }));
 vi.mock("@/hooks/useSendMessage", () => ({
@@ -126,6 +128,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.conversation = null;
   mocks.conversations = [];
+  mocks.hydrated = true;
   mocks.send.mockResolvedValue(true);
   mocks.retrieve.mockResolvedValue({
     id: "task-1",
@@ -1030,4 +1033,84 @@ it("places native chat and actionable stage confirmation in main, keeping only a
   expect(
     screen.getByText("当前工作：新建品牌资料包"),
   ).toBeInTheDocument();
+});
+
+it("enters the content workspace without a modal before or after recovery, and opens it only from a chosen task", () => {
+  mocks.hydrated = false;
+  const view = render(<ContentProductionWorkspace workbench />);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /新建品牌资料包/ })).toBeDisabled();
+
+  mocks.hydrated = true;
+  view.rerender(<ContentProductionWorkspace workbench />);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /新建品牌资料包/ }));
+  expect(screen.getByRole("dialog", { name: "内容任务中心" })).toBeInTheDocument();
+  expect(screen.getByLabelText("企业名称")).toBeInTheDocument();
+  expect(mocks.create).not.toHaveBeenCalled();
+  expect(mocks.send).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "关闭任务中心" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "本次要完成什么？" })).toBeInTheDocument();
+});
+
+it("preserves an unsubmitted task and its original files when cancelled, closed with Escape, and reopened", async () => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+  const file = new File(["企业事实"], "企业材料.txt", { type: "text/plain" });
+  const view = render(<ContentProductionWorkspace workbench />);
+  fireEvent.click(screen.getByRole("button", { name: /围绕问题写文章/ }));
+  fireEvent.change(screen.getByLabelText("企业名称"), { target: { value: "保留的企业" } });
+  fireEvent.change(screen.getByLabelText("正式问题"), { target: { value: "产品如何用于日常工作？" } });
+  fireEvent.change(screen.getByLabelText("企业资料来源"), { target: { value: "files" } });
+  fireEvent.change(screen.getByLabelText(/^上传材料或品牌资料包/), { target: { files: [file] } });
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(mocks.create).not.toHaveBeenCalled();
+  expect(getUnsavedWorkspaceDrafts().some((draft) => draft.label === "新建内容任务")).toBe(true);
+
+  const trigger = screen.getByRole("tab", { name: "任务中心" });
+  trigger.focus();
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("tab", { name: "新建任务" }));
+  expect(screen.getByLabelText("企业名称")).toHaveValue("保留的企业");
+  expect(screen.getByLabelText("正式问题")).toHaveValue("产品如何用于日常工作？");
+  expect(screen.getByLabelText("企业资料来源")).toHaveValue("files");
+  expect(screen.getByText("已选择：企业材料.txt")).toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await waitFor(() => expect(trigger).toHaveFocus());
+
+  fireEvent.click(screen.getByRole("button", { name: /围绕问题写文章/ }));
+  expect(screen.getByLabelText("企业名称")).toHaveValue("保留的企业");
+  fireEvent.click(screen.getByRole("button", { name: "创建并开始" }));
+  expect(mocks.create).toHaveBeenCalledTimes(1);
+  mocks.conversation = { id: "new-job", title: "保留的企业 · 单问题文章", messages: [], status: "idle" };
+  mocks.conversations = [mocks.conversation];
+  view.rerender(<ContentProductionWorkspace workbench />);
+  await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1));
+  expect(mocks.send.mock.calls[0][1]?.[0]).toBe(file);
+  expect(mocks.send.mock.calls[0][2].contentProduction).toMatchObject({
+    enterpriseName: "保留的企业", question: "产品如何用于日常工作？", knowledgeSource: "files",
+  });
+});
+
+it("manually restores an existing task by reading its original taskId without creating or submitting another task", async () => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+  paused("awaiting_blueprint_confirmation");
+  mocks.conversations[1] = { id: "job-2", taskId: "task-2", title: "另一篇文章任务", messages: [], status: "completed", updatedAt: Date.now() };
+  const view = render(<ContentProductionWorkspace workbench />);
+  await waitFor(() => expect(mocks.retrieve).toHaveBeenCalledWith("task-1", expect.anything()));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "任务中心" }));
+  fireEvent.click(screen.getByRole("button", { name: /另一篇文章任务/ }));
+  expect(mocks.select).toHaveBeenCalledWith("job-2");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+  mocks.conversation = mocks.conversations[1];
+  mocks.retrieve.mockResolvedValue({ id: "task-2", purpose: "content_production", status: "completed", contentProduction: progress() });
+  view.rerender(<ContentProductionWorkspace workbench />);
+  await waitFor(() => expect(mocks.retrieve).toHaveBeenCalledWith("task-2", expect.anything()));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(mocks.create).not.toHaveBeenCalled();
+  expect(mocks.send).not.toHaveBeenCalled();
 });

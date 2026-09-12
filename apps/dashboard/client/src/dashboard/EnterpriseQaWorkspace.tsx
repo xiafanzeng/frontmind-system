@@ -202,8 +202,7 @@ export function EnterpriseQaSourceNote({
         <div role="alert">
           <p>暂时无法刷新知识来源，当前任务和输入已保留。</p>
           <Button
-            variant="ghost"
-            size="sm"
+            variant="operatorOutline"
             onClick={() => {
               onRetryPublication?.();
               retryTaskSource();
@@ -266,8 +265,7 @@ function KnowledgeUnlockSteps() {
       </ol>
       {progress.isError && (
         <Button
-          variant="ghost"
-          size="sm"
+          variant="operatorOutline"
           onClick={() => void progress.refetch()}
         >
           重新读取构建状态
@@ -293,30 +291,30 @@ function EnterpriseQaPublishedWorkspace({
               <Loader2 className="inline-block mr-2 h-4 w-4 animate-spin" />
               正在确认知识库状态…
             </p>
-            <Button variant="outline" disabled>
+            <Button variant="operatorOutline" disabled>
               重新检查
             </Button>
           </div>
         ) : source.failed ? (
           <>
             <p role="alert">知识库状态读取失败，请重新检查。</p>
-            <Button variant="outline" onClick={retry}>
+            <Button variant="operatorOutline" onClick={retry}>
               重新检查
             </Button>
           </>
         ) : (
           <>
-            <BookOpen size={26} className="text-primary" />
+            <BookOpen size={26} className="text-[var(--module-accent,#5e6174)]" />
             <h2>先发布企业知识库，即可开始问答</h2>
             <p role="status">当前项目尚无可用的已发布知识库。</p>
             <KnowledgeUnlockSteps />
             <div className="flex flex-wrap gap-3">
-              <Button asChild>
+              <Button variant="operatorOutline" asChild>
                 <Link href={projectWorkspaceUrl("/?view=knowledge")}>
                   前往智能知识库
                 </Link>
               </Button>
-              <Button variant="ghost" onClick={retry}>
+              <Button variant="operatorOutline" onClick={retry}>
                 重新检查
               </Button>
             </div>

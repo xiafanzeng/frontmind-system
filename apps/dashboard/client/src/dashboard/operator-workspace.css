@@ -20,14 +20,14 @@
   --card-foreground: #20232b;
   --popover: #ffffff;
   --popover-foreground: #20232b;
-  --primary: #491060;
+  --primary: var(--module-accent, #5e6174);
   --primary-foreground: #ffffff;
   --secondary: #f2edf6;
   --secondary-foreground: #667085;
   --muted: #f7f7f8;
   --muted-foreground: #667085;
   --accent: #f2edf6;
-  --accent-foreground: #491060;
+  --accent-foreground: var(--module-accent, #5e6174);
   --border: #eaecf0;
   --input: #8f8997; /* More than 3:1 against the white input surface. */
   --ring: #7545a0;
@@ -572,34 +572,38 @@
   line-height: 22px;
 }
 .operator-control-primary {
-  background: var(--module-accent, #491060);
+  border: 1px solid var(--module-accent, #5e6174);
+  background: var(--module-accent, #5e6174);
   color: #fff;
 }
-.operator-control-primary:hover {
-  background: color-mix(in srgb, var(--module-accent, #491060) 88%, #000);
+.operator-control-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--module-accent, #5e6174) 92%, #000);
+  border-color: color-mix(in srgb, var(--module-accent, #5e6174) 92%, #000);
 }
 .operator-control-secondary {
   border: 1px solid #d0d5dd;
   background: #fff;
   color: #344054;
 }
-.operator-control-secondary:hover {
+.operator-control-secondary:hover:not(:disabled) {
   border-color: var(--module-accent, #667085);
   background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff);
 }
 .operator-primary-button {
-  background: var(--module-accent, #491060);
+  border-color: var(--module-accent, #5e6174);
+  background: var(--module-accent, #5e6174);
   color: #fff;
 }
-.operator-primary-button:hover {
-  background: color-mix(in srgb, var(--module-accent, #491060) 88%, #000);
+.operator-primary-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--module-accent, #5e6174) 92%, #000);
+  border-color: color-mix(in srgb, var(--module-accent, #5e6174) 92%, #000);
 }
 .operator-secondary-button {
   border-color: #d0d5dd;
   background: #fff;
   color: #344054;
 }
-.operator-secondary-button:hover {
+.operator-secondary-button:hover:not(:disabled) {
   border-color: var(--module-accent, #667085);
   background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff);
 }
@@ -612,9 +616,22 @@
 }
 .operator-primary-button:disabled,
 .operator-secondary-button:disabled,
-.operator-danger-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+.operator-danger-button:disabled,
+.operator-control-primary:disabled,
+.operator-control-secondary:disabled {
+  border-color: #e7ebef;
+  background: #f2f4f7;
+  color: #98a2b3;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.operator-primary-button:focus-visible,
+.operator-secondary-button:focus-visible,
+.operator-danger-button:focus-visible,
+.operator-control-primary:focus-visible,
+.operator-control-secondary:focus-visible {
+  outline: 2px solid var(--module-accent, #5e6174);
+  outline-offset: 2px;
 }
 .operator-project-menu {
   z-index: 110;
@@ -1014,9 +1031,9 @@
   --fm-text-caption: 13px;
   --fm-text-body-sm: 14px;
   --fm-text-body: 16px;
-  --purple-700: #3b1c55;
-  --purple-600: #491060;
-  --purple-500: #7545a0;
+  --purple-700: color-mix(in srgb, var(--module-accent, #5e6174) 82%, black);
+  --purple-600: var(--module-accent, #5e6174);
+  --purple-500: color-mix(in srgb, var(--module-accent, #5e6174) 88%, white);
   --text-strong: #20232b;
   --text-secondary: #667085;
   --text-muted: #667085;
@@ -1042,7 +1059,7 @@
   --rl-muted: #667085;
   --rl-faint: #667085;
   --rl-line: #eaecf0;
-  --rl-purple: #491060;
+  --rl-purple: var(--module-accent, #7545a0);
   --rl-paper: #fff;
   font-size: 16px;
   line-height: 1.75;
@@ -1053,8 +1070,8 @@
   --qm-muted: #667085;
   --qm-faint: #667085;
   --qm-line: #eaecf0;
-  --qm-purple: #491060;
-  --qm-purple-soft: #f2edf6;
+  --qm-purple: var(--module-accent, #2867a5);
+  --qm-purple-soft: color-mix(in srgb, var(--module-accent, #2867a5) 8%, white);
   font-size: 16px;
   line-height: 1.75;
 }
@@ -1068,7 +1085,7 @@
   line-height: 1.65;
 }
 .user-brand-dashboard.operator-mode .knowledge-frontend {
-  --kf-blue: #491060;
+  --kf-blue: var(--module-accent, #16794f);
   --kf-line: #eaecf0;
   color: #20232b;
   font-family: var(--fm-font-ui);
@@ -1079,7 +1096,7 @@
   background: #f6f7f9;
 }
 .user-brand-dashboard.operator-mode .kf-topbar {
-  background: #f2edf6;
+  background: color-mix(in srgb, var(--module-accent, #16794f) 8%, white);
 }
 .user-brand-dashboard.operator-mode
   :is(.kf-field, .kf-label, .kf-choices label, .kf-button) {
@@ -1093,7 +1110,7 @@
   line-height: 1.7;
 }
 .user-brand-dashboard.operator-mode .helplook-preview {
-  --hl-primary: #491060;
+  --hl-primary: var(--module-accent, #5e6174);
   --hl-text: #20232b;
   --hl-muted: #667085;
   --hl-border: #eaecf0;
@@ -1107,9 +1124,9 @@
   --publishing-ink: #20232b;
   --publishing-muted: #667085;
   --publishing-line: #eaecf0;
-  --publishing-purple: #491060;
-  --publishing-purple-dark: #3b1c55;
-  --publishing-purple-soft: #f2edf6;
+  --publishing-purple: var(--module-accent, #b33467);
+  --publishing-purple-dark: color-mix(in srgb, var(--module-accent, #b33467) 92%, black);
+  --publishing-purple-soft: color-mix(in srgb, var(--module-accent, #b33467) 8%, white);
   font-size: 16px;
   line-height: 1.75;
 }
@@ -1140,7 +1157,7 @@
 }
 
 .operator-theme.hl-portal {
-  --hl-primary: #491060;
+  --hl-primary: var(--module-accent, #5e6174);
   --hl-text: #20232b;
   --hl-muted: #667085;
   --hl-border: #eaecf0;

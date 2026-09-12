@@ -1,7 +1,7 @@
 /* Operator-only detail roles. Business states and module layouts stay with their owners. */
 .user-brand-dashboard.operator-mode, .operator-theme {
   --operator-caption-size: 13px;
-  --operator-control-border: #8f8997;
+  --operator-control-border: #d0d5dd;
 }
 .user-brand-dashboard.operator-mode :is(.page-header h1, .rl-page-header h2, .publishing-page-heading h1) {
   color: #20232b; font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: normal;
@@ -9,11 +9,17 @@
 .user-brand-dashboard.operator-mode :is(.rl-page-header p, .publishing-page-heading p) { color: #5d6573; font-size: 16px; line-height: 26px; }
 .user-brand-dashboard.operator-mode :is(.rl-eyebrow, .cp-kicker) { display: none; }
 .user-brand-dashboard.operator-mode :is(.rl-primary-button, .publishing-button-primary, .publishing-button-accent) {
-  min-height: 44px; padding: 10px 18px; border: 1px solid #4b246b; border-radius: 8px;
-  background: #4b246b; color: #fff; font-size: 15px; line-height: 22px; font-weight: 500; box-shadow: none; transform: none;
+  min-height: 40px; padding: 8px 16px; border: 1px solid var(--module-accent, #667085); border-radius: 8px;
+  background: var(--module-accent, #667085); color: #fff; font-size: 14px; line-height: 22px; font-weight: 500; box-shadow: none; transform: none;
 }
 .user-brand-dashboard.operator-mode :is(.rl-primary-button, .publishing-button-primary, .publishing-button-accent):hover:not(:disabled) {
-  background: #3b1c55; border-color: #3b1c55; box-shadow: none; transform: none;
+  background: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); border-color: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); box-shadow: none; transform: none;
+}
+.user-brand-dashboard.operator-mode :is(.rl-primary-button, .publishing-button-primary, .publishing-button-accent, .publishing-button-secondary, .fm-primary-button, .fm-add-button, .fm-secondary-button, .fm-tool-button):disabled,
+.user-brand-dashboard.operator-mode .helplook-preview .hl-button:disabled,
+.operator-theme.hl-portal .hl-button:disabled {
+  background: #f2f4f7; border-color: #e7ebef; color: #98a2b3;
+  opacity: 1; cursor: not-allowed; box-shadow: none; transform: none;
 }
 .user-brand-dashboard.operator-mode :is(.rl-question-nav, .rl-dialogue-card, .rl-editor-card, .rl-question-context, .publishing-panel) {
   border-color: #e2e5eb; border-radius: 12px; box-shadow: none; background: #fff;
@@ -31,18 +37,18 @@
 }
 .user-brand-dashboard.operator-mode .monitoring-module .publishing-page { --publishing-shadow: none; font-family: var(--fm-font-ui); padding-inline: 24px; }
 .user-brand-dashboard.operator-mode .publishing-workbench-tabs a { min-height: 40px; border-radius: 8px; font-size: 14px; }
-.user-brand-dashboard.operator-mode .publishing-workbench-tabs a[aria-current="page"] { background: #f2edf6; color: #4b246b; box-shadow: none; }
-.user-brand-dashboard.operator-mode .publishing-button-secondary { min-height: 40px; border-color: #8f8997; border-radius: 8px; font-size: 14px; }
-.user-brand-dashboard.operator-mode .publishing-button-secondary:hover:not(:disabled) { background: #f2edf6; border-color: #8f8997; transform: none; }
+.user-brand-dashboard.operator-mode .publishing-workbench-tabs a[aria-current="page"] { background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff); color: var(--module-accent, #667085); box-shadow: none; }
+.user-brand-dashboard.operator-mode .publishing-button-secondary { min-height: 40px; padding: 8px 16px; border-color: #d0d5dd; border-radius: 8px; background: #fff; color: #344054; font-size: 14px; line-height: 22px; font-weight: 500; }
+.user-brand-dashboard.operator-mode .publishing-button-secondary:hover:not(:disabled) { background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff); border-color: #d0d5dd; transform: none; }
 .user-brand-dashboard.operator-mode .publishing-page :is(input, select):not([type="checkbox"]):not([type="radio"]):not([type="file"]) { min-height: 44px; border-radius: 8px; }
 .user-brand-dashboard.operator-mode .publishing-page :is(table, .publishing-table) { font-size: 14px; line-height: 22px; }
-.user-brand-dashboard.operator-mode .publishing-page :is(button, a, input, select, textarea):focus-visible { outline: 2px solid #7545a0; outline-offset: 2px; }
+.user-brand-dashboard.operator-mode .publishing-page :is(button, a, input, select, textarea):focus-visible { outline: 2px solid var(--module-accent, #667085); outline-offset: 2px; }
 .user-brand-dashboard.operator-mode .helplook-preview :is(h2, h3), .operator-theme.hl-portal h2 { color: #20232b; }
 .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-page-heading h2, .hl-widget-settings-title) { font-size: 24px; line-height: 32px; }
 .user-brand-dashboard.operator-mode .helplook-preview .hl-page-heading { flex-wrap: wrap; }
 .user-brand-dashboard.operator-mode .helplook-preview .hl-period { max-width: 100%; flex-wrap: wrap; gap: 12px; }
 .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-date-trigger, .hl-segmented button) { font-size: 14px; line-height: 22px; white-space: nowrap; }
-.user-brand-dashboard.operator-mode .helplook-preview .hl-date-trigger { border-color: #8f8997; border-radius: 8px; }
+.user-brand-dashboard.operator-mode .helplook-preview .hl-date-trigger { border-color: #d0d5dd; border-radius: 8px; }
 .user-brand-dashboard.operator-mode .helplook-preview .hl-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
 .user-brand-dashboard.operator-mode .helplook-preview { container-type: inline-size; }
 @container (max-width: 900px) {
@@ -57,16 +63,17 @@
   .user-brand-dashboard.operator-mode .helplook-preview .hl-widget-tab-list { flex-wrap: wrap; gap: 12px; }
 }
 .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-widget-settings, .hl-group-toggle) { background: #f6f7f9; }
-.user-brand-dashboard.operator-mode .helplook-preview .hl-module-nav button[aria-current="page"] { background: #f2edf6; }
-.user-brand-dashboard.operator-mode .helplook-preview .hl-button, .operator-theme.hl-portal .hl-button { min-height: 40px; padding: 8px 14px; border-radius: 8px; font-size: 14px; line-height: 22px; }
-.user-brand-dashboard.operator-mode .helplook-preview .hl-button--primary, .operator-theme.hl-portal .hl-button--primary { min-height: 44px; background: #4b246b; border-color: #4b246b; color: #fff; }
-.user-brand-dashboard.operator-mode .helplook-preview .hl-button--primary:hover, .operator-theme.hl-portal .hl-button--primary:hover { background: #3b1c55; }
-.user-brand-dashboard.operator-mode .helplook-preview :is(.hl-input, .hl-select), .operator-theme.hl-portal :is(.hl-input, .hl-select) { min-height: 44px; border-color: #8f8997; border-radius: 8px; font-size: 16px; }
+.user-brand-dashboard.operator-mode .helplook-preview .hl-module-nav button[aria-current="page"] { background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff); }
+.user-brand-dashboard.operator-mode .helplook-preview .hl-button, .operator-theme.hl-portal .hl-button { min-height: 40px; padding: 8px 16px; border-radius: 8px; font-size: 14px; line-height: 22px; }
+.user-brand-dashboard.operator-mode .helplook-preview .hl-button--primary, .operator-theme.hl-portal .hl-button--primary { min-height: 40px; background: var(--module-accent, #667085); border-color: var(--module-accent, #667085); color: #fff; }
+.user-brand-dashboard.operator-mode .helplook-preview .hl-button--primary:hover:not(:disabled), .operator-theme.hl-portal .hl-button--primary:hover:not(:disabled) { background: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); }
+.user-brand-dashboard.operator-mode .helplook-preview :is(.hl-input, .hl-select), .operator-theme.hl-portal :is(.hl-input, .hl-select) { min-height: 44px; border-color: #d0d5dd; border-radius: 8px; font-size: 16px; }
 .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-label, .hl-widget-label) { color: #20232b; font-size: 14px; line-height: 22px; }
 .user-brand-dashboard.operator-mode .helplook-preview :is(.hl-hint, .hl-widget-hint, .hl-widget-settings-subtitle) { color: #5d6573; font-size: 13px; line-height: 20px; }
 .user-brand-dashboard.operator-mode .helplook-preview .hl-table { font-size: 14px; line-height: 22px; }
-.user-brand-dashboard.operator-mode .helplook-preview :is(button, a, input, textarea, select):focus-visible, .operator-theme.hl-portal :is(button, a, input, textarea, select):focus-visible { outline: 2px solid #7545a0; outline-offset: 2px; }
-.operator-theme.hl-portal .hl-dialog { border-radius: 16px; }
+.user-brand-dashboard.operator-mode .helplook-preview :is(button, a, input, textarea, select):focus-visible, .operator-theme.hl-portal :is(button, a, input, textarea, select):focus-visible { outline: 2px solid var(--module-accent, #667085); outline-offset: 2px; }
+.operator-theme.hl-portal { --module-accent: #5e6174; }
+.operator-theme.hl-portal .hl-dialog { border-radius: var(--fm-dialog-radius, 18px); }
 .operator-theme.hl-calendar { max-width: calc(100vw - 24px); max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height, calc(100dvh - 24px))); overflow: auto; overscroll-behavior: contain; border-radius: 12px; }
 @media (max-width: 767px) {
   .operator-theme.hl-calendar .rdp-months { flex-direction: column; flex-wrap: nowrap; }
@@ -80,32 +87,34 @@
 
 /* The current monitoring workspace and its native portal form define their own tokens. */
 .user-brand-dashboard.operator-mode .monitoring-module .fm-monitoring-workspace {
-  --fm-primary: #4b246b; --fm-primary-hover: #3b1c55; --fm-text: #20232b;
+  --module-accent: #2867a5;
+  --fm-primary: var(--module-accent, #667085); --fm-primary-hover: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); --fm-text: #20232b;
   --fm-muted: #5d6573; --fm-border: #e2e5eb; --fm-surface: #fff;
 }
 .user-brand-dashboard.operator-mode .monitoring-module .modal-wide .monitor-form-v2 {
-  --monitor-form-primary: #4b246b; --monitor-form-primary-soft: #f2edf6;
+  --module-accent: #2867a5;
+  --monitor-form-primary: var(--module-accent, #667085); --monitor-form-primary-soft: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff);
   --monitor-form-text: #20232b; --monitor-form-muted: #5d6573;
   --monitor-form-line: #e2e5eb; --monitor-form-surface: #f6f7f9;
 }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-primary-button, .fm-add-button),
 .user-brand-dashboard.operator-mode .monitoring-module .monitor-form-v2 .footer-actions :is(.primary-button, .secondary-strong-button) {
-  min-height: 44px; padding: 10px 14px; border-radius: 8px; font-size: 15px; line-height: 22px; font-weight: 500; box-shadow: none;
+  min-height: 40px; padding: 8px 16px; border-radius: 8px; font-size: 14px; line-height: 22px; font-weight: 500; box-shadow: none;
 }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-primary-button, .fm-add-button):not(:disabled),
-.user-brand-dashboard.operator-mode .monitoring-module .monitor-form-v2 .footer-actions :is(.primary-button, .secondary-strong-button):not(:disabled) { background: #4b246b; border-color: #4b246b; }
+.user-brand-dashboard.operator-mode .monitoring-module .monitor-form-v2 .footer-actions :is(.primary-button, .secondary-strong-button):not(:disabled) { background: var(--module-accent, #667085); border-color: var(--module-accent, #667085); }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-primary-button, .fm-add-button):not(:disabled):hover,
-.user-brand-dashboard.operator-mode .monitoring-module .monitor-form-v2 .footer-actions :is(.primary-button, .secondary-strong-button):not(:disabled):hover { background: #3b1c55; border-color: #3b1c55; box-shadow: none; }
+.user-brand-dashboard.operator-mode .monitoring-module .monitor-form-v2 .footer-actions :is(.primary-button, .secondary-strong-button):not(:disabled):hover { background: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); border-color: color-mix(in srgb, var(--module-accent, #667085) 92%, #000); box-shadow: none; }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-secondary-button, .fm-tool-button) { min-height: 40px; font-size: 14px; line-height: 22px; border-radius: 8px; box-shadow: none; }
 .user-brand-dashboard.operator-mode .monitoring-module .fm-tabs { box-shadow: none; backdrop-filter: none; }
 .user-brand-dashboard.operator-mode .monitoring-module .fm-tabs button { min-height: 36px; padding: 6px 12px; font-size: 14px; line-height: 22px; border-radius: 8px; }
-.user-brand-dashboard.operator-mode .monitoring-module .fm-tabs button.active { background: #4b246b; box-shadow: none; }
-.user-brand-dashboard.operator-mode .monitoring-module .fm-monitor-card.selected { background: #f2edf6; border-color: #b9a8c7; box-shadow: none; }
-.user-brand-dashboard.operator-mode .monitoring-module .fm-collapsed-selection { color: #4b246b; background: #f2edf6; border-color: #b9a8c7; }
+.user-brand-dashboard.operator-mode .monitoring-module .fm-tabs button.active { background: var(--module-accent, #667085); box-shadow: none; }
+.user-brand-dashboard.operator-mode .monitoring-module .fm-monitor-card.selected { background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff); border-color: color-mix(in srgb, var(--module-accent, #667085) 30%, #fff); box-shadow: none; }
+.user-brand-dashboard.operator-mode .monitoring-module .fm-collapsed-selection { color: var(--module-accent, #667085); background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff); border-color: color-mix(in srgb, var(--module-accent, #667085) 30%, #fff); }
 .user-brand-dashboard.operator-mode .monitoring-module .fm-monitor-card:hover { transform: none; box-shadow: none; }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-monitor-card h3, .fm-monitor-list-heading h2) { font-size: 15px; line-height: 24px; }
 .user-brand-dashboard.operator-mode .monitoring-module :is(.fm-monitor-hero p, .fm-monitor-list-heading > div > span, .fm-metric-grid article > span, .fm-metric-grid article > small, .fm-demo-notice) { color: #5d6573; font-size: 13px; line-height: 20px; }
-.user-brand-dashboard.operator-mode .monitoring-module :is(button, a, input, select, textarea):focus-visible { outline: 2px solid #7545a0; outline-offset: 2px; }
+.user-brand-dashboard.operator-mode .monitoring-module :is(button, a, input, select, textarea):focus-visible { outline: 2px solid var(--module-accent, #667085); outline-offset: 2px; }
 @media (max-width: 900px) {
   /* Auto-height rows prevent the old 100% grid from squeezing the list below its controls. */
   .user-brand-dashboard.operator-mode .monitoring-module .monitoring-reference-page .fm-monitoring-workspace { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; align-content: start; gap: 16px; }

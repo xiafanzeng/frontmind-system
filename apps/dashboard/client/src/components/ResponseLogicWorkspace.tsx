@@ -1989,7 +1989,7 @@ function ResponseLogicWorkspaceContent({
       />
       {!confirmed && (
         <Button
-          variant="outline"
+          variant="operatorOutline"
           disabled={savingDraft || !draftDirty}
           onClick={() => void saveCurrentDraft()}
         >
@@ -2006,13 +2006,14 @@ function ResponseLogicWorkspaceContent({
           </p>
           <div className="flex flex-wrap gap-3">
             <Button
-              variant="outline"
+              variant="operatorOutline"
               disabled={isPublishing}
               onClick={() => setConfirmDialogOpen(false)}
             >
               继续检查
             </Button>
             <Button
+              variant="operator"
               disabled={isPublishing}
               onClick={() => void updateConfirmation()}
             >
@@ -2217,7 +2218,7 @@ function ResponseLogicWorkspaceContent({
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="rl-secondary-button"
+              className="operator-secondary-button"
               disabled={isPublishing}
               onClick={() => setConfirmDialogOpen(false)}
             >
@@ -2225,7 +2226,7 @@ function ResponseLogicWorkspaceContent({
             </button>
             <button
               type="button"
-              className="rl-update-button"
+              className="operator-primary-button"
               disabled={isPublishing}
               onClick={() => void updateConfirmation()}
             >
@@ -2249,10 +2250,14 @@ function ResponseLogicWorkspaceContent({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isPublishing}>
+            <AlertDialogCancel
+              className="operator-control-secondary"
+              disabled={isPublishing}
+            >
               继续检查
             </AlertDialogCancel>
             <AlertDialogAction
+              className="operator-control-primary"
               disabled={isPublishing}
               onClick={(event) => {
                 event.preventDefault();

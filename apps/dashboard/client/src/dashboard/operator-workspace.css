@@ -22,15 +22,15 @@
   --popover-foreground: #20232b;
   --primary: var(--module-accent, #5e6174);
   --primary-foreground: #ffffff;
-  --secondary: #f2edf6;
-  --secondary-foreground: #667085;
+  --secondary: #f7f8fa;
+  --secondary-foreground: #344054;
   --muted: #f7f7f8;
   --muted-foreground: #667085;
-  --accent: #f2edf6;
+  --accent: color-mix(in srgb, var(--module-accent, #5e6174) 7%, white);
   --accent-foreground: var(--module-accent, #5e6174);
   --border: #eaecf0;
   --input: #8f8997; /* More than 3:1 against the white input surface. */
-  --ring: #7545a0;
+  --ring: var(--module-accent, #5e6174);
   --destructive: #b53c4a;
   --destructive-foreground: #ffffff;
   --radius: 0.75rem;

@@ -199,7 +199,9 @@
   font-weight: 500;
   line-height: 22px;
   box-shadow: none;
-  transition: background-color 150ms ease, border-color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
 }
 .hl-button:hover:not(:disabled) {
   color: var(--hl-primary);
@@ -683,4 +685,59 @@
 }
 .content-insights-flow .hl-page-heading h2 {
   font-size: 18px;
+}
+
+/* Operator workbench controls use the shared Dashboard control rhythm. Keep
+   the compact controls for the standalone preview, while workbench forms and
+   their Radix portals use the 40px/8px baseline. */
+.agent-workbench-shell .content-insights-flow .hl-input:not(textarea),
+.agent-workbench-shell .content-insights-flow .hl-select {
+  min-height: var(--fm-control-height, 40px);
+  height: var(--fm-control-height, 40px);
+  border-radius: var(--fm-control-radius, 8px);
+}
+
+.agent-workbench-shell .content-insights-flow textarea.hl-input {
+  min-height: var(--fm-control-height, 40px);
+  border-radius: var(--fm-control-radius, 8px);
+}
+
+.hl-portal.operator-theme.hl-dialog {
+  border-radius: var(--fm-dialog-radius, 18px);
+}
+
+.hl-portal.operator-theme.hl-select-options {
+  border-radius: var(--fm-control-radius, 8px);
+}
+
+.hl-portal.operator-theme.hl-dialog .hl-dialog-head,
+.hl-portal.operator-theme.hl-dialog .hl-dialog-body,
+.hl-portal.operator-theme.hl-dialog .hl-dialog-footer {
+  border-color: var(--fm-line, #e7ebef);
+}
+
+.agent-workbench-shell .content-insights-flow .hl-pagination > button {
+  min-width: 32px;
+  height: 32px;
+  border-radius: var(--fm-control-radius, 8px);
+  border: 1px solid var(--fm-line, #e7ebef);
+  background: #fff;
+  color: var(--fm-muted, #667085);
+}
+
+.agent-workbench-shell
+  .content-insights-flow
+  .hl-pagination
+  > button:hover:not(:disabled) {
+  border-color: var(--hl-primary);
+  background: color-mix(in srgb, var(--hl-primary) 7%, white);
+}
+
+.agent-workbench-shell
+  .content-insights-flow
+  .hl-pagination
+  > button[aria-current="page"] {
+  border-color: var(--hl-primary);
+  background: var(--hl-primary);
+  color: #fff;
 }

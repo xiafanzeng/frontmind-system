@@ -23,9 +23,33 @@
   padding: 24px;
   background: var(--cp-soft);
 }
-.cp-task-center-tabs { display:flex; flex:none; gap:6px; margin:0; padding-bottom:10px; border-bottom:1px solid #e7ebef; }
-.cp-task-center-tabs button { border:0; background:transparent; color:#667085; border-radius:8px; padding:7px 12px; font-size:13px; font-weight:500; }
-.cp-task-center-tabs button[aria-selected="true"] { color:var(--cp-primary); background:var(--cp-primary-soft); font-weight:500; }
+.cp-task-center-tabs {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e7ebef;
+}
+.cp-task-center-tabs button {
+  border: 0;
+  background: transparent;
+  color: #667085;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.cp-task-center-tabs button[aria-selected="true"] {
+  color: var(--cp-primary);
+  background: var(--cp-primary-soft);
+  font-weight: 500;
+}
+.cp-entry-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 20px;
+}
 
 /* AgentWorkbenchShell owns the split-pane sizing and scrolling in opt-in mode. */
 .cp-workspace.cp-workspace--agent {

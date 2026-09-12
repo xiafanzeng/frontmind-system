@@ -50,9 +50,19 @@ import KnowledgeBaseManagedUploadRecovery from "./KnowledgeBaseManagedUploadReco
 import GeneralAgentRuntimeBadge from "./GeneralAgentRuntimeBadge";
 
 export const ENTERPRISE_QA_SUGGESTIONS = [
-  { label: "产品与服务", prompt: "请根据已发布知识库介绍企业的主要产品与服务，并说明资料依据。" },
-  { label: "品牌定位", prompt: "请根据已发布知识库说明企业的品牌定位、目标客户和主要特点。" },
-  { label: "资料依据", prompt: "请梳理已发布知识库中的主要资料，以及这些资料可以支持解答的企业问题。" },
+  {
+    label: "产品与服务",
+    prompt: "请根据已发布知识库介绍企业的主要产品与服务，并说明资料依据。",
+  },
+  {
+    label: "品牌定位",
+    prompt: "请根据已发布知识库说明企业的品牌定位、目标客户和主要特点。",
+  },
+  {
+    label: "资料依据",
+    prompt:
+      "请梳理已发布知识库中的主要资料，以及这些资料可以支持解答的企业问题。",
+  },
 ] as const;
 
 interface FilePreview {
@@ -1206,8 +1216,28 @@ export default function ChatInput({
                   {uploadProgress.overallPercent}%
                 </span>
               </div>
-              {syncKnowledgeBaseSnapshot && stopKnowledgeBaseAttachmentAttempt && <Button type="button" variant="ghost" size="sm" onClick={() => void stopKnowledgeBaseAttachmentAttempt()}>停止上传</Button>}
-              {uploadProgress.totalBytes !== undefined && <p className="mb-1.5 text-xs tabular-nums text-muted-foreground">已上传 {formatKnowledgeBaseUploadBytes(uploadProgress.uploadedBytes ?? 0)} / {formatKnowledgeBaseUploadBytes(uploadProgress.totalBytes)} · 已完成 {uploadProgress.confirmedFiles ?? 0}/{uploadProgress.totalFiles} 个文件</p>}
+              {syncKnowledgeBaseSnapshot &&
+                stopKnowledgeBaseAttachmentAttempt && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void stopKnowledgeBaseAttachmentAttempt()}
+                  >
+                    停止上传
+                  </Button>
+                )}
+              {uploadProgress.totalBytes !== undefined && (
+                <p className="mb-1.5 text-xs tabular-nums text-muted-foreground">
+                  已上传{" "}
+                  {formatKnowledgeBaseUploadBytes(
+                    uploadProgress.uploadedBytes ?? 0,
+                  )}{" "}
+                  / {formatKnowledgeBaseUploadBytes(uploadProgress.totalBytes)}{" "}
+                  · 已完成 {uploadProgress.confirmedFiles ?? 0}/
+                  {uploadProgress.totalFiles} 个文件
+                </p>
+              )}
               <Progress
                 value={uploadProgress.overallPercent}
                 className="h-1.5"
@@ -1403,14 +1433,19 @@ export default function ChatInput({
                   ? "首轮使用固定提问发送 · 发送后可自由输入文字并上传图片或文件"
                   : syncKnowledgeBaseSnapshot
                     ? "Enter 提交修订 · Shift+Enter 换行 · 支持多文件选择与拖拽上传"
-                    : "Enter 发送 · Shift+Enter 换行 · 支持资料、图片与交付文件上传"}
+                    : purpose === "enterprise_qa"
+                      ? "Enter 发送 · Shift+Enter 换行 · 仅基于当前知识来源回答"
+                      : "Enter 发送 · Shift+Enter 换行 · 支持资料、图片与交付文件上传"}
               </p>
             </div>
           </div>
         )}
         {welcomeSuggestions && (
           <div className="general-task-suggestions" aria-label="快捷任务建议">
-            {(welcomeSuggestions === "enterprise_qa" ? ENTERPRISE_QA_SUGGESTIONS : GENERAL_TASK_SUGGESTIONS).map((item) => (
+            {(welcomeSuggestions === "enterprise_qa"
+              ? ENTERPRISE_QA_SUGGESTIONS
+              : GENERAL_TASK_SUGGESTIONS
+            ).map((item) => (
               <button
                 type="button"
                 key={item.label}

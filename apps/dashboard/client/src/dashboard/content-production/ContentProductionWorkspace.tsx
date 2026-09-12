@@ -4,9 +4,20 @@ import {
 } from "@/dashboard/workflow/Workflow";
 import { BusinessWorkspaceInspector } from "@/dashboard/BusinessWorkspaceContext";
 import { WorkbenchTaskToolbar } from "../WorkbenchTaskToolbar";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { OPERATOR_MODULES } from "../operator-navigation";
-const contentTheme = { "--module-accent": OPERATOR_MODULES.find((item) => item.id === "content")!.color, "--module-color": OPERATOR_MODULES.find((item) => item.id === "content")!.color } as CSSProperties;
+const contentTheme = {
+  "--module-accent": OPERATOR_MODULES.find((item) => item.id === "content")!
+    .color,
+  "--module-color": OPERATOR_MODULES.find((item) => item.id === "content")!
+    .color,
+} as CSSProperties;
 import {
   Check,
   ChevronDown,
@@ -677,7 +688,8 @@ function ContentProductionInner({
             />
           ) : (
             <WorkflowQuestion
-              variant="entry" module="content"
+              variant="entry"
+              module="content"
               question="本次要完成什么？"
               selected={mode ?? undefined}
               choices={CONTENT_MODES.map((item) => ({
@@ -815,17 +827,15 @@ function ContentProductionInner({
       </div>
       {(mode || !workbench) && (
         <footer>
-          <button
-            type="button"
-            className="cp-secondary"
-            onClick={closeCreate}
-          >
+          <button type="button" className="cp-secondary" onClick={closeCreate}>
             取消
           </button>
           <button
             className="cp-primary"
             type="submit"
-            disabled={!hydrated || !mode || Boolean(pendingStart) || handoffPending}
+            disabled={
+              !hydrated || !mode || Boolean(pendingStart) || handoffPending
+            }
           >
             创建并开始
           </button>
@@ -833,9 +843,31 @@ function ContentProductionInner({
       )}
     </form>
   );
-  const resultView = (
+  const showResult = Boolean(activeConversation);
+  const confirmationConversation = activeConversation;
+  const confirmationView =
+    confirmationConversation && progress ? (
+      <ContentProductionConfirmation
+        key={`${confirmationConversation.id}:${progress.runnerRevision}:${progress.confirmation}`}
+        progress={progress}
+        busy={busy}
+        onPendingChange={setConfirmationPending}
+        onAction={async (prompt, files, action) => {
+          const id = confirmationConversation.id;
+          if (currentId.current !== id)
+            throw new Error("任务已切换，请在当前任务重新确认。");
+          setNotice("");
+          const accepted = await sendMessage(prompt, files, {
+            contentProductionAction: action,
+          });
+          if (accepted === false)
+            throw new Error("本轮提交尚未确认成功，请查看任务回复中的提示。");
+        }}
+        onNotice={setNotice}
+      />
+    ) : null;
+  const resultView = showResult ? (
     <div className={`cp-result-surface ${workbench ? "is-agent" : ""}`}>
-      {activeConversation && (
         <aside className="cp-results" aria-label="任务进度与交付成果">
           <header
             className={`cp-results-heading ${workbench ? "cp-results-heading--agent" : ""}`}
@@ -877,9 +909,7 @@ function ContentProductionInner({
                     return (
                       <li
                         key={step.title}
-                        className={
-                          done ? "is-done" : current ? "is-current" : ""
-                        }
+                      className={done ? "is-done" : current ? "is-current" : ""}
                         aria-current={current ? "step" : undefined}
                       >
                         <span className="cp-step-icon">
@@ -895,28 +925,7 @@ function ContentProductionInner({
                 </ol>
               )}
             </details>
-            {progress && (
-              <ContentProductionConfirmation
-                key={`${activeConversation.id}:${progress.runnerRevision}:${progress.confirmation}`}
-                progress={progress}
-                busy={busy}
-                onPendingChange={setConfirmationPending}
-                onAction={async (prompt, files, action) => {
-                  const id = activeConversation.id;
-                  if (currentId.current !== id)
-                    throw new Error("任务已切换，请在当前任务重新确认。");
-                  setNotice("");
-                  const accepted = await sendMessage(prompt, files, {
-                    contentProductionAction: action,
-                  });
-                  if (accepted === false)
-                    throw new Error(
-                      "本轮提交尚未确认成功，请查看任务回复中的提示。",
-                    );
-                }}
-                onNotice={setNotice}
-              />
-            )}
+          {confirmationView}
             {handoffAvailable && (
               <section className="cp-handoff">
                 <strong>
@@ -936,9 +945,7 @@ function ContentProductionInner({
                       用于下一任务的资料包
                       <select
                         value={selectedPack}
-                        onChange={(event) =>
-                          setSelectedPack(event.target.value)
-                        }
+                      onChange={(event) => setSelectedPack(event.target.value)}
                         disabled={handoffPending}
                       >
                         <option value="">请选择已交付的品牌资料包</option>
@@ -1015,14 +1022,8 @@ function ContentProductionInner({
             )}
           </div>
         </aside>
-      )}
-      {!activeConversation && workbench && (
-        <p className="cp-progress-empty">
-          开始内容任务后，制作阶段、确认操作与交付文件会显示在这里。
-        </p>
-      )}
     </div>
-  );
+  ) : null;
   const conversationView = (
     <div className="cp-dialogue">
       <div className="cp-dialogue-heading">
@@ -1068,15 +1069,17 @@ function ContentProductionInner({
               purpose="content_production"
               contentProduction={input}
               standardWelcomeVariant="simple"
-              conversationFooter={workbench ? resultView : undefined}
+              conversationFooter={workbench ? confirmationView : undefined}
             />
           </div>
         </>
       ) : workbench ? (
         <WorkflowQuestion
-          variant="entry" module="content"
+          variant="entry"
+          module="content"
           question="本次要完成什么？"
           description="选择交付目标，再补充企业材料。"
+          selected={mode}
           choices={CONTENT_MODES.map((item) => ({
             id: item.value,
             label: item.title,
@@ -1085,17 +1088,50 @@ function ContentProductionInner({
           }))}
           onSelect={(value) => {
             setMode(value as ContentProductionMode);
-            openTaskCenter("new");
           }}
-        />
+        >
+          {mode ? (
+            <div className="cp-entry-actions">
+              <button
+                type="button"
+                className="cp-primary"
+                onClick={openCreate}
+                disabled={!hydrated || handoffPending}
+              >
+                配置并开始任务
+              </button>
+            </div>
+          ) : null}
+        </WorkflowQuestion>
       ) : (
         <WorkflowQuestion
-          variant="entry" module="content"
+          variant="entry"
+          module="content"
           question="本次要完成什么？"
           description="选择交付目标，再补充企业材料。"
-          choices={CONTENT_MODES.map((item) => ({ id: item.value, label: item.title, description: item.description, disabled: !hydrated, disabledReason: "正在恢复工作区" }))}
-          onSelect={(value) => { setMode(value as ContentProductionMode); openTaskCenter("new"); }}
-        />
+          selected={mode}
+          choices={CONTENT_MODES.map((item) => ({
+            id: item.value,
+            label: item.title,
+            description: item.description,
+            disabled: !hydrated,
+            disabledReason: "正在恢复工作区",
+          }))}
+          onSelect={(value) => setMode(value as ContentProductionMode)}
+        >
+          {mode ? (
+            <div className="cp-entry-actions">
+              <button
+                type="button"
+                className="cp-primary"
+                onClick={openCreate}
+                disabled={!hydrated || handoffPending}
+              >
+                配置并开始任务
+              </button>
+            </div>
+          ) : null}
+        </WorkflowQuestion>
       )}
     </div>
   );
@@ -1193,6 +1229,17 @@ function ContentProductionInner({
           }
           taskKey={activeConversation?.id ?? "empty"}
           scrollMain={!activeConversation}
+          showResult={showResult}
+          topbarActions={
+            <button
+              type="button"
+              className="cp-secondary cp-task-center-trigger"
+              onClick={() => openTaskCenter("existing")}
+              disabled={!hydrated || Boolean(pendingStart) || handoffPending}
+            >
+              任务中心
+            </button>
+          }
           main={
             <div
               className={`cp-main-flow ${activeConversation ? "has-conversation" : ""}`}
@@ -1202,29 +1249,6 @@ function ContentProductionInner({
           }
           auxiliary={
             <div className="workbench-task-panel">
-              <div
-                className="workbench-panel-tabs"
-                role="tablist"
-                aria-label="制作任务与交付文件"
-              >
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={false}
-                  disabled={!hydrated || Boolean(pendingStart) || handoffPending}
-                  onClick={() => openTaskCenter("existing")}
-                >
-                  任务中心
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={true}
-                >
-                  交付文件
-                </button>
-              </div>
-
                 <BusinessWorkspaceInspector
                   summary={{
                     status: statusLabel,
@@ -1306,26 +1330,67 @@ function ContentProductionInner({
         >
           <header>
             <div>
-              <DialogTitle>{workbench ? "内容任务中心" : "新建内容任务"}</DialogTitle>
-              <DialogDescription>选择交付目标，或继续已有的制作任务。关闭后保留未提交内容。</DialogDescription>
+              <DialogTitle>
+                {workbench ? "内容任务中心" : "新建内容任务"}
+              </DialogTitle>
+              <DialogDescription>
+                选择交付目标，或继续已有的制作任务。关闭后保留未提交内容。
+              </DialogDescription>
             </div>
-            <button type="button" className="cp-icon-button" aria-label="关闭任务中心" onClick={closeCreate}>
+            <button
+              type="button"
+              className="cp-icon-button"
+              aria-label="关闭任务中心"
+              onClick={closeCreate}
+            >
               <X size={20} />
             </button>
           </header>
-          <div className="cp-task-center-tabs" role="tablist" aria-label="内容任务中心">
-            <button type="button" role="tab" aria-selected={taskCenterTab === "new"} onClick={() => setTaskCenterTab("new")}>新建任务</button>
-            <button type="button" role="tab" aria-selected={taskCenterTab === "existing"} onClick={() => setTaskCenterTab("existing")}>已有任务</button>
+          <div
+            className="cp-task-center-tabs"
+            role="tablist"
+            aria-label="内容任务中心"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={taskCenterTab === "new"}
+              onClick={() => setTaskCenterTab("new")}
+            >
+              新建任务
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={taskCenterTab === "existing"}
+              onClick={() => setTaskCenterTab("existing")}
+            >
+              已有任务
+            </button>
           </div>
-          {taskCenterTab === "new" ? createForm : (
+          {taskCenterTab === "new" ? (
+            createForm
+          ) : (
             <div className="cp-task-center-body">
             <WorkbenchTaskToolbar
               presentation="panel"
-              labels={{ newAction: "新建任务", history: "已有任务", noun: "制作任务" }}
-              tasks={state.conversations.map((item) => ({ ...item, title: contentProductionTaskTitle(item.title) }))}
+                labels={{
+                  newAction: "新建任务",
+                  history: "已有任务",
+                  noun: "制作任务",
+                }}
+                tasks={state.conversations.map((item) => ({
+                  ...item,
+                  title: contentProductionTaskTitle(item.title),
+                }))}
               currentId={activeConversation?.id}
               onNew={() => setTaskCenterTab("new")}
-              onSelect={(id) => { setFailedStart(null); setActive(id); setShowCreate(false); setTaskCenterTab("new"); }}
+                onSelect={(id) => {
+                  setFailedStart(null);
+                  setActive(id);
+                  setShowCreate(false);
+                  setTaskCenterTab("new");
+                }}
               onDelete={deleteConversation}
               disabled={!hydrated || Boolean(pendingStart) || handoffPending}
             />

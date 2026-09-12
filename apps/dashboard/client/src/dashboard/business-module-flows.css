@@ -177,10 +177,22 @@
   margin: 0;
   padding: 20px 0;
 }
-.monitoring-module .monitoring-inline-step
-  :is(.modal-header, .modal-body, .modal-footer, .monitor-form, .monitor-form-body,
-      .monitor-form-footer, .monitor-form-left, .monitor-form-right,
-      .question-workbench, .question-editor-panel, .models-section, .monitor-frequency-section) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(
+    .modal-header,
+    .modal-body,
+    .modal-footer,
+    .monitor-form,
+    .monitor-form-body,
+    .monitor-form-footer,
+    .monitor-form-left,
+    .monitor-form-right,
+    .question-workbench,
+    .question-editor-panel,
+    .models-section,
+    .monitor-frequency-section
+  ) {
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -192,7 +204,8 @@
   padding: 0;
   background: #fff;
 }
-.monitoring-module .monitoring-inline-step
+.monitoring-module
+  .monitoring-inline-step
   :is(.monitor-form-body, .question-workbench, .monitor-bottom-grid) {
   grid-template-columns: minmax(0, 1fr);
   gap: 24px;
@@ -215,10 +228,14 @@
 }
 /* Inline editors retain their real controls without inheriting dialog-sized
    columns, fixed heights or nested scroll viewports. */
-.monitoring-module .monitoring-inline-step :is(.monitor-form-left, .monitor-form-right) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.monitor-form-left, .monitor-form-right) {
   gap: 24px;
 }
-.monitoring-module .monitoring-inline-step :is(.monitor-basic-grid, .form-section) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.monitor-basic-grid, .form-section) {
   padding: 16px 0;
   border: 0;
   border-bottom: 1px solid #eaecf0;
@@ -230,24 +247,37 @@
   padding-bottom: 20px;
   border-bottom: 1px solid #eaecf0;
 }
-.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading, .question-editor-panel > .section-heading, .frequency-heading) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(
+    .monitor-competitor-heading,
+    .question-editor-panel > .section-heading,
+    .frequency-heading
+  ) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
 }
-.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading, .section-heading) > div:first-child {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.monitor-competitor-heading, .section-heading)
+  > div:first-child {
   display: grid;
   flex: 1 1 220px;
   gap: 6px;
 }
-.monitoring-module .monitoring-inline-step :is(.monitor-competitor-heading small, .monitor-competitor-empty span) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.monitor-competitor-heading small, .monitor-competitor-empty span) {
   color: #595959;
   font-size: 13px;
   line-height: 20px;
 }
-.monitoring-module .monitoring-inline-step :is(.monitor-competitor-empty, .monitor-competitor-editor) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.monitor-competitor-empty, .monitor-competitor-editor) {
   display: grid;
   gap: 8px;
 }
@@ -257,17 +287,36 @@
   align-items: center;
   gap: 8px;
 }
-.monitoring-module .monitoring-inline-step .monitor-competitor-row :is(label, input) {
+.monitoring-module
+  .monitoring-inline-step
+  .monitor-competitor-row
+  :is(label, input) {
   width: 100%;
   min-width: 0;
 }
-.monitoring-module .monitoring-inline-step :is(.question-editor-actions, .question-item-actions, .question-import-footer, .footer-actions) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(
+    .question-editor-actions,
+    .question-item-actions,
+    .question-import-footer,
+    .footer-actions
+  ) {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.monitoring-module .monitoring-inline-step :is(.competitor-add-button, .competitor-remove-button, .question-add-button, .question-editor-actions button, .question-item-actions button, .question-import-footer button) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(
+    .competitor-add-button,
+    .competitor-remove-button,
+    .question-add-button,
+    .question-editor-actions button,
+    .question-item-actions button,
+    .question-import-footer button
+  ) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -282,16 +331,22 @@
   font-size: 14px;
   line-height: 20px;
 }
-.monitoring-module .monitoring-inline-step :is(.competitor-remove-button, .question-item-actions button) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.competitor-remove-button, .question-item-actions button) {
   width: 44px;
   padding: 0;
 }
-.monitoring-module .monitoring-inline-step :is(.question-editor-actions button.active, .question-import-confirm) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.question-editor-actions button.active, .question-import-confirm) {
   border-color: #2867a5;
   color: #2867a5;
   background: #f4f8fc;
 }
-.monitoring-module .monitoring-inline-step :is(.question-list-mode, .question-item-list) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.question-list-mode, .question-item-list) {
   display: grid;
   gap: 12px;
   min-height: 0;
@@ -306,7 +361,9 @@
   padding: 8px 0;
   border-bottom: 1px solid #eaecf0;
 }
-.monitoring-module .monitoring-inline-step :is(.question-item-text, .question-item-editor) {
+.monitoring-module
+  .monitoring-inline-step
+  :is(.question-item-text, .question-item-editor) {
   min-width: 0;
   overflow-wrap: anywhere;
   font-size: 14px;
@@ -355,13 +412,18 @@
   font-size: 14px;
 }
 @media (max-width: 767px) {
-  .monitoring-module .monitoring-inline-step :is(.frequency-grid, .schedule-row, .monitor-basic-grid) {
+  .monitoring-module
+    .monitoring-inline-step
+    :is(.frequency-grid, .schedule-row, .monitor-basic-grid) {
     grid-template-columns: minmax(0, 1fr);
   }
   .monitoring-module .monitoring-inline-step .monitor-competitor-row {
     grid-template-columns: 26px minmax(0, 1fr) 44px;
   }
-  .monitoring-module .monitoring-inline-step .monitor-competitor-row > label:nth-of-type(2) {
+  .monitoring-module
+    .monitoring-inline-step
+    .monitor-competitor-row
+    > label:nth-of-type(2) {
     grid-column: 2;
   }
   .monitoring-module .monitoring-inline-step .competitor-remove-button {
@@ -492,10 +554,10 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 20px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
-  padding: 20px 0 28px;
+  padding: 0 0 28px;
   background: #fff;
 }
 .keyword-start-step h2 {
@@ -503,13 +565,16 @@
   font-size: 24px;
   line-height: 34px;
   font-weight: 600;
-  color: #292932;
+  color: var(--fm-text, #20232b);
 }
 .keyword-start-step > p {
   margin: 0;
-  color: #686872;
+  color: var(--fm-muted, #667085);
   font-size: 16px;
   line-height: 26px;
+}
+.keyword-start-step > :nth-child(n + 3) {
+  margin-top: 16px;
 }
 .keyword-start-actions {
   display: flex;
@@ -532,12 +597,77 @@
   background: #fff;
 }
 
-.business-monitor-project-list, .business-report-entries { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,220px),1fr)); gap: 10px; margin: 16px 0; }
-.business-monitor-project-list > button, .business-report-entries > button { display: flex; align-items: flex-start; flex-direction: column; gap: 8px; text-align: left; padding: 18px; border: 1px solid #e5e8ed; border-radius: 12px; background: #fff; }
-.business-monitor-project-list > button[aria-pressed="true"], .business-report-entries > button[aria-pressed="true"] { border-color: #aeb9c8; background: #f8f9fb; }
-.business-monitor-project-list strong, .business-report-entries strong { font-size: 14px; font-weight: 600; }
-.business-monitor-project-list span, .business-report-entries span { color: #7d8590; font-size: 12px; }
-.business-report-flow > [hidden], .monitoring-reference-page > [hidden] { display: none; }
+.business-monitor-project-list,
+.business-report-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+.business-monitor-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.business-monitor-project-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+}
+.business-monitor-project-empty {
+  margin: 0;
+  padding: 18px 0 4px;
+  color: var(--fm-muted, #667085);
+  font-size: 13px;
+}
+.business-monitor-project-pagination {
+  display: flex;
+  justify-content: flex-end;
+}
+.business-monitor-project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.business-monitor-project-actions .workflow-text-action {
+  width: fit-content;
+}
+.business-monitor-project-cards > button,
+.business-report-entries > button {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  padding: 18px;
+  border: 1px solid #e5e8ed;
+  border-radius: 12px;
+  background: #fff;
+}
+.business-monitor-project-cards > button[aria-pressed="true"],
+.business-report-entries > button[aria-pressed="true"] {
+  border-color: #aeb9c8;
+  background: #f8f9fb;
+}
+.business-monitor-project-list strong,
+.business-report-entries strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.business-monitor-project-list span,
+.business-report-entries span {
+  color: #7d8590;
+  font-size: 12px;
+}
+.business-report-flow > [hidden],
+.monitoring-reference-page > [hidden] {
+  display: none;
+}
+.business-inline-step[aria-label="监控趋势分析"] .business-monitor-project-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
 
 /* Monitoring report surfaces share the website frontend's card language:
    toned metric cards, status badges, and inline run progress bars. */
@@ -562,14 +692,30 @@
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.monitoring-metric-card.is-purple { border-top-color: #7a4bb5; }
-.monitoring-metric-card.is-purple strong { color: #5b2a86; }
-.monitoring-metric-card.is-blue { border-top-color: #2f6fed; }
-.monitoring-metric-card.is-blue strong { color: #245bd0; }
-.monitoring-metric-card.is-green { border-top-color: #1d9a6c; }
-.monitoring-metric-card.is-green strong { color: #147a53; }
-.monitoring-metric-card.is-red { border-top-color: #d92d20; }
-.monitoring-metric-card.is-red strong { color: #b42318; }
+.monitoring-metric-card.is-purple {
+  border-top-color: #7a4bb5;
+}
+.monitoring-metric-card.is-purple strong {
+  color: #5b2a86;
+}
+.monitoring-metric-card.is-blue {
+  border-top-color: #2f6fed;
+}
+.monitoring-metric-card.is-blue strong {
+  color: #245bd0;
+}
+.monitoring-metric-card.is-green {
+  border-top-color: #1d9a6c;
+}
+.monitoring-metric-card.is-green strong {
+  color: #147a53;
+}
+.monitoring-metric-card.is-red {
+  border-top-color: #d92d20;
+}
+.monitoring-metric-card.is-red strong {
+  color: #b42318;
+}
 
 .monitoring-status-badge {
   display: inline-flex;
@@ -583,11 +729,26 @@
   line-height: 18px;
   white-space: nowrap;
 }
-.monitoring-status-badge.is-blue { background: #e7effd; color: #245bd0; }
-.monitoring-status-badge.is-green { background: #e8f6ef; color: #147a53; }
-.monitoring-status-badge.is-red { background: #fdecec; color: #b42318; }
-.monitoring-status-badge.is-amber { background: #fdf3e3; color: #b47413; }
-.monitoring-status-badge.is-muted { background: #f4f1f7; color: #6f6f7a; }
+.monitoring-status-badge.is-blue {
+  background: #e7effd;
+  color: #245bd0;
+}
+.monitoring-status-badge.is-green {
+  background: #e8f6ef;
+  color: #147a53;
+}
+.monitoring-status-badge.is-red {
+  background: #fdecec;
+  color: #b42318;
+}
+.monitoring-status-badge.is-amber {
+  background: #fdf3e3;
+  color: #b47413;
+}
+.monitoring-status-badge.is-muted {
+  background: #f4f1f7;
+  color: #6f6f7a;
+}
 
 .monitoring-run-progress {
   display: flex;

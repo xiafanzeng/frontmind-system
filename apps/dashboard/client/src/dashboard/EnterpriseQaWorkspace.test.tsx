@@ -152,12 +152,10 @@ describe("Enterprise QA source binding", () => {
     };
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ knowledgeBase: null }),
-        }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ knowledgeBase: null }),
+      }),
     );
     render(<WorkbenchQa />);
     const main = screen.getByRole("region", { name: "主工作区" });
@@ -347,9 +345,7 @@ describe("Enterprise QA source binding", () => {
       ),
     );
     render(<EnterpriseQaWorkspace />);
-    expect(
-      screen.getByRole("status"),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
     expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "新建会话" }),
@@ -591,6 +587,9 @@ describe("Enterprise QA source binding", () => {
     expect(
       screen.getByRole("region", { name: "企业问答知识来源" }),
     ).toHaveTextContent("历史资料.md");
+    expect(
+      screen.getByText("已有新版知识库 v8；新建会话后使用。"),
+    ).toBeInTheDocument();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/frontmind/v2/runtime-config?purpose=enterprise_qa",
       "/api/frontmind/v2/runtime-config?localTaskId=frozen-task",

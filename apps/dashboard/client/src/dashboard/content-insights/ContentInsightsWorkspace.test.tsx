@@ -117,6 +117,13 @@ describe("content insights interface preview", () => {
     expect(screen.getByRole("button", { name: "导出" })).toBeDisabled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("does not expose development fixture metrics in production builds", () => {
+    vi.stubEnv("DEV", false);
+    render(<ContentInsightsWorkspace />);
+    expect(screen.getByRole("status")).toHaveTextContent("暂无真实数据");
+    expect(screen.queryByText("9450")).not.toBeInTheDocument();
+  });
 });
 
 import {

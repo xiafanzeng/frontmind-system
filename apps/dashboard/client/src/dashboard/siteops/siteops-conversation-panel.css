@@ -1243,7 +1243,9 @@
   line-height: 22px;
   font-weight: 500;
   text-decoration: none;
-  transition: background-color 150ms ease, border-color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
 }
 
 .siteops-primary-button {
@@ -1253,8 +1255,16 @@
 }
 
 .siteops-primary-button:not(:disabled):hover {
-  background: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 92%, black);
-  border-color: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 92%, black);
+  background: color-mix(
+    in srgb,
+    var(--siteops-accent, var(--module-accent, #5e6174)) 92%,
+    black
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--siteops-accent, var(--module-accent, #5e6174)) 92%,
+    black
+  );
 }
 
 .siteops-primary-button:focus-visible,
@@ -1276,7 +1286,11 @@
 .siteops-icon-button:not(:disabled):hover,
 .siteops-build-actions a:hover {
   border-color: var(--siteops-accent, var(--module-accent, #5e6174));
-  background: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 7%, white);
+  background: color-mix(
+    in srgb,
+    var(--siteops-accent, var(--module-accent, #5e6174)) 7%,
+    white
+  );
 }
 
 .siteops-primary-button:disabled,
@@ -1551,12 +1565,87 @@
   height: 14px;
 }
 
-.siteops-execution-summary { margin: 18px 0; color: #65656e; font-size: 13px; }
-.siteops-execution-summary > summary { cursor: pointer; padding: 8px 0; }
-.siteops-execution-summary > div { padding: 4px 0 8px; }
-.siteops-execution-summary p { display: flex; gap: 16px; margin: 8px 0; }
-.siteops-execution-summary small { font-size: 12px; color: #85858e; }
-.siteops-inline-preview { display: block; width: 100%; height: min(720px, 75dvh); min-height: 400px; border: 1px solid #e6e6ea; border-radius: 10px; background: #fff; }
-.siteops-conversation-flow .siteops-message-footer button { display: inline-flex; gap: 5px; font-size: 12px; min-height: 30px; padding: 4px 6px; }
-.siteops-conversation-flow .siteops-message[data-role="assistant"] .siteops-message-meta { display: none; }
-.siteops-conversation-flow .siteops-message-list { overflow: visible; max-height: none; height: auto; }
+.siteops-execution-summary {
+  margin: 18px 0;
+  color: #65656e;
+  font-size: 13px;
+}
+.siteops-execution-summary > summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.siteops-execution-summary > div {
+  padding: 4px 0 8px;
+}
+.siteops-execution-summary p {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
+}
+.siteops-execution-summary small {
+  font-size: 12px;
+  color: #85858e;
+}
+.siteops-inline-preview {
+  display: block;
+  width: 100%;
+  height: min(720px, 75dvh);
+  min-height: 400px;
+  border: 1px solid #e6e6ea;
+  border-radius: 10px;
+  background: #fff;
+}
+.siteops-conversation-flow .siteops-message-footer button {
+  display: inline-flex;
+  gap: 5px;
+  font-size: 12px;
+  min-height: 30px;
+  padding: 4px 6px;
+}
+.siteops-conversation-flow
+  .siteops-message[data-role="assistant"]
+  .siteops-message-meta {
+  display: none;
+}
+.siteops-conversation-flow .siteops-message-list {
+  overflow: visible;
+  max-height: none;
+  height: auto;
+}
+
+/* Workbench presentation: keep the conversation on the shared canvas while
+   retaining a quiet, bounded panel surface. The shell owns the outer gutter;
+   this panel only adds its own vertical rhythm. */
+.agent-workbench-shell__main-content.is-scrollable > .siteops-panel,
+.agent-workbench-shell__main-content.has-native-scroll > .siteops-panel,
+.agent-workbench-shell__main-content.is-scrollable
+  > .agent-workspace-frame
+  .siteops-panel,
+.agent-workbench-shell__main-content.has-native-scroll
+  > .agent-workspace-frame
+  .siteops-panel {
+  width: 100%;
+  max-width: 1280px !important;
+  margin-inline: auto;
+}
+
+.agent-workbench-shell .siteops-panel.siteops-conversation-flow {
+  --siteops-accent: var(--module-accent, #5e6174);
+  border: 1px solid var(--fm-line, #e7ebef);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0 24px 24px;
+}
+
+.agent-workbench-shell .siteops-panel {
+  border-radius: 12px;
+  background: #fff;
+}
+
+.agent-workbench-shell .siteops-panel-title {
+  color: var(--siteops-accent);
+}
+
+.agent-workbench-shell .siteops-rebuild-reason textarea:focus-visible {
+  outline-color: var(--siteops-accent);
+}

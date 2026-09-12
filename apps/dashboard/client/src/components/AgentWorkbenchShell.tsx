@@ -7,9 +7,7 @@ import {
   type ReactNode,
   type PointerEvent,
 } from "react";
-import {
-  useChatReadingPosition,
-} from "@/hooks/useChatReadingPosition";
+import { useChatReadingPosition } from "@/hooks/useChatReadingPosition";
 import {
   useWorkbenchModule,
   type WorkbenchAction,
@@ -49,7 +47,7 @@ export type AgentWorkbenchShellProps = {
   titleRef?: React.RefObject<HTMLHeadingElement | null>;
 };
 export const WORKBENCH_RATIO_KEY = "frontmind.workbench.v5.auxiliary-ratio";
-export const WORKBENCH_MIN_WIDTH = 768;
+export const WORKBENCH_MIN_WIDTH = 900;
 const DEFAULT_AUXILIARY_RATIO = 2 / 7;
 
 export function workbenchPaneGeometry(
@@ -99,9 +97,11 @@ export function AgentWorkbenchShell({
   titleRef,
 }: AgentWorkbenchShellProps) {
   const module = useWorkbenchModule();
-  const themeId = module?.id ?? (moduleId === "content-production" ? "content" : moduleId);
+  const themeId =
+    module?.id ?? (moduleId === "content-production" ? "content" : moduleId);
   const moduleColor = OPERATOR_MODULES.find(
-    (item) => item.id === themeId || item.views.some((view) => view.id === themeId),
+    (item) =>
+      item.id === themeId || item.views.some((view) => view.id === themeId),
   )?.color;
   const layout = requestedLayout ?? (!showResult ? "single" : "workflow");
   const isKnowledge = layout === "knowledge";
@@ -181,7 +181,7 @@ export function AgentWorkbenchShell({
     mainViewport,
     readingKey,
     readingKey,
-    { initialPinned: false, enabled: ownsScroll },
+    { initialPinned: false, enabled: ownsScroll && !isWorkspace },
   );
   const changeWidth = (value: number) => {
     if (fixedAuxWidth) return;
@@ -232,7 +232,10 @@ export function AgentWorkbenchShell({
           title={action.description}
           className={action.active ? "is-active" : undefined}
           style={
-            { "--subagent-color": action.color ?? moduleColor ?? "var(--module-accent, #667085)" } as CSSProperties
+            {
+              "--subagent-color":
+                action.color ?? moduleColor ?? "var(--module-accent, #667085)",
+            } as CSSProperties
           }
           onClick={() => requestWorkspaceNavigation(action.run)}
         >
@@ -263,7 +266,10 @@ export function AgentWorkbenchShell({
         <div className="agent-workbench-topbar__canvas">
           <div className="agent-workbench-topbar__inner">
             {module ? (
-              <span className="agent-workbench-topbar__group" title={module.label}>
+              <span
+                className="agent-workbench-topbar__group"
+                title={module.label}
+              >
                 {module.label}
               </span>
             ) : (
@@ -271,11 +277,17 @@ export function AgentWorkbenchShell({
             )}
             {agentSwitch}
           </div>
-          <h2 ref={titleRef} tabIndex={-1} className="agent-workbench-topbar__heading">
+          <h2
+            ref={titleRef}
+            tabIndex={-1}
+            className="agent-workbench-topbar__heading"
+          >
             {title}
           </h2>
           {topbarActions ? (
-            <div className="agent-workbench-topbar__actions">{topbarActions}</div>
+            <div className="agent-workbench-topbar__actions">
+              {topbarActions}
+            </div>
           ) : null}
         </div>
       </header>
@@ -290,12 +302,14 @@ export function AgentWorkbenchShell({
             className={`agent-workbench-shell__main-content ${ownsScroll ? "is-scrollable" : "has-native-scroll"}`}
           >
             {isWorkspace ? (
-              <div className="agent-workspace-frame">{main ?? conversation}</div>
+              <div className="agent-workspace-frame">
+                {main ?? conversation}
+              </div>
             ) : (
               (main ?? conversation)
             )}
           </div>
-          {ownsScroll && showLatest && (
+          {ownsScroll && !isWorkspace && showLatest && (
             <button
               type="button"
               className="workbench-back-to-latest"

@@ -1,4 +1,5 @@
 .agent-workbench-shell {
+  --workbench-gutter: 32px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -6,7 +7,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  color: #000;
+  color: #20232b;
   background: #fff;
 }
 /* V2.3 workspace top bar: business group name + module tabs on one line. */
@@ -15,10 +16,11 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  flex: 0 0 auto;
+  flex: 0 0 64px;
+  height: 64px;
   min-height: 64px;
   padding: 0;
-  border-bottom: 1px solid #eceef1;
+  border-bottom: 1px solid #e7ebef;
   background: #fff;
 }
 .agent-workbench-topbar__canvas {
@@ -27,9 +29,10 @@
   gap: 16px;
   width: 100%;
   max-width: 1280px;
-  min-height: 64px;
+  height: 100%;
+  min-height: 0;
   margin-inline: auto;
-  padding: 0 32px;
+  padding: 0 var(--workbench-gutter);
   box-sizing: border-box;
 }
 .agent-workbench-topbar__inner {
@@ -47,7 +50,7 @@
   border-right: 1px solid #dfe3e8;
   color: #242833;
   font-size: 16px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 24px;
   white-space: nowrap;
 }
@@ -117,9 +120,18 @@
 }
 .agent-workbench-shell__layout.is-single-pane {
   grid-template-columns: minmax(0, 1fr);
+  padding: 0;
 }
 .agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary {
   grid-template-columns: minmax(0, 1fr) var(--agent-aux-width, 348px);
+  /* The main scroll/editor owns its inset. Reserve only the outside right
+     gutter here so titles align with the top bar instead of adding 16px. */
+  padding: 0 var(--workbench-gutter) 24px 0;
+}
+.agent-workbench-shell__layout.is-fixed-auxiliary
+  > .agent-workbench-shell__auxiliary {
+  margin-top: 26px;
+  height: calc(100% - 26px);
 }
 /* Resource workspaces browse full-width in a centered, capped canvas. */
 .agent-workbench-shell__layout.is-workspace {
@@ -130,15 +142,23 @@
   grid-template-columns: minmax(0, 1fr);
   padding: 0;
 }
-.agent-workbench-shell__layout.is-workspace .agent-workbench-shell__main-content.is-scrollable {
+.agent-workbench-shell__layout.is-workspace
+  .agent-workbench-shell__main-content.is-scrollable {
   padding: 0;
+}
+.agent-workbench-shell.layout-workspace .agent-workbench-shell__main-content {
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .agent-workspace-frame {
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
-  padding: 26px 32px 30px;
+  padding: 26px var(--workbench-gutter) 30px;
   min-width: 0;
+  min-height: max-content;
 }
 .agent-workbench-shell__main,
 .agent-workbench-shell__auxiliary {
@@ -155,11 +175,9 @@
   max-height: 100%;
   min-height: 96px;
   width: 100%;
-  border: 1px solid #e2e4e8;
-  border-radius: 20px;
-  box-shadow:
-    0 6px 20px rgb(24 24 27 / 5%),
-    0 1px 4px rgb(24 24 27 / 4%);
+  border: 1px solid #e7ebef;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgb(24 24 27 / 3%);
   overflow-wrap: anywhere;
 }
 .agent-workbench-shell__auxiliary .knowledge-node-workspace__empty {
@@ -181,7 +199,7 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  padding: 32px;
+  padding: 26px var(--workbench-gutter) 30px;
 }
 .agent-workbench-shell__main-content.has-native-scroll {
   display: flex;
@@ -263,6 +281,7 @@
 /* Business sub navigation now lives in the top bar (V2.3 module tabs). */
 .agent-workbench-subagents--bar {
   flex-wrap: nowrap;
+  flex-shrink: 1;
   gap: 6px;
   min-width: 0;
   padding: 0;
@@ -275,6 +294,7 @@
   display: none;
 }
 .agent-workbench-subagents--bar button {
+  flex: 0 0 auto;
   min-height: 34px;
   padding: 6px 13px;
   border: 0;
@@ -282,13 +302,17 @@
   background: transparent;
   color: #737c8a;
   font-size: 13px;
-  font-weight: 450;
+  font-weight: 500;
   white-space: nowrap;
 }
 .agent-workbench-subagents--bar button.is-active {
   color: var(--subagent-color);
   background: color-mix(in srgb, var(--subagent-color) 7%, white);
-  font-weight: 600;
+  font-weight: 500;
+}
+.agent-workbench-subagents--bar button:focus-visible {
+  outline: 2px solid var(--subagent-color);
+  outline-offset: -2px;
 }
 .agent-workbench-subagents--bar button:hover:not(:disabled) {
   color: var(--subagent-color);
@@ -320,16 +344,19 @@
 .agent-workbench-subagents:not(.agent-workbench-subagents--bar) button svg {
   flex-shrink: 0;
 }
-.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button.is-active,
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar)
+  button.is-active,
 .agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:hover {
   background: color-mix(in srgb, var(--subagent-color) 7%, white);
   border-color: color-mix(in srgb, var(--subagent-color) 14%, white);
 }
-.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:focus-visible {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar)
+  button:focus-visible {
   outline: 2px solid var(--subagent-color);
   outline-offset: 2px;
 }
-.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:disabled {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar)
+  button:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -449,12 +476,18 @@
 .user-brand-dashboard.operator-mode .workbench-main {
   overflow: hidden;
 }
+/* Resource routes (publishing/media and monitoring lists) render below the
+   project workbench shell and own a page-sized document scroll. Keep the
+   shell clipped for conversational panes, but let these route pages grow
+   beyond the viewport instead of trapping the lower rows behind overflow. */
+.user-brand-dashboard.operator-mode .workbench-main:has(.publishing-page),
+.user-brand-dashboard.operator-mode .workbench-main:has(.monitoring-reference-page) {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 @media (max-width: 1023px) {
   .user-brand-dashboard.operator-mode .agent-workbench-shell {
     padding-top: max(48px, env(safe-area-inset-top));
-  }
-  .agent-workbench-shell__main-content.is-scrollable {
-    padding: 16px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -667,6 +700,16 @@
   color: #595959;
   margin-top: 20px;
 }
+.enterprise-qa-source p.enterprise-qa-source__newer {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid
+    color-mix(in srgb, var(--module-accent, #5e6174) 22%, #e7ebef);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--module-accent, #5e6174) 6%, #fff);
+  color: color-mix(in srgb, var(--module-accent, #5e6174) 78%, #20232b);
+  line-height: 1.55;
+}
 .general-agent-welcome {
   padding-top: clamp(20px, 9vh, 90px);
 }
@@ -758,22 +801,30 @@
   color: #595959;
   cursor: pointer;
 }
-@media (max-width: 767px) {
+@media (max-width: 899px) {
   .agent-workbench-shell__layout.has-outcomes {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: clamp(96px, 30%, 260px) minmax(0, 1fr);
     row-gap: 12px;
-    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+    padding: 0 0 max(12px, env(safe-area-inset-bottom));
   }
   .agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary {
     grid-template-columns: minmax(0, 1fr);
+    padding: 0 0 max(12px, env(safe-area-inset-bottom));
   }
   .agent-workbench-shell__auxiliary {
     grid-column: 1;
     grid-row: 1;
-    height: 100%;
+    width: calc(100% - 2 * var(--workbench-gutter));
+    margin: 16px var(--workbench-gutter) 0;
+    height: calc(100% - 16px);
     max-height: 260px;
-    border-radius: 20px;
+    border-radius: 12px;
+  }
+  .agent-workbench-shell__layout.is-fixed-auxiliary
+    > .agent-workbench-shell__auxiliary {
+    margin-top: 16px;
+    height: calc(100% - 16px);
   }
   .agent-workbench-shell__auxiliary:has(.knowledge-node-workspace__empty)
     :is(.knowledge-workbench-auxiliary, .knowledge-node-workspace) {
@@ -789,6 +840,20 @@
   .agent-workbench-shell__layout.has-outcomes .agent-workbench-shell__main {
     grid-column: 1;
     grid-row: 2;
+  }
+  .layout-knowledge
+    .agent-workbench-shell__layout:has(.knowledge-node-workspace__empty) {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .layout-knowledge
+    .agent-workbench-shell__layout:has(.knowledge-node-workspace__empty)
+    > .agent-workbench-shell__auxiliary {
+    display: none;
+  }
+  .layout-knowledge
+    .agent-workbench-shell__layout:has(.knowledge-node-workspace__empty)
+    > .agent-workbench-shell__main {
+    grid-row: 1;
   }
   .agent-workbench-shell__resize {
     display: none;
@@ -848,11 +913,27 @@
   background: transparent;
   color: #595959;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 .workbench-panel-tabs button[aria-selected="true"] {
-  color: #000;
-  border-bottom-color: #491060;
+  color: var(--module-accent, #20232b);
+  border-bottom-color: var(--module-accent, #20232b);
+}
+.workbench-panel-tabs button:hover:not(:disabled) {
+  color: var(--module-accent, #20232b);
+}
+.workbench-panel-tabs button:focus-visible {
+  outline: 2px solid var(--module-accent, #20232b);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.workbench-panel-tabs button:disabled {
+  color: #98a2b3;
+  cursor: not-allowed;
 }
 .workbench-task-panel {
   display: flex;
@@ -918,6 +999,31 @@
   font-size: 13px;
   line-height: 1.8;
 }
+.workbench-resource-heading,
+.workbench-restored-summary {
+  margin: 0 0 20px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid #e7ebef;
+}
+.workbench-resource-heading h1,
+.workbench-restored-summary h2 {
+  margin: 0;
+  color: #20232b;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 34px;
+}
+.workbench-resource-heading p,
+.workbench-restored-summary li {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 14px;
+  line-height: 22px;
+}
+.workbench-restored-summary ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
 .general-agent-welcome {
   padding-top: clamp(24px, 11vh, 120px);
 }
@@ -932,12 +1038,23 @@
   padding: 10px 14px;
   color: #303038;
 }
-@media (max-width: 639px) {
-  .agent-workbench-shell__layout {
-    padding: 0;
+@media (max-width: 1279px) {
+  .agent-workbench-shell {
+    --workbench-gutter: 24px;
   }
-  .agent-workbench-shell__main-content.is-scrollable {
-    padding: 16px;
+}
+@media (max-width: 639px) {
+  .agent-workbench-shell {
+    --workbench-gutter: 16px;
+  }
+  .agent-workbench-topbar__canvas {
+    gap: 8px;
+  }
+  .agent-workbench-topbar__inner {
+    gap: 12px;
+  }
+  .agent-workbench-topbar__group {
+    padding-right: 12px;
   }
 }
 
@@ -949,8 +1066,8 @@
 }
 
 .agent-workbench-shell {
-  --foreground: #000;
-  --muted-foreground: #595959;
+  --foreground: #20232b;
+  --muted-foreground: #667085;
   font-size: 16px;
   line-height: 28px;
 }
@@ -972,7 +1089,7 @@
 }
 .agent-workbench-shell label,
 .agent-workbench-shell th {
-  color: #000;
+  color: #20232b;
 }
 .agent-workbench-shell input:not([type="checkbox"]):not([type="radio"]),
 .agent-workbench-shell select,
@@ -984,7 +1101,7 @@
 
 .agent-workbench-shell
   [data-testid="chat-messages-viewport"]:has(> .workbench-reading-column) {
-  padding: 32px;
+  padding: 26px var(--workbench-gutter) 30px;
 }
 .workbench-reading-column {
   width: 100%;
@@ -994,7 +1111,7 @@
 .agent-workbench-shell .knowledge-composer {
   width: 100%;
   max-width: none;
-  padding: 16px 32px 32px;
+  padding: 16px var(--workbench-gutter) 24px;
 }
 .agent-workbench-shell.module-general .knowledge-composer {
   border-top: 0;
@@ -1004,7 +1121,7 @@
   margin-inline: auto;
 }
 .agent-workbench-shell .chat-message-content {
-  color: #000;
+  color: #20232b;
   font-size: 16px;
   line-height: 28px;
 }
@@ -1020,10 +1137,10 @@
 @media (max-width: 1023px) {
   .agent-workbench-shell
     [data-testid="chat-messages-viewport"]:has(> .workbench-reading-column) {
-    padding: 16px;
+    padding: 20px var(--workbench-gutter);
   }
   .agent-workbench-shell .knowledge-composer {
-    padding: 12px 16px 16px;
+    padding: 12px var(--workbench-gutter) 16px;
   }
 }
 

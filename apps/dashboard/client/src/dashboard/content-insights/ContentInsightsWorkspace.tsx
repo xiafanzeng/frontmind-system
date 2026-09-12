@@ -38,6 +38,21 @@ const widgetModules = [
 ] as const;
 const settingTabs: SettingsTab[] = ["basic", "leads"];
 
+function AnalyticsUnavailable({ module }: { module: AnalyticsModule }) {
+  const label =
+    [...analyticsModules].find(([id]) => id === module)?.[1] ?? "分析";
+  return (
+    <div
+      className="hl-pending-empty content-insights-unavailable"
+      role="status"
+    >
+      <BarChart3 size={36} strokeWidth={1.4} />
+      <strong>{label}暂无真实数据</strong>
+      <span>当前项目尚未接入站点统计，接入后这里将显示真实指标。</span>
+    </div>
+  );
+}
+
 export function readContentInsightsRoute(search: string) {
   const params = new URLSearchParams(search);
   const module =
@@ -145,6 +160,10 @@ export default function ContentInsightsWorkspace() {
           `contentModule=${encodeURIComponent(savedModule)}`,
         )
       : parsedRoute;
+  // AnalyticsWorkspace intentionally contains development-only fixture data.
+  // Keep that preview available to local designers while production renders a
+  // truthful empty state until a real metrics contract is connected.
+  const analyticsPreview = import.meta.env.DEV;
   const [widgetOutput, setWidgetOutput] =
     useBusinessFlowState<BusinessWorkspaceOutput | null>(
       "widgetConfirmedOutput",
@@ -292,7 +311,7 @@ export default function ContentInsightsWorkspace() {
       )}
       {(!isWorkbench || entry) && (
         <>
-          {(
+          {
             <div className="hl-workspace-nav">
               <div className="hl-group-toggle" aria-label="模块分组">
                 <button
@@ -340,19 +359,29 @@ export default function ContentInsightsWorkspace() {
                 </HlButton>
               </div>
             </div>
-          )}
+          }
           <WorkflowSection id="insights-current-preview">
             <div key={`${taskScope}:${session}`}>
               <div hidden={route.section !== "analytics"}>
-                <AnalyticsWorkspace
-                  active={route.section === "analytics"}
-                  module={
-                    route.section === "analytics"
-                      ? (route.module as AnalyticsModule)
-                      : "overview"
-                  }
-                  onNavigate={navigate}
-                />
+                {analyticsPreview ? (
+                  <AnalyticsWorkspace
+                    active={route.section === "analytics"}
+                    module={
+                      route.section === "analytics"
+                        ? (route.module as AnalyticsModule)
+                        : "overview"
+                    }
+                    onNavigate={navigate}
+                  />
+                ) : (
+                  <AnalyticsUnavailable
+                    module={
+                      route.section === "analytics"
+                        ? (route.module as AnalyticsModule)
+                        : "overview"
+                    }
+                  />
+                )}
               </div>
               <div hidden={route.module !== "settings"}>
                 <WidgetSettingsWorkspace
@@ -366,18 +395,20 @@ export default function ContentInsightsWorkspace() {
                 <PendingWorkspace key={route.module} module={route.module} />
               )}
             </div>
-            {isWorkbench && currentEntry === "analytics" && (
-              <>
-                {analysisError && <p role="alert">{analysisError}</p>}
-                <HlButton
-                  variant="primary"
-                  disabled={analysisSaving}
-                  onClick={confirmAnalysis}
-                >
-                  {analysisSaving ? "正在确认保存…" : "确认本次分析预览"}
-                </HlButton>
-              </>
-            )}
+            {isWorkbench &&
+              analyticsPreview &&
+              currentEntry === "analytics" && (
+                <>
+                  {analysisError && <p role="alert">{analysisError}</p>}
+                  <HlButton
+                    variant="primary"
+                    disabled={analysisSaving}
+                    onClick={confirmAnalysis}
+                  >
+                    {analysisSaving ? "正在确认保存…" : "确认本次分析预览"}
+                  </HlButton>
+                </>
+              )}
           </WorkflowSection>
         </>
       )}

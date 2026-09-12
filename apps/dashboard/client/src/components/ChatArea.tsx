@@ -2992,7 +2992,7 @@ export function EmptyConversationHint({
                   setCompanyNameDraft(event.target.value);
                 }}
                 placeholder={companyLoading ? "正在读取企业信息…" : "输入本次构建使用的企业名称"}
-                disabled={isStarting || isDiscarding || batchLocked}
+                disabled={isStarting || isDiscarding}
               />
               {!companyLoading && !effectiveCompanyName && (
                 <p className="text-xs leading-5 text-amber-700">
@@ -3216,8 +3216,8 @@ export function EmptyConversationHint({
                       )}
                     </span>
                   </div>
-                  {(checking || checkMessage || stalled) && <p role="status" className="text-xs text-amber-700">{checking ? "正在检查连接…" : checkMessage || "当前传输暂时没有进展，已上传资料会保留。"}</p>}
-                  {(stalled || stopState === "unknown") && !checking && <Button type="button" variant="outline" onClick={() => void uploadBatch.checkStatus().catch(() => undefined)}>检查并继续</Button>}
+                  {(checking || checkMessage || stalled) && <p role="status" className="text-xs text-amber-700">{checking ? "正在读取服务端状态…" : checkMessage || "暂时没有新的服务端进度，已完成文件会保留。"}</p>}
+                  {(stalled || stopState === "unknown") && !checking && <Button type="button" variant="outline" onClick={() => void uploadBatch.checkStatus().catch(() => undefined)}>重新读取状态</Button>}
                   {batchError && (
                     <div
                       role="alert"

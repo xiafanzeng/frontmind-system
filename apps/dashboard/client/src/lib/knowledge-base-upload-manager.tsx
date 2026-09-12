@@ -296,10 +296,10 @@ export class KnowledgeBaseUploadBatch {
       this.dispatchNeedsCheck = false;
       // Background (heartbeat/reconcile) checks refresh state silently: a
       // still-healthy batch must not flash connection warnings at the user.
-      if (source === "user") this.write("checkMessage", status.controlState === "stopped" ? "上传已停止，已确认的资料已保留。" : status.error?.message || (status.dispatchRecoveryAction === "confirm_dispatch" ? "启动结果待确认，请继续核对本轮状态。" : status.dispatchRecoveryAction === "observe" ? "任务已受理，正在同步当前阶段。" : status.readyToDispatch ? "资料已保存，可以继续确认并启动。" : "连接检查完成，等待未完成的文件。"));
+      if (source === "user") this.write("checkMessage", status.controlState === "stopped" ? "上传已停止，已确认的资料已保留。" : status.error?.message || (status.dispatchRecoveryAction === "confirm_dispatch" ? "启动结果待确认，请继续核对本轮状态。" : status.dispatchRecoveryAction === "observe" ? "任务已受理，正在同步当前阶段。" : status.readyToDispatch ? "资料已保存，可以继续确认并启动。" : "状态已更新，等待未完成的文件。"));
       return status;
     }).catch(error => {
-      if (source === "user" && this.statusRequest === request && dispatchEpoch === this.dispatchEpoch) this.write("checkMessage", error instanceof Error ? error.message : "连接检查未完成，请检查并继续");
+      if (source === "user" && this.statusRequest === request && dispatchEpoch === this.dispatchEpoch) this.write("checkMessage", error instanceof Error ? error.message : "服务端状态读取未完成，请重新读取状态");
       throw error;
     }).finally(() => {
       clearTimeout(timeout);

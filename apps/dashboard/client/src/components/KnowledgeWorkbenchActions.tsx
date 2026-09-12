@@ -73,11 +73,11 @@ export default function KnowledgeWorkbenchActions({
           onProgress(result.observation.progress);
       }
       if (!response.ok)
-        throw new Error(result.error?.message ?? "整体确认暂未完成，请重试");
+        throw new Error(result.error?.message ?? "开始逐节点核验暂未完成，请重试");
     } catch (error) {
       if (!rest.signal.aborted)
         setError(
-          error instanceof Error ? error.message : "整体确认暂未完成，请重试",
+          error instanceof Error ? error.message : "开始逐节点核验暂未完成，请重试",
         );
     } finally {
       lock.current = false;
@@ -113,7 +113,7 @@ export default function KnowledgeWorkbenchActions({
               ? "初稿待确认"
               : "正在逐节点核验"
             : initial
-              ? "初稿已按知识节点组织。浏览后点击确认进入逐节点核验：可逐个确认、跳过预填或让 AI 修改，全部完成后更新知识库。"
+              ? "初稿已按知识节点组织。开始后可逐个确认、跳过预填或让 AI 修改，全部完成后更新知识库。"
               : "在对话中确认当前节点，或从右侧选择节点直接编辑与重新核验。全部完成后，更新知识库以启用新版本。"}
         </p>
       </div>
@@ -121,7 +121,7 @@ export default function KnowledgeWorkbenchActions({
         {initial && presentation !== "resource" && (
           <Button onClick={accept} disabled={!available || disabled || pending}>
             {pending ? <Loader2 className="animate-spin" /> : <Check />}
-            {pending ? "正在确认…" : "确认初稿，进入编辑"}
+            {pending ? "正在准备…" : "开始逐节点核验"}
           </Button>
         )}
         {presentation !== "accept" && (

@@ -1,14 +1,14 @@
 .knowledge-workspace {
-  --knowledge-border: #e2e5eb;
+  --knowledge-border: #e7ebef;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   color: #20232b;
-  background: #f6f7f9;
+  background: #fafbfc;
   container-type: inline-size;
-  padding: 0 24px 24px;
+  padding: 0 32px 24px;
 }
 .knowledge-workspace-toolbar {
   display: flex;
@@ -18,6 +18,9 @@
   gap: 12px;
   padding: 12px 0 16px;
   flex-shrink: 0;
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
 }
 .knowledge-workspace-toolbar h2 {
   font-size: 18px;
@@ -43,7 +46,7 @@
   padding: 8px 12px;
   align-items: center;
   gap: 8px;
-  border: 1px solid #858b96;
+  border: 1px solid #cfd5dc;
   border-radius: 8px;
   background: white;
   font-size: 14px;
@@ -54,6 +57,9 @@
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  width: 100%;
+  max-width: 1280px;
+  margin-inline: auto;
 }
 .knowledge-workspace-view-switch {
   display: flex;
@@ -67,8 +73,8 @@
   font-size: 14px;
 }
 .knowledge-workspace-view-switch button[aria-selected="true"] {
-  background: #f2edf6;
-  color: #4b246b;
+  background: #f1f3f5;
+  color: #27313b;
   font-weight: 600;
 }
 .knowledge-workspace-grid {
@@ -88,7 +94,7 @@
   overflow: hidden;
   background: #fff;
   border: 1px solid var(--knowledge-border);
-  border-radius: 12px;
+  border-radius: 10px;
 }
 .knowledge-workspace-grid[data-view="knowledge"]
   > .knowledge-workspace-collaboration,
@@ -119,7 +125,7 @@
   border-bottom: 0;
   font-size: 14px;
   line-height: 22px;
-  background: #fafbfc;
+  background: #f8fafb;
   flex-shrink: 0;
 }
 .knowledge-workspace-status p {
@@ -140,8 +146,8 @@
   font-size: 14px;
   line-height: 22px;
   border-bottom: 1px solid var(--knowledge-border);
-  color: #4b246b;
-  background: #f2edf6;
+  color: #3f4b58;
+  background: #f4f6f8;
   overflow-wrap: anywhere;
 }
 .knowledge-workspace-empty {
@@ -174,7 +180,7 @@
   max-height: 240px;
   overflow: auto;
   border-right: 0;
-  border-bottom: 1px solid #e2e5eb;
+  border-bottom: 1px solid var(--knowledge-border);
 }
 .knowledge-workspace-history .knowledge-snapshot-body {
   padding: 20px;
@@ -202,7 +208,7 @@
 }
 .knowledge-workspace-chat .knowledge-composer {
   background: #fff;
-  border-top: 1px solid #e2e5eb;
+  border-top: 1px solid var(--knowledge-border);
 }
 .knowledge-workspace-chat .knowledge-composer textarea {
   font-size: 16px;
@@ -219,7 +225,7 @@
 }
 .knowledge-preview-message[data-role="user"] {
   margin-left: 32px;
-  background: #f2edf6;
+  background: #f1f3f5;
 }
 @container (min-width: 916px) {
   .knowledge-workspace-view-switch {

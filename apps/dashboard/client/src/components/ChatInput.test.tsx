@@ -657,7 +657,7 @@ describe("knowledge-base ChatInput actions", () => {
       <ChatInput syncKnowledgeBaseSnapshot knowledgeBaseProgress={{ ...initial, contentAvailability: "complete" }} knowledgeEditingBlocked />,
     );
     expect(screen.getByRole("textbox")).toBeDisabled();
-    expect(screen.getByText("请先确认知识库初稿，再修改节点。")).toBeVisible();
+    expect(screen.getByText("请先开始逐节点核验，再修改节点。")).toBeVisible();
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });

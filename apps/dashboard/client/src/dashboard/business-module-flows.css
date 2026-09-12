@@ -492,23 +492,24 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
+  gap: 20px;
   width: 100%;
   min-width: 0;
-  padding: 16px 0 24px;
+  padding: 20px 0 28px;
   background: #fff;
 }
 .keyword-start-step h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 34px;
   font-weight: 600;
   color: #292932;
 }
 .keyword-start-step > p {
   margin: 0;
   color: #686872;
-  font-size: 15px;
-  line-height: 1.8;
+  font-size: 16px;
+  line-height: 26px;
 }
 .keyword-start-actions {
   display: flex;

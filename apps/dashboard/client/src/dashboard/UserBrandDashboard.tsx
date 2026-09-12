@@ -2389,7 +2389,7 @@ function BrandGlobalKeywords({ onUseQuestion, quotaAvailability, bank }) {
                     <td>
                       <button
                         type="button"
-                        className="keyword-optimize-button"
+                        className="operator-secondary-button keyword-action-button"
                         disabled={quotaAccess?.available === false}
                         onClick={() =>
                           onUseQuestion({

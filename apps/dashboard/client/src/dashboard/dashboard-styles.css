@@ -1834,23 +1834,6 @@
   line-height: 1.55;
 }
 
-.user-brand-dashboard .keyword-optimize-button {
-  white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--module-accent, #16794f) 28%, #fff);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--module-accent, #16794f) 8%, #fff);
-  color: var(--module-accent, #16794f);
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.user-brand-dashboard .keyword-optimize-button:hover {
-  border-color: var(--module-accent, #16794f);
-  background: color-mix(in srgb, var(--module-accent, #16794f) 14%, #fff);
-}
-
 /* Resource actions use the same control geometry as workflow actions. The
    module accent is supplied by the operator workspace context. */
 .user-brand-dashboard .keyword-action-button {

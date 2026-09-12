@@ -11,9 +11,9 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         operator:
-          "bg-[#2563eb] text-white shadow-xs hover:bg-[#1d4ed8] focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/30 dark:bg-[#2563eb] dark:hover:bg-[#1d4ed8]",
+          "operator-control-primary text-white shadow-xs",
         operatorOutline:
-          "border border-[#2563eb]/60 bg-white text-[#1d4ed8] shadow-xs hover:border-[#2563eb] hover:bg-[#eff6ff] hover:text-[#1d4ed8] focus-visible:border-[#2563eb] focus-visible:ring-[#2563eb]/25 dark:border-[#60a5fa]/70 dark:bg-transparent dark:text-[#93c5fd] dark:hover:bg-[#1e3a8a]/35 dark:hover:text-[#bfdbfe]",
+          "operator-control-secondary shadow-xs",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:

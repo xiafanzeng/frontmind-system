@@ -2,6 +2,14 @@
 /* Scoped operator presentation. Shared portals receive the same class through React context. */
 .user-brand-dashboard.operator-mode,
 .operator-theme {
+  --fm-text: #20232b;
+  --fm-muted: #667085;
+  --fm-line: #e7ebef;
+  --fm-surface: #ffffff;
+  --fm-surface-soft: #f7f8fa;
+  --fm-control-height: 40px;
+  --fm-control-radius: 8px;
+  --fm-dialog-radius: 18px;
   --fm-text-caption: 0.8125rem;
   --fm-text-body-sm: 0.875rem;
   --fm-text-body: 1rem;
@@ -474,12 +482,12 @@
   align-items: center;
   justify-content: center;
   min-width: 132px;
-  min-height: 40px;
-  padding: 8px 18px;
+  min-height: 36px;
+  padding: 7px 14px;
   border-radius: 8px;
   color: #667085;
-  font-size: 15px;
-  line-height: 24px;
+  font-size: 13px;
+  line-height: 20px;
   text-decoration: none;
 }
 .operator-sub-tabs > a:hover {
@@ -540,30 +548,54 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
-  padding: 10px 18px;
+  min-height: var(--fm-control-height, 40px);
+  padding: 8px 16px;
   border: 1px solid transparent;
   border-radius: 8px;
   font: inherit;
-  font-size: 15px;
-  line-height: 24px;
+  font-size: 14px;
+  line-height: 22px;
   font-weight: 500;
   cursor: pointer;
 }
+.operator-control-primary,
+.operator-control-secondary {
+  min-height: var(--fm-control-height, 40px);
+  border-radius: var(--fm-control-radius, 8px);
+  font-size: 14px;
+  line-height: 22px;
+}
+.operator-control-primary {
+  background: var(--module-accent, #491060);
+  color: #fff;
+}
+.operator-control-primary:hover {
+  background: color-mix(in srgb, var(--module-accent, #491060) 88%, #000);
+}
+.operator-control-secondary {
+  border: 1px solid #d0d5dd;
+  background: #fff;
+  color: #344054;
+}
+.operator-control-secondary:hover {
+  border-color: var(--module-accent, #667085);
+  background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff);
+}
 .operator-primary-button {
-  background: #491060;
+  background: var(--module-accent, #491060);
   color: #fff;
 }
 .operator-primary-button:hover {
-  background: #3b1c55;
+  background: color-mix(in srgb, var(--module-accent, #491060) 88%, #000);
 }
 .operator-secondary-button {
-  border-color: #8f8997;
+  border-color: #d0d5dd;
   background: #fff;
-  color: #667085;
+  color: #344054;
 }
 .operator-secondary-button:hover {
-  background: #f2edf6;
+  border-color: var(--module-accent, #667085);
+  background: color-mix(in srgb, var(--module-accent, #667085) 7%, #fff);
 }
 .operator-danger-button {
   color: #fff;

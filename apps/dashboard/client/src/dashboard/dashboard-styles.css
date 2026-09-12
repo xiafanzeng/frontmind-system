@@ -1836,10 +1836,10 @@
 
 .user-brand-dashboard .keyword-optimize-button {
   white-space: nowrap;
-  border: 1px solid #d8c9e3;
+  border: 1px solid color-mix(in srgb, var(--module-accent, #16794f) 28%, #fff);
   border-radius: 10px;
-  background: #f7f1fa;
-  color: #5b2a86;
+  background: color-mix(in srgb, var(--module-accent, #16794f) 8%, #fff);
+  color: var(--module-accent, #16794f);
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
@@ -1847,8 +1847,19 @@
 }
 
 .user-brand-dashboard .keyword-optimize-button:hover {
-  border-color: #8b58aa;
-  background: #efe4f5;
+  border-color: var(--module-accent, #16794f);
+  background: color-mix(in srgb, var(--module-accent, #16794f) 14%, #fff);
+}
+
+/* Resource actions use the same control geometry as workflow actions. The
+   module accent is supplied by the operator workspace context. */
+.user-brand-dashboard .keyword-action-button {
+  --module-accent: #16794f;
+  min-height: var(--fm-control-height, 40px);
+  padding: 8px 16px;
+  border-radius: var(--fm-control-radius, 8px);
+  font-size: 14px;
+  line-height: 22px;
 }
 
 .user-brand-dashboard .managed-keyword-heading {

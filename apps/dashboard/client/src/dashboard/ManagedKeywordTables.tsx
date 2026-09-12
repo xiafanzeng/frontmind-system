@@ -260,7 +260,7 @@ export function BrandQuestionUniverseGenerationControl({
   const knowledgeAction = (
     <button
       type="button"
-      className="keyword-optimize-button"
+      className="operator-secondary-button keyword-action-button"
       onClick={openKnowledge}
     >
       前往智能知识库
@@ -314,7 +314,7 @@ export function BrandQuestionUniverseGenerationControl({
             {failed && (
               <button
                 type="button"
-                className="keyword-optimize-button"
+                className="operator-secondary-button keyword-action-button"
                 onClick={retryRead}
               >
                 重新读取
@@ -432,7 +432,7 @@ export function BrandQuestionUniverseGenerationControl({
           <div className="keyword-start-actions">
             <button
               type="button"
-              className="keyword-optimize-button"
+              className="operator-secondary-button keyword-action-button"
               onClick={retryRead}
             >
               刷新词库状态
@@ -457,7 +457,7 @@ export function BrandQuestionUniverseGenerationAction({
     <div className="flex max-w-md flex-col items-start gap-2">
       <button
         type="button"
-        className="keyword-optimize-button disabled:cursor-not-allowed disabled:opacity-50"
+        className="operator-primary-button keyword-action-button disabled:cursor-not-allowed disabled:opacity-50"
         disabled={disabled}
         onClick={onStart}
       >
@@ -902,7 +902,7 @@ function LegacyManagedKeywordTables({
               <p>{selectedKeyword.question}</p>
               <button
                 type="button"
-                className="keyword-optimize-button"
+                className="operator-primary-button keyword-action-button"
                 disabled={handingOff || task?.pending}
                 onClick={() => void handoffQuestion()}
               >
@@ -1026,7 +1026,7 @@ function LegacyManagedKeywordTables({
                                 <td>
                                   <button
                                     type="button"
-                                    className="keyword-optimize-button disabled:cursor-not-allowed disabled:opacity-50"
+                                    className="operator-secondary-button keyword-action-button disabled:cursor-not-allowed disabled:opacity-50"
                                     disabled={
                                       !question ||
                                       !category ||

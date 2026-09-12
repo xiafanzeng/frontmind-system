@@ -83,16 +83,17 @@ describe("EmptyConversationHint", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the real knowledge intake inline and retains input when returning to its entry", () => {
+  it("opens the compact knowledge intake dialog and retains input when returning to its entry", async () => {
     render(<EmptyConversationHint inline onStartKnowledgeBase={vi.fn()} companyName="验收企业" companyConfigured companyLoading={false} />);
     expect(screen.getByRole("heading", { name: "先用哪些资料了解你的企业？" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /构建企业知识库/ }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "构建企业知识库" })).toBeInTheDocument();
     const notes = screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容");
     fireEvent.change(notes, { target: { value: "重点整理产品的适用范围" } });
     addStarterFiles([sizedFile("企业宣传册.pdf", 1024)]);
-    fireEvent.click(screen.getByRole("button", { name: "返回选项列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /构建企业知识库/ })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /构建企业知识库/ }));
     expect(screen.getByPlaceholderText("填写知识库范围、重点产品、目标用途或需要避开的内容")).toHaveValue("重点整理产品的适用范围");
     expect(screen.getByText("企业宣传册.pdf")).toBeInTheDocument();

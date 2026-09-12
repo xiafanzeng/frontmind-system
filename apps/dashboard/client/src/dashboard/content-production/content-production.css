@@ -23,6 +23,10 @@
   padding: 24px;
   background: var(--cp-soft);
 }
+.cp-task-center-dialog { max-width: 800px; max-height: min(82dvh, 780px); overflow-y: auto; }
+.cp-task-center-tabs { display:flex; gap:6px; margin:-4px 0 16px; padding-bottom:10px; border-bottom:1px solid #e7ebef; }
+.cp-task-center-tabs button { border:0; background:transparent; color:#667085; border-radius:8px; padding:7px 12px; font-size:13px; font-weight:500; }
+.cp-task-center-tabs button[aria-selected="true"] { color:var(--module-color,#491060); background:color-mix(in srgb,var(--module-color,#491060) 8%,white); font-weight:600; }
 
 /* AgentWorkbenchShell owns the split-pane sizing and scrolling in opt-in mode. */
 .cp-workspace.cp-workspace--agent {

@@ -21,6 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useWorkspaceDraftGuard } from "@/lib/workspace-navigation-guard";
+import { captureWorkspaceRestOperation } from "@/lib/workspace-rest-scope";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import {
   currentKnowledgeBaseReplySnapshot,
@@ -450,19 +451,29 @@ export default function ChatInput({
       JSON.stringify(draftCoordinates.current) !==
         JSON.stringify(currentDraftCoordinates),
   );
+  const knowledgeBaseInitialDraft =
+    syncKnowledgeBaseSnapshot &&
+    knowledgeBaseProgress?.workbench?.phase === "initial";
   const inputLocked =
     baseInputLocked || knowledgeEditingBlocked || draftTargetChanged;
   const currentNodePresentationReady = Boolean(knowledgeBaseReplySnapshot);
+  const initialDraftReady = Boolean(
+    knowledgeBaseInitialDraft &&
+      knowledgeBaseProgress?.contentAvailability === "complete" &&
+      currentKnowledgeLeaf &&
+      currentNodePresentationReady,
+  );
+  const initialAcceptanceRequestId = useRef<string | null>(null);
+  useEffect(() => {
+    initialAcceptanceRequestId.current = null;
+  }, [activeConversation?.id]);
   const knowledgeBaseComplete =
     syncKnowledgeBaseSnapshot &&
     Boolean(knowledgeBaseProgress?.packageAllowed) &&
     !currentKnowledgeLeaf;
-  const knowledgeBaseInitialDraft =
-    syncKnowledgeBaseSnapshot &&
-    knowledgeBaseProgress?.workbench?.phase === "initial";
   const knowledgeEditingNotice = knowledgeBaseInitialDraft
     ? knowledgeBaseProgress?.contentAvailability === "complete"
-      ? "请先确认知识库初稿，再修改节点。"
+      ? "请先开始逐节点核验，再修改节点。"
       : null
     : "请先完成右侧节点编辑。";
   const knowledgeLockedPlaceholder = (() => {
@@ -580,10 +591,14 @@ export default function ChatInput({
 
   const submitContent = useCallback(
     async (message: string, selectedFiles: FilePreview[]) => {
+      const initialConfirm =
+        initialDraftReady &&
+        message.trim() === "确认" &&
+        selectedFiles.length === 0;
       if (
         (!message.trim() && selectedFiles.length === 0) ||
         isSending ||
-        inputLocked ||
+        (inputLocked && !initialConfirm) ||
         knowledgeBaseNotStarted
       ) {
         return;
@@ -638,6 +653,43 @@ export default function ChatInput({
       sendLockRef.current.add(submittedDraftKey);
       setSendingTasks((previous) => new Set(previous).add(submittedDraftKey));
       try {
+        if (knowledgeBaseInitialDraft) {
+          if (!knowledgeBaseReplySnapshot || !activeConversation) return;
+          const requestId =
+            initialAcceptanceRequestId.current || crypto.randomUUID();
+          initialAcceptanceRequestId.current = requestId;
+          const rest = captureWorkspaceRestOperation();
+          const response = await rest.fetch(
+            "/api/knowledge-base/initial-draft/accept",
+            {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                conversationId: activeConversation.id,
+                expectedGeneration: knowledgeBaseReplySnapshot.generation,
+                expectedRevision: knowledgeBaseReplySnapshot.revision,
+                expectedStateEpoch: knowledgeBaseReplySnapshot.stateEpoch,
+                expectedContentVersion:
+                  knowledgeBaseReplySnapshot.contentVersion,
+                expectedResetRevision: knowledgeBaseResetRevision ?? 0,
+                clientRequestId: requestId,
+              }),
+            },
+          );
+          const result = await response.json();
+          rest.assertActive();
+          if (result.observation) {
+            commitKnowledgeBaseObservation(
+              activeConversation.id,
+              result.observation,
+            );
+          }
+          if (!response.ok)
+            throw new Error(
+              result.error?.message ?? "开始逐节点核验暂未完成，请重试",
+            );
+        }
         const sent = await sendMessage(
           message,
           selectedFiles.map((file) => file.file),
@@ -695,6 +747,7 @@ export default function ChatInput({
       }
     },
     [
+      activeConversation,
       draftKey,
       composerDrafts,
       clearSelectedFiles,
@@ -717,6 +770,9 @@ export default function ChatInput({
       selectedModel,
       sendMessage,
       syncKnowledgeBaseSnapshot,
+      knowledgeBaseInitialDraft,
+      commitKnowledgeBaseObservation,
+      initialDraftReady,
     ],
   );
 
@@ -800,7 +856,7 @@ export default function ChatInput({
     Boolean(text.trim()) ||
     files.length > 0 ||
     isSending ||
-    inputLocked ||
+    (inputLocked && !initialDraftReady) ||
     isUploading ||
     knowledgeBaseNotStarted ||
     officialLogoRequired ||
@@ -870,12 +926,12 @@ export default function ChatInput({
           (currentKnowledgeLeaf || knowledgeBaseComplete) && (
             <div
               className={cn(
-                "mb-3 rounded-2xl border px-4 py-3 shadow-sm",
+                "mb-3 rounded-xl border px-4 py-3",
                 knowledgeBaseComplete
-                  ? "border-emerald-200 bg-emerald-50/90"
+                  ? "border-border bg-muted/30"
                   : officialLogoRequired
-                    ? "border-amber-300 bg-amber-50/95"
-                    : "border-violet-200 bg-violet-50/90",
+                    ? "border-amber-200 bg-amber-50/50"
+                    : "border-border bg-background",
               )}
               data-testid="knowledge-node-action-card"
             >
@@ -897,7 +953,7 @@ export default function ChatInput({
                           "text-xs font-semibold tracking-wide",
                           officialLogoRequired
                             ? "text-amber-700"
-                            : "text-violet-700",
+                            : "text-foreground/70",
                         )}
                       >
                         {officialLogoRequired
@@ -915,7 +971,7 @@ export default function ChatInput({
                           "mt-1 truncate text-sm font-semibold",
                           officialLogoRequired
                             ? "text-amber-950"
-                            : "text-violet-950",
+                            : "text-foreground",
                         )}
                       >
                         {currentKnowledgeLeaf!.branchTitle} /{" "}
@@ -926,7 +982,7 @@ export default function ChatInput({
                           "mt-1 text-xs leading-5",
                           officialLogoRequired
                             ? "text-amber-900/80"
-                            : "text-violet-800/80",
+                            : "text-muted-foreground",
                         )}
                       >
                         {officialLogoRequired
@@ -1025,7 +1081,7 @@ export default function ChatInput({
                       "mt-2 text-xs",
                       officialLogoRequired
                         ? "text-amber-800/80"
-                        : "text-violet-700/75",
+                        : "text-muted-foreground",
                     )}
                   >
                     {officialLogoRequired

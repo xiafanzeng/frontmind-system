@@ -1404,7 +1404,6 @@ function RealBuildFlow({
               knowledgeBaseResetRevision={resetRevision}
               knowledgeBaseAccountId={accountId}
               knowledgeEditingBlocked={
-                displayedProgress?.workbench?.phase === "initial" ||
                 updating ||
                 nodeDirty ||
                 nodePending ||
@@ -1759,7 +1758,6 @@ export function PreviewBuildFlow({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [nodeFocusRequest, setNodeFocusRequest] = useState<object | null>(null);
   const focusNode = useCallback(() => setNodeFocusRequest({}), []);
-  const [initialAccepted, setInitialAccepted] = useState(false);
   const [draft, setDraft] = useState("");
   const currentLeaf = progress.branches
     .flatMap((branch) => branch.leaves)
@@ -1770,12 +1768,12 @@ export function PreviewBuildFlow({
     {
       role: "assistant",
       content:
-        "已将企业资料整理为知识库初稿。先浏览知识节点，整体确认后即可在主区编辑正文与图片。",
+        "已将企业资料整理为知识库初稿。当前节点已准备好，请逐项阅读并确认；打开详情不会改变确认状态。",
     },
   ]);
 
-  const sendPreviewMessage = () => {
-    const content = draft.trim();
+  const sendPreviewMessage = (input?: string) => {
+    const content = (input ?? draft).trim();
     if (!content || !currentLeaf) return;
     const normalized = content
       .normalize("NFKC")
@@ -1860,7 +1858,7 @@ export function PreviewBuildFlow({
                 工作稿版本 {progress.build.contentVersion ?? 1}
               </span>
               <p>
-                {initialAccepted ? "已进入节点编辑" : "初稿待确认"} ·
+                {currentLeaf ? `当前节点：${currentLeaf.title}` : "全部节点已处理"} ·
                 本地设计预览
               </p>
             </div>
@@ -1883,22 +1881,22 @@ export function PreviewBuildFlow({
             <section className="knowledge-workbench-stage">
               <div>
                 <span className="knowledge-workbench-stage__eyebrow">
-                  {initialAccepted
-                    ? "工作稿 · 本地设计预览"
-                    : "初稿审阅 · 本地设计预览"}
+                  {currentLeaf ? "逐节点核验 · 本地设计预览" : "知识库已完成 · 本地设计预览"}
                 </span>
                 <p>
-                  {initialAccepted
-                    ? "选择右侧节点，在主区查看正文。"
-                    : "整体确认后进入编辑阶段；预览不会操作真实知识库。"}
+                  {currentLeaf
+                    ? "选择右侧节点查看正文；确认按钮只推进当前节点。"
+                    : "所有节点均已逐项处理，预览不会操作真实知识库。"}
                 </p>
               </div>
-              <Button
-                onClick={() => setInitialAccepted(true)}
-                disabled={initialAccepted}
-              >
-                {initialAccepted ? "初稿已确认" : "确认初稿，进入编辑"}
-              </Button>
+              {currentLeaf && (
+                <Button
+                  onClick={() => sendPreviewMessage("确认")}
+                  disabled={!currentLeaf}
+                >
+                  确认当前节点
+                </Button>
+              )}
             </section>
           )}
           {workbench && (
@@ -1951,7 +1949,7 @@ export function PreviewBuildFlow({
                 size="icon"
                 aria-label="发送样例消息"
                 disabled={!draft.trim() || !currentLeaf}
-                onClick={sendPreviewMessage}
+                onClick={() => sendPreviewMessage()}
               >
                 <Send className="h-4 w-4" />
               </Button>
@@ -1966,7 +1964,7 @@ export function PreviewBuildFlow({
           detailContainer={workbench ? detailContainer : null}
           onDetailsOpenChange={setDetailsOpen}
           onNodeOpen={focusNode}
-          autoOpenDetails={workbench && initialAccepted}
+          autoOpenDetails={false}
           progress={progress}
           conversationId={progress.build.conversationId}
           generation={1}

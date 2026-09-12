@@ -51,7 +51,7 @@ describe("knowledge initial draft actions", () => {
     );
     expect(
       within(screen.getByRole("main")).getByRole("button", {
-        name: "确认初稿，进入编辑",
+        name: "开始逐节点核验",
       }),
     ).toBeInTheDocument();
     expect(
@@ -70,7 +70,7 @@ describe("knowledge initial draft actions", () => {
     );
     expect(
       within(screen.getByRole("complementary")).queryByRole("button", {
-        name: "确认初稿，进入编辑",
+        name: "开始逐节点核验",
       }),
     ).toBeNull();
   });
@@ -103,9 +103,9 @@ describe("knowledge initial draft actions", () => {
         onProgress={onProgress}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "确认初稿，进入编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始逐节点核验" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("连接中断");
-    fireEvent.click(screen.getByRole("button", { name: "确认初稿，进入编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始逐节点核验" }));
     await waitFor(() => expect(onProgress).toHaveBeenCalledWith(updated));
     const first = JSON.parse(fetcher.mock.calls[0][1].body),
       second = JSON.parse(fetcher.mock.calls[1][1].body);
@@ -135,7 +135,7 @@ describe("knowledge initial draft actions", () => {
       />,
     );
     expect(
-      screen.queryByRole("button", { name: "确认初稿，进入编辑" }),
+      screen.queryByRole("button", { name: "开始逐节点核验" }),
     ).toBeNull();
     expect(
       screen.getByRole("link", { name: "导出工作稿 ZIP" }),
@@ -157,7 +157,7 @@ describe("knowledge initial draft actions", () => {
       />,
     );
     expect(
-      screen.getByRole("button", { name: "确认初稿，进入编辑" }),
+      screen.getByRole("button", { name: "开始逐节点核验" }),
     ).toBeDisabled();
     expect(
       screen.getByRole("link", { name: "下载已保存工作稿 ZIP" }),

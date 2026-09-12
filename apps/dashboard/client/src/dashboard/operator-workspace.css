@@ -105,6 +105,17 @@
   overflow-x: hidden;
   overscroll-behavior: contain;
 }
+/* Publishing pages own their full document height. Keep a single scroll owner
+   (the dashboard main column) so wheel/touch gestures continue through the
+   media catalog, filters, and pagination instead of getting trapped in a
+   zero-height flex child. */
+.publishing-route-surface
+  .user-brand-dashboard.operator-mode
+  .dashboard-module-content {
+  flex: 0 0 auto;
+  overflow: visible;
+  overscroll-behavior: auto;
+}
 .user-brand-dashboard.operator-mode .dashboard-main > .page-shell {
   width: 100%;
   padding: 24px 28px;

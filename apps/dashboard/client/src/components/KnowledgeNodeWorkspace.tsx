@@ -71,6 +71,8 @@ export interface KnowledgeNodeWorkspaceProps {
   nodeConversation?: { leafId: string; content: React.ReactNode };
   onDetailsOpenChange?: (open: boolean) => void;
   autoOpenDetails?: boolean;
+  /** A server completion receipt for this exact build and generation. */
+  firstReviewCompleted?: boolean;
   onNodeOpen?: () => void;
   onEditTargetChange?: (target: KnowledgeNodeEditTarget | null) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -141,6 +143,7 @@ function KnowledgeNodeWorkspaceSession({
   nodeConversation,
   onDetailsOpenChange,
   autoOpenDetails = false,
+  firstReviewCompleted = false,
   onNodeOpen,
   onEditTargetChange,
   onDirtyChange,
@@ -153,6 +156,18 @@ function KnowledgeNodeWorkspaceSession({
     () => branches.flatMap((branch) => branch.leaves),
     [branches],
   );
+  // In the V2.3 walkthrough the conversation owns review and confirmation.
+  // Only after all nodes are settled does the directory become an editor.
+  const sequentialReview =
+    previewDetails === undefined &&
+    !firstReviewCompleted &&
+    !progress?.workbench?.legacyPublished &&
+    Boolean(progress?.workbench) &&
+    leaves.length > 0 &&
+    progress?.build.status !== "published" &&
+    (progress?.workbench?.phase === "initial" ||
+      Boolean(progress?.build.currentLeafId) ||
+      leaves.some((leaf) => !["confirmed", "direct_prefilled"].includes(leaf.status)));
   const [selectedLeafId, setSelectedLeafId] = useState<string | null>(
     () =>
       leaves.find((leaf) => leaf.id === progress?.build.currentLeafId)?.id ??
@@ -169,8 +184,8 @@ function KnowledgeNodeWorkspaceSession({
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   useEffect(() => {
-    if (autoOpenDetails) setDrawerOpen(true);
-  }, [autoOpenDetails]);
+    if (autoOpenDetails && !sequentialReview) setDrawerOpen(true);
+  }, [autoOpenDetails, sequentialReview]);
   const inlineDetails = detailPresentation === "inline";
   const detailTitleId = useId();
   const detailDescriptionId = useId();
@@ -244,6 +259,30 @@ function KnowledgeNodeWorkspaceSession({
   );
   const currentDetails =
     details?.node.leafId === selectedLeafId ? details : null;
+
+  useEffect(() => {
+    if (!sequentialReview || editing || mutationPending || imageDirty) return;
+    setDrawerOpen(false);
+    const currentId = progress?.build.currentLeafId;
+    if (!currentId) return;
+    setSelectedLeafId(currentId);
+    setDetails(null);
+    const branch = branches.find((item) =>
+      item.leaves.some((leaf) => leaf.id === currentId),
+    );
+    if (branch) setCollapsedBranches((old) => {
+      if (!old.has(branch.id)) return old;
+      const next = new Set(old);
+      next.delete(branch.id);
+      return next;
+    });
+    const frame = window.requestAnimationFrame(() => {
+      nodeElements.current.get(currentId)?.scrollIntoView?.({
+        block: "nearest", behavior: "auto",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sequentialReview, progress?.build.currentLeafId, editing, mutationPending, imageDirty]);
 
   useEffect(() => {
     if (lifetime.current.signal.aborted)
@@ -674,7 +713,7 @@ function KnowledgeNodeWorkspaceSession({
     onNodeOpen?.();
   };
   const selectLeaf = (leafId: string) => {
-    if (mutationPending || imageDirty) return;
+    if (sequentialReview || mutationPending || imageDirty) return;
     if (drawerOpen && leafId === selectedLeafId) {
       onNodeOpen?.();
       return;
@@ -755,7 +794,7 @@ function KnowledgeNodeWorkspaceSession({
   const beginDirectEdit = () => {
     if (
       !currentDetails?.capabilities.directEdit.allowed ||
-      currentDetails.node.leafId !== progress?.build.currentLeafId ||
+      sequentialReview ||
       readonlyPreview ||
       disabled ||
       readPending ||
@@ -791,7 +830,7 @@ function KnowledgeNodeWorkspaceSession({
         next.delete(branch.id);
         return next;
       });
-    selectLeaf(currentId);
+    if (!sequentialReview) selectLeaf(currentId);
     requestAnimationFrame(() => {
       if (!lifetime.current.signal.aborted)
         nodeElements.current
@@ -876,7 +915,7 @@ function KnowledgeNodeWorkspaceSession({
   const reverifyCurrentNode = async () => {
     const build = progress?.build;
     if (!currentDetails || !build || generation === undefined) return;
-    if (selectPending || mutationPending || dirty || imageDirty) return;
+    if (sequentialReview || selectPending || mutationPending || dirty || imageDirty) return;
     const rest = captureWorkspaceRestOperation(lifetime.current.signal);
     setSelectPending(true);
     setSelectError(null);
@@ -929,17 +968,12 @@ function KnowledgeNodeWorkspaceSession({
         ),
     );
   const canReverifyNode =
+    !sequentialReview &&
     Boolean(currentDetails) &&
     buildAllowsNodeSelection &&
     (currentDetails?.node.status === "confirmed" ||
       currentDetails?.node.status === "direct_prefilled") &&
     progress?.build.currentLeafId !== currentDetails?.node.leafId;
-  // Verification is sequential: only the server cursor may be edited or
-  // advanced. Earlier confirmed nodes and future nodes remain read-only until
-  // the cursor is moved to them by a successful confirmation.
-  const canEditCurrentNode =
-    Boolean(currentDetails) &&
-    currentDetails?.node.leafId === progress?.build.currentLeafId;
   const actionsDisabled =
     disabled ||
     readonlyPreview ||
@@ -1022,7 +1056,7 @@ function KnowledgeNodeWorkspaceSession({
               disabled={
                 actionsDisabled ||
                 !currentDetails?.capabilities.directEdit.allowed ||
-                !canEditCurrentNode
+                sequentialReview
               }
             >
               <Pencil aria-hidden="true" />
@@ -1281,7 +1315,7 @@ function KnowledgeNodeWorkspaceSession({
                   conversationId={conversationId}
                   leafId={currentDetails.node.leafId}
                   resetRevision={currentDetails.coordinates.resetRevision}
-                  disabled={actionsDisabled}
+                  disabled={actionsDisabled || sequentialReview}
                   editDisabled={!currentDetails.capabilities.aiEdit.allowed}
                   imagesDisabled={
                     !currentDetails.capabilities.manageImages.allowed
@@ -1505,7 +1539,7 @@ function KnowledgeNodeWorkspaceSession({
                                       data-status={leaf.status}
                                       aria-label={`${leaf.title} ${leafStatusLabel(leaf)}`}
                                       aria-current={
-                                        leaf.id === selectedLeafId
+                                        leaf.id === (sequentialReview ? progress?.build.currentLeafId : selectedLeafId)
                                           ? "true"
                                           : undefined
                                       }
@@ -1513,7 +1547,8 @@ function KnowledgeNodeWorkspaceSession({
                                         inlineDetails ? undefined : "dialog"
                                       }
                                       onClick={() => selectLeaf(leaf.id)}
-                                      disabled={mutationPending}
+                                      disabled={mutationPending || sequentialReview}
+                                      data-review-locked={sequentialReview || undefined}
                                     >
                                       <span className="knowledge-node-workspace__leaf-icon">
                                         <StatusIcon aria-hidden="true" />
@@ -1526,7 +1561,7 @@ function KnowledgeNodeWorkspaceSession({
                                       >
                                         {leafStatusLabel(leaf)}
                                       </span>
-                                      <ChevronRight aria-hidden="true" />
+                                      {!sequentialReview && <ChevronRight aria-hidden="true" />}
                                     </button>
                                   </li>
                                 );

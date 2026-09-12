@@ -457,6 +457,26 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     expect(task).toHaveAttribute("data-node-details-open", "true");
   });
 
+  it.each([
+    [{}, true],
+    [{ buildId: "another-build" }, false],
+    [{ generation: 2 }, false],
+    [{ serverOwned: false }, false],
+    [{ kind: "presentation" }, false],
+  ])("unlocks the directory only for the current build's server completion receipt %j", (override, expected) => {
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.activeConversation.messages.push({
+      id: "completion", role: "assistant", content: "已完成", timestamp: 3,
+      knowledgeBase: { kind: "completion", serverOwned: true, buildId: "build-current-kb", generation: 1, ...override },
+    });
+    mocks.progressData = { progress: {
+      ...activeBuild(),
+      workbench: { generation: 1, stateEpoch: 2, phase: "editing", acceptedAt: null, legacyPublished: false },
+    } };
+    render(<EmbeddedKnowledgeBasePanel mode="workspace" workbench page="build" onPageChange={vi.fn()} />);
+    expect(mocks.nodeProps.mock.lastCall?.[0].firstReviewCompleted).toBe(expected);
+  });
+
   it("clears a stale AI target label when the authoritative workflow advances to another node", async () => {
     mocks.activeConversation = approvedConversation("current-kb");
     mocks.progressData = { progress: activeBuild() };

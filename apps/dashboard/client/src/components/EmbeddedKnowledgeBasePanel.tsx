@@ -1464,6 +1464,15 @@ function RealBuildFlow({
       autoOpenDetails={
         workbench && displayedProgress?.workbench?.phase === "editing"
       }
+      firstReviewCompleted={Boolean(displayedProgress &&
+        displayedConversation?.messages?.some((message) =>
+          message.role === "assistant" &&
+          message.knowledgeBase?.serverOwned === true &&
+          message.knowledgeBase.kind === "completion" &&
+          message.knowledgeBase.buildId === displayedProgress.build.id &&
+          message.knowledgeBase.generation === displayedProgress.workbench?.generation,
+        )
+      )}
       key={`${conversationId ?? "empty"}:${displayedProgress?.build.id ?? "empty"}:${displayedConversation?.knowledgeBase?.generation ?? 0}:${resetRevision}`}
       progress={displayedProgress}
       conversationId={conversationId ?? displayedConversation?.id ?? ""}

@@ -230,22 +230,55 @@ describe("unified knowledge node workspace", () => {
     } finally { main.remove(); }
   });
 
-  it("keeps confirmed and future nodes read-only until the verification cursor reaches them", async () => {
-    fixtureFetch();
-    renderWorkspace();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled(),
-    );
+  it("keeps the first-pass directory locked and follows each server confirmation", async () => {
+    const fetcher = fixtureFetch();
+    const reviewing: KnowledgeBaseProgressDto = {
+      ...progress,
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: "2026-09-12T00:00:00Z", legacyPublished: false },
+    };
+    const view = renderWorkspace({ progress: reviewing, autoOpenDetails: true }, false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "企业简介 当前节点" })).toBeDisabled();
+    const other = screen.getByRole("button", { name: "产品服务 已确认" });
+    expect(other).toBeDisabled();
+    fireEvent.click(other);
+    expect(screen.queryByRole("button", { name: "直接编辑" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新核验" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "AI 修改" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "定位当前节点" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    view.rerender(<KnowledgeNodeWorkspace conversationId="conversation" autoOpenDetails progress={{
+      ...reviewing,
+      build: { ...reviewing.build, currentLeafId: "1.2", revision: 9 },
+      branches: reviewing.branches.map((branch) => ({ ...branch, leaves: branch.leaves.map((leaf) => ({ ...leaf, status: leaf.id === "1.2" ? "current" : "confirmed" })) })),
+    }} />);
+    expect(screen.getByRole("button", { name: "产品服务 当前节点" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "企业简介 已确认" })).not.toHaveAttribute("aria-current");
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
 
-    // Reading another leaf remains available, but the verification cursor
-    // cannot be bypassed to edit it directly.
-    fireEvent.change(screen.getByRole("combobox", { name: "切换知识节点" }), {
-      target: { value: "1.2" },
-    });
-    const editorButton = await screen.findByRole("button", { name: "直接编辑" });
-    expect(editorButton).toBeDisabled();
-    fireEvent.click(editorButton);
-    expect(screen.queryByRole("textbox", { name: "编辑产品服务正文" })).toBeNull();
+  it("unlocks direct editing after all nodes are confirmed with no current cursor", async () => {
+    fixtureFetch();
+    renderWorkspace({ progress: {
+      ...progress,
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: "2026-09-12T00:00:00Z", legacyPublished: false },
+      build: { ...progress.build, currentLeafId: null, status: "ready_to_publish" },
+      branches: progress.branches.map((branch) => ({ ...branch, leaves: branch.leaves.map((leaf) => ({ ...leaf, status: "confirmed" })) })),
+    } }, false);
+    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "直接编辑" }));
+    expect(screen.getByRole("textbox", { name: "编辑产品服务正文" })).toBeVisible();
+  });
+
+  it("keeps a completed first pass unlocked when a later edit needs confirmation", async () => {
+    fixtureFetch();
+    renderWorkspace({ firstReviewCompleted: true, progress: {
+      ...progress,
+      workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: "2026-09-12T00:00:00Z", legacyPublished: false },
+    } }, false);
+    fireEvent.click(screen.getByRole("button", { name: "产品服务 已确认" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled());
   });
 
   it("supports standalone inline node reading and collaboration focus without dismissing it", async () => {
@@ -689,7 +722,7 @@ describe("unified knowledge node workspace", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       downloads.push(this.href);
     });
-    renderWorkspace({ progress: {
+    renderWorkspace({ firstReviewCompleted: true, progress: {
       ...progress,
       contentAvailability: "complete",
       workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },
@@ -729,7 +762,7 @@ describe("unified knowledge node workspace", () => {
       return json(details("1.1", Number(url.searchParams.get("expectedContentVersion"))));
     }));
     const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    renderWorkspace({ progress: {
+    renderWorkspace({ firstReviewCompleted: true, progress: {
       ...progress,
       contentAvailability: "complete",
       workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },
@@ -987,7 +1020,7 @@ describe("unified knowledge node workspace", () => {
     );
     vi.stubGlobal("fetch", fetcher);
     const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-    renderWorkspace({ progress: {
+    renderWorkspace({ firstReviewCompleted: true, progress: {
       ...progress,
       contentAvailability: "complete",
       workbench: { generation: 1, stateEpoch: 12, phase: "editing", acceptedAt: null, legacyPublished: false },

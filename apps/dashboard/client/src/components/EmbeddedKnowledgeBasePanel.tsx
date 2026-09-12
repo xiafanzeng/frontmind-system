@@ -1358,8 +1358,10 @@ function RealBuildFlow({
           请先保存或取消节点修改，再提交任务消息。
         </div>
       )}
-      {!(workbench && nodeDetailsOpen) && (
-        <div className="knowledge-workspace-task">
+      <div
+        className="knowledge-workspace-task"
+        data-node-details-open={workbench && nodeDetailsOpen ? "true" : "false"}
+      >
           {missingCurrentConversation || snapshotOnly ? (
             <div className="knowledge-workspace-empty">
               <p>
@@ -1423,8 +1425,7 @@ function RealBuildFlow({
               正在打开知识库工作台…
             </div>
           )}
-        </div>
-      )}
+      </div>
     </>
   );
   const knowledge = snapshotOnly ? (

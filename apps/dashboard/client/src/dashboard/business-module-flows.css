@@ -848,3 +848,12 @@
   color: #2867a5;
   font-weight: 600;
 }
+
+/* Keep monitoring progress tied to the current operator module instead of the
+   historical purple customer portal palette. */
+.user-brand-dashboard.operator-mode .monitoring-run-progress__track {
+  background: color-mix(in srgb, var(--module-accent, #2867a5) 10%, white);
+}
+.user-brand-dashboard.operator-mode .monitoring-run-progress__fill {
+  background: var(--module-accent, #2867a5);
+}

@@ -5994,3 +5994,52 @@ button.content-ticket-row:hover {
     justify-items: start;
   }
 }
+
+/* Operator workspaces use the active module accent for legacy resource actions
+   too, so older portal controls do not introduce a second CTA color system. */
+.user-brand-dashboard.operator-mode .question-intake-submit {
+  min-height: var(--fm-control-height, 40px);
+  border: 1px solid var(--module-accent, #7545a0);
+  border-radius: var(--fm-control-radius, 8px);
+  background: var(--module-accent, #7545a0);
+  padding: 8px 16px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.user-brand-dashboard.operator-mode .question-intake-submit:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--module-accent, #7545a0) 92%, #000);
+  background: color-mix(in srgb, var(--module-accent, #7545a0) 92%, #000);
+}
+.user-brand-dashboard.operator-mode .question-intake-submit:focus-visible {
+  outline: 2px solid var(--module-accent, #7545a0);
+  outline-offset: 2px;
+}
+.user-brand-dashboard.operator-mode .question-intake-history-button,
+.user-brand-dashboard.operator-mode .question-intake-library-link,
+.user-brand-dashboard.operator-mode .service-question-change-actions button,
+.user-brand-dashboard.operator-mode .question-work-order-footer button {
+  min-height: var(--fm-control-height, 40px);
+  border-color: #d0d5dd;
+  border-radius: var(--fm-control-radius, 8px);
+  color: #344054;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.user-brand-dashboard.operator-mode .question-intake-history-button:hover,
+.user-brand-dashboard.operator-mode .question-intake-library-link:hover,
+.user-brand-dashboard.operator-mode .service-question-change-actions button:hover,
+.user-brand-dashboard.operator-mode .question-work-order-footer button:hover {
+  border-color: var(--module-accent, #7545a0);
+  background: color-mix(in srgb, var(--module-accent, #7545a0) 7%, white);
+  color: var(--module-accent, #7545a0);
+}
+.user-brand-dashboard.operator-mode .question-intake-history-button:focus-visible,
+.user-brand-dashboard.operator-mode .question-intake-library-link:focus-visible,
+.user-brand-dashboard.operator-mode .service-question-change-actions button:focus-visible,
+.user-brand-dashboard.operator-mode .question-work-order-footer button:focus-visible {
+  outline: 2px solid var(--module-accent, #7545a0);
+  outline-offset: 2px;
+}

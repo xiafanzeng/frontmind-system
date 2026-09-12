@@ -1065,7 +1065,7 @@ export default function ChatInput({
                             ? inputLocked || isSending || isUploading
                             : quickActionsDisabled
                         }
-                        className="rounded-xl"
+                        className="knowledge-node-confirm-button rounded-md"
                       >
                         {officialLogoRequired && (isSending || isUploading) ? (
                           <Loader2 className="h-4 w-4 animate-spin" />

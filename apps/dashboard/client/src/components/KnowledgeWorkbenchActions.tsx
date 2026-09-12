@@ -99,24 +99,18 @@ export default function KnowledgeWorkbenchActions({
             : "知识库编辑阶段"
       }
     >
-      <div>
-        <span className="knowledge-workbench-stage__eyebrow">
-          {presentation === "resource"
-            ? `工作稿版本 ${progress.build.contentVersion}`
-            : initial
-              ? "初稿审阅"
-              : "工作稿"}
-        </span>
-        <p>
-          {presentation === "resource"
-            ? initial
-              ? "初稿待确认"
-              : "正在逐节点核验"
-            : initial
+      {presentation !== "resource" && (
+        <div>
+          <span className="knowledge-workbench-stage__eyebrow">
+            {initial ? "初稿审阅" : "工作稿"}
+          </span>
+          <p>
+            {initial
               ? "初稿已按知识节点组织。开始后可逐个确认、跳过预填或让 AI 修改，全部完成后更新知识库。"
               : "在对话中确认当前节点，或从右侧选择节点直接编辑与重新核验。全部完成后，更新知识库以启用新版本。"}
-        </p>
-      </div>
+          </p>
+        </div>
+      )}
       <div className="knowledge-workbench-stage__actions">
         {initial && presentation !== "resource" && (
           <Button onClick={accept} disabled={!available || disabled || pending}>

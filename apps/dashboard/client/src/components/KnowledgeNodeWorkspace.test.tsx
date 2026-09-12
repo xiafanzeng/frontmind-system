@@ -237,8 +237,8 @@ describe("unified knowledge node workspace", () => {
       expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled(),
     );
 
-    // A future/confirmed leaf may be inspected, but it cannot bypass the
-    // currentLeafId cursor and enter direct edit.
+    // Reading another leaf remains available, but the verification cursor
+    // cannot be bypassed to edit it directly.
     fireEvent.change(screen.getByRole("combobox", { name: "切换知识节点" }), {
       target: { value: "1.2" },
     });

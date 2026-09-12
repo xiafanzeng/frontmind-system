@@ -58,8 +58,11 @@ describe("knowledge initial draft actions", () => {
       within(screen.getByRole("main")).queryByRole("link", { name: /ZIP/ }),
     ).toBeNull();
     expect(
-      within(screen.getByRole("complementary")).getByText("工作稿版本 1"),
-    ).toBeInTheDocument();
+      within(screen.getByRole("complementary")).queryByText("工作稿版本 1"),
+    ).toBeNull();
+    expect(
+      within(screen.getByRole("complementary")).queryByText("正在逐节点核验"),
+    ).toBeNull();
     expect(
       within(screen.getByRole("complementary")).getByRole("link", {
         name: "导出工作稿 ZIP",

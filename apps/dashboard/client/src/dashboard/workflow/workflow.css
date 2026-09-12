@@ -122,9 +122,7 @@
   gap: 12px;
   margin-top: 20px;
 }
-.workflow-actions > button,
-.workflow-feedback > button,
-.workflow-pagination > button {
+:where(.workflow-actions > button, .workflow-feedback > button, .workflow-pagination > button) {
   min-height: 40px;
   padding: 8px 14px;
   border: 1px solid #d0d5dd;
@@ -139,8 +137,7 @@
   border-color: var(--module-color, #491060);
   color: white;
 }
-.workflow-actions > button:disabled,
-.workflow-pagination > button:disabled {
+:where(.workflow-actions > button:disabled, .workflow-pagination > button:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }

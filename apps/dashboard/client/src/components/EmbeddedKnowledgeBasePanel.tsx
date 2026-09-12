@@ -1,8 +1,10 @@
+import { OPERATOR_MODULES } from "@/dashboard/operator-navigation";
 import { useRetireKnowledgeUploads } from "@/lib/knowledge-base-upload-manager";
 import KnowledgeNodeConversation from "./KnowledgeNodeConversation";
 import KnowledgePublicExecution from "./KnowledgePublicExecution";
 import KnowledgeWorkbenchActions from "./KnowledgeWorkbenchActions";
 import {
+  type CSSProperties,
   createContext,
   useContext,
   useCallback,
@@ -360,7 +362,7 @@ export default function EmbeddedKnowledgeBasePanel({
               </p>
               <Button
                 type="button"
-                variant="outline"
+                variant="operatorOutline"
                 className="mt-4"
                 onClick={() => void resetQuery.refetch()}
               >
@@ -454,7 +456,7 @@ function KnowledgeResetButton({
       <Button
         ref={resetButtonRef}
         type="button"
-        variant="outline"
+        variant="operatorOutline"
         className="knowledge-workspace-reset"
         disabled={disabled || !status.canReset || resetMutation.isPending}
         title={
@@ -479,6 +481,7 @@ function KnowledgeResetButton({
         }}
       >
         <DialogContent
+          style={{ "--module-accent": OPERATOR_MODULES[0].color } as CSSProperties}
           onCloseAutoFocus={(event) => {
             const resetButton = resetButtonRef.current;
             const target =
@@ -505,7 +508,7 @@ function KnowledgeResetButton({
           </DialogHeader>
           <DialogFooter>
             <Button
-              variant="outline"
+              variant="operatorOutline"
               disabled={resetMutation.isPending}
               onClick={() => setOpen(false)}
             >
@@ -717,7 +720,7 @@ function ManualKnowledgeUpdateButton({
   if (uncertainConversation === activeConversation?.id) {
     return (
       <Button
-        variant="outline"
+        variant="operatorOutline"
         disabled={updating}
         onClick={() => void reconcileUpdate()}
       >
@@ -732,7 +735,7 @@ function ManualKnowledgeUpdateButton({
     progress?.packageState === "preparing" ||
     progress?.packageState === "retrying";
   if (generating && !updating) {
-    return <Button disabled>生成并更新中…</Button>;
+    return <Button variant="operator" disabled>生成并更新中…</Button>;
   }
   if (!(progress?.updateAllowed ?? progress?.packageAllowed)) {
     return null;
@@ -741,6 +744,7 @@ function ManualKnowledgeUpdateButton({
   return (
     <>
       <Button
+        variant="operator"
         disabled={disabled || updating}
         onClick={() => {
           if (getUnsavedWorkspaceDrafts().length) {
@@ -766,6 +770,7 @@ function ManualKnowledgeUpdateButton({
         }}
       >
         <DialogContent
+          style={{ "--module-accent": OPERATOR_MODULES[0].color } as CSSProperties}
           onEscapeKeyDown={(event) => {
             if (updating) event.preventDefault();
           }}
@@ -782,13 +787,14 @@ function ManualKnowledgeUpdateButton({
           </DialogHeader>
           <DialogFooter>
             <Button
-              variant="outline"
+              variant="operatorOutline"
               disabled={updating}
               onClick={() => setConfirmOpen(false)}
             >
               取消
             </Button>
             <Button
+              variant="operator"
               disabled={disabled || updating}
               onClick={() => void updateKnowledgeBase()}
             >
@@ -1257,7 +1263,7 @@ function RealBuildFlow({
           </p>
           <Button
             type="button"
-            variant="outline"
+            variant="operatorOutline"
             className="mt-4"
             onClick={retryRecovery}
           >
@@ -1362,7 +1368,7 @@ function RealBuildFlow({
                   : "当前构建记录无法继续。请确认重置后重新上传资料。"}
               </p>
               <Button
-                variant="outline"
+                variant="operatorOutline"
                 onClick={() =>
                   window.dispatchEvent(
                     new Event(KNOWLEDGE_BASE_RESET_REQUEST_EVENT),

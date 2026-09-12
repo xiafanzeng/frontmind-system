@@ -91,8 +91,8 @@
 }
 .agent-workbench-topbar__actions button,
 .agent-workbench-topbar__actions a {
-  min-height: 28px;
-  font-size: 12px;
+  min-height: var(--fm-control-height, 40px);
+  font-size: 14px;
 }
 /* A persistent outcome card and the conversation own separate scroll areas. */
 .agent-workbench-task-status {
@@ -123,7 +123,11 @@
 }
 /* Resource workspaces browse full-width in a centered, capped canvas. */
 .agent-workbench-shell__layout.is-workspace {
-  display: block;
+  /* Keep the resource viewport in the bounded grid row. A block wrapper
+     lets its flex child grow to catalog height and clips the page before
+     the main-content scroll owner can overflow. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   padding: 0;
 }
 .agent-workbench-shell__layout.is-workspace .agent-workbench-shell__main-content.is-scrollable {

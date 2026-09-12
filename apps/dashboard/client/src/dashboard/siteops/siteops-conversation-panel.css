@@ -1,4 +1,5 @@
 .siteops-panel {
+  --siteops-accent: var(--module-accent, #5e6174);
   display: grid;
   gap: 18px;
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -55,11 +56,11 @@
 
 .siteops-icon-button {
   display: inline-grid;
-  width: 38px;
-  height: 38px;
+  width: var(--fm-control-height, 40px);
+  height: var(--fm-control-height, 40px);
   place-items: center;
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: var(--fm-control-radius, 8px);
   background: #fff;
   color: #475569;
 }
@@ -1232,44 +1233,64 @@
 .siteops-secondary-button,
 .siteops-build-actions a {
   display: inline-flex;
-  min-height: 38px;
+  min-height: var(--fm-control-height, 40px);
   align-items: center;
   justify-content: center;
   gap: 7px;
-  border-radius: 11px;
-  padding: 8px 13px;
-  font-weight: 700;
+  border-radius: var(--fm-control-radius, 8px);
+  padding: 8px 16px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
   text-decoration: none;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .siteops-primary-button {
-  border: 1px solid #4f46e5;
-  background: #4f46e5;
+  border: 1px solid var(--siteops-accent, var(--module-accent, #5e6174));
+  background: var(--siteops-accent, var(--module-accent, #5e6174));
   color: #fff;
-  transition: filter 150ms ease;
 }
 
 .siteops-primary-button:not(:disabled):hover {
-  filter: brightness(0.9) saturate(1.05);
+  background: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 92%, black);
+  border-color: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 92%, black);
 }
 
-.siteops-primary-button:focus-visible {
-  outline: 3px solid Highlight;
+.siteops-primary-button:focus-visible,
+.siteops-secondary-button:focus-visible,
+.siteops-icon-button:focus-visible,
+.siteops-build-actions a:focus-visible {
+  outline: 2px solid var(--siteops-accent, var(--module-accent, #5e6174));
   outline-offset: 2px;
 }
 
 .siteops-secondary-button,
 .siteops-build-actions a {
-  border: 1px solid #cbd5e1;
+  border: 1px solid #d0d5dd;
   background: #fff;
-  color: #334155;
+  color: #344054;
+}
+
+.siteops-secondary-button:not(:disabled):hover,
+.siteops-icon-button:not(:disabled):hover,
+.siteops-build-actions a:hover {
+  border-color: var(--siteops-accent, var(--module-accent, #5e6174));
+  background: color-mix(in srgb, var(--siteops-accent, var(--module-accent, #5e6174)) 7%, white);
 }
 
 .siteops-primary-button:disabled,
 .siteops-secondary-button:disabled,
 .siteops-icon-button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  border-color: #e4e7ec;
+  background: #f9fafb;
+  color: #98a2b3;
+  opacity: 1;
+}
+
+.siteops-primary-button:disabled {
+  background: #e4e7ec;
 }
 
 .siteops-inline-actions {

@@ -6,7 +6,7 @@ import { BusinessWorkspaceInspector } from "@/dashboard/BusinessWorkspaceContext
 import { WorkbenchTaskToolbar } from "../WorkbenchTaskToolbar";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { OPERATOR_MODULES } from "../operator-navigation";
-const contentTheme = { "--module-color": OPERATOR_MODULES.find((item) => item.id === "content")!.color } as CSSProperties;
+const contentTheme = { "--module-accent": OPERATOR_MODULES.find((item) => item.id === "content")!.color, "--module-color": OPERATOR_MODULES.find((item) => item.id === "content")!.color } as CSSProperties;
 import {
   Check,
   ChevronDown,
@@ -231,6 +231,7 @@ function ContentProductionInner({
   } = useConversation();
   const { sendMessage } = useSendMessage();
   const [showCreate, setShowCreate] = useState(false);
+  const taskCenterTrigger = useRef<HTMLElement | null>(null);
   const [taskCenterTab, setTaskCenterTab] = useState<"new" | "existing">("new");
   const [mode, setMode] = useState<ContentProductionMode | null>(null);
   const [enterpriseName, setEnterpriseName] = useState("");
@@ -300,15 +301,13 @@ function ContentProductionInner({
   const busy =
     Boolean(pendingStart) ||
     ["running", "pending"].includes(activeConversation?.status ?? "");
-  const createDirty =
-    showCreate &&
-    Boolean(
-      mode ||
-        enterpriseName.trim() ||
-        question.trim() ||
-        questionId.trim() ||
-        materials.length,
-    );
+  const createDirty = Boolean(
+    mode ||
+      enterpriseName.trim() ||
+      question.trim() ||
+      questionId.trim() ||
+      materials.length,
+  );
   useWorkspaceDraftGuard({ dirty: createDirty, label: "新建内容任务" });
   useWorkspaceDraftGuard({
     dirty: Boolean(pendingStart) || handoffPending,
@@ -460,26 +459,26 @@ function ContentProductionInner({
     setHandoffName("");
     setHandoffFile(null);
   }
+  function openTaskCenter(tab: "new" | "existing") {
+    if (!showCreate && document.activeElement instanceof HTMLElement)
+      taskCenterTrigger.current = document.activeElement;
+    setTaskCenterTab(tab);
+    setShowCreate(true);
+  }
   function openCreate() {
-    requestWorkspaceNavigation(() => {
-      setFailedStart(null);
-      resetCreate();
-      setNotice("");
-      setTaskCenterTab("new");
-      setShowCreate(true);
-    });
+    openTaskCenter("new");
   }
   function closeCreate() {
-    requestWorkspaceNavigation(() => {
-      setShowCreate(false);
-      resetCreate();
-    });
+    // Closing the task center only hides it; the draft and File objects stay
+    // mounted until submission or an explicitly approved workspace departure.
+    setShowCreate(false);
   }
   function startTask(event: React.FormEvent) {
     event.preventDefault();
     const name = enterpriseName.trim();
     if (
       startLocked.current ||
+      !hydrated ||
       !mode ||
       !name ||
       (mode === "single_article" && !question.trim() && !questionId.trim())
@@ -653,7 +652,7 @@ function ContentProductionInner({
       setHandoffFile(carriedFile);
       setMaterials([carriedFile]);
       setHandoffName(source.fileName);
-      setShowCreate(true);
+      openTaskCenter("new");
     } catch (error) {
       if (!rest.signal.aborted && currentId.current === conversationId)
         setNotice(
@@ -667,34 +666,8 @@ function ContentProductionInner({
     }
   }
   const createForm = (
-    <>
-      {!workbench && (
-        <header>
-          <div>
-            {workbench ? (
-              <h3>确定本次内容任务</h3>
-            ) : (
-              <DialogTitle>新建内容任务</DialogTitle>
-            )}
-            {workbench ? (
-              <p>确定本次交付目标，再选择资料来源。</p>
-            ) : (
-              <DialogDescription>
-                确定本次交付目标，再选择资料来源。
-              </DialogDescription>
-            )}
-          </div>
-          <button
-            type="button"
-            className="cp-icon-button"
-            aria-label="关闭新建任务"
-            onClick={closeCreate}
-          >
-            <X size={20} />
-          </button>
-        </header>
-      )}
-      <form onSubmit={startTask}>
+    <form className="cp-task-create-form" onSubmit={startTask}>
+      <div className="cp-task-center-body">
         {workbench ? (
           mode ? (
             <WorkflowCompleted
@@ -837,26 +810,28 @@ function ContentProductionInner({
                 {notice}
               </p>
             )}
-            <footer>
-              <button
-                type="button"
-                className="cp-secondary"
-                onClick={closeCreate}
-              >
-                取消
-              </button>
-              <button
-                className="cp-primary"
-                type="submit"
-                disabled={!mode || Boolean(pendingStart) || handoffPending}
-              >
-                创建并开始
-              </button>
-            </footer>
           </>
         )}
-      </form>
-    </>
+      </div>
+      {(mode || !workbench) && (
+        <footer>
+          <button
+            type="button"
+            className="cp-secondary"
+            onClick={closeCreate}
+          >
+            取消
+          </button>
+          <button
+            className="cp-primary"
+            type="submit"
+            disabled={!hydrated || !mode || Boolean(pendingStart) || handoffPending}
+          >
+            创建并开始
+          </button>
+        </footer>
+      )}
+    </form>
   );
   const resultView = (
     <div className={`cp-result-surface ${workbench ? "is-agent" : ""}`}>
@@ -1109,9 +1084,8 @@ function ContentProductionInner({
             disabled: !hydrated,
           }))}
           onSelect={(value) => {
-            resetCreate();
             setMode(value as ContentProductionMode);
-            setShowCreate(true);
+            openTaskCenter("new");
           }}
         />
       ) : (
@@ -1120,7 +1094,7 @@ function ContentProductionInner({
           question="本次要完成什么？"
           description="选择交付目标，再补充企业材料。"
           choices={CONTENT_MODES.map((item) => ({ id: item.value, label: item.title, description: item.description, disabled: !hydrated, disabledReason: "正在恢复工作区" }))}
-          onSelect={(value) => { resetCreate(); setMode(value as ContentProductionMode); setShowCreate(true); }}
+          onSelect={(value) => { setMode(value as ContentProductionMode); openTaskCenter("new"); }}
         />
       )}
     </div>
@@ -1221,7 +1195,7 @@ function ContentProductionInner({
           scrollMain={!activeConversation}
           main={
             <div
-              className={`cp-main-flow ${!showCreate && activeConversation ? "has-conversation" : ""}`}
+              className={`cp-main-flow ${activeConversation ? "has-conversation" : ""}`}
             >
               <>{conversationView}</>
             </div>
@@ -1237,7 +1211,8 @@ function ContentProductionInner({
                   type="button"
                   role="tab"
                   aria-selected={false}
-                  onClick={() => { setTaskCenterTab("existing"); setShowCreate(true); }}
+                  disabled={!hydrated || Boolean(pendingStart) || handoffPending}
+                  onClick={() => openTaskCenter("existing")}
                 >
                   任务中心
                 </button>
@@ -1322,13 +1297,28 @@ function ContentProductionInner({
           style={contentTheme}
           overlayClassName="cp-modal-overlay"
           showCloseButton={false}
+          onCloseAutoFocus={(event) => {
+            if (taskCenterTrigger.current?.isConnected) {
+              event.preventDefault();
+              taskCenterTrigger.current.focus();
+            }
+          }}
         >
-          {workbench && <><DialogTitle className="sr-only">内容任务中心</DialogTitle><DialogDescription className="sr-only">新建或恢复内容制作任务</DialogDescription></>}
+          <header>
+            <div>
+              <DialogTitle>{workbench ? "内容任务中心" : "新建内容任务"}</DialogTitle>
+              <DialogDescription>选择交付目标，或继续已有的制作任务。关闭后保留未提交内容。</DialogDescription>
+            </div>
+            <button type="button" className="cp-icon-button" aria-label="关闭任务中心" onClick={closeCreate}>
+              <X size={20} />
+            </button>
+          </header>
           <div className="cp-task-center-tabs" role="tablist" aria-label="内容任务中心">
             <button type="button" role="tab" aria-selected={taskCenterTab === "new"} onClick={() => setTaskCenterTab("new")}>新建任务</button>
             <button type="button" role="tab" aria-selected={taskCenterTab === "existing"} onClick={() => setTaskCenterTab("existing")}>已有任务</button>
           </div>
           {taskCenterTab === "new" ? createForm : (
+            <div className="cp-task-center-body">
             <WorkbenchTaskToolbar
               presentation="panel"
               labels={{ newAction: "新建任务", history: "已有任务", noun: "制作任务" }}
@@ -1339,6 +1329,7 @@ function ContentProductionInner({
               onDelete={deleteConversation}
               disabled={!hydrated || Boolean(pendingStart) || handoffPending}
             />
+            </div>
           )}
         </DialogContent>
       </Dialog>

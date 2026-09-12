@@ -98,6 +98,12 @@
   min-width: 0;
   flex: 1;
   padding: 0;
+  /* Module routes (including the media library) can be substantially
+     taller than the viewport. Keep the flex item as the scroll owner so
+     descendants are not clipped by the fixed-height operator shell. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .user-brand-dashboard.operator-mode .dashboard-main > .page-shell {
   width: 100%;

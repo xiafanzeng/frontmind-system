@@ -585,3 +585,40 @@
     padding-left: 72px;
   }
 }
+
+/* The node confirmation is the single primary action for this stage. Keep it
+ * aligned with the operator control system even though the composer uses the
+ * shared shadcn Button primitive. */
+.knowledge-workspace-task .knowledge-node-confirm-button {
+  min-height: var(--fm-control-height, 40px);
+  padding: 8px 16px;
+  border: 1px solid var(--module-accent, #16794f);
+  border-radius: var(--fm-control-radius, 8px);
+  background: var(--module-accent, #16794f);
+  color: #fff;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+.knowledge-workspace-task .knowledge-node-confirm-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--module-accent, #16794f) 92%, #000);
+  background: color-mix(in srgb, var(--module-accent, #16794f) 92%, #000);
+}
+.knowledge-workspace-task .knowledge-node-confirm-button:focus-visible {
+  outline: 2px solid var(--module-accent, #16794f);
+  outline-offset: 2px;
+}
+.knowledge-workspace-task .knowledge-node-confirm-button:disabled {
+  border-color: #e7ebef;
+  background: #f2f4f7;
+  color: #98a2b3;
+  opacity: 1;
+  cursor: not-allowed;
+}
+@media (max-width: 600px) {
+  .knowledge-workspace-task .knowledge-node-confirm-button {
+    width: 100%;
+  }
+}

@@ -239,6 +239,23 @@ describe("AgentWorkbenchShell persistent outcomes", () => {
     expect(screen.queryByRole("separator")).toBeNull();
     expect(screen.getByRole("textbox")).toBeVisible();
   });
+  it("uses a true two-column grid for fixed auxiliary modules", () => {
+    const { container } = render(
+      <AgentWorkbenchShell {...props} moduleId="knowledge" />,
+    );
+    expect(
+      container.querySelector(".agent-workbench-shell__layout"),
+    ).toHaveClass("is-fixed-auxiliary");
+    expect(container.querySelector('[role="separator"]')).toHaveAttribute(
+      "hidden",
+    );
+  });
+  it("keeps resource frames at 1280px while reading columns stay 960px", () => {
+    const { container } = render(
+      <AgentWorkbenchShell {...props} layout="workspace" />,
+    );
+    expect(container.querySelector(".agent-workspace-frame")).toBeTruthy();
+  });
   it("hands a node request back to its main reader on mobile without a drawer", async () => {
     viewport(390);
     const main = (

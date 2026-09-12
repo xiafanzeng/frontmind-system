@@ -200,11 +200,6 @@ function ScopedWorkbench({
         {task.state?.records.filter(record => record.targetTask).map(record => <p key={record.id} data-reading-anchor={record.id}>
           <a href={taskUrl(projectId, record.targetTask!.agentId, record.targetTask!.conversationId)}>打开接续任务</a>
         </p>)}
-        {resourcePresentation && summary && (
-          <div className="workbench-resource-summary">
-            <BusinessWorkspaceInspector summary={summary} />
-          </div>
-        )}
         <ConversationContextProvider value={originalWorkspace}>
           {children}
         </ConversationContextProvider>

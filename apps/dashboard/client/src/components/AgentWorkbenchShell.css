@@ -17,9 +17,20 @@
   gap: 16px;
   flex: 0 0 auto;
   min-height: 64px;
-  padding: 0 32px;
+  padding: 0;
   border-bottom: 1px solid #eceef1;
   background: #fff;
+}
+.agent-workbench-topbar__canvas {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 1280px;
+  min-height: 64px;
+  margin-inline: auto;
+  padding: 0 32px;
+  box-sizing: border-box;
 }
 .agent-workbench-topbar__inner {
   display: flex;
@@ -93,8 +104,9 @@
   position: relative;
   display: grid;
   width: 100%;
-  max-width: none;
-  margin-inline: 0;
+  max-width: 1280px;
+  margin-inline: auto;
+  box-sizing: border-box;
   grid-template-columns: minmax(0, 1fr) 16px var(--agent-aux-width, 28.5714%);
   grid-template-rows: minmax(0, 1fr);
   padding: 16px;
@@ -105,6 +117,9 @@
 }
 .agent-workbench-shell__layout.is-single-pane {
   grid-template-columns: minmax(0, 1fr);
+}
+.agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary {
+  grid-template-columns: minmax(0, 1fr) var(--agent-aux-width, 348px);
 }
 /* Resource workspaces browse full-width in a centered, capped canvas. */
 .agent-workbench-shell__layout.is-workspace {
@@ -279,7 +294,7 @@
   opacity: 0.5;
   cursor: default;
 }
-.agent-workbench-subagents button {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -298,19 +313,19 @@
     background 0.15s,
     border-color 0.15s;
 }
-.agent-workbench-subagents button svg {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button svg {
   flex-shrink: 0;
 }
-.agent-workbench-subagents button.is-active,
-.agent-workbench-subagents button:hover {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button.is-active,
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:hover {
   background: color-mix(in srgb, var(--subagent-color) 7%, white);
   border-color: color-mix(in srgb, var(--subagent-color) 14%, white);
 }
-.agent-workbench-subagents button:focus-visible {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:focus-visible {
   outline: 2px solid var(--subagent-color);
   outline-offset: 2px;
 }
-.agent-workbench-subagents button:disabled {
+.agent-workbench-subagents:not(.agent-workbench-subagents--bar) button:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -746,6 +761,9 @@
     row-gap: 12px;
     padding: 12px 12px max(12px, env(safe-area-inset-bottom));
   }
+  .agent-workbench-shell__layout.has-outcomes.is-fixed-auxiliary {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .agent-workbench-shell__auxiliary {
     grid-column: 1;
     grid-row: 1;
@@ -936,6 +954,9 @@
   width: 100%;
   max-width: 960px;
   margin-inline: auto;
+}
+.agent-workbench-shell__main-content.is-scrollable > .agent-workspace-frame {
+  max-width: 1280px;
 }
 .agent-workbench-shell__auxiliary {
   font-size: 13px;

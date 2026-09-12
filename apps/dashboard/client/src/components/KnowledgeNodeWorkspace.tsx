@@ -755,6 +755,7 @@ function KnowledgeNodeWorkspaceSession({
   const beginDirectEdit = () => {
     if (
       !currentDetails?.capabilities.directEdit.allowed ||
+      currentDetails.node.leafId !== progress?.build.currentLeafId ||
       readonlyPreview ||
       disabled ||
       readPending ||
@@ -933,6 +934,12 @@ function KnowledgeNodeWorkspaceSession({
     (currentDetails?.node.status === "confirmed" ||
       currentDetails?.node.status === "direct_prefilled") &&
     progress?.build.currentLeafId !== currentDetails?.node.leafId;
+  // Verification is sequential: only the server cursor may be edited or
+  // advanced. Earlier confirmed nodes and future nodes remain read-only until
+  // the cursor is moved to them by a successful confirmation.
+  const canEditCurrentNode =
+    Boolean(currentDetails) &&
+    currentDetails?.node.leafId === progress?.build.currentLeafId;
   const actionsDisabled =
     disabled ||
     readonlyPreview ||
@@ -1014,7 +1021,8 @@ function KnowledgeNodeWorkspaceSession({
               onClick={beginDirectEdit}
               disabled={
                 actionsDisabled ||
-                !currentDetails?.capabilities.directEdit.allowed
+                !currentDetails?.capabilities.directEdit.allowed ||
+                !canEditCurrentNode
               }
             >
               <Pencil aria-hidden="true" />

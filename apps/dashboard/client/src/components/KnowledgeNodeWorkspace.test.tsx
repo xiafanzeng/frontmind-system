@@ -230,6 +230,24 @@ describe("unified knowledge node workspace", () => {
     } finally { main.remove(); }
   });
 
+  it("keeps confirmed and future nodes read-only until the verification cursor reaches them", async () => {
+    fixtureFetch();
+    renderWorkspace();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "直接编辑" })).toBeEnabled(),
+    );
+
+    // A future/confirmed leaf may be inspected, but it cannot bypass the
+    // currentLeafId cursor and enter direct edit.
+    fireEvent.change(screen.getByRole("combobox", { name: "切换知识节点" }), {
+      target: { value: "1.2" },
+    });
+    const editorButton = await screen.findByRole("button", { name: "直接编辑" });
+    expect(editorButton).toBeDisabled();
+    fireEvent.click(editorButton);
+    expect(screen.queryByRole("textbox", { name: "编辑产品服务正文" })).toBeNull();
+  });
+
   it("supports standalone inline node reading and collaboration focus without dismissing it", async () => {
     fixtureFetch();
     render(

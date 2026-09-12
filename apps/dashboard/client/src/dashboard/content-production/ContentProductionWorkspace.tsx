@@ -232,7 +232,6 @@ function ContentProductionInner({
   const { sendMessage } = useSendMessage();
   const [showCreate, setShowCreate] = useState(false);
   const [taskCenterTab, setTaskCenterTab] = useState<"new" | "existing">("new");
-  const autoOpenedTaskCenter = useRef(false);
   const [mode, setMode] = useState<ContentProductionMode | null>(null);
   const [enterpriseName, setEnterpriseName] = useState("");
   const [knowledgeSource, setKnowledgeSource] = useState<"published" | "files">(
@@ -371,14 +370,6 @@ function ContentProductionInner({
         setRefreshing(false);
     }
   }, [taskId]);
-  useEffect(() => {
-    if (workbench && hydrated && !activeConversation && !autoOpenedTaskCenter.current) {
-      autoOpenedTaskCenter.current = true;
-      setTaskCenterTab(state.conversations.length > 0 ? "existing" : "new");
-      setShowCreate(true);
-    }
-  }, [workbench, hydrated, activeConversation, state.conversations.length]);
-
   useEffect(() => {
     setTaskRead(null);
     setNotice("");

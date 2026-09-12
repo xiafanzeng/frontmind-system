@@ -388,6 +388,16 @@
   display: flex;
   flex-direction: column;
 }
+/* Keep the confirmation composer available while the selected node is open
+ * inline.  The composer owns the existing confirmation API/state machine;
+ * details should never hide that action. */
+.knowledge-workbench-main-node[data-open="true"] {
+  flex: 1 1 58%;
+}
+.knowledge-workspace-task[data-node-details-open="true"] {
+  flex: 1 1 42%;
+  min-height: 220px;
+}
 .knowledge-workbench-main-node .knowledge-node-workspace__inline-detail {
   flex: 1;
   min-height: 0;

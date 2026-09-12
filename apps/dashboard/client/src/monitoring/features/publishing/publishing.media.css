@@ -4,7 +4,10 @@
   max-width: 1520px;
   margin-right: auto;
   margin-left: auto;
-  overflow: hidden;
+  /* Let the operator module's page scroll owner reach every catalog row.
+   * The previous clipping hid rows after the first viewport when this table
+   * lived inside the fixed-height dashboard shell. */
+  overflow: visible;
 }
 
 .monitoring-module :where(.publishing-page) .publishing-media-row {

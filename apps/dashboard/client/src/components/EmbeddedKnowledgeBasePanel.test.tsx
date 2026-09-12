@@ -434,6 +434,29 @@ describe("EmbeddedKnowledgeBasePanel reset action", () => {
     );
   });
 
+  it("keeps the confirmation composer mounted while inline node details are open", async () => {
+    mocks.activeConversation = approvedConversation("current-kb");
+    mocks.progressData = { progress: activeBuild() };
+    render(
+      <EmbeddedKnowledgeBasePanel
+        mode="workspace"
+        workbench
+        page="build"
+        onPageChange={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("knowledge-home")).toBeVisible(),
+    );
+    const onDetailsOpenChange = mocks.nodeProps.mock.lastCall?.[0]
+      ?.onDetailsOpenChange as ((open: boolean) => void) | undefined;
+    expect(onDetailsOpenChange).toBeTypeOf("function");
+    act(() => onDetailsOpenChange?.(true));
+    const task = document.querySelector(".knowledge-workspace-task");
+    expect(task).toBeInTheDocument();
+    expect(task).toHaveAttribute("data-node-details-open", "true");
+  });
+
   it("clears a stale AI target label when the authoritative workflow advances to another node", async () => {
     mocks.activeConversation = approvedConversation("current-kb");
     mocks.progressData = { progress: activeBuild() };

@@ -31,39 +31,29 @@ export class KnowledgeBaseEnterpriseIdentityError extends Error {
   }
 }
 
-function normalizedEnterpriseName(value: string) {
-  return canonicalizeKnowledgeBaseCompanyName(value).toLowerCase();
-}
-
-/** Resolve the immutable enterprise identity already assigned to the account. */
+/** Resolve the enterprise name for this build request.
+ *
+ * The name entered in the build dialog is the source of truth for the new
+ * build.  It may intentionally differ from the account's historical display
+ * name (for example after a rebrand), so we only fall back to that display
+ * name when the request omits an explicit value.  Project ownership and
+ * authentication are enforced by the caller and remain unchanged.
+ */
 export function resolveKnowledgeBaseEnterpriseIdentity(input: {
   sourceName: string | null;
   brandName: string;
   requestedCompanyName?: string;
 }) {
-  let companyName: string;
+  const requestedCompanyName = String(input.requestedCompanyName || "").trim();
+  const candidate = requestedCompanyName || input.brandName;
   try {
-    companyName = canonicalizeKnowledgeBaseCompanyName(input.brandName);
+    return canonicalizeKnowledgeBaseCompanyName(candidate);
   } catch {
     throw new KnowledgeBaseEnterpriseIdentityError(
       "ENTERPRISE_NOT_CONFIGURED",
-      "当前账号尚未由管理员配置企业名称，无法启动知识库构建",
+      "请填写本次知识库构建使用的企业名称",
     );
   }
-
-  const requestedCompanyName = String(input.requestedCompanyName || "").trim();
-  if (
-    requestedCompanyName &&
-    normalizedEnterpriseName(requestedCompanyName) !==
-      normalizedEnterpriseName(companyName)
-  ) {
-    throw new KnowledgeBaseEnterpriseIdentityError(
-      "ENTERPRISE_IDENTITY_MISMATCH",
-      "输入的企业名称与当前账号绑定企业不一致，请刷新后重试",
-    );
-  }
-
-  return companyName;
 }
 
 const KNOWLEDGE_PREFILL_MAX_CHARACTERS = 80_000;

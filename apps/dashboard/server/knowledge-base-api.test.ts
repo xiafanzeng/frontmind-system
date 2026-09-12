@@ -5807,7 +5807,7 @@ describe("knowledge base execution contract", () => {
     delete process.env.FRONTMIND_KB_MANUS_V2_WRITER;
   });
 
-  it("uses the configured workspace enterprise and rejects client identity changes", () => {
+  it("uses the requested enterprise name without comparing it to account metadata", () => {
     expect(
       resolveKnowledgeBaseEnterpriseIdentity({
         sourceName: "管理员结构化编辑",
@@ -5824,15 +5824,13 @@ describe("knowledge base execution contract", () => {
       }),
     ).toBe("验收企业");
 
-    expectEnterpriseIdentityError(
-      () =>
-        resolveKnowledgeBaseEnterpriseIdentity({
-          sourceName: "dashboard.json",
-          brandName: "验收企业",
-          requestedCompanyName: "另一家企业",
-        }),
-      "ENTERPRISE_IDENTITY_MISMATCH",
-    );
+    expect(
+      resolveKnowledgeBaseEnterpriseIdentity({
+        sourceName: "dashboard.json",
+        brandName: "验收企业",
+        requestedCompanyName: "另一家企业",
+      }),
+    ).toBe("另一家企业");
   });
 
   it("allows a compatible client to omit the repeated company name", () => {

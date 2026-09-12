@@ -51,6 +51,14 @@
 }
 .operator-action-copy {
   min-width: 0;
+  /* Keep the title baseline consistent for entries with and without a
+     description.  Entry cards are one shared interaction pattern across
+     modules; reserving the two-line copy height prevents a single-line
+     monitoring entry from floating lower than content entries. */
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   overflow-wrap: anywhere;
 }
 .operator-action-list .operator-action-title {
